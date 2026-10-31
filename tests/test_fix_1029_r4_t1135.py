@@ -75,7 +75,7 @@ def _ledger(native, cash, basis):
 def _report(base_rows, cash_doc, basis, gains=False):
     """build_report over the base rows (one file) with `cash_doc`, on
     the date basis `basis`; with `gains` the account's gains file as
-    `taxjson run` writes it (the INCOME column), else none."""
+    `tjs run` writes it (the INCOME column), else none."""
     from taxjson.lib.pipeline import GainsRequest, run_gains
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "abroad_base.json"

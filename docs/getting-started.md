@@ -12,7 +12,7 @@ Every example below uses made-up data (tickers like `SAMPA.TO`). The
 command output is real output from those examples, shortened where it
 says `...`.
 
-`tjs` is the short name of `taxjson`; both work. A word you don't know
+`tjs` is taxjson's command. A word you don't know
 (ACB, superficial loss, TOBASE, journal ...) is in the
 [glossary](glossary.md).
 
@@ -41,7 +41,7 @@ bash -c "$(curl -fsSL https://taxjson.com/install.sh)"
 tjs --version
 ```
 
-This also installs the taxjson-fetch plugin (`taxjson fetch`: Questrade /
+This also installs the taxjson-fetch plugin (`tjs fetch`: Questrade /
 IBKR Flex auto-fetch, a separate package that does nothing until you run
 it); add `_ --without-fetch` to the installer line to leave it out.
 
@@ -143,7 +143,7 @@ switched off (`# province = "ON"`): delete the `# ` to switch it on.
 Put each account's files in its own folder, `inputs/<account>/` (beside
 the year folders: one folder per account for every year). Any file
 name works: taxjson recognises each broker's export by its header, and
-`taxjson run --details` prints which broker it read each file as. Several files for
+`tjs run --details` prints which broker it read each file as. Several files for
 one account are fine; overlapping rows are read once.
 
 Download **all the history the broker will give you**, not just the tax
@@ -215,21 +215,21 @@ to check next, each with the command that shows it:
 ==> Reading 1 file
 Info: activity.csv: 4 tax objects
 ==> Processing corporate actions
-Warning: Transfer-in: margin: 1 booked at the broker's stated cost (SAMPJ.TO): check it — `taxjson transfers`
-Warning: Transfer-in: margin: 1 with NO cost, kept out of the books (SAMPK.TO) — `taxjson transfers`
+Warning: Transfer-in: margin: 1 booked at the broker's stated cost (SAMPJ.TO): check it — `tjs transfers`
+Warning: Transfer-in: margin: 1 with NO cost, kept out of the books (SAMPK.TO) — `tjs transfers`
 ==> Sorting, de-duplicating, mapping tickers, converting currency
 ==> Calculating capital gains
 ==> Writing holdings reports/margin_holdings.toml
 ==> Writing summary reports/margin.sum
 ==> Checking for missing purchase history
-Info: 2 position(s) go short in margin's data (SAMPA.TO, SAMPK.TO) — `taxjson find-missing-history`
+Info: 2 position(s) go short in margin's data (SAMPA.TO, SAMPK.TO) — `tjs find-missing-history`
 ...
 ==> Done. Reports are in reports/
 ==> Before you trust these numbers (docs/getting-started.md, step 5)
-Warning: NOT in the totals: 2 sales with no purchase (SAMPA.TO, SAMPK.TO) — `taxjson find-missing-history`
-Warning: 1 transfer-in kept out with no cost (SAMPK.TO) — `taxjson transfers`
-Info: 1 account with positions not checked against the broker's holdings — `taxjson sanity`
-Info: Then `taxjson checklist --run` (the next step); each message's detail: `taxjson run --details`
+Warning: NOT in the totals: 2 sales with no purchase (SAMPA.TO, SAMPK.TO) — `tjs find-missing-history`
+Warning: 1 transfer-in kept out with no cost (SAMPK.TO) — `tjs transfers`
+Info: 1 account with positions not checked against the broker's holdings — `tjs sanity`
+Info: Then `tjs checklist --run` (the next step); each message's detail: `tjs run --details`
 ```
 
 Every line starts with `==> ` (a step the run is doing), `Info:`,
@@ -477,7 +477,7 @@ purchase for them, docs/troubleshooting.md):
   that value on the transfer date, and every run says so:
 
   ```
-  Warning: Transfer-in: margin: 1 booked at the broker's stated cost (SAMPJ.TO): check it — `taxjson transfers`
+  Warning: Transfer-in: margin: 1 booked at the broker's stated cost (SAMPJ.TO): check it — `tjs transfers`
   ```
 
   (`tjs run --details`: "1 transfer-in(s) from outside your books booked
@@ -618,7 +618,7 @@ tjs opening margin margin_start.toml      # or: tjs opening margin statement.csv
 
 ```
 3 OPENING line(s) for account margin as of 2023-12-29 -> inputs/margin/opening_2023-12-29.tt
-Next: `taxjson run`, then `taxjson find-missing-history` and `taxjson sanity` (it compares quantities and costs).
+Next: `tjs run`, then `tjs find-missing-history` and `tjs sanity` (it compares quantities and costs).
 ```
 
 The file it writes holds one line per position:
@@ -1101,12 +1101,12 @@ and a complete project per tax year beside them.
   2025/                 the 2025 project, the same shape
 ```
 
-- **A filed year keeps its own copy of the exports.** `taxjson
+- **A filed year keeps its own copy of the exports.** `tjs
   close-year` copies the files its books were built from into the
   year folder's `inputs/` (and the shared `tobase.map` beside its
   `ticker.map`) and the year reads that copy from then on: the shared
   `inputs/` moves on with the next year while the filed year can be
-  rebuilt as filed (`taxjson compare filed`). `taxjson new-year` points
+  rebuilt as filed (`tjs compare filed`). `tjs new-year` points
   the next year at the shared folders again.
 - **Each year is its own project.** Its `taxjson.toml` and `ticker.map`
   are read exactly as a single-folder project's: a change to 2025's map

@@ -764,7 +764,7 @@ class TestWashClassContextInputs(unittest.TestCase):
 
     def test_unreadable_ticker_map_refuses(self):
         # A2-0683: a map that cannot be read stops buy/sell-check, as
-        # it stops `taxjson run`.
+        # it stops `tjs run`.
         import taxjson.bin.taxjson_run as R
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp, [_row("2026-06-01", "MSFT.US", 10,

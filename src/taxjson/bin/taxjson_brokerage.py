@@ -64,7 +64,7 @@ register_brokerage("coinbase", coinbase.CoinbaseBrokerage)
 register_brokerage("cb", coinbase.CoinbaseBrokerage)
 register_brokerage("generic", generic.GenericBrokerage)
 
-# The id `taxjson run` passes for each parser (detect_broker); an alias
+# The id `tjs run` passes for each parser (detect_broker); an alias
 # typed on the command line is recorded under it, so the fees report
 # does not split one broker into two rows (audit S026-21).
 _CANONICAL_ID = {'interactive_brokers': 'ib', 'rbc': 'rbc_direct',
@@ -76,7 +76,7 @@ _CANONICAL_ID = {'interactive_brokers': 'ib', 'rbc': 'rbc_direct',
 # on the raw rows (the --transfers-out sidecar carries them) and dropped
 # quietly from the book rows. 'qty' is the legacy alias of 'quantity'.
 # fee_qty / fee_currency: a crypto withdrawal's fee paid in coins
-# (Kraken), shown by `taxjson transfers` (A2-0663). A currency
+# (Kraken), shown by `tjs transfers` (A2-0663). A currency
 # journal's `journal_pair` is a TaxTransaction field: the book rows keep
 # it too (an account with `transfers = true` has no sidecar).
 _EVIDENCE_KEYS = frozenset({'qty', 'book_value', 'broker_account',
@@ -450,7 +450,7 @@ Examples:
                        help="Without --transfers: write the excluded "
                             "TRANSFER rows to this sidecar JSON instead "
                             "of discarding them (custody evidence for "
-                            "`taxjson transfers`)")
+                            "`tjs transfers`)")
     parser.add_argument("--strict", action="store_true",
                        help="Exit nonzero when the parsed output violates "
                             "the transaction schema (default: report "
@@ -469,7 +469,7 @@ Examples:
             "securities the currency->exchange suffix mislabels (e.g. "
             "a TSX-listed fund's US-dollar class, which would otherwise "
             "collide with a US-listed ticker of the same name). "
-            "`taxjson run` passes the project's ticker.map "
+            "`tjs run` passes the project's ticker.map "
             "when it has EXTRACT lines."
         ),
     )
@@ -492,7 +492,7 @@ Examples:
         "--override-log", metavar="PATH", default=None,
         help=("With --security-overrides: write which parsed (symbol, "
               "currency) pairs an override renamed, and which it left "
-              "alone, as JSON — `taxjson run` renames the corporate-"
+              "alone, as JSON — `tjs run` renames the corporate-"
               "action rows of the same security the same way."))
     parser.add_argument(
         "--country", type=country_arg, default=None,
@@ -507,7 +507,7 @@ Examples:
             "parse notes (RBC: T3 / ACB vs Form 1099-DIV / basis). "
             "Without it both choices take the neutral answer — a "
             "foreign issuer's return of capital lowers the cost and a "
-            "stablecoin is property — and a note says so. `taxjson run` "
+            "stablecoin is property — and a note says so. `tjs run` "
             "passes the project's country."
         ),
     )
@@ -542,7 +542,7 @@ Examples:
             "Whether the account is taxable. Parsers use it only to "
             "decide whether a taxable-account caveat is worth a warning "
             "(Questrade: a dividend booked net of non-resident "
-            "withholding, a transfer-in with no book value). `taxjson "
+            "withholding, a transfer-in with no book value). `tjs "
             "run` passes it from the account's `type`."
         ),
     )
@@ -551,7 +551,7 @@ Examples:
         metavar="FEE",
         help=(
             "Webull: the broker's exercise/assignment charge on the stock "
-            "leg (`[accounts.<name>] exercise_fee`, passed by `taxjson "
+            "leg (`[accounts.<name>] exercise_fee`, passed by `tjs "
             "run`). With it, a $0 option close plus a stock trade at the "
             "strike carrying exactly this charge is booked as an "
             "exercise/assignment; without it nothing is inferred and each "
@@ -564,7 +564,7 @@ Examples:
         help=(
             "RBC: the day of the next year by which RBC has posted the "
             "tax year's back-dated Dec-31 book-cost adjustments "
-            "(`[accounts.<name>] year_end_posting`, passed by `taxjson "
+            "(`[accounts.<name>] year_end_posting`, passed by `tjs "
             "run`; default 06-30). Exports that hold the year's rows, all "
             "taken before it, get a note that they may be missing."
         ),
@@ -575,7 +575,7 @@ Examples:
         help=(
             "Every broker account in these statements is yours and "
             "taxable together (`[accounts.<name>] combined_broker_accounts "
-            "= true`, passed by `taxjson run`): a statement spanning "
+            "= true`, passed by `tjs run`): a statement spanning "
             "several broker accounts is a one-line note, not an ATTENTION "
             "line. With --account-type sheltered it is refused unless the "
             "statement shows every account is the same plan."
@@ -588,13 +588,13 @@ Examples:
             "The tax year the books are for. Parsers whose exports carry "
             "their own timestamp check it against the year (RBC: an "
             "export taken before the year ended cannot hold the rest of "
-            "it). `taxjson run` passes the project year."
+            "it). `tjs run` passes the project year."
         ),
     )
     parser.add_argument(
         "--ticker-map", dest="ticker_map", metavar="FILE", default=None,
         help=(
-            "The project's ticker.map (`taxjson run` passes it). The "
+            "The project's ticker.map (`tjs run` passes it). The "
             "parsers' identity hints (a ticker change booked without a "
             "corporate-action row, an income row on an untraded listing) "
             "are dropped for a pair the map already joins; --lint keeps "
@@ -606,7 +606,7 @@ Examples:
         default=None,
         help=(
             "The ticker changes the project's .tt RENAME lines declare "
-            "(`taxjson run` passes work/declared_renames.list: one "
+            "(`tjs run` passes work/declared_renames.list: one "
             "OLD<TAB>NEW<TAB>WHERE line each). A look-alike rename hint "
             "for a declared pair becomes a note naming the line; --lint "
             "keeps the hint."
@@ -616,7 +616,7 @@ Examples:
         "--symbol-codes", dest="symbol_codes", metavar="FILE",
         default=None,
         help=(
-            "Questrade: the internal security codes `taxjson run` "
+            "Questrade: the internal security codes `tjs run` "
             "resolved from the project's other exports (work/<acct>"
             "_symbol_codes.state, lib/symbol_codes): every row of a "
             "resolved code is booked under its ticker, said in one note. "
@@ -627,7 +627,7 @@ Examples:
         "--listing-fixes", dest="listing_fixes", metavar="FILE",
         default=None,
         help=(
-            "Questrade / RBC: the listings `taxjson run` read from the "
+            "Questrade / RBC: the listings `tjs run` read from the "
             "project's other exports for symbols whose suffix came from "
             "the row currency alone (work/<acct>_<broker>"
             "_listing_suffix.state, lib/listing_suffix): every row of such "
@@ -641,7 +641,7 @@ Examples:
         help=(
             "IB: the project's other IB accounts and their statements "
             "(work/<acct>_ib_project.state, JSON {\"account\": this "
-            "label, \"accounts\": {label: [paths]}}; `taxjson run` "
+            "label, \"accounts\": {label: [paths]}}; `tjs run` "
             "passes it): a ticker change IB shows as one contract id "
             "under two symbols is dated from every account's rows."
         ),
@@ -649,7 +649,7 @@ Examples:
     parser.add_argument(
         "--rates", dest="rates", metavar="FILE", default=None,
         help=(
-            "The run's currency rates (work/to_base.csv, `taxjson run` "
+            "The run's currency rates (work/to_base.csv, `tjs run` "
             "passes it). Coinbase and Kraken turn a stablecoin fill valued "
             "in CAD, EUR, ... into US dollars through it before the de-peg "
             "check (a warning only; nothing is booked from it)."
@@ -669,7 +669,7 @@ Examples:
 
     # The market lists' per-symbol overrides (lib/markets: STABLE,
     # VENUE, EVENING, MULT, GLOBAL crypto codes) come from this map;
-    # without one, from TAXJSON_TICKER_MAP (`taxjson run` sets it).
+    # without one, from TAXJSON_TICKER_MAP (`tjs run` sets it).
     from taxjson.lib.markets import use_ticker_map
     use_ticker_map(args.ticker_map)
     if args.ticker_map:
@@ -884,7 +884,7 @@ Examples:
         from taxjson.lib.country import plans_taxed_as_ordinary
         extractor.plans_taxed = plans_taxed_as_ordinary(args.country)
         extractor.combined_broker_accounts = args.combined_broker_accounts
-        # The sidecar's reader (`taxjson run`) says what a transfer-in
+        # The sidecar's reader (`tjs run`) says what a transfer-in
         # costs, once it knows which ones a .tt line covers.
         extractor.transfer_costs_checked_downstream = bool(
             args.transfers_out and not args.transfers)
@@ -970,7 +970,7 @@ Examples:
     # The generic importer's mappings may name the real broker
     # ([broker].name): the source is then recorded as generic:<name>,
     # so the fees report attributes it (audit S027-05). One parse holds
-    # one broker — `taxjson run` splits the generic files by name.
+    # one broker — `tjs run` splits the generic files by name.
     source_label = brokerage_id
     if brokerage_id == 'generic':
         _names = {getattr(ex, 'broker_name', None)
@@ -980,7 +980,7 @@ Examples:
             emit_line(f"taxjson-brokerage: error: the generic files' mappings "
                   f"name different brokers ([broker].name: {_shown}) — "
                   f"parse each broker's files in a separate call "
-                  f"(`taxjson run` does this).")
+                  f"(`tjs run` does this).")
             sys.exit(2)
         _nm = next(iter(_names), None) if _names else None
         if _nm:
@@ -1080,7 +1080,7 @@ Examples:
             # stay OUT of the book — but they are kept aside (see
             # --transfers-out) instead of silently deleted: a depot
             # flip or broker migration is exactly what explains a
-            # confusing position later (`taxjson transfers` reads the
+            # confusing position later (`tjs transfers` reads the
             # sidecar).
             _tr = [tx for tx in transactions
                    if tx.get('action', '').upper() == 'TRANSFER']
@@ -1090,7 +1090,7 @@ Examples:
                 kept_aside_sources.append((_source, _source_key))
                 print(f"  {shown_name(input_path)}: {len(_tr)} TRANSFER "
                       f"row(s) kept aside (custody evidence, not tax "
-                      f"events — view with `taxjson transfers`)",
+                      f"events — view with `tjs transfers`)",
                       file=sys.stderr)
                 if brokerage_id in ('kraken', 'kr', 'coinbase', 'cb'):
                     # A Kraken Hybrid Earn move is still yours
@@ -1106,7 +1106,7 @@ Examples:
                         emit_line(f"  NOTE: {_sends} crypto withdrawal/"
                             f"send(s) among them — if any paid for "
                             f"something (payment), each is a taxable "
-                            f"SALE at fair market value: `taxjson "
+                            f"SALE at fair market value: `tjs "
                             f"crypto-sends` lists them with the fair "
                             f"value and writes the .tt sale for each "
                             f"payment (a gift is not a sale for a US "
@@ -1117,7 +1117,7 @@ Examples:
                             f"send(s) among them — if any left your "
                             f"ownership (gift or payment), each is a "
                             f"taxable DISPOSITION at fair market "
-                            f"value: `taxjson crypto-sends` lists "
+                            f"value: `tjs crypto-sends` lists "
                             f"them with the fair value and writes the "
                             f".tt sale for each gift/payment "
                             f"(self-custody moves need nothing)"
@@ -1289,7 +1289,7 @@ Examples:
         lint=args.lint)
     for w in schema_warnings:
         if w.startswith(SCHEMA_ATTENTION_TAG):
-            # `taxjson run` echoes ATTENTION lines to the console
+            # `tjs run` echoes ATTENTION lines to the console
             # (echo_parse_stats); the rest stay in the .sum (S065-12).
             emit_line(f"warning: ATTENTION: schema: "
                   f"{w[len(SCHEMA_ATTENTION_TAG):]}")

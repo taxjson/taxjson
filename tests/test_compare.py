@@ -1,4 +1,4 @@
-"""`taxjson compare` and close-year's freeze of the inputs.
+"""`tjs compare` and close-year's freeze of the inputs.
 
 - a full run keeps the reports it replaces as the `prev` snapshot;
   `compare` says "No difference" or names the figures, files and inputs
@@ -180,7 +180,7 @@ class TestFreeze(_Base):
                          _TT)
         self.assertEqual((root / "tobase.map").read_text(), _TOBASE)
         toml = (root / "taxjson.toml").read_text()
-        self.assertIn("## frozen by `taxjson close-year`", toml)
+        self.assertIn("## frozen by `tjs close-year`", toml)
         self.assertIn('# inputs_dir = "../inputs"', toml)
         self.assertIn('# tobase_map = "../tobase.map"', toml)
         from taxjson.lib import project_layout as PL
@@ -327,8 +327,8 @@ class TestFreezeAudit(_Base):
             self.assertEqual((root / "tobase.map").read_text(), _TOBASE)
         text = (root / "taxjson.toml").read_text()
         # The keys are adjacent: one note reads over both (polish pass).
-        self.assertEqual(text.count("## frozen by `taxjson close-year`"), 1)
-        self.assertNotIn("## frozen by `taxjson close-year` too\n", text)
+        self.assertEqual(text.count("## frozen by `tjs close-year`"), 1)
+        self.assertNotIn("## frozen by `tjs close-year` too\n", text)
         self.assertEqual(text.count("tobase_map"), 1)   # commented once
         from taxjson.lib import project_layout as PL
         lay = PL.tobase_layout(self.top)

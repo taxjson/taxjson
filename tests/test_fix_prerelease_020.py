@@ -8,7 +8,7 @@ M1  a name-only match keeps the share designators (class letter, voting
     Transfer pairing refuses a leg whose name is another class.
 M2  any ticker.map rule naming the code (DELETE, DISTINCT, dated RENAME,
     GLOBAL ...) wins over the inference, in the run and in the parser.
-L1  the record and `taxjson transfers` say "ticker.map rule" then.
+L1  the record and `tjs transfers` say "ticker.map rule" then.
 L2  a transfer-in that pairs with nothing is not identified by name.
 L3  pairing on a subset of words needs two strong words in common.
 L4  a damaged record is ignored with one warning, never a traceback.

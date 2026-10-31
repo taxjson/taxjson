@@ -1,7 +1,7 @@
-"""Moved from the core's tests/test_fix_l_parsers2_fetch.py with `taxjson fetch` (now the
+"""Moved from the core's tests/test_fix_l_parsers2_fetch.py with `tjs fetch` (now the
 taxjson-fetch plugin). Original module docstring:
 
-Low-round parsers2 fixes: taxjson fetch (Questrade window/dates) and
+Low-round parsers2 fixes: tjs fetch (Questrade window/dates) and
 taxjson-fill-crypto.
 
 R1-354 (a future project year is refused, not a silent trailing 90

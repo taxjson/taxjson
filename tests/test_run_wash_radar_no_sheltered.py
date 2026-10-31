@@ -1,4 +1,4 @@
-"""`taxjson run` must generate the wash-radar report for a taxable account even
+"""`tjs run` must generate the wash-radar report for a taxable account even
 when the project defines NO registered (sheltered) account.
 
 Previously `stage_cross_reports` gated the radar on `taxable_equity_base AND

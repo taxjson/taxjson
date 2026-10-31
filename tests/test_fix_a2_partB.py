@@ -1,5 +1,5 @@
 """Re-audit-2 partition fixes, part B (lists partition-03 / partition-04):
-Canada/USA wording and country gates in `taxjson run`'s commands,
+Canada/USA wording and country gates in `tjs run`'s commands,
 edge-cases, currency conversion and the country ownership tables."""
 from __future__ import annotations
 

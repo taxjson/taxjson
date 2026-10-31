@@ -1,4 +1,4 @@
-"""The tjs command audit of 2026-10-27, `taxjson redact` (backlog
+"""The tjs command audit of 2026-10-27, `tjs redact` (backlog
 TJ-0248, TJ-0249). Synthetic data only: made-up account ids (pii-ok)
 and a made-up name."""
 import os

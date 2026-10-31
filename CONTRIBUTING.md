@@ -44,12 +44,12 @@ SECURITY.md:
    kind (buy, sell, dividend, fee, transfer, corporate action…), with the
    broker's exact columns, action words and wording pattern, and made-up
    symbols, ids and amounts. Its amounts are made up, so they are fine.
-3. **Otherwise a redacted copy, after review.** `taxjson redact` copies an
+3. **Otherwise a redacted copy, after review.** `tjs redact` copies an
    export and strips what it recognises:
 
    ```bash
-   taxjson redact ~/Downloads/activity.csv        # writes activity.redacted.csv
-   taxjson redact                                 # in a project: inputs/ -> inputs_redact/
+   tjs redact ~/Downloads/activity.csv        # writes activity.redacted.csv
+   tjs redact                                 # in a project: inputs/ -> inputs_redact/
    ```
 
    It replaces every account number with a same-length placeholder (so
@@ -312,18 +312,18 @@ is interrupted restore with `git checkout -- src/taxjson/lib/`.
    is generated from the same schema table, but the draft still goes through
    steps 2–4 like hand-written code.
 
-## Adding a broker fetcher (`taxjson fetch`)
+## Adding a broker fetcher (`tjs fetch`)
 
 Broker API clients never go in the core: the core holds no broker
 client and reads no broker credential (SECURITY.md lists the core's
-network egress). `taxjson fetch` is a thin dispatcher over plugins, so a
+network egress). `tjs fetch` is a thin dispatcher over plugins, so a
 new broker's downloader is its own package. The contract is the module
 docstring of `src/taxjson/lib/fetchers.py`; in short:
 
 1. Write a class (instantiated with no arguments) or an object with:
    - `brokerages` — the `brokerage = "..."` values (under
      `[accounts.<name>]` in taxjson.toml) it serves;
-   - `description` — one line for `taxjson fetch --list`;
+   - `description` — one line for `tjs fetch --list`;
    - `fetch(request) -> {account: {...}}` — download every account in
      `request.accounts` into `request.inputs / <account>` (the inputs
      folder: with `[settings] inputs_dir` it is the folder of exports
@@ -333,8 +333,8 @@ docstring of `src/taxjson/lib/fetchers.py`; in short:
      snapshot goes in `request.holdings` (the year's holdings folder).
      An older core sends no `inputs` / `holdings`: fall back to
      `request.root / "inputs"` / `request.root / "holdings"` then. Fail
-     with `SystemExit("taxjson fetch: ...")`, never a traceback.
-   - optional: `add_arguments(parser)` (its own `taxjson fetch` options;
+     with `SystemExit("tjs fetch: ...")`, never a traceback.
+   - optional: `add_arguments(parser)` (its own `tjs fetch` options;
      an option two fetchers both define is shared, so keep the
      conventional meaning, e.g. `--year`), `account_keys` (extra
      `[accounts.<name>]` keys the config check should accept; `brokerage`,
@@ -359,7 +359,7 @@ example; a fetcher kept in this repository lives under `packages/` and
 
 ## Running the stages by hand
 
-`taxjson run` drives the whole pipeline for a project. The stage tools
+`tjs run` drives the whole pipeline for a project. The stage tools
 it calls are console scripts too — handy for one file, scripting, or
 seeing what a parser makes of an export. Each takes `--help`; outputs are
 JSON that feed the next stage. A walk-through on the demo files is in
@@ -386,7 +386,7 @@ taxjson-merge2 --dedup            rrsp.json   > sheltered.json
 #    the US); --sheltered passes registered-account context for
 #    cross-account matching. A Canada project uses grant timing for
 #    written options: pass --option-premium-timing grant
-#    --option-grant-since YEAR to match `taxjson run`.
+#    --option-grant-since YEAR to match `tjs run`.
 taxjson-gains --country ca --year 2025 --taxable \
     --sheltered sheltered.json taxable.json > gains.json
 
@@ -395,7 +395,7 @@ taxjson-sum-gains gains.json        # realized gains/losses
 taxjson-sum-income taxable.json     # dividends/interest (reads merged JSON)
 ```
 
-These stages skip what `taxjson run` adds around them (currency
+These stages skip what `tjs run` adds around them (currency
 conversion to the base currency, corporate-action elections, ticker.map,
 the cross-account wash pass, missing-history openings), so their figures
 are not the project's.
@@ -422,9 +422,9 @@ Country-specific cost-basis and wash-sale logic lives in `src/taxjson/lib/core.p
 
 ## tax-logic is the spec
 
-Every statement `taxjson tax-logic` prints is a `Rule` with a stable id in
+Every statement `tjs tax-logic` prints is a `Rule` with a stable id in
 `src/taxjson/lib/tax_logic.py` (`CA-...` in the Canada section, `US-...` in
-the US section; `taxjson tax-logic --ids` shows them). A change in tax
+the US section; `tjs tax-logic --ids` shows them). A change in tax
 logic changes or adds a Rule in the right country's section, and the test
 that pins it cites the id:
 

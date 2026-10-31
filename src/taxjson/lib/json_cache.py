@@ -25,7 +25,7 @@ from typing import Any, Callable, Dict, Optional
 
 def save_json_cache(path, data: Dict[str, Any], *, merge: bool = False,
                     update: Optional[Callable[[Any], Dict[str, Any]]] = None,
-                    prog: str = "taxjson", label: str = "",
+                    prog: str = "tjs", label: str = "",
                     **dump_kw) -> bool:
     """Write `data` (a dict) to `path` atomically; True when saved. A
     failure is a stderr warning (a cache write never stops a run).

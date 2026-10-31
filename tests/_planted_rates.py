@@ -2,7 +2,7 @@
 the HOME's currency cache as well, so a run that rebuilds the file
 writes the same rates back (backlog TJ-0635, TJ-0606).
 
-`taxjson run` rebuilds work/to_base.csv when a taxjson source file is
+`tjs run` rebuilds work/to_base.csv when a taxjson source file is
 newer than it (stage_currency_rates, needs_rebuild: a file edited while
 the suite runs) or when its rates end more than three days ago, and an
 offline rebuild reads ~/.currency_price_cache.json only. A test's own

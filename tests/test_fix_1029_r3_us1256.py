@@ -45,7 +45,7 @@ def _env():
 
 
 def _cli(root, *args):
-    """`taxjson -C ROOT ARGS` as a child of THIS tree's code."""
+    """`tjs -C ROOT ARGS` as a child of THIS tree's code."""
     cmd = python_module_argv("taxjson.bin.taxjson_run",
                              ["-C", str(root), *map(str, args)])
     return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True,

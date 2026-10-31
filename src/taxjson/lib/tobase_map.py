@@ -11,8 +11,8 @@ holding the year folders that every year reads (`[settings] tobase_map
 CA` line per US listing (exchange first, then the OTC listings of the
 same shares in a section of their own) and per extra Canadian line (a
 fund's US-dollar units), each marked `# master:<FIGI>`.
-`taxjson init --country canada` writes it, `taxjson new-year` keeps the
-setting, `taxjson update-tobase-map` keeps it in step with the
+`tjs init --country canada` writes it, `tjs new-year` keeps the
+setting, `tjs update-tobase-map` keeps it in step with the
 installed master.
 
 No `DISTINCT` line is written (since v0.27.1): taxjson never joins two
@@ -43,7 +43,7 @@ An ended interlisting is never deleted: its lines carry `until=DATE`
 ended listing after that date is a Warning: the ticker may now name
 another security (`until_findings`).
 
-Nothing here writes; `taxjson update-tobase-map --write` and `init`
+Nothing here writes; `tjs update-tobase-map --write` and `init`
 write through lib/safe_write.
 """
 from __future__ import annotations
@@ -61,7 +61,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 TOBASE_MAP = "tobase.map"
 MASTER_FILE = "interlisted.toml"
 MARKER = "master:"
-# The header line `taxjson update-tobase-map` and the checklist read.
+# The header line `tjs update-tobase-map` and the checklist read.
 STAMP = "# master-generated:"
 SECTION_EXCHANGE = "## --- Exchange-listed pairs (one security, one ACB pool) ---"
 SECTION_CURRENCY = ("## --- US-dollar lines of the same TSX units (one "
@@ -971,7 +971,7 @@ def until_message(f: UntilFinding) -> Tuple[str, List[str]]:
 
 @dataclass
 class Plan:
-    """What `taxjson update-tobase-map` would do."""
+    """What `tjs update-tobase-map` would do."""
     added: List[GenLine] = field(default_factory=list)
     ended: List[Tuple[FileLine, GenLine]] = field(default_factory=list)
     # (line, why): unedited marked lines removed — a listing the master
@@ -1293,7 +1293,7 @@ def covered_lines(ticker_text: str, tob: Optional[TobaseFile]
     """The user's own ticker.map TOBASE / DISTINCT lines that tobase.map
     states identically: a TOBASE line with the same two listings in the
     same direction, a DISTINCT line with the same pair (either order).
-    `taxjson ticker-map --suggest` lists them ("delete?"), never removes
+    `tjs ticker-map --suggest` lists them ("delete?"), never removes
     one by itself: keeping it is harmless, and it holds even if the
     master later retracts the pair."""
     if tob is None:
@@ -1330,7 +1330,7 @@ def without_lines(text: str, linenos: Iterable[int]) -> str:
 
 @dataclass
 class SharedPlan:
-    """What `taxjson migrate` does with a multi-year project's per-year
+    """What `tjs migrate` does with a multi-year project's per-year
     tobase.map copies (the layout before v0.27.1): one file at the
     folder holding the year folders (`target`) that every year reads
     (`[settings] tobase_map = "../tobase.map"`), the copies removed (each

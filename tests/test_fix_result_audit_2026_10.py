@@ -67,7 +67,7 @@ class TestFilingFigures(unittest.TestCase):
         """A purchase traded before the merger but settling after it
         weighed on a trade-basis project's replay. The walk reads the
         engine's pools now (backlog TJ-0417), and the engine refuses a
-        rename inside a trade's settlement lag, as `taxjson run` does."""
+        rename inside a trade's settlement lag, as `tjs run` does."""
         from taxjson.lib.core import SplitStraddlesSettlementError
         b = [tx('BUYSELL', '2025-01-01', 'ZZOLD.US', 10, 100, account='b', id='b'),
              tx('BUYSELL', '2025-06-02', 'ZZOLD.US', 10, 100, account='a',

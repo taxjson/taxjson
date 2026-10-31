@@ -1,4 +1,4 @@
-"""`taxjson format-map`: ticker.map laid out in keyword groups
+"""`tjs format-map`: ticker.map laid out in keyword groups
 (lib/ticker_map_format). Lossless (the parsed map and every comment line
 kept), idempotent, a comment directly above a line moved with it, a line
 taxjson cannot use kept as written under Unrecognized, the CLI modes and
@@ -240,7 +240,7 @@ class TestTemplates(unittest.TestCase):
                     if F.commented_rule(ln)), g)
 
     def test_an_earlier_init_header_is_regenerated(self):
-        # The header paragraphs the previous `taxjson init` wrote are
+        # The header paragraphs the previous `tjs init` wrote are
         # template text (recognised by hash): replaced by the new header;
         # its examples are kept like the user's own lines.
         old = (
@@ -336,12 +336,12 @@ class TestCommand(unittest.TestCase):
             self.assertEqual((root / "ticker.map.bak").read_text(), MESSY)
             self.assertEqual((root / "ticker.map").read_text(),
                              F.format_map(MESSY).text)
-            # Formatted, but `taxjson run` still refuses the map (its two
+            # Formatted, but `tjs run` still refuses the map (its two
             # problem lines): --check fails and says so.
             r = _cli(root, "format-map", "--check")
             self.assertEqual(r.returncode, 1, r.stderr)
             self.assertIn("already formatted", r.stdout)
-            self.assertIn("`taxjson run` refuses this ticker.map", r.stderr)
+            self.assertIn("`tjs run` refuses this ticker.map", r.stderr)
             # A formatted file is left alone: no second backup.
             r = _cli(root, "format-map", "--write")
             self.assertEqual(r.returncode, 0)

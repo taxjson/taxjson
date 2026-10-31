@@ -112,7 +112,7 @@ class TestFrozenYearPointedBack(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0, out)
         self.assertIn("two tobase.map files", out)
         self.assertIn("close-year froze", out)
-        self.assertNotIn("taxjson migrate", out)
+        self.assertNotIn("tjs migrate", out)
 
     def test_migrate_keeps_the_frozen_copy(self):
         tjs("migrate", cwd=self.top)
@@ -172,7 +172,7 @@ class TestSharedWriteNamesFrozenYears(unittest.TestCase):
         with contextlib.redirect_stderr(err), \
                 contextlib.redirect_stdout(err):
             R._SHOWN_THIS_RUN.clear()
-            R._shared_inputs_note(top / "2025", f, "taxjson opening")
+            R._shared_inputs_note(top / "2025", f, "tjs opening")
         self.assertIn("applies to every year", err.getvalue())
         self.assertIn("Not 2024 (filed, inputs frozen)", err.getvalue())
 

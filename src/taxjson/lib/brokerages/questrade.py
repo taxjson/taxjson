@@ -324,7 +324,7 @@ class QtAccountContext:
     # Keys learned from Transfers rows that no Trades key prefixes: they
     # may carry the delivering dealer's name after the security's.
     transfer_keys: set = field(default_factory=set)
-    # Internal codes `taxjson run` resolved from the project's other
+    # Internal codes `tjs run` resolved from the project's other
     # exports (lib/symbol_codes, `--symbol-codes`): code -> {symbol,
     # currency, how, evidence}; and the codes it could not, with why.
     inferred: Dict[str, Dict[str, Any]] = field(default_factory=dict)
@@ -346,7 +346,7 @@ class QtAccountContext:
     plan_types: Dict[str, set] = field(default_factory=dict)
     plan_files: Dict[str, set] = field(default_factory=dict)
     plans_checked: bool = False
-    # Planned at the first parse (plan_rows), when the codes `taxjson
+    # Planned at the first parse (plan_rows), when the codes `tjs
     # run` resolved are known: the reversal pairing above, and each
     # broker account's signed position per listing (_plan_qt_positions)
     # that tells a split on a short position from a reverse split.
@@ -356,7 +356,7 @@ class QtAccountContext:
 
     def add_codes_note(self) -> None:
         """ONE note per account for every internal code booked under a
-        ticker: those `taxjson run` inferred from the other exports and
+        ticker: those `tjs run` inferred from the other exports and
         those a journal leg of the account names (lib/symbol_codes)."""
         codes = {**self.journal_codes, **self.inferred}
         if codes:
@@ -569,7 +569,7 @@ def _plan_qt_journals(ctx: QtAccountContext, helper) -> None:
     same Account #, day, description and quantity are one journal
     between the security's CAD and USD lines (Norbert's gambit). Each
     leg gets its line's listing (_journal_listing) and the pair an id
-    the parsed rows carry (`journal_pair`: `taxjson run` joins the two
+    the parsed rows carry (`journal_pair`: `tjs run` joins the two
     lines as a ticker.map JOURNAL line would). An internal code whose
     rows have a journal leg's description in the same account and
     currency is that leg's listing (journal_codes). A leg with no
@@ -684,8 +684,8 @@ def _plan_qt_journals(ctx: QtAccountContext, helper) -> None:
 def journal_codes(paths, *, helper=None) -> Dict[str, Dict[str, Any]]:
     """The internal codes of one account's exports that a BRW journal
     leg of the same name names (_plan_qt_journals): code -> {symbol,
-    currency, how: "journal", evidence} — `taxjson run` records them
-    with the inferred ones (lib/symbol_codes), so `taxjson transfers`
+    currency, how: "journal", evidence} — `tjs run` records them
+    with the inferred ones (lib/symbol_codes), so `tjs transfers`
     lists them."""
     paths = [Path(p) for p in paths]
     if not any(_canon_action(r.get('Action')) == 'BRW'
@@ -705,7 +705,7 @@ def scan_code_uses(paths, *, helper=None) -> list:
     distinct description, the row currencies (listing currency for an
     EXCHANGE RATE row), each transfer-in's (date, quantity), and the
     listings the account's own rows name for some of the code's rows
-    (`own`) — what `taxjson run` needs to resolve the code."""
+    (`own`) — what `tjs run` needs to resolve the code."""
     from taxjson.lib.symbol_codes import (CodeUse, desc_cut,
                                           questrade_name,
                                           questrade_own_name)
@@ -1110,7 +1110,7 @@ class QuestradeBrokerage(BaseBrokerage):
     DEFAULT_ACCOUNT = "Questrade"
 
     # Whether the account is TAXABLE: True / False when the caller knows
-    # (`taxjson-brokerage --account-type`, which `taxjson run` passes),
+    # (`taxjson-brokerage --account-type`, which `tjs run` passes),
     # None = infer from the export's Account Type column. Only gates
     # warnings that matter in a taxable account (a dividend booked net
     # of non-resident withholding, a transfer-in with no book value).
@@ -1227,7 +1227,7 @@ class QuestradeBrokerage(BaseBrokerage):
         identity maps every per-file parse shares (description ->
         traded symbol, a symbol's listing currency, position timelines).
         Account-level warnings print here, once. `symbol_codes`: the
-        record `taxjson run` wrote (lib/symbol_codes) — the internal
+        record `tjs run` wrote (lib/symbol_codes) — the internal
         codes it resolved from the project's other exports, listed in
         ONE note."""
         ctx = build_qt_account_context(list(paths), helper=cls())
@@ -1240,7 +1240,7 @@ class QuestradeBrokerage(BaseBrokerage):
                     continue
                 # A ticker.map rule naming the code (any rule: a rename,
                 # DELETE, DISTINCT, a dated RENAME) wins over the
-                # inference — the same test `taxjson run` records.
+                # inference — the same test `tjs run` records.
                 if any(ticker_map_names(cls().apply_currency_suffix(
                         code, c)) for c in ('USD', 'CAD',
                                             r.get('currency') or 'USD')):
@@ -1254,7 +1254,7 @@ class QuestradeBrokerage(BaseBrokerage):
     account_context: Optional[QtAccountContext] = None
 
     def _unbooked(self, lineno: int, msg: str) -> None:
-        """A real row the parser could not book: `taxjson run` echoes
+        """A real row the parser could not book: `tjs run` echoes
         the UNBOOKED prefix to the console and `run --strict` refuses
         to publish (the old skip note reached only the .sum banner)."""
         emit_line(f"warning: UNBOOKED: {self._where(lineno)}: {msg}")
@@ -1406,7 +1406,7 @@ class QuestradeBrokerage(BaseBrokerage):
         return currency
 
     def _inferred_code(self, sym: str) -> Optional[Tuple[str, str]]:
-        """(listing, currency) `taxjson run` inferred for internal code
+        """(listing, currency) `tjs run` inferred for internal code
         `sym` from the project's other exports (lib/symbol_codes), or
         None."""
         r = self._ctx.inferred.get((sym or '').upper()) if self._ctx \
@@ -1499,7 +1499,7 @@ class QuestradeBrokerage(BaseBrokerage):
         _jc = self._ctx.journal_codes.get(sym)
         if _jc is not None:
             return str(_jc['symbol']), str(_jc['currency'])
-        # The code-level resolution (`taxjson run`, lib/symbol_codes)
+        # The code-level resolution (`tjs run`, lib/symbol_codes)
         # first: one code is one security, so every row of it is booked
         # under ONE listing — a row whose own description matches
         # another listing (a warrant code's plain-worded row, the
@@ -1586,7 +1586,7 @@ class QuestradeBrokerage(BaseBrokerage):
 
         # Taxable hint from the Account Type column: a registered-plan
         # marker -> sheltered; "margin"/"cash" without one -> taxable;
-        # anything else ("API" from `taxjson fetch`) -> unknown.
+        # anything else ("API" from `tjs fetch`) -> unknown.
         _types = {(r.get('Account Type') or '').strip() for _, r in rows
                   if not _is_qt_header(r)}
         _types.discard('')
@@ -1644,7 +1644,7 @@ class QuestradeBrokerage(BaseBrokerage):
                 # "CONVERSION - USD/CAD": the account's own cash moving
                 # between denominations. Not a disposition of property
                 # in this model — FX cash gains are reconstructed by
-                # `taxjson fx-cash` from security cash flows
+                # `tjs fx-cash` from security cash flows
                 # (KNOWN_ISSUES) — so a recognized non-event, not an
                 # unclassified action.
                 self.count_nonevent(f"FX conversion "
@@ -1734,7 +1734,7 @@ class QuestradeBrokerage(BaseBrokerage):
                                  f"{qty:g} share(s) on {date} booked as a "
                                  f"stock-dividend event — the gains run "
                                  f"applies your country's rule to its cost "
-                                 f"(`taxjson tax-logic`)."))
+                                 f"(`tjs tax-logic`)."))
                 continue
 
             if action_raw == 'DIV' or activity_type == 'Dividends':
@@ -1756,7 +1756,7 @@ class QuestradeBrokerage(BaseBrokerage):
                     # CORPORATE-ACTION leg (warrant spinoff / rights
                     # distribution chain: +100 / -100 / +100), not an
                     # informational dividend. taxjson-corp-actions
-                    # books the spinoff chains (run by `taxjson run`);
+                    # books the spinoff chains (run by `tjs run`);
                     # anything else is unclassified — loud.
                     _sym = (row.get('Symbol') or '').strip() or '?'
                     if _QT_CA_LEG_RE.search(desc):
@@ -1965,7 +1965,7 @@ class QuestradeBrokerage(BaseBrokerage):
                         'description': desc,
                     }
                     if _jl.get('pair'):
-                        # The pair's id: `taxjson run` joins the two lines
+                        # The pair's id: `tjs run` joins the two lines
                         # as a ticker.map JOURNAL line would (Canada,
                         # tax-logic CA-XLIST-03; lib/cross_listings).
                         _jtx['journal_pair'] = _jl['pair']
@@ -1989,7 +1989,7 @@ class QuestradeBrokerage(BaseBrokerage):
                 self.count_skip(f"action {action_raw or activity_type or '?'!s}")
                 if abs(_q) > 1e-9:
                     # A row that moves shares and is not booked changes
-                    # the position: say so where `taxjson run` shows it
+                    # the position: say so where `tjs run` shows it
                     # (audit R1-71; the note reached only the .sum).
                     self._unbooked(
                         lineno, f"action {action_raw or '?'!r} moves "
@@ -2288,7 +2288,7 @@ class QuestradeBrokerage(BaseBrokerage):
                   f"corporate-action leg(s) ({', '.join(ca_legs[:8])}"
                   f"{', ...' if len(ca_legs) > 8 else ''}) are not "
                   f"booked by the parser — taxjson-corp-actions books "
-                  f"spinoff/rights chains (`taxjson run` does this); "
+                  f"spinoff/rights chains (`tjs run` does this); "
                   f"check the position if you parse without it.")
         taxable = self._is_taxable()
         if net_of_tax and taxable is not False:
@@ -2327,7 +2327,7 @@ class QuestradeBrokerage(BaseBrokerage):
                   f"quantity, the sending broker's "
                   f"{self.law('ACB', 'cost basis', 'cost')}) as a .tt BUYSELL "
                   f"row, or open it at an unknown cost with a .tt OPENING "
-                  f"cost=unknown line (`taxjson find-missing-history "
+                  f"cost=unknown line (`tjs find-missing-history "
                   f"--write-missing-history`)."
                   f"{'' if taxable else ' (Account type unknown — ignore in a registered account.)'}")
         for _t in transactions[_acct_from:]:
@@ -2338,7 +2338,7 @@ class QuestradeBrokerage(BaseBrokerage):
             emit_line(f"note: {shown_name(path)}: {len(journals)} BRW journal row(s) "
                   f"move units between the CAD and USD lines of one "
                   f"security ({', '.join(journals[:6])}) — booked as "
-                  f"TRANSFER legs; in a Canadian project `taxjson run` "
+                  f"TRANSFER legs; in a Canadian project `tjs run` "
                   f"joins a paired journal's two lines as one security, "
                   f"as a ticker.map TOBASE line (e.g. TOBASE "
                   f"SAMPLF.U.TO SAMPLF.TO) would, so the pair nets out.")

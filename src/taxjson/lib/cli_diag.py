@@ -3,7 +3,7 @@
 Convention (docs/output-style.md, Messages): diagnostics go to stderr.
 Shown to a person they start with their label — ``Warning: ...`` /
 ``Error: ...`` / ``Info: ...``; captured for a program (width 0: a
-stage under ``taxjson run``, a command the checklist reads) they keep
+stage under ``tjs run``, a command the checklist reads) they keep
 the GNU ``<prog>: warning: ...`` / ``<prog>: error: ...`` /
 ``<prog>: note: ...`` bytes, where ``<prog>`` is the installed
 console-script name (e.g. ``taxjson-merge``). lib/out.message makes the
@@ -210,7 +210,7 @@ class InputContentError(ValueError):
     that names the file. A ValueError, so the orchestrator's data-error
     handlers keep catching it; every guard_main-wrapped tool reports it
     as ``<prog>: error: <line>`` with exit 2 — the stand-alone tools
-    printed a traceback for the refusals `taxjson run` reports in one line
+    printed a traceback for the refusals `tjs run` reports in one line
     (re-audit A2-0770 / A2-0793)."""
 
 
@@ -254,7 +254,7 @@ def tolerant_stdout() -> None:
 
 
 def _stdout_closed_exit() -> None:
-    """The reader of our stdout went away (`taxjson trades | head -1`):
+    """The reader of our stdout went away (`tjs trades | head -1`):
     stop quietly with the shell's SIGPIPE status, 141, and no traceback
     (re-audit A2-0785). stdout is pointed at /dev/null first so the
     interpreter's own flush at exit cannot fail again (exit 120)."""
@@ -371,7 +371,7 @@ def describe_input_error(exc: BaseException) -> str:
         # A full disk: a write failed — often to stdout, which a stage's
         # caller redirects to a work/ file, and an OSError for that names
         # no file. It was the bare "[Errno 27] File too large" (backlog
-        # TJ-0106); `taxjson run` names the work/ file.
+        # TJ-0106); `tjs run` names the work/ file.
         return f"{no_space_text(exc)} — {NO_SPACE_FIX}"
     if isinstance(exc, FileNotFoundError):
         return f"no such file: {fn}"
@@ -505,7 +505,7 @@ def guard_main(prog: str, *, value_errors: bool = False):
 
 def tax_year(value: str) -> int:
     """argparse type for --year: an integer in 1900..next year, the range
-    `taxjson init` and [settings] year enforce (audit S033-16: 0 meant
+    `tjs init` and [settings] year enforce (audit S033-16: 0 meant
     'all history' and a 2-digit year silently matched nothing)."""
     import argparse
     from datetime import date

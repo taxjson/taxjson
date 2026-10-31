@@ -1,4 +1,4 @@
-"""`taxjson run`'s console, essentials first (docs/output-style.md):
+"""`tjs run`'s console, essentials first (docs/output-style.md):
 each message one line naming the command with its detail, the closing
 block under `==> Before you trust these numbers` at most six lines, and
 `run --details` bringing every detail line back. The captured text
@@ -71,7 +71,7 @@ class TestOneLineMessages(_Runs):
                     for ln in entries:
                         self.assertLessEqual(len(ln), CONCISE_WIDTH, ln)
                     assert_console(self, text, width=CONCISE_WIDTH,
-                                   allow=("taxjson elect ",))
+                                   allow=("tjs elect ",))
 
     def test_headlines_name_the_command(self):
         r = self.run_of("canada")
@@ -80,10 +80,10 @@ class TestOneLineMessages(_Runs):
                 "Warning: ib_demo.csv: no Cash Report, so its cash is not "
                 "reconciled: add it to the export",
                 "Warning: Transfer-in: margin: 1 with NO cost, kept out of "
-                "the books (XYZQ.US) — `taxjson transfers`",
+                "the books (XYZQ.US) — `tjs transfers`",
                 "Warning: Short position: OLDCO.US (margin): its purchase "
-                "is missing — `taxjson find-missing-history`",
-                "(GHOSTQ.TO) — `taxjson find-missing-history`",
+                "is missing — `tjs find-missing-history`",
+                "(GHOSTQ.TO) — `tjs find-missing-history`",
                 "can be read by other users: `chmod -R go-rwx` it"):
             self.assertIn(phrase, text)
         # Which broker each file was read as: --details.
@@ -101,12 +101,12 @@ class TestOneLineMessages(_Runs):
                 self.assertIn("Warning: NOT in the totals: 2 sales with "
                                 "no purchase", flat)
                 self.assertIn("transfer-in kept out with no cost (XYZQ.US) "
-                              "— `taxjson transfers`", flat)
+                              "— `tjs transfers`", flat)
                 self.assertIn("not checked against the broker's holdings "
-                              "— `taxjson sanity`", flat)
+                              "— `tjs sanity`", flat)
                 self.assertTrue(lines[-1].startswith(
-                    "Info: Then `taxjson checklist --run`"), tail)
-                self.assertIn("`taxjson run --details`", lines[-1])
+                    "Info: Then `tjs checklist --run`"), tail)
+                self.assertIn("`tjs run --details`", lines[-1])
 
 
 class TestDetails(_Runs):
@@ -123,7 +123,7 @@ class TestDetails(_Runs):
                 "2 positions sold in 2024 with no purchase in your files, "
                 "not in missing_history.tt",
                 "Tighten it once: chmod -R go-rwx",
-                "Info: Then run `taxjson checklist --run`: it checks every step "
+                "Info: Then run `tjs checklist --run`: it checks every step "
                 "and names the next one."):
             self.assertIn(phrase, text)
         assert_console(self, r.stdout, width=CONCISE_WIDTH)
@@ -135,7 +135,7 @@ class TestDetails(_Runs):
         text = r.stdout + r.stderr
         self.assertIn("2 positions sold in 2024 with no purchase in your "
                       "files, not in missing_history.tt", text)
-        self.assertNotIn("`taxjson run --details`", text)
+        self.assertNotIn("`tjs run --details`", text)
 
 
 class TestConciseItems(unittest.TestCase):
@@ -186,7 +186,7 @@ class TestConciseItems(unittest.TestCase):
         self.assertLessEqual(len(body), FR.CONCISE_BUDGET, body)
         self.assertTrue(any("$0 cost you declared" in ln for ln in body)
                         or any("more check(s)" in ln for ln in body), body)
-        self.assertEqual(body[-1], "Info: Then run `taxjson checklist --run`: "
+        self.assertEqual(body[-1], "Info: Then run `tjs checklist --run`: "
                                    "it checks every step and names the "
                                    "next one.")
 

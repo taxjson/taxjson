@@ -1,4 +1,4 @@
-"""`taxjson edge-cases`: the transactions whose tax treatment turns on a
+"""`tjs edge-cases`: the transactions whose tax treatment turns on a
 boundary, with where each one lands and why.
 
 Two kinds of boundary:
@@ -69,7 +69,7 @@ def _work_doc(path: Path) -> Dict[str, Any]:
     try:
         return read_work_doc(path)
     except InputFileError as e:
-        raise ValueError(f"{e} — re-run `taxjson run`") from None
+        raise ValueError(f"{e} — re-run `tjs run`") from None
 
 
 def _rows(path: Path) -> List[Dict[str, Any]]:
@@ -878,7 +878,7 @@ def option_expiries(book: Book) -> List[Dict[str, Any]]:
                     + ")")
         if side == "written" and not book.usa:
             why += (" (under grant timing the premium was already a gain"
-                    " in the year written; see `taxjson option-boundary`)")
+                    " in the year written; see `tjs option-boundary`)")
         out.append(dict(base, units=sign * expiring, lands_in=exp.year,
                         outcome=(f"{traded:g} {closed}, " if traded > 1e-9
                                  else "") + f"{expiring:g} expire",
@@ -1659,7 +1659,7 @@ def analyze(root: Path, cfg: Dict[str, Any], *, margin: int = 3,
         from taxjson.lib.option_boundary import filed_locks
         filed, filed_timing = filed_locks(
             root, settings,
-            warn=lambda m: emit_line(f"taxjson edge-cases: warning: {m}",
+            warn=lambda m: emit_line(f"tjs edge-cases: warning: {m}",
                                      file=_sys.stderr),
             premiums=filed_premiums, labels=filed_labels)
     # Written options across a year end are an s.49(1) grant-timing
@@ -1883,14 +1883,14 @@ def render_text(doc: Dict[str, Any], verbose: bool = False,
             lambda r: (r["account"], str(r["symbol"]), f"{r['qty']:+g}",
                        r["date"], r["renamed_to"], r["rename_date"]),
             note=("A separate security unless ticker.map folds them "
-                  "(`taxjson renames`)."),
+                  "(`tjs renames`)."),
             details=lambda r: [str(r["resolution"])],
             essential=lambda r: [str(r["resolution"])])
     if not _all:
         d.blank()
         if doc.get("missing_books"):
             d.para(f"No work files for: {', '.join(doc['missing_books'])} "
-                   f"(run `taxjson run`).")
+                   f"(run `tjs run`).")
         d.line(f"None on the other {len(_none)} edges checked; the rules and "
                f"each row's why: tjs edge-cases --details"
                if _none else
@@ -1915,8 +1915,8 @@ def render_text(doc: Dict[str, Any], verbose: bool = False,
     d.blank()
     if doc.get("missing_books"):
         d.para(f"No work files for: {', '.join(doc['missing_books'])} "
-               f"(run `taxjson run`).")
+               f"(run `tjs run`).")
     d.para("Whether last year's closing positions, January settlements "
            "and corrections are carried into this year exactly once: "
-           "`taxjson handoff`.")
+           "`tjs handoff`.")
     return d.lines()

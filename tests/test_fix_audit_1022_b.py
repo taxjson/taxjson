@@ -7,7 +7,7 @@
   option-boundary (and the run) warn: the books hold a written option.
 - Item 12: an empty crypto (or other) account left from the scaffold:
   option-boundary and the checklist name the empty folder, never "run
-  `taxjson run`" (the run skips it, so the advice looped).
+  `tjs run`" (the run skips it, so the advice looped).
 - Item 15: outside a project every command says there is none and how
   to start one or where to `cd`.
 
@@ -88,7 +88,7 @@ class TestSaleBeyondHeldIsNotInTheTotals(unittest.TestCase):
     def test_run_warns_not_in_the_totals(self):
         self.assertEqual(self.ran.returncode, 0, self.ran.stderr[-2000:])
         out = self.ran.stdout + self.ran.stderr
-        self.assertRegex(out, r"NOT in (the totals|`taxjson sum`)")
+        self.assertRegex(out, r"NOT in (the totals|`tjs sum`)")
         self.assertNotIn("is in the totals", out)
 
     def test_sum_readiness_is_incomplete(self):
@@ -120,7 +120,7 @@ class TestSaleBeyondHeldIsNotInTheTotals(unittest.TestCase):
         self.assertEqual(res.status, "blocked")
         self.assertIn("inputs/crypto is empty", res.detail)
         self.assertIn("[accounts.crypto]", res.detail)
-        self.assertNotIn("taxjson run", res.detail)
+        self.assertNotIn("tjs run", res.detail)
         # Its `! ` line names no command (the detail is the fix).
         text = cl.render_summary([res], 2025, "canada", width_=120)
         acts = [ln for ln in text.splitlines()
@@ -209,7 +209,7 @@ class TestOnlyTaxableAccountEmpty(unittest.TestCase):
             r = _tjs(root, "option-boundary")
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("inputs/margin is empty", r.stderr)
-            self.assertNotIn("`taxjson run`", r.stderr)
+            self.assertNotIn("`tjs run`", r.stderr)
 
 
 class TestOutsideAProject(unittest.TestCase):
@@ -227,7 +227,7 @@ class TestOutsideAProject(unittest.TestCase):
                     self.assertNotEqual(r.returncode, 0)
                     self.assertIn("not a taxjson project", r.stderr)
                     self.assertIn("init --country", r.stderr)
-                    self.assertNotIn("`taxjson run` first", r.stderr)
+                    self.assertNotIn("`tjs run` first", r.stderr)
                     self.assertNotIn("country is missing", r.stderr)
             self.assertEqual(list(Path(tmp).iterdir()), [])
 

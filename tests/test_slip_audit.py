@@ -1,4 +1,4 @@
-"""`taxjson slip-audit`: T5 / T3 slips against the books' income
+"""`tjs slip-audit`: T5 / T3 slips against the books' income
 (tax-logic CA-SLIP-01..03; lib/slip_audit, lib/ib_dividends).
 
 Synthetic data only: a fake IB account id (IB_ACCT), invented tickers, a
@@ -336,7 +336,7 @@ class TestIBEndToEnd(unittest.TestCase):
             st = {s["id"]: s for s in json.loads(r.stdout)["steps"]}
             self.assertEqual(st["t5-t3"]["status"], "attention")
             self.assertIn("margin: ", st["t5-t3"]["detail"])
-            self.assertEqual(st["t5-t3"]["command"], "taxjson slip-audit")
+            self.assertEqual(st["t5-t3"]["command"], "tjs slip-audit")
 
             _apply(root, rep)
             r = tj(root, home, "run", "--no-input")
@@ -665,7 +665,7 @@ class TestCountry(unittest.TestCase):
             self.assertNotIn("Traceback", r.stderr)
             self.assertIn("TAXABLE", cl.step_meta("t5-t3", "usa")[3])
             self.assertEqual(cl.step_meta("t5-t3", "canada")[3],
-                             "taxjson slip-audit")
+                             "tjs slip-audit")
 
 
 if __name__ == "__main__":

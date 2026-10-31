@@ -1,4 +1,4 @@
-"""Backlog group `checktt`: `taxjson check-tt` and the .tt readers
+"""Backlog group `checktt`: `tjs check-tt` and the .tt readers
 (lib/check_tt, bin/taxjson_convert_tt, cmd_check_tt). Each test names
 its backlog id."""
 import contextlib

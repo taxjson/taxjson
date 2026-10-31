@@ -1,6 +1,6 @@
 """Read the wash radar's text report back into rows, for tests.
 
-The report (taxjson-wash-radar / `taxjson wash-radar`, house style) is one
+The report (taxjson-wash-radar / `tjs wash-radar`, house style) is one
 section per advisory category — a heading `<CATEGORY> — <title> (N)`, a
 TICKER / TAXABLE / SHELTERED / CLEARS table, and each advisory printed
 once (without its `<CATEGORY>:` lead) under the rows it applies to, its

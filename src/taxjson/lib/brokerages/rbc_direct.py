@@ -314,7 +314,7 @@ def rbc_export_as_of(path) -> str:
     """The "Activity Export as of" date (ISO) of an RBC activity export
     read from its first lines only, or '' when the file is not one (or
     cannot be read) — for checks that do not parse the whole file
-    (`taxjson checklist` inputs-frozen, audit S063-22)."""
+    (`tjs checklist` inputs-frozen, audit S063-22)."""
     try:
         with open(path, 'rb') as fh:
             head = fh.read(4096)
@@ -671,7 +671,7 @@ def read_rbc_rows(path: Path) -> RbcExport:
 
 
 # The tax words in the parser's notes, by the project's country
-# (taxjson-brokerage --country; `taxjson run` always passes it). The
+# (taxjson-brokerage --country; `tjs run` always passes it). The
 # parser books the same rows either way — only the words differ: a US
 # project never reads a T3/T5 slip, an ACB or the ITA (re-audit A2-0729,
 # A2-0731, A2-0733, A2-0736, A2-1254, A2-1309, A2-1313, A2-1314,
@@ -1005,7 +1005,7 @@ def _extract_words(symdesc: str, desc: str) -> str:
 
 # ------------------------------------------------------- account context
 #
-# `taxjson run` hands every RBC export of one account to ONE
+# `tjs run` hands every RBC export of one account to ONE
 # taxjson-brokerage call, but each file used to be parsed with identity
 # maps learned from that file alone: a symbol's market currency, an
 # option code's contract, a temporary code's company. Split the same rows
@@ -1569,13 +1569,13 @@ class RbcBrokerage(BaseBrokerage):
     def _warn(self, msg: str, *, lint: bool = False,
               unbooked: bool = False, attention: bool = False) -> None:
         """`unbooked`: a real row the parser did NOT book. The
-        'warning: UNBOOKED:' prefix is what `taxjson run` echoes to the
+        'warning: UNBOOKED:' prefix is what `tjs run` echoes to the
         console and what `run --strict` refuses on — a lint finding
         alone reached only the .sum banner, and run never passes --lint
         (audit S016-00 / S064-17). `attention`: booked, but on a guess
         or with money the books leave out (a listing, a temporary code,
         a notional distribution's income) — the 'warning: ATTENTION:'
-        prefix `taxjson run` prints on the console (re-audit A2-0005,
+        prefix `tjs run` prints on the console (re-audit A2-0005,
         A2-0007, A2-0612; owner decision S065-12: not an error)."""
         tag = ('UNBOOKED: ' if unbooked
                else 'ATTENTION: ' if attention else '')
@@ -1621,7 +1621,7 @@ class RbcBrokerage(BaseBrokerage):
                           ) -> List[str]:
         """The account's coverage findings for tax year `year` (see
         rbc_coverage_messages); taxjson-brokerage prints them when
-        `taxjson run` passes the project year (--tax-year)."""
+        `tjs run` passes the project year (--tax-year)."""
         return rbc_coverage_messages(
             [(ctx.exports[k].path.name, ctx.exports[k].as_of,
               [r.date for r in ctx.exports[k].rows],
@@ -1774,7 +1774,7 @@ class RbcBrokerage(BaseBrokerage):
 
         if spinoffs:
             # Country-neutral (audit S064-20): corp-actions has election
-            # rules for every supported country, and `taxjson run` runs
+            # rules for every supported country, and `tjs run` runs
             # it — the old text cited Canadian law and told a US project
             # to add a .tt row the stage already books (double-booked).
             _cil = (f" and {spinoff_cil} cash-in-lieu row(s) for their "
@@ -1782,16 +1782,16 @@ class RbcBrokerage(BaseBrokerage):
             self._note(
                 f"{spinoffs} RBC spin-off row(s) (DIS - ... SPINOFF){_cil} are "
                 f"left to taxjson-corp-actions, which asks for your "
-                f"country's tax election (`taxjson run` runs it). Parsing "
-                f"outside `taxjson run`, run taxjson-corp-actions on this "
+                f"country's tax election (`tjs run` runs it). Parsing "
+                f"outside `tjs run`, run taxjson-corp-actions on this "
                 f"file too — do not also enter the shares in a .tt file "
                 f"(that books them twice).")
         if owned_by_corp_actions:
             self._note(
                 f"skipped {owned_by_corp_actions} RBC merger row(s) — these "
                 f"are resolved by taxjson-corp-actions (--brokerage "
-                f"rbc_direct), which `taxjson run` runs. Parsing outside "
-                f"`taxjson run`, run it on this file too — do not also "
+                f"rbc_direct), which `tjs run` runs. Parsing outside "
+                f"`tjs run`, run it on this file too — do not also "
                 f"enter the shares in a .tt file (that books them twice).")
 
         if not transactions:
@@ -2160,7 +2160,7 @@ class RbcBrokerage(BaseBrokerage):
         the transferred-in ACB is not booked here (the engine consumes the
         TRANSFER before the ACB pass and missing basis surfaces as
         incomplete history). RBC's "BOOK VALUE nnn" is carried as
-        `book_value` evidence: in a taxable account `taxjson run` books
+        `book_value` evidence: in a taxable account `tjs run` books
         it as the cost of shares that arrive from outside the books
         (lib/transfer_in). Gated by --transfers at the taxjson-brokerage
         wrapper."""
@@ -2481,7 +2481,7 @@ class RbcBrokerage(BaseBrokerage):
         symbol = self._equity_symbol(self._resolve_temp(r), r.currency, r)
         self._note(f"line {r.line}: stock dividend of {r.qty:g} {symbol} "
                    f"booked as a stock-dividend event — the gains run "
-                   f"applies your country's rule to its cost (`taxjson "
+                   f"applies your country's rule to its cost (`tjs "
                    f"tax-logic`).")
         return {
             'action': 'BUYSELL',

@@ -5,10 +5,10 @@ decision; the TradingView one went first, see test_fix_notv).
   either is a clear exit-2 error naming the removal. The tool now needs
   one of its remaining modes, `--report` or `--holdings-toml` (no mode
   used to print a bare ticker list, the watchlist path).
-- `taxjson run` has no exports stage (no "==> exports"); a full run
+- `tjs run` has no exports stage (no "==> exports"); a full run
   removes the *_SA.csv / *_FG.csv / *_TV.txt files an earlier run left in
   reports/exports/ and the folder once it is empty, in one line.
-- `--report`, `--holdings-toml` and the holdings TOMLs `taxjson run`
+- `--report`, `--holdings-toml` and the holdings TOMLs `tjs run`
   writes are unchanged.
 
 Synthetic data only.

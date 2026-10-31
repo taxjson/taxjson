@@ -367,7 +367,7 @@ class TestTJ0946CashInTransitAtTheYearEnd(unittest.TestCase):
 
 
 class TestTJ0946TheCommand(unittest.TestCase):
-    """TJ-0946 through `taxjson t1135 --json` (the audit's repro)."""
+    """TJ-0946 through `tjs t1135 --json` (the audit's repro)."""
 
     def _t1135(self, arrival):
         with tempfile.TemporaryDirectory() as td:

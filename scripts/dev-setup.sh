@@ -1,6 +1,6 @@
 #!/bin/bash
 # Developer setup (clone-then-run): venv + editable install with the extras the full
-# pipeline uses ([fx] = FX-rate fetching for taxjson run, [dev] = the
+# pipeline uses ([fx] = FX-rate fetching for tjs run, [dev] = the
 # CI linter). Idempotent — safe to
 # re-run after a pull. Activate afterwards with: source setup.sh. End users: see install.sh (curl one-liner).
 #   scripts/dev-setup.sh --hook-only   only (re)install the pre-push hook
@@ -62,7 +62,7 @@ venv/bin/pip install --upgrade pip --quiet
 # below keeps it (the [dev] extra's ruff>=0.4 is already met).
 venv/bin/pip install --require-hashes --only-binary :all: -r requirements/dev.txt
 venv/bin/pip install -e ".[fx,dev]"
-# The broker-fetch plugin (`taxjson fetch`: Questrade, IBKR Flex) — a separate
+# The broker-fetch plugin (`tjs fetch`: Questrade, IBKR Flex) — a separate
 # distribution in packages/, installed beside the core. --no-deps: its only
 # dependency is the core installed just above from this checkout.
 venv/bin/pip install --no-deps -e packages/taxjson-fetch

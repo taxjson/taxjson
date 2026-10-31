@@ -460,7 +460,7 @@ class TestIsinCountryFallback(unittest.TestCase):
 
 
 class TestRunParsesStrict(unittest.TestCase):
-    """`taxjson run` passes --strict to taxjson-brokerage: a schema
+    """`tjs run` passes --strict to taxjson-brokerage: a schema
     ERROR stops the run instead of scrolling past as a warning."""
 
     def test_brokerage_stage_is_strict(self):

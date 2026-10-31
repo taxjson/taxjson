@@ -18,13 +18,13 @@ by the country:
 - ``tx(action, date, symbol, qty, net, ...)``: one TaxTransaction with
   the settle date given explicitly (``settle=``; default = trade date).
 - ``gains_both(book, ...)`` -> {"canada": result, "usa": result}: the full
-  `run_gains` (the same code `taxjson run` uses) under each country, on
+  `run_gains` (the same code `tjs run` uses) under each country, on
   deep copies of the book. Keyword arguments go to GainsRequest; per-
   country extras go in ``canada={...}`` / ``usa={...}``.
 - ``projects_both(tmp, ...)`` -> {"canada": Path, "usa": Path}: two
   project folders with identical inputs/work files and the country's own
   [settings] (country, base currency); ``cli_both(projects, *args)`` runs
-  `taxjson -C <project> args...` in each and returns the
+  `tjs -C <project> args...` in each and returns the
   CompletedProcess per country.
 """
 from __future__ import annotations
@@ -127,7 +127,7 @@ def projects_both(tmp, *, year: int = 2025,
 
 def cli(root: Path, *args: str, timeout: int = 180
         ) -> subprocess.CompletedProcess:
-    """`taxjson -C root args...` from this worktree's sources."""
+    """`tjs -C root args...` from this worktree's sources."""
     import os
     env = dict(os.environ, PYTHONPATH=str(SRC), TAXJSON_OFFLINE="1")
     return subprocess.run(

@@ -320,7 +320,7 @@ class TestUsDecideHint(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             r = _cli(root, home, "crypto-sends", "crypto")
             self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("Decide: taxjson crypto-sends crypto --set "
+        self.assertIn("Decide: tjs crypto-sends crypto --set "
                       "ID=self|payment [--note TEXT]", r.stdout)
         self.assertNotIn("gift|", r.stdout)
 
@@ -395,7 +395,7 @@ class TestCoinbaseNegativeDerivedTotal(unittest.TestCase):
 class TestS07619Messages(unittest.TestCase):
     """A2-0905: the two S076-19 message fixes nothing pinned —
     find-missing-history's closing advice names the project commands
-    (`taxjson find-missing-history --write-missing-history`, `taxjson run`), and
+    (`tjs find-missing-history --write-missing-history`, `tjs run`), and
     pipeline._handle_transfers' rewrite NOTE scopes --taxable to the
     standalone `taxjson-gains` (the run never passes a flag the user
     typed)."""
@@ -415,10 +415,10 @@ class TestS07619Messages(unittest.TestCase):
                 # style.md, Essentials first); the default names it.
                 main(["--year", "2025", "--details", str(f)])
         text = out.getvalue()
-        self.assertIn("`taxjson find-missing-history "
+        self.assertIn("`tjs find-missing-history "
                       "--write-missing-history` in the project", text)
         self.assertIn("into inputs/<account>/missing_history.tt", text)
-        self.assertIn("then `taxjson run` (it reads them)", text)
+        self.assertIn("then `tjs run` (it reads them)", text)
 
     def test_transfer_rewrite_note_scopes_the_flag(self):
         from taxjson.lib.core import TaxTransaction

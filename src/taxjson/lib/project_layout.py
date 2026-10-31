@@ -27,7 +27,7 @@ the newest year's run writes the files other tools read. A folder or
 file a setting names must be inside the folder that holds the project
 (its parent): a path that leaves it, by `..` or a symlink, is refused.
 A year folder that names a shared tobase.map and still holds a
-tobase.map of its own is refused, naming both (`taxjson migrate` at the
+tobase.map of its own is refused, naming both (`tjs migrate` at the
 top makes the per-year copies one shared file). `holdings_dir`
 (default holdings/) holds the year's positions snapshots
 (lib/holdings_dir). A year folder (named YYYY) of a shared-exports
@@ -54,6 +54,7 @@ INPUTS = "inputs"
 SLIPS = "slips"
 HOLDINGS = "holdings"
 EXPORTS = "exports"
+SNAPSHOTS = "snapshot"
 # [settings] keys naming folders (relative to the project).
 INPUTS_KEY = "inputs_dir"
 HOLDINGS_KEY = "holdings_dir"
@@ -253,7 +254,7 @@ def shared_inputs(root) -> bool:
         return False
 
 
-# The project a command runs for, named by `taxjson run` (every
+# The project a command runs for, named by `tjs run` (every
 # command's load_config) to its stages: with exports shared by every
 # year (`inputs_dir`) an input file's folders say nothing about which
 # project reads it (inputs/../ is the folder holding the year folders).
@@ -286,13 +287,13 @@ def project_of_input(path) -> Optional[Path]:
     return None
 
 
-# The stem ending of the copy `taxjson redact FILE` writes (NAME.redacted.EXT).
+# The stem ending of the copy `tjs redact FILE` writes (NAME.redacted.EXT).
 REDACTED_STEM = ".redacted"
 _INPUT_SUFFIXES = (".csv", ".tt")
 
 
 def redacted_copy_beside_exports(path) -> bool:
-    """`path` is a NAME.redacted.EXT copy `taxjson redact FILE` wrote
+    """`path` is a NAME.redacted.EXT copy `tjs redact FILE` wrote
     beside the exports it was made from: its folder also holds an
     activity file (.csv / .tt) that is no redacted copy. Never an
     input: its rows are the export's again under placeholder ids, so
@@ -331,6 +332,26 @@ def project_path(root, rel: str) -> Path:
     if parts and parts[0] == INPUTS:
         return inputs_dir(root).joinpath(*parts[1:])
     return Path(root) / rel
+
+
+def years_layout(root) -> bool:
+    """The project is a year folder of a multi-year project: it reads
+    shared exports, or (a closed year has its own copy and names no
+    shared folder) it is a folder named YYYY beside `inputs/` or
+    `snapshot/`."""
+    root = Path(root)
+    if shared_inputs(root):
+        return True
+    parent = root.resolve().parent
+    return bool(YEAR_DIR_RE.match(root.resolve().name)) and (
+        (parent / INPUTS).is_dir() or (parent / SNAPSHOTS).is_dir())
+
+
+def snapshots_folder(root) -> Path:
+    """Where `tjs snapshot` keeps its copies: `snapshot/` beside the
+    year folders, else in the project."""
+    root = Path(root)
+    return (root.resolve().parent if years_layout(root) else root) / SNAPSHOTS
 
 
 def write_boundary(root) -> Path:
@@ -502,7 +523,7 @@ def tobase_both_problem(root, settings: Dict[str, Any]) -> Optional[str]:
     return (f"two tobase.map files for this year: [settings] {TOBASE_KEY} "
             f"= {v!r} names {shown(shared, _resolved(root))} (shared by "
             f"every year), and this folder holds a tobase.map of its own "
-            f"— `taxjson migrate` in the folder holding the year folders "
+            f"— `tjs migrate` in the folder holding the year folders "
             f"makes the per-year copies one shared file (each kept as "
             f"tobase.map.bak); or delete this folder's tobase.map, or "
             f"remove the setting")
@@ -680,7 +701,7 @@ def unconfigured_inputs(root, accounts: Dict[str, Any]) -> List[str]:
 # ------------------------------------------------------------- new year
 
 # Tables that hold one year's own figures: commented out in the copy
-# `taxjson new-year` makes of last year's taxjson.toml.
+# `tjs new-year` makes of last year's taxjson.toml.
 YEAR_ONLY_TABLES = ("estimate", "instalments")
 
 
@@ -702,7 +723,7 @@ def new_year_text(text: str, old_year: int, new_year: int) -> str:
             text = set_key_text(
                 text, (t,), None,
                 note=f"## {old_year}'s figures, kept for reference by "
-                     f"`taxjson new-year`: put {new_year}'s in and "
+                     f"`tjs new-year`: put {new_year}'s in and "
                      f"uncomment them.")
     accounts = doc.get("accounts")
     for name, a in (accounts.items() if isinstance(accounts, dict)
@@ -714,7 +735,7 @@ def new_year_text(text: str, old_year: int, new_year: int) -> str:
             text = set_key_text(
                 text, ("accounts", name, "holdings"), None,
                 note=f"## {old_year}'s positions snapshots, commented out "
-                     f"by `taxjson new-year`: save {new_year}'s in "
+                     f"by `tjs new-year`: save {new_year}'s in "
                      f"holdings/, or list them here.")
     text = set_key_text(text, ("settings", "year"), new_year)
     return set_key_text(text, ("settings", "prior_year_record"),
@@ -833,7 +854,7 @@ def _account_names(doc: Dict[str, Any]) -> List[str]:
 
 def compare(here: Path, other: Path) -> Dict[str, Any]:
     """What differs between two projects' ticker.map rules and
-    taxjson.toml keys (`taxjson align`, `taxjson years --diff`): rules
+    taxjson.toml keys (`tjs align`, `tjs years --diff`): rules
     only in one, the accounts only one has (`accounts_only_here`,
     `accounts_only_there`: listed whole, their keys never compared),
     keys set differently (`year`, prior_year_record, the
@@ -851,7 +872,7 @@ def compare(here: Path, other: Path) -> Dict[str, Any]:
     # tobase.map (lib/tobase_map): the interlisted pairs. With one file
     # every year shares (`tobase_map`) the setting is compared (a key
     # below), never the file; per-year copies (the layout before
-    # v0.27.1, `taxjson migrate` makes them one) are compared line by
+    # v0.27.1, `tjs migrate` makes them one) are compared line by
     # line, shown apart (align never copies them).
     ta: List[str] = []
     tb: List[str] = []
@@ -1333,7 +1354,7 @@ def _edit_text(text: str, doc: Dict[str, Any], path: KeyPath, value: Any,
 
 # The note close-year's freeze writes over the shared folders' settings
 # it comments out (taxjson_run._FROZEN_NOTE_PREFIX).
-FROZEN_NOTE_PREFIX = "## frozen by `taxjson close-year`"
+FROZEN_NOTE_PREFIX = "## frozen by `tjs close-year`"
 
 
 def _freeze_noted(d) -> bool:
@@ -1349,7 +1370,7 @@ def _freeze_noted(d) -> bool:
 
 def frozen_year(d, year) -> bool:
     """The year project `d` was closed with its inputs frozen (its
-    filed/<year>.json lock carries a `frozen` record: `taxjson
+    filed/<year>.json lock carries a `frozen` record: `tjs
     close-year` copied the shared exports and tobase.map into the
     year's own folders, which the year reads from then on). A lock
     taken before the year ended (close-year --force) records the
@@ -1423,7 +1444,7 @@ def lock_missing_parts(year) -> Tuple[str, str]:
             f"again",
             "The year's folder shows it was closed (close-year's freeze "
             "note in taxjson.toml, or the reports it kept as filed): "
-            "restore the lock from git or a backup, or `taxjson "
+            "restore the lock from git or a backup, or `tjs "
             "close-year` locks the year again.")
 
 
@@ -1539,7 +1560,7 @@ def set_key_after(text: str, dotted: str, value: Any,
 # ------------------------------------------------------------ years view
 
 # The last drift check of the project's filed years, in work/ (written
-# by taxjson_run._check_filed_years: `taxjson run`, `check-filed`).
+# by taxjson_run._check_filed_years: `tjs run`, `check-filed`).
 FILED_CHECK_STATE = "filed_check.state"
 _FILED_CHECK_FORMAT = "filed_check/1"
 
@@ -1555,7 +1576,7 @@ def _lock_digest(lock: Path) -> Optional[str]:
 def record_filed_check(root, verdicts: Dict[Any, str]) -> None:
     """Keep the drift check's verdict on each filed year it judged
     (`verdicts`: {year: "drifted" | "ok"}) in work/FILED_CHECK_STATE,
-    with the digest of the lock it judged, so `taxjson years` shows a
+    with the digest of the lock it judged, so `tjs years` shows a
     filed year whose last run DRIFTED (filed_check, backlog TJ-0159).
     Advisory: nothing is written without a work/ folder, and a write
     that fails is let go."""
@@ -1598,8 +1619,8 @@ def filed_check(root, year) -> Optional[bool]:
 
 
 def years_report(folder: Path) -> Dict[str, Any]:
-    """`taxjson years --json`: each year project of the multi-year folder
-    with its state (docs/settings.md, `taxjson years --json`)."""
+    """`tjs years --json`: each year project of the multi-year folder
+    with its state (docs/settings.md, `tjs years --json`)."""
     from taxjson.lib import checklist as CL
     yrs = year_dirs(folder)
     newest = yrs[-1][1] if yrs else None
@@ -1647,7 +1668,7 @@ def years_report(folder: Path) -> Dict[str, Any]:
                                                      "disallowed")
                                 if isinstance(rr.get(k), (int, float))
                                 and not isinstance(rr.get(k), bool))
-                        # ...and income as `taxjson sum`'s taxable
+                        # ...and income as `tjs sum`'s taxable
                         # SUBTOTAL adds it (backlog TJ-0212).
                         from taxjson.bin.taxjson_filed import \
                             income_as_summed
@@ -1671,7 +1692,7 @@ def years_report(folder: Path) -> Dict[str, Any]:
                                  "a link to nothing" if lock.is_symlink()
                                  and not lock.exists() else "not a file")
                               + ") — restore the lock from git, or "
-                              "remove it and `taxjson close-year` after "
+                              "remove it and `tjs close-year` after "
                               "filing")
         elif lock_missing_frozen(d, y):
             # A frozen year whose lock was deleted: filed, its lock to

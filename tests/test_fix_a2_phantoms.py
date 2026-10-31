@@ -453,7 +453,7 @@ class TestStaleMissingHistoryEntries(unittest.TestCase):
 class TestNativeBooksApplyMissingHistory(unittest.TestCase):
     """A2-0111 / A2-0305 (R1-275 / R1-322): the native raw-gains pass
     applies missing_history.json, so holdings.toml carries no false short
-    and `taxjson gains` shows no realized gain for the tainted sale."""
+    and `tjs gains` shows no realized gain for the tainted sale."""
 
     @rule("CA-ACB-11")
     def test_holdings_and_native_gains_agree_with_sum(self):

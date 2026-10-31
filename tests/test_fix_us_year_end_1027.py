@@ -1,4 +1,4 @@
-"""`taxjson edge-cases` on a US project (backlog TJ-0284, also the tjs
+"""`tjs edge-cases` on a US project (backlog TJ-0284, also the tjs
 command audit's TJ-0339): the disallowed losses carried in the positions
 held at the end of the project year come from the US engine's lots at
 the end of Dec 31 (`inventory_year_end`, tax-logic US-RPT-13), not from
@@ -6,8 +6,8 @@ the gains file's final inventory, so a later sale or purchase leaves
 them alone.
 
 Engine-backed: run_gains computes every row from synthetic trades
-(ZZQ.US, ZZR.US; made-up amounts), written to work/ as `taxjson run`
-writes them; one test drives `taxjson run` and `taxjson edge-cases` on a
+(ZZQ.US, ZZR.US; made-up amounts), written to work/ as `tjs run`
+writes them; one test drives `tjs run` and `tjs edge-cases` on a
 .tt project, as the audit's reproduction did.
 """
 import contextlib
@@ -279,8 +279,8 @@ def _cli(root: Path, *args: str) -> subprocess.CompletedProcess:
 
 @rule("US-RPT-13")
 class TestUSYearEndCLI(unittest.TestCase):
-    """The audit's reproduction (TJ-0339): `taxjson run`, then
-    `taxjson edge-cases --json`, before and after a 2026 sale is added."""
+    """The audit's reproduction (TJ-0339): `tjs run`, then
+    `tjs edge-cases --json`, before and after a 2026 sale is added."""
 
     TT = ("BUYSELL 2025-11-03 10:00:00 ZZQ.US 10 USD 10 100 0\n"
           "BUYSELL 2025-11-17 10:00:00 ZZQ.US -10 USD 5 50 0\n"

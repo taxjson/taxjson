@@ -1,4 +1,4 @@
-"""`taxjson elect` — view / clear corporate-action elections."""
+"""`tjs elect` — view / clear corporate-action elections."""
 import argparse
 import io
 import json
@@ -109,7 +109,7 @@ class TestElect(unittest.TestCase):
 
 
 class TestElectSet(unittest.TestCase):
-    """`taxjson elect ACCOUNT --set EVENT_ID=ELECTION [--hint K=V]` —
+    """`tjs elect ACCOUNT --set EVENT_ID=ELECTION [--hint K=V]` —
     non-interactive election writing for headless/CI bootstrap."""
 
     def _elect_set(self, root, setarg, hints=None):

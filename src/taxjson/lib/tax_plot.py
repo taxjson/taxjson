@@ -1,15 +1,15 @@
-"""`taxjson plot-tax`: the tax the year's investment income generated
+"""`tjs plot-tax`: the tax the year's investment income generated
 month by month, as an ASCII chart, against the year's estimate
-(`taxjson estimate`). Planning numbers only, never a filing figure
+(`tjs estimate`). Planning numbers only, never a filing figure
 (tax-logic CA-PLAN-08 / US-PLAN-09).
 
-The command runs the estimator the way `taxjson estimate` does, once
+The command runs the estimator the way `tjs estimate` does, once
 per month on the taxable accounts' gains and income dated up to that
 month's end; a month's tax is that run less the month before's (so a
 month's figure depends on where the year's income stands: a loss
 month is negative, a month that crosses a bracket costs more). The
 running total through December is the year's estimate on the same
-inputs; `taxjson estimate`'s own figure is the reference line (the two
+inputs; `tjs estimate`'s own figure is the reference line (the two
 differ only by what is dated to the year rather than to a month: a T5
 box 18 reclassification; a US month splits its own §1256 P/L 60/40, as
 the year does).
@@ -61,11 +61,11 @@ def build(points: Iterable[Dict[str, Any]], *, year: int, base: str,
           unknown_cost_included: int = 0) -> Dict[str, Any]:
     """The document. `points`: one per month in order, {month,
     cum_tax, cum_income} — the estimator run on the rows dated up to
-    the month's end. `year_estimate` / `year_income`: `taxjson
+    the month's end. `year_estimate` / `year_income`: `tjs
     estimate`'s own figures for the year. `unknown_cost_routed`: the
     sales with an unknown cost routed to manual reporting, NOT in the
     figures; `unknown_cost_included`: those in them (raw engine
-    output), as `taxjson estimate` counts them (backlog TJ-0783)."""
+    output), as `tjs estimate` counts them (backlog TJ-0783)."""
     rows: List[Dict[str, Any]] = []
     prev_t = prev_i = 0.0
     for p in points:

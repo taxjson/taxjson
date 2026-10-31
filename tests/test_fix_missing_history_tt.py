@@ -8,14 +8,14 @@ A. `OPENING <date> <SYMBOL> <qty> cost=unknown [reason="..."]` in an
    window). Sales that draw on them go to manual reporting in both
    countries (CA-ACB-11 / US-BASIS-04). It is the only form:
    missing_history.json (and phantoms.json) is no longer read — every
-   command refuses a project that has one, naming `taxjson migrate`,
+   command refuses a project that has one, naming `tjs migrate`,
    which converts it (in the shared layout merging the year folders'
    files: agreeing entries one line; disagreeing ones listed, written
    with --write as the newest year sizes them; entries that open nothing
    dropped) and renames it *.migrated. `find-missing-history
    --write-missing-history` writes only these lines (merged: never
    twice; another quantity flagged, never replaced) and takes no FILE.
-B. `taxjson sanity` compares the broker's positions with the books'
+B. `tjs sanity` compares the broker's positions with the books'
    positions INCLUDING the missing-history units (lib/positions_check.
    book_rows): a pre-history sale covered by missing history is no
    longer a false MISSING_IN_HOLDINGS; an uncovered one still is.
@@ -262,7 +262,7 @@ class TestBothCountries(unittest.TestCase):
 
 class TestTheJsonIsRefused(unittest.TestCase):
     """missing_history.json (or phantoms.json): every command stops,
-    naming `taxjson migrate`; the checklist shows it."""
+    naming `tjs migrate`; the checklist shows it."""
 
     def test_refused_with_the_migrate_hint(self):
         for name in ("missing_history.json", "phantoms.json"):
@@ -276,7 +276,7 @@ class TestTheJsonIsRefused(unittest.TestCase):
                     self.assertEqual(r.returncode, 2, cmd)
                     flat = " ".join(r.stderr.split())
                     self.assertIn(f"{name} is no longer read", flat)
-                    self.assertIn("run `taxjson migrate` to convert it",
+                    self.assertIn("run `tjs migrate` to convert it",
                                   flat)
                 r = tjs("-C", str(d), "checklist", "--run", "--json")
                 self.assertIn(f"{name} is no longer read", r.stdout)
@@ -289,7 +289,7 @@ class TestTheJsonIsRefused(unittest.TestCase):
         f.write_text("[]")
         with self.assertRaises(MissingHistoryNoLongerRead) as cm:
             load_missing_history(f)
-        self.assertIn("taxjson migrate", str(cm.exception))
+        self.assertIn("tjs migrate", str(cm.exception))
 
 
 class TestWriteMissingHistory(unittest.TestCase):
@@ -337,7 +337,7 @@ class TestWriteMissingHistory(unittest.TestCase):
 
 
 class TestMigrate(unittest.TestCase):
-    """`taxjson migrate`: missing_history.json -> .tt lines, sized from
+    """`tjs migrate`: missing_history.json -> .tt lines, sized from
     the project's books (a run with the file moved aside built them)."""
 
     def test_single_folder(self):

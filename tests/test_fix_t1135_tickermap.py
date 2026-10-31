@@ -3,13 +3,13 @@
 - `T1135 SYMBOL COUNTRY` lines in ticker.map are the T1135 domicile
   overrides (COUNTRY: an ISO 3166 alpha-3 code, or CA/CAN/CANADA/EXCLUDE
   for "not foreign property" — the old t1135.map vocabulary). taxjson-t1135
-  `--map` and `taxjson t1135` read them from ticker.map.
+  `--map` and `tjs t1135` read them from ticker.map.
 - A T1135 line that cannot be read (bad country, wrong shape, the same
-  symbol given two countries) is a ticker.map problem: `taxjson run`
+  symbol given two countries) is a ticker.map problem: `tjs run`
   refuses the map and taxjson-t1135 stops naming it — never a silent
   fallback to the listing suffix.
 - t1135.map is an old per-purpose file: every command stops while it is
-  in the project; `taxjson migrate` turns it into T1135 lines (with the
+  in the project; `tjs migrate` turns it into T1135 lines (with the
   old loader's rules) and renames it t1135.map.migrated. The migrated
   project's t1135 output is identical to one written with T1135 lines.
 
@@ -124,7 +124,7 @@ class TestT1135Lines(unittest.TestCase):
                 self.assertIn(want, str(cm.exception))
 
     def test_other_lookup_problems_do_not_stop_t1135(self):
-        # A bad QUOTE line is `taxjson run`'s to refuse; T1135 reads on.
+        # A bad QUOTE line is `tjs run`'s to refuse; T1135 reads on.
         self.assertEqual(_load("QUOTE PNG.TO\nT1135 ENB.US CA\n"),
                          {"ENB.US": None})
 
@@ -173,7 +173,7 @@ class TestProject(unittest.TestCase):
                     self.assertEqual(r.returncode, 2, r.stderr[-2000:])
                     self.assertIn("t1135.map", r.stderr)
                     self.assertIn("T1135", r.stderr)
-                    self.assertIn("taxjson migrate", r.stderr)
+                    self.assertIn("tjs migrate", r.stderr)
 
     def test_migrate_converts_with_the_old_rules(self):
         from taxjson.bin.taxjson_t1135 import load_overrides

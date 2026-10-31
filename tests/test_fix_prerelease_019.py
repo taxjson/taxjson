@@ -124,7 +124,7 @@ def _rates(path: Path, home: Path):
 
 
 class TestRunConsole(unittest.TestCase):
-    """`taxjson run` over a synthetic project whose sale names a symbol
+    """`tjs run` over a synthetic project whose sale names a symbol
     carrying an ESC sequence: the console shows it escaped; the .diag and
     .sum files keep the raw bytes (they are captured, never displayed —
     byte for byte what the run wrote before this change)."""

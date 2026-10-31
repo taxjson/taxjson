@@ -27,7 +27,7 @@ SRC = REPO_ROOT / "src"
 
 
 def _cli(root: Path, *args: str) -> subprocess.CompletedProcess:
-    """`taxjson -C root args...` from this tree's sources
+    """`tjs -C root args...` from this tree's sources
     (python_module_argv, never `-m` from the cwd)."""
     env = dict(os.environ, PYTHONPATH=str(SRC), TAXJSON_OFFLINE="1",
                TAXJSON_WIDTH="0")

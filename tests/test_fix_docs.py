@@ -52,7 +52,7 @@ def _bullets(section):
 
 
 def _subcommands():
-    """The subcommand names `taxjson --help` lists."""
+    """The subcommand names `tjs --help` lists."""
     # `help --all`: every command, whatever project the cwd is in; the
     # grouped page lists each at a 2-space indent under its heading.
     r = subprocess.run([sys.executable, "-m", "taxjson.bin.taxjson_run",
@@ -78,8 +78,8 @@ class TestNoPhantomCommands(unittest.TestCase):
 
     def test_no_taxjson_fees_console_script(self):
         # The console script is taxjson-fees-sum; the taxjson-fees alias
-        # was removed (CHANGELOG v0.15 era). `commands.md#taxjson-fees`
-        # is the `taxjson fees` section's anchor, not a script (TJ-0181).
+        # was removed (CHANGELOG v0.15 era). `commands.md#tjs-fees`
+        # is the `tjs fees` section's anchor, not a script (TJ-0181).
         pat = re.compile(r"(?<!#)taxjson-fees(?!-sum)\b")
         self.assertIsNone(pat.search(_unreleased()))
         for d in self.DOCS:
@@ -88,7 +88,7 @@ class TestNoPhantomCommands(unittest.TestCase):
     def test_every_documented_taxjson_command_exists(self):
         subs = _subcommands()
         readme = _read("README.md")
-        named = set(re.findall(r"`taxjson ([a-z][a-z0-9-]+)", readme))
+        named = set(re.findall(r"`tjs ([a-z][a-z0-9-]+)", readme))
         # `taxjson <tool>` passthroughs and words that are not commands.
         missing = sorted(n for n in named if n not in subs)
         self.assertEqual(missing, [], "README names unknown commands")
@@ -97,14 +97,14 @@ class TestNoPhantomCommands(unittest.TestCase):
         # Removed commands the CHANGELOG still names: "the removed taxjson
         # verify" and the web UI's `taxjson serve`.
         subs = _subcommands() | {"verify", "serve"}
-        named = set(re.findall(r"`taxjson ([a-z][a-z0-9-]+)", _unreleased()))
+        named = set(re.findall(r"`(?:tjs|taxjson) ([a-z][a-z0-9-]+)", _unreleased()))
         self.assertEqual(sorted(named - subs), [])
 
     def test_every_command_is_in_the_readme(self):
         readme = _read("README.md")
         undocumented = sorted(
             c for c in _subcommands()
-            if f"`taxjson {c}" not in readme and f"taxjson {c} " not in readme
+            if f"`tjs {c}" not in readme and f"tjs {c} " not in readme
             and f"`{c}`" not in readme)
         self.assertEqual(undocumented, [], "commands missing from README")
 
@@ -137,8 +137,8 @@ class TestFilingChecklistDoc(unittest.TestCase):
         doc = _read("docs/filing.md")
         missing = []
         for sid, _stage, _title, cmd, _why in STEPS:
-            for c in re.findall(r"taxjson ([a-z][a-z0-9-]+)", cmd):
-                if f"`taxjson {c}" not in doc:
+            for c in re.findall(r"(?:tjs|taxjson) ([a-z][a-z0-9-]+)", cmd):
+                if f"`tjs {c}" not in doc:
                     missing.append((sid, c))
         self.assertEqual(missing, [])
 

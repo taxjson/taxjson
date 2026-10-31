@@ -1,4 +1,4 @@
-"""What `taxjson sanity` checks beyond the quantity table: the books'
+"""What `tjs sanity` checks beyond the quantity table: the books'
 COST against a positions report's, the books' positions on a past date,
 and income paid on a share count the books do not hold.
 
@@ -70,7 +70,7 @@ def load_base_rows(cache: Path, account: str, *,
     — read as an empty history, it made `sanity` compare a dated
     snapshot with the latest books and certify it (audit 2026-10-24
     B18); a missing file is still no history. A books document is the
-    object `taxjson run` writes, with a `transactions` list: `{}` or a
+    object `tjs run` writes, with a `transactions` list: `{}` or a
     bare list is no books either (backlog TJ-0010)."""
     p = Path(cache) / f"{account}_base.json"
     try:

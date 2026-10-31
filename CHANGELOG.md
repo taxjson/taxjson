@@ -3,6 +3,32 @@
 ## Unreleased
 
 
+## v0.40.0 (2026-10-30)
+
+### Changed: the command is `tjs`, everywhere
+
+- Every message, usage line, doc and report now names the command `tjs`, so
+  the two names no longer mix. `taxjson` still runs the same program, for old
+  scripts and cron jobs; the project, `taxjson.toml`, the `taxjson-*` tools and
+  the `TAXJSON_*` variables keep their names. No figure moves. `tjs compare`
+  reads an older report's `taxjson run` as `tjs run`; `tjs format --write`
+  updates the comments in taxjson.toml. See docs/upgrading.md.
+
+### New: `tjs snapshot`
+
+- `tjs snapshot` copies the whole project (reports, books, inputs, settings,
+  maps) to `snapshot/<year>.<timestamp>/`, laid out as the project is, beside
+  the year folders in a multi-year project. Diff it file by file with `diff -r`,
+  or read it with `tjs compare NAME` (or its folder, `tjs compare
+  ../snapshot/NAME`), `--list` and `--delete`; `tjs` also runs
+  inside it. `tjs init`'s `.gitignore` lists `snapshot/`.
+
+### Security
+
+- pyasn1 0.6.5 in the `all` and `generate-parser` locks (GHSA-2qm8-x737-gmw5,
+  GHSA-9m75-vc3g-4x39, GHSA-fm9c-5rcf-2q5p, GHSA-mm57-4v3p-rchx). Every other
+  pinned version is unchanged.
+
 ## v0.39.0 (2026-10-30)
 
 ### Fixed: carryover

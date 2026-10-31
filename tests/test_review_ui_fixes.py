@@ -467,7 +467,7 @@ class TestR6_CliRenderingHardening(unittest.TestCase):
             r = _run(root, "list", "--date", "2025-06-01")
         self.assertNotEqual(r.returncode, 0, r.stderr)
         self.assertIn("no cost timeline for margin", r.stderr)
-        self.assertIn("taxjson run", r.stderr)
+        self.assertIn("tjs run", r.stderr)
 
     def test_init_year_range_validated(self):
         with tempfile.TemporaryDirectory() as tmp:

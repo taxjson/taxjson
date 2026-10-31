@@ -41,7 +41,7 @@ one shared `generic.toml` in the same folder. Example:
                                   # not for crypto (a security importer)
 
     [broker]
-    name = "wealthsimple"       # optional: the real broker. taxjson run
+    name = "wealthsimple"       # optional: the real broker. tjs run
                                 # parses each named broker on its own;
                                 # its rows are recorded as
                                 # generic:wealthsimple (fees report)
@@ -70,7 +70,7 @@ options T+1) on the listing's market;
 income rows are dated `date`. Symbols are upper-cased (`sample` and `SAMPLE`
 are one security). Unmapped action values are counted and summarized,
 never silently dropped — one that carries a quantity, an amount or a fee is an
-UNBOOKED warning (echoed by `taxjson run`, refused by `--strict`, a
+UNBOOKED warning (echoed by `tjs run`, refused by `--strict`, a
 failure under `taxjson-brokerage --lint`); map it, or map it to `skip`.
 A `fee` row is booked positive = charged (the IB/Questrade/RBC
 convention): a cash-signed CSV (negative = charged, the default

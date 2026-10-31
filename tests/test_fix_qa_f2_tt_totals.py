@@ -1,7 +1,7 @@
 """QA F2 (external QA suite, synthetic data): a .tt line whose total is
 off qty x price + fee by more than 1% is booked as written, and now said:
 the run's console (file:line, both figures, on every run), `run
---strict` and `taxjson checklist`'s run-clean step (lib/tt_totals)."""
+--strict` and `tjs checklist`'s run-clean step (lib/tt_totals)."""
 import shutil
 import tempfile
 import unittest

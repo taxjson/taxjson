@@ -1,4 +1,4 @@
-"""taxjson-fetch: the Questrade and IBKR Flex fetcher for `taxjson fetch`.
+"""taxjson-fetch: the Questrade and IBKR Flex fetcher for `tjs fetch`.
 
 The taxjson core holds no broker API client and reads no broker
 credential; this package does both, and plugs into the core through

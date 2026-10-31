@@ -296,7 +296,7 @@ class TestRbcNotesFollowTheCountry(unittest.TestCase):
     """A2-0729, A2-0731, A2-0733, A2-0736, A2-1254, A2-1309, A2-1313,
     A2-1314, A2-1315, A2-1321, A2-1344, A2-1345, A2-1346, A2-1347: the
     same rows, the same booking; the notes' tax words are the project's
-    country's (taxjson-brokerage --country, which `taxjson run` passes)."""
+    country's (taxjson-brokerage --country, which `tjs run` passes)."""
 
     _CA = ("ITA s.", "s.15(1)(c)", "T3", "T5", "ACB", "box 21", "box 42")
 

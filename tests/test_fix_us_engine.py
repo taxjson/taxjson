@@ -391,7 +391,7 @@ class TestOwnAccountMoveCarriesLots(unittest.TestCase):
 
     @rule("US-BASIS-05")
     def test_one_accounts_own_book_moves_the_lots_out(self):
-        # taxjson run's per-account (pre-blend) view: the sender's book
+        # tjs run's per-account (pre-blend) view: the sender's book
         # alone loses the lots without a sale; the receiver's alone
         # holds them with an unknown basis (manual reporting).
         book = _moved_book()
@@ -403,7 +403,7 @@ class TestOwnAccountMoveCarriesLots(unittest.TestCase):
                     year=2025)
         self.assertEqual(len(qb.get("manual_reporting_required") or []), 1)
         self.assertNotIn("conservation", qb["_stderr"])
-        self.assertIn("the blended pass of `taxjson run` carries",
+        self.assertIn("the blended pass of `tjs run` carries",
                       qb["_stderr"])
 
     @rule("US-BASIS-05")

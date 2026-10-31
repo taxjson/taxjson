@@ -1,6 +1,6 @@
 """Backlog group fxcorp: the FX-on-cash ledger v2 (lib/fx_cash_v2, the
 Kraken cash reader) and the spin-off views and checks (lib/corp_views,
-lib/missing_history, lib/positions_check, `taxjson sanity`). One test
+lib/missing_history, lib/positions_check, `tjs sanity`). One test
 per backlog item, each named for it. Synthetic data only."""
 import itertools
 import json
@@ -374,7 +374,7 @@ def _spin(eid, d, parent, child, new, old, received, cur, fmv=0.0, **kw):
 
 class TestSpinoffViews(unittest.TestCase):
     def test_tj0134_broker_value_labelled_in_its_currency(self):
-        """TJ-0134: `taxjson spinoffs` printed the broker's USD value
+        """TJ-0134: `tjs spinoffs` printed the broker's USD value
         per share as "20.00 CAD/share"."""
         from taxjson.lib import corp_views as CV
         eid = "20240603-parnt-spnco-0001"
@@ -436,7 +436,7 @@ class TestSpinoffViews(unittest.TestCase):
                          "12.00 CAD on 2024-06-18, for a fraction the "
                          "export does not size")
         self.assertEqual(CV.cash_in_lieu_line(10, 0, 0, "CAD", ""), "")
-        # `taxjson elect --pending` on the same event, from a Questrade
+        # `tjs elect --pending` on the same event, from a Questrade
         # export.
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

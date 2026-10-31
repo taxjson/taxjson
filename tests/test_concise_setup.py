@@ -38,7 +38,7 @@ class TestInitAndNewYear(unittest.TestCase):
                 self.assertEqual(r.returncode, 0, r.stderr)
                 assert_concise(self, r.stdout, r.stderr)
                 self.assertIn("NEXT STEPS", r.stdout)
-                for step in ("  3. taxjson -C ", "  4. taxjson -C "):
+                for step in ("  3. tjs -C ", "  4. tjs -C "):
                     self.assertIn(step, r.stdout)
                 self.assertNotIn("wrote ", r.stdout)
                 d = _tjs("init", "--country", country, "--year", "2024",
@@ -81,7 +81,7 @@ class TestInitAndNewYear(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             assert_concise(self, r.stdout, r.stderr)
             self.assertIn("2025/holdings/", r.stdout)
-            self.assertIn("taxjson align --from 2024", r.stdout)
+            self.assertIn("tjs align --from 2024", r.stdout)
             self.assertIn("2024 is not locked yet", r.stderr)
             shutil.rmtree(top / "2025")
             d = _tjs("-C", str(top), "new-year", "2025", "--details",
@@ -112,7 +112,7 @@ class TestElect(unittest.TestCase):
                 d = p.run("elect", "--pending", "--details", **W)
                 self.assertEqual(d.returncode, 0, d.stderr)
                 self.assertIn("ONLY for broker noise", _flat(d.stdout))
-                self.assertIn("set:  taxjson elect margin --set ",
+                self.assertIn("set:  tjs elect margin --set ",
                               d.stdout)
                 self.assertEqual(d.stdout.splitlines()[-1], out[-1])
 

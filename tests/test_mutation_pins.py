@@ -818,7 +818,7 @@ class TestRoundSixPins(unittest.TestCase):
         sale executed that morning (settling T+1) was pre-split. A
         date-only 'strictly between' straddle test skipped it, the
         ladder split the pool first, and 80 x 0.1 = 8 phantom shares
-        (and their stranded cost) stayed in inventory — caught by `taxjson sanity` against the broker's
+        (and their stranded cost) stayed in inventory — caught by `tjs sanity` against the broker's
         positions. The straddle test now compares the execution
         MOMENT (date, clock time) against the split's."""
         def _t(**kw):

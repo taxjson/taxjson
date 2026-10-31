@@ -1,5 +1,5 @@
-"""The 2026-10-29 fix round, group "edgecases": `taxjson edge-cases`
-and `taxjson option-boundary` on synthetic books.
+"""The 2026-10-29 fix round, group "edgecases": `tjs edge-cases`
+and `tjs option-boundary` on synthetic books.
 
 - TJ-0396: a contract on explicit close timing (option_premium_timing =
   "close") whose write year's lock records grant timing, or reports the

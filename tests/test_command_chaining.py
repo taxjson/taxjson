@@ -1,4 +1,4 @@
-"""Chained subcommands: `taxjson run sum` executes both, in order."""
+"""Chained subcommands: `tjs run sum` executes both, in order."""
 import json
 import subprocess
 import sys
@@ -136,14 +136,14 @@ class TestReleaseAuditRegressions(unittest.TestCase):
             r = _cli(root, "run", "-h", "sum")
         # -h is terminal for the chain, but the help block must appear
         # exactly once (the trial parse used to leak a second copy).
-        self.assertEqual(r.stdout.count("usage: taxjson run"), 1,
+        self.assertEqual(r.stdout.count("usage: tjs run"), 1,
                          r.stdout)
 
 
 
 
 class TestChainPreValidation(unittest.TestCase):
-    """2026-08-21 audit: `taxjson events -- 30d` HALF-RAN — events
+    """2026-08-21 audit: `tjs events -- 30d` HALF-RAN — events
     executed, then '30d' died rc 2. The whole chain is validated
     before anything executes."""
 

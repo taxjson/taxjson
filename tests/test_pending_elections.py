@@ -1,8 +1,8 @@
 """Non-TTY / --no-input corp-action elections (the desktop-app path).
 
-A headless `taxjson run` must never hang on the election prompt or
+A headless `tjs run` must never hang on the election prompt or
 crash: unresolved events become work/pending_elections.json (options,
-descriptions, required hints), the run exits 3, `taxjson elect
+descriptions, required hints), the run exits 3, `tjs elect
 --pending` shows ready-to-copy --set lines, and after `elect --set`
 the re-run completes. Uses an IB-shaped ABG->ABH merger CSV (synthetic
 amounts).
@@ -90,7 +90,7 @@ class TestRunNoInput(unittest.TestCase):
             r = _taxjson(root, "run", "--no-input")
             self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
             self.assertIn("elections", r.stderr)
-            self.assertIn("taxjson elect margin --set", r.stderr)
+            self.assertIn("tjs elect margin --set", r.stderr)
             agg = json.loads(
                 (root / "work" / "pending_elections.json").read_text())
             pend = agg["accounts"]["margin"]["pending"]
@@ -101,7 +101,7 @@ class TestRunNoInput(unittest.TestCase):
             p = _taxjson(root, "elect", "--pending")
             self.assertEqual(p.returncode, 0, p.stderr)
             self.assertIn(event_id, p.stdout)
-            self.assertIn(f"taxjson elect margin --set {event_id}=",
+            self.assertIn(f"tjs elect margin --set {event_id}=",
                           p.stdout)
             pj = _taxjson(root, "elect", "--pending", "--json")
             self.assertEqual(

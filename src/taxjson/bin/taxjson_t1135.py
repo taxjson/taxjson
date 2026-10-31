@@ -68,7 +68,7 @@ Usage:
         [--sheltered sheltered_base.json] [--option-premium-timing grant] \\
         [--map ticker.map] [--threshold 100000] [--json]
 
-Or through the project wrapper (recommended):  `taxjson t1135`
+Or through the project wrapper (recommended):  `tjs t1135`
 """
 
 from taxjson.lib.out import unwrapped as _unwrapped
@@ -203,7 +203,7 @@ def load_overrides(path: Optional[Path]) -> Dict[str, Optional[str]]:
     line with no keyword (an old t1135.map line pasted in as is) stops
     the tool naming it: the old file skipped such a line with a warning
     and the symbol silently kept its listing-suffix country, which can
-    flip the filing verdict. Other lookup lines' problems are `taxjson
+    flip the filing verdict. Other lookup lines' problems are `tjs
     run`'s to refuse; they do not stop T1135."""
     if path is None:
         return {}
@@ -235,7 +235,7 @@ _NO_KEYWORD_RE = re.compile(r"^(?P<where>\S+:\d+): line has no ticker\.map "
 def _overrides_problem(path: Path, problems: List[str]) -> str:
     """The one-line refusal of a ticker.map whose T1135 lines cannot be
     read: the first problem by its line (`ticker.map:54`, not the
-    absolute path), what to write, `taxjson migrate` only when an old
+    absolute path), what to write, `tjs migrate` only when an old
     t1135.map is there to convert — it was named for every problem, and
     then said "nothing to migrate" (backlog TJ-0083)."""
     first = problems[0]
@@ -252,7 +252,7 @@ def _overrides_problem(path: Path, problems: List[str]) -> str:
         head = first
         fix = "T1135 overrides are `T1135 SYMBOL COUNTRY` lines"
     if (path.parent / "t1135.map").exists():
-        fix += " (`taxjson migrate` converts the old t1135.map)"
+        fix += " (`tjs migrate` converts the old t1135.map)"
     return (head + (f" (and {more} more)" if more else "") + " — " + fix)
 
 
@@ -390,7 +390,7 @@ class Custody:
     so such an account's part of a pool of a symbol that is not foreign
     property (a Canadian listing, or a `T1135 SYMBOL CA` line) is its
     share of the pooled ACB: its own units that day (`units`, from its
-    books as `taxjson list --date` apportions a pool) times the pool's
+    books as `tjs list --date` apportions a pool) times the pool's
     cost per unit, under a key of its own, SYMBOL@ACCOUNT (`keys`:
     {key: (symbol, account, country)}; walk_costs). Options and futures
     keep their symbols."""
@@ -697,7 +697,7 @@ def _engine_timeline(transactions: List[Dict[str, Any]],
 
 
 def _pass_on_engine_errors(text: str) -> None:
-    """The engine's diagnostics belong to `taxjson run` (they would
+    """The engine's diagnostics belong to `tjs run` (they would
     repeat here); a solver that did not converge is still said."""
     for line in text.splitlines():
         if "did not converge" in line:
@@ -1061,7 +1061,7 @@ def check_gains_country(paths: List[Path]) -> None:
                 f"taxjson-t1135: {p}: its sales carry short/long-term "
                 f"terms — gains the US engine computed (FIFO lots, wash "
                 f"sales). T1135 is a Canadian form: pass the gains file "
-                f"of a country=canada run (re-run `taxjson run` in the "
+                f"of a country=canada run (re-run `tjs run` in the "
                 f"Canadian project).")
 
 
@@ -1097,7 +1097,7 @@ def check_currency(paths: List[Path], base_currency: str) -> None:
                 f"taxjson-t1135: {p}: amounts in {got}, not "
                 f"{base} — the cost walk sums them as {base}. Pass the "
                 f"converted books (work/<account>_base.json and the "
-                f"<account>_gains*.json beside them; `taxjson t1135` "
+                f"<account>_gains*.json beside them; `tjs t1135` "
                 f"does).")
 
 
@@ -1273,7 +1273,7 @@ def join_income_gains(gains_paths: List[Path], year: int,
             # or a JSON without 'transactions' (S033-01).
             raise UnreadableGains(
                 f"taxjson-t1135: could not read {p}: {e} — re-run "
-                f"`taxjson run` to rebuild it.")
+                f"`tjs run` to rebuild it.")
         file_acct = _file_account(p, data)
         for e in data.get("transactions", []):
             date = _gains_row_date(e, tax_date)
@@ -1419,7 +1419,7 @@ def full_history_pass(base_paths: List[Path],
     pass (year=None) over the taxable books together — ITA s.47 pools are
     symbol-global, as in the pipeline's blended pass — with the
     registered accounts as wash context and the project's missing-history
-    file and option timing, the way `taxjson carryover` runs it. A loss
+    file and option timing, the way `tjs carryover` runs it. A loss
     denied in an earlier year whose replacement is still held is in the
     year's ACB (s.53(1)(f)), but not in the year-scoped gains files
     (S008-07, S009-01, S051-21): the timeline's pools carry it."""
@@ -1439,7 +1439,7 @@ def full_history_pass(base_paths: List[Path],
                        # corporation's ROC on its pay date), as in the
                        # filing run (audit A2-0339).
                        **(income_rules or {}))
-    # The engine's diagnostics belong to `taxjson run` (they would repeat
+    # The engine's diagnostics belong to `tjs run` (they would repeat
     # here); this pass only reads its pools.
     err = io.StringIO()
     with contextlib.redirect_stderr(err), _unwrapped():
@@ -1621,7 +1621,7 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
               f"{'every property' if not gains_paths else 'its properties'}"
               f" read n/a, not 0",
               details=_dl(["Pass each account's <account>_gains.json (or "
-                           "_gains_wash.json) with --gains; `taxjson "
+                           "_gains_wash.json) with --gains; `tjs "
                            "t1135` does."]))
     # An override that matches nothing (a ticker change, a ticker.map
     # consolidation, a typo) silently reversed the filing verdict
@@ -1869,7 +1869,7 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
 _money = fmt_money                  # shared report-layer formatter
 
 
-# Essentials first (docs/output-style.md): with --brief (what `taxjson
+# Essentials first (docs/output-style.md): with --brief (what `tjs
 # t1135` passes unless --details) a message is its headline and the
 # report is render_brief; the standalone tool prints everything.
 _DETAILS = True
@@ -2176,7 +2176,7 @@ def render_report(rep: Dict[str, Any]) -> str:
                      f"ticker.map once confirmed.")
     _ng = _no_gains_note(rep)
     if _ng:
-        warns.append(_ng + " — pass each account's gains file; `taxjson "
+        warns.append(_ng + " — pass each account's gains file; `tjs "
                            "t1135` does.")
     # The cash in the books the test could not count (CA-RPT-20).
     for r in rep["properties"]:
@@ -2185,7 +2185,7 @@ def render_report(rep: Dict[str, Any]) -> str:
                          f"FX-on-cash ledger v2 refuses"
                          + (f" ({r['cash_why']})" if r.get("cash_why")
                             else "")
-                         + "; `taxjson fx-cash --ledger v2` lists what it "
+                         + "; `tjs fx-cash --ledger v2` lists what it "
                            "needs. Its figures are the ledger's partial "
                            "reading, so the total is not settled.")
     for n in rep.get("cash_not_counted") or []:
@@ -2432,7 +2432,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         default=None,
                         help="Written-option premium timing the gains "
                              "files use (default close, with a note: "
-                             "`taxjson t1135` passes the project's)")
+                             "`tjs t1135` passes the project's)")
     parser.add_argument("--option-grant-since", type=tax_year, default=None,
                         metavar="YEAR",
                         help="With grant timing: contracts written before "
@@ -2461,12 +2461,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "alpha-3; CAN: Canada, the default): its "
                              "Canadian issuers' shares are foreign "
                              "property, category 6, under COUNTRY; "
-                             "repeatable (`taxjson t1135` passes each "
+                             "repeatable (`tjs t1135` passes each "
                              "account's custodian_country)")
     parser.add_argument("--cash", type=Path, default=None, metavar="FILE",
                         help="The cash the accounts hold outside Canada, "
                              "day by day at its cost (a JSON document "
-                             "`taxjson t1135` writes from the FX-on-cash "
+                             "`tjs t1135` writes from the FX-on-cash "
                              "ledger v2, lib/t1135_cash): a row per "
                              "account and currency, category 1, counted "
                              "toward the threshold")
@@ -2475,7 +2475,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--year-wash-only", action="store_true",
                         help=argparse.SUPPRESS)
     parser.add_argument("--brief", action="store_true",
-                        help="The essentials only (what `taxjson t1135` prints "
+                        help="The essentials only (what `tjs t1135` prints "
                              "without --details): the notes and each "
                              "message's detail are left out")
     args = parser.parse_args(argv)
@@ -2512,9 +2512,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         from taxjson.lib.out import error as _error
         _error(f"{args.cash}: the T1135 cash document {bad_cash}",
                prog="taxjson-t1135",
-               details=["`taxjson t1135` writes it for the project's "
+               details=["`tjs t1135` writes it for the project's "
                         "year, base currency and tax_date: rebuild it "
-                        "(`taxjson t1135`) for the report you ask for."])
+                        "(`tjs t1135`) for the report you ask for."])
         return 2
     # The interlisted pairs (lib/tobase_map): a foreign issuer's country,
     # the units and funds whose category is the user's, and the renames
@@ -2539,7 +2539,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         # timing from the project year — say so instead of silently
         # disagreeing with it, as taxjson-gains does (re-audit A2-1361).
         emit_line("taxjson-t1135: note: --option-premium-timing not given — "
-                  "using close timing. `taxjson run` on a Canada project uses "
+                  "using close timing. `tjs run` on a Canada project uses "
                   "grant timing from the project year; pass "
                   "--option-premium-timing grant --option-grant-since YEAR "
                   "to match it.", file=sys.stderr)
@@ -2552,7 +2552,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"taxjson-t1135: --base-currency "
               f"{args.base_currency.upper()}: the T1135 test is in CAD "
               f"(ITA s.233.3) — pass books converted to CAD (a Canada "
-              f"project's work/<account>_base.json; `taxjson t1135` "
+              f"project's work/<account>_base.json; `tjs t1135` "
               f"does).", file=sys.stderr)
         return 2
     try:
@@ -2587,7 +2587,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         from taxjson.lib.out import error as _error
         _error(f"could not read the base books: {e}",
                prog="taxjson-t1135",
-               details=["Re-run `taxjson run` to rebuild them."])
+               details=["Re-run `tjs run` to rebuild them."])
         return 2
     if args.json:
         from taxjson.lib.json_input import dump_filing_json

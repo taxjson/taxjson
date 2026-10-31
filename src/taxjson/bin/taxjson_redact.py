@@ -1,4 +1,4 @@
-"""`taxjson redact FILE...` — strip account numbers, names and contact
+"""`tjs redact FILE...` — strip account numbers, names and contact
 details it recognises from a broker export while keeping every row
 shape, so a statement can be shared as a parser sample or attached to a
 bug report. It is a best-effort pattern matcher, not a guarantee:
@@ -70,7 +70,7 @@ security vocabulary, a `LAST, FIRST` cell) or long digit runs it did
 not redact. `--check` writes nothing
 and exits 1 when it finds anything to redact.
 
-With no FILE (`taxjson redact`, in a project or with -C DIR) the whole
+With no FILE (`tjs redact`, in a project or with -C DIR) the whole
 inputs/ folder is copied to inputs_redact/ (or --out DIR) and the COPY
 is redacted, every text file of it, ids consistent across the tree;
 file and folder names holding an id (or an e-mail address) are
@@ -679,7 +679,7 @@ def _is_pseudonym(v: str) -> bool:
 
 
 def in_redacted_copy(path: Path) -> bool:
-    """Whether `path` is (in) a copy `taxjson redact` wrote: a
+    """Whether `path` is (in) a copy `tjs redact` wrote: a
     NAME.redacted.EXT file, or a file or folder inside a tree that
     holds its `.taxjson-redacted` marker. `--check` of such a copy takes
     the copy's own placeholders as redacted already (backlog TJ-0097)."""
@@ -2180,7 +2180,7 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
         return None, rep
     dst_dir = out_dir or src.parent
     if dst_dir.exists() and not dst_dir.is_dir():
-        raise SystemExit(exit_text(f"taxjson redact: --out {dst_dir} is not a directory"))
+        raise SystemExit(exit_text(f"tjs redact: --out {dst_dir} is not a directory"))
     dst_dir.mkdir(parents=True, exist_ok=True)
     dst = dst_dir / redacted_name(src, rep.accounts, rep.name_patterns,
                                   rep.known_ids)
@@ -2190,11 +2190,11 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
             f"run from another input — nothing written. Redact the two "
             f"files into different --out folders (or rename one).")
     if dst.resolve() == src.resolve():
-        raise SystemExit(exit_text(f"taxjson redact: refusing to overwrite {src}"))
+        raise SystemExit(exit_text(f"tjs redact: refusing to overwrite {src}"))
     if dst.is_symlink():
-        raise SystemExit(exit_text(f"taxjson redact: {dst} is a symlink — refusing to write through it"))
+        raise SystemExit(exit_text(f"tjs redact: {dst} is a symlink — refusing to write through it"))
     if dst.exists() and not force:
-        raise SystemExit(exit_text(f"taxjson redact: {dst} exists (use --force to overwrite)"))
+        raise SystemExit(exit_text(f"tjs redact: {dst} exists (use --force to overwrite)"))
     # The checks above can be raced (a link planted after them): the
     # write itself never follows a symlink. A new copy is created with
     # O_CREAT | O_EXCL | O_NOFOLLOW (anything that appeared at the name
@@ -2211,7 +2211,7 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
                          | getattr(os, "O_NOFOLLOW", 0), 0o600)
         except FileExistsError:
             raise SystemExit(exit_text(
-                f"taxjson redact: {dst} appeared while redacting — "
+                f"tjs redact: {dst} appeared while redacting — "
                 f"nothing written (use --force to overwrite)")) from None
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
             fh.write(data)
@@ -2392,19 +2392,19 @@ def print_report(src: Path, dst: Optional[Path], rep: Report) -> None:
 
 
 def _diag(kind: str, text: str, details=(), file=None) -> None:
-    """`taxjson redact: <kind>: ...` on stderr (lib/out.message)."""
+    """`tjs redact: <kind>: ...` on stderr (lib/out.message)."""
     from taxjson.lib.out import emit
-    emit(kind, text, prog="taxjson redact", details=details, file=file)
+    emit(kind, text, prog="tjs redact", details=details, file=file)
 
 
 # --------------------------------------------------------- project mode
-# `taxjson redact` with no FILE: the whole inputs/ folder of a project is
+# `tjs redact` with no FILE: the whole inputs/ folder of a project is
 # copied to inputs_redact/ (or --out DIR) and every text file in the
 # COPY is redacted; inputs/ is never written. Design (owner request,
 # 2026-10-06):
 #   * Every text file is copied redacted, whatever its kind (CSV, .tt,
 #     .json / .toml sidecars, README.txt), so the copy is a complete
-#     inputs tree `taxjson run` can parse. Binary files (.xlsx, .pdf,
+#     inputs tree `tjs run` can parse. Binary files (.xlsx, .pdf,
 #     .zip ...) are NOT copied — the redactor cannot read them, so it
 #     cannot vouch for them — and each one is named in a Warning to
 #     review by hand. Hidden files and Office lock files (which the run
@@ -2443,7 +2443,7 @@ TREE_DEFAULT = "inputs_redact"
 TREE_MARKER = ".taxjson-redacted"
 _MARKER_TEXT = (
     "This folder is a copy of a taxjson inputs/ folder made by "
-    "`taxjson redact`.\n"
+    "`tjs redact`.\n"
     "Account numbers, names and contact details it recognised are "
     "replaced by placeholders.\n"
     "It is pattern-based, not a guarantee: review every file before "
@@ -2729,7 +2729,7 @@ def _count_items(f: _TreeFile) -> List[Tuple[int, str, str]]:
 
 
 def _tree_summary(text_files: List[_TreeFile], names) -> bool:
-    """`taxjson redact` (no FILE), default view: one line of totals, the
+    """`tjs redact` (no FILE), default view: one line of totals, the
     free text to read as one line, a file whose account id was not
     replaced everywhere as one warning each. True when anything was
     found."""
@@ -2804,7 +2804,7 @@ def _check_dest(dst: Path, inputs: Path, force: bool,
     if not force:
         return f"{shown} exists (use --force to replace it)"
     if any(dst.iterdir()) and not (dst / TREE_MARKER).is_file():
-        return (f"{shown} was not made by taxjson redact (it has no "
+        return (f"{shown} was not made by tjs redact (it has no "
                 f"{TREE_MARKER} file) — move it away yourself")
     return None
 
@@ -2837,7 +2837,7 @@ def _write_tree(dst: Path, dirs: List[Path], files: List[_TreeFile],
             fh.write(_MARKER_TEXT)
         why = _check_dest(dst, inputs, force)
         if why:
-            raise SystemExit(exit_text(f"taxjson redact: {why}"))
+            raise SystemExit(exit_text(f"tjs redact: {why}"))
         if os.path.lexists(dst):
             trash = Path(tempfile.mkdtemp(prefix=f".{dst.name}.",
                                           suffix=".old", dir=parent))
@@ -3404,7 +3404,7 @@ def _redact_comment_paths(comment: str) -> Tuple[str, int]:
 @functools.lru_cache(maxsize=1)
 def _generated_comments() -> frozenset:
     """The comment lines taxjson itself writes in a settings file (the
-    ticker.map `taxjson init` writes, the tobase.map header): template
+    ticker.map `tjs init` writes, the tobase.map header): template
     text, never a person's, so never listed for review."""
     lines: List[str] = []
     try:
@@ -3425,7 +3425,7 @@ def redact_project_text(text: str, compiled: List[re.Pattern],
                         stand_ins: bool = False
                         ) -> Tuple[str, Report]:
     """A year's own settings file (taxjson.toml, ticker.map, tobase.map)
-    as copied by `taxjson redact` (GitHub #22): the configuration's ids
+    as copied by `tjs redact` (GitHub #22): the configuration's ids
     (`cfg_ids`, from config_ids) and any id the free-text detectors find
     get the invocation's placeholders (an id-shaped one the same as in
     the exports); e-mail addresses anywhere; phones, addresses, SINs
@@ -3527,7 +3527,7 @@ def _listing(names: List[str]) -> str:
 def redact_tree(root: Path, out: Optional[Path], extra: List[str],
                 check_only: bool, force: bool,
                 details: bool = False) -> int:
-    """`taxjson redact` with no FILE: copy `root`/inputs/ to
+    """`tjs redact` with no FILE: copy `root`/inputs/ to
     `root`/inputs_redact/ (or `out`), redacted. 0 done (or --check found
     nothing), 1 --check found something, 2 refused."""
     from taxjson.lib.out import relpath
@@ -3536,13 +3536,13 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
     if not inputs.is_dir():
         _diag("error", f"no inputs/ folder in {root}",
               ["Run it in a taxjson project (or pass -C DIR), or name the "
-               "files to redact: taxjson redact FILE ..."])
+               "files to redact: tjs redact FILE ..."])
         return 2
     dst = out if out is not None else root / TREE_DEFAULT
     # The copy as the shell reaches it: inputs_redact/ in the project's
     # own folder; else (-C DIR, --out DIR: a relative DIR is the shell's
     # folder's) its full path — `Review inputs/` named the project's
-    # unredacted exports, and `taxjson -C inputs_redact/ run` a folder
+    # unredacted exports, and `tjs -C inputs_redact/ run` a folder
     # the shell did not have (backlog TJ-0100, TJ-0110).
     try:
         here = Path.cwd().resolve() == root.resolve()
@@ -3672,7 +3672,7 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
                            f"TOML ({why}) — nothing written",
                   ["A denylist / --also pattern that matches part of a "
                    "setting breaks it: narrow the pattern. Else check "
-                   "that the project's own taxjson.toml reads (`taxjson "
+                   "that the project's own taxjson.toml reads (`tjs "
                    "run` says where it does not)."])
             return 2
         why = _valid_copy_record(files)
@@ -3733,7 +3733,7 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
                    "belongs in the sample."])
     if hidden:
         _diag("note", f"{_plural(hidden, 'hidden file or folder', 'hidden files or folders')} "
-                      f"not copied (taxjson run does not read them)",
+                      f"not copied (tjs run does not read them)",
               file=sys.stdout)
     renamed = [(rel, new) for rel, new in sorted(names.items())
                if rel.name != new.name]
@@ -3784,7 +3784,7 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
              "(or redact again with --force) before sharing it.")
         return 1 if found else 0
     if check_only:
-        step(f"Done. Nothing written; run taxjson redact to write "
+        step(f"Done. Nothing written; run tjs redact to write "
              f"{shown_dst}" if found else "Done. Nothing to redact.")
         return 1 if found else 0
     try:
@@ -3804,7 +3804,7 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
             f"taxjson.toml and ticker.map"
             + (f", and {prior} (the close-year record its estimate "
                f"carries from)" if prior else "")
-            + (f"; `taxjson -C {shlex.quote(shown_dst)} run` runs it (and "
+            + (f"; `tjs -C {shlex.quote(shown_dst)} run` runs it (and "
                f"writes work/ and reports/ there, holding this computer's "
                f"folder paths: delete them before sharing the copy)."
                if has_cfg else
@@ -3817,7 +3817,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Redacted copies are still private until reviewed: owner-only.
     os.umask(os.umask(0o077) | 0o077)
     ap = argparse.ArgumentParser(
-        prog="taxjson redact",
+        prog="tjs redact",
         description="Strip account numbers, names and contact details it "
                     "recognises from broker exports, keeping row shapes. "
                     "Review the output before sharing.")

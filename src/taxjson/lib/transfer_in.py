@@ -2,7 +2,7 @@
 books (tax-logic CA-ACB-TRANSFER-BV / US-BASIS-TRANSFER-BV).
 
 A taxable account's TRANSFER rows are custody evidence kept out of the
-books (the parse stage's transfer sidecar, `taxjson transfers`): the
+books (the parse stage's transfer sidecar, `tjs transfers`): the
 cost of a position comes from its purchase. Most transfer rows are your
 own shuffles — a broker's internal account moves, a move between two
 of your accounts, a listing journal — whose out and in legs cancel. The
@@ -344,7 +344,7 @@ def not_own_account_problem(n: NotOwn, accounts: Dict[str, Any]) -> str:
                 f"(INKIND), never a pairing this line undoes")
     if acfg.get("crypto"):
         return (f"account {n.account} is a crypto account: sends between "
-                f"your crypto accounts are paired by `taxjson "
+                f"your crypto accounts are paired by `tjs "
                 f"crypto-sends` (--unpair undoes one)")
     if acfg.get("transfers"):
         return (f"account {n.account} keeps its transfer rows in the "
@@ -352,7 +352,7 @@ def not_own_account_problem(n: NotOwn, accounts: Dict[str, Any]) -> str:
     if n.from_account not in (accounts or {}):
         return (f"it names account {n.from_account!r}, which taxjson.toml "
                 f"does not declare (the transfer-out's account, as "
-                f"`taxjson transfers` lists it)")
+                f"`tjs transfers` lists it)")
     return ""
 
 
@@ -664,7 +664,7 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
     `paired`: given a list, the identity (leg_ident) of every in leg
     the pairing cancelled, wholly or in part (a move of your own, a
     journal inside one account, shares out and back): the positive
-    evidence `taxjson transfers` needs to call a transfer-in your own
+    evidence `tjs transfers` needs to call a transfer-in your own
     move (backlog TJ-0308).
 
     `apart(out symbol, in symbol)`: true when the user's ticker.map
@@ -1254,7 +1254,7 @@ def attention_lines(found: Iterable[Arrival], country: str) -> List[str]:
             for x in ds[:3]) + ("; ..." if len(ds) > 3 else "")
         who = ("It may be" if len(xs) == 1
                else f"{len(ds)} of them may be")
-        then = ("they are then held twice: `taxjson sanity` compares each "
+        then = ("they are then held twice: `tjs sanity` compares each "
                 "account with the broker's holdings" if booked else
                 "a purchase added for them would then hold them twice")
         return (f" {who} the other end of a transfer-out of yours that "

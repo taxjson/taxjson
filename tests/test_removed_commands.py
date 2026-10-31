@@ -1,7 +1,7 @@
 """Removed commands leave no trace a user could take for a live command.
 
-`quick-start` (replaced by `taxjson checklist`) and `scan` (replaced by
-`taxjson tips` and `taxjson ticker-map --suggest`) are named only in
+`quick-start` (replaced by `tjs checklist`) and `scan` (replaced by
+`tjs tips` and `tjs ticker-map --suggest`) are named only in
 CHANGELOG.md, which records their removal. The code, the docs, the
 README, AGENTS.md, KNOWN_ISSUES.md and packages/ name neither: the
 patterns below match the commands, not the other scans the project runs
@@ -70,7 +70,7 @@ class TestRemovedCommandsLeaveNoTrace(unittest.TestCase):
         for other in ("the PII scan", "CA-SCAN-01", "scan_questrade",
                       "SIBLING_SCAN_LIMIT", "the folder scan, one line",
                       "a pre-scan over the rows", "hard-to-scan lines",
-                      '{"scan": "tips"}', "taxjson tips"):
+                      '{"scan": "tips"}', "tjs tips"):
             self.assertNotRegex(other, REMOVED, other)
 
     def test_the_changelog_records_both_removals(self):

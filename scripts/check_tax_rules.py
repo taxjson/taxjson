@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """check_tax_rules — tax-logic is the spec; the tests must cite it.
 
-Every statement `taxjson tax-logic` prints has a rule id (lib/tax_logic,
+Every statement `tjs tax-logic` prints has a rule id (lib/tax_logic,
 `catalog()`). Tests cite the ids they pin with the markers in
 tests/tax_rules (`@rule("CA-SL-02")`, `@rule_absent("CA-SL-02",
 country="usa")`), in tests/ and in the plugin packages' tests
@@ -325,7 +325,7 @@ def main(argv=None) -> int:
                         f"states it")
 
     # The plugin packages' tests (packages/*/tests) pin rules too: the
-    # moved `taxjson fetch` tests carry their @rule markers with them.
+    # moved `tjs fetch` tests carry their @rule markers with them.
     files = sorted(p for p in TESTS.rglob("*.py")
                    if RULES_DIR not in p.parents)
     files += sorted(p for p in (ROOT / "packages").glob("*/tests/**/*.py"))

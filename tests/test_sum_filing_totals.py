@@ -1,4 +1,4 @@
-"""`taxjson sum` FOR THE RETURN block: proceeds / ACB / outlays / gain per
+"""`tjs sum` FOR THE RETURN block: proceeds / ACB / outlays / gain per
 taxable account on the Schedule 3 convention, with PROCEEDS − ACB −
 OUTLAYS equal to the allowed gain (denied superficial losses in the ACB)."""
 import json

@@ -933,7 +933,7 @@ class TestHoldingsTomlStatesItsCostBasis(unittest.TestCase):
             doc = tomllib.loads((root / "reports" / "margin_holdings.toml")
                                 .read_text())
         self.assertIn("superficial-loss", doc["meta"]["base_cost_basis"])
-        self.assertIn("taxjson list", doc["meta"]["base_cost_basis"])
+        self.assertIn("tjs list", doc["meta"]["base_cost_basis"])
         # A2-0226: the map adjustments are not in either cost.
         self.assertIn("[[distributions]]", doc["meta"]["base_cost_basis"])
 

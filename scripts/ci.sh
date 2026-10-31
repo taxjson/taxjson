@@ -31,7 +31,7 @@
 # the repo (scripts/gate-record.sh), which release.sh can reuse.
 set -u
 cd "$(dirname "$0")/.."
-# Never a TTY: CLI tests spawn `taxjson run` as subprocesses that inherit
+# Never a TTY: CLI tests spawn `tjs run` as subprocesses that inherit
 # stdin, and a pending-election prompt would otherwise stop the suite to
 # wait on the keyboard (and then record the default — a wrong exit code)
 # when the gate is run from a terminal, e.g. by scripts/release.sh.

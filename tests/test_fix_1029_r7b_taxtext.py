@@ -284,7 +284,7 @@ def _row(i, date, sym, q, net, action="BUYSELL", time="10:00:00",
 
 def _report(rows, gains=True, **kw):
     """build_report over `rows` (one base file of account `a`), with the
-    gains file `taxjson run` writes for 2025 (the INCOME column)."""
+    gains file `tjs run` writes for 2025 (the INCOME column)."""
     from taxjson.lib.pipeline import GainsRequest, run_gains
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "a_base.json"

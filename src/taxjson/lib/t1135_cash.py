@@ -21,7 +21,7 @@ own cost, where the books give the balance (_base_holdings: an opening
 and the statement balances reconciled). The days are on the project's
 tax_date basis, the one the walk dates the securities on: on trade
 dates the cash a purchase paid leaves on its trade date, as the shares
-come in (`holdings_basis`; backlog TJ-0627). `taxjson t1135` builds the
+come in (`holdings_basis`; backlog TJ-0627). `tjs t1135` builds the
 document (`cash_doc`) and passes it to taxjson-t1135 (`--cash FILE`),
 whose walk counts each row toward the $100,000 test (bin/taxjson_t1135
 `walk_costs`, `build_report`).

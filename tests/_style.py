@@ -14,7 +14,7 @@ would (width 120, lib/out.WIDTH; TAXJSON_OFFLINE=1, stdin /dev/null).
             r = project("canada").run("harvest", "--no-ibkr")
             self.assertEqual(r.returncode, 0, r.stderr)
             assert_styled(self, r.stdout)                  # stdout
-            assert_styled(self, r.stderr, allow=("taxjson elect ",))
+            assert_styled(self, r.stderr, allow=("tjs elect ",))
 
 `project("canada", pending=True)` is a copy stopped at the pending
 spin-off election (for `elect --pending`, the run's exit 3). Every
@@ -103,7 +103,7 @@ class Project:
         self.country = country
 
     def run(self, *args, stdin=None, **env_extra):
-        """`taxjson -C <project> <args>` run from the project folder
+        """`tjs -C <project> <args>` run from the project folder
         (relative paths such as inputs/slips/t5008.csv work): a
         CompletedProcess (text) whose stdout and stderr are
         _qa_project.Text, as tj()'s: piped at width 120, a message naming

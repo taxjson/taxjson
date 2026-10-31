@@ -1,6 +1,6 @@
-"""`taxjson journals`: every broker journal between two listings of one
+"""`tjs journals`: every broker journal between two listings of one
 security, per account, with how it was found and what the books made
-of it (read-only, no network; a completed `taxjson run` is needed).
+of it (read-only, no network; a completed `tjs run` is needed).
 
 A journal moves a position from one listing to another: an out-leg of
 FROM and an in-leg of TO, the same quantity. Where they come from:
@@ -339,7 +339,7 @@ def _classify(j: Dict[str, Any], m: _Map) -> None:
         if not j["reason"]:
             j["reason"] = ("the run did not pair the legs (a symbol that "
                            "names two securities, or a run older than "
-                           "this command: re-run `taxjson run`)")
+                           "this command: re-run `tjs run`)")
         return
     # refused
     why = j["_refused"]
@@ -348,7 +348,7 @@ def _classify(j: Dict[str, Any], m: _Map) -> None:
         where, line = m.distinct.get(pair, ("ticker.map", f"DISTINCT {a} {b}"))
         j["reason"] = j["reason"] or f"ticker.map keeps them apart ({line})"
         j["decided_by"] = "ticker.map"
-        j["undo"] = (f"remove `{line}` ({where}) to let `taxjson run` "
+        j["undo"] = (f"remove `{line}` ({where}) to let `tjs run` "
                      f"decide")
     elif why == "map":
         named = m.naming(a, b)
@@ -549,6 +549,6 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
                else "") + f"; {doc['pending']} pending.")
     if doc["pending"]:
         tail += (" Settle each with the line it names, then re-run "
-                 "`taxjson run`.")
+                 "`tjs run`.")
     d.para(tail)
     return d.lines()

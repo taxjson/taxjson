@@ -143,7 +143,7 @@ class TestNextNamesTheFindingsFix(_RunOnce):
         # An item with no standing advice: the command its detail names,
         # as the `! ` line names it.
         r = CL.Result("run-clean", "attention",
-                      "pending elections (`taxjson elect --pending`)")
+                      "pending elections (`tjs elect --pending`)")
         self.assertEqual(CL._do(its["run-clean"], r),
                          "`tjs elect --pending`")
         # The item's advice stays for an item that has one...
@@ -152,7 +152,7 @@ class TestNextNamesTheFindingsFix(_RunOnce):
         self.assertIn("download the exports", CL._do(its["inputs-frozen"],
                                                      r))
         # ...and for a step that is merely to do.
-        r = CL.Result("run-clean", "todo", "x `taxjson elect --pending`")
+        r = CL.Result("run-clean", "todo", "x `tjs elect --pending`")
         self.assertEqual(CL._do(its["run-clean"], r), "`tjs run`")
 
     def test_tj0356_outside_a_repository_the_lock_step_says_git_init(self):

@@ -1,5 +1,5 @@
 """Helpers of the external QA suite's regression tests (synthetic data):
-a project folder with inputs, `taxjson -C <project> ...` as a person
+a project folder with inputs, `tjs -C <project> ...` as a person
 piping the output runs it (width 120), the gains rows of an account."""
 import json
 import os
@@ -64,7 +64,7 @@ class Text(str):
 
 
 def tj(root, *args, check=True):
-    """`taxjson -C ROOT ARGS` as a person piping it (width 120): its
+    """`tjs -C ROOT ARGS` as a person piping it (width 120): its
     stdout and stderr are Text (a phrase is found across a line
     break)."""
     r = subprocess.run([sys.executable, "-m", "taxjson.bin.taxjson_run",

@@ -129,7 +129,7 @@ class WebullBrokerage(BaseBrokerage):
             # Expiry and exercise/assignment ARE booked (from the $0
             # BUY/SELL rows); only these other action codes are not
             # (audit S065-22). A skipped row that moves shares or cash
-            # is UNBOOKED — the channel `taxjson run` echoes to the
+            # is UNBOOKED — the channel `tjs run` echoes to the
             # console and `--strict` refuses, as every other parser
             # uses (audit A2-0285 / A2-0288 / A2-0289 / A2-1069).
             emit_line(f"warning: Webull parser books only BUY/SELL rows — "
@@ -164,7 +164,7 @@ class WebullBrokerage(BaseBrokerage):
 
     @staticmethod
     def _sibling_exports(path: Path) -> List[Path]:
-        """The other Webull exports in the same folder — the CSVs `taxjson
+        """The other Webull exports in the same folder — the CSVs `tjs
         run` reads as Webull (content first, lib/brokerages/detect), not
         only those named wb_*/*webull*."""
         from taxjson.lib.brokerages.detect import same_broker_siblings
@@ -688,7 +688,7 @@ class WebullBrokerage(BaseBrokerage):
         return cols
 
     # The broker's exercise/assignment charge on the stock leg
-    # (`[accounts.<name>] exercise_fee`, passed by `taxjson run` as
+    # (`[accounts.<name>] exercise_fee`, passed by `tjs run` as
     # taxjson-brokerage --exercise-fee): the only evidence in the
     # Trading Summary that separates an exercise/assignment (net = qty x
     # strike +/- the charge) from an ordinary trade at the strike. None
@@ -965,7 +965,7 @@ class WebullBrokerage(BaseBrokerage):
                       f"`RENAME {rows[0]['date']} {prev_sym} {sym}` (the "
                       f"first {sym} row here; use the broker's change date "
                       f"if you know it) to a .tt file of this account so "
-                      f"both are one position (`taxjson renames`).")
+                      f"both are one position (`tjs renames`).")
 
     @staticmethod
     def _find_header(lines):

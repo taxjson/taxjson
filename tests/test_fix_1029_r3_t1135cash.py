@@ -155,7 +155,7 @@ class TestTJ0621ConversionFeeInAForeignCurrency(unittest.TestCase):
 
 # ============================================== TJ-0622 an opening
 class TestTJ0622OpeningSnapshotMovesNoCash(unittest.TestCase):
-    """TJ-0622: an opening balance (a .tt OPENING line, `taxjson
+    """TJ-0622: an opening balance (a .tt OPENING line, `tjs
     opening`) is a BUYSELL of type `opening` that records a position
     already held on the snapshot day; the FX-on-cash ledgers read it as
     a purchase for cash: 500 US dollars left the account that day."""

@@ -1,4 +1,4 @@
-"""Low-round fixes and pins, `taxjson instalments`
+"""Low-round fixes and pins, `tjs instalments`
 (bin/taxjson_instalments.py): R1-221 (A-B pinned), R1-222 (no interest
 when instalments are waived), S034-13 (Saturday due date), S034-14
 (quarters add up to the net tax), S034-15 (configured schedule starting

@@ -1,4 +1,4 @@
-"""`taxjson edge-cases` (lib/edge_cases): year-boundary and superficial-
+"""`tjs edge-cases` (lib/edge_cases): year-boundary and superficial-
 loss-window edge reporting, on a synthetic project's work files."""
 import json
 import subprocess

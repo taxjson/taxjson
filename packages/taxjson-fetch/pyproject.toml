@@ -1,8 +1,8 @@
 [project]
 name = "taxjson-fetch"
 # Released in lockstep with taxjson (scripts/release.sh bumps both).
-version = "0.39.0"
-description = "Broker auto-fetch for taxjson: Questrade REST API and IBKR Flex Web Service, as a `taxjson fetch` plugin"
+version = "0.40.0"
+description = "Broker auto-fetch for taxjson: Questrade REST API and IBKR Flex Web Service, as a `tjs fetch` plugin"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
@@ -18,18 +18,18 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Office/Business :: Financial :: Accounting",
 ]
-# The plugin interface (`taxjson fetch` as a dispatcher over the
+# The plugin interface (`tjs fetch` as a dispatcher over the
 # taxjson.fetchers entry points) and the parsers its files feed. No
 # other runtime dependency: the HTTP clients are stdlib urllib.
 dependencies = [
-    "taxjson>=0.39.0",
+    "taxjson>=0.40.0",
 ]
 
 [project.urls]
 Homepage = "https://github.com/taxjson/taxjson"
 Repository = "https://github.com/taxjson/taxjson"
 
-# The core's `taxjson fetch` finds fetchers here (taxjson.lib.fetchers).
+# The core's `tjs fetch` finds fetchers here (taxjson.lib.fetchers).
 [project.entry-points."taxjson.fetchers"]
 taxjson-fetch = "taxjson_fetch.plugin:BrokerFetcher"
 

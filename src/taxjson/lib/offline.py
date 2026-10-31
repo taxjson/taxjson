@@ -31,7 +31,7 @@ def offline_enabled(env: Optional[Mapping[str, str]] = None) -> bool:
         return True
     if val not in _OFF and val not in _warned:
         _warned.add(val)
-        emit_line(f"taxjson: warning: {ENV_VAR}={raw!r} is not recognised "
+        emit_line(f"tjs: warning: {ENV_VAR}={raw!r} is not recognised "
                   f"(use 1/true/yes/on to forbid downloads, 0/false/no/off "
                   f"to allow them); treating it as OFF.", file=sys.stderr)
     return False

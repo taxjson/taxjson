@@ -220,7 +220,7 @@ class TestElectNeverSavesAnotherCountrysElection(unittest.TestCase):
                      f"{EV}=rollover_s_85_1_5", "--hint", "fmv_per_share=10")
             self.assertEqual(r.returncode, 2, r.stderr)
             self.assertIn("with another country's elections", r.stderr)
-            self.assertIn("taxjson run --no-input", r.stderr)
+            self.assertIn("tjs run --no-input", r.stderr)
             self.assertIn("Nothing was saved", r.stderr)
             self.assertFalse(
                 (root / "inputs" / "margin" / "manifest.json").exists())

@@ -1,11 +1,11 @@
 # taxjson-fetch
 
 Broker auto-fetch for [taxjson](https://github.com/taxjson/taxjson): the
-Questrade REST API and the IBKR Flex Web Service, as a `taxjson fetch`
+Questrade REST API and the IBKR Flex Web Service, as a `tjs fetch`
 plugin.
 
 The taxjson core holds no broker API client and never reads a broker
-credential; its `taxjson fetch` command is a dispatcher over installed
+credential; its `tjs fetch` command is a dispatcher over installed
 fetcher plugins. This package is that plugin for Questrade and
 Interactive Brokers. It depends on `taxjson` and registers itself under
 the entry-point group `taxjson.fetchers`.
@@ -29,7 +29,7 @@ package there is not ours: never install either by name from PyPI.
 The plugin's `taxjson` dependency must be met by
 the core already installed from the installer or the checkout.
 
-`taxjson fetch --list` then shows `taxjson-fetch: questrade, ibkr_flex`.
+`tjs fetch --list` then shows `taxjson-fetch: questrade, ibkr_flex`.
 
 ## Use
 
@@ -49,17 +49,17 @@ query_id = "123456"      # an Activity Flex query: format CSV, with
 ```
 
 ```bash
-taxjson fetch                 # every account with a brokerage
-taxjson fetch run             # fetch, then rebuild the books
-taxjson fetch margin --dry-run
+tjs fetch                 # every account with a brokerage
+tjs fetch run             # fetch, then rebuild the books
+tjs fetch margin --dry-run
 ```
 
-Options this plugin adds to `taxjson fetch`: `--year N` (backfill a past
+Options this plugin adds to `tjs fetch`: `--year N` (backfill a past
 tax year's whole window), `--days N` / `--from YYYY-MM-DD` (override the
 Questrade window), `--refresh-token` (Questrade, first run) /
 `--flex-token` (IBKR), `--positions` (snapshot live Questrade holdings
 into the year's holdings folder, `holdings/<account>_live_holdings.toml`,
-where `taxjson sanity` and the end of `taxjson run` find it) and
+where `tjs sanity` and the end of `tjs run` find it) and
 `--trim-overlap` (trim manually exported Questrade rows inside the
 fetched window, keeping a `.bak`; a symlink at that name is skipped,
 never followed, for the next free `.bakN`). The core adds `--list`, `--fetcher`,
@@ -78,7 +78,7 @@ said with a note: the download applies to every year), an
 year, and a fetch in another year folder waits on the shared folder's
 `.fetch.lock`. Every file is
 written to a new owner-only temp file of its own and renamed into place,
-and one `taxjson fetch` runs per project at a time (a second one waits
+and one `tjs fetch` runs per project at a time (a second one waits
 on `work/.fetch.lock`), so two fetches never publish each other's
 unfinished file or lose each other's merged rows. The waiting fetch says
 so and waits as long as the first runs (Ctrl-C stops it, nothing
@@ -101,7 +101,7 @@ to no file is refused before the token is used. IBKR reads
 `$IBKR_FLEX_TOKEN`.
 Prefer the environment variables over the flags, which show in `ps`.
 
-Network, only when you run `taxjson fetch`: `https://login.questrade.com`
+Network, only when you run `tjs fetch`: `https://login.questrade.com`
 and the `https://*.questrade.com` API server it names, and
 `https://ndcdyn.interactivebrokers.com` (Flex). Credentialed requests
 refuse redirects; tokens never appear in logs or `work/` files.

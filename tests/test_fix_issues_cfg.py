@@ -1,6 +1,6 @@
 """GitHub issues #22, #26, #27, #29 (synthetic data only).
 
-- #22: `taxjson redact` of a year folder with shared exports copies the
+- #22: `tjs redact` of a year folder with shared exports copies the
   year's taxjson.toml, ticker.map and tobase.map: an account id found
   only in the config (account, broker_accounts, query_id), a denylist /
   --also match found only in a project file, and contact details in

@@ -1,4 +1,4 @@
-"""Backlog fixes, group redact: `taxjson redact` and the ticker.map /
+"""Backlog fixes, group redact: `tjs redact` and the ticker.map /
 tobase.map messages and `format-map`. One test class per backlog item,
 each named for its id. Synthetic data only."""
 import os
@@ -225,7 +225,7 @@ class TestTJ0100TJ0110TheCopysPath(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("==> Done. Review inputs_redact/ before sharing it. "
                       "It is a single-folder project of 2024: ", r.stdout)
-        self.assertIn("`taxjson -C inputs_redact/ run` runs it (and writes "
+        self.assertIn("`tjs -C inputs_redact/ run` runs it (and writes "
                       "work/", r.stdout)
 
     def test_dash_C_from_the_parent(self):
@@ -235,7 +235,7 @@ class TestTJ0100TJ0110TheCopysPath(unittest.TestCase):
         dst = os.path.abspath(self.top / "2024" / "inputs_redact")
         self.assertIn(f"==> Done. Review {dst}/ before sharing it.",
                       r.stdout)
-        self.assertIn(f"`taxjson -C {dst}/ run` runs it (and writes work/",
+        self.assertIn(f"`tjs -C {dst}/ run` runs it (and writes work/",
                       r.stdout)
         self.assertTrue(Path(dst, "taxjson.toml").is_file())
 
@@ -265,7 +265,7 @@ def _group_of(text: str, line: str) -> str:
 
 
 class TestTJ0047InitExamplesStayInTheirGroup(unittest.TestCase):
-    """A line appended at the end of the ticker.map `taxjson init`
+    """A line appended at the end of the ticker.map `tjs init`
     writes goes to its own group; the template's Lookups examples above
     it stay under Lookups (they moved with it as its comment)."""
 

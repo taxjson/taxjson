@@ -1,4 +1,4 @@
-"""Low-round fixes to `taxjson checklist` (lib/checklist.py) and its
+"""Low-round fixes to `tjs checklist` (lib/checklist.py) and its
 neighbours: detectors that computed a verdict from the readable subset of
 the books (R1-338, S066-19, S067-04, S067-11), from stale or other-year
 books (S067-12, S068-16), a missing-history row filter (S067-10),

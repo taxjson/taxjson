@@ -1,4 +1,4 @@
-"""Moved from the core's tests/test_fix_l_ibparse.py with `taxjson fetch` (now the
+"""Moved from the core's tests/test_fix_l_ibparse.py with `tjs fetch` (now the
 taxjson-fetch plugin). Original module docstring:
 
 Regression tests for the low-round `ibparse` audit findings (IB

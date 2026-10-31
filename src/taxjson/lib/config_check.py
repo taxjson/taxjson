@@ -4,7 +4,7 @@ reader applies.
 Every filing command partitions accounts with an exact match on
 `type == "taxable"` / `"sheltered"`. A typo'd or missing type matches
 neither, so the account silently vanished from estimate, instalments,
-`sum` FOR THE RETURN, form-export and close-year, while only `taxjson
+`sum` FOR THE RETURN, form-export and close-year, while only `tjs
 run` (through validate_config) refused the same config (R1-268). This
 is the one home for that check, so the run and every read-only command
 refuse the same configs with the same message.
@@ -17,7 +17,7 @@ ACCOUNT_TYPES = ("taxable", "sheltered")
 
 # Every key and table taxjson.toml may carry, by table: the one list the
 # config readers warn against (unknown keys are named, with a did-you-
-# mean) and the one `taxjson init` / `taxjson format` document
+# mean) and the one `tjs init` / `tjs format` document
 # (lib/config_template; tests/test_config_template.py checks that every
 # key here is in the template). [settings] keys and their owning country
 # live in lib/country.SETTING_COUNTRY; one-country tables and keys in
@@ -27,7 +27,7 @@ TOP_LEVEL_TABLES = ("settings", "accounts", "instalments", "estimate",
                     "distributions")
 # brokerage / account / query_id are the fetcher plugins' keys
 # (lib/fetchers.CORE_ACCOUNT_KEYS): accepted whether or not a fetcher is
-# installed, so a project that used `taxjson fetch` keeps validating.
+# installed, so a project that used `tjs fetch` keeps validating.
 ACCOUNT_KEYS = ("type", "crypto", "transfers", "plan",
                 "brokerage", "account", "query_id", "holdings",
                 "broker_accounts",
@@ -356,7 +356,7 @@ def settings_problems(cfg: Dict[str, Any]) -> List[str]:
     # year: the one check every reader shares (a reader once accepted
     # 1850, 2024.0, true or "2024" that every CLI command refuses;
     # A2-1373).
-    # Same plausible range as `taxjson init` and --year (cli_diag).
+    # Same plausible range as `tjs init` and --year (cli_diag).
     year = settings.get("year")
     if year is not None:
         from datetime import date as _date

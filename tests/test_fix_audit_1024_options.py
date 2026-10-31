@@ -1,5 +1,5 @@
 """The 2026-10-24 audit's option-view findings (A05, A06, A22-A28,
-A47, B45): `taxjson option-yield` (lib/option_yield), `taxjson
+A47, B45): `tjs option-yield` (lib/option_yield), `tjs
 option-boundary` and the expired-options checker (lib/option_boundary;
 handoff's timing check reads its lots), and the option close guard
 (lib/option_close_check). Reports, not the gains engine. Synthetic rows

@@ -1,6 +1,6 @@
 """House output style (docs/output-style.md) for the position, period and
 roll-up views, stats and crypto-sends: their diagnostics are headline +
-indented detail with the `taxjson <cmd>:` prefix, their tables fit the
+indented detail with the `tjs <cmd>:` prefix, their tables fit the
 width (dropping the least important columns first), and the re-importable
 `events PERIOD ACCOUNT` taxtext keeps its bytes. Synthetic style projects
 (tests/_style.py) only."""
@@ -47,7 +47,7 @@ class TestDiagnostics(unittest.TestCase):
                       "real calendar date", r.stderr)
         # Captured (width 0, as the checklist reads it): the GNU bytes.
         r = p.run("list", "--date", "2024-13-01", TAXJSON_WIDTH=0)
-        self.assertIn("taxjson list: error: --date 2024-13-01 is not a "
+        self.assertIn("tjs list: error: --date 2024-13-01 is not a "
                       "real calendar date", r.stderr)
         r = p.run("fees-sum", "nosuch")
         self.assertEqual(r.returncode, 2)       # a named input (TJ-0157)
@@ -56,7 +56,7 @@ class TestDiagnostics(unittest.TestCase):
             "Error: no files for account 'nosuch' in "
             "work/ — run"), lines)
         self.assertTrue(all(ln.startswith("  ") for ln in lines[1:]), lines)
-        self.assertIn("run `taxjson run` first, or check the name",
+        self.assertIn("run `tjs run` first, or check the name",
                       " ".join(r.stderr.split()))
         r = p.run("winners", "--top", "0")
         self.assertEqual(r.returncode, 2)       # a usage error (TJ-0241)
@@ -108,7 +108,7 @@ class TestFitted(unittest.TestCase):
         self.assertEqual(len(tt), 1)
         self.assertTrue(tt[0].rstrip().endswith(" 0"), tt[0])
         self.assertTrue(r.stdout.splitlines()[-1].startswith(
-            "Decide: taxjson crypto-sends crypto --set ID=self|payment"))
+            "Decide: tjs crypto-sends crypto --set ID=self|payment"))
 
 
 class TestTaxtextUnchanged(unittest.TestCase):

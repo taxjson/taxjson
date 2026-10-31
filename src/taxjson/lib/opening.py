@@ -1,7 +1,7 @@
 """Opening balances: positions taken from a broker's positions report.
 
 An OPENING row (a `.tt` line `OPENING <snapshot-date> <symbol> <qty>
-<currency> <total-cost> [<lot-date>]`, written by `taxjson opening`) is
+<currency> <total-cost> [<lot-date>]`, written by `tjs opening`) is
 a BUYSELL of type core.OPENING_TYPE dated the snapshot day. It sets the
 position and its cost but is not a purchase (tax-logic CA-OPEN-01,
 US-OPEN-01): the engines never treat it as superficial-loss / wash-sale
@@ -52,7 +52,7 @@ from taxjson.lib.core import is_opening_row
 POSITION_ACTIONS = ('BUYSELL', 'ASSIGN', 'TRANSFER', 'SPLIT', 'ADJUST',
                     'DISALLOW', 'OPENING_BALANCE')
 
-# The console line merge2 writes (echoed by `taxjson run`).
+# The console line merge2 writes (echoed by `tjs run`).
 ATTENTION_OPENING = "warning: ATTENTION: opening: "
 
 

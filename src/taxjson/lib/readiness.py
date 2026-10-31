@@ -93,35 +93,35 @@ def build(*, run_state: Iterable[str] = (), unknown_cost: int = 0,
     issues: List[Dict[str, Any]] = []
     for t in run_state:
         issues.append({"kind": "run-state", "detail": str(t),
-                       "fix": "taxjson run, then taxjson checklist --run"})
+                       "fix": "tjs run, then tjs checklist --run"})
     if unknown_cost:
         issues.append({
             "kind": "unknown-cost", "count": int(unknown_cost),
             "detail": f"{int(unknown_cost)} sale(s) with an unknown cost "
                       f"are not in the totals",
-            "fix": "taxjson find-missing-history; report them by hand "
+            "fix": "tjs find-missing-history; report them by hand "
                    "once their cost is known"})
     if no_purchase:
         issues.append({
             "kind": "no-purchase", "count": int(no_purchase),
             "detail": f"{int(no_purchase)} sale(s) with no purchase in "
                       f"the files are in no total",
-            "fix": "taxjson find-missing-history"})
+            "fix": "tjs find-missing-history"})
     for ln in conservation:
         issues.append({"kind": "conservation", "detail": str(ln),
-                       "fix": "taxjson audit; check the account's rows "
+                       "fix": "tjs audit; check the account's rows "
                               "for the symbol"})
     for ln in unconsumed_premium:
         # An assignment's premium no stock leg took: in no gain or
         # cost (backlog TJ-0824).
         issues.append({"kind": "unconsumed-premium", "detail": str(ln),
                        "fix": "add (or correct) the assignment's stock "
-                              "delivery rows, then taxjson run"})
+                              "delivery rows, then tjs run"})
     for ln in unsettled_compensation:
         # The year's income moves if the short is covered in time.
         issues.append({"kind": "compensation-not-settled", "detail": str(ln),
                        "fix": "add the later rows (the cover, or the 45th "
-                              "day passed), then taxjson run"})
+                              "day passed), then tjs run"})
     if in_kind_unbooked:
         # A contribution's deemed sale (a withdrawal's purchase) the run
         # could not value: missing from the books (backlog TJ-0095).
@@ -129,6 +129,6 @@ def build(*, run_state: Iterable[str] = (), unknown_cost: int = 0,
             "kind": "in-kind-not-booked", "count": int(in_kind_unbooked),
             "detail": f"{int(in_kind_unbooked)} in-kind move(s) with a "
                       f"registered account are NOT booked",
-            "fix": "taxjson transfers; value each with a .tt INKIND line, "
-                   "then taxjson run"})
+            "fix": "tjs transfers; value each with a .tt INKIND line, "
+                   "then tjs run"})
     return {"complete": not issues, "issues": issues}

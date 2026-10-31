@@ -283,7 +283,7 @@ def _run_cli(root, *args):
 class TestFuzzI_ShelteredFeesNotFolded(unittest.TestCase):
     """#I: the wash pass fed sheltered_base into each taxable account's
     gains run and the fee tally summed over ALL books — an RRSP's fee
-    appeared in every taxable wash file and `taxjson sum` multi-counted
+    appeared in every taxable wash file and `tjs sum` multi-counted
     it. Fee tallies are now taxable-book-only."""
 
     def test_sum_fees_counts_each_fee_once(self):

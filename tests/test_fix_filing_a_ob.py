@@ -1,4 +1,4 @@
-"""Medium-round fixes to `taxjson option-boundary` (lib/option_boundary.py):
+"""Medium-round fixes to `tjs option-boundary` (lib/option_boundary.py):
 R1-36 / R1-174 / R1-190 (future expiry is open, not 'expired?'), R1-179
 (rename-SPLIT followed, signed premium), S075-09 (cash-settled index
 option assignment), S075-10 (lock recorded close timing, project on

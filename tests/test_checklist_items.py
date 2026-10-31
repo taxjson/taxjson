@@ -1,4 +1,4 @@
-"""`taxjson checklist`: every step from install to filing, checked
+"""`tjs checklist`: every step from install to filing, checked
 (lib/checklist.items).
 
 - Coverage: every command an item names exists, every user-facing
@@ -291,7 +291,7 @@ class TestFreshProject(unittest.TestCase):
 
     def test_a_legacy_map_file_is_the_configure_item(self):
         """An old map file every other command stops for (exit 2) is
-        the configure item's attention naming `taxjson migrate`."""
+        the configure item's attention naming `tjs migrate`."""
         with tempfile.TemporaryDirectory() as d:
             root = self._init(d, "America/Toronto")
             (root / "yf_ticker.map").write_text("ABC ABC.TO\n")
@@ -301,7 +301,7 @@ class TestFreshProject(unittest.TestCase):
         st = {s["id"]: s for s in doc["steps"]}
         self.assertEqual(st["configure"]["effective"], "attention")
         self.assertIn("yf_ticker.map", st["configure"]["detail"])
-        self.assertIn("taxjson migrate", st["configure"]["detail"])
+        self.assertIn("tjs migrate", st["configure"]["detail"])
         self.assertEqual(doc["next"]["id"], "configure")
         self.assertEqual(st["run-clean"]["effective"], "blocked")
 

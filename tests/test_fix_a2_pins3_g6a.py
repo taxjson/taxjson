@@ -77,7 +77,7 @@ class _Res:
 
 
 def _inproc(root, *args, fake=()):
-    """Run `taxjson -C root ARGS` in process, recording every tool
+    """Run `tjs -C root ARGS` in process, recording every tool
     command the wrapper hands to lib.dispatch.run_cmd. A tool whose
     module name is in `fake` is not run (rc 0, empty output)."""
     from taxjson.bin import taxjson_run as R

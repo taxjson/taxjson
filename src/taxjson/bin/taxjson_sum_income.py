@@ -4,7 +4,7 @@ taxjson_sum_income.py
 
 Summarize income (dividends, payments in lieu, withholding tax, interest)
 from a transaction book: the merged / base JSON (`work/<acct>_base.json`)
-that taxjson-merge2 and `taxjson run` write.
+that taxjson-merge2 and `tjs run` write.
 
 Usage:
     python -m taxjson.bin.taxjson_sum_income [--sort-by FIELD] [file1.json file2.json ...]
@@ -404,7 +404,7 @@ def format_report(data: Dict[str, Any], sort_by: str = 'ticker') -> str:
 def main():
     parser = argparse.ArgumentParser(
         description="Summarize income from a transaction book (the "
-                    "merged / base JSON taxjson-merge2 and `taxjson run` "
+                    "merged / base JSON taxjson-merge2 and `tjs run` "
                     "write)."
     )
     parser.add_argument(

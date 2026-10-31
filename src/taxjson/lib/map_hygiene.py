@@ -1,7 +1,7 @@
-"""ticker.map hygiene read from the last run's files, for `taxjson
+"""ticker.map hygiene read from the last run's files, for `tjs
 ticker-map --suggest`: the listing pairs the map does not answer
 (map_gaps, MAP-GAP: "verify"), the rules no symbol of the books reaches
-("unused rule, delete?"), and the listing helpers `taxjson tips` shares
+("unused rule, delete?"), and the listing helpers `tjs tips` shares
 (a symbol's root and listing suffix, the listings the books show, the
 security names the exports give each listing, and what those names say
 about a US and a Canadian listing of one root).
@@ -178,7 +178,7 @@ def _map_view(root: Path) -> Tuple[Dict[str, str], Dict[str, str],
     run's effective map — the joins the run made itself
     (cross_listings), each said by a Warning naming the DISTINCT line
     that undoes it —, ticker.map's GLOBAL renames, its DISTINCT pairs),
-    upper-cased ({} for a map that cannot be read: `taxjson run`
+    upper-cased ({} for a map that cannot be read: `tjs run`
     refuses it). Read quietly: a listing's JSON stays JSON."""
     from taxjson.bin.taxjson_ticker_map import _parse_map_file, merge_renames
     from taxjson.lib.cross_listings import EFFECTIVE_MAP
@@ -457,4 +457,4 @@ def first_unread(unread: List[str]) -> Optional[str]:
     if not unread:
         return None
     return (f"The unused-rule check is skipped: could not read "
-            f"{'; '.join(unread)} — re-run `taxjson run`.")
+            f"{'; '.join(unread)} — re-run `tjs run`.")

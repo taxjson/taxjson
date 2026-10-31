@@ -1,6 +1,6 @@
 """CLI polish (owner requests, 2026-10):
 
-  1. `taxjson` (or `taxjson -C DIR`) with no command prints the help page
+  1. `taxjson` (or `tjs -C DIR`) with no command prints the help page
      and exits 0.
   2. The help page groups the subcommands by what they are for; every
      registered subcommand sits in exactly one group, and the README's
@@ -9,7 +9,7 @@
      lists them, marked).
   3. `tjs` is the same program as `taxjson` (usage shows the name it was
      invoked as).
-  4. `taxjson stats`: win/lose statistics on closed trades per asset
+  4. `tjs stats`: win/lose statistics on closed trades per asset
      class, economic P/L before any superficial-loss / wash-sale denial.
 
 All data is synthetic.
@@ -145,7 +145,7 @@ class TestGroupedHelp(unittest.TestCase):
             names = []
             for row in re.findall(r"^\| (.+?) \|", body, re.M):
                 for tok in re.findall(r"`([^`]+)`", row):
-                    w = tok.replace("taxjson ", "", 1).split()[0]
+                    w = tok.replace("tjs ", "", 1).split()[0]
                     if w in sub.choices and w not in names:
                         names.append(w)
             got.append((m.group(1).strip(), names))
@@ -172,7 +172,7 @@ class TestCountryAwareHelp(unittest.TestCase):
             listed = _listed(out)
             for c in self.ONE_COUNTRY:
                 self.assertNotIn(c, listed)
-            self.assertIn("6 commands hidden for USA — `taxjson help "
+            self.assertIn("6 commands hidden for USA — `tjs help "
                           "--all` lists every command.",
                           " ".join(out.split()))
             self.assertIn("form-export", listed)     # generic, stays
@@ -215,15 +215,7 @@ class TestTjsAlias(unittest.TestCase):
         self.assertRegex(text, rf"(?m)^taxjson = {re.escape(target)}$")
         self.assertRegex(text, rf"(?m)^tjs = {re.escape(target)}$")
 
-    def test_invoked_name(self):
-        from taxjson.bin.taxjson_run import _invoked_name
-        for argv0, want in (("/usr/bin/tjs", "tjs"), ("tjs.exe", "tjs"),
-                            ("tjs-script.py", "tjs"),
-                            ("/usr/bin/taxjson", "taxjson"),
-                            ("/x/taxjson_run.py", "taxjson"), ("", "taxjson")):
-            self.assertEqual(_invoked_name(argv0), want, argv0)
-
-    def test_usage_shows_the_invoked_name(self):
+    def test_usage_says_tjs_however_it_was_invoked(self):
         r = _as("tjs", "--help")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(r.stdout.startswith("usage: tjs "), r.stdout[:80])
@@ -234,7 +226,8 @@ class TestTjsAlias(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertIn("tjs: error", r.stderr)
         r = _as("taxjson", "--help")
-        self.assertTrue(r.stdout.startswith("usage: taxjson "))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(r.stdout.startswith("usage: tjs "), r.stdout[:80])
 
     def test_docs_and_installer_mention_it(self):
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
@@ -406,7 +399,7 @@ class TestStats(unittest.TestCase):
             root = _project(d, "fresh")
             r = _cli("-C", str(root), "stats")
             self.assertEqual(r.returncode, 1)
-            self.assertIn("run `taxjson run` first", r.stderr)
+            self.assertIn("run `tjs run` first", r.stderr)
             self.assertNotIn("Traceback", r.stderr)
 
 

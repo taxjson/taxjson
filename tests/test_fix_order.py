@@ -349,7 +349,7 @@ def _wb_csv(sell_first):
 
 class TestWebullThroughRun(unittest.TestCase):
     """End to end: a Webull export listing a write before
-    its same-day buy-back, through `taxjson run` (parse, merge, sort,
+    its same-day buy-back, through `tjs run` (parse, merge, sort,
     currency, engine) in a project of each country."""
 
     @rule("CA-DATE-14")

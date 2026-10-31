@@ -1,4 +1,4 @@
-"""Re-audit-2 planning fixes: `taxjson harvest` and the price chain.
+"""Re-audit-2 planning fixes: `tjs harvest` and the price chain.
 
 Offline throughout: prices come from injected fetchers (the price
 chain's `fetchers` test hook) or a seeded price cache, never the
@@ -55,7 +55,7 @@ def _json_rows(out):
 class TestDeclaredContractSize(unittest.TestCase):
     """A2-0367 / A2-1177: harvest --options values an option at the
     contract size its rows declared (the inventory's `multiplier`), as
-    `taxjson list` and the holdings export do; 100 only when none is
+    `tjs list` and the holdings export do; 100 only when none is
     declared."""
 
     def _book(self, td, inv):

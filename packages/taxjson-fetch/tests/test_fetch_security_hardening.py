@@ -1,4 +1,4 @@
-"""Moved from the core's tests/test_security_hardening.py with `taxjson fetch` (now the
+"""Moved from the core's tests/test_security_hardening.py with `tjs fetch` (now the
 taxjson-fetch plugin). Original module docstring:
 
 2026-09 security audit pins: filesystem/argv-safe account names,

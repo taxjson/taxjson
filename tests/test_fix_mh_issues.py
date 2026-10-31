@@ -7,7 +7,7 @@
      trades never become short covers.
 #24: a dated line's units are held even when no later row trades them
      (a holding simply kept, or one that only pays dividends).
-#25: `taxjson migrate` dates each entry from the books of the year that
+#25: `tjs migrate` dates each entry from the books of the year that
      sized it, and never archives a missing_history.json whose entries
      were not all converted.
 #28: the newest year listing an entry decides it, an explicit "opens

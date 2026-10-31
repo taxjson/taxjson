@@ -1,6 +1,6 @@
 """Export coverage, the checklist's line (owner, 2026-10-09;
 lib/export_coverage): a broker whose exports stop while it holds
-positions is said as "N open position(s) in <broker>'s rows — `taxjson
+positions is said as "N open position(s) in <broker>'s rows — `tjs
 list <account> <end>` lists the account's positions on that day (every
 source)", not a list of symbols, and, when a .tt line or a
 later export of the account records the next activity on those
@@ -44,7 +44,7 @@ class TestNextActivity(unittest.TestCase):
                                           date(2026, 3, 1)))
         self.assertEqual(res.status, "attention")
         self.assertIn("Webull exports for margin end 2025-09-30 with 1 "
-                      "open position(s) in Webull's rows — `taxjson list "
+                      "open position(s) in Webull's rows — `tjs list "
                       "margin 2025-09-30` lists the account's positions "
                       "on that day (every source); next recorded "
                       "activity: 2026-01-05 (wb_2026_manual.tt)",
@@ -57,7 +57,7 @@ class TestNextActivity(unittest.TestCase):
         self.assertIn("Warning: Webull exports for margin end 2025-09-30 "
                       "with open positions (ZZBB260116C00045000.US 14); "
                       "download the rest of 2025", text)
-        self.assertIn("`taxjson list margin 2025-09-30` lists the "
+        self.assertIn("`tjs list margin 2025-09-30` lists the "
                       "positions at the export's end; the next activity "
                       "the books record on them is 2026-01-05 "
                       "(wb_2026_manual.tt).", text)
@@ -66,7 +66,7 @@ class TestNextActivity(unittest.TestCase):
         g, = EC.find_gaps(self.root, cfg_of(self.root),
                           today=date(2026, 3, 1))
         rec = g.record()
-        self.assertEqual(rec["list_command"], "taxjson list margin 2025-09-30")
+        self.assertEqual(rec["list_command"], "tjs list margin 2025-09-30")
         self.assertEqual(rec["next_activity"],
                          {"date": "2026-01-05", "file": "wb_2026_manual.tt"})
 
@@ -87,7 +87,7 @@ class TestNoLaterActivity(unittest.TestCase):
             res = cl.d_export_coverage(ctx_of(root, 2025, date(2026, 3, 1)))
             g, = EC.find_gaps(root, cfg_of(root), today=date(2026, 3, 1))
         self.assertIn("with 1 open position(s) in Webull's rows — "
-                      "`taxjson list margin 2025-09-30` lists the "
+                      "`tjs list margin 2025-09-30` lists the "
                       "account's positions on that day (every source) — "
                       "download", res.detail)
         self.assertNotIn("next recorded activity", res.detail)

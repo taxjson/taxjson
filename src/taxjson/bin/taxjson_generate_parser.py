@@ -194,7 +194,7 @@ def gate_sample(sample: str) -> Tuple[Optional[str], List[str]]:
 
 
 def identity_findings(sample: str) -> List[str]:
-    """What `taxjson redact` would still find in `sample` (gate_sample's
+    """What `tjs redact` would still find in `sample` (gate_sample's
     findings), as counts and line numbers — never the values."""
     return gate_sample(sample)[1]
 
@@ -307,7 +307,7 @@ def main():
             "Draft a Python brokerage parser from a sample CSV using an LLM. "
             "Output is a Python file for manual review, NOT parsed transactions. "
             "PRIVACY: the first --sample-lines lines of the file are sent to "
-            "the provider. Run `taxjson redact` on a real export first; a "
+            "the provider. Run `tjs redact` on a real export first; a "
             "sample that still carries anything the redactor would change "
             "(an account id, name, e-mail, address, SIN, private-denylist "
             "match) or lines it lists for review is refused, and a sample "
@@ -398,7 +398,7 @@ def main():
         emit_line(f"taxjson-generate-parser: error: the first {args.sample_lines} "
                   f"line(s) of {shown_name(input_path)} still carry personal data "
                   f"({', '.join(found)}) and would be sent to {args.provider}. "
-                  f"Run `taxjson redact {shown_name(input_path)}` and use its output; "
+                  f"Run `tjs redact {shown_name(input_path)}` and use its output; "
                   f"once you have read the lines it lists for review and "
                   f"found no personal data there, or to send it anyway, "
                   f"pass --allow-unredacted (the file is then sent as it is).",

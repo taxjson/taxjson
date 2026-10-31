@@ -1,7 +1,7 @@
 """Two listings of one security joined by their transfer journal
 (CA-XLIST-01 / US-XLIST-01): when an out-leg of one listing and an
 in-leg of another pair uniquely and the exports' security names agree,
-`taxjson run` books them as one security, as a ticker.map TOBASE line
+`tjs run` books them as one security, as a ticker.map TOBASE line
 would — with one Warning per account naming the DISTINCT line that
 undoes it. The names must be EQUAL word for word (pre-release review
 H1): the corporate form and every designator count. A ticker.map rule (DISTINCT
@@ -321,7 +321,7 @@ class TestRun(unittest.TestCase):
         st = self._check_not_joined(
             "canada", tail="DISTINCT SAMPQ.TO SAMPR.TO\n")
         # The pair the DISTINCT line keeps apart is recorded as refused
-        # (`taxjson journals` lists it), never joined or suggested.
+        # (`tjs journals` lists it), never joined or suggested.
         self.assertEqual({k: st[k] for k in ("joined", "suggested",
                                               "collisions")},
                          {"joined": [], "suggested": [], "collisions": []})

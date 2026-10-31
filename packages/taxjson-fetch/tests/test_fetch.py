@@ -1,4 +1,4 @@
-"""taxjson fetch — broker auto-fetch (offline: injected HTTP)."""
+"""tjs fetch — broker auto-fetch (offline: injected HTTP)."""
 # First: puts the plugin, the core and its test helpers on sys.path and
 # registers the plugin's entry point when it is not pip-installed.
 import _support  # noqa: F401
@@ -202,7 +202,7 @@ class TestFlex(unittest.TestCase):
 
 def _online_env(**drop):
     """os.environ without TAXJSON_OFFLINE (the core's test helpers set
-    it for every test: tests/_hermetic), so `taxjson fetch` reaches the
+    it for every test: tests/_hermetic), so `tjs fetch` reaches the
     argument and token checks these tests are about; none of them gets
     as far as a download."""
     return {k: v for k, v in os.environ.items()

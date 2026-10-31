@@ -1,8 +1,8 @@
-"""Moved from the core's tests/test_security_audit_2026_09.py with `taxjson fetch` (now the
+"""Moved from the core's tests/test_security_audit_2026_09.py with `tjs fetch` (now the
 taxjson-fetch plugin). Original module docstring:
 
 2026-09 security/privacy audit pins: owner-only file modes, the
-network-serve token, credential handling in `taxjson fetch`, and the
+network-serve token, credential handling in `tjs fetch`, and the
 dependency floor. All values synthetic.
 """
 # First: puts the plugin, the core and its test helpers on sys.path and

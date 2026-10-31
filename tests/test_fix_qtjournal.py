@@ -15,7 +15,7 @@ find-missing-history showed the code short.
 Now the parser pairs the two legs (one account, day, name, quantity),
 books the USD leg on the security's US-dollar class (the account's own
 USD rows, else the TSX convention SYM.U.TO from data/markets.toml), learns
-the code from the journal leg of the same name, and `taxjson run` joins
+the code from the journal leg of the same name, and `tjs run` joins
 the two lines as a ticker.map JOURNAL line would (Canada only).
 
 Every fixture is SYNTHETIC: invented QZ* names, symbols and codes, fake

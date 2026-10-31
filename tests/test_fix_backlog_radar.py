@@ -341,7 +341,7 @@ class TestBuyCheckViolationDate(unittest.TestCase):
         self.assertIn("ZZD.TO: UNSAFE", out)
         self.assertIn("Safe to buy from 2026-10-30.", " ".join(out.split()))
         self.assertNotIn("2026-10-29", out)
-        self.assertNotIn("see `taxjson wash-radar`", out)
+        self.assertNotIn("see `tjs wash-radar`", out)
 
     @rule("CA-PLAN-05")
     def test_radar_legend_says_violation_clears_is_a_sell_by(self):

@@ -7,7 +7,7 @@ tax-loss-harvest view. "If I sold this today, is it a loss?"
 
 Positions (quantity + base-currency book cost, post ticker.map and post
 split/wash adjustments) come from the canonical per-account gains files'
-`inventory` — the same basis `taxjson list` shows. Current prices resolve
+`inventory` — the same basis `tjs list` shows. Current prices resolve
 through the shared chain: IBKR -> yfinance -> price cache. Each LOSS row
 is annotated with the wash radar's advisory when a radar JSON sidecar is
 supplied, so "is it a loss?" and "may I claim it?" land on one line.
@@ -27,7 +27,7 @@ Usage:
         [--radar reports/wash_radar_margin.json]
         [--symbol AAA.TO] [--json]
 
-Or through the project wrapper: `taxjson harvest [SYMBOL]`.
+Or through the project wrapper: `tjs harvest [SYMBOL]`.
 """
 
 import argparse
@@ -54,7 +54,7 @@ from taxjson.lib.ticker_map import is_future_ticker
 # Equity options premium-quote in per-share terms; a standard contract
 # covers 100 shares and the books carry the x100 amounts. A contract
 # size the rows DECLARED (the inventory's `multiplier`, e.g. a x10 mini)
-# wins — the same rule as `taxjson list` and the holdings export
+# wins — the same rule as `tjs list` and the holdings export
 # (audit A2-0367 / A2-1177).
 OPTION_MULTIPLIER = 100.0
 
@@ -96,7 +96,7 @@ def _read_input(p: Path, what: str) -> Dict[str, Any]:
         return read_json_doc(p, list_key=None)
     except InputFileError as e:
         from taxjson.lib.cli_diag import error
-        error(PROG, f"{what} {e} — re-run `taxjson run`")
+        error(PROG, f"{what} {e} — re-run `tjs run`")
         sys.exit(2)
 
 
@@ -250,7 +250,7 @@ def load_inventory_agg(files: List[Path], column: str,
     if stale:
         warn(PROG, f"{', '.join(stale)} predate the last_acq_date field — "
                    f"{column} shows '-' for those holdings; re-run "
-                   f"`taxjson run` to refresh.")
+                   f"`tjs run` to refresh.")
     return out
 
 
@@ -317,7 +317,7 @@ def _option_quote_symbols(option_tickers: List[str], files: List[Path],
         elif src and len(src) > 1:
             warn(PROG, f"{t}: the books consolidate several contracts "
                        f"onto it ({', '.join(sorted(src))}) — omitted; "
-                       f"price them with `taxjson harvest` per account "
+                       f"price them with `tjs harvest` per account "
                        f"or check ticker.map.")
             out[t] = None
         elif und in targets:
@@ -832,7 +832,7 @@ def main(argv: Optional[List[str]] = None,
                    help="The essentials (docs/output-style.md): a legend, "
                         "the tables, the harvestable losses and one line "
                         "per action; no COLUMNS / NOTES / scope "
-                        "paragraph (`taxjson harvest` passes it unless "
+                        "paragraph (`tjs harvest` passes it unless "
                         "--details)")
     args = p.parse_args(argv)
     if args.ticker_map is not None and not Path(args.ticker_map).exists():
@@ -966,7 +966,7 @@ def main(argv: Optional[List[str]] = None,
         external_map = load_yf_map(_dirs + [Path(".")])
         # The coin spellings the books were priced with: fill-crypto's
         # ids, the project's ticker.map CRYPTO lines (A2-0364).
-        # Project root first — `taxjson run` reads the map from there.
+        # Project root first — `tjs run` reads the map from there.
         crypto_overrides = load_crypto_overrides(
             [d for d in reversed(_dirs)])
     yf_map: Dict[str, str] = {}
@@ -1039,7 +1039,7 @@ def main(argv: Optional[List[str]] = None,
         fx_history = load_fx_history(rates_path, base)
     except (OSError, ValueError) as e:
         # An unreadable or damaged to_base.csv: one line, whether run
-        # as taxjson-harvest or `taxjson harvest` (re-audit A2-0790).
+        # as taxjson-harvest or `tjs harvest` (re-audit A2-0790).
         error(PROG, str(e))
         return 2
     today_iso = date.today().isoformat()
@@ -1121,7 +1121,7 @@ def main(argv: Optional[List[str]] = None,
             if age > _STALE_RATE_DAYS and qcur not in stale_warned:
                 stale_warned.add(qcur)
                 warn(PROG, f"{qcur}->{base} rate is {age}d old "
-                           f"({rate_date}) — run `taxjson run` to refresh.")
+                           f"({rate_date}) — run `tjs run` to refresh.")
         mult = (float(r.get("multiplier") or OPTION_MULTIPLIER)
                 if r.get("is_option") else 1.0)
         ratio = (1.0 if r.get("is_option")
@@ -1212,15 +1212,15 @@ def main(argv: Optional[List[str]] = None,
                    f"have the cost of part of the holding (an `OPENING "
                    f"... cost=unknown` line, a transfer in with no "
                    f"cost), so its gain or loss cannot be told — give "
-                   f"that cost, then `taxjson run`.")
+                   f"that cost, then `tjs run`.")
     for qcur, syms in sorted(no_rate.items()):
-        # `taxjson run` fetches the rates of [settings] source_currencies
+        # `tjs run` fetches the rates of [settings] source_currencies
         # only: a currency only a QUOTE line's listing is in is never
-        # fetched, so "run `taxjson run`" alone fixed nothing (TJ-0024).
+        # fetched, so "run `tjs run`" alone fixed nothing (TJ-0024).
         warn(PROG, f"{', '.join(syms)} omitted: no {qcur}->{base} rate — "
                    f"add \"{qcur}\" to source_currencies in taxjson.toml, "
-                   f"then `taxjson run`",
-             details=[f"{rates_path} has no {qcur} rate: `taxjson run` "
+                   f"then `tjs run`",
+             details=[f"{rates_path} has no {qcur} rate: `tjs run` "
                       f"fetches the rates of the [settings] "
                       f"source_currencies only, not the currency of a "
                       f"ticker.map QUOTE line's listing."])
@@ -1517,7 +1517,7 @@ def main(argv: Optional[List[str]] = None,
                      f"book cost across {carriers} position(s) is "
                      f"prior DENIED losses — UNREALIZED on those rows "
                      f"includes recycled loss, not only new loss "
-                     f"(per-row amounts in --json / `taxjson list`).")
+                     f"(per-row amounts in --json / `tjs list`).")
     _flagged = [(r["symbol"], n) for r in rows
                 for n in ((r.get("radar") or {}).get("notes") or [])
                 if r.get("verdict") == "LOSS"]

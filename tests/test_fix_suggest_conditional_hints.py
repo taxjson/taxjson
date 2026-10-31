@@ -1,4 +1,4 @@
-"""`taxjson ticker-map --suggest`: a parser hint phrased as a condition
+"""`tjs ticker-map --suggest`: a parser hint phrased as a condition
 ("Only if the position is really held under the other listing …, add to
 ticker.map: TOBASE QZLR.US QZLR.TO") is offered only when the project's
 books hold every symbol the line names. RBC books a dividend on a symbol
@@ -27,7 +27,7 @@ def _book(work: Path, name: str, rows) -> None:
 
 
 def _project(td: str, other_rows=None, holdings=None) -> Path:
-    """work/ as `taxjson run` leaves it: the RBC account's parse and its
+    """work/ as `tjs run` leaves it: the RBC account's parse and its
     .diag (the parser's own output for a dividend-only USD symbol), plus
     another account's parse when given."""
     root = Path(td)

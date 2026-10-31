@@ -178,7 +178,7 @@ class TestB27ConcurrentFetches(unittest.TestCase):
 
             def say(msg):
                 said.append(msg)
-                if "waiting for another `taxjson fetch`" in msg:
+                if "waiting for another `tjs fetch`" in msg:
                     waiting.set()
             req = SimpleNamespace(args=args, root=root, work=root / "work",
                                   config=cfg, accounts=["margin"], say=say,

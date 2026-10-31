@@ -3,7 +3,7 @@
 channels.json parsing, scripts/promote.sh's refusals and commit, the
 installer's channel resolution (stable default, beta, latest, dev, a
 pinned vX.Y.Z, the remembered channel, never backwards, only annotated
-tags on main), `taxjson channels --json`, and `promote` / `deploy`
+tags on main), `tjs channels --json`, and `promote` / `deploy`
 refusing without a development checkout. Every git remote here is a
 local temporary repository: nothing touches the network.
 """
@@ -216,7 +216,7 @@ class TestPromote(_Repos):
         lane = self.fast_lane_tags()
         self.assertEqual([v for v in lane.values()],
                          [(self.git(self.dev, "rev-parse", "origin/main"),
-                           "taxjson channels: stable → v0.4.0")])
+                           "tjs channels: stable → v0.4.0")])
         self.assertRegex(next(iter(lane)), r"^channels-\d{8}T\d{6}Z$")
         self.assertIn("asked the publisher for stable → v0.4.0", r.stdout)
         self.assertEqual(set(self.git(self.dev, "tag", "-l").split())
@@ -567,7 +567,7 @@ class TestChannelsCommand(_Repos):
         self.assertIn("  stable:    v0.2.0", r.stdout)
         self.assertIn("this box:  v0.2.0", r.stdout)
         self.assertIn("←stable", r.stdout)
-        self.assertIn("5 older — taxjson channels all", r.stdout)
+        self.assertIn("5 older — tjs channels all", r.stdout)
         # An unreachable remote is "offline" too, never an error.
         self.git(self.dev, "remote", "set-url", "origin",
                  str(self.d / "gone.git"))
@@ -621,7 +621,7 @@ class TestChannelsCommand(_Repos):
                     TAXJSON_BIN=str(self.d / "bin"))
 
     def test_deploy_moves_the_production_copy_and_keeps_its_channel(self):
-        # The stub install's `taxjson --version` reports the release its
+        # The stub install's `tjs --version` reports the release its
         # checkout is at, as a real editable install would.
         env = self._deploy_env(_PY_STUB.replace(
             'echo "taxjson 0.0.0"',

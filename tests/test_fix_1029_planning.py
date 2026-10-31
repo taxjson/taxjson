@@ -35,7 +35,7 @@ class TestMissingShelteredBookRefused(unittest.TestCase):
     ago, so a loss sale of the taxable SYN.TO is UNSAFE. With
     work/sheltered_base.json gone, sell-check said SAFE, exit 0, after
     an Info line. Decided 2026-10-29: sell-check, buy-check and rebuy
-    refuse, exit 2, run `taxjson run` first."""
+    refuse, exit 2, run `tjs run` first."""
 
     @classmethod
     def setUpClass(cls):
@@ -74,7 +74,7 @@ class TestMissingShelteredBookRefused(unittest.TestCase):
                 self.assertEqual(r.stdout, "")
                 err = " ".join(r.stderr.split())
                 self.assertIn("Error: no sheltered_base.json in work/", err)
-                self.assertIn("Run `taxjson run` first", err)
+                self.assertIn("Run `tjs run` first", err)
 
     def test_tj0394_wash_sales_explain_refuses_too(self):
         # The explain replay lost the registered account's denial the
@@ -182,7 +182,7 @@ class TestHarvestStrictMap(unittest.TestCase):
 class TestCommandsRefuseMalformedMap(unittest.TestCase):
     """TJ-0352: `tjs harvest` and `tjs wash-radar` (whose SIMILAR groups
     lib/similar read past a dropped line) refuse a map with a problem
-    line, exit 2, as `taxjson run` and buy-check do."""
+    line, exit 2, as `tjs run` and buy-check do."""
 
     @classmethod
     def setUpClass(cls):

@@ -202,7 +202,7 @@ class TestHoldingsCheckNamesWhyItCouldNotRun(unittest.TestCase):
     """TJ-0485: a holdings file with no [[holding]] tables ended the
     run's default view with a bare "Warning: holdings check could not
     run" — no file, no reason, no command; only --details added the
-    Error. The one line now names the reason and `taxjson sanity`, and
+    Error. The one line now names the reason and `tjs sanity`, and
     the detailed form says what to do. Since TJ-0643 such a file is an
     input sanity cannot read (exit 2): its Error, naming the file from
     the project, comes first, then the run's warning and the command."""
@@ -221,14 +221,14 @@ class TestHoldingsCheckNamesWhyItCouldNotRun(unittest.TestCase):
                           "[[holding]] array (a holdings file has "
                           "[[holding]] tables)\n"
                           "Warning: holdings check could not run — "
-                          "`taxjson sanity`", out)
+                          "`tjs sanity`", out)
             r = _tjs(p, "run", "--no-input")
-            self.assertIn("taxjson run: error: holdings/margin_holdings.toml "
+            self.assertIn("tjs run: error: holdings/margin_holdings.toml "
                           "has no [[holding]] array (a holdings file has "
                           "[[holding]] tables)\n"
                           "  warning: holdings check could not run\n"
                           "    The Error above names the file to fix; then "
-                          "`taxjson sanity`.",
+                          "`tjs sanity`.",
                           r.stdout + r.stderr)
 
 

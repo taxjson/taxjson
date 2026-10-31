@@ -5,7 +5,7 @@
 # body-sha256: 74a88d759f43628675902cd7495bf9d79980901638f512654becf195aadcaf98
 # python: >=3.10
 # exclude-newer: 2026-10-17T00:00:00Z
-# security-updates: certifi, setuptools
+# security-updates: certifi, pyasn1, setuptools
 # uv: 0.13.5
 
 et-xmlfile==2.0.0 \

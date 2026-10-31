@@ -1,4 +1,4 @@
-"""`taxjson slip-audit --import-cra`: a T5 whose issuer is a broker's
+"""`tjs slip-audit --import-cra`: a T5 whose issuer is a broker's
 carrying dealer, not the broker (Webull Canada's slips are issued by CI
 Investment Services). The issuer names live in a shipped data file
 (src/taxjson/data/slip_issuers.toml), never in code; an alias places a

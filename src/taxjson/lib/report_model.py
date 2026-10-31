@@ -402,7 +402,7 @@ def resolve_gains_files(cache, account: Optional[str] = None, *,
     """THE canonical discovery of per-account gains files under work/.
 
     The 2026-07b audit found six hand-copied variants of this walk in
-    taxjson_run.py running TWO different policies (`taxjson sum`/`list`
+    taxjson_run.py running TWO different policies (`tjs sum`/`list`
     read pre-wash files while carryover/t1135/wash-sales preferred the
     wash-adjusted ones), so totals disagreed across commands whenever a
     cross-account wash disallowance fired. Every consumer goes through
@@ -459,7 +459,7 @@ def resolve_gains_files(cache, account: Optional[str] = None, *,
                 emit_line(f"warning: {wash.name} was built before "
                           f"{', '.join(newer)} changed — wash-adjusted "
                           f"numbers are "
-                          f"stale (run a full `taxjson run` before "
+                          f"stale (run a full `tjs run` before "
                           f"filing from this output).",
                           file=_sys.stderr)
             out[name] = wash
@@ -703,7 +703,7 @@ def build_account_report(gains_data, account: str,
                          basis: Optional[str] = None,
                          base_transactions=None, rules=None) -> dict:
     """The structured dict work/<account>_report.json carries — the machine
-    twin of the text reports, written by `taxjson run` after the .sum stage.
+    twin of the text reports, written by `tjs run` after the .sum stage.
 
     Schema (schema_version 1):
       account         str — account name
@@ -717,7 +717,7 @@ def build_account_report(gains_data, account: str,
                       wash_sales records
 
     ADDITIVE artifact: the .sum text pipeline is unchanged; consumers
-    (`taxjson sum` today; future exports) read this instead of
+    (`tjs sum` today; future exports) read this instead of
     re-deriving the same aggregates from the raw gains JSON."""
     from datetime import datetime
     # Deferred imports: bin tools import report_model, so a module-level
@@ -744,7 +744,7 @@ def build_account_report(gains_data, account: str,
         "account": account,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         # Which gains basis the aggregates were computed from
-        # ("pre-wash" | "wash-adjusted") — `taxjson sum`'s fast path
+        # ("pre-wash" | "wash-adjusted") — `tjs sum`'s fast path
         # serves this file only when it matches the basis it resolved,
         # since after `run --account X` the report is freshly pre-wash
         # while the stale wash file still wins resolve_gains_files.

@@ -1,4 +1,4 @@
-"""Win/lose statistics on closed positions — the data behind `taxjson
+"""Win/lose statistics on closed positions — the data behind `tjs
 stats` (a trader's view of the books, never a filing number).
 
 One CLOSED TRADE per closing disposition, in six asset classes:

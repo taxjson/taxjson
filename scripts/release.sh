@@ -22,7 +22,7 @@
 #      "### vX.Y.Z";
 #   3. bumps pyproject.toml and, in lockstep, the taxjson-fetch plugin's
 #      packages/taxjson-fetch/pyproject.toml (its version and its
-#      `taxjson>=` floor), reinstalls so `taxjson --version` agrees;
+#      `taxjson>=` floor), reinstalls so `tjs --version` agrees;
 #   4. scans the release notes (the CHANGELOG section: what the public
 #      repo's release.yml publishes; scripts/release-notes.sh)
 #      with `scripts/check-pii.sh --message` before anything is committed;
@@ -244,7 +244,7 @@ if [ -n "$PREPARE" ]; then
   sed -i "s/^version = \"[^\"]*\"/version = \"$V\"/" pyproject.toml
   grep -q "^version = \"$V\"" pyproject.toml || { echo "pyproject version bump failed"; exit 1; }
   # The broker-fetch plugin ships from the same tag, version for version,
-  # and needs at least this core (the `taxjson fetch` plugin interface).
+  # and needs at least this core (the `tjs fetch` plugin interface).
   sed -i -e "s/^version = \"[^\"]*\"/version = \"$V\"/" \
          -e "s/\"taxjson>=[^\"]*\"/\"taxjson>=$V\"/" "$FETCH_TOML"
   grep -q "^version = \"$V\"" "$FETCH_TOML" && grep -q "\"taxjson>=$V\"" "$FETCH_TOML" \
@@ -258,7 +258,7 @@ if [ -n "$PREPARE" ]; then
     "$PY" -m pip install --no-deps -e packages/taxjson-fetch --quiet
   fi
   rm -rf src/*.egg-info packages/*/src/*.egg-info
-  [ "$("$PY" -m taxjson.bin.taxjson_run --version)" = "taxjson $V" ] || { echo "taxjson --version disagrees with $V"; exit 1; }
+  [ "$("$PY" -m taxjson.bin.taxjson_run --version)" = "taxjson $V" ] || { echo "tjs --version disagrees with $V"; exit 1; }
 
   if [ -n "$REUSE" ] && ! release_edits_only; then
     echo "gate: not reusing $REUSE — the working tree differs from the gated tree by more than the release edits"

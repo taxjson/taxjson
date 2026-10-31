@@ -1,7 +1,7 @@
 """Hand-entered year data kept in taxjson.toml: the readers and checks.
 
 Four inputs that used to be project-root text files live in the
-project's taxjson.toml (`taxjson migrate` moves an old project's files):
+project's taxjson.toml (`tjs migrate` moves an old project's files):
 
     [estimate]
     amt_carryover = { 2023 = 1200.50 }     # Canada: minimum tax carryover
@@ -9,7 +9,7 @@ project's taxjson.toml (`taxjson migrate` moves an old project's files):
     [carryover]
     claimed = { 2023 = 4000.00 }           # net capital losses applied on
                                            #   each filed return (both
-                                           #   countries; `taxjson carryover`)
+                                           #   countries; `tjs carryover`)
     [[capital_gains_dividends]]            # Canada: T5 box 18
     symbol = "ABD.TO"
     year = 2025                            # or: date = 2025-06-16

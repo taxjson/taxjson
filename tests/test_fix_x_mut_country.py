@@ -24,7 +24,7 @@ class TestHelpers(unittest.TestCase):
         plain = C.command_country_problem("t1135", "usa")
         self.assertEqual(C.command_country_problem("t1135", "usa",
                                                    variant="x"), plain)
-        self.assertIn("`taxjson t1135` is Canada-only (Form T1135", plain)
+        self.assertIn("`tjs t1135` is Canada-only (Form T1135", plain)
         self.assertIsNone(C.command_country_problem("t1135", "canada",
                                                     variant="x"))
 

@@ -1,4 +1,4 @@
-"""taxjson watch — cron-able change detector over the wash radar (and,
+"""tjs watch — cron-able change detector over the wash radar (and,
 optionally, the harvest schedule).
 
 The radar and harvest answer "what is the state NOW"; watch answers
@@ -15,7 +15,7 @@ radar against the state saved by the previous watch run
 
 Quiet run (no changes) prints NOTHING and exits 0 — under cron, no
 output means no mail. `--exit-code` makes changes exit 1 for shell
-scripting; the default stays 0 so `taxjson run watch` chains never
+scripting; the default stays 0 so `tjs run watch` chains never
 break on a mere change report. The first run records a baseline and
 says so. State updates on every run (atomic write).
 """
@@ -256,7 +256,7 @@ def diff_harvest(prev_now: Optional[float], cur_now: float,
 
 
 def harvest_left_out(hdoc: Dict[str, Any]) -> List[Dict[str, str]]:
-    """The positions a `taxjson harvest --json` document left out of its
+    """The positions a `tjs harvest --json` document left out of its
     totals ({key, shown}: key `account|symbol`, shown `SYMBOL (reason)`),
     sorted by key. A total that leaves out a position the baseline
     valued (a missing FX rate, no price) is not comparable with it:
@@ -275,7 +275,7 @@ def harvest_left_out(hdoc: Dict[str, Any]) -> List[Dict[str, str]]:
 
 
 def harvest_valued(hdoc: Dict[str, Any]) -> List[str]:
-    """The `account|symbol` keys of the positions a `taxjson harvest
+    """The `account|symbol` keys of the positions a `tjs harvest
     --json` document valued (its rows), sorted."""
     return sorted({f"{r.get('account') or ''}|{r.get('symbol')}"
                    for r in hdoc.get("rows") or []
@@ -350,7 +350,7 @@ def load_state(path: Path) -> Optional[Dict[str, Any]]:
     except (OSError, ValueError) as e:
         doc, why = None, f"unreadable ({e})"
     # Valid JSON of the wrong shape (a list) is no baseline either — it
-    # crashed `taxjson watch` with an AttributeError (S068-11, R1-242).
+    # crashed `tjs watch` with an AttributeError (S068-11, R1-242).
     if doc is not None and not isinstance(doc, dict):
         doc, why = None, "not a JSON object"
     if doc is not None and doc.get("schema_version") != STATE_VERSION:
@@ -368,7 +368,7 @@ def load_state(path: Path) -> Optional[Dict[str, Any]]:
     if doc is None:
         from taxjson.lib.out import warn
         warn(f"state file {path.name} is {why} — recording a NEW "
-             f"baseline", prog="taxjson watch",
+             f"baseline", prog="tjs watch",
              details=["Changes since the previous run are not reported "
                       "this time."])
     return doc
@@ -435,5 +435,5 @@ def render_report(changes: List[Dict[str, Any]], as_of: str,
 
 if __name__ == "__main__":                       # pragma: no cover
     sys.exit(exit_text("taxjson-watch is not a standalone tool — use "
-                       "`taxjson watch` (it needs the project's radar "
+                       "`tjs watch` (it needs the project's radar "
                        "inputs)."))

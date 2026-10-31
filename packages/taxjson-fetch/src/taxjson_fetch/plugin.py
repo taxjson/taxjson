@@ -1,4 +1,4 @@
-"""The taxjson-fetch plugin object the core's `taxjson fetch` loads.
+"""The taxjson-fetch plugin object the core's `tjs fetch` loads.
 
 Registered in pyproject.toml under the entry-point group
 `taxjson.fetchers` (see taxjson.lib.fetchers for the contract). Kept
@@ -54,7 +54,7 @@ class BrokerFetcher:
                        help="Also snapshot LIVE holdings per "
                             "Questrade account into the year's "
                             "holdings folder, holdings/<account>_"
-                            "live_holdings.toml (`taxjson sanity` "
+                            "live_holdings.toml (`tjs sanity` "
                             "finds it)")
         p.add_argument("--trim-overlap", action="store_true",
                        help="Trim rows inside the fetched window "

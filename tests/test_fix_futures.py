@@ -199,7 +199,7 @@ class TestT1135Futures(unittest.TestCase):
 
 @rule("CA-RPT-12", "CA-ACB-11")
 class TestT1135Phantoms(unittest.TestCase):
-    """R1-321: `taxjson t1135` applies the missing-history lines (.tt
+    """R1-321: `tjs t1135` applies the missing-history lines (.tt
     OPENING cost=unknown) like the gains pass."""
 
     def _books(self, td, account="IB"):

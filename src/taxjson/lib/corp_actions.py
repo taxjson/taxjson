@@ -1195,7 +1195,7 @@ def _ib_unsupported_events(odd_rows, account, acct_of, quiet: bool = False
 
 
 # Elections whose tax deferral is only valid if the user FILES the
-# election with their return — consumed by `taxjson run`'s end-of-run
+# election with their return — consumed by `tjs run`'s end-of-run
 # reminder and the `elect` listing (the option text says this at
 # choose time, but a March election is forgotten by filing season).
 #
@@ -1463,7 +1463,7 @@ def parse_questrade_corporate_actions(
     `+100 / -100 / +100` collapses to a single `qty_received=100` event.
 
     `symbol_codes`: the account's work/<acct>_symbol_codes.state (lib/
-    symbol_codes, written by `taxjson run`): a chain booked under
+    symbol_codes, written by `tjs run`): a chain booked under
     Questrade's internal code takes the listing that stage resolved the
     code to — the one the parser books the code's other rows under
     (GitHub issue #4: the two stages disagreed). The event id keeps the
@@ -2848,7 +2848,7 @@ def parse_rbc_corporate_actions(
     RBC reports no FMV and no ISIN; FMV comes from the election hint, and
     the symbols stand in for the ISINs in the event-id hash.
 
-    `renames` — the project's ticker.map renames (`taxjson run` passes
+    `renames` — the project's ticker.map renames (`tjs run` passes
     them): a spin-off booked under a temporary code that the map already
     renames needs no "map it" warning."""
     from taxjson.lib.brokerages.base import income_facts_from_description
@@ -3382,7 +3382,7 @@ class Manifest:
                 f"manifest at {path} is not valid JSON ({exc.msg} at line "
                 f"{exc.lineno} col {exc.colno}). It holds this account's "
                 f"elections and their hand-typed values: fix the JSON, or "
-                f"restore the file from git or a backup (`taxjson "
+                f"restore the file from git or a backup (`tjs "
                 f"checklist` tracks it under inputs-committed). Do not "
                 f"delete it — that discards the recorded elections."
             ) from None
@@ -3406,7 +3406,7 @@ class Manifest:
                     f"object like {{\"election\": \"...\"}}; got "
                     f"{type(rec).__name__} {rec!r:.40}")
             for fld in ('election', 'summary', 'notes'):
-                # summary=7 was a TypeError in `taxjson spinoffs` (A2-0804).
+                # summary=7 was a TypeError in `tjs spinoffs` (A2-0804).
                 val = rec.get(fld, '')
                 if fld != 'election' and val is None:
                     val = ''
@@ -3477,7 +3477,7 @@ class Manifest:
         """Load the manifest at `path`, apply `change(manifest)` and save
         it when the change returns a true value, as ONE step under
         `manifest_lock`. Returns (the manifest as saved, the change's
-        value). Two writers (two `taxjson elect --set`s, a run's prompt
+        value). Two writers (two `tjs elect --set`s, a run's prompt
         beside a --set) each loaded, changed and saved the whole file:
         the later save dropped the other's election, although both said
         "Election saved" (backlog TJ-0544)."""
@@ -3536,7 +3536,7 @@ class Manifest:
                 f"{'; ' + rec.summary if rec.summary else ''}) was saved "
                 f"under an older id that fits more than one event of this "
                 f"run ({', '.join(e.event_id for e in cands)}) — not "
-                f"guessed. Set it again with `taxjson elect <account> "
+                f"guessed. Set it again with `tjs elect <account> "
                 f"--set <event id>={rec.election}` (the hints are in the "
                 f"manifest), then delete the old entry.")
 
@@ -3602,7 +3602,7 @@ class Manifest:
                     + ("no saved summary" if not rec.summary else
                        f"a different action type or ratio ({rec.summary})")
                     + " — not carried over. If it is the same event, set "
-                    f"it again with `taxjson elect <account> --set "
+                    f"it again with `tjs elect <account> --set "
                     f"{ev.event_id}={rec.election}`.")
                 continue
             _adopt(hits[0], ev,
@@ -3617,7 +3617,7 @@ class Manifest:
         would carry over to an event of `events`, worked out on a copy:
         this manifest is not changed. A run whose manifest is not
         rewritten (shared exports: --decisions-only) applies such a
-        record under its old id; `taxjson elect --redo/--reset --event`
+        record under its old id; `tjs elect --redo/--reset --event`
         takes either id for it (backlog TJ-0848)."""
         recs = {eid: ElectionRecord(event_id=r.event_id, summary=r.summary,
                                     election=r.election, notes=r.notes,
@@ -3697,7 +3697,7 @@ class RuleSpec:
     apply: Callable[[CorporateAction, str, dict], List[dict]]
     # When set, the resolver applies this election WITHOUT prompting —
     # for event types with exactly one sane treatment (name changes).
-    # A manifest record is still written (audit trail intact; `taxjson
+    # A manifest record is still written (audit trail intact; `tjs
     # elect --redo` can override it like any other election).
     auto_default: Optional[str] = None
 
@@ -3911,7 +3911,7 @@ def _emit_taxable_exchange(event: CorporateAction, hints: dict,
             f"value for the new shares ({why}) — emitting zero-valued "
             f"rows: the SELL realizes a fake loss (proceeds are only the "
             f"cash-in-lieu, if any) and the BUY enters at $0 basis. Set "
-            f"its value: taxjson elect {event.account} --set "
+            f"its value: tjs elect {event.account} --set "
             f"{event.event_id}=<election> --hint fmv_per_share=<value>")
 
     # Proceeds in the source listing's currency: shares + cash-in-lieu.
@@ -4200,7 +4200,7 @@ def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
     _boot_paid, _fmv_paid, _fmv_paid_cur = boot, tgt_fmv, fmv_cur
     # One currency for the §356 arithmetic: US dollars. The boot and the
     # new shares' value are in the target listing's currency, the basis
-    # in USD (what a US project's `taxjson list` shows); each leg is
+    # in USD (what a US project's `tjs list` shows); each leg is
     # then booked in its own listing's currency at the event-date rate.
     # The hints used to be added unconverted across currencies (A2-0216).
     usd_boot = _convert(hints, boot, tgt_cur, 'USD', event.date)
@@ -4219,7 +4219,7 @@ def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
     if boot <= 0:
         emit_line(f"warning: boot merger {event.source_symbol}→"
             f"{event.target_symbol} on {event.date} has cash_boot=0 — "
-            f"elect reorg_368 for an all-stock reorganization (`taxjson "
+            f"elect reorg_368 for an all-stock reorganization (`tjs "
             f"elect --redo`).")
     if tgt_fmv <= 0 and event.qty_received > 0:
         # Without the new shares' value the realized gain is understated
@@ -4229,7 +4229,7 @@ def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
             f"{event.target_symbol} on {event.date} has no value for the "
             f"new shares (fmv_per_share=0 and none reported) — the "
             f"realized gain counts only the cash, so the recognized gain "
-            f"and the new basis are understated. Re-run `taxjson elect "
+            f"and the new basis are understated. Re-run `tjs elect "
             f"--redo` with the FMV per new share.")
 
     tgt_fmv = max(tgt_fmv, 0.0)
@@ -4418,7 +4418,7 @@ def _emit_distribution(event: CorporateAction, hints: dict,
     The value: the user's `fmv_per_share` hint when it is positive,
     else the broker's own value for the new shares (IB reports one —
     it used to be ignored), else 0. A zero-valued taxable spin-off is
-    booked so the pipeline runs, and `taxjson run` warns about it on
+    booked so the pipeline runs, and `tjs run` warns about it on
     every run until a value is supplied."""
     fmv_per_share = float(hints.get('fmv_per_share') or 0.0)
     currency = event.currency
@@ -4544,7 +4544,7 @@ def _emit_distribution(event: CorporateAction, hints: dict,
 
 def zero_value_merger_rows(rows: List[dict]) -> List[dict]:
     """New-share BUY rows of taxable merger elections booked at $0 —
-    the deferred-FMV state (with or without cash-in-lieu) `taxjson run`
+    the deferred-FMV state (with or without cash-in-lieu) `tjs run`
     keeps loud on every run, like a $0 spin-off."""
     return [r for r in rows
             if r.get('action') == 'BUYSELL'
@@ -4562,7 +4562,7 @@ ALLOCATED_BASIS_HINT = {'rollover_s_86_1': 'allocated_acb_cad',
 def zero_basis_rollover_rows(rows: List[dict]) -> List[dict]:
     """Spun-off share BUY rows of an s.86.1 / §355 election booked with
     $0 allocated basis: the parent keeps its whole cost and the gain
-    moves to the spin-off's sale (audits S073-21, S074-04). `taxjson
+    moves to the spin-off's sale (audits S073-21, S074-04). `tjs
     run` keeps it loud on every run, like a $0 spin-off."""
     return [r for r in rows
             if r.get('action') == 'BUYSELL'
@@ -4573,7 +4573,7 @@ def zero_basis_rollover_rows(rows: List[dict]) -> List[dict]:
 
 def zero_value_spinoff_rows(rows: List[dict]) -> List[dict]:
     """DIVIDEND rows of taxable spin-off elections booked at $0 — the
-    deferred-FMV state `taxjson run` keeps loud on every run (a $0 the
+    deferred-FMV state `tjs run` keeps loud on every run (a $0 the
     user declared is an Info instead: declares_zero_value)."""
     return [r for r in rows
             if r.get('action') == 'DIVIDEND'
@@ -4590,7 +4590,7 @@ FMV_SPINOFF_ELECTIONS = ('taxable_deemed_dividend',
 def declares_zero_value(election: str, hints: Optional[dict]) -> bool:
     """Whether a saved election DECLARES the spun-off shares worth $0:
     an FMV spin-off election whose hints carry `fmv_per_share` written
-    as 0 (`taxjson elect --set ID=ELECTION --hint fmv_per_share=0`, or a
+    as 0 (`tjs elect --set ID=ELECTION --hint fmv_per_share=0`, or a
     0 confirmed at the prompt) — a warrant distributed at no value. That
     is the user's answer: the $0 cost is listed as an Info, never as a
     Warning, ATTENTION or pending. A $0 the broker booked with no value
@@ -4618,7 +4618,7 @@ def declared_zero_value_ids(manifest_path: Path) -> set:
 
 def declared_zero_value_events(root: Path) -> set:
     """{(account, event id)} of the project's elections that declare a
-    $0 value: each account's manifest as `taxjson elect` reads it
+    $0 value: each account's manifest as `tjs elect` reads it
     (inputs/<account>/manifest.json, else the legacy
     work/<account>_manifest.json)."""
     root = Path(root)
@@ -4644,7 +4644,7 @@ def declared_zero_value_text(account: str, symbol: str, date: str,
     return (f"{account}: spin-off {symbol} on {date} (event {event_id}) "
             f"is booked at the $0 value you declared (fmv_per_share=0): "
             f"no dividend income and a $0 cost for the new shares. To "
-            f"change it: taxjson elect {account} --redo --event "
+            f"change it: tjs elect {account} --redo --event "
             f"{event_id}")
 
 
@@ -4916,7 +4916,7 @@ def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
         # A spin-off with value is never allocated $0 (s.86.1(2) /
         # §358(b) apportion by relative FMV): the parent kept its whole
         # cost and the spun-off shares booked at $0, with no word
-        # (audits S073-21, S074-04). Loud; `taxjson run` repeats it.
+        # (audits S073-21, S074-04). Loud; `tjs run` repeats it.
         emit_line(f"warning: spin-off {event.source_symbol}→"
                   f"{event.target_symbol} on {event.date}: the basis-allocating "
                   f"election carries an allocated cost of 0 — the spun-off "
@@ -5172,7 +5172,7 @@ def _allocation_in_listing_currency(event: CorporateAction, hints: dict,
     get back exactly the figure the user entered, while the native-
     currency (raw) view of the pool stays in one currency. Booking the
     rows in CAD on a USD listing made the raw holdings pass abort
-    `taxjson run` (A2-0002, a regression of S072-15) or skip the
+    `tjs run` (A2-0002, a regression of S072-15) or skip the
     holdings refresh with a false 'rollover rename' message (A2-0215,
     A2-0967); a US USD basis was read as CAD on a TSX listing (A2-0973).
     With no rate the rows stay in `amount_cur` and the run skips only
@@ -5230,7 +5230,7 @@ CANADA_SPINOFF = RuleSpec(
             "spinoff is on CRA's s. 86.1 eligibility list AND you file "
             "the election with your return. You supply the CAD cost to allocate: the "
             "parent's ACB in CAD immediately before the distribution "
-            "(`taxjson list` shows it) times the spin-off's share of the "
+            "(`tjs list` shows it) times the spin-off's share of the "
             "combined fair market value right after it (s. 86.1(3)). A "
             "company's Form 8937 percentage is a US figure and can "
             "differ. A Canadian parent's tax-deferred "
@@ -5306,7 +5306,7 @@ HINTS_BY_ELECTION: Dict[str, List[tuple]] = {
          "(used to compute the deemed-dividend amount and cost basis). "
          "The broker reported no value for this spin-off. Enter 0 only "
          "when the shares came at no value (a warrant distributed for "
-         "nothing): a declared $0 cost, which every `taxjson run` lists "
+         "nothing): a declared $0 cost, which every `tjs run` lists "
          "as an Info.",
          lambda ev: spinoff_broker_value(ev)[0] <= 0),
     ],
@@ -5314,7 +5314,7 @@ HINTS_BY_ELECTION: Dict[str, List[tuple]] = {
         ('allocated_acb_cad',
          "Cost (in CAD) moved from the parent to the spun-off shares, per "
          "s. 86.1(3): the parent's ACB in CAD immediately before the "
-         "distribution (`taxjson list`) x FMV of the spun-off shares / "
+         "distribution (`tjs list`) x FMV of the spun-off shares / "
          "(FMV of the parent + FMV of the spun-off shares) right after "
          "it. Booked in CAD — never converted at the spin-off date."),
     ],
@@ -5350,7 +5350,7 @@ HINTS_BY_ELECTION: Dict[str, List[tuple]] = {
          "(sets the taxable amount and the new cost basis). The broker "
          "reported no value for this spin-off. Enter 0 only when the "
          "shares came at no value (a warrant distributed for nothing): a "
-         "declared $0 cost, which every `taxjson run` lists as an Info.",
+         "declared $0 cost, which every `tjs run` lists as an Info.",
          lambda ev: spinoff_broker_value(ev)[0] <= 0),
     ],
     'tax_free_355': [
@@ -5358,7 +5358,7 @@ HINTS_BY_ELECTION: Dict[str, List[tuple]] = {
          "Basis in US DOLLARS allocated from the parent to the spun-off "
          "position per §358(b) — the company's Form 8937 publishes the "
          "allocation percentage; multiply by your parent's USD basis "
-         "(`taxjson list`). A non-US listing's rows are converted at the "
+         "(`tjs list`). A non-US listing's rows are converted at the "
          "spin-off date's rate."),
     ],
 }
@@ -5389,7 +5389,7 @@ def apply_auto_defaults(events: List[CorporateAction], manifest: "Manifest",
     """Write auto-default elections (RuleSpec.auto_default) for any
     unresolved event whose rule declares one. Returns the events that
     were auto-elected. The manifest record is a full audit-trail entry —
-    `taxjson elect --redo` overrides it like any hand-made election."""
+    `tjs elect --redo` overrides it like any hand-made election."""
     applied: List[CorporateAction] = []
     for ev in events:
         if manifest.get(ev.event_id) is not None:
@@ -5419,7 +5419,7 @@ def apply_auto_defaults(events: List[CorporateAction], manifest: "Manifest",
 # tax-logic CA-CORP-11 / US-CORP-12): a spin-off's new shares at $0
 # cost with the parent keeping its whole cost, a merger's new shares
 # taking the old shares' cost. Nothing is written to the manifest: an
-# election saved there (`taxjson elect`) wins, and "ask" brings the
+# election saved there (`tjs elect`) wins, and "ask" brings the
 # question back.
 SHELTERED_DEFAULT = 'sheltered_default'      # the rows' corp_election
 SHELTERED_ELECTION_MODES = ('zero', 'ask')
@@ -5505,7 +5505,7 @@ def sheltered_default_text(account: str, action_type: str, symbol: str,
         change = "sets a fair value if you want it there"
     return (f"sheltered account {account}: {what} on {date} (event "
             f"{event_id}) {booked}; cost only affects the holdings view "
-            f"— `taxjson elect` {change}")
+            f"— `tjs elect` {change}")
 
 
 # Hint keys older manifests carry that the emitters still honour.
@@ -5521,7 +5521,7 @@ def check_hints(event: CorporateAction, election_key: str,
     an unknown key (`fmv` for `fmv_per_share`, `allocated_ACB`) — and
     warn about a missing needed one. Every consumer reads `hints.get(key) or 0`, so a
     misspelled key in a hand-edited manifest silently booked a $0
-    dividend, a $0-cost lot or a rollover moving no cost — while `taxjson
+    dividend, a $0-cost lot or a rollover moving no cost — while `tjs
     elect --hint` refuses the same key (audit S072-07)."""
     import difflib
     specs = HINTS_BY_ELECTION.get(election_key, [])
@@ -5542,16 +5542,16 @@ def check_hints(event: CorporateAction, election_key: str,
             f"election {election_key!r} for event {event.event_id} has "
             f"unknown hint(s) {', '.join(tips)} — it takes: "
             f"{', '.join(sorted(h[0] for h in specs)) or 'none'}. Fix the "
-            f"manifest or re-elect with `taxjson elect --set`.")
+            f"manifest or re-elect with `tjs elect --set`.")
     have = given | {legacy[k] for k in given if k in legacy}
     missing = [h[0] for h in specs
                if h[0] not in have and (len(h) < 3 or h[2](event))]
     if missing:
         # Loud, not fatal: a missing value books the documented $0
-        # "deferred" rows, which `taxjson run` keeps warning about.
+        # "deferred" rows, which `tjs run` keeps warning about.
         emit_line(f"warning: election {election_key!r} for event "
                   f"{event.event_id} has no {', '.join(missing)} — the rows "
-                  f"are booked at $0 until you set it: `taxjson elect --set "
+                  f"are booked at $0 until you set it: `tjs elect --set "
                   f"{event.event_id}={election_key} "
                   + ' '.join(f'--hint {k}=<value>' for k in missing) + "`.")
 

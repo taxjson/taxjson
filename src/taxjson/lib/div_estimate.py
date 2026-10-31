@@ -1,4 +1,4 @@
-"""`taxjson div-estimate`: upcoming dividends projected from each held
+"""`tjs div-estimate`: upcoming dividends projected from each held
 position's own dividend history in the books. Planning numbers only,
 never a filing figure (tax-logic CA-PLAN-06 / US-PLAN-07).
 
@@ -517,7 +517,7 @@ def payments(rows: Iterable[Tuple[str, Dict[str, Any]]],
             (f"the {ds[0]} payment" if len(ds) == 1
              else f"{len(ds)} payments from {ds[0]}")
             + f" arrived while the books show {acct} short {sym}: "
-            f"counted as income; the books likely miss a trade (taxjson "
+            f"counted as income; the books likely miss a trade (tjs "
             f"find-missing-history)")
     for ds in short_paid.values():
         ds.sort()

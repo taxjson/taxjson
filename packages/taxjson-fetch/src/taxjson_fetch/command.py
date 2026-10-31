@@ -1,11 +1,11 @@
-"""`taxjson fetch` for Questrade and IBKR Flex — the command half.
+"""`tjs fetch` for Questrade and IBKR Flex — the command half.
 
 Moved out of the core (taxjson.bin.taxjson_run) into the taxjson-fetch
 plugin: the Questrade refresh-token file, the union-merge of a re-fetched
 window into questrade_<year>.csv, the overlap check and --trim-overlap
 for manually exported siblings, the Flex download's span and lost-dates
 guard, and live positions (--positions). The HTTP clients and the CSV /
-TOML writers are in taxjson_fetch.api; the core's `taxjson fetch`
+TOML writers are in taxjson_fetch.api; the core's `tjs fetch`
 dispatcher calls run() through taxjson_fetch.plugin.
 """
 import re
@@ -18,7 +18,7 @@ from taxjson_fetch import api as F
 
 
 def _die(msg: str) -> None:
-    sys.exit(f"taxjson fetch: {msg}")
+    sys.exit(f"tjs fetch: {msg}")
 
 
 def _questrade_token_file(cache: Path) -> Path:
@@ -129,7 +129,7 @@ def _qt_open_session(tok_cache: Path, http, *, explicit: str = "",
 
 
 def _token_wait_note(say, tok_cache: Path):
-    return lambda: say(f"  waiting for another `taxjson fetch` to finish "
+    return lambda: say(f"  waiting for another `tjs fetch` to finish "
                        f"with the Questrade token ({tok_cache.name}) ...")
 
 
@@ -148,12 +148,12 @@ def _qt_auth_hint(token: str, tok_cache: Path, *,
                + (", NOT $QUESTRADE_REFRESH_TOKEN (the cache wins)"
                   if env and env != cached else "")
                + ". If that chain is dead, start a new one: "
-                 "`taxjson fetch --refresh-token <new token>` (or "
+                 "`tjs fetch --refresh-token <new token>` (or "
                  f"delete {tok_cache.name} and set "
                  "$QUESTRADE_REFRESH_TOKEN).")
         return msg
     return (" — generate a new refresh token in Questrade's API centre "
-            "and pass it once with `taxjson fetch --refresh-token`.")
+            "and pass it once with `tjs fetch --refresh-token`.")
 
 
 def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
@@ -162,7 +162,7 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
     """Fetch live Questrade positions for each fetch-enabled account in
     `wanted` and write <holdings>/<account>_live_holdings.toml: the
     year's holdings folder (`holdings`, default root/holdings —
-    lib/holdings_dir), where `taxjson sanity` and the end of `taxjson
+    lib/holdings_dir), where `tjs sanity` and the end of `tjs
     run` find a [[holding]] file by its name with no setting. (It used
     to go to work/, which sanity read only when named.) Returns
     {account: toml_path}. Shares the rotated-token session flow with
@@ -193,7 +193,7 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
                 _die(f"Questrade auth failed: {e}"
                      + _qt_auth_hint(e.token, tok_cache))
             if qt_session is None:
-                _die("no Questrade refresh token — run `taxjson "
+                _die("no Questrade refresh token — run `tjs "
                      "fetch --refresh-token ...` once first.")
         try:
             positions = F.qt_positions(qt_session, number, http)
@@ -304,8 +304,8 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
                 + (f"failed ({_lookup_err})" if _lookup_err else
                    "gave none")
                 + "; a mini or an adjusted contract's cost is wrong "
-                  "until then. Once `taxjson run` has its trade in the "
-                  "books, `taxjson fetch --positions` takes the books' "
+                  "until then. Once `tjs run` has its trade in the "
+                  "books, `tjs fetch --positions` takes the books' "
                   "size.")
         if _ambiguous:
             say(f"  note: {a}: the books hold {len(_ambiguous)} option "
@@ -315,8 +315,8 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
                 f"Questrade's symbol lookup "
                 + (f"failed ({_venue_err})" if _venue_err else
                    "did not say which is open")
-                + ": no currency is written for its cost, and `taxjson "
-                  "sanity` may name the other listing. Run `taxjson fetch "
+                + ": no currency is written for its cost, and `tjs "
+                  "sanity` may name the other listing. Run `tjs fetch "
                   "--positions` again later.")
         if _amb_unbooked:
             # backlog TJ-1074: the books' other series say nothing about
@@ -328,7 +328,7 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
                 f"lookup "
                 + (f"failed ({_venue_err})" if _venue_err else
                    "did not say which listing it is")
-                + ": no currency is written for its cost. Run `taxjson "
+                + ": no currency is written for its cost. Run `tjs "
                   "fetch --positions` again later.")
         if _amb_closed:
             # backlog TJ-1235: the closed rows say nothing of what is open.
@@ -338,7 +338,7 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
                 f"symbol lookup "
                 + (f"failed ({_venue_err})" if _venue_err else
                    "did not say which listing is open")
-                + ": no currency is written for its cost. Run `taxjson "
+                + ": no currency is written for its cost. Run `tjs "
                   "fetch --positions` again later.")
         out[a] = toml_path
     _year = (cfg.get("settings") or {}).get("year")
@@ -607,7 +607,7 @@ def _qt_type_col(header: List[str]) -> Optional[int]:
 
 
 def _row_from_api(row: List[str], tcol: Optional[int]) -> bool:
-    """Whether a Questrade row is one `taxjson fetch` wrote: its Account
+    """Whether a Questrade row is one `tjs fetch` wrote: its Account
     Type cell is `API` (qt_to_csv). A manual export names the plan
     (Margin, TFSA ...)."""
     return (tcol is not None and len(row) > tcol
@@ -867,13 +867,13 @@ def _flex_lost_dates(existing: str, new: str, year: Any,
 
 
 def run(request) -> Dict[str, Any]:
-    """`taxjson fetch` (plugin.BrokerFetcher.fetch): _run, which takes
+    """`tjs fetch` (plugin.BrokerFetcher.fetch): _run, which takes
     the project's fetch lock itself."""
     return _run(request)
 
 
 def _run(request) -> Dict[str, Any]:
-    """One `taxjson fetch` per project at a time: the whole command
+    """One `tjs fetch` per project at a time: the whole command
     (each account's read of its existing CSV, the merge and the write
     back, the backups, --trim-overlap) runs under work/.fetch.lock, so
     a second fetch in the same project waits instead of merging into a
@@ -887,7 +887,7 @@ def _run(request) -> Dict[str, Any]:
     work = Path(request.work)
     work.mkdir(parents=True, exist_ok=True, mode=0o700)
     with file_lock(work / ".fetch.lock", on_wait=lambda: request.say(
-            "waiting for another `taxjson fetch` in this project to "
+            "waiting for another `tjs fetch` in this project to "
             "finish ...")):
         if not getattr(request, "shared_inputs", False) \
                 or getattr(request, "dry_run", False):
@@ -897,7 +897,7 @@ def _run(request) -> Dict[str, Any]:
         shared = Path(request.inputs)
         shared.mkdir(parents=True, exist_ok=True)
         with file_lock(shared / ".fetch.lock", on_wait=lambda: request.say(
-                "waiting for another `taxjson fetch` writing the shared "
+                "waiting for another `tjs fetch` writing the shared "
                 "inputs folder to finish ...")):
             return _run_locked(request)
 
@@ -908,7 +908,7 @@ def _run_locked(request) -> Dict[str, Any]:
     questrade_<year>.csv through the Questrade REST API, ib_flex.csv
     through the IBKR Flex Web Service — files the core's existing
     parsers read; hand-exported CSVs keep working side by side.
-    Returns {account: result} for `taxjson fetch --json`. Moved from
+    Returns {account: result} for `tjs fetch --json`. Moved from
     the core's cmd_fetch, which is now the plugin dispatcher.
 
     `inputs/` is request.inputs: with `[settings] inputs_dir` the folder
@@ -928,18 +928,18 @@ def _run_locked(request) -> Dict[str, Any]:
     results: Dict[str, Any] = {}
 
     if getattr(args, "days", None) is not None and args.days <= 0:
-        sys.exit(f"taxjson fetch: --days must be positive, got "
+        sys.exit(f"tjs fetch: --days must be positive, got "
                  f"{args.days}")
     if getattr(args, "year", None) is not None:
         if getattr(args, "from_date", None) or getattr(args, "days",
                                                        None):
-            sys.exit("taxjson fetch: --year picks the whole past "
+            sys.exit("tjs fetch: --year picks the whole past "
                      "year's window and file — combine it with "
                      "--from/--days and the file name would lie about "
                      "its contents. Use one or the other.")
         from datetime import date as _d
         if not 2000 <= args.year <= _d.today().year:
-            sys.exit(f"taxjson fetch: --year {args.year} is outside "
+            sys.exit(f"tjs fetch: --year {args.year} is outside "
                      f"2000..{_d.today().year}.")
     if getattr(args, "from_date", None):
         from datetime import date as _date_cls
@@ -948,10 +948,10 @@ def _run_locked(request) -> Dict[str, Any]:
             # dates that fromisoformat then crashed on.
             _f = _date_cls.fromisoformat(args.from_date)
         except ValueError:
-            sys.exit(f"taxjson fetch: --from {args.from_date!r} is not "
+            sys.exit(f"tjs fetch: --from {args.from_date!r} is not "
                      f"a valid YYYY-MM-DD date")
         if _f > _date_cls.today():
-            sys.exit(f"taxjson fetch: --from {args.from_date} is in "
+            sys.exit(f"tjs fetch: --from {args.from_date} is in "
                      f"the future — nothing to fetch.")
     http = F.default_http_get
     qt_session = None
@@ -967,13 +967,13 @@ def _run_locked(request) -> Dict[str, Any]:
         if source == "questrade":
             number = fc["number"]
             if not number:
-                sys.exit(f"taxjson fetch: [accounts.{a}] needs "
+                sys.exit(f"tjs fetch: [accounts.{a}] needs "
                          f"`account` (the Questrade account number).")
             try:
                 # digits only, checked before the token is spent (L2)
                 F.qt_account_segment(number)
             except RuntimeError as e:
-                sys.exit(f"taxjson fetch: [accounts.{a}]: {e}")
+                sys.exit(f"tjs fetch: [accounts.{a}]: {e}")
             if qt_session is None:
                 tok_cache = _questrade_token_file(cache)
                 try:
@@ -983,13 +983,13 @@ def _run_locked(request) -> Dict[str, Any]:
                         or "",
                         on_wait=_token_wait_note(say, tok_cache))
                 except QtAuthError as e:
-                    sys.exit(f"taxjson fetch: Questrade auth failed: "
+                    sys.exit(f"tjs fetch: Questrade auth failed: "
                              f"{e}" + _qt_auth_hint(
                                  e.token, tok_cache,
                                  explicit=bool(getattr(
                                      args, "refresh_token", None))))
                 if qt_session is None:
-                    sys.exit("taxjson fetch: no Questrade refresh "
+                    sys.exit("tjs fetch: no Questrade refresh "
                              "token — pass --refresh-token once (or "
                              "set $QUESTRADE_REFRESH_TOKEN); the "
                              "rotating chain then lives in "
@@ -1001,7 +1001,7 @@ def _run_locked(request) -> Dict[str, Any]:
                                          getattr(args, "from_date", None),
                                          year=_fetch_year)
             except ValueError as e:
-                sys.exit(f"taxjson fetch: {e}")
+                sys.exit(f"tjs fetch: {e}")
             if _fetch_year and (getattr(args, "days", None)
                                 or getattr(args, "from_date", None)):
                 from datetime import date as _dd
@@ -1022,7 +1022,7 @@ def _run_locked(request) -> Dict[str, Any]:
                 acts = F.qt_activities(qt_session, number, start, end,
                                        http)
             except RuntimeError as e:
-                sys.exit(f"taxjson fetch: {a}: {e}")
+                sys.exit(f"tjs fetch: {a}: {e}")
             new_csv = F.qt_to_csv(acts, number)
             by_type = F.activity_type_counts(acts)
             if by_type:
@@ -1035,7 +1035,7 @@ def _run_locked(request) -> Dict[str, Any]:
                             if out.exists() else "")
                 merged, added = _merge_csv_text(existing, new_csv)
             except ValueError as e:
-                sys.exit(f"taxjson fetch: {a}: {e} — move the old "
+                sys.exit(f"tjs fetch: {a}: {e} — move the old "
                          f"{out.name} aside and re-fetch.")
             overlap_now = _qt_window_overlap(acct_dir, out,
                                              start.isoformat(),
@@ -1087,10 +1087,10 @@ def _run_locked(request) -> Dict[str, Any]:
                     results[a]["trimmed"].append(
                         {"file": sib.name, "rows": 0,
                          "refused": f"{sib.name}: not trimmed — {_why}"})
-                print(f"taxjson fetch: WARNING: {a}: "
+                print(f"tjs fetch: WARNING: {a}: "
                       f"{', '.join(s.name for s, _n in overlap)} not "
                       f"trimmed — {_why}. {out.name} holds them with "
-                      f"blank or unreadable cells, which `taxjson run` "
+                      f"blank or unreadable cells, which `tjs run` "
                       f"refuses; the "
                       f"manual rows are kept. Delete those rows from "
                       f"{out.name} (a later fetch adds them back once "
@@ -1105,7 +1105,7 @@ def _run_locked(request) -> Dict[str, Any]:
                                             end.isoformat(), number,
                                             backups=_baks)
                     except ValueError as e:
-                        print(f"taxjson fetch: WARNING: {a}/{e}",
+                        print(f"tjs fetch: WARNING: {a}/{e}",
                               file=sys.stderr)
                         results[a]["trimmed"].append(
                             {"file": sib.name, "rows": 0,
@@ -1118,7 +1118,7 @@ def _run_locked(request) -> Dict[str, Any]:
                         f"{_baks[0].name if _baks else sib.name + '.bak'})")
             elif overlap:
                 for sib, n in overlap:
-                    print(f"taxjson fetch: WARNING: {a}/{sib.name} has "
+                    print(f"tjs fetch: WARNING: {a}/{sib.name} has "
                           f"{n} row(s) dated on/after {start} — the "
                           f"same trades exported manually round "
                           f"price/gross differently than the API, so "
@@ -1130,18 +1130,18 @@ def _run_locked(request) -> Dict[str, Any]:
         elif source == "ibkr_flex":
             query_id = fc["query_id"]
             if not query_id:
-                sys.exit(f"taxjson fetch: [accounts.{a}] needs "
+                sys.exit(f"tjs fetch: [accounts.{a}] needs "
                          f"`query_id` (the Flex query id).")
             token = (getattr(args, "flex_token", None)
                      or _os.environ.get("IBKR_FLEX_TOKEN", "").strip())
             if not token:
-                sys.exit("taxjson fetch: no IBKR Flex token — set "
+                sys.exit("tjs fetch: no IBKR Flex token — set "
                          "$IBKR_FLEX_TOKEN (or pass --flex-token).")
             say(f"fetch {a}: ibkr flex query {query_id}")
             try:
                 raw = F.flex_fetch(token, query_id, http)
             except RuntimeError as e:
-                sys.exit(f"taxjson fetch: {a}: {e}")
+                sys.exit(f"tjs fetch: {a}: {e}")
             # Decoded like detection and the parser (UTF-16, a UTF-8
             # BOM dropped): with the BOM kept as U+FEFF the section
             # test refused a download `run` reads (A2-0799, R1-57).
@@ -1154,7 +1154,7 @@ def _run_locked(request) -> Dict[str, Any]:
             out = acct_dir / "ib_flex.csv"
             _nstmt = F.flex_statement_count(text)
             if _nstmt > 1:
-                sys.exit(f"taxjson fetch: {a}: the Flex download "
+                sys.exit(f"tjs fetch: {a}: the Flex download "
                          f"contains {_nstmt} account statements — a "
                          f"multi-account query would blend books that "
                          f"must stay separate. Scope the Flex query "
@@ -1164,7 +1164,7 @@ def _run_locked(request) -> Dict[str, Any]:
             # accounts (backlog TJ-0867).
             _ids = F.flex_account_ids(text)
             if len(_ids) > 1:
-                sys.exit(f"taxjson fetch: {a}: the Flex download holds "
+                sys.exit(f"tjs fetch: {a}: the Flex download holds "
                          f"the rows of {len(_ids)} broker accounts ("
                          + ", ".join(F.mask_account_number(i)
                                      for i in _ids)
@@ -1179,7 +1179,7 @@ def _run_locked(request) -> Dict[str, Any]:
                 if not getattr(args, "dry_run", False):
                     F.write_private(bad, text)
                     saved = f" — saved to {bad.name}"
-                sys.exit(f"taxjson fetch: {a}: the Flex download is "
+                sys.exit(f"tjs fetch: {a}: the Flex download is "
                          f"not in the section,Header/Data CSV shape "
                          f"the IB parser reads{saved}. "
                          f"In the Flex query settings choose format "
@@ -1203,14 +1203,14 @@ def _run_locked(request) -> Dict[str, Any]:
                           f"history before it and the "
                           f"{_FLEX_YEAR_TAIL_DAYS} days after it, where "
                           f"a repurchase denies a December loss)")
-                sys.exit(f"taxjson fetch: {a}: the Flex download covers "
+                sys.exit(f"tjs fetch: {a}: the Flex download covers "
                          f"{_span}, but {out.name} holds {len(_lost)} "
                          f"activity date(s){_whose} outside it "
                          f"({_lost[0]}..{_lost[-1]}) — replacing it "
                          f"would delete that activity from the books. "
                          + ("" if getattr(args, "dry_run", False) else
                             f"The download was saved as {_new.name} "
-                            f"(not read by `taxjson run`). ")
+                            f"(not read by `tjs run`). ")
                          + f"Set the Flex query's period to cover "
                          f"{_lost[0]}..{_lost[-1]} too, or move "
                          f"{out.name} aside to accept the new file.")
@@ -1220,7 +1220,7 @@ def _run_locked(request) -> Dict[str, Any]:
                 continue
             if _existing and _existing != text:
                 # Never lose the previous statement: numbered backups,
-                # like --trim-overlap's (not read by `taxjson run`),
+                # like --trim-overlap's (not read by `tjs run`),
                 # never through a link at a .bak name (#18).
                 from taxjson.lib.safe_write import backup_copy
                 bak = backup_copy(out)
@@ -1235,13 +1235,13 @@ def _run_locked(request) -> Dict[str, Any]:
             if (_pyear and _got and int(_pyear) < date_cls.today().year
                     and (_got[0] > f"{_pyear}-01-10"
                          or _got[-1] < f"{_pyear}-12-20")):
-                print(f"taxjson fetch: WARNING: {a}: the Flex download "
+                print(f"tjs fetch: WARNING: {a}: the Flex download "
                       f"covers {_span}, not the whole tax year "
                       f"{_pyear} — set the query's period to the full "
                       f"year (Jan 1 to Dec 31, plus January for "
                       f"year-end settlements).", file=sys.stderr)
         else:
-            sys.exit(f"taxjson fetch: [accounts.{a}] brokerage must be "
+            sys.exit(f"tjs fetch: [accounts.{a}] brokerage must be "
                      f"'questrade' or 'ibkr_flex', got {source!r}.")
     if getattr(args, "positions", False) \
             and not getattr(args, "dry_run", False):
@@ -1252,5 +1252,5 @@ def _run_locked(request) -> Dict[str, Any]:
         if live and not json_mode:
             # sanity finds the holdings folder's files with no argument
             # (lib/holdings_dir).
-            print("cross-check after rebuilding: taxjson run sanity")
+            print("cross-check after rebuilding: tjs run sanity")
     return results

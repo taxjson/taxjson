@@ -751,7 +751,7 @@ class TestRbcIncomeAndCorporateRows(unittest.TestCase):
 
 class TestRbcUnbookedRows(unittest.TestCase):
     """S016-00 / S064-17 / S063-21: rows the parser does not book reach
-    the console (`taxjson run` echoes UNBOOKED lines; `run --strict`
+    the console (`tjs run` echoes UNBOOKED lines; `run --strict`
     refuses them)."""
 
     def test_unclassified_share_row_is_unbooked(self):

@@ -2,12 +2,12 @@
 
 - `taxjson-export --tradingview` / `--tv-map` are gone: asking for them
   is a clear error, not a silent fallback to another format.
-- `taxjson run` writes no reports/exports/*_TV.txt, and removes the ones
+- `tjs run` writes no reports/exports/*_TV.txt, and removes the ones
   an earlier run left behind (an outdated watchlist must not linger).
 - A TRADINGVIEW line already in a ticker.map is not an error: it is
   ignored, with one NOTE per run asking to delete it.
 - An old tv_exchange.map no longer stops the project (nothing in it is
-  read any more); `taxjson migrate` renames it to
+  read any more); `tjs migrate` renames it to
   tv_exchange.map.migrated without converting it.
 - --report / --holdings-toml are unchanged. (The Seeking Alpha and
   FastGraph exports were removed later: test_fix_noexports.)
@@ -173,7 +173,7 @@ class TestTvExchangeMapLeftover(unittest.TestCase):
             self.assertEqual(r2.returncode, 0, r2.stderr[-3000:])
         err = r.stdout + r.stderr
         self.assertEqual(err.count("tv_exchange.map"), 1, err[-3000:])
-        self.assertIn("taxjson migrate", err)
+        self.assertIn("tjs migrate", err)
 
     def test_migrate_renames_without_converting(self):
         with tempfile.TemporaryDirectory() as td:

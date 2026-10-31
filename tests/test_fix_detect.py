@@ -4,7 +4,7 @@ Order: an explicit generic mapping (configuration) > the file's content
 (each supported export's header signature, taken from the parser's own
 required columns) > the file name (cb_/kr_/generic_ prefixes, the words
 coinbase/kraken) only when no content signature matched. A file matching
-two signatures is an error naming both; `taxjson run` prints how every
+two signatures is an error naming both; `tjs run` prints how every
 file was detected. All data here is synthetic.
 """
 import os

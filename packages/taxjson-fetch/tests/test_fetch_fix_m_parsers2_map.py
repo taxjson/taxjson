@@ -1,7 +1,7 @@
-"""Moved from the core's tests/test_fix_m_parsers2_map.py with `taxjson fetch` (now the
+"""Moved from the core's tests/test_fix_m_parsers2_map.py with `tjs fetch` (now the
 taxjson-fetch plugin). Original module docstring:
 
-Medium-round fixes: ticker.map, taxjson-merge and taxjson fetch
+Medium-round fixes: ticker.map, taxjson-merge and tjs fetch
 (parsers2-map). Synthetic data only; fetch tests never touch the
 network beyond a 127.0.0.1 stub and never read credentials.
 """
@@ -145,7 +145,7 @@ class TestLiveOptionSuffix(unittest.TestCase):
 
 class TestHoldingsCurrency(unittest.TestCase):
     """2026-10 audit #43: each fetched holding carries its currency, so
-    `taxjson opening` can use its average price."""
+    `tjs opening` can use its average price."""
 
     def test_currency_from_the_listing(self):
         import tempfile

@@ -1,4 +1,4 @@
-"""`taxjson ticker-map --suggest [--write]`: every ticker.map line the
+"""`tjs ticker-map --suggest [--write]`: every ticker.map line the
 last run suggested, with its reason; --write appends the chosen ones
 (--all, or one by one on a terminal), each under a comment, never one
 the map already answers, keeping a backup. Synthetic data only.
@@ -85,7 +85,7 @@ class TestGather(unittest.TestCase):
         s = TS.Suggestion("TOBASE A.US A.TO", "rrsp: a # journal", "x")
         self.assertEqual(
             TS.appended_text("GLOBAL B.US C.US", [s], today="2025-01-02"),
-            "GLOBAL B.US C.US\n\n# taxjson ticker-map --suggest "
+            "GLOBAL B.US C.US\n\n# tjs ticker-map --suggest "
             "2025-01-02: rrsp: a journal\nTOBASE A.US A.TO\n")
 
 
@@ -120,7 +120,7 @@ class TestCommand(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             text = (root / "ticker.map").read_text()
             self.assertTrue(text.startswith("GLOBAL SAMPZ.TO SAMPY.TO\n"))
-            self.assertIn("# taxjson ticker-map --suggest ", text)
+            self.assertIn("# tjs ticker-map --suggest ", text)
             self.assertTrue(text.endswith("\nTOBASE SAMPQ.TO SAMPR.TO\n"))
             self.assertEqual((root / "ticker.map.bak").read_text(),
                              "GLOBAL SAMPZ.TO SAMPY.TO\n")

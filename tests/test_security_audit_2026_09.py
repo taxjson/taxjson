@@ -1,5 +1,5 @@
 """2026-09 security/privacy audit pins: owner-only file modes. (The
-web UI's token went with the web UI; the `taxjson fetch` credential
+web UI's token went with the web UI; the `tjs fetch` credential
 pins moved to packages/taxjson-fetch with the fetcher.) All values
 synthetic."""
 import stat

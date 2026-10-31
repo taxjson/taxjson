@@ -1,4 +1,4 @@
-"""taxjson-fetch — the broker API clients behind `taxjson fetch`.
+"""taxjson-fetch — the broker API clients behind `tjs fetch`.
 
 Part of the taxjson-fetch plugin (moved out of the taxjson core, which
 holds no broker client and reads no broker credential).
@@ -599,7 +599,7 @@ def qt_unusable_activities(activities: List[Dict[str, Any]]) -> List[str]:
     use (_qt_cash_reader_loses). --trim-overlap retires a manual export's
     rows on the strength of the download, so it must not trust a download
     holding such a row: a null netAmount trimmed the manual purchase and
-    left only a fetched row `taxjson run` refuses (backlog TJ-0868), and
+    left only a fetched row `tjs run` refuses (backlog TJ-0868), and
     a null currency or an unreadable date did the same (TJ-1073)."""
     from taxjson.lib.brokerages.base import BaseBrokerage
     from taxjson.lib.brokerages.questrade import _DATE_FMTS
@@ -649,7 +649,7 @@ def qt_positions(session: Dict[str, str], number: str,
     averageEntryPrice, currentPrice, currentMarketValue. A response
     without a `positions` list is refused (_qt_response_list): read as
     no positions, it wrote an EMPTY live-holdings snapshot at exit 0,
-    and `taxjson sanity` then compared the books with nothing (audit
+    and `tjs sanity` then compared the books with nothing (audit
     2026-10-24 B01 follow-up). An explicit empty list is an empty
     account."""
     seg = qt_account_segment(number)
@@ -1054,7 +1054,7 @@ def positions_to_holdings_toml(positions: List[Dict[str, Any]],
                                ambiguous_closed: Optional[List[str]] = None
                                ) -> str:
     """Render live positions as the holdings TOML that
-    `taxjson sanity` reads ([[holding]] symbol/quantity; extra fields
+    `tjs sanity` reads ([[holding]] symbol/quantity; extra fields
     are informational). The positions are checked first
     (qt_check_positions: a RuntimeError, nothing rendered).
     A ticker.map `MULT` line for an option is its contract size, ahead
@@ -1108,7 +1108,7 @@ def positions_to_holdings_toml(positions: List[Dict[str, Any]],
                      | frozenset(extra_to_roots))
     to_roots = live_to_roots | frozenset(book_to_roots)
     q = toml_str
-    lines = ["# Live Questrade holdings snapshot — taxjson fetch/verify.",
+    lines = ["# Live Questrade holdings snapshot — tjs fetch/verify.",
              "# Regenerated on every fetch; do not hand-edit.",
              "[meta]",
              f"account = {q(account)}",
@@ -1196,7 +1196,7 @@ def positions_to_holdings_toml(positions: List[Dict[str, Any]],
                 if assumed is not None:
                     assumed.append(sym)
         # The currency of the average price, from the listing's suffix
-        # (Questrade's payload carries none): without it `taxjson
+        # (Questrade's payload carries none): without it `tjs
         # opening` skipped every holding ("no currency for its cost")
         # and sanity compared a USD average with CAD books (2026-10
         # audit #43). A spelling that does not say is left out.
@@ -1412,7 +1412,7 @@ def looks_like_ib_statement(text: str) -> bool:
     query produces it with 'include section code and line descriptor'
     enabled; without it the download is a different format the parser
     would refuse. The SAME test broker detection routes on, so a
-    download fetch accepts is one `taxjson run` can read (audit R1-57:
+    download fetch accepts is one `tjs run` can read (audit R1-57:
     a 'Trades,Header' anywhere in the first 4 KB used to pass here and
     then stop the run with "cannot detect broker")."""
     from taxjson.bin.taxjson_detect_brokerage import looks_like_ib_text
@@ -1470,6 +1470,6 @@ def qt_window(days: Optional[int], since: Optional[str],
 
 if __name__ == "__main__":                       # pragma: no cover
     sys.exit("taxjson_fetch.api is not a standalone tool — use "
-             "`taxjson fetch` (configured via `brokerage` + "
+             "`tjs fetch` (configured via `brokerage` + "
              "`account`/`query_id` under [accounts.<name>] in "
              "taxjson.toml).")

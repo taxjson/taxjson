@@ -1,4 +1,4 @@
-"""taxjson fetch in a year folder whose exports are shared by every year
+"""tjs fetch in a year folder whose exports are shared by every year
 (`[settings] inputs_dir`): downloads go to the shared folder the run
 reads (with a note), `--positions` to the year's holdings folder.
 Offline: the downloads are faked."""

@@ -146,7 +146,7 @@ class TestCanadaContribution(unittest.TestCase):
             # holdings left in margin).
             hold = (root / "reports" / "margin_holdings.toml").read_text()
             self.assertNotIn("QZK", hold)
-            # `taxjson transfers` names both legs.
+            # `tjs transfers` names both legs.
             j = json.loads(cli(root, "transfers", "--json").stdout)
             self.assertEqual(sorted({t["arrival"] for t in j["transfers"]}),
                              ["in-kind contribution"])

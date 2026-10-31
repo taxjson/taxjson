@@ -86,7 +86,7 @@ class TestConvertedCommands(unittest.TestCase):
             with self.subTest(country=country):
                 r = project(country, pending=True).run("elect", "--pending")
                 self.assertEqual(r.returncode, 0, r.stderr)
-                assert_styled(self, r.stdout, allow=("taxjson elect ",))
+                assert_styled(self, r.stdout, allow=("tjs elect ",))
                 self.assertTrue(r.stdout.splitlines()[-1].startswith(
                     "1 election pending: "))
 
@@ -106,7 +106,7 @@ class TestDie(_Width100):
         from taxjson.bin import taxjson_run as R
         with mock.patch.object(R, "_CURRENT_CMD", "sum"), \
                 self.assertRaises(SystemExit) as cm:
-            R._die("no gains files in work/", "Run `taxjson run` first. "
+            R._die("no gains files in work/", "Run `tjs run` first. "
                    * 12)
         text = str(cm.exception)
         self.assertTrue(text.startswith(

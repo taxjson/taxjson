@@ -1,4 +1,4 @@
-"""Tests for `taxjson events <period> [account]` and sibling query commands."""
+"""Tests for `tjs events <period> [account]` and sibling query commands."""
 import json
 import subprocess
 import sys
@@ -519,7 +519,7 @@ class TestFindMissingHistory(unittest.TestCase):
     def test_gen_phantoms_output_is_consumed_by_gains(self):
         # The whole point of the file: what --write-missing-history emits must be
         # loadable by `taxjson-gains --incomplete-history` (the same path
-        # `taxjson run` uses), so the tainted disposition is pulled out of the
+        # `tjs run` uses), so the tainted disposition is pulled out of the
         # gains total and surfaced under manual_reporting_required.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -732,7 +732,7 @@ class TestWashRadarCmd(unittest.TestCase):
     def test_missing_account_errors(self):
         with tempfile.TemporaryDirectory() as tmp:
             r = _runsub(self._project(tmp), "wash-radar", "nope")
-        # The configured accounts named, not "run `taxjson run`"
+        # The configured accounts named, not "run `tjs run`"
         # (backlog TJ-0157).
         self.assertEqual(r.returncode, 2, r.stderr)
         err = " ".join(r.stderr.split())
@@ -877,7 +877,7 @@ class TestHelpCmd(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             r = _runsub(Path(tmp), "help", "divs")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("taxjson divs", r.stdout)      # its own usage line
+        self.assertIn("tjs divs", r.stdout)      # its own usage line
         self.assertIn("period", r.stdout)
 
     def test_renamed_long_names_are_gone(self):

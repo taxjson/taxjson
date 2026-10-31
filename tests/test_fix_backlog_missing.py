@@ -448,7 +448,7 @@ class TestStaleBooks(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertTrue(mh.is_file())
             lines = r.stderr.splitlines()
-            self.assertTrue(any("`taxjson run` reads them." in ln
+            self.assertTrue(any("`tjs run` reads them." in ln
                                 for ln in lines), r.stderr)
             for ln in lines:
                 self.assertLessEqual(len(ln), 120, ln)

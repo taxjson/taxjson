@@ -1,4 +1,4 @@
-"""`taxjson redact` medium-round fixes (audit R1-340, R1-341, R1-345,
+"""`tjs redact` medium-round fixes (audit R1-340, R1-341, R1-345,
 S036-16, S037-00, S037-02, S037-05). All data synthetic."""
 import os
 import subprocess

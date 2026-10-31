@@ -229,7 +229,7 @@ class TestSlowInKindRun(unittest.TestCase):
             self.assertIn("Warning: 1 in-kind move with a registered "
                           "account NOT booked: QZK.TO (margin). What each "
                           "books (a contribution's sale, a withdrawal's "
-                          "purchase) is NOT in `taxjson sum`", flat)
+                          "purchase) is NOT in `tjs sum`", flat)
 
     def test_find_missing_history_names_the_inkind_line(self):
         from tax_rules.dual import cli

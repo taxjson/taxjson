@@ -23,7 +23,7 @@ Corrections (the maintainer's history file, load_history): a listing
 shipped in error is retracted (`retracted`, never re-added); an ended US
 ticker that names another security today refuses the build unless the
 entry records `reused_by` (check_reused). Each entry keeps `first_seen`
-and, for a listing added later, `added` (`since`): `taxjson
+and, for a listing added later, `added` (`since`): `tjs
 update-tobase-map` tells a new line from one the user deleted by them.
 
 The TMX lists (interlisted companies, the TSX / TSXV issuer workbook) are
@@ -412,7 +412,7 @@ def load_history(path: Optional[Path]) -> List[Dict[str, Any]]:
 def retractions(h: Dict[str, Any], today: str) -> List[Dict[str, str]]:
     """A history table's `retracted = [{listing, reason, since}]`: the
     listings a correction takes out of the master (never re-added, and
-    `taxjson update-tobase-map` removes an unedited line naming them)."""
+    `tjs update-tobase-map` removes an unedited line naming them)."""
     out = []
     for r in h.get("retracted") or []:
         if isinstance(r, dict) and r.get("listing"):
@@ -821,7 +821,7 @@ def merge_previous(entries: Dict[str, Dict[str, Any]],
     whole entry gone keeps every listing and gets `until`; an entry or
     listing that returns is current again (its history kept). A listing
     new to an entry the previous master had is recorded in `added` with
-    the build date (`taxjson update-tobase-map` tells a new line from
+    the build date (`tjs update-tobase-map` tells a new line from
     one the user deleted by it). `retract` ({FIGI: [{listing, reason,
     since}]}, the maintainer's corrections and the temporary OTC
     symbols): each listing leaves the entry for good and is recorded in

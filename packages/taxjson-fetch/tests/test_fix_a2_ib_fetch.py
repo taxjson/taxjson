@@ -1,4 +1,4 @@
-"""Re-audit-2 fixes for the `taxjson fetch` helpers (list parsers-ib-02).
+"""Re-audit-2 fixes for the `tjs fetch` helpers (list parsers-ib-02).
 
 - A2-0084 / A2-0598: a fetched Questrade file (qt_to_csv) and the
   re-fetch union-merge (_merge_csv_text) keep the API's row order

@@ -1,4 +1,4 @@
-"""What to check next: the short summary at the end of `taxjson run`.
+"""What to check next: the short summary at the end of `tjs run`.
 
 A run that ends with "Done." can still be missing purchases (the
 broker's download rarely reaches back to every one). The summary counts
@@ -8,19 +8,19 @@ that lists and fixes it (docs/getting-started.md, step 5):
   * sales with no purchase in the files that missing history (.tt
     OPENING cost=unknown lines) does
     not cover and that fall in the tax year (taxable accounts) —
-    `taxjson find-missing-history`;
+    `tjs find-missing-history`;
   * positions at a $0 cost: sold in the tax year, or still held —
-    `taxjson find-missing-history` (a spin-off whose election declares
+    `tjs find-missing-history` (a spin-off whose election declares
     the $0, fmv_per_share=0, is an Info naming its event instead);
   * shares that arrived by transfer from outside the books with no
-    cost (lib/transfer_in) — `taxjson transfers`;
+    cost (lib/transfer_in) — `tjs transfers`;
   * accounts with open positions and no holdings file to check them
-    against — `taxjson sanity`;
+    against — `tjs sanity`;
   * income paid on a security the books do not hold — a holding with no
-    purchase at all; `taxjson sanity`.
+    purchase at all; `tjs sanity`.
 
 Silent when every count is zero. The same counts go to
-reports/run_summary.json. `taxjson sum` uses `uncovered_short_sales` for
+reports/run_summary.json. `tjs sum` uses `uncovered_short_sales` for
 its own warning.
 """
 from __future__ import annotations
@@ -49,7 +49,7 @@ _INCOME_GRACE_DAYS = 60
 
 def book_files(cache: Path) -> List[Path]:
     """The per-account full-history books (work/<acct>_base.json), as
-    `taxjson find-missing-history` reads them."""
+    `tjs find-missing-history` reads them."""
     return sorted(p for p in cache.glob("*_base.json")
                   if not p.name.endswith("_raw_base.json")
                   and p.name != "sheltered_base.json"
@@ -136,7 +136,7 @@ def uncovered_short_sales(txs: Sequence[TaxTransaction], year: Any, *,
                           ) -> List[MissingHistoryRow]:
     """The tax year's sales with no purchase in the files, in taxable
     accounts, that no .tt OPENING cost=unknown line covers — the AFFECTS
-    rows of `taxjson find-missing-history` (broker-marked real shorts,
+    rows of `tjs find-missing-history` (broker-marked real shorts,
     registered accounts and the old leg of a reconstructed merger are
     left out, as there).
 
@@ -174,12 +174,12 @@ def uncovered_short_sales(txs: Sequence[TaxTransaction], year: Any, *,
 # reads as sold with no purchase (engine_booking):
 #   "open"         a sale the gains files lack — the engine still holds
 #                  it as an open short at the year's end: its gain is
-#                  NOT in `taxjson sum`;
+#                  NOT in `tjs sum`;
 #   "short_cover"  booked as a short sale a later purchase of the year
-#                  closed: in `taxjson sum`, at that purchase's cost;
+#                  closed: in `tjs sum`, at that purchase's cost;
 #   "matched"      the engine sold it from a purchase in the files (it
 #                  reads the day's rows in another order than the walk):
-#                  in `taxjson sum` as an ordinary sale.
+#                  in `tjs sum` as an ordinary sale.
 BOOKED_OPEN, BOOKED_SHORT_COVER, BOOKED_MATCHED = (
     "open", "short_cover", "matched")
 
@@ -189,7 +189,7 @@ def engine_booking(cache: Path, rows: Sequence[MissingHistoryRow],
                    prefer_wash: bool = True
                    ) -> Dict[Tuple[str, str], str]:
     """{(symbol, account): BOOKED_*} for each uncovered row: what the
-    account's gains file (the one `taxjson sum` reads —
+    account's gains file (the one `tjs sum` reads —
     report_model.resolve_gains_files) did with the year's sales the walk
     found short (MissingHistoryRow.in_year_short_sales). A sale's units
     the engine closed against a long position carry the sale's id
@@ -511,7 +511,7 @@ def unchecked_accounts(cache: Path, accounts: Dict[str, Any],
     """[(account, open positions)] of configured accounts with open
     positions in their books and no holdings to compare them with:
     neither a `holdings` file in taxjson.toml nor a snapshot of the
-    project's holdings/ folder that `taxjson sanity` claims for it (by
+    project's holdings/ folder that `tjs sanity` claims for it (by
     broker account id or file name, lib/holdings_dir — `root`: the
     project, default the folder holding `cache`)."""
     from taxjson.lib.report_model import resolve_gains_files
@@ -550,7 +550,7 @@ def in_kind_not_booked(cache: Path, year: Any) -> List[Dict[str, Any]]:
     """The in-kind moves with a registered account the run did NOT book
     (work/in_kind.json; on or before the year's end): {symbol, account
     (the taxable one), kind, date}. Their sale or purchase is not in the
-    totals; `taxjson sum` says the same (taxjson_run.in_kind_unbooked)."""
+    totals; `tjs sum` says the same (taxjson_run.in_kind_unbooked)."""
     try:
         doc = json.loads((cache / "in_kind.json").read_text(
             encoding="utf-8"))
@@ -625,13 +625,13 @@ def collect(root: Path, cfg: Dict[str, Any], *,
     return {
         "schema_version": 1,
         "year": year,
-        # Sales the gains files lack: NOT in `taxjson sum`.
+        # Sales the gains files lack: NOT in `tjs sum`.
         "no_purchase": [{"symbol": r.candidate.symbol,
                          "account": r.candidate.account,
                          "sales": r.in_year_dispositions}
                         for r in shorts if _how(r) == BOOKED_OPEN],
         # Sales the walk reads short that the gains engine booked
-        # (engine_booking): in `taxjson sum`.
+        # (engine_booking): in `tjs sum`.
         "no_purchase_in_sum": [{"symbol": r.candidate.symbol,
                                 "account": r.candidate.account,
                                 "sales": r.in_year_dispositions,
@@ -734,19 +734,19 @@ def concise_items(doc: Dict[str, Any]) -> List[Tuple[str, str]]:
     if tw:
         items.append(("Warning", f"rows booked in two accounts "
                       f"({'; '.join(tw)}) — keep each export in one "
-                      f"inputs/<account>/ folder, then `taxjson run`"))
+                      f"inputs/<account>/ folder, then `tjs run`"))
     np_ = doc.get("no_purchase") or []
     if np_:
         items.append(("Warning", f"NOT in the totals: "
                       f"{_n(len(np_), 'sale', 'sales')} with no purchase "
-                      f"({_syms(np_)}) — `taxjson find-missing-history`"))
+                      f"({_syms(np_)}) — `tjs find-missing-history`"))
     ins = doc.get("no_purchase_in_sum") or []
     cov = [i for i in ins if i.get("booked") == BOOKED_SHORT_COVER]
     mat = [i for i in ins if i.get("booked") != BOOKED_SHORT_COVER]
     if cov:
         items.append(("Warning", f"{_n(len(cov), 'sale', 'sales')} with no "
                       f"purchase booked as shorts covered later "
-                      f"({_syms(cov)}) — `taxjson find-missing-history`"))
+                      f"({_syms(cov)}) — `tjs find-missing-history`"))
     zs, zh = doc.get("zero_cost_sold") or [], doc.get("zero_cost_held") or []
     if zs or zh:
         # A $0 lot part sold and part held is one position (backlog
@@ -754,40 +754,40 @@ def concise_items(doc: Dict[str, Any]) -> List[Tuple[str, str]]:
         zp = _distinct(zs + zh)
         items.append(("Warning", f"{_n(len(zp), 'position', 'positions')}"
                       f" at a $0 cost ({_syms(zp)}) — "
-                      f"`taxjson find-missing-history`"))
+                      f"`tjs find-missing-history`"))
     tn = doc.get("transfer_in_no_cost") or []
     if tn:
         items.append(("Warning", f"{_n(len(tn), 'transfer-in', 'transfer-ins')}"
                       f" kept out with no cost ({_syms(tn)}) — "
-                      f"`taxjson transfers`"))
+                      f"`tjs transfers`"))
     ik = doc.get("in_kind_not_booked") or []
     if ik:
         items.append(("Warning", f"NOT in the totals: "
                       f"{_n(len(ik), 'in-kind move', 'in-kind moves')} "
                       f"with a registered account NOT booked "
-                      f"({_syms(_distinct(ik))}) — `taxjson run "
+                      f"({_syms(_distinct(ik))}) — `tjs run "
                       f"--details`"))
     inc = doc.get("income_not_held") or []
     if inc:
         items.append(("Warning", f"{_n(len(inc), 'security', 'securities')}"
                       f" paid income the books do not hold ({_syms(inc)}) — "
-                      f"`taxjson sanity`"))
+                      f"`tjs sanity`"))
     if mat:
         items.append(("Info", f"{_n(len(mat), 'position', 'positions')} "
                       f"read short by the history check "
                       f"{'is' if len(mat) == 1 else 'are'} in the totals "
-                      f"({_syms(mat)}) — `taxjson find-missing-history`"))
+                      f"({_syms(mat)}) — `tjs find-missing-history`"))
     zd = doc.get("zero_cost_declared") or []
     if zd:
         items.append(("Info", f"{_n(len(zd), 'position', 'positions')} at "
                       f"the $0 cost you declared ({_syms(zd)}) — "
-                      f"`taxjson spinoffs`"))
+                      f"`tjs spinoffs`"))
     un = doc.get("unchecked_accounts") or []
     if un:
         items.append(("Info", f"{len(un)} "
                       f"{'account' if len(un) == 1 else 'accounts'} with "
                       f"positions not checked against the broker's "
-                      f"holdings — `taxjson sanity`"))
+                      f"holdings — `tjs sanity`"))
     return items
 
 
@@ -802,7 +802,7 @@ def render_blocks(doc: Dict[str, Any], *,
     run's default console — one line per finding (concise_items), at
     most CONCISE_BUDGET lines under the heading (the Info findings folded
     into one when there are more), and the closing line naming
-    `taxjson run --details` when `details_hint`."""
+    `tjs run --details` when `details_hint`."""
     if is_clean(doc) and not (concise and details_hint):
         return []
     from taxjson.lib import out
@@ -820,11 +820,11 @@ def render_blocks(doc: Dict[str, Any], *,
             rest = infos[keep:]
             if rest:
                 items.append(("Info", f"{len(rest)} more check(s) not yet "
-                              f"made — `taxjson checklist --run`"))
-        closing = ("Info: Then `taxjson checklist --run` (the next step); "
-                   "each message's detail: `taxjson run --details`"
+                              f"made — `tjs checklist --run`"))
+        closing = ("Info: Then `tjs checklist --run` (the next step); "
+                   "each message's detail: `tjs run --details`"
                    if details_hint else
-                   "Info: Then run `taxjson checklist --run`: it checks "
+                   "Info: Then run `tjs checklist --run`: it checks "
                    "every step and names the next one.")
 
         def _one(text: str) -> List[str]:
@@ -845,29 +845,29 @@ def render_blocks(doc: Dict[str, Any], *,
         items.append(("Warning", f"rows booked in two accounts ({tw}): "
                       f"every total counts them twice; keep each broker "
                       f"account's exports in one inputs/<account>/ folder "
-                      f"(delete the copy), then `taxjson run`."))
+                      f"(delete the copy), then `tjs run`."))
     np_ = doc.get("no_purchase") or []
     if np_:
         items.append(("Warning", f"{_n(len(np_), 'position', 'positions')} "
                      f"sold in {yr} with no purchase in your files, not in "
                      f"{mh_name}: {_names(np_)}. Those sales are NOT in "
-                     f"`taxjson sum`; run `taxjson find-missing-history`."))
+                     f"`tjs sum`; run `tjs find-missing-history`."))
     ins = doc.get("no_purchase_in_sum") or []
     cov = [i for i in ins if i.get("booked") == BOOKED_SHORT_COVER]
     mat = [i for i in ins if i.get("booked") != BOOKED_SHORT_COVER]
     if cov:
         items.append(("Warning", f"{_n(len(cov), 'position', 'positions')} "
                      f"sold in {yr} with no purchase in your files, not in "
-                     f"{mh_name}: {_names(cov)}. `taxjson sum` books those "
+                     f"{mh_name}: {_names(cov)}. `tjs sum` books those "
                      f"sales as short sales closed by a later purchase, at "
                      f"that purchase's cost — not yours if you held the "
-                     f"shares before your files start; run `taxjson "
+                     f"shares before your files start; run `tjs "
                      f"find-missing-history`."))
     if mat:
         items.append(("Info", f"{_n(len(mat), 'position', 'positions')} "
-                     f"read short in {yr} by `taxjson find-missing-history`"
+                     f"read short in {yr} by `tjs find-missing-history`"
                      f": {_names(mat)}. The gains engine sold them from "
-                     f"purchases in your files, so they are in `taxjson "
+                     f"purchases in your files, so they are in `tjs "
                      f"sum`; the check reads that day's rows in another "
                      f"order: compare it with the broker's trades."))
     zs, zh = doc.get("zero_cost_sold") or [], doc.get("zero_cost_held") or []
@@ -877,7 +877,7 @@ def render_blocks(doc: Dict[str, Any], *,
         zp = _distinct(zs + zh)
         items.append(("Warning", f"{_n(len(zp), 'position', 'positions')}"
                      f" at a $0 cost ({', '.join(parts)}): "
-                     f"{_names(zp)}. Run `taxjson "
+                     f"{_names(zp)}. Run `tjs "
                      f"find-missing-history`."))
     zd = doc.get("zero_cost_declared") or []
     if zd:
@@ -886,10 +886,10 @@ def render_blocks(doc: Dict[str, Any], *,
             f"{', '.join(i.get('events') or []) or '?'})" for i in zd[:3]) \
             + (f" +{len(zd) - 3} more" if len(zd) > 3 else "")
         one = zd[0]
-        how = (f"`taxjson elect {one['account']} --redo --event "
+        how = (f"`tjs elect {one['account']} --redo --event "
                f"{(one.get('events') or ['ID'])[0]}`"
                if len(zd) == 1 and len(one.get("events") or []) == 1
-               else "`taxjson elect ACCOUNT --redo --event ID`")
+               else "`tjs elect ACCOUNT --redo --event ID`")
         items.append(("Info", f"{_n(len(zd), 'position', 'positions')} at "
                      f"the $0 cost you declared (fmv_per_share=0 in the "
                      f"spin-off's election): {shown}. To change it: "
@@ -898,34 +898,34 @@ def render_blocks(doc: Dict[str, Any], *,
     if tn:
         items.append(("Warning", f"{_n(len(tn), 'transfer-in', 'transfer-ins')}"
                      f" from outside your books kept out with no cost: "
-                     f"{_names(tn)}. Run `taxjson transfers`."))
+                     f"{_names(tn)}. Run `tjs transfers`."))
     ik = doc.get("in_kind_not_booked") or []
     if ik:
         items.append(("Warning", f"{_n(len(ik), 'in-kind move', 'in-kind moves')}"
                      f" with a registered account NOT booked: "
                      f"{_names(_distinct(ik))}. What each books (a "
                      f"contribution's sale, a withdrawal's purchase) is "
-                     f"NOT in `taxjson sum`; the in-kind warning above "
+                     f"NOT in `tjs sum`; the in-kind warning above "
                      f"names the INKIND line for each."))
     un = doc.get("unchecked_accounts") or []
     if un:
         items.append(("Info", f"{_n(len(un), 'account', 'accounts')} with "
                      f"open positions and no holdings file to check them "
-                     f"against: {_accounts_shown(un)}. Run `taxjson "
+                     f"against: {_accounts_shown(un)}. Run `tjs "
                      f"sanity` with the broker's positions."))
     inc = doc.get("income_not_held") or []
     if inc:
         items.append(("Warning", f"{_n(len(inc), 'security', 'securities')} "
                      f"paid income in {yr} that the books do not hold (a "
                      f"holding with no purchase in your files?): "
-                     f"{_names(inc)}. Run `taxjson sanity`."))
+                     f"{_names(inc)}. Run `tjs sanity`."))
     w = out.width() if width_ is None else width_
     hang = "" if w > 0 else "  "
     blocks = [["==> Before you trust these numbers "
                "(docs/getting-started.md, step 5)"]]
     for kind, it in items:
         blocks.append(out.wrap(f"{kind}: {it}", w, "", hang))
-    blocks.append(out.wrap("Info: Then run `taxjson checklist --run`: it "
+    blocks.append(out.wrap("Info: Then run `tjs checklist --run`: it "
                            "checks every step and names the next one.", w,
                            "", hang))
     return blocks

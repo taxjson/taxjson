@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run every `taxjson help --all` command on the synthetic style projects
+"""Run every `tjs help --all` command on the synthetic style projects
 (tests/_style.py; tests/fixtures/style/) and save each command's
 stdout+stderr, as a person piping it would see it (width 100, offline).
 

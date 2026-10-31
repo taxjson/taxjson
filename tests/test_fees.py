@@ -121,7 +121,7 @@ class TestFees(unittest.TestCase):
         self.assertEqual(doc["meta"]["rows_without_id"], 2)
 
     def test_year_filter_is_trade_date_basis(self):
-        # TRADE-date basis, matching the per-trade `taxjson fees`
+        # TRADE-date basis, matching the per-trade `tjs fees`
         # view (2026-09 audit unified the two — they used to disagree
         # at year boundaries). Fees are incurred at trade.
         with tempfile.TemporaryDirectory() as d:
@@ -210,7 +210,7 @@ class TestFees(unittest.TestCase):
                                      "transactions": [_tx(id="a", fee=5.0)]}))
             r = _run(str(p))
         # No-data is SUCCESS (exit-code convention) — returning 1 here
-        # crashed `taxjson run` for commission-free projects
+        # crashed `tjs run` for commission-free projects
         # (FUZZ-2026-07 #H).
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("No trading fees", r.stdout)

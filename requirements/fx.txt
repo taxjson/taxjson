@@ -5,7 +5,7 @@
 # body-sha256: 3f15dfa918cbf96ed4069928140b8225da743a7ae49e342f527144099d9daded
 # python: >=3.10
 # exclude-newer: 2026-10-17T00:00:00Z
-# security-updates: certifi, setuptools
+# security-updates: certifi, pyasn1, setuptools
 # uv: 0.13.5
 
 beautifulsoup4==4.15.0 \

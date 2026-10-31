@@ -507,3 +507,9 @@ file and formats a map holding each variant.
 # MULT ZZQ1 50
 === `taxjson migrate`: a ticker.map it created
 # ticker.map — symbol rules and lookups (see `taxjson-ticker-map --help`).
+=== `taxjson format-map`: the lines before the command became `tjs` in them
+## (delete the `# ` to use it). `taxjson format-map` keeps this layout, and a comment directly above
+## a line moves with it. Every keyword: docs/settings.md, ticker.map.
+## `JOURNAL YYYY-MM-DD FROM TO QTY`); `taxjson format-map --write` moves these lines.
+## Lines taxjson cannot use, kept as written: `taxjson run` refuses the map until each is fixed
+## (`taxjson format-map` names the problem of each).

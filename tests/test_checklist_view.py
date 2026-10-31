@@ -1,4 +1,4 @@
-"""`taxjson checklist`: the default view is the list then the summary;
+"""`tjs checklist`: the default view is the list then the summary;
 a step is named by its id or its number (`--done 18`); `--section N`
 shows (or checks, or walks) one section (lib/checklist.resolve_id,
 resolve_section, section_ids, render)."""

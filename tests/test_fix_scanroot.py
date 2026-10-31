@@ -1,4 +1,4 @@
-"""`taxjson tips` (US-LISTING) and `taxjson ticker-map --suggest` (MAP-GAP;
+"""`tjs tips` (US-LISTING) and `tjs ticker-map --suggest` (MAP-GAP;
 both `taxjson scan` before) stop asking about pairs that are evidently
 not one security (owner, 2026-10-07).
 
@@ -338,7 +338,7 @@ class TestMapGapIsASuggestionToVerify(unittest.TestCase):
             root = _project(tmp)
             tips = _cmd(root, "tips")
         self.assertIn("verify QZX.TO is the same security first: only "
-                      "the letters match — `taxjson ticker-map --suggest` "
+                      "the letters match — `tjs ticker-map --suggest` "
                       "lists the pair", " ".join(tips.stdout.split()))
 
     def test_a_pair_the_run_joined_itself_is_answered(self):

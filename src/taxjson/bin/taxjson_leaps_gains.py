@@ -2,7 +2,7 @@
 """
 taxjson_leaps_gains.py
 
-Summarize LONG option gains (every tenor; `taxjson leaps-sum` is the
+Summarize LONG option gains (every tenor; `tjs leaps-sum` is the
 LEAPS-only view) by underlying from taxjson_gains.py output.
 Ported from tt_leaps_gains.pl. The body is shared with taxjson-ccd-gains
 (bin/_option_gains_report.py).
@@ -23,14 +23,14 @@ def process_data(data, leaps_by_underlying):
 def main():
     # Every LONG option close of any tenor — not only LEAPS (a buy placed
     # > [settings] leaps_months to expiry). The old "(LEAPS)" title disagreed with
-    # `taxjson leaps-sum` from the same run by 42k (audit R1-173).
+    # `tjs leaps-sum` from the same run by 42k (audit R1-173).
     _main(prog=PROG,
           description="Long option gains (every tenor), from "
                       "taxjson-gains output.",
           direction='LONG', calls_only=False,
           title="LONG OPTIONS", row_total_label="LONG OPTION GAIN",
           summary_title=("LONG OPTIONS SUMMARY (every long option close, "
-                         "any tenor; `taxjson leaps-sum` is the LEAPS-only "
+                         "any tenor; `tjs leaps-sum` is the LEAPS-only "
                          "view)"),
           summary_col="LONG_OPT_GAIN")
 

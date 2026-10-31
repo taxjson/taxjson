@@ -147,7 +147,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(fmt.format(*row))
 
     _sl = "a wash sale" if usa else "superficial"
-    print("\nNOTE: statuses are the wash radar's (`taxjson wash-radar` "
+    print("\nNOTE: statuses are the wash radar's (`tjs wash-radar` "
           "explains each). SAFE means no replacement bought in the last "
           f"30 days would make a loss sale {_sl}; FULL-EXIT-ONLY "
           "means only selling the whole position is clean.")

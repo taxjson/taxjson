@@ -460,7 +460,7 @@ class TestHarvestMissingShelteredBook(unittest.TestCase):
             r = tj(root, "harvest", "--no-ibkr", "--json", check=False)
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         self.assertIn("no sheltered_base.json", " ".join(r.stderr.split()))
-        self.assertIn("taxjson run", " ".join(r.stderr.split()))
+        self.assertIn("tjs run", " ".join(r.stderr.split()))
 
     def test_tj1206_with_the_book_the_units_stay_locked(self):
         with tempfile.TemporaryDirectory() as tmp:

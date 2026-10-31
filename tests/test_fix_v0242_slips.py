@@ -1,4 +1,4 @@
-"""Pre-release review of `taxjson slip-audit` and `--import-cra`
+"""Pre-release review of `tjs slip-audit` and `--import-cra`
 (v0.24.2): each slip counts once (two slips in one PDF, a slip read
 twice, an amended slip and its original, a typed T5 beside IB's report,
 two copies of IB's report), an issuer is never placed at another
@@ -545,7 +545,7 @@ class TestImportCountsOnce(unittest.TestCase):
 class TestKeysAndRedact(unittest.TestCase):
     """M4: slips.toml's broker_key is salted (the salt in work/), a key
     of another salt is said, a legacy unsalted key still works and is
-    said, and `taxjson redact` replaces the key."""
+    said, and `tjs redact` replaces the key."""
 
     def _slips(self, root, key):
         (root / "inputs" / "slips" / "slips.toml").write_text(

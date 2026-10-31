@@ -1,4 +1,4 @@
-"""`taxjson shares` — combined quantity per symbol across accounts, from
+"""`tjs shares` — combined quantity per symbol across accounts, from
 the canonical per-account inventories (post ticker.map)."""
 import json
 import subprocess
@@ -120,7 +120,7 @@ class TestShares(unittest.TestCase):
                 'base_currency = "CAD"\n[accounts.margin]\ntype = "taxable"\n')
             r = _run(root, "shares")
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn("taxjson run", r.stderr)
+            self.assertIn("tjs run", r.stderr)
 
 
 if __name__ == "__main__":

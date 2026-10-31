@@ -1,4 +1,4 @@
-"""`taxjson winners` / `taxjson losers` — per-ticker realized gains,
+"""`tjs winners` / `tjs losers` — per-ticker realized gains,
 one side each (one implementation, _ranked_view)."""
 
 import json

@@ -1,4 +1,4 @@
-"""`taxjson cash`: the cash events of the taxable accounts (conversions,
+"""`tjs cash`: the cash events of the taxable accounts (conversions,
 deposits, withdrawals, the .tt cash lines) as the .tt lines that declare
 them, oldest first, with per-currency totals (lib/cash_events tt_line,
 tt_comment, apply_declarations; bin/taxjson_run cmd_cash). The fixture
@@ -194,8 +194,8 @@ class TestCommand(unittest.TestCase):
             (root / "inputs" / "margin" / "rows.tt").write_text(_ROWS_TT)
             r = _cli(root, "cash")
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn("taxjson cash:", r.stderr)
-            self.assertIn("run `taxjson run` first", r.stderr)
+            self.assertIn("tjs cash:", r.stderr)
+            self.assertIn("run `tjs run` first", r.stderr)
 
 
 if __name__ == "__main__":

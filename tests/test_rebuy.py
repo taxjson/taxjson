@@ -1,4 +1,4 @@
-"""`taxjson rebuy`: every ticker sold at a loss whose repurchase window is
+"""`tjs rebuy`: every ticker sold at a loss whose repurchase window is
 still open, and the first day it can be bought back (CA-PLAN-05 /
 US-PLAN-06). The rows are the wash radar's own (`losses`, `rebuy_at`);
 lib/rebuy groups and renders them. Synthetic books and projects only."""

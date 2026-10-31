@@ -1,4 +1,4 @@
-"""Backlog fix round 2 of 2026-10-29, the `redact` group: `taxjson
+"""Backlog fix round 2 of 2026-10-29, the `redact` group: `tjs
 redact` and the bug-report path. A redacted copy holds no names, e-mail
 addresses, account numbers or absolute home paths, keeps what the run
 needs to reproduce, and is never booked by the project it came from.
@@ -27,7 +27,7 @@ TT = ("BUYSELL 2025-01-03 10:00:00 SYN.TO 10 CAD 10 100 0\n"
 
 
 def tjs(root, *args, cwd=None):
-    """`taxjson -C root <args>`, captured at width 0, offline."""
+    """`tjs -C root <args>`, captured at width 0, offline."""
     env = dict(os.environ, TAXJSON_OFFLINE="1", TAXJSON_WIDTH="0")
     return subprocess.run(
         python_module_argv("taxjson.bin.taxjson_run",
@@ -78,7 +78,7 @@ def gain(root: Path) -> float:
 # ------------------------------------------------------------- TJ-0476
 
 class TestRunSkipsARedactedCopyBesideItsExport(unittest.TestCase):
-    """`taxjson redact FILE` writes NAME.redacted.EXT beside the export;
+    """`tjs redact FILE` writes NAME.redacted.EXT beside the export;
     in an inputs/<account>/ folder the next run read both, booking
     every row twice (the copy's placeholder account id kept the
     de-duplication from merging them) with no word."""
@@ -95,7 +95,7 @@ class TestRunSkipsARedactedCopyBesideItsExport(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertEqual(gain(root), 100.0)
             self.assertIn("warning: inputs/margin/trades.redacted.tt is "
-                          "not read: a copy `taxjson redact` made of the "
+                          "not read: a copy `tjs redact` made of the "
                           "export beside it", r.stderr)
 
     def test_a_folder_of_redacted_copies_alone_is_read(self):
@@ -321,7 +321,7 @@ class TestALinkedConfigIsCopied(unittest.TestCase):
             copy = p / "inputs_redact" / "taxjson.toml"
             self.assertFalse(copy.is_symlink())
             self.assertEqual(toml(copy)["settings"]["year"], 2025)
-            self.assertIn("`taxjson -C inputs_redact/ run` runs it (and",
+            self.assertIn("`tjs -C inputs_redact/ run` runs it (and",
                           r.stdout)
             r = tjs(p / "inputs_redact", "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -347,7 +347,7 @@ class TestALinkedConfigIsCopied(unittest.TestCase):
 # ------------------------------------------------------------- TJ-0486
 
 class TestTheRunHintIsQuoted(unittest.TestCase):
-    """`taxjson -C <copy> run`, the closing line's hint, was not
+    """`tjs -C <copy> run`, the closing line's hint, was not
     shell-quoted: pasted, a path with a space stopped with "invalid
     choice"."""
 
@@ -358,9 +358,9 @@ class TestTheRunHintIsQuoted(unittest.TestCase):
             p = year_folder(Path(td) / "sp ace")
             r = tjs(p, "redact", "--no-denylist", cwd=td)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            hint = re.search(r"`(taxjson -C .*? run)` runs it", r.stdout)
+            hint = re.search(r"`(tjs -C .*? run)` runs it", r.stdout)
             argv = shlex.split(hint.group(1))
-            self.assertEqual(argv[:2], ["taxjson", "-C"])
+            self.assertEqual(argv[:2], ["tjs", "-C"])
             self.assertEqual(Path(argv[2]), p / "inputs_redact")
             self.assertEqual(argv[3:], ["run"])
 
@@ -368,7 +368,7 @@ class TestTheRunHintIsQuoted(unittest.TestCase):
 # ----------------------------------------------------- TJ-0480, TJ-0484
 
 class TestTheCopysCheckReadsAllOfIt(unittest.TestCase):
-    """`taxjson -C inputs_redact redact --check`, the check the
+    """`tjs -C inputs_redact redact --check`, the check the
     troubleshooting page gives for a copy laid out as a project, read
     its inputs/ only: an e-mail address or an account id in the copy's
     taxjson.toml or ticker.map passed with "Nothing to redact"; and the

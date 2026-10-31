@@ -2,7 +2,7 @@
 account (2026-09 audit findings R1-6, R1-81, S015-07, R1-79, S016-06,
 R1-80, S015-02, S016-09).
 
-`taxjson run` hands every RBC export of an account to ONE
+`tjs run` hands every RBC export of an account to ONE
 taxjson-brokerage call; the parser used to learn each identity map
 (market currency per symbol, option code -> contract, security name ->
 ticker) per FILE, so the answer depended on how the rows were split

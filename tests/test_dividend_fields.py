@@ -134,7 +134,7 @@ class TestMerge2DividendReconciliation(unittest.TestCase):
 class TestDerivedQtySnapsCentRounding(unittest.TestCase):
     """IB's Dividends section reports rate + TOTAL CASH (rounded to
     cents), no share count — deriving qty = amount/rate landed NEAR the
-    true count, not on it, and `taxjson divs` showed phantom fractional
+    true count, not on it, and `tjs divs` showed phantom fractional
     holdings (e.g. 45 sh x 0.213 = 9.585 paid as 9.58 ->
     44.97652582 sh; 83 x 0.315 = 26.145 paid as 26.15 ->
     83.01587302). Snap to the nearest integer when it explains the

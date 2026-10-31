@@ -1,4 +1,4 @@
-"""`taxjson opening` end to end, and `taxjson sanity`'s cost and income
+"""`tjs opening` end to end, and `tjs sanity`'s cost and income
 checks (tax-logic CA-OPEN-01..03 / US-OPEN-01..03). Synthetic data and
 fake account ids only."""
 import json

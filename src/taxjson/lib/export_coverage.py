@@ -1,5 +1,5 @@
 """Per-broker export coverage: a broker whose exports stop while it still
-holds positions (`taxjson run` Warning, `taxjson checklist`
+holds positions (`tjs run` Warning, `tjs checklist`
 export-coverage).
 
 A data check, not a tax rule (both countries). For each account of the
@@ -56,14 +56,14 @@ The run says each one as a Warning ("<broker> exports for <account> end
 <date> with open positions (...); download the rest of <year>"); the
 checklist's export-coverage step needs attention until the export is
 added or the question is answered: "no <broker> activity in <account>
-after <end>?" — `taxjson checklist --done export-coverage` records the
+after <end>?" — `tjs checklist --done export-coverage` records the
 (account, broker, end) of every gap it answers (Gap.key), whatever the
 end was read from (the user may know the account was not used after an
 RBC as-of date). The run then says a note instead; a gap the mark did not
 answer (a later end, another account or broker) asks again.
 
 The checklist's line (detail) counts the positions instead of naming
-them, gives the command that lists them (`taxjson list <account>
+them, gives the command that lists them (`tjs list <account>
 <end>`) and, when a .tt line or a later export of the account records
 the next activity on them (any date after the end, next_activity), its
 date and file; the run's Warning names them and says the same.
@@ -759,8 +759,8 @@ def next_activity(rows: Iterable[Dict[str, Any]], end: date,
 
 def list_command(g: "Gap") -> str:
     """The command that lists the account's positions at the export's
-    end (`taxjson list ACCOUNT DATE`)."""
-    return f"taxjson list {g.account} {g.end}"
+    end (`tjs list ACCOUNT DATE`)."""
+    return f"tjs list {g.account} {g.end}"
 
 
 def held_at_broker(own: List[Tuple[str, float]],
@@ -982,7 +982,7 @@ def _how_text(g: Gap) -> str:
 def question_text(g: Gap) -> str:
     """The question a DONE mark answers, for this gap's end only."""
     return (f"No {broker_name(g.broker)} activity in {g.account} after "
-            f"{g.end}? Mark `taxjson checklist --done {STEP}` (it answers "
+            f"{g.end}? Mark `tjs checklist --done {STEP}` (it answers "
             f"this end only: a later end, or another account or broker, "
             f"asks again).")
 
@@ -1031,7 +1031,7 @@ def message(g: Gap, year: int) -> Tuple[str, List[str]]:
 def _count_text(g: Gap) -> str:
     """The checklist's short form of what the broker still held: a
     count, the command that lists the account's positions, and the next
-    activity the books record on them (no symbol list: `taxjson list`
+    activity the books record on them (no symbol list: `tjs list`
     has it). The count is the broker's own rows'; the list is the whole
     account's on that day, every source (a .tt opening too), so the text
     says which is which (backlog TJ-0114)."""
@@ -1053,7 +1053,7 @@ def _count_text(g: Gap) -> str:
 def detail(gaps: List[Gap]) -> str:
     """One line for the checklist (the gaps that still
     hold positions: an Info gap is not listed): per gap the count of
-    positions, the `taxjson list` command that lists them and the next
+    positions, the `tjs list` command that lists them and the next
     activity a later file records on them."""
     gaps = [g for g in gaps if not g.info]
     parts = [f"{broker_name(g.broker)} exports for {g.account} end "
@@ -1062,4 +1062,4 @@ def detail(gaps: List[Gap]) -> str:
     more = len(gaps) - 3
     return ("; ".join(parts) + (f"; +{more} more" if more > 0 else "")
             + " — download the rest of the year, or if there was no "
-              f"later activity, `taxjson checklist --done {STEP}`")
+              f"later activity, `tjs checklist --done {STEP}`")

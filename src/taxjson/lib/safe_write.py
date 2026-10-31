@@ -30,7 +30,7 @@ overwrites whatever it points at — a file outside the project too.
 - Unique temps make each WRITE atomic, not a read-modify-write: the last
   rename wins. Writers that read a shared file, change it and write it
   back hold a lock around the whole step — the run lock
-  (taxjson_run._acquire_run_lock, one `taxjson run` per project), the
+  (taxjson_run._acquire_run_lock, one `tjs run` per project), the
   checklist state lock (checklist._StateLock) and the shared price/rate
   caches' lock (json_cache.save_json_cache); file_lock is the general
   form (the fetch plugin's project and Questrade-token locks).

@@ -1,7 +1,7 @@
-"""`taxjson fetch` plugins: broker downloaders live outside the core.
+"""`tjs fetch` plugins: broker downloaders live outside the core.
 
 The core holds no broker API client and never reads a broker credential.
-`taxjson fetch` is a thin dispatcher: it finds the fetchers installed in
+`tjs fetch` is a thin dispatcher: it finds the fetchers installed in
 the same Python environment, picks the accounts each one serves, and
 runs them. The Questrade REST API and IBKR Flex Web Service fetcher is
 the separate distribution `taxjson-fetch` (packages/taxjson-fetch in the
@@ -17,17 +17,17 @@ ready object. It provides:
 
     brokerages    tuple of the `brokerage = "..."` values (under
                   [accounts.<name>] in taxjson.toml) it downloads for
-    description   one line for `taxjson fetch --list`
+    description   one line for `tjs fetch --list`
     fetch(request) -> {account: {...}}
                   download every account in request.accounts into
                   inputs/<account>/ in a format an existing parser
                   reads; return a JSON-able result per account (the
-                  `--json` document). Fail with SystemExit("taxjson
+                  `--json` document). Fail with SystemExit("tjs
                   fetch: ...") — exit 1 — never a traceback.
 
 and optionally:
 
-    add_arguments(parser)  its own `taxjson fetch` options (an option
+    add_arguments(parser)  its own `tjs fetch` options (an option
                   two installed fetchers both define is shared — keep
                   the conventional meaning, e.g. --year)
     account_keys  extra [accounts.<name>] keys it reads, so the config
@@ -70,7 +70,7 @@ INSTALL_HINT = (f"install it by re-running the installer, which installs "
                 f"into taxjson's own environment — {_NOT_ON_PYPI}")
 # Keys the core always accepts under [accounts.<name>] for a fetcher
 # (the ones taxjson-fetch reads), installed or not: a project that used
-# `taxjson fetch` keeps validating when the plugin is absent.
+# `tjs fetch` keeps validating when the plugin is absent.
 CORE_ACCOUNT_KEYS = ("brokerage", "account", "query_id")
 
 
@@ -191,7 +191,7 @@ def declared_brokerages(cfg: Dict[str, Any]) -> Dict[str, str]:
 
 
 def add_fetcher_arguments(parser: argparse.ArgumentParser) -> None:
-    """Let each installed fetcher add its own options to `taxjson
+    """Let each installed fetcher add its own options to `tjs
     fetch`; one that fails is named on stderr and skipped (its options
     are then unknown, never a traceback)."""
     for f in installed():
@@ -201,7 +201,7 @@ def add_fetcher_arguments(parser: argparse.ArgumentParser) -> None:
         try:
             add(parser)
         except Exception as e:
-            emit_line(f"taxjson fetch: warning: fetcher {f.name!r} could not "
+            emit_line(f"tjs fetch: warning: fetcher {f.name!r} could not "
                       f"add its options ({type(e).__name__}: {e})",
                       file=sys.stderr)
 

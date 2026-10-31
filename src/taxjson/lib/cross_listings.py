@@ -8,7 +8,7 @@ rule joining them, the books held two securities: the old listing's
 shares never sold, the new listing's sales read as a short, and the
 superficial-loss / wash-sale walk saw a disposal and an acquisition.
 
-`taxjson run` joins such a pair itself, as a ticker.map `TOBASE FROM TO`
+`tjs run` joins such a pair itself, as a ticker.map `TOBASE FROM TO`
 line would, when the evidence is unambiguous:
 
 * the legs pair uniquely: an out-leg of X and an in-leg of Y (X != Y) in
@@ -61,7 +61,7 @@ and their own names agree as a journal's must: a move from one broker's
 TSX line to another broker's NYSE line, the two brokers spelling the
 corporate form differently.
 
-Everything else stays a suggestion (`taxjson ticker-map --suggest`) —
+Everything else stays a suggestion (`tjs ticker-map --suggest`) —
 except two listings whose names name different companies (no leading
 company word in common, companies_differ): never a join, never a TOBASE
 suggestion. A `.US` symbol whose rows name two different companies, one
@@ -834,7 +834,7 @@ def shown_apart(a: str, b: str,
     or the names name different companies (companies_differ for every
     pair of names).
     Shared letters are a candidate, never proof either way: this is
-    only the evidence AGAINST (`taxjson tips` MAP-GAP / US-LISTING,
+    only the evidence AGAINST (`tjs tips` MAP-GAP / US-LISTING,
     `ticker-map --suggest`'s conditional hints)."""
     from taxjson.lib.markets import is_canadian_listing
     why = (receipts or {}).get(frozenset((a, b)))
@@ -973,7 +973,7 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
     CA-XLIST-03; the caller gates the country).
 
     `refused`, when given, receives the unambiguous pairs left alone
-    (`taxjson journals` lists them): a ticker.map DISTINCT line keeps
+    (`tjs journals` lists them): a ticker.map DISTINCT line keeps
     them apart (extra["refused"] = "distinct"), the user's map names a
     listing and decides ("map"), or the legs of a broker journal name
     different companies ("different"). A coincidence of two unrelated
@@ -1214,7 +1214,7 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
     # An ambiguous leg is suggested once per journal it can be: legs of
     # one account, day, listings and size that nothing tells apart give
     # one candidate per out-leg and in-leg, never every combination
-    # (backlog TJ-1036: `taxjson journals` listed one out-leg and two
+    # (backlog TJ-1036: `tjs journals` listed one out-leg and two
     # in-legs as two journals). Another listing or day stays a candidate
     # of its own.
     spent: Set[Tuple[Any, ...]] = set()
@@ -1274,7 +1274,7 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
                          extra={"map": _booked(o.symbol)})
                 joined.append(p)
                 continue
-            # The user's map decides (listed by `taxjson journals` when
+            # The user's map decides (listed by `tjs journals` when
             # the pair is a journal, not a coincidence of two companies).
             # `verdict`: whether the legs' names agree (map_split warns
             # only for those).
@@ -1565,7 +1565,7 @@ def collision_note(c: Collision) -> Tuple[str, List[str]]:
     if c.template:
         det.append(f"The line has a placeholder to edit first ({c.why}).")
     return (f"{c.symbol} names two securities: {named} — add the EXTRACT "
-            f"line (`taxjson ticker-map --suggest`)", det)
+            f"line (`tjs ticker-map --suggest`)", det)
 
 
 def map_lines(joined: Iterable[Pair]) -> List[str]:
@@ -1883,5 +1883,5 @@ def map_split_note(account: str, items: Iterable[Tuple[Pair, str, str, str]]
              "books (in a registered account, a withdrawal at fair "
              "value) and the in-leg opens a position with no cost "
              "carried."] + details
-            + ["`taxjson journals` lists the pair; `run --strict` stops on "
+            + ["`tjs journals` lists the pair; `run --strict` stops on "
                "it."])

@@ -24,14 +24,14 @@ Directory layout:
     work/                 # intermediate JSON (--fast reuses these via mtime)
 
 Subcommands:
-    taxjson run                       # full pipeline, FULL rebuild (default —
+    tjs run                       # full pipeline, FULL rebuild (default —
                                       # never serves stale/cached data)
-    taxjson run --fast                # incremental: mtime-cached stages with
+    tjs run --fast                # incremental: mtime-cached stages with
                                       # unchanged inputs are skipped
-    taxjson run --account margin      # one account
-    taxjson sum                       # cross-account realized-gains summary
-    taxjson init [DIR] --country ca   # scaffold a new project directory
-    taxjson help [COMMAND]            # every other subcommand
+    tjs run --account margin      # one account
+    tjs sum                       # cross-account realized-gains summary
+    tjs init [DIR] --country ca   # scaffold a new project directory
+    tjs help [COMMAND]            # every other subcommand
 """
 
 from taxjson.lib.out import exit_text
@@ -86,7 +86,7 @@ def _cmd(name: str) -> List[str]:
 
 
 def _self_cmd(root: Path, *args: str) -> List[str]:
-    """`taxjson -C ROOT ARGS` as a tool command for dispatch.run_cmd (a
+    """`tjs -C ROOT ARGS` as a tool command for dispatch.run_cmd (a
     command relaying another one's --json: instalments and amt the
     estimate, close-year the carryover ledger, watch harvest)."""
     return _cmd("taxjson-run") + ["-C", str(root), *args]
@@ -305,7 +305,7 @@ def fill_moved_holdings(names: Iterable[str],
     again for each account in them whose file has a holding with no cost
     in its own books (`cost_unknown = true`: units moved in from another
     of your accounts), with the figure the passes have for it
-    (work/<name>_gains_wash.json, `taxjson list`'s; taxjson-export
+    (work/<name>_gains_wash.json, `tjs list`'s; taxjson-export
     --blended-gains, backlog TJ-0598). stage_account wrote the file and
     said its changes since the last run; this changes no quantity."""
     for name in names:
@@ -615,7 +615,7 @@ def _echo_captured(line: str, indent: str = "  ", file=None,
         indent, source = "", False
     if _run_concise(file):
         # One line per message (Essentials first): the continuation
-        # lines and the detail wait for `taxjson run --details` — an
+        # lines and the detail wait for `tjs run --details` — an
         # error keeps its detail (the fix).
         from taxjson.lib.out import relabel as _relabel
         if is_continuation(line):
@@ -665,7 +665,7 @@ def _out_relpath(path: Path, root: Path) -> str:
 
 def _console_line_buffered() -> None:
     """stdout and stderr flushed at every line end. Read through a pipe
-    (`taxjson run 2>&1 | tee log`) a block-buffered stdout came out in
+    (`tjs run 2>&1 | tee log`) a block-buffered stdout came out in
     chunks while stderr came out at once: a warning landed in the middle
     of an earlier stdout line, or before the step it belongs to."""
     import io as _io
@@ -699,7 +699,7 @@ def _wrote(path: Path, root: Path, what: str = "summary") -> None:
 
 
 def _run_concise(file=None) -> bool:
-    """True on `taxjson run`'s console shown to a person without
+    """True on `tjs run`'s console shown to a person without
     --details: each message is one line (docs/output-style.md,
     Essentials first); captured output (width 0) keeps every byte."""
     from taxjson.lib.out import width as _w
@@ -708,7 +708,7 @@ def _run_concise(file=None) -> bool:
 
 
 # Set when the run's console left a message's detail out (_run_concise):
-# the closing lines then name `taxjson run --details`.
+# the closing lines then name `tjs run --details`.
 _DETAILS_HIDDEN = [False]
 # The last message _echo_captured showed was an error (its continuation
 # lines are shown whole).
@@ -755,7 +755,7 @@ def _say(kind: str, text: str, *details: str, prog: Optional[str] = None,
 
 
 # Parser warning prefix for rows that are known tax events the parser
-# could NOT book. `taxjson run` echoes these to the console and, under
+# could NOT book. `tjs run` echoes these to the console and, under
 # --strict, refuses to publish (R1-104).
 UNBOOKED_PREFIX = "warning: UNBOOKED:"
 # Parser warning prefix for input COVERAGE / identity problems (lib/
@@ -1080,7 +1080,7 @@ def _read_work_stamp(path: Path) -> Optional[str]:
     code stamp, map markers), or None when it is missing or cannot be
     read: an unreadable stamp means 'changed' and is rewritten. A
     non-UTF-8 byte in one was a UnicodeDecodeError traceback that even
-    a full `taxjson run` — the documented recovery — could not get past
+    a full `tjs run` — the documented recovery — could not get past
     (re-audit A2-0795, A2-1429)."""
     try:
         return path.read_text(encoding="utf-8")
@@ -1090,7 +1090,7 @@ def _read_work_stamp(path: Path) -> Optional[str]:
 
 def _work_path_problem(path: Path) -> str:
     return (f"{path} is a directory, not a work file — work/ holds only "
-            f"files `taxjson run` rebuilds: delete it and re-run.")
+            f"files `tjs run` rebuilds: delete it and re-run.")
 
 
 def _write_work_stamp(path: Path, text: str) -> None:
@@ -1102,7 +1102,7 @@ def _write_work_stamp(path: Path, text: str) -> None:
     try:
         write_text_atomic(path, text)
     except OutputWriteError as e:
-        _die_input(f"{e} — work/ holds only files `taxjson run` "
+        _die_input(f"{e} — work/ holds only files `tjs run` "
                    f"rebuilds: fix or delete it and re-run.")
 
 
@@ -1121,7 +1121,7 @@ def _drop_work_file(path: Path) -> None:
 def timeline_beside(gains_json: Path) -> Path:
     """The engine's cost timeline the run writes with a gains file
     (taxjson-gains --cost-timeline; lib/cost_timeline, backlog TJ-0417),
-    read by `taxjson list --date`: `.<gains file's stem>.timeline.json`
+    read by `tjs list --date`: `.<gains file's stem>.timeline.json`
     beside it — dot-prefixed, so no account glob (`<account>_*.json`) or
     gains glob (`*_gains*.json`) finds it."""
     stem = gains_json.name.lstrip(".")
@@ -1188,7 +1188,7 @@ def _no_project_message(root: Path, cmd: str = "") -> Tuple[str, str]:
     """(headline, fix) for a command run where there is no project:
     the folder has no taxjson.toml. The fix names the project above it
     when there is one (`cd` there or -C), else how to start one — never
-    "run `taxjson run` first", which fails the same way (workflow audit
+    "run `tjs run` first", which fails the same way (workflow audit
     2026-10-22, item 15)."""
     import os as _os
     head = f"no taxjson.toml in {root} — not a taxjson project"
@@ -1381,7 +1381,7 @@ def _config_shown(path: Path) -> str:
 
 
 # Commands that never date a crypto row: a crypto project without
-# [settings] local_timezone still runs them (`taxjson format` shows the
+# [settings] local_timezone still runs them (`tjs format` shows the
 # key to add; `migrate` moves old files).
 _ZONE_FREE_CMDS = ("format", "format-map", "migrate", "init", "help")
 
@@ -1412,7 +1412,7 @@ def _normalize_settings(cfg: Dict[str, Any]) -> None:
     # variable applies only OUTSIDE a project (re-audit A2-0165). There
     # is no default zone (CA-DATE-12 / US-DATE-11): a project with a
     # crypto account and no setting stops here, naming the key — one
-    # user's zone silently dated everyone's midnight fills. `taxjson
+    # user's zone silently dated everyone's midnight fills. `tjs
     # format` / `migrate` do not come through here.
     import os as _os
     from taxjson.lib.brokerages._crypto_common import (
@@ -1449,7 +1449,7 @@ def _normalize_settings(cfg: Dict[str, Any]) -> None:
         settings["source_currencies"] = [c.strip().upper() for c in srcs]
     # year: a typo'd 2204 / 1850 / 0 built empty books and every filing
     # total read 0 with exit 0; `true` failed minutes later inside the
-    # gains stage (R1-256). Same plausible range `taxjson init` enforces.
+    # gains stage (R1-256). Same plausible range `tjs init` enforces.
     year = settings.get("year")
     if year is not None:
         if isinstance(year, bool) or not isinstance(year, int):
@@ -1490,7 +1490,7 @@ def _config_table_warnings(cfg: Dict[str, Any]) -> List[str]:
             continue
         if key == "fetch" and isinstance(cfg[key], dict):
             out.append("the retired [fetch.<account>] tables are "
-                       "ignored — `taxjson fetch` reads `brokerage` + "
+                       "ignored — `tjs fetch` reads `brokerage` + "
                        "`account` / `query_id` under [accounts.<name>]")
             continue
         what = ("table" if isinstance(cfg[key], dict) else "key")
@@ -1523,7 +1523,7 @@ def _unknown_setting_warnings(cfg: Dict[str, Any]) -> List[str]:
 
 
 def _warn_config_once(msg: str) -> None:
-    """`taxjson <cmd>: warning: taxjson.toml: <msg>` on stderr, once per
+    """`tjs <cmd>: warning: taxjson.toml: <msg>` on stderr, once per
     process."""
     if msg in _CONFIG_WARNED:
         return
@@ -1540,7 +1540,7 @@ def _warn_config_tables(root: Path) -> None:
             continue
         _CONFIG_WARNED.add(msg)
         _cmd = _current_cmd()
-        _pfx = f"taxjson {_cmd}" if _cmd else "taxjson"
+        _pfx = f"tjs {_cmd}" if _cmd else "tjs"
         emit_line(f"{_pfx}: warning: taxjson.toml: {msg}", file=sys.stderr)
 
 
@@ -1611,7 +1611,7 @@ _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Set up", ("checklist", "init", "years", "new-year", "align",
                 "format", "format-map", "migrate", "fetch", "elect",
                 "ticker-map", "update-tobase-map")),
-    ("Build the books", ("run", "compare", "crypto-sends",
+    ("Build the books", ("run", "compare", "snapshot", "crypto-sends",
                          "find-missing-history", "opening")),
     ("Summaries", ("amt", "div-estimate", "estimate", "fx-cash",
                    "instalments", "option-yield", "plot-tax", "stats",
@@ -1663,20 +1663,9 @@ _TOP_DESCRIPTION = (
     "missing purchase history included "
     "(github.com/taxjson/taxjson/blob/main/docs/getting-started.md).")
 
-# The name the program was invoked as: `tjs` (the short console script)
-# or `taxjson` (also for `python -m taxjson.bin.taxjson_run`). Set by
-# main(); usage lines and error prefixes show it.
-_PROG = "taxjson"
-
-
-def _invoked_name(argv0: Optional[str] = None) -> str:
-    """"tjs" when invoked through the `tjs` console script (tjs, tjs.exe,
-    tjs-script.py on Windows), else "taxjson"."""
-    import os
-    name = os.path.basename(argv0 if argv0 is not None
-                            else (sys.argv[0] if sys.argv else ""))
-    stem = name.lower().split(".", 1)[0]
-    return "tjs" if stem in ("tjs", "tjs-script") else "taxjson"
+# The command's name in every message and usage line, however it was
+# invoked (`taxjson` still runs it): one name for people to read.
+_PROG = "tjs"
 
 
 class _GroupedHelpParser(argparse.ArgumentParser):
@@ -1804,7 +1793,7 @@ def _no_command(argv: List[str], commands,
                 parser: Optional[argparse.ArgumentParser] = None) -> bool:
     """True when argv names no command and holds nothing but -C/--dir
     DIR (in any spelling `parser` takes: `--di DIR` too): `taxjson` or
-    `taxjson -C DIR` alone prints the help page. Any other token (-h,
+    `tjs -C DIR` alone prints the help page. Any other token (-h,
     --version, a mistyped command) keeps argparse's own handling."""
     i = 0
     while i < len(argv):
@@ -1823,7 +1812,7 @@ def _no_command(argv: List[str], commands,
             continue
         return False
     # Only -C/--dir options: their values are folders, even one named
-    # like a command (`taxjson -C run`, #51).
+    # like a command (`tjs -C run`, #51).
     return True
 
 
@@ -1876,7 +1865,7 @@ def _child_error(stderr: Optional[str], limit: int = 400) -> str:
 
 
 # A child's error line, in the person's form (`Error: ...`) or the
-# captured one (`taxjson estimate: error: ...`, `error: ...`).
+# captured one (`tjs estimate: error: ...`, `error: ...`).
 _CHILD_ERROR_LINE = re.compile(
     r"^(?:Error:|(?:(?:taxjson|tjs)(?:-\w+)?(?: \S+)?: )?(?:error|ERROR):)")
 # The label of a child's error line, its program name with it, as
@@ -1891,7 +1880,7 @@ def _current_cmd() -> str:
     (_CURRENT_CMD) while `_main` is on the stack; for an in-process
     call of a `cmd_*` function (tests, a GUI), the outermost one's
     command name — not the command an earlier call left set (backlog
-    TJ-0354: a t1135 refusal said "taxjson reconcile-slips: error");
+    TJ-0354: a t1135 refusal said "tjs reconcile-slips: error");
     else _CURRENT_CMD."""
     f = sys._getframe(1)
     g = globals()
@@ -1908,14 +1897,14 @@ def _current_cmd() -> str:
 
 
 def _cmd_prog() -> str:
-    """`taxjson <command>` while a command runs (the prog of its
-    messages), else `taxjson` (`tjs` when invoked so)."""
+    """`tjs <command>` while a command runs (the prog of its
+    messages), else `tjs`."""
     cmd = _current_cmd()
     return f"{_PROG} {cmd}" if cmd else _PROG
 
 
 def _die(msg: str, *details: str) -> None:
-    """Stop the command, exit 1: `taxjson <cmd>: error: <msg>`, then each
+    """Stop the command, exit 1: `tjs <cmd>: error: <msg>`, then each
     of `details` as an indented paragraph (docs/output-style.md). Keep
     `msg` a short headline — what was refused, about what — and put the
     why and the fix in `details`. SystemExit carries the text, as
@@ -2053,7 +2042,7 @@ def _carry_inputs(root: Path, args, cfg: Dict[str, Any], ol: float,
 def _estimate_inputs(root: Path, args) -> Tuple[float, float]:
     """(other_income, other_losses) for the tax estimate: CLI flags
     win, else the [estimate] table, else zero. Shared by cmd_summary
-    and cmd_instalments — `taxjson instalments` shells out to the
+    and cmd_instalments — `tjs instalments` shells out to the
     estimate, and without a common resolution the two commands
     reported different net tax owing for anyone with employment
     income (5.5x on the auditor's fixture)."""
@@ -2138,13 +2127,13 @@ def _fetch_account_keys(cfg: Dict[str, Any]) -> Tuple[str, ...]:
 def _fetch_plugin_note(cfg: Dict[str, Any]) -> Optional[str]:
     """One note when accounts declare a `brokerage` but no fetcher
     plugin is installed: the keys are accepted (they only matter to
-    `taxjson fetch`), and the user learns how to get the command."""
+    `tjs fetch`), and the user learns how to get the command."""
     from taxjson.lib import fetchers as _FP
     declared = _FP.declared_brokerages(cfg)
     if not declared or _FP.installed():
         return None
     names = ", ".join(f"[accounts.{a}]" for a in declared)
-    return (f"{names} brokerage is read only by `taxjson fetch`, and no "
+    return (f"{names} brokerage is read only by `tjs fetch`, and no "
             f"fetcher is installed — {_FP.INSTALL_HINT}")
 
 
@@ -2291,7 +2280,7 @@ def validate_config(cfg: Dict[str, Any],
             # and cmd_run prints one note instead (_fetch_plugin_note).
             warnings.append(
                 f"[accounts.{name}] brokerage {brok!r} is not a fetch "
-                f"source ({' | '.join(_served)}) — `taxjson fetch` "
+                f"source ({' | '.join(_served)}) — `tjs fetch` "
                 f"will refuse it{_suggest(str(brok), _served)}")
 
     # CSVs in a SUBFOLDER of an account's inputs are never read (only
@@ -2386,7 +2375,7 @@ _US_EXPERIMENTAL_NOTE = (
     "the US engine is EXPERIMENTAL",
     "Its rules are implemented and unit-tested but have not been "
     "validated against a real account. Treat the output as a draft, and "
-    "consider contributing a redacted export (`taxjson redact`) so it "
+    "consider contributing a redacted export (`tjs redact`) so it "
     "can be.")
 
 
@@ -2539,7 +2528,7 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
                     f"{r.get('date')} (event {eid}) is booked at $0 — no "
                     f"dividend income and a $0 cost for the new shares, "
                     f"so a later sale overstates the gain by the same "
-                    f"amount. Set its value: taxjson elect {name} --set "
+                    f"amount. Set its value: tjs elect {name} --set "
                     f"{eid}={r.get('corp_election')} --hint "
                     f"fmv_per_share=<value>")
             # A taxable merger at $0 (the "0 to defer" FMV, with or
@@ -2552,7 +2541,7 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
                     f"{r.get('date')} (event {eid}) is booked at $0 — the "
                     f"old shares' proceeds are only any cash-in-lieu (a "
                     f"fake loss) and the new shares cost $0. Set its "
-                    f"value: taxjson elect {name} --set "
+                    f"value: tjs elect {name} --set "
                     f"{eid}={r.get('corp_election')} --hint "
                     f"fmv_per_share=<value>")
             # An s.86.1 / §355 rollover allocated $0: the parent keeps
@@ -2565,7 +2554,7 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
                     f"warning: {name}: spin-off {r.get('symbol')} on "
                     f"{r.get('date')} (event {eid}, {el}) is booked with "
                     f"$0 allocated cost — the parent keeps all of it and "
-                    f"the spin-off's sale books the gain. Set it: taxjson "
+                    f"the spin-off's sale books the gain. Set it: tjs "
                     f"elect {name} --set {eid}={el} --hint "
                     f"{ALLOCATED_BASIS_HINT[el]}=<amount>")
     if lines or notes:
@@ -2672,7 +2661,7 @@ def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
                 f"that opened it CLOSING (IB code C / RBC CLOSE CONTRACT): "
                 f"it closed a position "
                 f"opened before the data — add the missing "
-                f"{'write' if qty > 0 else 'purchase'} (`taxjson "
+                f"{'write' if qty > 0 else 'purchase'} (`tjs "
                 f"find-missing-history`), not an expiry row.")
             continue
         lines.append(
@@ -2739,7 +2728,7 @@ def input_files(dirpath: Path, suffix: str) -> List[Path]:
         if p.suffix.lower() != suffix or p.name.startswith((".", "~$")):
             continue
         if _PL.redacted_copy_beside_exports(p):
-            # `taxjson redact FILE`'s copy beside its export: booked
+            # `tjs redact FILE`'s copy beside its export: booked
             # twice (backlog TJ-0476); group_inputs_detailed says so.
             continue
         if p.is_file():
@@ -2807,11 +2796,11 @@ def _redacted_copies_warning(account_dir: Path) -> None:
             continue
         _say_once(("redacted-copy", str(p)), "warning",
                   f"{_shown_account_dir(account_dir, p)}/"
-                  f"{_one_line(p.name)} is not read: a copy `taxjson "
+                  f"{_one_line(p.name)} is not read: a copy `tjs "
                   f"redact` made of the export beside it",
                   "Read too, its rows would be booked a second time "
                   "under placeholder ids. Move it out of the inputs "
-                  "folder (`taxjson redact --out DIR FILE` writes the "
+                  "folder (`tjs redact --out DIR FILE` writes the "
                   "copy elsewhere).", prog=_PROG)
 
 
@@ -2866,7 +2855,7 @@ def group_inputs_detailed(account_dir: Path):
             # A positions report (what is held on a date, not activity —
             # lib/positions_reports) dropped into inputs/: listed with
             # the detection lines and skipped, never parsed as trades
-            # and never a failed run. `taxjson sanity` / `taxjson
+            # and never a failed run. `tjs sanity` / `tjs
             # opening` read it.
             found.append(det)
             continue
@@ -2893,7 +2882,7 @@ def group_inputs_detailed(account_dir: Path):
                 _die(f"{_in_acct}/{shown_name(csv)} is IB's "
                      f"dividends report (the T5 / T3 income per payment), "
                      f"not an activity export — move it to inputs/slips/, "
-                     f"where `taxjson slip-audit` reads it.")
+                     f"where `tjs slip-audit` reads it.")
             # On the console: the file as it is on disk (an export's
             # default name is its account number; masking it here hid
             # which of two such files is meant).
@@ -2927,10 +2916,10 @@ def group_inputs_detailed(account_dir: Path):
     return out, found
 
 
-# Accounts whose per-file detection lines this `taxjson run` printed
+# Accounts whose per-file detection lines this `tjs run` printed
 # already (a crypto account is staged twice: parse first, then books).
 _DETECTION_SHOWN: set = set()
-# The broker parses this `taxjson run` made, by output: (what the parse
+# The broker parses this `tjs run` made, by output: (what the parse
 # read — its command and the bytes of every file it reads; what it
 # wrote — its outputs as left on disk). An account read in the first
 # pass (transfers / sends between your accounts) is staged again for its
@@ -2966,7 +2955,7 @@ def _shared_inputs_note(root: Path, path: Path, prog: str) -> None:
     _say_once(("shared-write", str(path)), "note",
               f"{_PL.shown(path, root)} is in the exports folder every "
               f"year's project shares: it applies to every year",
-              "Each year's run reads it; `taxjson run` in another year's "
+              "Each year's run reads it; `tjs run` in another year's "
               "folder shows what it changes there.",
               *_frozen_years_apart(root), prog=prog)
 
@@ -2986,7 +2975,7 @@ def _frozen_years_apart(root: Path) -> List[str]:
     return [f"Not {', '.join(map(str, yrs))} (filed, inputs frozen): "
             f"{'it reads its' if len(yrs) == 1 else 'each reads its'} own "
             f"copy — to amend a filed year, put the corrected file in "
-            f"its inputs/<account>/ and `taxjson run` there."]
+            f"its inputs/<account>/ and `tjs run` there."]
 
 
 # The cross-listing joins this run computed: {work dir: (map path or
@@ -3090,7 +3079,7 @@ def _say_loss_overrides(root: Path, settings: Dict[str, Any], cache: Path,
                  f"denied {rule}",
                  *[f"- {p}" for p in probs],
                  f"Each line names ONE sale the rule denies: its date "
-                 f"(trade or settlement), its symbol as `taxjson "
+                 f"(trade or settlement), its symbol as `tjs "
                  f"wash-sales` spells it and, when two such sales share "
                  f"the day, the units sold (`{LO.FORM}`).")
     if not any(it.get("status") == LO.STATUS_APPLIED for it in items):
@@ -3258,7 +3247,7 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
                             declared=(_decl.journals if _decl is not None
                                       else ()),
                             # The pairs left alone (the user's map, two
-                            # companies): `taxjson journals` lists them.
+                            # companies): `tjs journals` lists them.
                             refused=_refused,
                             map_renames=_renames,
                             # A Canadian depositary receipt and its US
@@ -3431,8 +3420,8 @@ def _report_detection(name: str, found, cache: Path) -> None:
             where = f"{_in}/{name}/{on_disk}"
             if det.positions:
                 text = (f"Info: File {where} is a positions report, not "
-                        f"activity: skipped (`taxjson sanity` and "
-                        f"`taxjson opening` read it)")
+                        f"activity: skipped (`tjs sanity` and "
+                        f"`tjs opening` read it)")
             elif det.broker:
                 if _run_concise():
                     # The broker each file was read as: --details (and
@@ -3988,7 +3977,7 @@ def _account_tt_files(acct_dir: Path, cache: Path, name: str
         # (pipeline.tt_json_path): one of them silently dropped.
         _die_input(f"{_PL.shown(mine[0], root)} (a .tt file you wrote) and "
                    f"{_PL.shown(gen, root)} (generated from sends.json by "
-                   f"`taxjson crypto-sends`) have the same name, so the "
+                   f"`tjs crypto-sends`) have the same name, so the "
                    f"run would read only one of them",
                    f"Rename yours (e.g. {name}_sends_manual.tt) and run "
                    f"again.")
@@ -4025,7 +4014,7 @@ def _resolve_manifest(acct_dir: Path, cache: Path, name: str,
                    f"it to start a new manifest).")
     if legacy.exists() and _PL.shared_inputs(cache.parent):
         # Exports shared by every year: a run never writes them; the
-        # year's legacy copy is read where it is (`taxjson elect`
+        # year's legacy copy is read where it is (`tjs elect`
         # saves into the shared folder).
         return legacy
     if legacy.exists():
@@ -4041,7 +4030,7 @@ def _resolve_manifest(acct_dir: Path, cache: Path, name: str,
              "read once it exists.", file=sys.stdout)
         return user_manifest
     # No manifest yet: the canonical path, not written — Manifest.load
-    # treats a missing file as empty, and `taxjson elect` writes it when
+    # treats a missing file as empty, and `tjs elect` writes it when
     # the first election is saved. An empty {"elections": {}} used to
     # be written on every first run of a project reading its own
     # inputs/, which dirtied a frozen year's committed copy (2026-10
@@ -4098,9 +4087,9 @@ _SKIPPED_ACCOUNTS_FILE = "skipped_accounts.json"
 
 def _record_skipped_accounts(cache: Path, names: List[str], *,
                              only: Optional[str] = None) -> None:
-    """Persist which accounts `taxjson run` skipped for having no inputs
+    """Persist which accounts `tjs run` skipped for having no inputs
     (work/skipped_accounts.json), so later commands don't tell the user
-    to "run `taxjson run` first" about an account that run deliberately
+    to "run `tjs run` first" about an account that run deliberately
     skipped. A single-account run (`only`) updates just that entry."""
     import json as _json
     path = cache / _SKIPPED_ACCOUNTS_FILE
@@ -4126,9 +4115,9 @@ def _record_skipped_accounts(cache: Path, names: List[str], *,
 
 
 def _accounts_skipped_for_no_inputs(root: Path) -> set:
-    """Accounts the last `taxjson run` skipped because inputs/<name>/
+    """Accounts the last `tjs run` skipped because inputs/<name>/
     held no CSV or .tt file — and that STILL hold none (a user who has
-    since added files does need the "run `taxjson run` first" hint).
+    since added files does need the "run `tjs run` first" hint).
     Readers that warn about a missing work/<name>_* artifact should
     stay quiet for these: their absence is expected, not staleness."""
     import json as _json
@@ -4148,7 +4137,7 @@ def _accounts_skipped_for_no_inputs(root: Path) -> set:
 
 def _sheltered_expected(root: Path) -> bool:
     """Should work/sheltered_base.json exist? True when the config has
-    a sheltered account that `taxjson run` did not skip for having no
+    a sheltered account that `tjs run` did not skip for having no
     inputs — the "no sheltered_base.json" notes are noise otherwise."""
     _acfg = _soft_config(root).get("accounts") or {}
     skipped = _accounts_skipped_for_no_inputs(root)
@@ -4159,7 +4148,7 @@ def _sheltered_expected(root: Path) -> bool:
 def _crypto_broker_files(root: Path, cfg: Dict[str, Any]
                          ) -> Dict[str, List[Tuple[str, Path]]]:
     """{crypto account: [(broker, csv)]} — the raw exchange exports the
-    stablecoin pool of `taxjson crypto-sends` is rebuilt from."""
+    stablecoin pool of `tjs crypto-sends` is rebuilt from."""
     from taxjson.lib.crypto_sends import crypto_accounts
     out: Dict[str, List[Tuple[str, Path]]] = {}
     for acct in crypto_accounts(cfg):
@@ -4223,10 +4212,10 @@ def _crypto_sends_tt(root: Path, acct: str, report: Dict[str, Any]
               "the price is not cached) — NOT booked. Re-run online, or "
               f"give the value per coin in {report['base_currency']}: "
             + "; ".join(
-                ([f"`taxjson crypto-sends {acct} --set {i}="
+                ([f"`tjs crypto-sends {acct} --set {i}="
                   f"{_disposing_word(report['country']).replace('/', '|')}"
                   f" --price P`" for i in _dec[:1]] if _dec else [])
-                + ([f"`taxjson crypto-sends {acct} --set {i}=fee "
+                + ([f"`tjs crypto-sends {acct} --set {i}=fee "
                     f"--price P` (the network fee hidden in a send that "
                     f"arrived short)" for i in _fee[:1]] if _fee else []))
             + f". {_sends_tt_shown(root, acct)} {status} with the "
@@ -4282,7 +4271,7 @@ def _dup_warning(acct: str, dups: List[Dict[str, Any]],
             f"{when} (send {d['id']}) — that disposition is counted "
             f"twice. Delete the hand-written line (crypto_sends.tt is "
             f"generated from sends.json), or, to keep it, record the send "
-            f"as `self`: `taxjson crypto-sends {acct} --set "
+            f"as `self`: `tjs crypto-sends {acct} --set "
             f"{d['id']}=self`.")
     return out
 
@@ -4307,15 +4296,15 @@ def _crypto_sends_problems(name: str, adoc: Dict[str, Any]) -> List[str]:
             f"`{o['decision']}`, but that send now pairs with an arrival "
             f"— {o['arrival']} — so it is booked as your own move and the "
             f"{o['decision']} is NOT booked. If that arrival is unrelated: "
-            f"`taxjson crypto-sends {name} --set {o['id']}={o['decision']} "
-            f"--unpair`; if the pairing is right: `taxjson crypto-sends "
+            f"`tjs crypto-sends {name} --set {o['id']}={o['decision']} "
+            f"--unpair`; if the pairing is right: `tjs crypto-sends "
             f"{name} --set {o['id']}=self`.")
     return out
 
 
 def _stage_crypto_sends(root: Path, name: str, interactive: bool,
                         strict: bool = False) -> None:
-    """`taxjson run` hook for a crypto account, right after the parse:
+    """`tjs run` hook for a crypto account, right after the parse:
     prompt for undecided sends at a TTY (else one note line), then
     refresh the generated crypto_sends.tt from the saved decisions.
 
@@ -4378,7 +4367,7 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
                     "a gift or payment is a disposition at fair value")
             _say("note", f"{adoc['undecided']} crypto send(s) not yet "
                  f"classified as {_decs}",
-                 f"`taxjson crypto-sends {name}` lists them ({_why}).",
+                 f"`tjs crypto-sends {name}` lists them ({_why}).",
                  indent="  ")
             if strict and not unparsed:
                 # A pending decision, like a pending election: a send
@@ -4386,7 +4375,7 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
                 _diag.unlink(missing_ok=True)
                 _die(f"--strict: {name}: {adoc['undecided']} crypto "
                      f"send(s) not yet classified as {_decs} — aborting",
-                     f"Decide each with `taxjson crypto-sends {name} "
+                     f"Decide each with `tjs crypto-sends {name} "
                      f"--set ID=...`.")
         if adoc.get("orphans"):
             _say("note", f"{_sends_json_shown(root, name)} has "
@@ -4394,7 +4383,7 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
                  f"no longer exist ({', '.join(adoc['orphans'][:3])}"
                  f"{' ...' if len(adoc['orphans']) > 3 else ''})",
                  f"The inputs or local_timezone changed? They are "
-                 f"ignored; `taxjson crypto-sends {name}` lists the "
+                 f"ignored; `tjs crypto-sends {name}` lists the "
                  f"current ids.", indent="  ")
         _problems += [(ATTENTION_PREFIX, w)
                       for w in _crypto_sends_problems(name, adoc)]
@@ -4513,7 +4502,7 @@ def _apply_override_log(corp_json: Path, log: Path, account: str) -> None:
                      f"{sym} rows (to {', '.join(targets)}) and not "
                      f"others — two securities share that spelling, so "
                      f"the event cannot be assigned. Record it with a "
-                     f".tt file (and `taxjson elect {account} --set "
+                     f".tt file (and `tjs elect {account} --set "
                      f"<event>=ignore`).")
             t[fld] = targets[0]
             changed = True
@@ -4577,7 +4566,7 @@ def _refuse_legacy_project_files(root: Path) -> None:
     """Stop (exit 2) while the project still holds an old per-purpose
     file whose contents now live in ticker.map / taxjson.toml
     (yf_ticker.map, distributions.map, ...): it is no longer read, and
-    running on without it would silently drop its rules. Only `taxjson
+    running on without it would silently drop its rules. Only `tjs
     migrate` (which moves them) runs past this."""
     from taxjson.lib.migrate import legacy_files, legacy_message
     names = legacy_files(root)
@@ -4636,7 +4625,7 @@ def _to_years_preflight(root: Path) -> Optional[bytes]:
 
 
 def _migrate_to_years(root: Path, dry_run: bool) -> None:
-    """`taxjson migrate --to-years`: a single-folder project becomes one
+    """`tjs migrate --to-years`: a single-folder project becomes one
     folder of exports for every year — inputs/ stays where it is, shared,
     and the project's own files move into <root>/<year>/ (inputs/slips/
     to <year>/inputs/slips/), its taxjson.toml naming the shared folders
@@ -4651,7 +4640,7 @@ def _migrate_to_years(root: Path, dry_run: bool) -> None:
         _die_input("this project already reads a shared inputs folder "
                    f"([settings] {_PL.INPUTS_KEY})")
     # An old per-purpose map (yf_ticker.map ...) would stay behind at the
-    # top, read by no year: `taxjson migrate` folds it in first.
+    # top, read by no year: `tjs migrate` folds it in first.
     _refuse_legacy_project_files(root)
     if not isinstance(year, int):
         _die_input("[settings] year is required")
@@ -4680,7 +4669,7 @@ def _migrate_to_years(root: Path, dry_run: bool) -> None:
                    f"slips folder, which moves into {year}/ — the "
                    f"account's exports there would no longer be read",
                    f"Rename the account (its [accounts.{_n}] table and "
-                   f"its inputs/{_n}/ folder) first, then run `taxjson "
+                   f"its inputs/{_n}/ folder) first, then run `tjs "
                    f"migrate --to-years` again. Nothing was moved.")
     moves = [(root / n, dest / n) for n in _TO_YEARS_MOVED
              if _os.path.lexists(root / n)]
@@ -4703,7 +4692,7 @@ def _migrate_to_years(root: Path, dry_run: bool) -> None:
             moves.append((root / hn, dest / hn))
     text = _read_config_text(root / "taxjson.toml")
     # A file in the template layout stays in it: the keys set below go
-    # in their places, as new-year writes them (`taxjson format --check`
+    # in their places, as new-year writes them (`tjs format --check`
     # passes after the move — backlog TJ-0049).
     _was_templated = _templated(text) == text
     _tob = (root / _PL.TOBASE_MAP).is_file()
@@ -4962,8 +4951,8 @@ def _migrate_to_years(root: Path, dry_run: bool) -> None:
         write_user_file(root / ".gitignore", gi_new, root, backup=False)
     # What stays at the top besides the shared folders: no year reads
     # it (a note of the user's, a script, a stray export).
-    _kept = {_PL.INPUTS, _PL.EXPORTS, str(year), ".git", ".gitignore",
-             ".gitattributes", _PL.TOBASE_MAP}
+    _kept = {_PL.INPUTS, _PL.EXPORTS, _PL.SNAPSHOTS, str(year), ".git",
+             ".gitignore", ".gitattributes", _PL.TOBASE_MAP}
     for a, b in moves:
         if b.is_symlink():
             # (the folder a moved link names stays: a year reads it)
@@ -4979,14 +4968,14 @@ def _migrate_to_years(root: Path, dry_run: bool) -> None:
     if left:
         _say_wrapped(f"Left at the top (no year reads them; move what "
                      f"belongs to {year} into {year}/): " + ", ".join(left))
-    _say_wrapped(f"Done. `taxjson -C {year} run` rebuilds the books there; "
-                 f"`taxjson new-year {year + 1}` here starts the next year. "
+    _say_wrapped(f"Done. `tjs -C {year} run` rebuilds the books there; "
+                 f"`tjs new-year {year + 1}` here starts the next year. "
                  f"The files are moved: commit the move (`git add -A` "
                  f"records them as renames, keeping their history).")
 
 
 def cmd_migrate(args: argparse.Namespace) -> None:
-    """`taxjson migrate`: _migrate_steps, then each project it covers
+    """`tjs migrate`: _migrate_steps, then each project it covers
     records the oldest taxjson its layout now needs (`[settings]
     requires_taxjson`, lib/requires; never lowered). A frozen filed
     year's taxjson.toml migrate edited has the edit recorded in its
@@ -4999,18 +4988,18 @@ def cmd_migrate(args: argparse.Namespace) -> None:
     if not dry:
         _raise_requirements(root, ("missing_history_tt",), all_years=True)
         _record_migrate_edits(
-            root, before, "taxjson migrate"
+            root, before, "tjs migrate"
             + (" --to-years" if getattr(args, "to_years", False) else ""))
 
 
-# The lock's `frozen` record of the edits `taxjson migrate` made to a
+# The lock's `frozen` record of the edits `tjs migrate` made to a
 # frozen year's taxjson.toml (backlog TJ-0231).
 _MIGRATED = "migrated"
 
 
 def _frozen_configs(root: Path) -> List[Tuple[int, Path, str, Any]]:
     """(year, project, digest, run part) of the taxjson.toml of each
-    filed year with frozen inputs `taxjson migrate` in `root` may
+    filed year with frozen inputs `tjs migrate` in `root` may
     edit: the project itself, or the year folders of the folder
     holding them (lib/checklist.run_config_state)."""
     from taxjson.lib.checklist import run_config_state
@@ -5037,7 +5026,7 @@ def _frozen_configs(root: Path) -> List[Tuple[int, Path, str, Any]]:
 def _record_migrate_edits(root: Path,
                           before: List[Tuple[int, Path, str, Any]],
                           how: str) -> None:
-    """Record in each frozen year's lock the edit `how` (`taxjson
+    """Record in each frozen year's lock the edit `how` (`tjs
     migrate`) made to its taxjson.toml — `before`, _frozen_configs
     taken before it ran: the digest the file has now and the keys it
     changed, under frozen.migrated. Only a file that still was as the
@@ -5083,20 +5072,20 @@ def _record_migrate_edits(root: Path,
             _say("warning", f"cannot record migrate's edit of {y}'s "
                  f"frozen taxjson.toml in filed/{y}.json: "
                  f"{e.strerror or e}",
-                 "`taxjson check-filed` will call the edit a changed "
+                 "`tjs check-filed` will call the edit a changed "
                  "frozen input.", prog=_cmd_prog())
             continue
         for _ln in _out_wrap(
                 f"filed/{y}.json: records this edit of {y}'s frozen "
                 f"taxjson.toml ({', '.join(keys)}) as migrate's own — "
-                f"`taxjson check-filed` explains it, not a changed "
+                f"`tjs check-filed` explains it, not a changed "
                 f"input", indent="", hang=""):
             print(_ln)
 
 
 def _migrate_edit(root: Path, frozen: Dict[str, Any]
                   ) -> Optional[Dict[str, Any]]:
-    """The lock's record of `taxjson migrate`'s edit of the frozen
+    """The lock's record of `tjs migrate`'s edit of the frozen
     taxjson.toml (frozen.migrated) when the file is as migrate left it,
     else None (backlog TJ-0231)."""
     from taxjson.lib.checklist import run_config_state
@@ -5149,7 +5138,7 @@ def _os_lexists(p: Path) -> bool:
 
 
 def _migrate_steps(args: argparse.Namespace) -> None:
-    """`taxjson migrate [--dry-run]`: move an old project's per-purpose
+    """`tjs migrate [--dry-run]`: move an old project's per-purpose
     files into ticker.map (QUOTE / CRYPTO / EXTRACT / T1135 lines) and
     taxjson.toml ([estimate] amt_carryover, [carryover] claimed,
     [[capital_gains_dividends]], [[distributions]]) — appended, never
@@ -5206,7 +5195,7 @@ def _migrate_steps(args: argparse.Namespace) -> None:
     if not pl.names:
         _migrate_missing_history(root, mhm, args, done)
         return
-    print(f"taxjson migrate{' --dry-run' if dry else ''}: {root}")
+    print(f"tjs migrate{' --dry-run' if dry else ''}: {root}")
     from taxjson.lib.out import labelled as _labelled
     for ln in pl.summary(dry):
         for _ln in _out_wrap(_labelled(ln), indent="  ", hang="    "):
@@ -5248,18 +5237,18 @@ def _migrate_steps(args: argparse.Namespace) -> None:
         for _ln in _out_wrap(
                 "Review ticker.map and taxjson.toml and commit them (in a "
                 "git repository, `git rm` the old files too); delete the "
-                "*.migrated files once you are satisfied; run `taxjson run` "
+                "*.migrated files once you are satisfied; run `tjs run` "
                 "to rebuild.", indent="  "):
             print(_ln)
     else:
         print("  Review and commit ticker.map and taxjson.toml, then "
-              "`taxjson run` (more: --details).")
+              "`tjs run` (more: --details).")
     if mhm is not None:
         _migrate_missing_history(root, mhm, args, done)
 
 
 def _migrate_plan(root: Path) -> Tuple[Any, Any]:
-    """`taxjson migrate`: this project's two plans — the old per-purpose
+    """`tjs migrate`: this project's two plans — the old per-purpose
     files (lib/migrate.plan) and missing_history.json (lib/missing_
     history.plan_missing_history_migration, None when there is none) —
     made before any phase writes, so a refusal here is true to its
@@ -5292,7 +5281,7 @@ def _migrate_done_note(done: List[str]) -> List[str]:
 
 
 def _migrate_shared_tobase(top: Path, args: argparse.Namespace) -> bool:
-    """`taxjson migrate` in a multi-year project: the year folders'
+    """`tjs migrate` in a multi-year project: the year folders'
     tobase.map copies (the layout before v0.27.1) become one tobase.map
     in `top` that every year reads (`[settings] tobase_map =
     "../tobase.map"`, lib/tobase_map.plan_shared). Identical copies:
@@ -5347,7 +5336,7 @@ def _migrate_shared_tobase(top: Path, args: argparse.Namespace) -> bool:
     for where, n in sorted(plan.other_lines.items()):
         for _ln in _out_wrap(
                 f"{where}: {n} more line(s) of another master version "
-                f"(`taxjson update-tobase-map` brings the shared file in "
+                f"(`tjs update-tobase-map` brings the shared file in "
                 f"step with this taxjson's master).", indent="  ",
                 hang="    "):
             print(_ln)
@@ -5359,7 +5348,7 @@ def _migrate_shared_tobase(top: Path, args: argparse.Namespace) -> bool:
                 indent="  ", hang="    "):
             print(_ln)
     if plan.frozen:
-        # A filed year's frozen copy is its own by design (as `taxjson
+        # A filed year's frozen copy is its own by design (as `tjs
         # years` says it): never pointed at the shared file (TJ-0086).
         _one = len(plan.frozen) == 1
         for _ln in _out_wrap(
@@ -5395,7 +5384,7 @@ def _migrate_shared_tobase(top: Path, args: argparse.Namespace) -> bool:
     for _ln in _out_wrap(
             f"Done: {TB.TOBASE_MAP} here is the one file "
             + ", ".join(str(y) for y in sorted(set(done) | set(plan.sharing)))
-            + " read. `taxjson update-tobase-map` in any year folder "
+            + " read. `tjs update-tobase-map` in any year folder "
             "updates it for every year; commit the change (in git, `git "
             "rm` the copies).", indent="  ", hang="  "):
         print(_ln)
@@ -5405,7 +5394,7 @@ def _migrate_shared_tobase(top: Path, args: argparse.Namespace) -> bool:
 def _migrate_missing_history(root: Path, mhm: Any,
                              args: argparse.Namespace,
                              done: Optional[List[str]] = None) -> None:
-    """`taxjson migrate`, missing_history.json: each entry becomes a
+    """`tjs migrate`, missing_history.json: each entry becomes a
     dated line `OPENING <date> <SYMBOL> <qty> cost=unknown` in
     inputs/<account>/missing_history.tt, its quantity what the project's
     run opens for it (lib/missing_history.plan_missing_history_
@@ -5416,7 +5405,7 @@ def _migrate_missing_history(root: Path, mhm: Any,
     it); entries that open nothing anywhere are dropped, said. Then each
     missing_history.json is renamed <name>.migrated. `done`: what the
     phases before this one wrote, named by a refusal here (TJ-0300) —
-    an entry not converted keeps them (it needs `taxjson run`, which an
+    an entry not converted keeps them (it needs `tjs run`, which an
     old file not yet migrated would stop)."""
     from taxjson.lib import missing_history as MH
     dry = bool(getattr(args, "dry_run", False))
@@ -5454,7 +5443,7 @@ def _migrate_missing_history(root: Path, mhm: Any,
             print(f"    - {d}")
     if mhm.nodate:
         print(f"  Cannot convert (no books for the account in a year "
-              f"folder listing it — run `taxjson run` there): "
+              f"folder listing it — run `tjs run` there): "
               f"{', '.join(mhm.nodate)}")
     if dry:
         print("\n  dry run: nothing was written")
@@ -5468,8 +5457,8 @@ def _migrate_missing_history(root: Path, mhm: Any,
              + (" for them" if done else ""),
              "Kept: " + ", ".join(_PL.shown(p, root)
                                   for p in sorted(mhm.unconverted))
-             + ". Run `taxjson run` in the year folder whose accounts "
-             "include the account, then `taxjson migrate` again.",
+             + ". Run `tjs run` in the year folder whose accounts "
+             "include the account, then `tjs migrate` again.",
              *_migrate_done_note(done or []))
     if mhm.differ and not force:
         _die("the year folders' missing_history.json files disagree "
@@ -5489,7 +5478,7 @@ def _migrate_missing_history(root: Path, mhm: Any,
     for _ln in _out_wrap(
             "Review the .tt lines (the date and quantity of each are "
             "yours to correct) and commit them; delete the *.migrated "
-            "files once you are satisfied; run `taxjson run`"
+            "files once you are satisfied; run `tjs run`"
             + (" in each year folder" if shared else "") + ".",
             indent="  "):
         print(_ln)
@@ -5531,7 +5520,7 @@ def _refuse_unreadable_project_inputs(root: Path) -> None:
     fees, ...) builds as if ticker.map were absent (re-audit A2-0401 /
     A2-0144; `run` since A2-0313). An old file whose contents now live
     elsewhere (a per-purpose map, missing_history.json) stops it first,
-    naming `taxjson migrate`."""
+    naming `tjs migrate`."""
     _refuse_legacy_project_files(root)
     _unreadable = _unreadable_project_inputs(root)
     if _unreadable:
@@ -5567,7 +5556,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                   ) -> Optional[Dict[str, Path]]:
     """Full per-account pipeline. Returns {base, gains, sum} paths, or None
     when the account has no inputs yet (a configured-but-unpopulated account,
-    e.g. straight after `taxjson init`) — that's a warn-and-skip, not a fatal
+    e.g. straight after `tjs init`) — that's a warn-and-skip, not a fatal
     error, so the other accounts still run. `parse_only`: stop after the
     broker parse (returns None) — cmd_run parses every crypto account
     first so each one's sends pair against current arrivals."""
@@ -5851,7 +5840,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 cmd.append("--transfers")
             else:
                 # Custody evidence sidecar: excluded TRANSFER rows are
-                # kept queryable (`taxjson transfers`) instead of
+                # kept queryable (`tjs transfers`) instead of
                 # silently deleted — a depot flip or broker migration
                 # is exactly what explains a confusing position later.
                 cmd += ["--transfers-out", str(_sidecar)]
@@ -6027,7 +6016,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                     "--country", country,
                     "--brokerage", broker,
                     "--manifest", str(manifest_path),
-                    # Named as `taxjson elect` names it (../inputs/...
+                    # Named as `tjs elect` names it (../inputs/...
                     # for shared exports), never by its absolute path
                     # (backlog TJ-0216).
                     "--manifest-shown",
@@ -6057,7 +6046,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 # election (taxable vs rollover) on stderr and reads the
                 # answer from stdin. Without a TTY (or with --no-input) it
                 # writes the pending elections as JSON and exits 3 — the
-                # GUI/headless path: resolve via `taxjson elect --set`,
+                # GUI/headless path: resolve via `tjs elect --set`,
                 # re-run.
                 non_interactive = no_input or not sys.stdin.isatty()
                 pending_path = cache / f"{name}_pending_elections.json"
@@ -6243,7 +6232,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             import os as _os
             _os.utime(src_manifest)
     # A US project's moves between your own taxable accounts, written by
-    # `taxjson run` before the accounts' books (stage_own_account_moves;
+    # `tjs run` before the accounts' books (stage_own_account_moves;
     # US-BASIS-05): their TRANSFER legs are part of this account's books.
     _own_moves = cache / f"{name}{OWN_MOVES_SUFFIX}"
     if is_taxable and not include_transfers and _own_moves.is_file():
@@ -6426,7 +6415,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                     if _dres.stderr:
                         _echo_stage_stderr(_dres.stderr)
                     if _dres.returncode != 0:
-                        sys.exit(exit_text(f"taxjson run: apply-distributions "
+                        sys.exit(exit_text(f"tjs run: apply-distributions "
                                            f"failed for {name} (see above)."))
                     _stage.replace(base_json)
                     # Publish the stage's diagnostics under the name
@@ -6620,7 +6609,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                  f"exchange rate on file. reports/{name}_holdings.toml "
                  "was NOT refreshed this run.", indent="  ")
             # The native books of an EARLIER run (before the rollover
-            # rows arrived) would otherwise keep serving `taxjson gains`
+            # rows arrived) would otherwise keep serving `tjs gains`
             # without the rolled-over disposition (2026-09 audit S037-23).
             for _stale in (cache / f"{name}_raw_gains.json",
                            cache / f"{name}_raw_base.json",
@@ -6633,7 +6622,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             raw_gains = cache / f"{name}_raw_gains.json"
             # The missing-history lines apply to the native books too:
             # without it holdings.toml listed
-            # every listed pair as a SHORT, and `taxjson gains` showed a
+            # every listed pair as a SHORT, and `tjs gains` showed a
             # tainted sale as a realized gain (audit A2-0111 / A2-0305,
             # R1-275 / R1-322). A pair spelled with a TOBASE target the
             # native books do not use simply has no rows here.
@@ -6738,7 +6727,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         write_holdings_toml(name, holdings_cmd, cache, reports_dir)
 
     # 6. summary — assembled in a .part sidecar and renamed on success, so a
-    # failing sub-report can't leave a truncated .sum that `taxjson sum`
+    # failing sub-report can't leave a truncated .sum that `tjs sum`
     # then serves (same atomicity contract as run_to_file).
     sum_path = reports_dir / f"{name}.sum"
     sum_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -6762,7 +6751,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             ]))
 
     # Machine twin of the text reports (ADDITIVE — the .sum bytes above are
-    # untouched): the structured aggregates `taxjson sum` and future
+    # untouched): the structured aggregates `tjs sum` and future
     # consumers read instead of re-deriving them from the gains JSON.
     try:
         from taxjson.lib.report_model import (build_account_report,
@@ -6839,7 +6828,7 @@ def stage_wash_pass(name: str, settings: Dict[str, Any], cache: Path, reports_di
     cmd += _locked_year_flags(cache.parent, settings)
     cmd += _loss_override_flags(cache)
     # Same missing-history opening balances as the main gains pass — without
-    # this the wash-adjusted books (which `taxjson wash-sales` PREFERS when
+    # this the wash-adjusted books (which `tjs wash-sales` PREFERS when
     # present) were computed on different books than <account>.sum.
     if incomplete_history is not None:
         cmd += ["--incomplete-history", str(incomplete_history)]
@@ -6873,7 +6862,7 @@ def _record_wash_inputs(cache: Path, washes: List[Path], names: List[str],
         _say("warning", f"could not record the inputs of the "
              f"cross-account pass: {e}",
              "A later `run --account` may leave the wash-adjusted "
-             "numbers stale without a warning; run a full `taxjson run` "
+             "numbers stale without a warning; run a full `tjs run` "
              "before filing.", indent="  ")
 
 
@@ -6948,7 +6937,7 @@ def _render_wash_outputs(name: str, settings: Dict[str, Any], cache: Path,
 
     # Rebuild the machine twin from the wash-adjusted gains: report.json
     # must carry the same basis the query commands resolve to (they prefer
-    # <name>_gains_wash.json), or `taxjson sum`'s fast path would serve
+    # <name>_gains_wash.json), or `tjs sum`'s fast path would serve
     # pre-wash aggregates next to a "wash-adjusted" banner.
     try:
         from taxjson.lib.report_model import (build_account_report,
@@ -6979,7 +6968,7 @@ def _symbol_codes_suffix() -> str:
 def _symbol_codes_state(root: Path, name: str) -> Optional[Path]:
     """work/<name>_symbol_codes.state when the run wrote one (lib/
     symbol_codes): what the corp-action extraction books a Questrade
-    chain under an internal code as — `taxjson elect` and `--redo`
+    chain under an internal code as — `tjs elect` and `--redo`
     extract exactly as the run does."""
     p = Path(root) / "work" / f"{name}{_symbol_codes_suffix()}"
     return p if p.is_file() else None
@@ -7066,7 +7055,7 @@ def stage_symbol_codes(name: str, csvs: List[Path], root: Path,
             # ANY ticker.map rule naming the code (a rename, DELETE,
             # DISTINCT, a dated RENAME) wins — the test the parser
             # applies too (base.ticker_map_names), so the record, the
-            # books and `taxjson transfers` agree.
+            # books and `tjs transfers` agree.
             return any(helper.apply_currency_suffix(code, cur) in named
                        for cur in sorted({"USD", "CAD"}
                                          | {c for u in uses
@@ -7077,7 +7066,7 @@ def stage_symbol_codes(name: str, csvs: List[Path], root: Path,
                             code_listing=helper.apply_currency_suffix)
     if by_journal:
         # Codes a BRW journal leg of this account names (the parser
-        # books them so): recorded for `taxjson transfers`; a ticker.map
+        # books them so): recorded for `tjs transfers`; a ticker.map
         # rule naming the code wins here too.
         named_j = _ticker_map_named(root)
         _h = QuestradeBrokerage()
@@ -7177,7 +7166,7 @@ def _ticker_map_named(root: Path, lookups: bool = False) -> frozenset:
     """Every symbol a rule of the project's ticker.map names
     (taxjson_ticker_map.named_symbols; `lookups`: a lookup line's symbol
     too); empty without a map. A map that does not parse is refused by
-    `taxjson run` up front."""
+    `tjs run` up front."""
     tm = _PL.ticker_map_path(root)
     if not tm.is_file():
         return frozenset()
@@ -7193,7 +7182,7 @@ def _ticker_map_renames(root: Path) -> Dict[str, str]:
     """The project's ticker.map renames as the base-currency merge books
     them (taxjson_ticker_map.merge_renames: GLOBAL, TOBASE, JOURNAL and
     undated RENAME lines, chains followed); empty without a map or when
-    it does not parse (`taxjson run` refuses such a map up front)."""
+    it does not parse (`tjs run` refuses such a map up front)."""
     tm = _PL.ticker_map_path(root)
     if not tm.is_file():
         return {}
@@ -7208,7 +7197,7 @@ def _ticker_map_renames(root: Path) -> Dict[str, str]:
 def _accounts_with_symbol_codes(inputs_dir: Path,
                                 accounts: Dict[str, Any]) -> List[str]:
     """The equity accounts whose Questrade exports hold internal codes
-    their own rows do not resolve: `taxjson run` parses every other
+    their own rows do not resolve: `tjs run` parses every other
     account first, so the inference sees their transfers and names."""
     from taxjson.lib.brokerages.detect import detect
     from taxjson.lib.brokerages.questrade import scan_code_uses
@@ -7304,7 +7293,7 @@ def transfer_arrivals(root: Path, cache: Path,
                 #                 each account's .tt files in turn
             # The strict work/ reader (backlog TJ-0308): a damaged file
             # (`[null]`, `{"transactions": 42}`, not JSON) was an
-            # AttributeError or skipped in silence, and `taxjson
+            # AttributeError or skipped in silence, and `tjs
             # transfers` then called each arrival a move of your own.
             rows += _read_work_doc(p).get("transactions") or []
         tt_rows[n] = rows
@@ -7534,7 +7523,7 @@ def stage_transfer_arrivals(name: str, root: Path, cache: Path,
              f"{TI.OWN_MOVE_DAYS} days, or a slower one the run says as "
              f"Info) and never makes one."),
             f"The form is `{TI.NOTOWN_FORM}`: the dates, units and "
-            f"accounts as `taxjson transfers` lists the two rows. Fix "
+            f"accounts as `tjs transfers` lists the two rows. Fix "
             f"the line or delete it.",
             indent="  ")
     from taxjson.lib.country import basis_pooled_across_accounts
@@ -7559,7 +7548,7 @@ def stage_transfer_arrivals(name: str, root: Path, cache: Path,
                  f".tt file in {_inputs_shown(root)}/{m.in_account}/: the "
                  f"transfer-in is "
                  f"then booked as one from outside your books "
-                 f"(docs/troubleshooting.md; `taxjson transfers` lists "
+                 f"(docs/troubleshooting.md; `tjs transfers` lists "
                  f"both rows).",
                  indent="  ", file=sys.stdout)
     for ln in TI.attention_lines(found, country):
@@ -7942,7 +7931,7 @@ def stage_in_kind_context(root: Path, cache: Path, settings: Dict[str, Any],
         _echo_stage_stderr((vres.stdout or "") + (vres.stderr or ""))
         _die("the sheltered book with the in-kind contributions marked "
              "failed validation (details above)",
-             "Check the transfer rows `taxjson transfers` labels "
+             "Check the transfer rows `tjs transfers` labels "
              "in-kind, or value them with a .tt INKIND line.")
     return p
 
@@ -7984,7 +7973,7 @@ def _say_tobase_map(root: Path, ticker_map: Path) -> None:
     if not ticker_map.is_file():
         _say("warning", f"{TB.TOBASE_MAP} is not read: there is no "
              f"ticker.map beside it",
-             "Create an empty ticker.map (`taxjson update-tobase-map "
+             "Create an empty ticker.map (`tjs update-tobase-map "
              "--write` makes one) so the interlisted pairs apply.",
              prog=_PROG)
         return
@@ -8008,7 +7997,7 @@ def _say_tobase_map(root: Path, ticker_map: Path) -> None:
              *[f"- {rule} not applied ({why})"
                for rule, why in ov.overridden],
              "Delete the ticker.map line to use the master's pair, or "
-             "keep it: `taxjson update-tobase-map` lists these too.",
+             "keep it: `tjs update-tobase-map` lists these too.",
              prog=_PROG)
     if ov.internal:
         _say("note", f"{TB.TOBASE_MAP}: {len(ov.internal)} of its line(s) "
@@ -8017,7 +8006,7 @@ def _say_tobase_map(root: Path, ticker_map: Path) -> None:
              *[f"- {rule} not applied ({why})"
                for rule, why in ov.internal],
              f"Usually a line you edited beside the master's: keep one of "
-             f"the two (`taxjson update-tobase-map` lists your edits).",
+             f"the two (`tjs update-tobase-map` lists your edits).",
              prog=_PROG)
 
 
@@ -8067,7 +8056,7 @@ def _say_xlist_losses(root: Path, cfg: Dict[str, Any], cache: Path, *,
         head, details = XR.message(f.record(), country)
         _say_once(("xlist-loss", f.loss_symbol, f.other_symbol), "warning",
                   head, *details, indent="  ", file=sys.stdout,
-                  cmd="taxjson ticker-map --suggest")
+                  cmd="tjs ticker-map --suggest")
     if len(found) > XR.RADAR_SHOWN:
         # The rest counted in one line (third pre-release review,
         # finding 9: one Warning per pair flooded the console).
@@ -8110,7 +8099,7 @@ def _say_similar_losses(root: Path, cfg: Dict[str, Any], cache: Path
                   "warning", head, *details, indent="  ", file=sys.stdout,
                   short=f"similar fund in a loss's window: {f.loss_symbol} "
                         f"sold at a loss, {f.other_symbol} bought "
-                        f"(SIMILAR) — `taxjson run --details`")
+                        f"(SIMILAR) — `tjs run --details`")
     if len(found) > SIM.SHOWN:
         head, details = SIM.more_message(len(found) - SIM.SHOWN, country)
         _say_once(("similar-loss-more",), "warning", head, *details,
@@ -8197,7 +8186,7 @@ def _say_option_transition(root: Path, cfg: Dict[str, Any]) -> None:
                   indent="  ", file=sys.stdout,
                   short=f"{len(asked)} option contract(s) written in "
                         f"{_wys}: is {_tot:,.2f} of premium taxed in "
-                        f"{year} right? — `taxjson checklist --run`")
+                        f"{year} right? — `tjs checklist --run`")
 
 
 def _say_export_coverage(root: Path, cfg: Dict[str, Any]) -> None:
@@ -8551,7 +8540,7 @@ def stage_own_account_moves(root: Path, cfg: Dict[str, Any],
              f"({u['date_in']}), but the quantities do not pair",
              f"The pairing took {u['qty']:g} of the units as one move of "
              f"your own: {u['from']}'s lots for them go to {u['to']}."
-             + _rest + " Check the transfer rows (`taxjson transfers`) "
+             + _rest + " Check the transfer rows (`tjs transfers`) "
              "and the sales of those shares (US-BASIS-05).", indent="  ")
     if partial and strict:
         _die(f"--strict: {len(partial)} transfer(s) between your own "
@@ -9233,7 +9222,7 @@ def _shell_quote(p: Path) -> str:
 def _acquire_run_lock(cache: Path, *, closing: bool = False) -> None:
     """Hold an exclusive lock on work/.run.lock for the life of this
     process (released by the OS when it exits, however it exits). A
-    second `taxjson run` in the same project refuses in one line.
+    second `tjs run` in the same project refuses in one line.
     `closing`: close-year takes it too, so a run started while the year
     is closed refuses, and close-year refuses while a run is building
     the books it locks (backlog TJ-0924: the lock's totals came from
@@ -9242,7 +9231,7 @@ def _acquire_run_lock(cache: Path, *, closing: bool = False) -> None:
     serialized, as before."""
     global _RUN_LOCK_FH
     if _RUN_LOCK_FH is not None:
-        return                          # `taxjson run run` chains
+        return                          # `tjs run run` chains
     # safe_write.file_lock: created owner-only and never through a
     # symlink (a planted work/.run.lock link was opened "a+", creating
     # or appending to its target; 2026-10 security review LOW b).
@@ -9251,7 +9240,7 @@ def _acquire_run_lock(cache: Path, *, closing: bool = False) -> None:
     _nothing = "Nothing was written." if closing else "Nothing was run."
 
     def busy() -> None:
-        _die("another `taxjson run` (or `taxjson close-year`) is in "
+        _die("another `tjs run` (or `tjs close-year`) is in "
              "progress in this project",
              f"Wait for it to finish (or stop it), then re-run. "
              f"{_nothing}")
@@ -9264,7 +9253,7 @@ def _acquire_run_lock(cache: Path, *, closing: bool = False) -> None:
 
 
 def cmd_run(args: argparse.Namespace) -> None:
-    """`taxjson run` (_cmd_run). On a person's console without --details
+    """`tjs run` (_cmd_run). On a person's console without --details
     each message is one line (Essentials first, docs/output-style.md):
     said to the stages too (lib/stage_msg.CONCISE_ENV, whose own messages
     reach the console), and taken back when the run ends."""
@@ -9420,7 +9409,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
             _fp_started = input_fingerprint(root, cfg)
         except Exception:                # advisory, never a crash
             _fp_started = None
-    # The reports a full run replaces become `taxjson compare`'s
+    # The reports a full run replaces become `tjs compare`'s
     # `prev` snapshot (lib/compare.rotate_previous); a single-
     # account run keeps the full run's there before it replaces part
     # of them, and records that reports/ are partial (backlog
@@ -9431,7 +9420,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
     except Exception as _e:          # advisory, never a crash
         from taxjson.lib.cli_diag import is_no_space, no_space_text
         _say("warning", f"the previous reports were not kept for "
-             f"`taxjson compare`: "
+             f"`tjs compare`: "
              + (no_space_text(_e, "work/compare/")
                 if is_no_space(_e) else str(_e)), prog=_PROG)
     # --fast trusts cached stages only when they were built by THIS code
@@ -9772,7 +9761,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
                  f"their accounts have inputs",
                  "sheltered_base.json was left unchanged (rebuilding it "
                  "without them would hide their purchases from the "
-                 "superficial-loss checks). Run `taxjson run` without "
+                 "superficial-loss checks). Run `tjs run` without "
                  "--account to rebuild every book.")
         _missing = [p.name for p in _others if not p.exists()]
         _sheltered_merge_inputs = (
@@ -9821,7 +9810,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
                  "above) — the wash pass cannot trust it",
                  "The usual cause is a malformed row from a corp-action "
                  "election; check the named account's DIAGNOSTICS in its "
-                 ".sum, fix the election (`taxjson elect <account> "
+                 ".sum, fix the election (`tjs elect <account> "
                  "--redo`) or the input row, and re-run.")
 
     taxable_outputs: List[Tuple[str, Dict[str, Path], bool]] = []
@@ -9997,7 +9986,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
     if not args.account and not pending_accounts:
         # A sheltered account never gets a wash pass. One re-typed from
         # taxable kept its old <name>_gains_wash.json / _wash.sum, which
-        # resolve_gains_files prefers forever — the "run a full `taxjson
+        # resolve_gains_files prefers forever — the "run a full `tjs
         # run`" remedy never cleared them (S038-19).
         for _n, _c in accounts.items():
             if (_c or {}).get("type") != "sheltered":
@@ -10051,7 +10040,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
             for ev in doc.get("pending", []):
                 opts = "|".join(o["election"] for o in ev.get("options",
                                                              []))
-                _sets.append(f"  taxjson elect {pe.account} --set "
+                _sets.append(f"  tjs elect {pe.account} --set "
                              f"{ev['event_id']}=<{opts}>")
         _shown = _out.width(sys.stderr) > 0
         if not _shown:
@@ -10065,11 +10054,11 @@ def _cmd_run(args: argparse.Namespace) -> None:
         # a person, flush-left like every continuation).
         _lines += [ln.strip() if _shown else ln for ln in _sets]
         _lines += _out.wrap(
-            "`taxjson elect --pending` shows what each option books "
+            "`tjs elect --pending` shows what each option books "
             "and the hints it needs (also in "
-            f"{_out.relpath(agg_path, root)}). Set each with `taxjson "
+            f"{_out.relpath(agg_path, root)}). Set each with `tjs "
             "elect ACCOUNT --set` (add --hint KEY=VALUE where "
-            "required), or run `taxjson run` at a terminal to be "
+            "required), or run `tjs run` at a terminal to be "
             "asked; then run again.", indent="" if _shown else "  ",
             stream=sys.stderr)
         _out.show(_lines, sys.stderr)
@@ -10191,8 +10180,8 @@ def _cmd_run(args: argparse.Namespace) -> None:
                      f"this run read them: {', '.join(_edited[:3])}"
                      + (" ..." if len(_edited) > 3 else ""),
                      "The books may hold the earlier version, so they "
-                     "are recorded as stale: run `taxjson run` again.",
-                     prog=_PROG, cmd="taxjson run")
+                     "are recorded as stale: run `tjs run` again.",
+                     prog=_PROG, cmd="tjs run")
         except Exception as _e:          # advisory, never a crash
             _say("warning", f"could not record the input fingerprint: "
                  f"{_e}", prog=_PROG)
@@ -10235,7 +10224,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
                 _say("warning", f"could not read {_out_relpath(_mp, root)} "
                      f"({_e})",
                      "Its elections are not checked for a FILING REQUIRED "
-                     f"reminder; fix the file (`taxjson elect {_name}` "
+                     f"reminder; fix the file (`tjs elect {_name}` "
                      "reads it too).", prog=_PROG)
                 continue
             for _rec in _recs:
@@ -10311,7 +10300,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
         try:
             if _ow(sys.stdout) > 0:
                 # Shown to a person: what differs, in a few lines
-                # (`taxjson sanity` has the tables).
+                # (`tjs sanity` has the tables).
                 _sanity_console(root)
             else:
                 cmd_sanity(argparse.Namespace(dir=str(root), items=[],
@@ -10346,10 +10335,10 @@ def _cmd_run(args: argparse.Namespace) -> None:
                      "holdings files",
                      "On a first project the likely cause is missing "
                      "history (purchases before your download starts: "
-                     "`taxjson find-missing-history`, "
+                     "`tjs find-missing-history`, "
                      "docs/getting-started.md step 5); later, same-day "
                      "trades not yet in the CSVs are the usual one; "
-                     "anything else is a booking problem (see `taxjson "
+                     "anything else is a booking problem (see `tjs "
                      "sanity`).", indent="  ")
         except Exception as _e:  # noqa: BLE001 — never break a run
             _say("warning", f"holdings sanity skipped: {_e}", indent="  ")
@@ -10368,10 +10357,10 @@ def _cmd_run(args: argparse.Namespace) -> None:
         _say("warning", f"single-account run ({args.account}): cross-account "
              f"{_rule_n} detection and the combined cross-account reports "
              f"were skipped",
-             "They keep the last full run's contents. Run `taxjson run` "
+             "They keep the last full run's contents. Run `tjs run` "
              "with no --account before filing.", prog=f"{_PROG} run",
              short=f"single-account run ({args.account}) skipped the "
-                   f"cross-account {_rule_n} pass, so `taxjson run` fully "
+                   f"cross-account {_rule_n} pass, so `tjs run` fully "
                    f"before filing")
 
 
@@ -10381,10 +10370,10 @@ _SANITY_SHOWN = 8
 # refused an input (exit 2) and printed its Error: never "no result",
 # never "positions differ" (audit 2026-10-25 brokers-inputs#1).
 _SANITY_REFUSED = ("The Error above names the file to fix; then "
-                   "`taxjson sanity`.")
+                   "`tjs sanity`.")
 # ... and under it when sanity stopped with a message (exit 1): the
 # reason is the line above.
-_SANITY_FIX = "Fix what it names; then `taxjson sanity`."
+_SANITY_FIX = "Fix what it names; then `tjs sanity`."
 
 
 def _sanity_failed_line(why: List[str]) -> str:
@@ -10398,11 +10387,11 @@ def _sanity_failed_line(why: List[str]) -> str:
         head = head[m.end():]
     head = re.sub(r"\s*\([^()]*\)\s*$", "", head).rstrip(" .:")
     return ("holdings check could not run"
-            + (f": {head}" if head else "") + " — `taxjson sanity`")
+            + (f": {head}" if head else "") + " — `tjs sanity`")
 
 
 def _holdings_folder_in_use(root: Path, cfg: Dict[str, Any]) -> bool:
-    """The year's holdings/ folder holds a snapshot `taxjson sanity`
+    """The year's holdings/ folder holds a snapshot `tjs sanity`
     compares (lib/holdings_dir)."""
     from taxjson.lib import holdings_dir as _HD
     folder, note = _HD.folder_for(root, (cfg.get("settings") or {})
@@ -10412,7 +10401,7 @@ def _holdings_folder_in_use(root: Path, cfg: Dict[str, Any]) -> bool:
 
 def _sanity_console(root: Path) -> None:
     """The run's holdings check as a person reads it on the console:
-    one message per finding with its few lines (`taxjson sanity` lists
+    one message per finding with its few lines (`tjs sanity` lists
     every row). Exits as cmd_sanity does (1 on a quantity difference,
     a message on a config problem)."""
     import contextlib
@@ -10457,8 +10446,8 @@ def _sanity_console(root: Path) -> None:
                             + ")" if len(per) > 1 else ""))
         _say("warning", f"{_n(len(rows), 'position differs', 'positions differ')}"
              f" from the broker's holdings files", *shown,
-             "`taxjson sanity` lists them. Fewer shares than the broker: "
-             "usually missing history (`taxjson find-missing-history`); "
+             "`tjs sanity` lists them. Fewer shares than the broker: "
+             "usually missing history (`tjs find-missing-history`); "
              "more: a trade after the last export.",
              file=sys.stdout)
     else:
@@ -10482,13 +10471,13 @@ def _sanity_console(root: Path) -> None:
         _say("note", f"{len(diffs)} of "
              f"{_n((doc.get('cost') or {}).get('compared', 0), 'position', 'positions')}"
              f" differ from the reports' cost ({unexpl} unexplained)",
-             "`taxjson sanity` lists them with their reasons (a broker's "
+             "`tjs sanity` lists them with their reasons (a broker's "
              "book value is not always your ACB).", file=sys.stdout)
     inc = doc.get("income_share_mismatches") or []
     if inc:
         _say("note", f"{_n(len(inc), 'dividend row states', 'dividend rows state')}"
              f" a share count the books did not hold",
-             "`taxjson sanity` lists them.", file=sys.stdout)
+             "`tjs sanity` lists them.", file=sys.stdout)
     if rows:
         raise SystemExit(1)
 
@@ -10554,7 +10543,7 @@ def _short_positions_note(account: str, symbols: List[str],
     that go short (_short_positions_cands) and bear on the tax year.
     `booked`: what the gains engine did with their sales
     (lib/first_run.engine_booking, the split the run's closing summary
-    and `taxjson sum` say too): "open" — not in any total —,
+    and `tjs sum` say too): "open" — not in any total —,
     "short_cover" — a short sale a later purchase closed, in the totals
     — or "matched" — sold from a purchase in the files."""
     shown = ", ".join(symbols[:5]) \
@@ -10566,7 +10555,7 @@ def _short_positions_note(account: str, symbols: List[str],
                 "Sales with no purchase in your files, unless they were "
                 "real short sales. Their gain is in the totals at the "
                 "covering purchase's cost — not yours if you held the "
-                "shares before your files start; `taxjson "
+                "shares before your files start; `tjs "
                 "find-missing-history` lists them with the fixes.")
     if booked == "matched":
         return (f"{len(symbols)} position(s) read short in {account}'s "
@@ -10579,7 +10568,7 @@ def _short_positions_note(account: str, symbols: List[str],
             f"({shown})",
             "Sales with no purchase in your files, unless they were real "
             "short sales. Until the purchase is supplied their gain is in "
-            "no total — `taxjson find-missing-history` lists them with "
+            "no total — `tjs find-missing-history` lists them with "
             "the fixes.")
 
 
@@ -10649,7 +10638,7 @@ def _report_short_positions(root: Path, settings: Dict[str, Any],
             # stage — is not shown either)
             _SHOWN_THIS_RUN.add(("short",) + key)
     # What the gains engine booked for each listed pair (the split the
-    # closing summary and `taxjson sum` make, lib/first_run.
+    # closing summary and `tjs sum` make, lib/first_run.
     # engine_booking): a short a later purchase of the year closed is IN
     # the totals — "in no total" said for it contradicted both. This
     # run's plain gains files: the cross-account wash pass has not yet
@@ -10721,9 +10710,9 @@ def _report_short_positions(root: Path, settings: Dict[str, Any],
         _say("note", f"{n} position{'' if n == 1 else 's'} went short "
              f"{when} {year} with missing history; no effect on {year}'s "
              f"numbers",
-             f"No purchase in your files and no {year} activity. `taxjson "
+             f"No purchase in your files and no {year} activity. `tjs "
              f"find-missing-history` lists {'it' if n == 1 else 'them'}; "
-             f"`taxjson find-missing-history --write-missing-history "
+             f"`tjs find-missing-history --write-missing-history "
              f"--outside-year` records {'it' if n == 1 else 'them'} in "
              f"inputs/<account>/missing_history.tt so the run stops listing "
              f"{'it' if n == 1 else 'them'}.", indent="  ",
@@ -10784,7 +10773,7 @@ def _first_run_summary(root: Path, cfg: Dict[str, Any], cache: Path,
                          arrivals=transfer_arrivals(root, cache,
                                                     cfg.get("accounts")))
     except Exception as e:                          # noqa: BLE001
-        emit_line(f"taxjson: warning: the closing summary could not be built "
+        emit_line(f"tjs: warning: the closing summary could not be built "
                   f"({type(e).__name__}: {e}).", file=sys.stderr)
         return
     import json as _json
@@ -10805,17 +10794,17 @@ def _first_run_summary(root: Path, cfg: Dict[str, Any], cache: Path,
 
 
 # The taxjson.toml template — every key, documented, per country — and
-# its renderer live in lib/config_template (`taxjson format` uses the
+# its renderer live in lib/config_template (`tjs format` uses the
 # same one, so a fresh scaffold is already formatted).
 def _render_init_config(country_canon: str,
                         year: Optional[int] = None,
                         extra: Optional[Dict[str, Any]] = None,
                         grant_since: Optional[int] = None
                         ) -> Tuple[str, Tuple[str, ...]]:
-    """(toml_text, account_names) for `taxjson init` — the same tuple
+    """(toml_text, account_names) for `tjs init` — the same tuple
     drives the inputs/ folder scaffold so config sections and input dirs
     can't drift apart. local_timezone is this machine's zone when it can
-    be read, else left commented (there is no default: `taxjson run`
+    be read, else left commented (there is no default: `tjs run`
     then asks for it when the project has a crypto account)."""
     from taxjson.lib import config_template as CT
     return CT.render_init(country_canon, year, tz=CT.system_timezone(),
@@ -10825,25 +10814,29 @@ def _render_init_config(country_canon: str,
 # A commented `ticker.map` stub. The pipeline runs fine without this file, so
 # every rule is left commented — it's here to document the format and the four
 # keywords so a user can populate it without hunting the README.
-# The ticker.map `taxjson init` writes is lib/ticker_map_format.
-# init_template(): the `taxjson format-map` layout with a commented-out
+# The ticker.map `tjs init` writes is lib/ticker_map_format.
+# init_template(): the `tjs format-map` layout with a commented-out
 # example per group, so format-map on a new project changes nothing.
 
-# Keep generated artifacts out of version control. `taxjson run` rebuilds all
+# Keep generated artifacts out of version control. `tjs run` rebuilds all
 # of these from inputs/ + taxjson.toml, so none of them need committing.
 _TEMPLATE_GITIGNORE = """\
-# Generated by `taxjson run` — rebuildable from inputs/ + taxjson.toml.
+# Generated by `tjs run` — rebuildable from inputs/ + taxjson.toml.
 # Anchored to this folder and its year folders, so filed/<year>/reports/
-# (the reports as filed, kept by `taxjson close-year`) is committed.
+# (the reports as filed, kept by `tjs close-year`) is committed.
 /work/
 /*/work/
 /reports/
 /*/reports/
 /export/
 /*/export/
-# The redacted copy `taxjson redact` makes to share (review it first).
+# The redacted copy `tjs redact` makes to share (review it first).
 /inputs_redact/
 /*/inputs_redact/
+# `tjs snapshot`'s copies: your real figures and exports again. Keep
+# them in a backup; delete these two lines to commit them too.
+/snapshot/
+/*/snapshot/
 # The lock a command holds while it rewrites a file beside it
 # (inputs/<account>/.sends.json.lock): not an input.
 .*.lock
@@ -10854,7 +10847,7 @@ _TEMPLATE_GITIGNORE = """\
 
 def _manifest_path_for(acct_dir: Path, cache: Path, name: str) -> Path:
     """The corp-action elections manifest the pipeline uses for an account.
-    Delegates to _resolve_manifest (read-only mode) so `taxjson elect` and
+    Delegates to _resolve_manifest (read-only mode) so `tjs elect` and
     the run pipeline can never disagree about which file is live — a
     legacy work/ manifest is migrated to inputs/ on first touch."""
     return _resolve_manifest(acct_dir, cache, name, create=False)
@@ -10918,12 +10911,12 @@ def _elections_section(doc, name: str, manifest_path: Path, root: Path,
         doc.item(f"{eid}: {_default_label(ev['kind'])}")
         doc.kv([("event", f"{ev['kind']} {ev['symbol']} on {ev['date']}"
                  .replace("spinoff", "spin-off")),
-                ("change", f"`taxjson elect {name} --set {eid}=<election>`"
+                ("change", f"`tjs elect {name} --set {eid}=<election>`"
                            f" (nothing saved: the run booked it without "
                            f"asking; no tax in the account depends on it)")],
                indent="  ")
     for eid, r in sorted(man.records.items()):
-        # A hand-typed key no rule knows: `taxjson run` refuses it, so
+        # A hand-typed key no rule knows: `tjs run` refuses it, so
         # say so here too (audit S072-16 — it was listed as if valid).
         bad = (known is not None and r.election
                and r.election not in known)
@@ -10937,8 +10930,8 @@ def _elections_section(doc, name: str, manifest_path: Path, root: Path,
         if r.notes:
             pairs.append(("notes", r.notes))
         if bad:
-            pairs.append(("fix", f"`taxjson run` refuses it; choose again "
-                                 f"with `taxjson elect {name} --redo "
+            pairs.append(("fix", f"`tjs run` refuses it; choose again "
+                                 f"with `tjs elect {name} --redo "
                                  f"--event {eid}`"))
         doc.kv(pairs, indent="  ")
     return len(man.records) + len(dflt)
@@ -10946,7 +10939,7 @@ def _elections_section(doc, name: str, manifest_path: Path, root: Path,
 
 def _elections_json_out(names: List[str], inputs_dir: Path,
                         cache: Path) -> None:
-    """`taxjson elect [ACCOUNT] --json`: {"accounts": {name: {event id:
+    """`tjs elect [ACCOUNT] --json`: {"accounts": {name: {event id:
     {election, summary, hints, notes[, saved: false]}}}} — each account's
     saved elections and the events the run booked by the sheltered
     default (nothing saved), one serializer for every view (backlog
@@ -10990,7 +10983,7 @@ def _elections_json_out(names: List[str], inputs_dir: Path,
 def _print_elections(names: List[str], inputs_dir: Path, cache: Path,
                      root: Path, country: Optional[str],
                      footer: str) -> None:
-    """The saved-elections listing of `taxjson elect [ACCOUNT]`."""
+    """The saved-elections listing of `tjs elect [ACCOUNT]`."""
     from taxjson.lib.out import Doc
     doc = Doc("CORPORATE-ACTION ELECTIONS")
     empty = []
@@ -11075,13 +11068,13 @@ def _wrong_country_section(doc, wrong: List[Dict[str, str]],
     know, each with the command that replaces it."""
     from taxjson.lib.country import display_name
     doc.section(f"NOT {display_name(country).upper()} ELECTIONS — "
-                f"`taxjson run` refuses them")
+                f"`tjs run` refuses them")
     for w in wrong:
         doc.item(f"{w['account']}: {w['event_id']} (saved: "
                  f"{w['election']})")
         from taxjson.lib.out import Verbatim
         doc.kv([("event", w["summary"]),
-                ("redo", Verbatim(f"taxjson elect {w['account']} --redo "
+                ("redo", Verbatim(f"tjs elect {w['account']} --redo "
                                   f"--event {w['event_id']}"))],
                indent="  ")
 
@@ -11098,7 +11091,7 @@ def _option_brief(desc: str) -> str:
 def _print_pending(root: Path, inputs_dir: Path, cache: Path,
                    agg: Dict[str, Any], wrong: List[Dict[str, str]],
                    country: str, details: bool = False) -> None:
-    """`taxjson elect --pending`: each deferred event with its options —
+    """`tjs elect --pending`: each deferred event with its options —
     a table of the options (first clause of what each books, the hint it
     needs) and one `--set` line to copy; with `details`, each option's
     whole description and its own ready `--set` line — and a last line
@@ -11145,7 +11138,7 @@ def _print_pending(root: Path, inputs_dir: Path, cache: Path,
             # without this marker, "did my --set take?" looked like NO
             # and users re-set (or overwrote) their election.
             doc.para(f"already elected: {rec.election} — re-run "
-                     f"`taxjson run` to apply", indent="  ")
+                     f"`tjs run` to apply", indent="  ")
         else:
             open_n += 1
         if not details:
@@ -11156,7 +11149,7 @@ def _print_pending(root: Path, inputs_dir: Path, cache: Path,
                        for o in opts], indent="  ", drop=(2,))
             _hinted = any(o.get("hints") for o in opts)
             doc.kv([("set", Verbatim(
-                f"taxjson elect {acct} --set {eid}=OPTION"
+                f"tjs elect {acct} --set {eid}=OPTION"
                 + (" [--hint KEY=VALUE]" if _hinted else "")))],
                 indent="  ")
             continue
@@ -11170,25 +11163,25 @@ def _print_pending(root: Path, inputs_dir: Path, cache: Path,
                      for h in hints]
             hint_args = "".join(f" --hint {h['key']}=..." for h in hints)
             pairs.append(("set", Verbatim(
-                f"taxjson elect {acct} --set {eid}={o['election']}"
+                f"tjs elect {acct} --set {eid}={o['election']}"
                 f"{hint_args}")))
             doc.kv(pairs, indent="     ")
     doc.blank()
     if open_n and not details:
         doc.line("What each option books, and its hints: "
-                 "taxjson elect --pending --details")
+                 "tjs elect --pending --details")
     if open_n:
-        # ONE short line: `taxjson checklist` shows it as the step's
+        # ONE short line: `tjs checklist` shows it as the step's
         # detail.
         doc.line(f"{open_n} election{'s' if open_n != 1 else ''} pending: "
-                 f"set each with `taxjson elect ACCOUNT --set`, then "
-                 f"`taxjson run`.")
+                 f"set each with `tjs elect ACCOUNT --set`, then "
+                 f"`tjs run`.")
     elif events:
         doc.line("Every pending event has an election saved: run "
-                 "`taxjson run` to apply them.")
+                 "`tjs run` to apply them.")
     else:
-        doc.line("Replace each of them with `taxjson elect ACCOUNT --redo "
-                 "--event ID`, then run `taxjson run`.")
+        doc.line("Replace each of them with `tjs elect ACCOUNT --redo "
+                 "--event ID`, then run `tjs run`.")
     doc.print()
 
 
@@ -11292,7 +11285,7 @@ def _foreign_pending_options(entry: Dict[str, Any], country: str
 
 def cmd_elect(args: argparse.Namespace) -> None:
     """View, clear, or redo corporate-action tax elections (taxable vs
-    rollover, FMV/ACB hints) that `taxjson run` otherwise prompts for once
+    rollover, FMV/ACB hints) that `tjs run` otherwise prompts for once
     and then reuses silently."""
     from taxjson.lib.corp_actions import Manifest
     from taxjson.lib import out as _out
@@ -11325,7 +11318,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
         if _also:
             fail(f"--pending lists the pending elections: it does not "
                  f"take {', '.join(_also)}",
-                 "Save an election without it: `taxjson elect ACCOUNT "
+                 "Save an election without it: `tjs elect ACCOUNT "
                  "--set EVENT_ID=ELECTION`. Nothing was saved.")
         # `elect ACCOUNT --pending`: that account's only (it listed
         # every account's; backlog TJ-0539).
@@ -11335,7 +11328,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
                  f"Accounts: {', '.join(accounts) or '(none)'}.")
         # A saved election the project's country does not know (a
         # Canadian rollover left in a project switched to usa) stops
-        # `taxjson run`; it is pending too (re-audit A2-0725).
+        # `tjs run`; it is pending too (re-audit A2-0725).
         from taxjson.lib.corp_views import (ViewError,
                                             wrong_country_elections)
         try:
@@ -11352,7 +11345,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
                 # One line, exit 2 — not a traceback (re-audit A2-0471,
                 # A2-0779, A2-1419, A2-1460). It is a work file `run`
                 # rebuilds.
-                fail(str(e), "A damaged work file: re-run `taxjson run "
+                fail(str(e), "A damaged work file: re-run `tjs run "
                      "--no-input` to rebuild it.")
             if scope:
                 doc["accounts"] = {a: d for a, d in doc["accounts"].items()
@@ -11384,7 +11377,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
                       prog=f"{_PROG} elect",
                       details=[f"It was written before this project's "
                                f"country became {display_name(country)}: "
-                               f"re-run `taxjson run --no-input` to "
+                               f"re-run `tjs run --no-input` to "
                                f"rebuild it."])
         _print_pending(root, inputs_dir, cache, doc, _wrong, country,
                        _details(args))
@@ -11393,7 +11386,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
         # --event scopes --redo/--reset; alone it was ignored and the
         # listing printed (backlog TJ-0539).
         fail("--event applies to --redo/--reset only",
-             f"For example: `taxjson elect "
+             f"For example: `tjs elect "
              f"{args.account or 'ACCOUNT'} --reset --event ID`. Nothing "
              f"was changed.")
 
@@ -11401,12 +11394,12 @@ def cmd_elect(args: argparse.Namespace) -> None:
     if not args.account:
         if args.redo or args.reset:
             fail("--redo/--reset need an account",
-                 "For example: `taxjson elect margin --redo`.")
+                 "For example: `tjs elect margin --redo`.")
         if getattr(args, "set", None) or getattr(args, "hint", None):
             # Falling through to the read-only listing here looked like
             # success (exit 0) while saving NOTHING (REVIEW #7).
             fail("--set/--hint need an account",
-                 "For example: `taxjson elect margin --set "
+                 "For example: `tjs elect margin --set "
                  "EVENT_ID=ELECTION`. Nothing was saved.")
         if getattr(args, "json", False):
             # Machine listing of SAVED elections (--pending --json
@@ -11415,7 +11408,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
             _elections_json_out(list(accounts), inputs_dir, cache)
             return
         _print_elections(list(accounts), inputs_dir, cache, root, country,
-                         "Redo one: `taxjson elect ACCOUNT --redo` (add "
+                         "Redo one: `tjs elect ACCOUNT --redo` (add "
                          "`--event ID` for just one event).")
         return
 
@@ -11432,7 +11425,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
         if args.redo or args.reset or getattr(args, "set", None):
             fail("--json applies to the listings only, not to "
                  "--set/--redo/--reset",
-                 "Listings: `taxjson elect [ACCOUNT] --json`, `taxjson "
+                 "Listings: `tjs elect [ACCOUNT] --json`, `tjs "
                  "elect --pending --json`.")
         # One account's elections — the all-accounts listing's entry
         # for it (it printed the text listing before; it left out the
@@ -11449,7 +11442,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
         if len(args.set) > 1:
             fail(f"{len(args.set)} --set flags — give ONE --set per "
                  f"command",
-                 f"Its --hint flags belong to it: run `taxjson elect "
+                 f"Its --hint flags belong to it: run `tjs elect "
                  f"{name} --set ...` once per event. Nothing was saved.")
         args.set = args.set[0]
     if getattr(args, "set", None):
@@ -11460,7 +11453,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
             _ex = "reorg_368" if country == "usa" else "rollover_s_85_1_5"
             fail("--set expects EVENT_ID=ELECTION",
                  f"For example `--set 20250317-abg-abh-1a2b={_ex}`; "
-                 f"`taxjson elect --pending` lists each event's "
+                 f"`tjs elect --pending` lists each event's "
                  f"choices.")
         event_id, election = args.set.split("=", 1)
         event_id, election = event_id.strip(), election.strip()
@@ -11468,7 +11461,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
             # A ""-keyed record could never be targeted by --event
             # afterwards (REVIEW #34).
             fail("--set: empty EVENT_ID (expected EVENT_ID=ELECTION)",
-                 "`taxjson elect --pending` lists the ids.")
+                 "`tjs elect --pending` lists the ids.")
         # PER-EVENT validation on every --set: the country-wide set
         # accepted e.g. a spinoff election for a merger, which only
         # exploded at the NEXT run as a raw KeyError traceback (REVIEW
@@ -11508,8 +11501,8 @@ def cmd_elect(args: argparse.Namespace) -> None:
             fail(f"work/pending_elections.json lists {event_id} with "
                  f"another country's elections",
                  f"It was written before this project's country became "
-                 f"{display_name(country)}. Re-run `taxjson run "
-                 f"--no-input` to rebuild it: `taxjson elect --pending` "
+                 f"{display_name(country)}. Re-run `tjs run "
+                 f"--no-input` to rebuild it: `tjs elect --pending` "
                  f"then lists the event's {display_name(country)} "
                  f"elections. Nothing was saved.")
         if pending_entry is not None:
@@ -11594,9 +11587,9 @@ def cmd_elect(args: argparse.Namespace) -> None:
             fail(f"{event_id!r} matches no pending event — nothing was "
                  f"saved",
                  f"It is no saved election either, and no corporate "
-                 f"action in {name}'s inputs. Check the id with `taxjson "
-                 f"elect --pending` (after a `taxjson run --no-input`) or "
-                 f"`taxjson elect {name}`.")
+                 f"action in {name}'s inputs. Check the id with `tjs "
+                 f"elect --pending` (after a `tjs run --no-input`) or "
+                 f"`tjs elect {name}`.")
 
         def _set(man) -> bool:
             prior = man.get(event_id)
@@ -11619,7 +11612,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
                  + [("file", _out.Verbatim(_manifest_shown(manifest_path,
                                                            root)))],
                  indent="  ")
-        _done.line("Run `taxjson run` to apply it.")
+        _done.line("Run `tjs run` to apply it.")
         _done.print()
         from taxjson.lib.corp_actions import declares_zero_value
         if declares_zero_value(election, hints):
@@ -11630,8 +11623,8 @@ def cmd_elect(args: argparse.Namespace) -> None:
                       f"value you declared",
                       prog=f"{_PROG} elect",
                       details=["No income and a $0 cost for the new "
-                               "shares; `taxjson run` lists it as an "
-                               "Info. To change it: `taxjson elect "
+                               "shares; `tjs run` lists it as an "
+                               "Info. To change it: `tjs elect "
                                f"{name} --redo --event {event_id}`."])
         elif ("fmv_per_share" in hints
                 and abs(hints["fmv_per_share"]) < 1e-12
@@ -11641,7 +11634,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
             _out.warn(f"fmv_per_share=0 books this {election} at $0",
                       prog=f"{_PROG} elect",
                       details=["No income and a $0 cost for the new "
-                               "shares. Every `taxjson run` and the "
+                               "shares. Every `tjs run` and the "
                                "checklist flag it until a value is "
                                "set."])
         from taxjson.lib.corp_actions import ALLOCATED_BASIS_HINT
@@ -11653,13 +11646,13 @@ def cmd_elect(args: argparse.Namespace) -> None:
                       prog=f"{_PROG} elect",
                       details=["They book at $0 and the parent keeps all "
                                "of it. Enter the allocated amount; every "
-                               "`taxjson run` and the checklist flag it "
+                               "`tjs run` and the checklist flag it "
                                "until then."])
         return
 
     if not (args.redo or args.reset):
         _print_elections([name], inputs_dir, cache, root, country,
-                         f"Redo all: `taxjson elect {name} --redo`; one "
+                         f"Redo all: `tjs elect {name} --redo`; one "
                          f"event: add `--event ID`; just clear: "
                          f"`--reset`.")
         return
@@ -11670,10 +11663,10 @@ def cmd_elect(args: argparse.Namespace) -> None:
         # TTY — the user's saved (non-rebuildable) elections were
         # already gone (REVIEW #4).
         fail("--redo asks again, so it needs a terminal",
-             f"Headless: `taxjson elect {name} --reset [--event ID]` to "
-             f"clear, then `taxjson elect {name} --set EVENT_ID=ELECTION` "
-             f"(ids and options: `taxjson elect --pending` after a "
-             f"`taxjson run --no-input`). Nothing was cleared.")
+             f"Headless: `tjs elect {name} --reset [--event ID]` to "
+             f"clear, then `tjs elect {name} --set EVENT_ID=ELECTION` "
+             f"(ids and options: `tjs elect --pending` after a "
+             f"`tjs run --no-input`). Nothing was cleared.")
     # `is not None`: --event '' (e.g. an unset shell variable) must NOT
     # silently widen to ALL elections (REVIEW #34 wiped everything).
     saved = Manifest.load(manifest_path)
@@ -11694,7 +11687,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
         _olds = sorted(o for o, n in aliases().items() if n == args.event)
         if len(_olds) != 1:
             fail(f"no election '{args.event}' for account '{name}'",
-                 f"`taxjson elect {name}` lists the event ids.")
+                 f"`tjs elect {name}` lists the event ids.")
         target = _olds[0]
     askable = None
 
@@ -11715,8 +11708,8 @@ def cmd_elect(args: argparse.Namespace) -> None:
             fail(f"--redo: {name} has no corporate-action export to ask "
                  f"again from",
                  f"Its saved elections were kept: nothing was cleared. "
-                 f"To clear one anyway (the next `taxjson run` asks only "
-                 f"if its event is back in the exports): `taxjson elect "
+                 f"To clear one anyway (the next `tjs run` asks only "
+                 f"if its event is back in the exports): `tjs elect "
                  f"{name} --reset --event ID`.")
         askable = _extracted_event_ids(acct_dir, name, root)
         if args.event is not None and current_id(target) not in askable:
@@ -11724,7 +11717,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
                  f"exports",
                  f"There is nothing to ask again about: its saved "
                  f"election was kept, nothing was cleared. To clear it "
-                 f"anyway: `taxjson elect {name} --reset --event "
+                 f"anyway: `tjs elect {name} --reset --event "
                  f"{args.event}`.")
         if any(e not in askable for e in saved.records):
             aliases()           # read before the lock is taken
@@ -11755,17 +11748,17 @@ def cmd_elect(args: argparse.Namespace) -> None:
                   f"{name}'s exports: {', '.join(sorted(kept))}",
                   prog=f"{_PROG} elect",
                   details=[f"--redo cannot ask again about them. To "
-                           f"clear one: `taxjson elect {name} --reset "
+                           f"clear one: `tjs elect {name} --reset "
                            f"--event ID`."])
 
     if args.reset:
-        print(f"Next `taxjson run` will re-prompt for them.")
+        print(f"Next `tjs run` will re-prompt for them.")
         return
 
     # --redo: re-prompt now by re-running corp-actions interactively.
     # Any failure or Ctrl-C mid-prompt RESTORES the pre-clear manifest —
     # elections are the one non-rebuildable user artifact (REVIEW #4).
-    # The same valuation inputs `taxjson run` passes (event-date rates,
+    # The same valuation inputs `tjs run` passes (event-date rates,
     # base currency, ticker.map): without them a cross-currency merger's
     # new shares were booked in the wrong currency, and a following
     # `run --fast` kept that corp file (A2-0981, A2-0982).
@@ -11792,7 +11785,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
     # about every event without an election and saved each answer, and
     # an interrupted redo kept them (backlog TJ-0847) — and its output,
     # which leaves out the events it did not ask about, is not the corp
-    # file `taxjson run` reads: it goes to a scratch folder, removed.
+    # file `tjs run` reads: it goes to a scratch folder, removed.
     _ask = (["--ask-event", current_id(target)] if target is not None
             else [])
     import tempfile as _tempfile
@@ -11851,7 +11844,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
                  f"The previous elections for '{name}' were restored, "
                  f"except {', '.join(sorted(conflicts))}: another command "
                  f"saved an election for it after the redo cleared it, "
-                 f"and that newer one was kept (`taxjson elect {name}` "
+                 f"and that newer one was kept (`tjs elect {name}` "
                  f"shows it).", code=1)
         fail("--redo interrupted",
              f"The previous elections for '{name}' were restored "
@@ -11863,7 +11856,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
     if not ran:
         print(f"No corp-action events to re-elect for '{name}'.")
     else:
-        print("\nElections saved. Run `taxjson run` to recompute.")
+        print("\nElections saved. Run `tjs run` to recompute.")
 
 
 def _tx_period_cutoff(period: str):
@@ -11921,7 +11914,7 @@ def _tx_period_cutoff(period: str):
 
 _TAX_YEAR_TOKENS = ("tax_year", "tax-year", "taxyear", "ty")
 
-# A literal 4-digit tax year is a valid PERIOD token: `taxjson events 2025`
+# A literal 4-digit tax year is a valid PERIOD token: `tjs events 2025`
 # scopes to calendar year 2025 (same shape the -sum roll-ups label
 # "tax year N").
 _YEAR_TOKEN_RE = re.compile(r"(19|20)\d{2}")
@@ -12014,7 +12007,7 @@ def _period_keep(period: str, root: Path):
 # Native (pre-base) per-account transaction file, in preference order: the raw
 # equity merge, then the crypto native (post fill-crypto-prices), then sorted.
 # These carry NATIVE currency with NO TOBASE / currency-to-base mapping —
-# exactly what `taxjson events` shows.
+# exactly what `tjs events` shows.
 _NATIVE_TX_SUFFIXES = ("_raw.json", "_filled.json", "_sorted.json")
 
 
@@ -12041,7 +12034,7 @@ def _discover_tx_accounts(cache: Path) -> List[str]:
 
 
 def _tx_display_line(tx: dict, settle: bool = False) -> Optional[str]:
-    """Human-readable line for `taxjson events`. Money amounts (total,
+    """Human-readable line for `tjs events`. Money amounts (total,
     fee, dividend/tax/interest/adjust amount) are shown to 2 decimals; quantity
     and per-share price keep their significant digits (a 0.0375 dividend rate
     or a 0.25178314 crypto qty must not be rounded away). Mirrors the .tt field
@@ -12288,7 +12281,7 @@ def _vprint(text: str = "", indent: str = "", hang: Optional[str] = None
 
 def _view_msg(kind: str, text: str, *details: str) -> None:
     """A query view's diagnostic on stderr in the house style
-    (docs/output-style.md): `taxjson <cmd>: <kind>: <headline>`, then
+    (docs/output-style.md): `tjs <cmd>: <kind>: <headline>`, then
     each detail indented. `kind`: note | warning."""
     from taxjson.lib import out
     out.emit(kind, text, prog=_cmd_prog(), details=details)
@@ -12335,12 +12328,12 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
         accounts = [account]
         if _native_tx_file(cache, account) is None:
             _die_input(f"no native transaction file for account "
-                       f"{account!r} in work/ — run `taxjson run` first, "
+                       f"{account!r} in work/ — run `tjs run` first, "
                        f"or check the name")
     else:
         accounts = _discover_tx_accounts(cache)
         if not accounts:
-            _die("no transaction files in work/ — run `taxjson run` first")
+            _die("no transaction files in work/ — run `tjs run` first")
         # S045-09 twin (audit A2-1182): an account with inputs but no
         # books was simply absent from trades/divs/events/roc.
         # An account whose stage failed has no native book: say so, as
@@ -12404,7 +12397,7 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
         _view_msg("note", f"{moved} income row(s) shown with their pay "
                   f"date belong to this window by their tax date",
                   "A Canadian trust's record date, a listed RIC January "
-                  "dividend (`taxjson tax-logic`), as in divs-sum / "
+                  "dividend (`tjs tax-logic`), as in divs-sum / "
                   "roc-sum.")
 
     # Chronological, oldest → latest (date, then time), across all accounts.
@@ -12559,11 +12552,11 @@ def _require_books(root: Path, account: Optional[str] = None,
     (no work/), a run that died before any book was written, or an
     account with no book. spinoffs, splits, transfers, edge-cases and
     fees-sum printed an empty report ('No spin-offs', nine 'None.'
-    sections) at rc 0 where their twins say 'run `taxjson run` first'
+    sections) at rc 0 where their twins say 'run `tjs run` first'
     (re-audit A2-0797, A2-1395)."""
     cache = root / "work"
     if not cache.is_dir():
-        _die("no work/ — run `taxjson run` first.")
+        _die("no work/ — run `tjs run` first.")
     names = set(_discover_tx_accounts(cache)) | {
         p.name[:-len("_base.json")] for p in cache.glob("*_base.json")
         if not p.name.startswith(".")
@@ -12576,15 +12569,15 @@ def _require_books(root: Path, account: Optional[str] = None,
     if account:
         if account not in names:
             _die(f"no books for account {account!r} in work/ — run "
-                 f"`taxjson run` first (an account with no inputs has no "
+                 f"`tjs run` first (an account with no inputs has no "
                  f"books).")
     elif not names and not extra:
-        _die("no books in work/ — run `taxjson run` first (or the last "
+        _die("no books in work/ — run `tjs run` first (or the last "
              "run stopped before writing any; see its error).")
 
 
 def cmd_transfers_view(args: argparse.Namespace) -> None:
-    """`taxjson transfers`: the custody-evidence view. TRANSFER rows
+    """`tjs transfers`: the custody-evidence view. TRANSFER rows
     are deliberately NOT tax events — a taxable book's basis comes from
     its buy/sell history, so the parse stage keeps them OUT of the
     books (in a sidecar) and `events` stays buysell-only. But a depot
@@ -12705,7 +12698,7 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
             if name not in _no_inputs and _has_inputs(root, name):
                 _view_msg("warning", f"no work/{p.name}: {name}'s "
                           f"in-book TRANSFER rows are not shown",
-                          "Run `taxjson run` to build it.")
+                          "Run `tjs run` to build it.")
             continue
         try:
             doc = _read_work_doc(p)
@@ -12781,7 +12774,7 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
         _view_msg("warning", f"transfer-ins not classified: {_why_not}",
                   "Each taxable transfer-in reads UNCLASSIFIED: whether "
                   "it is a move of your own or shares from outside your "
-                  "books is not known. Run `taxjson run` to rebuild work/.")
+                  "books is not known. Run `tjs run` to rebuild work/.")
     _tax_eq = {n for n, c in (cfg.get("accounts") or {}).items()
                if isinstance(c, dict) and c.get("type") == "taxable"
                and not c.get("crypto") and not c.get("transfers")}
@@ -12984,11 +12977,11 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
             "given; never booked as a $0 lot.",
             "in-kind_contribution / in-kind_withdrawal: a move between a "
             "taxable and a registered account, booked in the taxable "
-            "account as a sale / purchase at fair market value (`taxjson "
+            "account as a sale / purchase at fair market value (`tjs "
             "run` lists each).",
             "UNCLASSIFIED: neither paired with a transfer-out of yours nor "
             "read as an arrival — work/ could not be read (the warning "
-            "says which file): run `taxjson run`."])
+            "says which file): run `tjs run`."])
     _codes_section(doc)
     doc.print()
 
@@ -13002,7 +12995,7 @@ def _cannot_write_decisions(path, e: OSError) -> str:
 
 
 def cmd_crypto_sends(args: argparse.Namespace) -> None:
-    """`taxjson crypto-sends`: every outgoing crypto transfer that did
+    """`tjs crypto-sends`: every outgoing crypto transfer that did
     not arrive in another of your crypto accounts, with your decision (self /
     gift / payment), its fair value and the ready .tt line; --set
     records a decision, --write regenerates the account's crypto_sends.tt
@@ -13023,7 +13016,7 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
     if (sets or unsets or args.write) and not acct:
         if len(accts) != 1:
             _die("--set/--unset/--write need an account",
-                 f"`taxjson crypto-sends <{'|'.join(accts)}> --set ID="
+                 f"`tjs crypto-sends <{'|'.join(accts)}> --set ID="
                  f"{'|'.join(_send_decisions(_country(cfg.get('settings'))))}`")
         acct = accts[0]
     if (args.note is not None or args.price is not None
@@ -13037,7 +13030,7 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
     if not any((cache / f"{a}_{b}_transfers.json").exists()
                for a in accts for b in ("kraken", "coinbase")):
         _die("no crypto transfer evidence in work/",
-             "Run `taxjson run` first (the parse keeps withdrawals/sends "
+             "Run `tjs run` first (the parse keeps withdrawals/sends "
              "in work/<acct>_<exchange>_transfers.json).")
     if unsets:
         # Removing a saved decision needs no current evidence (A2-1163).
@@ -13049,14 +13042,14 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
                 if not CS.clear_decision(_man, sid):
                     _die(f"no saved decision for {sid!r} in "
                          f"{_sends_json_shown(root, acct)}.")
-                print(f"removed: {sid} (undecided again — `taxjson run` "
+                print(f"removed: {sid} (undecided again — `tjs run` "
                       f"asks, or `--set {sid}=...`)")
         except ValueError as e:
             _die(str(e))
         except OSError as e:
             _die_input(_cannot_write_decisions(_man, e))
-        print(f"Regenerate the .tt lines: `taxjson crypto-sends {acct} "
-              f"--write` (or just `taxjson run`).")
+        print(f"Regenerate the .tt lines: `tjs crypto-sends {acct} "
+              f"--write` (or just `tjs run`).")
         return
     files = _crypto_broker_files(root, cfg)
     # Evidence parsed before an export changed: a send that has since
@@ -13066,12 +13059,12 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
     if stale and (sets or args.write):
         _die(f"the transfer evidence is not current for "
              f"{'; '.join(stale)}",
-             "Run `taxjson run` first, then decide (a send may have "
+             "Run `tjs run` first, then decide (a send may have "
              "arrived since).")
     if stale:
         _view_msg("warning", f"the transfer evidence is not current for "
                   f"{'; '.join(stale)}",
-                  "Run `taxjson run` before deciding (a send may have "
+                  "Run `tjs run` before deciding (a send may have "
                   "arrived since).")
     try:
         if sets:
@@ -13126,7 +13119,7 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
                     paired = CS.matched_send(root, cfg, acct, sid, files)
                     if paired is None:
                         _die(f"no send {sid!r} in account {acct!r}",
-                             f"`taxjson crypto-sends {acct}` lists the "
+                             f"`tjs crypto-sends {acct}` lists the "
                              f"ids.")
                     if dec in CS.DISPOSING and not args.unpair:
                         # The pairing calls it your own move: a gift or
@@ -13157,8 +13150,8 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
                       f"{' (unpaired)' if unpair else ''}  "
                       f"({_sends_json_shown(root, acct)})")
             if not args.write:
-                print(f"Regenerate the .tt lines: `taxjson crypto-sends "
-                      f"{acct} --write` (or just `taxjson run`).")
+                print(f"Regenerate the .tt lines: `tjs crypto-sends "
+                      f"{acct} --write` (or just `tjs run`).")
                 return
         _price_fn = CS.yahoo_usd_price(root)
         report = CS.build_report(root, cfg, files, _price_fn, want=acct,
@@ -13169,7 +13162,7 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
             status, dups = _crypto_sends_tt(root, acct, report)
             n = len(CS.tt_entries(report["accounts"][acct])[0])
             print(f"{_sends_tt_shown(root, acct)}: {status} "
-                  f"({n} BUYSELL line(s)); `taxjson run` books it.")
+                  f"({n} BUYSELL line(s)); `tjs run` books it.")
             for w in _dup_warning(acct, dups, root):
                 _view_msg("warning", w)
             return
@@ -13221,7 +13214,7 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any],
                     f"{adoc['undecided']} undecided")
         if details or adoc["matched"]:
             doc.para(f"{adoc['matched']} matched to an arrival (self-"
-                     f"custody moves, `taxjson transfers`).", indent="  ")
+                     f"custody moves, `tjs transfers`).", indent="  ")
         _short = adoc.get("network_fees") or []
         if _short:
             # R1-26: the coins lost in transit paid the network fee — a
@@ -13328,7 +13321,7 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any],
                     f"fee needs a sale line.")
         else:
             last = (f"{_sends_tt_shown(root, acct)}: OUT OF DATE — run "
-                    f"`taxjson crypto-sends {acct} --write` (or `taxjson "
+                    f"`tjs crypto-sends {acct} --write` (or `tjs "
                     f"run`).")
         doc.para(last)
         for w in _dup_warning(acct, CS.duplicate_lines(
@@ -13343,7 +13336,7 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any],
                         details=(["Inputs or local_timezone changed? It "
                                   "is ignored."] if details else []))
         if adoc["undecided"]:
-            last = (f"Decide: taxjson crypto-sends {acct} --set "
+            last = (f"Decide: tjs crypto-sends {acct} --set "
                     f"ID={'self|payment' if _usa else 'self|gift|payment'}"
                     f" [--note TEXT]   (then --write)")
             doc.line(last)
@@ -13365,7 +13358,7 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any],
                      "US-dollar cash in these books, so this is a "
                      "foreign-currency gain: ITA s.39(1.1) taxes only the "
                      "year's NET currency gain beyond $200. With ledger v2 "
-                     "(fx_cash_ledger = \"v2\") `taxjson fx-cash` reads "
+                     "(fx_cash_ledger = \"v2\") `tjs fx-cash` reads "
                      "each of these sends as US dollars going out and "
                      "asks what it was: put its `fx-cash v2` line above "
                      "(proceeds= its value; kept for a send to your own "
@@ -13386,7 +13379,7 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any],
                      "US-dollar cash in these books, so this is a "
                      "foreign-currency gain: ITA s.39(1.1) taxes only the "
                      "year's NET currency gain beyond $200. It is NOT in "
-                     "any taxjson figure (`taxjson fx-cash` does not read "
+                     "any taxjson figure (`tjs fx-cash` does not read "
                      "it under the default ledger v1): add it by hand to "
                      "the year's net foreign-exchange gain or loss (the "
                      "fx-cash net before the $200) and apply the $200 to "
@@ -13502,7 +13495,7 @@ def _gains_artifact_scope(files, period_token,
             _die(f"work/ holds the gains of tax year "
                  f"{', '.join(sorted(years))} but [settings] year is "
                  f"{cfg_year}",
-                 f"Run `taxjson run` to rebuild for {cfg_year} (or pass "
+                 f"Run `tjs run` to rebuild for {cfg_year} (or pass "
                  f"the year the books cover).")
     in_scope = (tok in _TAX_YEAR_TOKENS or tok == ""
                 or (tok.isdigit() and tok in years))
@@ -13519,7 +13512,7 @@ def _warn_gains_artifact_scope(files, period_token,
                   f"{', '.join(sorted(years))} only — rows outside it are "
                   f"NOT in this report",
                   f"The requested window '{period_token}' may exceed that; "
-                  f"`taxjson gains` reads the full-history native books.")
+                  f"`tjs gains` reads the full-history native books.")
 
 
 _GAINS_ALL_SUFFIX = "_gains_all.json"
@@ -13703,7 +13696,7 @@ def _leaps_contracts(root: Path, account: Optional[str],
         # verdict about the books (2026-09 CLI audit B22).
         _die_input("no gains files in work/"
                    + (f" for account {account!r}" if account else "")
-                   + " — run `taxjson run` first",
+                   + " — run `tjs run` first",
                    "LEAPS come from the built books.")
     # An account with option gains but no native book: its LEAPS
     # entries are unknowable, and the report silently left them out with rc 0
@@ -13717,7 +13710,7 @@ def _leaps_contracts(root: Path, account: Optional[str],
     if _no_native:
         _die(f"no native transaction file (work/<account>_raw.json) for "
              f"account(s) {', '.join(_no_native)}, which have gains",
-             "Rerun `taxjson run` (this report would otherwise leave "
+             "Rerun `tjs run` (this report would otherwise leave "
              "their LEAPS out).")
     leaps: set = set()
     qty_by_symbol: Dict[str, float] = {}
@@ -13737,7 +13730,7 @@ def _leaps_contracts(root: Path, account: Optional[str],
             _renames = merge_renames(load_map_file(_tm), True)
         except Exception as e:                          # noqa: BLE001
             _die(f"could not read ticker.map: {e}",
-                 "Fix it (`taxjson run` refuses it too); the LEAPS report "
+                 "Fix it (`tjs run` refuses it too); the LEAPS report "
                  "would otherwise miss the renamed contracts.")
     from taxjson.bin.taxjson_ticker_map import map_symbol as _map_sym
     from taxjson.lib.corporate_timeline import dedupe_split_events
@@ -13867,7 +13860,7 @@ def cmd_leaps(args: argparse.Namespace) -> None:             # `leaps` view
     entries, found, basis = _leaps_closed(root, account, leaps, keep,
                                           _files)
     if not found:
-        _die_input("no gains files in work/ — run `taxjson run` first",
+        _die_input("no gains files in work/ — run `tjs run` first",
                    "Closed positions come from the gains engine.")
     if not entries:
         if getattr(args, "json", False):
@@ -14022,7 +14015,7 @@ def _leaps_closed(root: Path, account: Optional[str], leaps,
         _view_msg("warning", f"{tainted} LEAPS disposition(s) in this "
                   f"window have an unknown cost and need MANUAL reporting",
                   "No purchase in your files; not shown here (see "
-                  "`taxjson sum`).")
+                  "`tjs sum`).")
     return entries, found, basis
 
 
@@ -14047,7 +14040,7 @@ def cmd_leaps_sum(args: argparse.Namespace) -> None:
     entries, found, basis = _leaps_closed(root, account, leaps, keep,
                                           _files)
     if not found:
-        _die_input("no gains files in work/ — run `taxjson run` first",
+        _die_input("no gains files in work/ — run `tjs run` first",
                    "Gains come from the engine.")
     if not entries:
         if getattr(args, "json", False):
@@ -14203,8 +14196,8 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     if not resolved:
         if account:
             _die_input(f"no gains for account {account!r} in work/ — run "
-                       f"`taxjson run` first, or check the name")
-        _die_input("no gains files in work/ — run `taxjson run` first")
+                       f"`tjs run` first, or check the name")
+        _die_input("no gains files in work/ — run `tjs run` first")
     basis = gains_basis_label(resolved)
 
     agg: Dict[str, Dict[str, float]] = {}
@@ -14379,14 +14372,14 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
 
 
 def cmd_winners(args: argparse.Namespace) -> None:
-    """`taxjson winners [PERIOD] [ACCOUNT] [--top N]`: the biggest
+    """`tjs winners [PERIOD] [ACCOUNT] [--top N]`: the biggest
     realized WINNERS over a window (default: the tax year), positive
     gains only, best first (`losers` is the other side)."""
     _ranked_view(args, "winners")
 
 
 def cmd_losers(args: argparse.Namespace) -> None:
-    """`taxjson losers [PERIOD] [ACCOUNT] [--top N]`: the biggest
+    """`tjs losers [PERIOD] [ACCOUNT] [--top N]`: the biggest
     realized LOSERS over a window (default: the tax year), negative
     gains only, worst first (`winners` is the other side)."""
     _ranked_view(args, "losers")
@@ -14420,7 +14413,7 @@ def _ranked_view(args: argparse.Namespace, side: str) -> None:
     if resolved and not account:
         _warn_accounts_without_books(root, resolved, side, "gains file")
     if not resolved:
-        _die_input("no gains files in work/ — run `taxjson run` first")
+        _die_input("no gains files in work/ — run `tjs run` first")
     basis = gains_basis_label(resolved)
     _INCOME = {"DIVIDEND", "DIVIDEND_IN_LIEU", "TAX", "INTEREST",
                "FEE", "DISALLOW", "ADJUST"}
@@ -14631,7 +14624,7 @@ def _ranked_view(args: argparse.Namespace, side: str) -> None:
 
 
 def cmd_stats(args: argparse.Namespace) -> None:
-    """`taxjson stats [YEAR] [ACCOUNT] [--all-history] [--json]`: win/lose
+    """`tjs stats [YEAR] [ACCOUNT] [--all-history] [--json]`: win/lose
     statistics on closed trades per asset class (lib/trade_stats) —
     economic P/L in the base currency before any superficial-loss /
     wash-sale denial, the denied total on its own line. A view, never a
@@ -14946,8 +14939,8 @@ def _warn_accounts_without_books(root: Path, have, label: str,
                      if n not in have and n not in skipped
                      and _has_inputs(root, n))
     if missing:
-        print(f"taxjson {label}: warning: no {what} for account(s) "
-              f"{', '.join(missing)} (the last `taxjson run` did not "
+        print(f"tjs {label}: warning: no {what} for account(s) "
+              f"{', '.join(missing)} (the last `tjs run` did not "
               f"build it — did it fail?) — their rows are NOT in this "
               f"report.", file=sys.stderr)
 
@@ -14972,12 +14965,12 @@ def _collect_period_txs(args: argparse.Namespace, label: str, actions,
         accounts = [account]
         if _native_tx_file(cache, account) is None:
             _die_input(f"no native transaction file for account "
-                       f"{account!r} in work/ — run `taxjson run` first, "
+                       f"{account!r} in work/ — run `tjs run` first, "
                        f"or check the name")
     else:
         accounts = _discover_tx_accounts(cache)
         if not accounts:
-            _die("no transaction files in work/ — run `taxjson run` first")
+            _die("no transaction files in work/ — run `tjs run` first")
         _warn_accounts_without_books(root, accounts, label,
                                      "transaction file")
 
@@ -15102,9 +15095,9 @@ def _dist_adjust_rows(cache: Path, accounts, keep) -> List[Tuple[str, dict]]:
     if missing and not warned_missing_base_once(missing):
         # The map's adjustments live only in the base books: without
         # one they vanished from roc / roc-sum with rc 0 (A2-1128).
-        emit_line(f"taxjson: warning: taxjson.toml has [[distributions]] but "
+        emit_line(f"tjs: warning: taxjson.toml has [[distributions]] but "
                   f"{', '.join(missing)} is missing in {cache} (the last "
-                  f"`taxjson run` did not build it) — that account's map "
+                  f"`tjs run` did not build it) — that account's map "
                   f"ACB adjustments are NOT in this report.", file=sys.stderr)
     return out
 
@@ -15140,7 +15133,7 @@ def _load_json_or_die(path: Path) -> Any:
         return _read_work_doc(path)
     except (OSError, ValueError) as e:
         _die_input(f"could not read {_work_read_why(path, e)} — rerun "
-                   f"`taxjson run` (this view would otherwise leave that "
+                   f"`tjs run` (this view would otherwise leave that "
                    f"file's rows out).")
 
 
@@ -15338,7 +15331,7 @@ def _staking_rows(args: argparse.Namespace):
         if not path.is_file():
             if selected or _has_inputs(root, acct):
                 _die_input(f"no base-currency book for {acct!r} — run "
-                           "`taxjson run` first; staking totals need its "
+                           "`tjs run` first; staking totals need its "
                            "saved prices and exchange rates")
             continue
         crypto = (configured.get(acct) or {}).get("crypto") is True
@@ -15353,23 +15346,23 @@ def _staking_rows(args: argparse.Namespace):
                 _date.fromisoformat(when)
             except ValueError:
                 _die_input(f"{path.name}: invalid reward/acquisition date "
-                           f"{when!r} — rerun `taxjson run`")
+                           f"{when!r} — rerun `tjs run`")
             if not keep(when):
                 continue
             if str(tx.get("currency") or "").strip().upper() != currency.upper():
                 _die_input(f"{path.name}: {tx.get('symbol', '?')} on {when} "
-                           f"is not in {currency} — rerun `taxjson run` "
+                           f"is not in {currency} — rerun `tjs run` "
                            "before totalling staking")
             if action == "DIVIDEND":
                 facts = tx.get("staking_reward") or {}
                 if not isinstance(facts, dict):
                     _die_input(f"{path.name}: damaged staking evidence — "
-                               "rerun `taxjson run`")
+                               "rerun `tjs run`")
                 if facts:
                     try:
                         validate_staking_reward(facts, path.name)
                     except ValueError as exc:
-                        _die_input(f"{exc} — rerun `taxjson run`")
+                        _die_input(f"{exc} — rerun `tjs run`")
                 broker = str(facts.get("broker") or "unknown")
                 if args.symbol and str(tx.get("symbol") or "").casefold() != args.symbol.casefold():
                     continue
@@ -15381,7 +15374,7 @@ def _staking_rows(args: argparse.Namespace):
                         # without one is a book built before the evidence.
                         if not str(tx.get("source") or "").lower().endswith(".tt"):
                             _die_input(f"{path.name}: exchange is unknown for a reward "
-                                       "in this window — rerun `taxjson run` before "
+                                       "in this window — rerun `tjs run` before "
                                        "filtering staking by exchange")
                         tt_rewards += 1
                     continue
@@ -15389,7 +15382,7 @@ def _staking_rows(args: argparse.Namespace):
     if tt_rewards:
         _say("note", f"{tt_rewards} reward(s) in this window come from .tt "
              f"lines, which name no exchange: not in --broker {args.broker}",
-             "`taxjson staking --broker unknown` lists them.")
+             "`tjs staking --broker unknown` lists them.")
     return rows, scope, currency, country, settings
 
 
@@ -15596,7 +15589,7 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
 
 
 def cmd_div_estimate(args: argparse.Namespace) -> None:
-    """`taxjson div-estimate [PERIOD] [ACCOUNT] [--months N] [--date D]`:
+    """`tjs div-estimate [PERIOD] [ACCOUNT] [--months N] [--date D]`:
     upcoming dividends projected from each held position's own dividend
     history in the books (lib/div_estimate; CA-PLAN-06 / US-PLAN-07).
     The history is the native books (work/<acct>_raw.json, what
@@ -15648,7 +15641,7 @@ def cmd_div_estimate(args: argparse.Namespace) -> None:
         _die_input(f"no [accounts.{account}] in taxjson.toml",
                    "Check the name.")
     if not cache.is_dir():
-        _die("no work/ — run `taxjson run` first.")
+        _die("no work/ — run `tjs run` first.")
     groups = _account_group_of(root)
     rows: List[Tuple[str, Dict[str, Any]]] = []
     positions: List[Dict[str, Any]] = []
@@ -15691,10 +15684,10 @@ def cmd_div_estimate(args: argparse.Namespace) -> None:
         _view_msg("warning", f"no native books for {', '.join(missing)} "
                   f"(work/<account>_raw.json, _raw_gains.json): not "
                   f"estimated",
-                  "Run `taxjson run`; a raw holdings view skipped for "
+                  "Run `tjs run`; a raw holdings view skipped for "
                   "mixed currencies leaves an account out too.")
     if not rows and not positions and not missing:
-        _die("no books in work/ — run `taxjson run` first.")
+        _die("no books in work/ — run `tjs run` first.")
     base = _base_currency(root)
     hist = load_fx_history(cache / "to_base.csv", base)
 
@@ -15731,7 +15724,7 @@ def cmd_div_estimate(args: argparse.Namespace) -> None:
                   "one: the books likely miss a purchase or a transfer "
                   "in before it. The estimate counts the payment as "
                   "income.",
-                  "Find the missing trade: `taxjson find-missing-history`.")
+                  "Find the missing trade: `tjs find-missing-history`.")
     doc = DE.estimate(positions, pays, as_of=as_of,
                       months=months, tax_year=year, base=base, fx=_fx,
                       income_date=rules.income_date if rules else None,
@@ -15840,7 +15833,7 @@ def _closed_trade_inputs(args: argparse.Namespace, root: Path,
                 label, "gains file")
     if not resolved:
         what = (f"account {account!r}" if account else "a taxable account")
-        _die(f"no books for {what} in work/ — run `taxjson run` first")
+        _die(f"no books for {what} in work/ — run `tjs run` first")
     books: Dict[str, list] = {}
     base_rows: Dict[str, list] = {}
     gains: Dict[str, Dict[str, Any]] = {}
@@ -15849,7 +15842,7 @@ def _closed_trade_inputs(args: argparse.Namespace, root: Path,
         bpath = cache / f"{acct}_base.json"
         if not bpath.is_file():
             _die(f"no base-currency book for account {acct!r} "
-                 f"(work/{bpath.name})", "Run `taxjson run` first.")
+                 f"(work/{bpath.name})", "Run `tjs run` first.")
         base_rows[acct] = list(_load_json_or_die(bpath).get("transactions")
                                or [])
         books[acct] = base_rows[acct] + _option_openings(root,
@@ -16230,7 +16223,7 @@ def _acb_pools(root: Path, cache: Path, gains: Dict[str, Dict[str, Any]],
 
 
 def cmd_win_rates(args: argparse.Namespace) -> None:
-    """`taxjson win-rates [SYMBOL...] [PERIOD] [ACCOUNT] [--by
+    """`tjs win-rates [SYMBOL...] [PERIOD] [ACCOUNT] [--by
     symbol|account|month|class] [--all-history] [--json]`: the win
     rate of every closed trade in the window, grouped per share
     listing (an option under its underlying) by default, else per
@@ -16375,7 +16368,7 @@ def _out_act_prefix() -> str:
 
 
 def cmd_option_yield(args: argparse.Namespace) -> None:
-    """`taxjson option-yield [UNDERLYING...] [PERIOD] [ACCOUNT] [--json]`:
+    """`tjs option-yield [UNDERLYING...] [PERIOD] [ACCOUNT] [--json]`:
     how the option trades on an underlying did over a window — premiums
     in and out, the profit or loss of the contracts closed in it and
     how they closed, what is still open, and the yield on the strike
@@ -16403,13 +16396,13 @@ def cmd_option_yield(args: argparse.Namespace) -> None:
     args.period, args.account = period, account
     keep, scope, account = _view_window(args, root)
     if not cache.is_dir():
-        _die("no work/ — run `taxjson run` first.")
+        _die("no work/ — run `tjs run` first.")
     accounts = ([account] if account else _discover_tx_accounts(cache))
     if account and _native_tx_file(cache, account) is None:
         _die_input(f"no native transaction file for account {account!r} "
-                   f"in work/ — run `taxjson run` first, or check the name")
+                   f"in work/ — run `tjs run` first, or check the name")
     if not accounts:
-        _die("no transaction files in work/ — run `taxjson run` first")
+        _die("no transaction files in work/ — run `tjs run` first")
     if not account:
         _warn_accounts_without_books(root, accounts, "option-yield",
                                      "transaction file")
@@ -16942,7 +16935,7 @@ def _real_world_legs(t: dict) -> Tuple[float, float]:
 
 
 def _gain_display_line(g: dict) -> str:
-    """A realized-gain (disposition) row for `taxjson gains`: money columns
+    """A realized-gain (disposition) row for `tjs gains`: money columns
     (proceeds/cost/gain) to 2 decimals, quantity keeps significant digits.
     A short row's legs are shown the real-world way (_real_world_legs)."""
     money = fmt_money               # shared report-layer formatter
@@ -16985,9 +16978,9 @@ def cmd_gains(args: argparse.Namespace) -> None:
                      "native books are skipped after a cross-currency "
                      "rollover rename (see the run's 'raw holdings "
                      "skipped' line) — rerunning will not create them; "
-                     "its converted gains are in `taxjson sum`.")
+                     "its converted gains are in `tjs sum`.")
             _die_input(f"no native gains for account {account!r} in work/",
-                       "Crypto has none; else run `taxjson run`, or check the "
+                       "Crypto has none; else run `tjs run`, or check the "
                        "name.")
     else:
         accounts = sorted(p.name[: -len(suffix)]
@@ -17008,7 +17001,7 @@ def cmd_gains(args: argparse.Namespace) -> None:
                 # with no word while `sum` counted it (R1-274).
                 _view_msg("note", f"crypto account {_n!r} is not shown "
                           f"(crypto has no native-currency gains)",
-                          "Its gains are in `taxjson sum` / `taxjson "
+                          "Its gains are in `tjs sum` / `tjs "
                           "winners`.")
             elif (isinstance(_c, dict) and not _c.get("crypto")
                     and _n not in accounts
@@ -17017,10 +17010,10 @@ def cmd_gains(args: argparse.Namespace) -> None:
                 _view_msg("note", f"account {_n!r} has no native gains",
                           "The last run skipped its native books (see its "
                           "'raw holdings skipped' line); its converted "
-                          "gains are in `taxjson sum` / `taxjson "
+                          "gains are in `tjs sum` / `tjs "
                           "winners`.")
         if not accounts and not _noted:
-            _die_input("no native gains files in work/ — run `taxjson run` "
+            _die_input("no native gains files in work/ — run `tjs run` "
                        "first")
         # S045-09 twin (audit A2-1182): accounts with books are named by
         # the notes above; one with inputs but no books at all is not.
@@ -17075,7 +17068,7 @@ def cmd_gains(args: argparse.Namespace) -> None:
         _view_msg("note", f"{manual} sale(s) with unknown cost are not "
                   f"shown",
                   "Shares bought before the data (.tt OPENING cost=unknown): "
-                  "their basis is unknown; `taxjson form-export` lists "
+                  "their basis is unknown; `tjs form-export` lists "
                   "them for manual reporting.")
     rows.sort(key=lambda r: (r[0], r[1]))
     if getattr(args, "json", False):
@@ -17220,7 +17213,7 @@ def _issuer_names_match(a: str, b: str) -> bool:
 
 
 def cmd_tips(args: argparse.Namespace) -> None:
-    """`taxjson tips`: advice for next year — where you hold what costs
+    """`tjs tips`: advice for next year — where you hold what costs
     tax it need not. It changes no number of this year. Canada checks
     today:
 
@@ -17249,7 +17242,7 @@ def cmd_tips(args: argparse.Namespace) -> None:
     equivalent (fractional, CAD-hedged, floating ratio) — never map it;
     nothing to do: look-alike listings are never joined.
 
-    The map's own hygiene is `taxjson ticker-map --suggest`: a loss on
+    The map's own hygiene is `tjs ticker-map --suggest`: a loss on
     one listing with the other bought in its window (lib/
     xlist_loss_radar), a same-root listing pair the map does not answer
     (MAP-GAP, lib/map_hygiene.map_gaps) and the rules no symbol reaches
@@ -17306,7 +17299,7 @@ def cmd_tips(args: argparse.Namespace) -> None:
             # unreadable report into a false all-clear: the findings on
             # that account's positions vanished (S049-10).
             _die_input(f"could not read reports/{f.name}: {e}",
-                       "Re-run `taxjson run` to rebuild it (tips would "
+                       "Re-run `tjs run` to rebuild it (tips would "
                        "otherwise leave that account's positions out).")
     _equity_accts = [n for n, c in accounts.items()
                      if not (c or {}).get("crypto")]
@@ -17316,9 +17309,9 @@ def cmd_tips(args: argparse.Namespace) -> None:
         if set(_equity_accts) <= _accounts_skipped_for_no_inputs(root):
             _die_input("no account has any input yet — nothing to check.",
                        "Drop broker CSVs into inputs/<account>/ and "
-                       "`taxjson run`.")
+                       "`tjs run`.")
         _die_input("no holdings reports in reports/ — nothing was checked",
-                   "Run `taxjson run` first (tips read the per-listing "
+                   "Run `tjs run` first (tips read the per-listing "
                    "positions).")
 
     # Dividend payers, per raw (pre-consolidation) symbol.
@@ -17338,7 +17331,7 @@ def cmd_tips(args: argparse.Namespace) -> None:
             data = _read_work_doc(f)
         except (OSError, ValueError) as e:
             _die_input(f"could not read {f}: {e}",
-                       "Re-run `taxjson run` (tips would otherwise leave "
+                       "Re-run `tjs run` (tips would otherwise leave "
                        "that file's rows out).")
         for t in data.get("transactions", []):
             if t.get("action") in ("DIVIDEND", "DIVIDEND_IN_LIEU"):
@@ -17377,7 +17370,7 @@ def cmd_tips(args: argparse.Namespace) -> None:
                               for pair in _tmap.distinct}
         except Exception as e:
             from taxjson.lib.out import warn as _warn
-            _warn(f"could not read ticker.map: {e}", prog="taxjson tips")
+            _warn(f"could not read ticker.map: {e}", prog="tjs tips")
     renames_u = {k.upper(): v.upper() for k, v in renames.items()}
 
     # The issuer's domicile, never the listing alone (a US listing of a
@@ -17512,7 +17505,7 @@ def cmd_tips(args: argparse.Namespace) -> None:
                     _ca = " or ".join(_ca_twins(rt, sym_u))
                     _chk = ("" if _twins_proved(rt, sym_u) else
                             f" (verify {_ca} is the same security first: "
-                            f"only the letters match — `taxjson "
+                            f"only the letters match — `tjs "
                             f"ticker-map --suggest` lists the pair)")
                     findings.append((
                         "US-LISTING", name, sym,
@@ -17548,7 +17541,7 @@ def cmd_tips(args: argparse.Namespace) -> None:
     if getattr(args, "online", False) and _offline():
         # The documented kill switch covers this probe too: it sends
         # every held and dividend ticker to Yahoo (S042-12, S048-00).
-        note("taxjson tips", "TAXJSON_OFFLINE is set — the --online "
+        note("tjs tips", "TAXJSON_OFFLINE is set — the --online "
              "Yahoo Finance probe is skipped",
              details=["MAP-GAP?/MAP-BAD?/CDR-PAIR are not checked; the "
                       "offline checks below still ran."])
@@ -17558,7 +17551,7 @@ def cmd_tips(args: argparse.Namespace) -> None:
         except ImportError:
             from taxjson.lib.out import warn as _warn
             _warn("--online needs yfinance (pip install -e '.[fx]'); "
-                  "skipping the probe.", prog="taxjson tips")
+                  "skipping the probe.", prog="tjs tips")
         else:
             # The book symbol (ZZQ.US, ZZQ.B.TO) is not Yahoo's spelling:
             # every probe goes through the project's QUOTE lines, else
@@ -17662,7 +17655,7 @@ def cmd_tips(args: argparse.Namespace) -> None:
                 | {renames_u[s] for s in held_syms if s in renames_u}
                 | {k for k, v in renames_u.items() if v in held_syms})
             if len(_probe_list) > _NAME_CAP:
-                note("taxjson tips",
+                note("tjs tips",
                      f"probing issuer names for the first {_NAME_CAP} "
                      f"of {len(_probe_list)} held listings",
                      details=["Alphabetical; the remainder are NOT "
@@ -17750,7 +17743,7 @@ def cmd_tips(args: argparse.Namespace) -> None:
 
     if getattr(args, "json", False):
         # schema 2: the unused-rule notes and cross-listing loss
-        # findings are `taxjson ticker-map --suggest`'s now.
+        # findings are `tjs ticker-map --suggest`'s now.
         print(json.dumps({"schema_version": 2, "findings": [
             {"check": c, "account": a, "symbol": sy, "message": m}
             for c, a, sy, m in findings],
@@ -17766,8 +17759,8 @@ def cmd_tips(args: argparse.Namespace) -> None:
         out.warn("not read (no "
                  + "; ".join(f"{n}: {w}"
                              for n, w in sorted(unscanned.items()))
-                 + ")", prog="taxjson tips",
-                 details=["Re-run `taxjson run` to rebuild them."])
+                 + ")", prog="tjs tips",
+                 details=["Re-run `tjs run` to rebuild them."])
     if not findings:
         doc.blank()
         if unscanned:
@@ -17948,7 +17941,7 @@ def _box18_into_estimate(root: Path, est: Dict[str, float], accounts,
             _die_input(f"could not read {_work_read_why(p, e, root)}",
                        "It holds the capital-gains dividends "
                        "[[capital_gains_dividends]] names. Re-run "
-                       "`taxjson run` to rebuild it.")
+                       "`tjs run` to rebuild it.")
         for t in data.get("transactions", []):
             f = fr.get((acct, str(t.get("id"))))
             if not f or t.get("action") != "DIVIDEND":
@@ -18049,7 +18042,7 @@ def _fold_estimate_income(res: Dict[str, Any], acct: str,
 
 
 def cmd_plot_tax(args: argparse.Namespace) -> None:
-    """`taxjson plot-tax [--other-income AMT] [--other-losses AMT]
+    """`tjs plot-tax [--other-income AMT] [--other-losses AMT]
     [--deductions AMT] [--carrying-charges AMT] [--long-term-losses
     AMT] [--province P] [--json]`: the tax the year's investment income
     generated month by month as an ASCII chart against the year's
@@ -18093,7 +18086,7 @@ def cmd_plot_tax(args: argparse.Namespace) -> None:
              if a in taxable}
     if not files:
         _die_input("no gains files for a taxable account in work/",
-                   "Run `taxjson run` first.")
+                   "Run `tjs run` first.")
     _warn_artifact_year(files, year)
     _warn_run_state(root, cfg)
     oi, ol = _estimate_inputs(root, args)
@@ -18109,7 +18102,7 @@ def cmd_plot_tax(args: argparse.Namespace) -> None:
             # Named once, from the project; exit 2 (backlog TJ-0641).
             _die_input(f"could not read {_work_read_why(p, e, root)}",
                        "A taxable account's gains cannot be left out. "
-                       "Re-run `taxjson run` to rebuild it.")
+                       "Re-run `tjs run` to rebuild it.")
     settle = _settle_basis(root, next(iter(docs.values())))
     keep = _year_keep(str(year))
 
@@ -18202,8 +18195,8 @@ def cmd_plot_tax(args: argparse.Namespace) -> None:
             _out.warn(f"{n_routed} disposition(s) with an unknown cost "
                       f"(no purchase in your files) were routed to manual "
                       f"reporting — these figures EXCLUDE them",
-                      prog="taxjson plot-tax",
-                      details=["`taxjson form-export` lists them in its "
+                      prog="tjs plot-tax",
+                      details=["`tjs form-export` lists them in its "
                                "MANUAL REPORTING section; report them by "
                                "hand."])
         _json_out(doc)
@@ -18245,11 +18238,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
     if not files:
         if getattr(args, "account", None):
             _die_input(f"no gains for account {args.account!r} in work/",
-                       "Run `taxjson run` first, or check the account "
+                       "Run `tjs run` first, or check the account "
                        "name.")
         if not _PL.has_config(root):
             _die(*_no_project_message(root, _current_cmd()))
-        _die_input("no gains files in work/", "Run `taxjson run` first.")
+        _die_input("no gains files in work/", "Run `tjs run` first.")
     basis = gains_basis_label(files)
 
     money = fmt_money               # shared report-layer formatter
@@ -18284,12 +18277,12 @@ def cmd_summary(args: argparse.Namespace) -> None:
     if want_estimate and not cfg:
         _die("the tax estimate needs taxjson.toml",
              "It reads the country and the account types from it.")
-    _prog = f"taxjson {_current_cmd() or 'sum'}"
+    _prog = f"tjs {_current_cmd() or 'sum'}"
     if getattr(args, "province", None) and not want_estimate:
         _out.warn("--province is ignored without the tax estimate",
                   prog=_prog,
                   details=["Add --other-income or --other-losses, or use "
-                           "`taxjson estimate`."])
+                           "`tjs estimate`."])
     if want_estimate:
         # --other-income/--other-losses were checked by _estimate_inputs
         # above (one guard, A2-1123).
@@ -18362,7 +18355,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                     _out.warn(f"{_out.relpath(report_p, root)} holds no "
                               f"usable gains aggregate — {acct}'s row is "
                               f"recomputed from {p.name}", prog=_prog,
-                              details=["A full `taxjson run` rewrites "
+                              details=["A full `tjs run` rewrites "
                                        "the report file."])
                 elif (rep.get("basis") and rep.get("basis") != p_basis):
                     # The account was rebuilt on a DIFFERENT basis than
@@ -18373,13 +18366,13 @@ def cmd_summary(args: argparse.Namespace) -> None:
                     _brief1 = _brief(sys.stderr)
                     _out.note(f"{acct}: serving the previous {p_basis} "
                               f"numbers"
-                              + (" — run a full `taxjson run`" if _brief1
+                              + (" — run a full `tjs run`" if _brief1
                                  else ""),
                               prog=_prog,
                               details=[] if _brief1 else [
                                   f"The latest per-account rebuild is "
                                   f"{rep.get('basis')} only. Run a full "
-                                  f"`taxjson run` to refresh the "
+                                  f"`tjs run` to refresh the "
                                   f"wash-adjusted aggregates."])
             except (OSError, ValueError):
                 res = None
@@ -18398,7 +18391,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                     # (R1-277, S004-09): refuse instead.
                     _die_input(f"could not read {_why}",
                                "A taxable account's gains cannot be left "
-                               "out of the totals. Re-run `taxjson run` "
+                               "out of the totals. Re-run `tjs run` "
                                "to rebuild it.")
                 if acct in acct_types:
                     # A configured sheltered account dropped out of the
@@ -18408,7 +18401,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                                f"Account {acct!r} "
                                f"({acct_types[acct] or 'untyped'}) would "
                                f"be left out of the account tables and "
-                               f"the ALL ACCOUNTS total. Re-run `taxjson "
+                               f"the ALL ACCOUNTS total. Re-run `tjs "
                                f"run` to rebuild it.")
                 _out.warn(f"could not read {_why}", prog=_prog)
                 continue
@@ -18546,7 +18539,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
             # Named once, exit 2 (backlog TJ-0641).
             _die_input(f"{acct}: could not read dispositions from "
                        f"{_work_read_why(p, e, root)}",
-                       "Re-run `taxjson run` to rebuild it (the FOR THE "
+                       "Re-run `tjs run` to rebuild it (the FOR THE "
                        "RETURN block cannot leave a taxable account out).")
         if ((cfg.get("accounts") or {}).get(acct) or {}).get("crypto"):
             _ents = mark_crypto(_ents)
@@ -18560,7 +18553,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                 # realized total with rc 0, where form-export fails and
                 # the Canada branch dies (A2-1120).
                 _die(f"{acct}: {e}",
-                     "Re-run `taxjson run` to rebuild it (the FOR THE "
+                     "Re-run `tjs run` to rebuild it (the FOR THE "
                      "RETURN block cannot leave a taxable account out).")
             filing_rows.append({"account": acct, **{
                 k: round(sum(x[k] for x in _parts), 2)
@@ -18737,7 +18730,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
         _out.warn(f"{tainted_routed} disposition(s) with an unknown cost "
                   f"(no purchase in your files) were routed to manual "
                   f"reporting — these totals EXCLUDE them", prog=_prog,
-                  details=["`taxjson form-export` lists them in its MANUAL "
+                  details=["`tjs form-export` lists them in its MANUAL "
                            "REPORTING section; report them by hand."])
     # Sales with no purchase in the files that no .tt OPENING
     # cost=unknown line covers: the engine books them as an open short, so their gain is
@@ -18772,7 +18765,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                   f"totals at that purchase's cost", prog=_prog,
                   details=[f"No .tt OPENING cost=unknown line: {_shown_c}.",
                            "If you held the shares before your files "
-                           "start, `taxjson find-missing-history` lists "
+                           "start, `tjs find-missing-history` lists "
                            "them and the fixes (docs/getting-started.md, "
                            "step 5)."])
     if _uncovered and not _full_msgs:
@@ -18790,7 +18783,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                   f"purchase in your files: their gain is NOT in these "
                   f"totals", prog=_prog,
                   details=[f"No .tt OPENING cost=unknown line: {_shown}.",
-                           "`taxjson find-missing-history` lists them and "
+                           "`tjs find-missing-history` lists them and "
                            "the fixes (docs/getting-started.md, step 5)."])
     # An in-kind move to or from a registered account the run could not
     # value is NOT booked: a contribution's deemed sale (or a
@@ -18809,7 +18802,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
         _out.warn(_ik_head, prog=_prog,
                   details=[in_kind_fix_line(m, base, _ik_in)
                            for m in _ik_unbooked]
-                  + ["Then re-run `taxjson run`; `taxjson transfers` "
+                  + ["Then re-run `tjs run`; `tjs transfers` "
                      "lists every move (docs/tax-rules.md, In-kind "
                      "contributions and withdrawals)."])
     # Scope: unlike the filing commands (carryover/t1135/form-export,
@@ -19026,7 +19019,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                           f"disposition(s), net "
                           f"{money(_filing_6781['gain'])} — Form 6781 by "
                           f"hand (60/40; year-end marking not modelled, "
-                          f"US-FUT-02 / US-OPT-04). `taxjson form-export` "
+                          f"US-FUT-02 / US-OPT-04). `tjs form-export` "
                           f"lists them.")
                 if abs(_round_gap) >= 0.005:
                     _item(f"Rows are rounded to the cent, as filed: the "
@@ -19038,7 +19031,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                           f"gains files' unrounded total {_denied_label} "
                           f"is {money(_engine_denied)} "
                           f"({_denied_gap:+,.2f} on the RETURN row).")
-                _item("Per-sale rows: `taxjson form-export`.")
+                _item("Per-sale rows: `tjs form-export`.")
             _tail.append("More: tjs sum --details (notes); per sale: "
                          "tjs form-export")
         else:
@@ -19140,14 +19133,14 @@ def cmd_summary(args: argparse.Namespace) -> None:
                 else:
                     _item("FX on foreign cash (s.39(1.1)) is not in the "
                           "rows above — T4037 puts it on line 15300; see "
-                          "`taxjson fx-cash`.")
+                          "`tjs fx-cash`.")
                 # Slip capital gains are part of line 19700 too (R1-44).
                 _item("Capital gains on T3 (box 21) and T5/T5013 (box 18) "
                       "slips are not in the rows above — Schedule 3 lines "
                       "17600 and 17400, entered from the slips (the books "
                       "carry those distributions as dividends).")
-                _item("Per-security rows: `taxjson form-export`; per "
-                      "account: `taxjson sum --json`.")
+                _item("Per-security rows: `tjs form-export`; per "
+                      "account: `tjs sum --json`.")
             # Slip capital gains are part of line 19700 too (R1-44).
             _tail.append("Not in the rows: T3/T5 slip capital gains (lines "
                          "17600, 17400). More: tjs sum --details")
@@ -19407,7 +19400,7 @@ def _relay_child_stderr(text: str) -> None:
     continuation indented, each indented detail line wrapped under
     itself (docs/output-style.md: whoever shows captured text wraps
     it), the label first and the child named as the source
-    (`Warning: taxjson estimate: ...`, lib/out.labelled)."""
+    (`Warning: tjs estimate: ...`, lib/out.labelled)."""
     from taxjson.lib.out import labelled, wrap
     for ln in (text or "").splitlines():
         if not ln.strip():
@@ -19424,10 +19417,10 @@ def _relay_child_stderr(text: str) -> None:
 
 
 def cmd_instalments(args: argparse.Namespace) -> None:
-    """`taxjson instalments`: the year's instalment schedule, what each
+    """`tjs instalments`: the year's instalment schedule, what each
     date calls for, what has been paid, and the offset interest /
     s.163.1 penalty that follows from the gap. The current-year basis
-    is driven by `taxjson estimate` itself (AMT included), so the two
+    is driven by `tjs estimate` itself (AMT included), so the two
     commands can never disagree."""
     import json as _json
     from taxjson.bin import taxjson_instalments as INST
@@ -19473,7 +19466,7 @@ def cmd_instalments(args: argparse.Namespace) -> None:
     r = (_json.loads(res.stdout) or {}).get("estimate") or {}
     if not r:
         _die("the estimate produced no result",
-             "Run `taxjson run` first, and set [settings] province.")
+             "Run `tjs run` first, and set [settings] province.")
     doc = _instalments_doc(root, r, year, icfg)
     if doc is None:
         _die("no `year` under [settings] in taxjson.toml",
@@ -19509,7 +19502,7 @@ def cmd_instalments(args: argparse.Namespace) -> None:
         "CPP/EI payable on self-employment earnings (T1 lines 42100 / "
         "42120) — CRA adds it to the instalments due; add it yourself",
         "FX gains/losses on foreign cash (s.39(1.1), line 15300 — "
-        "`taxjson fx-cash`) and capital gains on T3/T5 slips are not in "
+        "`tjs fx-cash`) and capital gains on T3/T5 slips are not in "
         "the estimate this schedule is built on"]
     if getattr(args, "json", False):
         _json_out(doc)
@@ -19551,7 +19544,7 @@ def cmd_instalments(args: argparse.Namespace) -> None:
 
 
 def cmd_estimate(args: argparse.Namespace) -> None:
-    """`taxjson estimate`: the realized-gains summary table followed by
+    """`tjs estimate`: the realized-gains summary table followed by
     the tax ESTIMATE for the year's investment income — the same code
     path `sum` uses for its estimate block (the two can never
     disagree): tax(other income + investment income) minus
@@ -19560,7 +19553,7 @@ def cmd_estimate(args: argparse.Namespace) -> None:
     numbers.
 
     Essentials first (docs/output-style.md): the default view is the
-    estimate block alone (the gains table is `taxjson sum`) with the
+    estimate block alone (the gains table is `tjs sum`) with the
     summary's act-on `! ` lines; --details and --json keep the summary
     first."""
     args.estimate = True
@@ -19602,12 +19595,12 @@ def cmd_estimate(args: argparse.Namespace) -> None:
 
 
 def cmd_amt(args: argparse.Namespace) -> None:
-    """`taxjson amt [YEAR]`: the year's Canadian minimum tax line by
+    """`tjs amt [YEAR]`: the year's Canadian minimum tax line by
     line — regular tax, adjusted taxable income, exemption, rate,
     credits, whether it binds, the provincial AMT, the carryover
     created, the carryovers available by year of origin with their
     7-year limit, what is recovered and what carries forward. Every
-    figure is the estimate's own (`taxjson estimate --json`), so the
+    figure is the estimate's own (`tjs estimate --json`), so the
     two agree to the cent (tax-logic CA-AMT-01). A closed earlier
     year prints what its close-year lock recorded."""
     import json as _json
@@ -19633,7 +19626,7 @@ def cmd_amt(args: argparse.Namespace) -> None:
             _die(f"this project's books are for {py}; {year} has no "
                  f"close-year lock here",
                  f"Neither filed/{year}.json nor [settings] "
-                 f"prior_year_record. Run `taxjson amt` in the {year} "
+                 f"prior_year_record. Run `tjs amt` in the {year} "
                  f"project.")
         try:
             # The one lock check, under this project's country: a US
@@ -19647,7 +19640,7 @@ def cmd_amt(args: argparse.Namespace) -> None:
         if not isinstance(mt, dict):
             _die(f"{label} records no minimum tax",
                  f"It was closed before taxjson recorded carry-forwards, "
-                 f"or with no province set. Run `taxjson amt` in the "
+                 f"or with no province set. Run `tjs amt` in the "
                  f"{year} project, or re-close {year} there.")
         if getattr(args, "json", False):
             _json_out({"year": int(year), "recorded": True,
@@ -19677,7 +19670,7 @@ def cmd_amt(args: argparse.Namespace) -> None:
     r = (_json.loads(res.stdout) or {}).get("estimate") or {}
     if not r or not r.get("amt"):
         _die("the estimate produced no minimum tax result",
-             "Run `taxjson run` first, and set [settings] province.")
+             "Run `tjs run` first, and set [settings] province.")
     doc = AR.build(r, int(year), str(_base(settings)))
     if getattr(args, "json", False):
         _json_out(doc)
@@ -19755,10 +19748,10 @@ def _withholding_rows(cache: Path, taxable_accounts, year,
             # fallback while its foreign dividends were still taxed
             # (R1-223): fall back for it, and say so.
             if foreign_by_account.get(acct):
-                emit_line(f"taxjson: warning: could not read {p.name} "
+                emit_line(f"tjs: warning: could not read {p.name} "
                           f"({e}) — assuming {CA_FOREIGN_WITHHOLDING:.0%} "
                           f"withholding on {acct}'s foreign dividends; "
-                          f"re-run `taxjson run`.", file=sys.stderr)
+                          f"re-run `tjs run`.", file=sys.stderr)
             data = {}
         rows: List[Tuple] = []
         acct_seen = False
@@ -20078,8 +20071,8 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
         from taxjson.lib.out import note as _onote
         _onote(f"{fmt_money(unterm)} of gains carry no ST/LT term — "
                f"treated as SHORT-TERM (conservative)",
-               prog=f"taxjson {_current_cmd() or 'sum'}",
-               details=["Re-run `taxjson run` to refresh."])
+               prog=f"tjs {_current_cmd() or 'sum'}",
+               details=["Re-run `tjs run` to refresh."])
     # The year's own [carryover] claimed entry: the deduction its filed
     # return's taxable income absorbed, which the carryover after the
     # year (and close-year's lock) counts as used (backlog TJ-0464).
@@ -20160,7 +20153,7 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                         foreign_div_noncash: float = 0.0,
                         withholding_by_security=None
                         ) -> None:
-    """Marginal tax-estimate block under `taxjson sum` — TAXABLE
+    """Marginal tax-estimate block under `tjs sum` — TAXABLE
     accounts only, incremental on top of --other-income. Assumptions
     are printed with the numbers; these are never filing figures.
     `verbose` appends the CALCULATION TRACE: every bracket slice,
@@ -20372,7 +20365,7 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                 f"exceeds the tax on the grossed-up dividends)."))
         # The part of the year's loss [carryover] claimed carries back
         # (T1A) does not carry forward: close-year's lock and
-        # `taxjson carryover` take it out (backlog TJ-0084).
+        # `tjs carryover` take it out (backlog TJ-0084).
         _back = _losses_carried_back(root, cfg, year, r["losses_unused"])
         if _back > 0.005:
             print(f"  Unused capital losses:{_g}"
@@ -20511,7 +20504,7 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                               f"{base_cur}")
                 print(f"  {'Carried forward':<30}"
                       f"{money(_cy.get('closing', 0.0)):>14}  "
-                      f"[`taxjson amt` for the detail]")
+                      f"[`tjs amt` for the detail]")
         if verbose:
             from taxjson.lib.tax_estimate import (CA_FED_BPA,
                                                   CA_FED_BRACKETS,
@@ -20614,7 +20607,7 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                 if _idoc["remaining_dates"]:
                     print(f"  {'=> next due ' + _idoc['remaining_dates'][0]:<30}"
                           f"{money(_idoc['per_remaining_date'] or 0.0):>14}"
-                          f"  [taxjson instalments]")
+                          f"  [tjs instalments]")
                 else:
                     from taxjson.bin.taxjson_instalments import \
                         balance_due_label
@@ -20624,7 +20617,7 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                     print(f"  {'=> instalments behind':<30}"
                           f"{money(_idoc['shortfall']):>14}"
                           f"  [due with the balance "
-                          f"{balance_due_label()}; taxjson instalments]")
+                          f"{balance_due_label()}; tjs instalments]")
         if details:
             print()
             _est_notes("  ")
@@ -20764,7 +20757,7 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                  "tax; §1256 contracts (futures, index options) split "
                  "60/40 long-/short-term (Form 6781), with no year-end "
                  "marking or loss carryback; interest income and the "
-                 "§988 result on foreign currency (`taxjson fx-cash`) "
+                 "§988 result on foreign currency (`tjs fx-cash`) "
                  "not included.")
 
 
@@ -20773,7 +20766,7 @@ def _sanity_items_from_config(accounts_cfg: Dict[str, Any],
                               kinds: Optional[Dict[str, List[str]]] = None
                               ) -> Tuple[List[Tuple[List[str], List[str]]],
                                          List[str]]:
-    """Paired `taxjson sanity` items from each account's
+    """Paired `tjs sanity` items from each account's
     `holdings = [...]` (paths; `~` expanded, relative to the project),
     and for the other accounts the snapshots of the year's holdings/
     folder (lib/holdings_dir: by broker account id or file name).
@@ -20873,7 +20866,7 @@ def _sanity_items_from_config(accounts_cfg: Dict[str, Any],
 
 
 def cmd_shares(args: argparse.Namespace) -> None:
-    """`taxjson shares [--options] [--taxable|--sheltered] [--json]`: the
+    """`tjs shares [--options] [--taxable|--sheltered] [--json]`: the
     COMBINED quantity held of each symbol across all accounts — the
     canonical inventory (post ticker.map, base-currency, wash-adjusted
     where built), summed per symbol with a per-account breakdown. Shorts
@@ -20888,7 +20881,7 @@ def cmd_shares(args: argparse.Namespace) -> None:
     cache = root / "work"
     files = resolve_gains_files(cache)
     if not files:
-        _die_input("no gains files in work/ — run `taxjson run` first")
+        _die_input("no gains files in work/ — run `tjs run` first")
     _warn_accounts_without_books(root, files, "shares", "gains file")
     basis = gains_basis_label(files)
     want = None
@@ -20904,7 +20897,7 @@ def cmd_shares(args: argparse.Namespace) -> None:
         if not files:
             _die(f"no {want} account with books in work/",
                  "Accounts and their types come from taxjson.toml; run "
-                 "`taxjson run` first.")
+                 "`tjs run` first.")
     by_sym: Dict[str, Dict[str, Any]] = {}
     year = None
     for acct, f in files.items():
@@ -20991,7 +20984,7 @@ def cmd_shares(args: argparse.Namespace) -> None:
 
 
 def cmd_channels(args: argparse.Namespace) -> None:
-    """`taxjson channels [all] [--json] [--offline]`: where the release
+    """`tjs channels [all] [--json] [--offline]`: where the release
     channels point (stable / beta in channels.json on main, latest = the
     newest release tag), what this machine's production copy runs, and
     the newest releases (lib/channels). Reads the development checkout
@@ -21042,7 +21035,7 @@ def _run_script(argv: List[str], env: Optional[Dict[str, str]] = None
 
 
 def cmd_promote(args: argparse.Namespace) -> None:
-    """`taxjson promote [TAG] [stable|beta]`: point a channel at a
+    """`tjs promote [TAG] [stable|beta]`: point a channel at a
     release — scripts/promote.sh in the development checkout: it commits
     channels.json, lands it on main (scripts/land.sh) and pushes a
     fast-lane tag `channels-<UTC time>` on that commit, which asks the
@@ -21066,11 +21059,11 @@ def cmd_promote(args: argparse.Namespace) -> None:
 
 
 def cmd_deploy(args: argparse.Namespace) -> None:
-    """`taxjson deploy [TAG]`: put a release on this machine's production
+    """`tjs deploy [TAG]`: put a release on this machine's production
     copy now — the newest tag, or TAG — through the installer's upgrade
     path (the development checkout's install.sh run against the
     production copy), then checks that the copy is at that tag and its
-    `taxjson --version` agrees (exit 1 when not). The remembered channel is left as it is; the
+    `tjs --version` agrees (exit 1 when not). The remembered channel is left as it is; the
     installer never moves a channel backwards, so the copy stays on TAG
     until its channel passes it. No fetch flag is passed: the installer
     installs taxjson-fetch unless this machine opted out (remembered in
@@ -21104,7 +21097,7 @@ def cmd_deploy(args: argparse.Namespace) -> None:
 
 
 def cmd_redact(args: argparse.Namespace) -> None:
-    """`taxjson redact FILE...`: strip account numbers and identity from
+    """`tjs redact FILE...`: strip account numbers and identity from
     broker exports (row shapes kept); with no FILE, copy the project's
     inputs/ to inputs_redact/, redacted — see taxjson_redact."""
     from taxjson.bin.taxjson_redact import main as redact_main
@@ -21264,7 +21257,7 @@ def _grant_since_warning(settings: Dict[str, Any],
 
 
 def cmd_tax_logic(args: argparse.Namespace) -> None:
-    """`taxjson tax-logic`: a short statement of every rule taxjson
+    """`tjs tax-logic`: a short statement of every rule taxjson
     applies for the project's country, with the project's settings
     filled in (lib/tax_logic). Works outside a project too (defaults)."""
     from taxjson.lib.country import CountryError
@@ -21298,7 +21291,7 @@ def cmd_tax_logic(args: argparse.Namespace) -> None:
 
 
 def cmd_spinoffs(args: argparse.Namespace) -> None:
-    """`taxjson spinoffs`: every spin-off, its election, the value per
+    """`tjs spinoffs`: every spin-off, its election, the value per
     share used and what was booked (lib/corp_views). Exit 1 when one
     needs attention (zero value, no election, ignored)."""
     from taxjson.lib.corp_views import ViewError, render_spinoffs, spinoffs
@@ -21319,7 +21312,7 @@ def cmd_spinoffs(args: argparse.Namespace) -> None:
 
 
 def cmd_splits(args: argparse.Namespace) -> None:
-    """`taxjson splits`: every split, consolidation and rename in the
+    """`tjs splits`: every split, consolidation and rename in the
     books with holdings before and after, noting a split two sources
     report within a week (one event, applied once) and flagging the same
     ratio again further apart (applied twice), a no-op row and a
@@ -21343,7 +21336,7 @@ def cmd_splits(args: argparse.Namespace) -> None:
 
 
 def cmd_journals(args: argparse.Namespace) -> None:
-    """`taxjson journals`: every broker journal between two listings of
+    """`tjs journals`: every broker journal between two listings of
     one security, per account — its date, FROM -> TO, quantity, broker,
     how it was found and its state: joined (the map line that pools the
     two), suggested (the reason, and the `.tt` / ticker.map line that
@@ -21361,7 +21354,7 @@ def cmd_journals(args: argparse.Namespace) -> None:
     try:
         doc = report(root, cfg, want, args.year)
     except JournalsError as e:
-        _die(f"{e} — run `taxjson run` first",
+        _die(f"{e} — run `tjs run` first",
              "The journals are read from the last run's work/ folder.")
     if args.pending:
         doc = dict(doc, journals=[j for j in doc["journals"]
@@ -21376,7 +21369,7 @@ def cmd_journals(args: argparse.Namespace) -> None:
 
 
 def cmd_renames(args: argparse.Namespace) -> None:
-    """`taxjson renames`: every ticker change in the books as a dated
+    """`tjs renames`: every ticker change in the books as a dated
     event (date, source, position and book cost carried), every trade in
     an old ticker after its rename with the .tt line that resolves it,
     the look-alike renames the exports show (suggested, with the `.tt`
@@ -21418,7 +21411,7 @@ def cmd_renames(args: argparse.Namespace) -> None:
 
 
 def cmd_ticker_map(args: argparse.Namespace) -> None:
-    """`taxjson ticker-map --suggest [--write [--all]] [--json]`: every
+    """`tjs ticker-map --suggest [--write [--all]] [--json]`: every
     ticker.map line the last run suggested (lib/ticker_map_suggest),
     each with its reason; the listing pairs the map does not answer
     (MAP-GAP, "verify": TOBASE if one security, DISTINCT if two); the
@@ -21434,10 +21427,10 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
     if not getattr(args, "suggest", False):
         _die_input("ticker-map: say what to do: --suggest lists the "
                    "ticker.map lines the last run suggested",
-                   "`taxjson ticker-map --suggest --write` appends them.")
+                   "`tjs ticker-map --suggest --write` appends them.")
     load_config(root)
     if not (root / "work").is_dir():
-        _die("no work/ — run `taxjson run` first",
+        _die("no work/ — run `tjs run` first",
              "The suggestions come from the run's messages.")
     offer, skipped = TS.pending(root)
     # The listing pairs the map does not answer (MAP-GAP): to verify,
@@ -21531,7 +21524,7 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
         if gap_unread:
             d.blank()
             d.para(f"The listing-pair check skipped what it could not "
-                   f"read: {'; '.join(gap_unread)} — re-run `taxjson "
+                   f"read: {'; '.join(gap_unread)} — re-run `tjs "
                    f"run`.")
         # A suggestion another one covers is not answered by the map:
         # its own heading.
@@ -21566,7 +21559,7 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
             if _det:
                 d.para("Keeping them is harmless: your line holds even if "
                        "the interlisted master later retracts the pair. "
-                       "`taxjson ticker-map --suggest --write` on a "
+                       "`tjs ticker-map --suggest --write` on a "
                        "terminal asks for each (keep is the default).",
                        indent="  ")
         if unread:
@@ -21591,10 +21584,10 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
             d.print()
             return
         d.para("Add a line only when it is right for your securities: "
-               "`taxjson ticker-map --suggest --write` asks for each one "
+               "`tjs ticker-map --suggest --write` asks for each one "
                "(a pair to verify: TOBASE, DISTINCT or skip; --all adds "
                "only the lines the run's evidence names, never a pair to "
-               "verify), then re-run `taxjson run`."
+               "verify), then re-run `tjs run`."
                if offer or verify else
                "Nothing to add; an unused rule is harmless — delete it by "
                "hand only if its symbol will not return." if unused else
@@ -21635,7 +21628,7 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
         if not interactive:
             # --all writes only what the evidence proves: a shared root
             # is a candidate, never proof (MAP-GAP).
-            say(f"Not added (to verify — one security or two? `taxjson "
+            say(f"Not added (to verify — one security or two? `tjs "
                   f"ticker-map --suggest --write` on a terminal asks): "
                   f"{s.line} / {s.alternative}")
             continue
@@ -21697,7 +21690,7 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
         from taxjson.lib.tobase_map import without_lines
         current = without_lines(current, drop)
     text = TS.appended_text(current, chosen) if chosen else current
-    # The new map must be one `taxjson run` accepts (no contradiction).
+    # The new map must be one `tjs run` accepts (no contradiction).
     import tempfile as _tf
     with _tf.TemporaryDirectory() as _d:
         _probe = Path(_d) / "ticker.map"
@@ -21727,7 +21720,7 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
         + (f"; deleted {len(drop)} line(s) tobase.map covers" if drop
            else "")
         + (f" (the old file is {bak.name})" if bak else "")
-        + ". Run `taxjson run` to apply them.")
+        + ". Run `tjs run` to apply them.")
 
 
 def _tobase_covered(root: Path) -> List[Any]:
@@ -21798,12 +21791,12 @@ def _warn_unused_renames(records: List[Dict[str, Any]], *,
                   f"No account's books hold {r['old']} before "
                   f"{r['date']} (in an account of the line's kind: "
                   f"securities or crypto) — check the symbols (a typo?) "
-                  f"and the date, or delete the line. `taxjson renames` "
+                  f"and the date, or delete the line. `tjs renames` "
                   f"lists it.", prog=_PROG)
     if unused and strict:
         _die(f"--strict: {len(unused)} declared rename(s) book nothing "
              f"— aborting",
-             "See the warnings above and `taxjson renames --pending`.")
+             "See the warnings above and `tjs renames --pending`.")
 
 
 def _check_renamed_late(root: Path, *, strict: bool) -> None:
@@ -21827,16 +21820,16 @@ def _check_renamed_late(root: Path, *, strict: bool) -> None:
         _say("attention", f"{n} trade(s) in {sym} after its rename to "
              f"{new} on {d}",
              "Booked as a separate security until a .tt RENAME line says "
-             "which it is (`late=fold` or `late=separate`; `taxjson "
+             "which it is (`late=fold` or `late=separate`; `tjs "
              "renames` prints the lines).", indent="  ")
     if rows and strict:
         _die(f"--strict: {len(rows)} trade(s) in a renamed ticker after "
              f"its rename are not declared — aborting",
-             "See the warnings above and `taxjson renames`.")
+             "See the warnings above and `tjs renames`.")
 
 
 def cmd_check_dates(args: argparse.Namespace) -> None:
-    """`taxjson check-dates`: every trade and settlement date the parsers
+    """`tjs check-dates`: every trade and settlement date the parsers
     produced, checked against the trading calendar of what was traded
     (crypto 24/7, futures 23/5, US stocks with the overnight session,
     options and Canadian listings on exchange days) and the settlement
@@ -21845,14 +21838,14 @@ def cmd_check_dates(args: argparse.Namespace) -> None:
     root = Path(args.dir).resolve()
     cfg = load_config(root)
     if not (root / "work").is_dir():
-        _die("no work/ — run `taxjson run` first")
+        _die("no work/ — run `tjs run` first")
     try:
         doc = analyze(root, cfg, account=args.account)
     except ValueError as e:
         # [settings] futures_settle refused as `run` refuses it (A2-0697).
         _die(str(e))
     if not doc["sources"]:
-        _die("no parsed sources in work/ — run `taxjson run` first")
+        _die("no parsed sources in work/ — run `tjs run` first")
     if not args.account:
         _warn_accounts_without_books(root, _discover_tx_accounts(root / "work"),
                                      "check-dates", "parsed source")
@@ -21912,7 +21905,7 @@ def _reads_no_project(args: argparse.Namespace) -> bool:
 
 
 def cmd_check_tt(args: argparse.Namespace) -> None:
-    """`taxjson check-tt [ACCOUNT | FILE.tt ...]`: every line of the .tt
+    """`tjs check-tt [ACCOUNT | FILE.tt ...]`: every line of the .tt
     files read with the run's own parsers, every problem named with its
     file and line (lib/check_tt) — the run stops at the first. With no
     item, the project's accounts; an account name, its files; a path,
@@ -21970,7 +21963,7 @@ def cmd_check_tt(args: argparse.Namespace) -> None:
 
 
 def cmd_compare(args: argparse.Namespace) -> None:
-    """`taxjson compare [NAME] [--save NAME] [--delete NAME] [--list]`:
+    """`tjs compare [NAME] [--save NAME] [--delete NAME] [--list]`:
     reports/ against a snapshot of an earlier run (lib/compare): the
     run before (`prev`, rotated by every full run), a saved one, or
     the reports as filed (`filed`). Exit 1 when a report differs or an
@@ -21988,7 +21981,7 @@ def cmd_compare(args: argparse.Namespace) -> None:
             else:
                 print(f"Saved {len(doc['reports'])} report file(s) as "
                       f"{args.save} (work/compare/{args.save}/); "
-                      f"`taxjson compare {args.save}` diffs against it.")
+                      f"`tjs compare {args.save}` diffs against it.")
             return
         if args.delete:
             _cmp.delete(root, args.delete)
@@ -22006,7 +21999,7 @@ def cmd_compare(args: argparse.Namespace) -> None:
                     print(ln)
             return
         if not (root / "reports").is_dir():
-            _die_input("no reports/ — run `taxjson run` first")
+            _die_input("no reports/ — run `tjs run` first")
         doc = _cmp.compare(root, cfg, args.name or _cmp.PREV,
                            details=_details(args) or _json)
     except _cmp.CompareError as e:
@@ -22022,8 +22015,39 @@ def cmd_compare(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def cmd_snapshot(args: argparse.Namespace) -> None:
+    """`tjs snapshot`: the whole project copied to
+    snapshot/<year>.<timestamp>/, laid out as it is, for `diff -r` and
+    `tjs compare` (lib/compare.take_full)."""
+    from taxjson.lib import compare as _cmp
+    from taxjson.lib import out as _out
+    root = Path(args.dir).resolve()
+    cfg = load_config(root)
+    try:
+        doc = _cmp.take_full(root, cfg)
+    except _cmp.CompareError as e:
+        _die_input(str(e))
+    if doc["partial_accounts"]:
+        _out.emit("warning", f"reports/ hold a `tjs run --account "
+                  f"{', '.join(doc['partial_accounts'])}` over the last "
+                  f"full run's; the snapshot records that")
+    if doc["links_leaving"]:
+        _out.emit("warning", "kept as links, what they lead to is not in "
+                  "the snapshot: " + ", ".join(doc["links_leaving"]))
+    if getattr(args, "json", False):
+        _json_out(doc)
+        return
+    _mb = doc["bytes"] / (1024 * 1024)
+    print(f"Saved snapshot {doc['name']}: {doc['files']} file(s), "
+          f"{_mb:.1f} MB, in {doc['folder']}")
+    for ln in _out.kv_lines([
+            ("Compare", f"`tjs compare {doc['name']}`"),
+            ("Diff", f"`diff -r reports {doc['reports_folder'].rstrip('/')}`")]):
+        print(ln)
+
+
 def cmd_edge_cases(args: argparse.Namespace) -> None:
-    """`taxjson edge-cases`: transactions whose treatment turns on a
+    """`tjs edge-cases`: transactions whose treatment turns on a
     boundary — trades that settle in a different year than they trade,
     dispositions in the last/first days of a year, written options and
     expiries across Dec 31, income around New Year, crypto near midnight,
@@ -22040,7 +22064,7 @@ def cmd_edge_cases(args: argparse.Namespace) -> None:
     root = Path(args.dir).resolve()
     cfg = load_config(root)
     if not (root / "work").is_dir():
-        _die("no work/ directory — run `taxjson run` first")
+        _die("no work/ directory — run `tjs run` first")
     _require_books(root, args.account)
     try:
         doc = analyze(root, cfg, margin=args.margin, account=args.account)
@@ -22057,7 +22081,7 @@ def cmd_edge_cases(args: argparse.Namespace) -> None:
 
 
 def cmd_option_boundary(args: argparse.Namespace) -> None:
-    """`taxjson option-boundary [--json]`: every written option in the
+    """`tjs option-boundary [--json]`: every written option in the
     taxable accounts whose write and close straddle a tax-year boundary
     (or that is still open at the project year's end) — where each
     amount lands under the timing in force (ITA s.49), and whether a
@@ -22078,7 +22102,7 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
         _die("[settings] year is required in taxjson.toml",
              "The review is per tax year.")
     from taxjson.lib import out as _out
-    _prog = "taxjson option-boundary"
+    _prog = "tjs option-boundary"
     year = int(settings["year"])
     kw = option_timing_from_settings(settings)
     timing = kw.get("option_premium_timing", "close") if kw else "close"
@@ -22122,7 +22146,7 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
             _out.warn(f"cannot read {_lbl} as a close-year lock — its "
                       f"recorded option timing is unknown", prog=_prog,
                       details=[f"{e}", f"The advice for {fy} below assumes "
-                               f"none was recorded; `taxjson check-filed` "
+                               f"none was recorded; `tjs check-filed` "
                                f"checks the lock."])
             continue
         _docs[fy] = _doc
@@ -22154,7 +22178,7 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
                  str(e))
     # A crypto account writes no options (lib/option_boundary skips it
     # too), and one the run skipped for an empty inputs/ folder has no
-    # books to make: "run `taxjson run`" about either looped (workflow
+    # books to make: "run `tjs run`" about either looped (workflow
     # audit 2026-10-22, item 12).
     _no_inputs = _accounts_skipped_for_no_inputs(root)
     empty = []
@@ -22169,7 +22193,7 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
                 continue
             missing.append(name)
             _out.warn(f"no work/{base.name}", prog=_prog,
-                      details=["Run `taxjson run` first."])
+                      details=["Run `tjs run` first."])
             continue
         books += 1
         # A truncated, non-UTF-8 or wrong-shape book was a traceback
@@ -22180,7 +22204,7 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
             # keys as rows: an AttributeError traceback (issue #53).
             _die_input(f'work/{base.name} has no "transactions" list — the '
                  f'books are damaged or from an interrupted run',
-                 "Run `taxjson run` to rebuild them.")
+                 "Run `tjs run` to rebuild them.")
         txs = []
         for r in doc["transactions"]:
             try:
@@ -22213,7 +22237,7 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
                  "[accounts.NAME] table from taxjson.toml if you do not "
                  "have it.")
         _die("NOT CHECKED — no taxable base files in work/",
-             "Run `taxjson run` first.")
+             "Run `tjs run` first.")
     amend = [r for r in rows if r["action"].startswith("T1-ADJ")]
     attention = [r for r in rows if r.get("attention")]
     if getattr(args, "json", False):
@@ -22258,7 +22282,7 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
                       if y in partial_locks else "")
             for y in sorted(filed_years)) + ".")
     elif _det:
-        _para("No filed-year locks (run `taxjson close-year` after "
+        _para("No filed-year locks (run `tjs close-year` after "
               "filing).")
     for _py in sorted(partial_locks):
         _para(_out.label("note", stream=sys.stdout) + partial_locks[_py],
@@ -22314,7 +22338,7 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
 
 
 def cmd_checklist(args: argparse.Namespace) -> None:
-    """`taxjson checklist`: every step from install to filing, in order
+    """`tjs checklist`: every step from install to filing, in order
     (lib/checklist.items). `--run` checks each — a check runs the
     command that proves it (or reads the project's files) — and stores
     the verdicts in work/checklist_results.json (`-j N`: N slow checks
@@ -22338,7 +22362,7 @@ def cmd_checklist(args: argparse.Namespace) -> None:
     if getattr(args, "skip", None):
         _named = ",".join(t.strip() for tok in args.skip
                           for t in str(tok).split(",") if t.strip())
-        _die_input(f"--skip was replaced by --done --force: `taxjson "
+        _die_input(f"--skip was replaced by --done --force: `tjs "
                    f"checklist --done {_named or 'ID'} --force`",
                    "It marks the step done over the last check's finding "
                    "(shown [f], the finding beside it). Nothing was "
@@ -22365,8 +22389,8 @@ def cmd_checklist(args: argparse.Namespace) -> None:
         if used:
             _die_input(f"{used[0]} needs a project: no taxjson.toml in "
                        f"{root}",
-                       "Run `taxjson checklist` in the project folder (or "
-                       "`taxjson -C DIR checklist`); here it prints the "
+                       "Run `tjs checklist` in the project folder (or "
+                       "`tjs -C DIR checklist`); here it prints the "
                        "steps.")
         if args.json:
             _json_out(cl.guide_json(section=section))
@@ -22423,7 +22447,7 @@ def cmd_checklist(args: argparse.Namespace) -> None:
         _die("-j takes a number of 1 or more (slow checks at a time)")
     if args.walk and not sys.stdin.isatty():
         _die("--walk needs a terminal",
-             "Use `taxjson checklist --run` for the report, "
+             "Use `tjs checklist --run` for the report, "
              "--done to record steps.")
     # A plain --done over a kept finding would record a mark the list
     # never shows (a DONE mark never hides a finding): refused before
@@ -22441,8 +22465,8 @@ def cmd_checklist(args: argparse.Namespace) -> None:
         st = flagged[0]
         _die(f"{st} is marked {findings[st]} by the last check — a done "
              f"mark would not show over it",
-             f"Fix it (`taxjson checklist --only {st}` says what), then "
-             f"`--run --only {st}`; or accept it as it is: `taxjson "
+             f"Fix it (`tjs checklist --only {st}` says what), then "
+             f"`--run --only {st}`; or accept it as it is: `tjs "
              f"checklist --done {st} --force` (shown [f], the finding "
              f"beside it).")
     marks = [(st, cl.MARK_FORCED if m == "done" and st in flagged else m)
@@ -22523,7 +22547,7 @@ def cmd_checklist(args: argparse.Namespace) -> None:
     from taxjson.lib.out import note as _note, warn as _warn
     if args.only and args.quick and args.run:
         _note("--only names one step; ignoring --quick.",
-              prog="taxjson checklist")
+              prog="tjs checklist")
         args.quick = False
 
     if args.walk:
@@ -22553,14 +22577,14 @@ def cmd_checklist(args: argparse.Namespace) -> None:
                 # shown this once and not kept.
                 _warn(f"the verdicts could not be stored in "
                       f"work/{cl.RESULTS_FILE} ({e.strerror or e}): "
-                      f"shown now, not kept", prog="taxjson checklist")
+                      f"shown now, not kept", prog="tjs checklist")
                 info = cl.fresh_info()
             else:
                 results, info = cl.load_results(ctx, only=only, doc=doc)
         else:
             if args.quick or args.jobs is not None:
                 _note("--quick and -j go with --run; showing the stored "
-                      "verdicts.", prog="taxjson checklist")
+                      "verdicts.", prog="tjs checklist")
             results, info = cl.load_results(ctx, only=only)
     except cl.StateFileError as e:
         _die_state(e)
@@ -22596,7 +22620,7 @@ def _checklist_config(root: Path) -> Tuple[Dict[str, Any], str]:
     """(taxjson.toml, "" or why every other command refuses it) for the
     checklist. A config the strict loader refuses — a crypto account and
     no local_timezone (what `init` writes on a UTC machine), an old map
-    file `taxjson migrate` moves — is the configure item's finding, not
+    file `tjs migrate` moves — is the configure item's finding, not
     an error instead of the list: the TOML is
     read leniently and the checks that need the strict config are
     blocked. Only a file with no readable (or plausible) year, country
@@ -22641,7 +22665,7 @@ def _checklist_config(root: Path) -> Tuple[Dict[str, Any], str]:
     # read or not: the checklist wrote work/checklist_results.json
     # through such a work/ link (audit 2026-10-24 A17).
     _refuse_outside_dir_links(root, accounts)
-    # The loader's message without its `taxjson checklist: error:`
+    # The loader's message without its `tjs checklist: error:`
     # headline prefix, on one line.
     msg = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", text).split())
     msg = re.sub(r"^(?:Error:\s*|.*?: error:\s*)", "", msg, count=1)
@@ -22652,7 +22676,7 @@ def _walk_interrupted(sid: str, ctx) -> None:
     from taxjson.lib.out import error
     print(file=sys.stderr)
     error(f"interrupted at {sid} — it is not recorded",
-          prog="taxjson checklist",
+          prog="tjs checklist",
           details=[f"The marks made so far are kept in "
                    f"{ctx.root / 'checklist.json'}."])
     sys.exit(1)
@@ -22756,7 +22780,7 @@ def _checklist_walk(ctx, cl, only, quick: bool = False,
         if quit_early:
             break
     print(f"\n{seen} open step(s) visited. Summary "
-          f"(`taxjson checklist --run` re-checks everything):\n")
+          f"(`tjs checklist --run` re-checks everything):\n")
     results, info = cl.load_results(ctx, only=only)
     print(cl.render_summary(results, ctx.year, country, root=ctx.root,
                             info=info, scope=scope,
@@ -22790,9 +22814,9 @@ def _mask_ids_in_path(path: str) -> str:
 
 
 def _sanity_note(text: str) -> None:
-    """`taxjson sanity: note: ...` on stderr, wrapped (lib/out)."""
+    """`tjs sanity: note: ...` on stderr, wrapped (lib/out)."""
     from taxjson.lib.out import note
-    note(text, prog="taxjson sanity")
+    note(text, prog="tjs sanity")
 
 
 def _project_file(root: Path, name: str) -> Optional[Path]:
@@ -22810,7 +22834,7 @@ def _project_file(root: Path, name: str) -> Optional[Path]:
 
 
 def cmd_sanity(args: argparse.Namespace) -> None:
-    """`taxjson sanity ITEM... [--tolerance N] [--json]`: LOOSE
+    """`tjs sanity ITEM... [--tolerance N] [--json]`: LOOSE
     cross-check of open positions against externally produced holdings
     TOML files (a [[holding]] array of symbol/quantity tables).
 
@@ -22830,7 +22854,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
 
     Each group is compared independently; an account or file may sit
     in only one group. taxjson side: the canonical gains inventory
-    (same basis as `taxjson list` — wash-adjusted where built, post
+    (same basis as `tjs list` — wash-adjusted where built, post
     ticker.map). The files' symbols get the same GLOBAL+TOBASE renames,
     with options following their underlying's rename. Exit 1 on any
     discrepancy in any group.
@@ -22871,7 +22895,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         # table says; 1 stays the verdict "positions differ" (backlog
         # TJ-0353).
         # Named from the project (docs/output-style.md; TJ-0631).
-        _die_input("no gains files in work/ — run `taxjson run` first.")
+        _die_input("no gains files in work/ — run `tjs run` first.")
     basis = gains_basis_label(resolved)
     tax: Dict[str, Dict[str, float]] = {}
     unreadable: Dict[str, str] = {}
@@ -22943,7 +22967,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             # The damaged file leads, not taxjson.toml (backlog TJ-0057).
             # Exit 2: an input that cannot be read (TJ-0353).
             _die_input(f"{unreadable[name]} — the books of {name!r} "
-                       f"cannot be read: re-run `taxjson run` to rebuild "
+                       f"cannot be read: re-run `tjs run` to rebuild "
                        f"them.")
         if name in _declared():
             # An account of taxjson.toml with no books: it was refused
@@ -22964,8 +22988,8 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         if _has_inputs(root, name):
             _die_input(f"{ctx}: no gains file in work/ for account "
                        f"{name!r}, whose inputs are there — the last "
-                       f"`taxjson run` did not build them (did it "
-                       f"fail?): fix and re-run `taxjson run`.")
+                       f"`tjs run` did not build them (did it "
+                       f"fail?): fix and re-run `tjs run`.")
         _in = _PL.inputs_dir(root) / name
         _shown = _PL.shown(_in, root)
         _how = ("leave it out of the check" if ctx != "taxjson.toml"
@@ -22979,9 +23003,9 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                    f"({_shown}/ "
                    + ("holds no export" if _in.is_dir() else "is missing")
                    + "): nothing to compare",
-                   f"Its holdings are compared with the books `taxjson "
+                   f"Its holdings are compared with the books `tjs "
                    f"run` builds from its exports. Save them in "
-                   f"{_shown}/ and run `taxjson run`, or {_how}.")
+                   f"{_shown}/ and run `tjs run`, or {_how}.")
 
     def _warn_left_out() -> None:
         """Each account whose books cannot be read and that this check
@@ -22991,8 +23015,8 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         for _a, _why in unreadable.items():
             _file, _, _reason = _why.partition(": ")
             _warn(f"could not read {_file} — {_a!r} is not in this check",
-                  prog="taxjson sanity",
-                  details=[_reason, "Re-run `taxjson run` to rebuild it."])
+                  prog="tjs sanity",
+                  details=[_reason, "Re-run `tjs run` to rebuild it."])
 
     def _resolved(name: str) -> Optional[Path]:
         """The file a holdings argument names, or None when it is not
@@ -23079,7 +23103,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         _bad = [a for a in _accts_cfg if a in unreadable]
         if _bad:
             _die_input(f"{unreadable[_bad[0]]} — the books of {_bad[0]!r} "
-                       f"cannot be read: re-run `taxjson run` to rebuild "
+                       f"cannot be read: re-run `tjs run` to rebuild "
                        f"them"
                        + (f" (also: {', '.join(_bad[1:])})"
                           if len(_bad) > 1 else "") + ".")
@@ -23088,8 +23112,8 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         if _absent:
             _die_input(f"no gains file in work/ for account(s) "
                        f"{', '.join(_absent)}, whose inputs are there — "
-                       f"the last `taxjson run` did not build them (did it "
-                       f"fail?): fix and re-run `taxjson run`.")
+                       f"the last `tjs run` did not build them (did it "
+                       f"fail?): fix and re-run `tjs run`.")
         config_groups, config_notes = _sanity_items_from_config(
             _accts_cfg, root, (_scfg.get("settings") or {}).get("year"),
             kinds=config_kinds)
@@ -23185,7 +23209,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                     f"{_PL.shown(_hold, root)}/ (one per account{_how}; "
                     f"its RBC Holdings Export or IB statement, named "
                     f"NAME_holdings.csv, is read too), "
-                    f"or pass one: `taxjson sanity margin=positions.toml` "
+                    f"or pass one: `tjs sanity margin=positions.toml` "
                     f"(docs/commands.md, sanity)."):
                 print(_ln)
             _sanity_print_extras([], [], [], 0, 0, _inc, True,
@@ -23237,7 +23261,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         if not (bare["accounts"] and bare["files"]):
             _die_input("the aggregate form needs at least "
                        "one ACCOUNT and one FILE.toml (free mix, e.g. "
-                       "`taxjson sanity margin rrsp margin.toml "
+                       "`tjs sanity margin rrsp margin.toml "
                        "rrsp.toml`), or pair them: "
                        "`margin=margin.toml+margin-2.toml`")
     ordered: List[Dict[str, Any]] = list(groups.values())
@@ -23274,7 +23298,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         except Exception as e:
             from taxjson.lib.out import warn as _warn
             _warn(f"ticker.map not applied ({e}) — cross-listed symbols "
-                  f"may mismatch.", prog="taxjson sanity")
+                  f"may mismatch.", prog="tjs sanity")
             renames = None
 
     def _mapped(sym: str) -> str:
@@ -23454,7 +23478,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             except PC.BaseBookError as e:
                 # (exit 2, an input that cannot be read: TJ-0353)
                 _die_input(f"the books of {acct!r} cannot be read ({e}) — "
-                           f"re-run `taxjson run` to rebuild them")
+                           f"re-run `tjs run` to rebuild them")
         return base_rows[acct]
 
     def _file_day(_p: Path) -> str:
@@ -23570,7 +23594,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                         except ValueError:
                             return str(_p)
                     _one = (f" Or compare one date's files in a run of "
-                            f"their own: `taxjson sanity {_acct}="
+                            f"their own: `tjs sanity {_acct}="
                             + "+".join(_mask_ids_in_path(_rel(_p))
                                        for _p in grp["files"]
                                        if days[_p] == _whole[-1])
@@ -23621,7 +23645,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                 "number) to the [meta] of "
                 + ", ".join(_mask_ids_in_path(_p.name) for _p in _unnamed)
                 + "; or keep one snapshot per broker account (the year-end "
-                "one); or check one file at a time: `taxjson sanity "
+                "one); or check one file at a time: `tjs sanity "
                 "ACCOUNT=FILE`.")
         for _files in units:
             sub = grp if len(units) == 1 else dict(grp, files=_files)
@@ -23672,7 +23696,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                              f"dated {_one_day}, and the books' rows "
                              f"(work/<account>_base.json) are missing: "
                              f"compared with the latest books — "
-                             f"`taxjson run` writes them.")
+                             f"`tjs run` writes them.")
             _ds = sorted(d for d in _dates if d)
             # (an undated file beside a dated one is of the books' last
             # day: two dates too, backlog TJ-0257)
@@ -24122,7 +24146,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                     "Fewer shares in taxjson than at the broker usually "
                     "means missing history: purchases from before your "
                     "download starts, or shares transferred in. See "
-                    "`taxjson find-missing-history`, `taxjson transfers` "
+                    "`tjs find-missing-history`, `tjs transfers` "
                     "and docs/getting-started.md step 5. A trade after "
                     "your last export is the other usual cause."):
                 print(ln)
@@ -24133,7 +24157,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
     raise SystemExit(0 if not all_rows else 1)
 
 
-# What `taxjson opening` writes into a .tt line from a positions
+# What `tjs opening` writes into a .tt line from a positions
 # report's cells (security review M2): anything else is skipped, named.
 _OPENING_SYMBOL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]*\Z")
 _OPENING_CURRENCY_RE = re.compile(r"[A-Z]{3}\Z")
@@ -24290,7 +24314,7 @@ def _opening_lines(report, *, country: str, base_currency: str,
                                      f"ticker.map (each exercise or "
                                      f"assignment of it delivers "
                                      f"{size_text(m)} units a contract), "
-                                     f"then run `taxjson opening` again"))
+                                     f"then run `tjs opening` again"))
                 continue
             size = f" x{size_text(m)}"
         lines.append(f"OPENING {snapshot} {sym} {qtext} {cur} "
@@ -24301,13 +24325,13 @@ def _opening_lines(report, *, country: str, base_currency: str,
                      "lot method); Canadian ACB is the average cost of "
                      "all identical shares (s.47). They differ when part "
                      "of a position was sold before the snapshot — check "
-                     "those with `taxjson sanity` once the books are "
+                     "those with `tjs sanity` once the books are "
                      "built.")
     return lines, skipped, notes
 
 
 def cmd_opening(args: argparse.Namespace) -> None:
-    """`taxjson opening ACCOUNT FILE [--date D] [--dry-run] [--force]`:
+    """`tjs opening ACCOUNT FILE [--date D] [--dry-run] [--force]`:
     turn a broker's positions report (lib/positions_reports: an IB
     Activity Statement's Open Positions, an RBC Holdings Export, a
     `[[holding]]` TOML) into an opening balance —
@@ -24364,7 +24388,7 @@ def cmd_opening(args: argparse.Namespace) -> None:
                 ", or pass --date YYYY-MM-DD."))
     if args.date and report.as_of and args.date != report.as_of:
         _note(f"the report is as of {report.as_of}; the opening is dated "
-              f"{args.date} as given (--date).", prog="taxjson opening")
+              f"{args.date} as given (--date).", prog="tjs opening")
     # Counted by each row's key of the whole account id: the masked
     # label (two characters + ***) is the same for two ids that share
     # their first two characters. A consolidated IB statement's rows
@@ -24450,7 +24474,7 @@ def cmd_opening(args: argparse.Namespace) -> None:
              "the lines, first.")
     header = [
         f"# Opening balance of account {name} on {snapshot} "
-        f"(`taxjson opening`).",
+        f"(`tjs opening`).",
         # A control character of the file name or an account cell (a
         # newline) would end the comment and book the rest as a line
         # (security review L3).
@@ -24478,7 +24502,7 @@ def cmd_opening(args: argparse.Namespace) -> None:
         except ValueError as e:
             _die(f"an OPENING line would not read back: {e}",
                  "Nothing written: fix that position's row in the "
-                 "report (or leave it out), then `taxjson opening` "
+                 "report (or leave it out), then `tjs opening` "
                  "again.")
     if getattr(args, "dry_run", False):
         sys.stdout.write(text)
@@ -24511,12 +24535,12 @@ def cmd_opening(args: argparse.Namespace) -> None:
                                                          "written.") if x))
         if bak is not None:
             _note(f"kept the previous {out.name} as {bak.name}",
-                  prog="taxjson opening")
-        _shared_inputs_note(root, out, "taxjson opening")
+                  prog="tjs opening")
+        _shared_inputs_note(root, out, "tjs opening")
     for n in report.notes + notes:
-        _note(n, prog="taxjson opening")
+        _note(n, prog="tjs opening")
     for sym, why in skipped:
-        _warn(f"skipped {sym}: {why}", prog="taxjson opening")
+        _warn(f"skipped {sym}: {why}", prog="tjs opening")
     if not lines:
         _die(f"no position of {shown_name(path)} could be written (see "
              f"above) — nothing written")
@@ -24529,8 +24553,8 @@ def cmd_opening(args: argparse.Namespace) -> None:
                        if skipped else "")):
         print(ln)
     if not getattr(args, "dry_run", False):
-        for ln in _wrap("Next: `taxjson run`, then `taxjson "
-                        "find-missing-history` and `taxjson sanity` (it "
+        for ln in _wrap("Next: `tjs run`, then `tjs "
+                        "find-missing-history` and `tjs sanity` (it "
                         "compares quantities and costs)."):
             print(ln)
 
@@ -24571,7 +24595,7 @@ def _sanity_spellings(rows: List[Dict[str, Any]],
 def _sanity_pointers(root: Path, rows: List[Dict[str, Any]],
                      distinct: Iterable[frozenset] = ()
                      ) -> List[Tuple[str, str]]:
-    """The `! ` lines closing `taxjson sanity`'s table: (text, command)
+    """The `! ` lines closing `tjs sanity`'s table: (text, command)
     per kind of difference, each naming the fix that works for it
     (docs/getting-started.md, step 5b) — a symbol spelled two ways (the
     books' symbol, `tjs list`), shares transferred in with no cost
@@ -24674,10 +24698,10 @@ def _sanity_print_extras(groups, cost_all, cost_diffs, cost_matched,
                          cost_na, income_all, multi,
                          brief: bool = False,
                          concise: bool = False) -> None:
-    """The COST and INCOME sections of `taxjson sanity` (after the
+    """The COST and INCOME sections of `tjs sanity` (after the
     quantity check, never changing its exit code). `brief` (the check
-    `taxjson run` ends with): one line each, the tables are
-    `taxjson sanity`'s."""
+    `tjs run` ends with): one line each, the tables are
+    `tjs sanity`'s."""
     from taxjson.lib.positions_check import REASON_TEXT
     from taxjson.lib.out import wrap as _wrap
 
@@ -24692,11 +24716,11 @@ def _sanity_print_extras(groups, cost_all, cost_diffs, cost_matched,
             _p(f"COST: {len(cost_diffs)} of {compared} position(s) "
                f"differ from the reports' cost "
                f"({sum(1 for c in cost_diffs if c['reasons'] == ['unexplained'])}"
-               f" unexplained) — `taxjson sanity` lists them with "
+               f" unexplained) — `tjs sanity` lists them with "
                f"their reasons (informational).")
         if income_all:
             _p(f"INCOME: {len(income_all)} dividend row(s) state a "
-               f"share count the books did not hold — `taxjson "
+               f"share count the books did not hold — `tjs "
                f"sanity` lists them.")
         return
     if concise:
@@ -24776,7 +24800,7 @@ def _sanity_print_extras(groups, cost_all, cost_diffs, cost_matched,
 
 
 def _list_positional_date(args: argparse.Namespace) -> None:
-    """`taxjson list [ACCOUNT] [YYYY-MM-DD]`: a positional YYYY-MM-DD is
+    """`tjs list [ACCOUNT] [YYYY-MM-DD]`: a positional YYYY-MM-DD is
     the date (as --date), anything else the account — `list margin
     2026-04-28` and `list 2026-04-28` both work. Sets args.account and
     args.date; two dates, two accounts or a date that differs from
@@ -24788,7 +24812,7 @@ def _list_positional_date(args: argparse.Namespace) -> None:
     if len(dates) > 1 or len(accounts) > 1:
         _die(f"list takes one account and one date: got "
              f"{' '.join(given)}",
-             "Usage: taxjson list [ACCOUNT] [YYYY-MM-DD]")
+             "Usage: tjs list [ACCOUNT] [YYYY-MM-DD]")
     if dates:
         if getattr(args, "date", None) and args.date != dates[0]:
             _die(f"two dates: {dates[0]} and --date {args.date}",
@@ -24820,7 +24844,7 @@ def _dated_inventory(cache: Path, acct: str, gains: Path, as_of: str,
     tl_path = timeline_beside(combined)
     if not tl_path.exists():
         _die(f"no cost timeline for {acct} (work/{tl_path.name})",
-             "Run `taxjson run`: it writes the positions per day with the "
+             "Run `tjs run`: it writes the positions per day with the "
              "gains.")
     tl = _load_json_or_die(tl_path)
     problem = CT.check(tl)
@@ -24828,7 +24852,7 @@ def _dated_inventory(cache: Path, acct: str, gains: Path, as_of: str,
         # A damaged sidecar is an input that cannot be read: exit 2
         # (docs/commands.md's exit codes; backlog TJ-0684).
         _die_input(f"work/{tl_path.name}: {problem}",
-                   "Run `taxjson run` to rebuild it.")
+                   "Run `tjs run` to rebuild it.")
     basis = str(tl.get("basis") or "settle")
     rows = CT.inventory_on(tl, as_of, eps=CT.us_eps if us else None)
     # A short beside a long, at its own proceeds (backlog TJ-1104).
@@ -24918,8 +24942,8 @@ def cmd_positions(args: argparse.Namespace) -> None:
         if not files:
             if args.account:
                 _die_input(f"no gains for account {args.account!r} in "
-                           f"work/ — run `taxjson run` first")
-            _die_input("no gains files in work/ — run `taxjson run` first")
+                           f"work/ — run `tjs run` first")
+            _die_input("no gains files in work/ — run `tjs run` first")
         from taxjson.lib.country import is_usa
         _us = is_usa(_country(settings))
         tmp_docs = {}
@@ -24939,9 +24963,9 @@ def cmd_positions(args: argparse.Namespace) -> None:
         if not files:
             if args.account:
                 _die_input(f"no gains for account {args.account!r} in "
-                           f"work/ — run `taxjson run` first, or check the "
+                           f"work/ — run `tjs run` first, or check the "
                            f"name")
-            _die_input("no gains files in work/ — run `taxjson run` first")
+            _die_input("no gains files in work/ — run `tjs run` first")
         basis = gains_basis_label(files)
 
     money = fmt_money               # shared report-layer formatter
@@ -25090,9 +25114,9 @@ def cmd_positions(args: argparse.Namespace) -> None:
     elif negative_only and n_sus:
         _vprint("Each is a sale your files show nothing to close for: a "
                 "purchase before the data (or a transfer-in) is missing. "
-                "Supply it (`taxjson find-missing-history` lists the "
+                "Supply it (`tjs find-missing-history` lists the "
                 "fixes), or record them all as openings with no cost so "
-                "the shorts disappear: `taxjson find-missing-history "
+                "the shorts disappear: `tjs find-missing-history "
                 "--write-missing-history --all-history` (their sales then "
                 "leave the totals and are reported by hand; "
                 "`--outside-year` records only the ones that do not touch "
@@ -25130,7 +25154,7 @@ def cmd_positions(args: argparse.Namespace) -> None:
     if n_sus and not negative_only:
         _vprint(f"{n_sus} short position(s) marked `missing history?`: a "
                 f"sale with no purchase in your files, not a real short — "
-                f"`taxjson list --negative` lists them apart.", hang="  ")
+                f"`tjs list --negative` lists them apart.", hang="  ")
     if total_deferred > 0.005:
         _us_l = _country(_soft_settings(root)) == "usa"
         _vprint(f"DEFERRED: {money(total_deferred)} {base} of the book "
@@ -25170,9 +25194,9 @@ def _books_horizon(cache: Path, accounts: List[str]) -> Optional[str]:
         except FileNotFoundError:
             continue
         except (OSError, ValueError, AttributeError) as e:
-            emit_line(f"taxjson: warning: work/{p.name} cannot be read "
+            emit_line(f"tjs: warning: work/{p.name} cannot be read "
                       f"({str(e)[:120]}) — the 'as of' date leaves account "
-                      f"{a} out; re-run `taxjson run`.", file=sys.stderr)
+                      f"{a} out; re-run `tjs run`.", file=sys.stderr)
             continue
         for t in txs:
             if not isinstance(t, dict):
@@ -25245,7 +25269,7 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
         if getattr(args, "json", False):
             # The trace is prose from taxjson-explain — silently
             # printing text under --json broke machine consumers.
-            sys.exit(exit_text("taxjson wash-sales: --explain has no JSON form; "
+            sys.exit(exit_text("tjs wash-sales: --explain has no JSON form; "
                                "drop --json (or drop --explain for the "
                                "machine-readable table)."))
         _explain_wash_sales(root, cache, args.account)
@@ -25259,8 +25283,8 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
         # missing, as sanity says it (backlog TJ-0642, TJ-0631).
         if args.account:
             _die_input(f"no gains for account {args.account!r} in work/ "
-                       f"— run `taxjson run` first, or check the name.")
-        _die_input("no gains files in work/ — run `taxjson run` first.")
+                       f"— run `tjs run` first, or check the name.")
+        _die_input("no gains files in work/ — run `tjs run` first.")
     if not args.account:
         _warn_accounts_without_books(root, resolved, "wash-sales",
                                      "gains file")
@@ -25494,7 +25518,7 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
 
 
 def cmd_t1135(args: argparse.Namespace) -> None:
-    """`taxjson t1135`: CRA T1135 foreign-property helper over ALL taxable
+    """`tjs t1135`: CRA T1135 foreign-property helper over ALL taxable
     accounts (T1135 is a per-person form; registered accounts are excluded
     from specified foreign property by law, so sheltered accounts are never
     read). Feeds every taxable `<account>_base.json` (full history, base
@@ -25514,7 +25538,7 @@ def cmd_t1135(args: argparse.Namespace) -> None:
         _die("no [settings] year in taxjson.toml")
     base_currency = str(_base(settings))
     if base_currency.upper() != "CAD":
-        note("taxjson t1135",
+        note("tjs t1135",
              f"base_currency is {base_currency} — T1135 amounts must be "
              f"reported in CAD; these figures are in {base_currency}.")
 
@@ -25555,18 +25579,18 @@ def cmd_t1135(args: argparse.Namespace) -> None:
         _die(f"no gains file for taxable account(s) {', '.join(no_gains)} "
              f"in work/ — the T1135 income and gain(loss) columns come "
              f"from it",
-             "Re-run `taxjson run` to rebuild it; without it those "
+             "Re-run `tjs run` to rebuild it; without it those "
              "accounts' income and gains would read 0.")
     missing = [n for n in missing
                if n not in _accounts_skipped_for_no_inputs(root)]
     if missing:
         from taxjson.lib.out import warn as _warn
         _warn(f"no base file for taxable account(s) {', '.join(missing)}",
-              prog="taxjson t1135",
-              details=["Run `taxjson run` first; the threshold test below "
+              prog="tjs t1135",
+              details=["Run `tjs run` first; the threshold test below "
                        "may be understated."])
     if not argv:
-        _die("no taxable base files in work/", "Run `taxjson run` first.")
+        _die("no taxable base files in work/", "Run `tjs run` first.")
     # The income/gain columns come from the year-scoped gains files: on
     # books built for another year they silently read 0 (S007-06,
     # S048-01).
@@ -25640,7 +25664,7 @@ def cmd_t1135(args: argparse.Namespace) -> None:
 
 def _t1135_cash_doc(root: Path, cache: Path, cfg: Dict[str, Any],
                     settings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """The cash rows of `taxjson t1135` (lib/t1135_cash.cash_doc), None
+    """The cash rows of `tjs t1135` (lib/t1135_cash.cash_doc), None
     when no taxable account holds cash outside Canada (or the project
     is not Canadian). The FX-on-cash ledger v2 costs it; where it
     refuses or cannot run, the doc says so (an unknown cost, the total
@@ -25662,7 +25686,7 @@ def _t1135_cash_doc(root: Path, cache: Path, cfg: Dict[str, Any],
     # on: on trade dates a purchase's cash leaves as its shares come in
     # (backlog TJ-0627).
     basis = _tax_date_basis(settings)
-    # The ledger's own notes are `taxjson fx-cash`'s to say.
+    # The ledger's own notes are `tjs fx-cash`'s to say.
     with contextlib.redirect_stderr(io.StringIO()):
         try:
             ledger = _fx_cash_v2_doc(root, cache, holdings=True,
@@ -25676,7 +25700,7 @@ def _t1135_cash_doc(root: Path, cache: Path, cfg: Dict[str, Any],
         from taxjson.lib.brokerages._crypto_common import USD_STABLECOINS
         stable = sorted(USD_STABLECOINS)
     refusal = refusal.split("\n", 1)[0]
-    for p in ("taxjson fx-cash: error: ", "taxjson fx-cash: "):
+    for p in ("tjs fx-cash: error: ", "tjs fx-cash: "):
         if refusal.startswith(p):
             refusal = refusal[len(p):]
     return TC.cash_doc(ledger, counted, year, base,
@@ -25706,7 +25730,7 @@ def _box18_by_year(root: Path, accounts) -> Dict[int, float]:
             _die_input(f"could not read {_work_read_why(p, e, root)}",
                        "It holds the capital-gains dividends "
                        "[[capital_gains_dividends]] names. Re-run "
-                       "`taxjson run` to rebuild it.")
+                       "`tjs run` to rebuild it.")
         for t in data.get("transactions", []):
             f = fr.get((acct, str(t.get("id"))))
             if not f or t.get("action") != "DIVIDEND":
@@ -25720,7 +25744,7 @@ def _box18_by_year(root: Path, accounts) -> Dict[int, float]:
 
 
 def cmd_carryover(args: argparse.Namespace) -> None:
-    """`taxjson carryover`: multi-year capital-loss carryforward/carryback
+    """`tjs carryover`: multi-year capital-loss carryforward/carryback
     ledger over all taxable accounts' full-history books. Passes the
     combined sheltered book for wash-window context and the project's
     .tt OPENING cost=unknown lines when present. taxjson.toml's [carryover] claimed
@@ -25757,11 +25781,11 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     if missing:
         from taxjson.lib.out import warn as _warn
         _warn(f"no base file for taxable account(s) {', '.join(missing)}",
-              prog="taxjson carryover",
-              details=["Run `taxjson run` first; those years' nets will "
+              prog="tjs carryover",
+              details=["Run `tjs run` first; those years' nets will "
                        "be incomplete."])
     if not base_argv and not crypto_argv:
-        _die("no taxable base files in work/", "Run `taxjson run` first.")
+        _die("no taxable base files in work/", "Run `tjs run` first.")
     # A crypto-only project passes its books as --crypto only: fed as
     # positional FILEs they lost the US no-wash pass (US-WASH-13; audit
     # A2-0146, A2-0411, A2-0412).
@@ -25823,7 +25847,7 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     _w = _grant_since_warning(settings, root, cfg.get("accounts") or {})
     if _w:
         from taxjson.lib.out import warn as _warn
-        _warn(_w, prog="taxjson carryover")
+        _warn(_w, prog="tjs carryover")
     # Deferred / failed / validation-ERROR books drive the carryforward
     # balance too (S048-21).
     _warn_run_state(root, cfg)
@@ -25838,7 +25862,7 @@ def cmd_carryover(args: argparse.Namespace) -> None:
 
 def _taxable_gains_argv(root: Path, cache: Path, *,
                         exclude_crypto: bool = False,
-                        prog: str = "taxjson",
+                        prog: str = "tjs",
                         required: bool = False) -> List[str]:
     """`--gains FILE` pairs for every taxable account, preferring the
     wash-adjusted `<account>_gains_wash.json` (the allowed numbers a return
@@ -25881,7 +25905,7 @@ def _taxable_gains_argv(root: Path, cache: Path, *,
         elif name not in _no_input:
             from taxjson.lib.out import warn as _warn
             _warn(f"no gains file for taxable account {name!r}",
-                  prog=prog, details=["Run `taxjson run` first."])
+                  prog=prog, details=["Run `tjs run` first."])
     if required:
         # The Schedule 3 / 8949 export and the slip check must not be
         # partial: a failed account was a one-line warning with rc 0,
@@ -25890,12 +25914,12 @@ def _taxable_gains_argv(root: Path, cache: Path, *,
             root, {"accounts": {n: accounts_cfg[n] for n in taxable}},
             have, "gains file")
     if not argv:
-        _die("no taxable gains files in work/", "Run `taxjson run` first.")
+        _die("no taxable gains files in work/", "Run `tjs run` first.")
     return argv
 
 
 def cmd_form_export(args: argparse.Namespace) -> None:
-    """`taxjson form-export`: render the year's gains as IRS Form 8949 or
+    """`tjs form-export`: render the year's gains as IRS Form 8949 or
     CRA Schedule 3 rows. Form defaults from the project country."""
     from taxjson.bin import taxjson_form_export
 
@@ -25945,7 +25969,7 @@ def cmd_form_export(args: argparse.Namespace) -> None:
         argv.append("--json")
         for _p in _state_probs or ():
             argv += ["--run-state-problem", str(_p)]
-    # What `taxjson sum` counts as missing from the totals that the gains
+    # What `tjs sum` counts as missing from the totals that the gains
     # files cannot tell: an in-kind move with a registered account the
     # run could not value, a sale with no purchase in the files — the
     # same readiness record, and a `! ` line each (backlog TJ-0251).
@@ -25985,7 +26009,7 @@ def _radar_as_of(sidecar: Path) -> Optional[str]:
 
 
 def cmd_harvest(args: argparse.Namespace) -> None:
-    """`taxjson harvest [SYMBOL]`: unrealized gain/(loss) per open
+    """`tjs harvest [SYMBOL]`: unrealized gain/(loss) per open
     position at current prices — "if I sold this today, is it a loss?" —
     over every taxable account's wash-adjusted books, harvestable losses
     first, each loss annotated with the wash radar's advisory. Prices
@@ -26011,7 +26035,7 @@ def cmd_harvest(args: argparse.Namespace) -> None:
     taxable = [n for n, c in sorted(accounts_cfg.items())
                if c.get("type") == "taxable" and not _skip_crypto(c)]
     if skipped:
-        note("taxjson harvest",
+        note("tjs harvest",
              f"crypto account(s) excluded: {', '.join(skipped)} "
              f"(pass --crypto to include them).")
     if not taxable:
@@ -26027,19 +26051,19 @@ def cmd_harvest(args: argparse.Namespace) -> None:
         elif name not in _no_input:
             from taxjson.lib.out import warn as _warn
             _warn(f"no gains file for taxable account {name!r} — run "
-                  f"`taxjson run` first.", prog="taxjson harvest")
+                  f"`tjs run` first.", prog="tjs harvest")
     if not files:
         _die("no taxable gains files in work/",
-             "Run `taxjson run` first.")
+             "Run `tjs run` first.")
     # Its rename rules decide which option contract is quoted: with a
     # malformed `GLOBAL OLD.TO NEW.TO` dropped, the books' NEW contract
     # was quoted for the OLD one held, a loss read as a gain (backlog
-    # TJ-0352, audit TJ-0399). Refused as `taxjson run` refuses it.
+    # TJ-0352, audit TJ-0399). Refused as `tjs run` refuses it.
     _strict_ticker_map(
         root, "its rename rules decide which contract an option row is "
         "quoted as and its SIMILAR lines the wash caveats, so a "
         "valuation without the rule can price another contract "
-        "(`taxjson run` refuses this map too)")
+        "(`tjs run` refuses this map too)")
     cmd = _cmd("taxjson-harvest") + files + [
         "--price-cache", str(cache / ".price_cache.json"),
         "--country", _country(settings),
@@ -26115,11 +26139,11 @@ def cmd_harvest(args: argparse.Namespace) -> None:
                        "accounts' trades are missing from this harvest",
                        "A registered account's recent buy can deny a loss "
                        "for good, so the wash-radar reports cannot be "
-                       "brought up to date without them. Run `taxjson "
+                       "brought up to date without them. Run `tjs "
                        "run` first to rebuild it.")
         from taxjson.lib.dispatch import run_cmd as _run_live
         _live = cache / ".harvest_radar.json"
-        _bases = _radar_taxable_bases(root, cache, "taxjson harvest",
+        _bases = _radar_taxable_bases(root, cache, "tjs harvest",
                                       empty_ok=True)
         _rcmd = _cmd("taxjson-wash-radar") + [
             "--taxable", *[str(b) for b in _bases],
@@ -26131,10 +26155,10 @@ def cmd_harvest(args: argparse.Namespace) -> None:
         _res = _run_live(_rcmd, capture_output=True)
         if _res.returncode == 0 and _live.exists():
             if _old_books:
-                note("taxjson harvest",
+                note("tjs harvest",
                      "the wash-radar reports are older than the books (a "
                      "single-account run?) — using a live radar",
-                     details=["Run a full `taxjson run` to refresh "
+                     details=["Run a full `tjs run` to refresh "
                               "reports/."])
             radar_files = [_live]
         else:
@@ -26144,9 +26168,9 @@ def cmd_harvest(args: argparse.Namespace) -> None:
                      else "of an earlier day")
                   + " and a live radar failed — the ADVISORY column is "
                   "left empty",
-                  prog="taxjson harvest",
+                  prog="tjs harvest",
                   details=["Losses count as 'no clear date'; run a full "
-                           "`taxjson run`."])
+                           "`tjs run`."])
             radar_files = []
     for sidecar in radar_files:
         cmd += ["--radar", str(sidecar)]
@@ -26214,12 +26238,12 @@ def _warn_artifact_year(files: Dict[str, Path], config_year) -> None:
     got = ", ".join(f"{a} ({y})" for a, y in sorted(bad.items()))
     if _brief(sys.stderr):
         _say("warning", f"these figures are NOT {config_year}'s: work/ "
-             f"was built for another year — run `taxjson run`",
+             f"was built for another year — run `tjs run`",
              prog=_cmd_prog())
         return
     _say("warning", f"[settings].year is {config_year} but the work/ "
          f"books were built for another tax year: {got}",
-         f"These figures are NOT {config_year}'s — rebuild with `taxjson "
+         f"These figures are NOT {config_year}'s — rebuild with `tjs "
          f"run` first.", prog=_cmd_prog())
 
 
@@ -26245,19 +26269,19 @@ def _tax_date_basis(settings: Dict[str, Any]) -> str:
 
 
 def _has_inputs(root: Path, name: str) -> bool:
-    """inputs/<name>/ holds an activity file `taxjson run` reads."""
+    """inputs/<name>/ holds an activity file `tjs run` reads."""
     d = _PL.inputs_dir(root) / name
     return bool(input_files(d, ".csv") or input_files(d, ".tt"))
 
 
 # _run_state_problems' entry for a run that died after writing work/:
 # close-year refuses those books even with --force (backlog TJ-0015).
-_RUN_UNFINISHED = ("the last `taxjson run` did not finish: reports/ has "
+_RUN_UNFINISHED = ("the last `tjs run` did not finish: reports/ has "
                    "no .sum, but work/ holds the partial books it wrote")
 
 
 def _run_state_problems(root: Path, cfg: Dict[str, Any]) -> List[str]:
-    """What `taxjson checklist`'s run-clean step finds wrong with the
+    """What `tjs checklist`'s run-clean step finds wrong with the
     books the filing commands read: validation ERRORs in the last run,
     an account deferred on pending elections, inputs changed since the
     last full run (a failed run leaves them newer than the artifacts),
@@ -26315,7 +26339,7 @@ def _refuse_other_country_books(root: Path, cfg: Dict[str, Any]) -> None:
     if built and built != now:
         _die(f"the books in work/ were built by the last full run for country = \"{built}\", but "
              f"taxjson.toml now says \"{now}\" — their figures follow the "
-             f"other country's law. Run `taxjson run` to rebuild them "
+             f"other country's law. Run `tjs run` to rebuild them "
              f"before using any report.")
 
 
@@ -26329,13 +26353,13 @@ def _warn_run_state(root: Path, cfg: Dict[str, Any]) -> List[str]:
                   if _filed_year_stale_hint(root, cfg, probs) else "")
         _say("warning", f"these books are not the clean result of the "
              f"current inputs ({_count_noun(len(probs), 'problem')}"
-             f"{_filed}): `taxjson checklist --run`", prog=_cmd_prog())
+             f"{_filed}): `tjs checklist --run`", prog=_cmd_prog())
     elif probs:
         _say("warning", "these books are not the clean result of the "
              "current inputs",
              *[f"- {p}" for p in probs],
              "The figures below may leave sales out or carry default FX; "
-             "fix and re-run `taxjson run` before using them."
+             "fix and re-run `tjs run` before using them."
              + _filed_year_stale_hint(root, cfg, probs),
              prog=_cmd_prog())
     return probs
@@ -26356,7 +26380,7 @@ def _filed_year_stale_hint(root: Path, cfg: Dict[str, Any],
                for p in probs):
         return ""
     return (f" {year} is filed (filed/{year}.json) and its inputs changed "
-            f"since the last run: `taxjson run` here recomputes the year "
+            f"since the last run: `tjs run` here recomputes the year "
             f"and says whether the filed figures moved (DRIFTED).")
 
 
@@ -26372,8 +26396,8 @@ def _require_taxable_books(root: Path, cfg: Dict[str, Any],
         and n not in have and _has_inputs(root, n))
     if missing:
         _die(f"no {what} for taxable account(s) {', '.join(missing)} — "
-             f"the last `taxjson run` did not build them (did it fail?). "
-             f"Fix and re-run `taxjson run`; figures without them would "
+             f"the last `tjs run` did not build them (did it fail?). "
+             f"Fix and re-run `tjs run`; figures without them would "
              f"leave those accounts out.")
 
 
@@ -26411,12 +26435,12 @@ _CLOSE_YEAR_TODO = frozenset({"inputs-committed"})
 
 def _return_row_totals(cfg: Dict[str, Any], files: Dict[str, Path],
                        year: int) -> Optional[Dict[str, float]]:
-    """`realized` and `disallowed` as `taxjson sum`'s FOR THE RETURN row
+    """`realized` and `disallowed` as `tjs sum`'s FOR THE RETURN row
     files them, for the taxable gains `files`: each disposition's cents
     summed per return line (Canada: Schedule 3's gain and denied; USA:
     Form 8949's (h) and (g), the §1256 net of Form 6781 added to the
     gain). The lock's `totals` round the engine's unrounded sum once,
-    a cent or two apart on a large year: close-year and `taxjson years`
+    a cent or two apart on a large year: close-year and `tjs years`
     show these, check-filed compares the totals (backlog TJ-0192). None
     when the dispositions cannot be read."""
     import io
@@ -26454,7 +26478,7 @@ def _return_row_totals(cfg: Dict[str, Any], files: Dict[str, Path],
 def _project_return_row(root: Path, cfg: Dict[str, Any],
                         taxable: List[str]) -> Optional[Dict[str, float]]:
     """The project year's RETURN row (`_return_row_totals`) over the
-    taxable accounts' gains files in work/, for `taxjson carryover`'s
+    taxable accounts' gains files in work/, for `tjs carryover`'s
     ledger (Canada: its net is one figure; backlog TJ-0208). None in a
     US project, with no year, or when a taxable account with books has
     no gains file of the year (a partial RETURN row is no figure)."""
@@ -26473,13 +26497,13 @@ def _project_return_row(root: Path, cfg: Dict[str, Any],
 
 
 def cmd_close_year(args: argparse.Namespace) -> None:
-    """`taxjson close-year`: snapshot the current tax year's per-account
+    """`tjs close-year`: snapshot the current tax year's per-account
     filing aggregates to filed/<year>.json (the filed-year lock)."""
     from taxjson.bin import taxjson_filed
     from taxjson.lib.report_model import (gains_basis_label,
                                           resolve_gains_files)
     from taxjson.lib import out as _out
-    _prog = "taxjson close-year"
+    _prog = "tjs close-year"
     _nothing = "Nothing was written."
     root = Path(args.dir).resolve()
     cache = root / "work"
@@ -26490,22 +26514,22 @@ def cmd_close_year(args: argparse.Namespace) -> None:
         _die(f"the work/ gains artifacts are scoped to tax year "
              f"{settings.get('year')}",
              "Set [settings].year to the year you are closing, run "
-             "`taxjson run`, then close.")
+             "`tjs run`, then close.")
     taxable = {n for n, c in cfg.get("accounts", {}).items()
                if c.get("type") == "taxable"}
     files = {a: p for a, p in resolve_gains_files(cache).items()
              if a in taxable}
     if not files:
-        _die("no taxable gains files in work/", "Run `taxjson run` first.")
+        _die("no taxable gains files in work/", "Run `tjs run` first.")
     # The books, inputs and reports stay as they are until the lock is
-    # written: no `taxjson run` meanwhile (backlog TJ-0924).
+    # written: no `tjs run` meanwhile (backlog TJ-0924).
     _acquire_run_lock(cache, closing=True)
     _bad_year = _artifact_year_mismatch(files, settings.get("year"))
     if _bad_year:
         _die(f"the work/ books were built for another tax year ("
              f"{', '.join(f'{a}: {y}' for a, y in sorted(_bad_year.items()))}"
              f") but [settings].year is {settings.get('year')}",
-             f"Rebuild with `taxjson run` first, then close. {_nothing}")
+             f"Rebuild with `tjs run` first, then close. {_nothing}")
     # A taxable account with inputs but no gains file (its stage
     # failed) was left out of the lock without a word, and then never
     # drift-checked (S006-07).
@@ -26526,7 +26550,7 @@ def cmd_close_year(args: argparse.Namespace) -> None:
         and not Path(pth).name.endswith("_gains_wash.json"))
     # Staleness guard: after `run --account X` the wash file predates
     # the just-rebuilt plain gains (the blend pass was skipped).
-    # `taxjson sum` merely notes this; close-year WRITES the filing
+    # `tjs sum` merely notes this; close-year WRITES the filing
     # lock, so snapshotting stale numbers is a hard stop.
     # A sheltered rebuild (`run --account <sheltered>`) refreshes
     # sheltered_base.json without the wash pass — the same stale lock
@@ -26543,10 +26567,10 @@ def cmd_close_year(args: argparse.Namespace) -> None:
         n for n in (cfg.get("accounts") or {})
         if (cache / f"{n}_pending_elections.json").exists())
     _why_unblended = (
-        f"The last `taxjson run` deferred {', '.join(_deferred)} at "
-        f"pending elections (`taxjson elect --pending`), so its "
+        f"The last `tjs run` deferred {', '.join(_deferred)} at "
+        f"pending elections (`tjs elect --pending`), so its "
         f"cross-account pass never ran: make the elections, run "
-        f"`taxjson run`, then close." if _deferred else None)
+        f"`tjs run`, then close." if _deferred else None)
     # --force locks books with open problems, but never books it cannot:
     # a run that did not finish (the reports as filed would be empty,
     # backlog TJ-0015), or books the cross-account pass did not build
@@ -26556,21 +26580,21 @@ def cmd_close_year(args: argparse.Namespace) -> None:
         _forceable = not (_unfinished or _unblended or stale)
         _die("the books are not the clean result of the current inputs",
              *[f"- {_p}" for _p in _state],
-             f"Fix and re-run `taxjson run`, then close"
+             f"Fix and re-run `tjs run`, then close"
              + (" (or pass --force to lock them anyway)" if _forceable
                 else "") + f". {_nothing}")
     if _unblended:
         _die(f"{', '.join(_unblended)} only has per-account (pre-wash, "
              f"unblended) gains",
              (_why_unblended or
-              "The cross-account pass of a full `taxjson run` never ran. "
-              "Run `taxjson run` with no --account first.")
+              "The cross-account pass of a full `tjs run` never ran. "
+              "Run `tjs run` with no --account first.")
              + f" {_nothing}")
     if stale:
         _die(f"wash-adjusted gains for {'; '.join(stale)} are STALE",
              (_why_unblended or
               "A --account rerun skipped the cross-account wash pass — "
-              "run a full `taxjson run` first.") + f" {_nothing}")
+              "run a full `tjs run` first.") + f" {_nothing}")
     if _state:
         _out.warn("locking books with open problems (--force)", prog=_prog,
                   details=[f"- {_p}" for _p in _state])
@@ -26592,7 +26616,7 @@ def cmd_close_year(args: argparse.Namespace) -> None:
             # Unreadable, not JSON, or JSON of the wrong shape (a list):
             # one line, never a traceback (S031-19).
             _die(f"could not read {_out.relpath(pth, root)}: {e}",
-                 f"Re-run `taxjson run` to rebuild it. {_nothing}")
+                 f"Re-run `tjs run` to rebuild it. {_nothing}")
     # A year with no disposition and no income in any taxable book is
     # almost always a typo'd [settings] year (2015, 2204): the lock
     # then guarded an all-zero "filed" year as OK (S045-24).
@@ -26633,7 +26657,7 @@ def cmd_close_year(args: argparse.Namespace) -> None:
              "taxjson.toml now says",
              f"{'; '.join(_ot_bad)}; settings: {_exp[0]}"
              + (f" since {_exp[1]}" if _exp[0] == "grant" else "") + ".",
-             f"Run `taxjson run`, then close. {_nothing}")
+             f"Run `tjs run`, then close. {_nothing}")
     filed_csv = (Path(args.filed_dispositions).expanduser()
                  if getattr(args, "filed_dispositions", None) else None)
     if filed_csv is not None and not filed_csv.exists():
@@ -26816,7 +26840,7 @@ def cmd_close_year(args: argparse.Namespace) -> None:
     # TJ-0917).
     try:
         # The RETURN row's figures, as filed: what the CLOSED block and
-        # `taxjson years` show (display only; check-filed compares
+        # `tjs years` show (display only; check-filed compares
         # `totals`).
         _ret = _return_row_totals(cfg, files, int(year))
         if _ret is not None:
@@ -26864,7 +26888,7 @@ def cmd_close_year(args: argparse.Namespace) -> None:
                                f"return: this is right only if you amended "
                                f"{year} to these figures — otherwise "
                                f"restore the old lock from your records "
-                               f"(git) and resolve the drift `taxjson "
+                               f"(git) and resolve the drift `tjs "
                                f"check-filed` reports."])
     if _old_lock is not None:
         # A later year filed on the net capital loss the replaced lock
@@ -26878,18 +26902,18 @@ def cmd_close_year(args: argparse.Namespace) -> None:
                       details=[_carry_in_detail(
                           _ly, int(year), _cm,
                           _out.relpath(path, root),
-                          ("`taxjson check-filed` " if _ld == root else
-                           f"`taxjson -C {_year_dir_arg(_ld.parent, _ly)}"
+                          ("`tjs check-filed` " if _ld == root else
+                           f"`tjs -C {_year_dir_arg(_ld.parent, _ly)}"
                            f" check-filed` ")
                           + f"names it ({_lp}); amend {_ly} as {year}: "
-                          f"`taxjson run`, and after filing `taxjson "
+                          f"`tjs run`, and after filing `tjs "
                           f"close-year --force` in {_ly}'s project.")])
     print()
     print(f"CLOSED {year} — {basis}, {len(accounts)} taxable account(s)")
-    # Realized and disallowed as the return files them (`taxjson sum`'s
+    # Realized and disallowed as the return files them (`tjs sum`'s
     # RETURN row), not the engine total a cent or two apart (TJ-0192).
     _shown = {**tot, **(_ret or {})}
-    # Income as `taxjson sum`'s taxable SUBTOTAL adds it (each
+    # Income as `tjs sum`'s taxable SUBTOTAL adds it (each
     # account's cents), not the lock's total rounded once (TJ-0212).
     _inc = taxjson_filed.income_as_summed({"accounts": accounts})
     if _inc is not None:
@@ -26906,18 +26930,18 @@ def cmd_close_year(args: argparse.Namespace) -> None:
             abs(float(tot[k]) - _ret[k]) > 0.005
             for k in ("realized", "disallowed")):
         _rnd.append(f"realized and disallowed are the RETURN "
-                    f"row of `taxjson sum` (each sale's cents); "
+                    f"row of `tjs sum` (each sale's cents); "
                     f"the engine totals the lock's drift check "
                     f"compares are {tot['realized']:,.2f} and "
                     f"{tot['disallowed']:,.2f}")
     if _det and abs(float(tot["income"]) - float(_shown["income"])) > 0.005:
-        _rnd.append(f"income is the taxable SUBTOTAL of `taxjson sum` "
+        _rnd.append(f"income is the taxable SUBTOTAL of `tjs sum` "
                     f"(each account's cents); the lock's total the drift "
                     f"check compares is {tot['income']:,.2f}")
     if _rnd:
         _kv.append(("Rounding", "; ".join(_rnd)))
     _kv.append(("Lock", f"{_out.relpath(path, root)} — commit it with "
-                        f"your records; `taxjson check-filed` now guards "
+                        f"your records; `tjs check-filed` now guards "
                         f"it" if _det else
                         f"{_out.relpath(path, root)} — commit it with "
                         f"your records"))
@@ -26926,7 +26950,7 @@ def cmd_close_year(args: argparse.Namespace) -> None:
         _kv.append(("As filed", f"{_ft['source']}: {_ft['dispositions']} "
                                 f"dispositions, gain {_ft['gain']:,.2f}"
                                 + (f" — the {int(year) + 1} project's "
-                                   f"`taxjson handoff` checks against "
+                                   f"`tjs handoff` checks against "
                                    f"these" if _det else "")))
     _kv.append(("Frozen", _frozen_summary(_frozen, _kept_reports,
                                           int(year), _det)))
@@ -26954,13 +26978,13 @@ def cmd_close_year(args: argparse.Namespace) -> None:
             print()
             for _ln in _out.wrap(_out.labelled(
                     f"note: these books carry a net capital loss of "
-                    f"{_bl:,.2f} into {year} (`taxjson carryover`) that "
+                    f"{_bl:,.2f} into {year} (`tjs carryover`) that "
                     f"the lock does not take in: with no [estimate] "
                     f"other_losses and no earlier close-year record, "
                     f"{year} started from 0.00. If that loss is yours "
                     f"(your notice of assessment's balance), set "
-                    f"[estimate] other_losses to it, `taxjson run`, then "
-                    f"`taxjson close-year --force`."), None, "", ""):
+                    f"[estimate] other_losses to it, `tjs run`, then "
+                    f"`tjs close-year --force`."), None, "", ""):
                 print(_ln)
 
 
@@ -27006,12 +27030,12 @@ def _config_rewrite_target(root: Path, nothing: str) -> Path:
     return real
 
 
-_FROZEN_NOTE = ("## frozen by `taxjson close-year`: this year reads its "
+_FROZEN_NOTE = ("## frozen by `tjs close-year`: this year reads its "
                 "own copy of the exports it was filed from")
 # The note above the second key the freeze comments out (the first
 # carries _FROZEN_NOTE; the keys need not be adjacent).
-_FROZEN_NOTE_2 = "## frozen by `taxjson close-year` too"
-_FROZEN_NOTE_PREFIX = "## frozen by `taxjson close-year`"
+_FROZEN_NOTE_2 = "## frozen by `tjs close-year` too"
+_FROZEN_NOTE_PREFIX = "## frozen by `tjs close-year`"
 
 
 def _one_frozen_note(text: str) -> str:
@@ -27397,19 +27421,19 @@ def _thaw_partial_freeze(root: Path, cfg: Dict[str, Any], year: int,
         _die(_what, f"the thaw did not finish: {e.strerror or e}",
              f"Check that taxjson.toml names "
              f"{' and '.join(want.values())} and remove the copies in "
-             f"{_PL.INPUTS}/ by hand, then `taxjson run` and close.")
+             f"{_PL.INPUTS}/ by hand, then `tjs run` and close.")
     _die(_what,
          f"Thawed: taxjson.toml reads {' and '.join(want.values())} "
          f"again, the {len(removes)} unchanged copied file(s) are "
          f"removed, and the {year} lock is a partial snapshot (its "
          f"inputs hashed, not frozen).",
-         f"Run `taxjson run` (later trades in {year} now show as drift), "
+         f"Run `tjs run` (later trades in {year} now show as drift), "
          f"then close the year after filing. Nothing was locked.")
 
 
 def _keep_filed_reports(root: Path, year: int, *, prog: str) -> int:
     """The reports as filed: reports/ copied to filed/<year>/reports/
-    (replaced on --force), what `taxjson compare filed` diffs against.
+    (replaced on --force), what `tjs compare filed` diffs against.
     Returns the number of files kept (0, with a warning, when the copy
     failed: the lock itself is written)."""
     from taxjson.lib import compare as _cmp
@@ -27429,7 +27453,7 @@ def _keep_filed_reports(root: Path, year: int, *, prog: str) -> int:
     except OSError as e:
         _out.warn(f"the reports as filed were not kept in "
                   f"{_PL.shown(dest, root)}/: {e.strerror or e}",
-                  prog=prog, details=["The lock is written; `taxjson "
+                  prog=prog, details=["The lock is written; `tjs "
                                       "compare filed` has nothing to "
                                       "diff against."])
         return 0
@@ -27448,7 +27472,7 @@ def _frozen_summary(rec: Dict[str, Any], kept: int, year: int,
             what += f"; reports so far: filed/{year}/reports/"
         if details:
             what += (f"; {len(rec.get('inputs') or {})} input file(s) "
-                     f"hashed in the lock — `taxjson check-filed` names "
+                     f"hashed in the lock — `tjs check-filed` names "
                      f"each one that changes")
         return what
     if rec.get("copied"):
@@ -27468,8 +27492,8 @@ def _frozen_summary(rec: Dict[str, Any], kept: int, year: int,
     if details:
         what += (f"; {len(rec.get('inputs') or {})} input file(s) hashed "
                  f"in the lock — taxjson.toml reads the copy from now on, "
-                 f"`taxjson check-filed` says when a frozen input "
-                 f"changes, `taxjson compare filed` diffs the reports")
+                 f"`tjs check-filed` says when a frozen input "
+                 f"changes, `tjs compare filed` diffs the reports")
     return what
 
 
@@ -27480,7 +27504,7 @@ def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any],
     """The `carryforwards` block close-year writes (lib/carryforward):
     the year's net capital loss (Canada) or ST/LT capital loss
     carryover (USA), and the Canadian minimum tax carryover — from the
-    estimate itself (`taxjson estimate --json`, the computation `amt`
+    estimate itself (`tjs estimate --json`, the computation `amt`
     prints), with the inputs the project gives it. A Canada project
     with no supported province gets a federal-only estimate (no other
     province's tables stand in; every figure the block carries forward
@@ -27593,7 +27617,7 @@ def _as_filed(ncl: Dict[str, Any], doc: Dict[str, Any],
 
 
 def _carried_back(root: Path, year: int) -> float:
-    """How much of `year`'s net capital loss `taxjson carryover` finds
+    """How much of `year`'s net capital loss `tjs carryover` finds
     carried back by [carryover] claimed (lines under earlier years); 0.0
     when there is none or the ledger cannot be built."""
     return sum(float(x.get("carried_back") or 0.0)
@@ -27601,7 +27625,7 @@ def _carried_back(root: Path, year: int) -> float:
 
 
 def _carried_back_to(root: Path, year: int) -> Dict[int, float]:
-    """{earlier year: the part of `year`'s net capital loss `taxjson
+    """{earlier year: the part of `year`'s net capital loss `tjs
     carryover` carries back to it} ([carryover] claimed under that
     year, a T1A carry-back); {} when there is none or the ledger cannot
     be built."""
@@ -27614,7 +27638,7 @@ def _carried_back_to(root: Path, year: int) -> Dict[int, float]:
 
 def _ledger_rows(root: Path, year: int,
                  before: bool = False) -> List[Dict[str, Any]]:
-    """`year`'s rows of `taxjson carryover --json` ([] when the ledger
+    """`year`'s rows of `tjs carryover --json` ([] when the ledger
     cannot be built); `before`: the rows of the years before it."""
     import json as _json
     from taxjson.lib.dispatch import run_cmd as _run
@@ -27634,7 +27658,7 @@ def _ledger_rows(root: Path, year: int,
 
 def _books_loss_not_carried(root: Path, cf: Dict[str, Any],
                             year: int) -> Optional[float]:
-    """The net capital loss `taxjson carryover` finds carried into
+    """The net capital loss `tjs carryover` finds carried into
     `year` from the books' earlier years when the lock's block `cf`
     took none in (no [estimate] other_losses, no earlier close-year
     record: it starts from 0); None when it took one in, or the books
@@ -27669,7 +27693,7 @@ def _claims_back(cfg: Dict[str, Any], year: Any) -> bool:
 def _losses_carried_back(root: Optional[Path], cfg: Dict[str, Any],
                          year: Any, losses_unused: float) -> float:
     """Of the estimate's unused capital losses (Canada), the part
-    [carryover] claimed carries back (T1A), as `taxjson carryover` folds
+    [carryover] claimed carries back (T1A), as `tjs carryover` folds
     it: what the estimate prints and its --json carries
     (`losses_carried_back`; backlog TJ-0084, TJ-0226). 0.0 with no
     claim under an earlier year (the ledger is not built then)."""
@@ -27802,7 +27826,7 @@ def _prior_record_path(root: Path, settings: Dict[str, Any],
     try:
         p = prior_record_setting(root, settings)
     except PriorRecordError as e:
-        # The same refusal `taxjson run` gives — not "no prior-year
+        # The same refusal `tjs run` gives — not "no prior-year
         # record at <root>/5" (A2-1135).
         _die(str(e))
     if p is not None:
@@ -27848,7 +27872,7 @@ def _handoff_positions(rep: Dict[str, Any], cache: Path, ry: int,
 
 
 def cmd_handoff(args: argparse.Namespace) -> None:
-    """`taxjson handoff`: check this project against the previous year's
+    """`tjs handoff`: check this project against the previous year's
     close-year record — opening positions and cost at Dec 31, trades
     that settle across Dec 31, and sales reported in both years
     (lib/handoff). Exit 1 on any problem."""
@@ -27871,7 +27895,7 @@ def cmd_handoff(args: argparse.Namespace) -> None:
         if _gone:
             _die_input(_gone)
         _die_input(f"no prior-year record at {_rp_label}",
-                   "Run `taxjson close-year` in the previous year's "
+                   "Run `tjs close-year` in the previous year's "
                    "project, then set [settings] prior_year_record to its "
                    "filed/<year>.json (or pass --prior).")
     # A truncated, non-UTF-8, unreadable or wrong-shape record, or a field
@@ -27885,7 +27909,7 @@ def cmd_handoff(args: argparse.Namespace) -> None:
     if _rprob:
         _die_input(f"{_rp_label}: not a usable close-year record: "
                    f"{_rprob}",
-                   "Restore it (or re-close that year with `taxjson "
+                   "Restore it (or re-close that year with `tjs "
                    "close-year --force` in its project).")
     from taxjson.bin.taxjson_filed import lock_country_problem
     _cp = lock_country_problem(record, settings, str(rp), prior=True)
@@ -27897,9 +27921,9 @@ def cmd_handoff(args: argparse.Namespace) -> None:
     if int(record.get("schema_version") or 1) < 2 \
             or "year_end" not in record:
         _die(f"{_rp_label} is a version-1 lock (totals only)",
-             "Re-close that year with the current taxjson (`taxjson "
+             "Re-close that year with the current taxjson (`tjs "
              "close-year --force` in its project) to record positions — "
-             "run `taxjson check-filed` there first: if it reports "
+             "run `tjs check-filed` there first: if it reports "
              "DRIFTED, the re-close would replace the filed totals, so "
              "resolve the drift (or amend) before re-closing.")
     ry = int(record["year"])
@@ -27907,7 +27931,7 @@ def cmd_handoff(args: argparse.Namespace) -> None:
     # problem of the record in the report (lib/handoff.check; backlog
     # TJ-0555), not a note beside a clean verdict.
     if not (root / "work").is_dir():
-        _die("no work/", "Run `taxjson run` first.")
+        _die("no work/", "Run `tjs run` first.")
     from taxjson.lib.income_dating import IncomeRulesError
     try:
         _hflags = _handoff_gains_flags(settings, root / "work")
@@ -28526,7 +28550,7 @@ def _check_filed_years(root: Path, cache: Path,
     mismatched = 0
     settings_back = 0               # frozen years naming shared folders
     carry_moved = 0                 # built on an earlier record replaced
-    # Each judged year's verdict, kept for `taxjson years` (backlog
+    # Each judged year's verdict, kept for `tjs years` (backlog
     # TJ-0159: a filed year whose run DRIFTED looked clean there).
     _verdicts: Dict[int, str] = {}
     _lost = _lock_missing_year(root, settings)
@@ -28624,7 +28648,7 @@ def _check_filed_years(root: Path, cache: Path,
                 input_failed += 1
                 _out.warn(f"filed {year}: {path.name} could not be "
                           f"checked: {_child_error_line(e)}", prog=_prog,
-                          details=["Fix that input and re-run `taxjson "
+                          details=["Fix that input and re-run `tjs "
                                    "run` (the lock itself was not "
                                    "judged)."])
                 continue
@@ -28680,7 +28704,7 @@ def _check_filed_years(root: Path, cache: Path,
             # edited or replaced since is named, so a DRIFT (or an OK
             # with other books) is not blamed on the code.
             _moved = _frozen_inputs_changed(root, _fz["inputs"])
-            # taxjson.toml as `taxjson migrate` left it, the edit its
+            # taxjson.toml as `tjs migrate` left it, the edit its
             # lock records (frozen.migrated): migrate's own, explained
             # by check-filed, never a changed input; any later edit is
             # one (backlog TJ-0231).
@@ -28692,7 +28716,7 @@ def _check_filed_years(root: Path, cache: Path,
                     _keys = ", ".join(str(k) for k in
                                       (_mig.get("keys") or [])) or "layout"
                     _line(f"note: filed {year}: taxjson.toml is as "
-                          f"`{_mig.get('by') or 'taxjson migrate'}` "
+                          f"`{_mig.get('by') or 'tjs migrate'}` "
                           f"rewrote it on {_mig.get('on') or '?'} "
                           f"({_keys}), the edit its lock records — not "
                           f"a changed input")
@@ -28734,7 +28758,7 @@ def _check_filed_years(root: Path, cache: Path,
                               f"The books no longer read the frozen "
                               f"copy: delete "
                               f"{'those lines' if len(_back) > 1 else 'that line'}"
-                              f" from [settings], then `taxjson run`."])
+                              f" from [settings], then `tjs run`."])
             elif _moved:
                 _line(f"note: filed {year}: {len(_moved)} frozen input(s) "
                       f"changed since the year was closed: "
@@ -28760,8 +28784,8 @@ def _check_filed_years(root: Path, cache: Path,
                       f"and cost, so a correction there shows nowhere "
                       f"else: compare each with its copy in inputs/ (a "
                       f"file new since the close has none); to "
-                      f"amend, copy it in, `taxjson run`, and after "
-                      f"filing `taxjson close-year --force`")
+                      f"amend, copy it in, `tjs run`, and after "
+                      f"filing `tjs close-year --force`")
             _map_moved = _shared["mappings"]
             if _map_moved:
                 # A generic mapping corrected in the shared folder: the
@@ -28778,7 +28802,7 @@ def _check_filed_years(root: Path, cache: Path,
                       f"copy, so a correction there shows nowhere else: "
                       f"compare each with its copy in inputs/ (a mapping "
                       f"new since the close has none); to amend, copy it "
-                      f"in, `taxjson run`, and after filing `taxjson "
+                      f"in, `tjs run`, and after filing `tjs "
                       f"close-year --force`")
             _dec_moved = ([] if _partial or _back
                           else _shared_decisions_moved(root, _fz, year))
@@ -28796,8 +28820,8 @@ def _check_filed_years(root: Path, cache: Path,
                       f"closed with — the filed year reads its copy, so "
                       f"it reaches neither its books nor its return: to "
                       f"amend, make the same decision in {year}'s folder "
-                      f"(`taxjson elect` / `taxjson crypto-sends --set` "
-                      f"there), `taxjson run`, and after filing `taxjson "
+                      f"(`tjs elect` / `tjs crypto-sends --set` "
+                      f"there), `tjs run`, and after filing `tjs "
                       f"close-year --force`; else undo it in the shared "
                       f"file")
             _unread = _shared["unread"]
@@ -28830,11 +28854,11 @@ def _check_filed_years(root: Path, cache: Path,
                       + ([f"The lock is a snapshot taken before {year} "
                           f"ended: trades and corrections since then "
                           f"move the year. Close it again after filing "
-                          f"(`taxjson close-year --force` with "
+                          f"(`tjs close-year --force` with "
                           f"[settings].year = {year})."] if _partial else
                          [f"A code/data change moved an already-filed "
                           f"year. Review; then either amend the return or "
-                          f"refresh the lock (`taxjson close-year --force` "
+                          f"refresh the lock (`tjs close-year --force` "
                           f"with [settings].year = {year})."]))
         else:
             _line(f"filed {year}: OK (matches {path.name}; "
@@ -28862,9 +28886,9 @@ def _check_filed_years(root: Path, cache: Path,
                           f"carries {_cm[2]:,.2f} into {year}", prog=_prog,
                           details=[_carry_in_detail(
                               year, _pl[0], _cm, _pl[2],
-                              f"`taxjson run` here (the estimate reads "
+                              f"`tjs run` here (the estimate reads "
                               f"the {_pl[0]} record as it is now), then "
-                              f"after filing `taxjson close-year "
+                              f"after filing `tjs close-year "
                               f"--force`.")])
     _PL.record_filed_check(root, _verdicts)
     if counts is not None:
@@ -28872,21 +28896,21 @@ def _check_filed_years(root: Path, cache: Path,
                       input=input_failed)
     unreadable += input_failed
     if (unreadable or mismatched) and strict:
-        sys.exit(exit_text(f"taxjson run --strict: {unreadable + mismatched} "
+        sys.exit(exit_text(f"tjs run --strict: {unreadable + mismatched} "
                            f"filed-year lock(s) could not be checked"
                            + (f" ({mismatched} closed under another country)"
                     if mismatched else "")
                            + (f" and {drifting} drifted" if drifting else "")
                            + " — aborting."))
     if drifting and strict:
-        sys.exit(exit_text(f"taxjson run --strict: {drifting} filed year(s) "
+        sys.exit(exit_text(f"tjs run --strict: {drifting} filed year(s) "
                            f"drifted — aborting."))
     if settings_back and strict:
-        sys.exit(exit_text(f"taxjson run --strict: {settings_back} filed "
+        sys.exit(exit_text(f"tjs run --strict: {settings_back} filed "
                            f"year(s) no longer read their frozen inputs "
                            f"— aborting."))
     if carry_moved and strict:
-        sys.exit(exit_text(f"taxjson run --strict: the filed year took in "
+        sys.exit(exit_text(f"tjs run --strict: the filed year took in "
                            f"a net capital loss its earlier year's record "
                            f"no longer carries — aborting."))
     return drifting + unreadable + mismatched
@@ -28897,7 +28921,7 @@ def _check_filed_years(root: Path, cache: Path,
 _EXPORT_PATTERNS = ("*_holdings.toml", "wash_radar_*.json",
                     "wash_radar_*.rpt")
 _EXPORTS_README = """\
-Written by `taxjson run` of the {year} project ({folder}/), the newest
+Written by `tjs run` of the {year} project ({folder}/), the newest
 year folder here; every run of the newest year replaces these files.
 Read them; do not edit them.
 
@@ -29019,7 +29043,7 @@ def _fx_cash_after_run(root: Path, cache: Path,
 
 
 def cmd_check_filed(args: argparse.Namespace) -> None:
-    """`taxjson check-filed`: recompute every filed year from the
+    """`tjs check-filed`: recompute every filed year from the
     current books and diff against the locks. Exit 1 on drift or a
     damaged lock, 2 when only the recompute failed on an input (nothing
     was judged)."""
@@ -29047,13 +29071,13 @@ def cmd_check_filed(args: argparse.Namespace) -> None:
                                                  + _os.pardir) else rel)
             print(_out.fill(
                 f"No filed/<year>.json lock in this project: "
-                f"{settings.get('year')} is not closed (`taxjson "
+                f"{settings.get('year')} is not closed (`tjs "
                 f"close-year` locks it after you file). The filed years "
                 f"are checked in their own folders: "
-                + ", ".join(f"`taxjson -C {_at(p)} check-filed`"
+                + ", ".join(f"`tjs -C {_at(p)} check-filed`"
                             for p in _others) + "."))
             return
-        print(_out.fill("No filed/<year>.json snapshots — `taxjson "
+        print(_out.fill("No filed/<year>.json snapshots — `tjs "
                         "close-year` creates one after you file."))
         return
     print("FILED-YEAR LOCK CHECK", flush=True)
@@ -29070,12 +29094,12 @@ def cmd_check_filed(args: argparse.Namespace) -> None:
         raise SystemExit(2)
     if _state:
         print(_out.fill("The books above are not clean — see the warning; "
-                        "an OK here is not conclusive until `taxjson run` "
+                        "an OK here is not conclusive until `tjs run` "
                         "is clean."))
 
 
 def cmd_reconcile_slips(args: argparse.Namespace) -> None:
-    """`taxjson reconcile-slips SLIP.csv`: diff broker T5008/1099-B slips
+    """`tjs reconcile-slips SLIP.csv`: diff broker T5008/1099-B slips
     against the computed dispositions of all taxable accounts."""
     from taxjson.bin import taxjson_reconcile_slips
 
@@ -29086,23 +29110,23 @@ def cmd_reconcile_slips(args: argparse.Namespace) -> None:
 
     _slips = (args.slip_csv if isinstance(args.slip_csv, list)
               else [args.slip_csv])
-    # IB's dividends report (T5/T3 data, `taxjson slip-audit`) lives in
+    # IB's dividends report (T5/T3 data, `tjs slip-audit`) lives in
     # inputs/slips/ too: the documented `inputs/slips/*.csv` names it.
     from taxjson.lib.ib_dividends import is_dividends_report
     _ib = [f for f in _slips if is_dividends_report(Path(f))]
     if _ib:
         from taxjson.lib.brokerages.base import shown_name
-        note("taxjson reconcile-slips",
+        note("tjs reconcile-slips",
              f"skipped {', '.join(shown_name(f) for f in _ib)}: IB's "
-             f"dividends report (T5/T3 income, read by `taxjson "
+             f"dividends report (T5/T3 income, read by `tjs "
              f"slip-audit`), not a T5008")
         _slips = [f for f in _slips if f not in _ib]
         if not _slips:
             _die_input("no T5008 slip CSV to reconcile",
-                       "IB's dividends report is read by `taxjson "
+                       "IB's dividends report is read by `tjs "
                        "slip-audit`.")
     gains_argv = _taxable_gains_argv(
-        root, cache, exclude_crypto=True, prog="taxjson reconcile-slips",
+        root, cache, exclude_crypto=True, prog="tjs reconcile-slips",
         required=True)
     # Books built for another tax year made every slip row read
     # MISSING_FROM_COMPUTED "dropped CSV rows or a missing statement?"
@@ -29113,7 +29137,7 @@ def cmd_reconcile_slips(args: argparse.Namespace) -> None:
         got = ", ".join(f"{a} ({y})" for a, y in sorted(_stale.items()))
         _die(f"[settings].year is {year} but the work/ books were built "
              f"for another tax year: {got}",
-             f"Rebuild with `taxjson run` before reconciling the {year} "
+             f"Rebuild with `tjs run` before reconciling the {year} "
              f"slips.")
     argv = list(_slips) + gains_argv
     tmap = _PL.ticker_map_path(root)
@@ -29146,7 +29170,7 @@ def cmd_reconcile_slips(args: argparse.Namespace) -> None:
 
 def _slip_audit_import_cra(root: Path, cfg: Dict[str, Any],
                            args: argparse.Namespace) -> None:
-    """`taxjson slip-audit [ACCOUNT] --import-cra PDF|DIR ... [--write]
+    """`tjs slip-audit [ACCOUNT] --import-cra PDF|DIR ... [--write]
     [--json]`: CRA-downloaded T5 / T3 slip PDFs as [[slip]] tables, each
     placed in a project account (and broker account, a T3 its fund) by
     the books (lib/cra_slips). A slip read twice is kept once; an
@@ -29272,7 +29296,7 @@ def _slip_audit_import_cra(root: Path, cfg: Dict[str, Any],
             try:
                 base = SA.comment_out_tables(old_text, {
                     e.index: (f"Replaced by the amended slip "
-                              f"{CS._comment(pl.slip.shown)} (taxjson "
+                              f"{CS._comment(pl.slip.shown)} (tjs "
                               f"slip-audit --import-cra, {today}):")
                     for e, pl, _k in plan.replace})
             except SA.SlipsError as e:
@@ -29352,7 +29376,7 @@ def _slip_audit_import_cra(root: Path, cfg: Dict[str, Any],
                + (f", {len(plan.replace)} replacing an earlier slip (commented "
                   f"out" + (f"; the old file is {backup.name}" if backup
                             else "") + ")" if plan.replace else "")
-               + "; `taxjson slip-audit` compares them with the books.")
+               + "; `tjs slip-audit` compares them with the books.")
     else:
         d.para(f"Run again with --write to add {len(tables)} slip(s) to "
                f"inputs/slips/{SA.SLIPS_FILE}"
@@ -29362,7 +29386,7 @@ def _slip_audit_import_cra(root: Path, cfg: Dict[str, Any],
 
 
 def cmd_slip_audit(args: argparse.Namespace) -> None:
-    """`taxjson slip-audit [ACCOUNT]`: the T5 / T3 slips in inputs/slips/
+    """`tjs slip-audit [ACCOUNT]`: the T5 / T3 slips in inputs/slips/
     (slips.toml, IB's dividends reports) against the books' income, per
     account and box (lib/slip_audit; tax-logic CA-SLIP-01..04). Canada
     only (lib/country COMMAND_COUNTRY). Exit 1 on a finding or on
@@ -29376,7 +29400,7 @@ def cmd_slip_audit(args: argparse.Namespace) -> None:
         _die_input("taxjson.toml has no [settings] year",
                    "slip-audit compares one tax year's slips.")
     if not (root / "work").is_dir():
-        _die("no work/ in the project", "Run `taxjson run` first.")
+        _die("no work/ in the project", "Run `tjs run` first.")
     if getattr(args, "template", False):
         try:
             sys.stdout.write(SA.template(root, cfg))
@@ -29416,7 +29440,7 @@ def cmd_slip_audit(args: argparse.Namespace) -> None:
 
 def _explain_wash_sales(root: Path, cache: Path,
                         account: Optional[str]) -> None:
-    """`taxjson wash-sales --explain`: print the full ACB / superficial-loss
+    """`tjs wash-sales --explain`: print the full ACB / superficial-loss
     calculation trace for each wash sale, via `taxjson-explain --wash-sales`
     (plain text — `taxjson-explain` is color-off by default). Resolves the
     account base file(s) and the country / tax-date / sheltered context from the
@@ -29425,7 +29449,7 @@ def _explain_wash_sales(root: Path, cache: Path,
         base = cache / f"{account}_base.json"
         if not base.exists():
             # (work/ named from the project: backlog TJ-0642)
-            _die_input(f"no {base.name} in work/ — run `taxjson run` "
+            _die_input(f"no {base.name} in work/ — run `tjs run` "
                        f"first, or check the name.")
         if ((_soft_config(root).get("accounts") or {}).get(account)
                 or {}).get("type") == "sheltered":
@@ -29442,12 +29466,12 @@ def _explain_wash_sales(root: Path, cache: Path,
                        "taxable account's loss: `tjs wash-sales "
                        "--explain` traces those.").print()
             raise SystemExit(0)
-        _refuse_us_crypto_account(root, account, "taxjson wash-sales")
+        _refuse_us_crypto_account(root, account, "tjs wash-sales")
         bases = [base]
     else:
         names = _taxable_equity_account_names(root)
         if names is not None and not names:
-            _no_wash_checkable("taxjson wash-sales")
+            _no_wash_checkable("tjs wash-sales")
         if names is not None:
             bases = [cache / f"{n}_base.json" for n in names
                      if (cache / f"{n}_base.json").exists()]
@@ -29459,7 +29483,7 @@ def _explain_wash_sales(root: Path, cache: Path,
         if not bases:
             # Exit 2, an input missing, work/ named from the project
             # (backlog TJ-0642).
-            _die_input("no base files in work/ — run `taxjson run` "
+            _die_input("no base files in work/ — run `tjs run` "
                        "first.")
 
     settings = _soft_settings(root)
@@ -29467,7 +29491,7 @@ def _explain_wash_sales(root: Path, cache: Path,
     common += ["--country", _country(settings)]
     if _country(settings) in ("us", "usa"):
         # The blended table keeps FIFO per account (US-BASIS-01): said
-        # explicitly, as `taxjson audit` does, so the trace of a merged
+        # explicitly, as `tjs audit` does, so the trace of a merged
         # book never pools lots across accounts (re-audit A2-0155).
         common.append("--per-account-basis")
     if settings.get("tax_date"):
@@ -29489,7 +29513,7 @@ def _explain_wash_sales(root: Path, cache: Path,
                    "accounts' trades are missing from the replay",
                    "A registered account's buy can deny a loss for good, "
                    "so a trace without them can contradict the table. "
-                   "Run `taxjson run` first to rebuild it.")
+                   "Run `tjs run` first to rebuild it.")
     # Same missing-history openings as the pipeline, so traces match the
     # books.
     mh_file = _missing_history_arg(root)
@@ -29562,7 +29586,7 @@ def _explain_wash_sales(root: Path, cache: Path,
                            capture_output=True)
             if res.returncode != 0:
                 tmp.unlink(missing_ok=True)
-                sys.exit(exit_text(f"taxjson wash-sales: could not merge the "
+                sys.exit(exit_text(f"tjs wash-sales: could not merge the "
                                    f"taxable base books: "
                                    f"{_child_error(res.stderr)}"))
             tmp.write_text(res.stdout, encoding="utf-8")
@@ -29581,12 +29605,12 @@ def _explain_wash_sales(root: Path, cache: Path,
             if tmp is not None:
                 tmp.unlink(missing_ok=True)
     if not matched:
-        emit_line("taxjson wash-sales: note: no matching gains found",
+        emit_line("tjs wash-sales: note: no matching gains found",
                   file=sys.stderr)
     raise SystemExit(rc)
 
 
-def _radar_config(root: Path, prog: str = "taxjson") -> Dict[str, Any]:
+def _radar_config(root: Path, prog: str = "tjs") -> Dict[str, Any]:
     """taxjson.toml for the radar family (wash-radar, watch, buy-check,
     sell-check): {} when the project has none — a bare work/ directory
     still runs — but a file that EXISTS and does not parse stops the
@@ -29612,7 +29636,7 @@ def _radar_config(root: Path, prog: str = "taxjson") -> Dict[str, Any]:
 
 
 def _taxable_equity_account_names(root: Path,
-                                  prog: str = "taxjson"
+                                  prog: str = "tjs"
                                   ) -> Optional[List[str]]:
     """Wash-checkable taxable account names from taxjson.toml (no hard
     exit when the config is absent; an unreadable one stops — see
@@ -29688,7 +29712,7 @@ def _empty_radar_json(root: Path, args: argparse.Namespace):
         from datetime import date as _date, datetime as _dt
         from taxjson.lib.wash_scope import scope_note
         country = _normalize_country(_country(
-            _radar_config(root, "taxjson wash-radar").get("settings", {})))
+            _radar_config(root, "tjs wash-radar").get("settings", {})))
         return {"schema_version": 1, "country": country,
                 "generated_at": _dt.now().isoformat(timespec="seconds"),
                 "as_of_date": args.date or _date.today().isoformat(),
@@ -29706,7 +29730,7 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
     live (against `--date`, defaulting to today) to stdout. All taxable accounts
     go into ONE invocation so the report — and its Definitions legend — prints
     once, in the fixed advisory order. Recomputes cooling-down windows as of now
-    (the per-account reports/wash_radar_<account>.rpt are written by `taxjson
+    (the per-account reports/wash_radar_<account>.rpt are written by `tjs
     run`). An ACCOUNT scopes the rows shown (--show), never the books
     read: every taxable account still decides each status, as the
     engine pools them (audit 2026-10-23 #6)."""
@@ -29718,10 +29742,10 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
         base = cache / f"{args.account}_base.json"
         if not base.exists():
             _die_input(f"no {base.name} in work/",
-                       "Run `taxjson run` first, or check the account "
+                       "Run `tjs run` first, or check the account "
                        "name.")
         _acct_cfg = _radar_config(
-            root, "taxjson wash-radar").get("accounts") or {}
+            root, "tjs wash-radar").get("accounts") or {}
         if (_acct_cfg.get(args.account) or {}).get("type") == "sheltered":
             # A usage error (the wrong account for the radar): exit 2,
             # as an unknown account's (TJ-0157); 1 is a verdict's
@@ -29729,20 +29753,20 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
             _die_input(f"{args.account} is a sheltered account",
                        "The radar advises on TAXABLE loss sales (sheltered "
                        "books are its context, not its subject).")
-        _refuse_us_crypto_account(root, args.account, "taxjson wash-radar",
+        _refuse_us_crypto_account(root, args.account, "tjs wash-radar",
                                   _na_json)
         # Every taxable book decides the statuses (the superficial-loss
         # pool and §1091 look across all your accounts); the account
         # only scopes the rows shown. It used to read this book alone,
         # so a sibling account's rebuy or loss was invisible (audit
         # 2026-10-23 #6).
-        bases = _radar_taxable_bases(root, cache, "taxjson wash-radar",
+        bases = _radar_taxable_bases(root, cache, "tjs wash-radar",
                                      empty_ok=True)
         if base.resolve() not in {b.resolve() for b in bases}:
             bases.append(base)
         show = ["--show", str(base), "--account", args.account]
     else:
-        bases = _radar_taxable_bases(root, cache, "taxjson wash-radar",
+        bases = _radar_taxable_bases(root, cache, "tjs wash-radar",
                                      json_doc=_na_json)
         show = []
     # Its SIMILAR groups (lib/similar, below) and renames: the lenient
@@ -29750,13 +29774,13 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
     _strict_ticker_map(
         root, "its rename and SIMILAR rules decide which listings the "
         "radar's caveats join, so a status without the rule can miss "
-        "one (`taxjson run` refuses this map too)")
+        "one (`tjs run` refuses this map too)")
 
     cmd = _cmd("taxjson-wash-radar") + ["--taxable", *[str(b) for b in bases]]
     cmd += show
     cmd += _radar_engine_args(
         bases, root,
-        _country(_radar_config(root, "taxjson wash-radar").get(
+        _country(_radar_config(root, "tjs wash-radar").get(
             "settings", {})))
     # Cross-account superficial-loss detection needs the pooled sheltered
     # history; pass it when the pipeline has built it.
@@ -29764,10 +29788,10 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
     if sheltered_base.exists():
         cmd += ["--sheltered", str(sheltered_base)]
     elif _sheltered_expected(root):
-        note("taxjson wash-radar",
+        note("tjs wash-radar",
              "no sheltered_base.json in work/ — registered-account "
              "(permanent-denial) context disabled",
-             details=["Run a full `taxjson run` to build it."])
+             details=["Run a full `tjs run` to build it."])
     if args.date:
         # Same shape+calendar validation as `list --date` — the
         # standalone fed the raw string straight into strptime, so a
@@ -29831,7 +29855,7 @@ def _radar_taxable_bases(root: Path, cache: Path,
                   f"missing)", prog=prog,
                   details=["Their trades are INVISIBLE to these window "
                            "checks, so a SAFE/CLEAR verdict here can be "
-                           "wrong. Run `taxjson run` to build them."])
+                           "wrong. Run `tjs run` to build them."])
     else:
         bases = [p for p in sorted(cache.glob("*_base.json"))
                  if not p.name.endswith("_raw_base.json")
@@ -29840,7 +29864,7 @@ def _radar_taxable_bases(root: Path, cache: Path,
     if not bases:
         from taxjson.lib.out import fail
         fail("no taxable base files in work/", prog=prog,
-             details=["Run `taxjson run` first."])
+             details=["Run `tjs run` first."])
     return bases
 
 
@@ -29924,7 +29948,7 @@ def _radar_missing_context(root: Path, cache: Path) -> List[str]:
     """The work/ books a radar run should read and cannot, as
     `work/<file>` names: each wash-checkable taxable account's
     <account>_base.json, and the combined sheltered_base.json when the
-    project has a sheltered account (an account `taxjson run` skipped
+    project has a sheltered account (an account `tjs run` skipped
     for having no inputs has no books to miss). [] with no readable
     accounts table (the radar then globs work/)."""
     names = _taxable_equity_account_names(root) or []
@@ -29945,13 +29969,13 @@ def _watch_threshold(args: argparse.Namespace) -> float:
 
 
 def cmd_watch(args: argparse.Namespace) -> None:
-    """`taxjson watch`: report only what CHANGED since the last watch
+    """`tjs watch`: report only what CHANGED since the last watch
     run — new/changed/cleared radar advisories, moved clear dates, and
     (with --harvest) the harvestable-now loss total. Quiet (no output,
     exit 0) when nothing changed, so a cron line mails only on news.
     State lives in work/.watch_state.json; the first run records a
     baseline. `--exit-code` exits 1 on changes for scripting (the
-    default stays 0 so chains like `taxjson run watch` never fail on
+    default stays 0 so chains like `tjs run watch` never fail on
     a mere report)."""
     import json as _json
     from datetime import date as _date
@@ -29967,14 +29991,14 @@ def cmd_watch(args: argparse.Namespace) -> None:
         return {"baseline": False, "changes": [], "tracked": 0,
                 "actionable": 0, "as_of": _date.today().isoformat(),
                 "scope_note": scope_note(_country(_radar_config(
-                    root, "taxjson watch").get("settings", {})))}
+                    root, "tjs watch").get("settings", {})))}
     bases = _radar_taxable_bases(
-        root, cache, "taxjson watch",
+        root, cache, "tjs watch",
         json_doc=_na_doc if getattr(args, "json", False) else None,
         warn_missing=False)
     cmd = _cmd("taxjson-wash-radar") + [
         "--taxable", *[str(b) for b in bases], "--all", "--json"]
-    _wcountry = _country(_radar_config(root, "taxjson watch").get(
+    _wcountry = _country(_radar_config(root, "tjs watch").get(
         "settings", {}))
     cmd += _radar_engine_args(bases, root, _wcountry)
     # A CLEAR is "safe as far as this project's accounts show"
@@ -30017,9 +30041,9 @@ def cmd_watch(args: argparse.Namespace) -> None:
               f"{'is' if _one else 'are'} missing, and without "
               f"{'it' if _one else 'them'} the radar misses those "
               f"accounts' buys (a LOCKED name reads CLEAR); {kept}",
-              prog="taxjson watch",
-              details=["Run a full `taxjson run` to rebuild "
-                       f"{'it' if _one else 'them'}, then `taxjson "
+              prog="tjs watch",
+              details=["Run a full `tjs run` to rebuild "
+                       f"{'it' if _one else 'them'}, then `tjs "
                        "watch` again."])
         if getattr(args, "json", False):
             _json_out({"baseline": False, "changes": [],
@@ -30048,7 +30072,7 @@ def cmd_watch(args: argparse.Namespace) -> None:
     harvest_valued: List[str] = []
     if (getattr(args, "threshold", None) not in (None, 100.0)
             and not getattr(args, "harvest", False)):
-        note("taxjson watch", "--threshold only applies with --harvest "
+        note("tjs watch", "--threshold only applies with --harvest "
              "(ignored this run).")
     if getattr(args, "harvest", False):
         hcmd = _self_cmd(root, "harvest", "--json")
@@ -30058,7 +30082,7 @@ def cmd_watch(args: argparse.Namespace) -> None:
         if hres.returncode != 0:
             from taxjson.lib.out import warn as _warn
             _warn("harvest failed — the harvest dimension is skipped "
-                  "this run", prog="taxjson watch",
+                  "this run", prog="tjs watch",
                   details=[_child_error(hres.stderr)])
         else:
             try:
@@ -30072,7 +30096,7 @@ def cmd_watch(args: argparse.Namespace) -> None:
                 harvest_now = None
                 from taxjson.lib.out import warn as _warn
                 _warn(f"harvest JSON unreadable ({e}) — skipped this "
-                      f"run.", prog="taxjson watch")
+                      f"run.", prog="tjs watch")
 
     def _save(harvest_value, harvest_omitted=None,
               valued=None) -> None:
@@ -30126,9 +30150,9 @@ def cmd_watch(args: argparse.Namespace) -> None:
               f"position(s) the baseline valued are left out this run "
               f"({', '.join(_new)}); the baseline of "
               f"{state.get('as_of') or '?'} is kept",
-              prog="taxjson watch",
-              details=["`taxjson harvest` names what is missing (a rate: "
-                       "`taxjson run`; a price: run it online)."])
+              prog="tjs watch",
+              details=["`tjs harvest` names what is missing (a rate: "
+                       "`tjs run`; a price: run it online)."])
         saved_harvest = state.get("harvest_now")
         _save(saved_harvest, saved_left, saved_valued)
     elif harvest_now is not None:
@@ -30138,8 +30162,8 @@ def cmd_watch(args: argparse.Namespace) -> None:
                      if saved_left is not None
                      and x["key"] not in saved_left]
         if _unvalued:
-            note("taxjson watch", f"not in the harvestable total: "
-                                  f"{', '.join(_unvalued)} (`taxjson "
+            note("tjs watch", f"not in the harvestable total: "
+                                  f"{', '.join(_unvalued)} (`tjs "
                                   f"harvest` names what is missing).")
         if _cover == "same":
             hch = _watch.diff_harvest(state.get("harvest_now"),
@@ -30177,7 +30201,7 @@ def cmd_watch(args: argparse.Namespace) -> None:
 
 
 def _no_fetcher_exit() -> None:
-    """`taxjson fetch` with no fetcher plugin installed: one line, exit 2
+    """`tjs fetch` with no fetcher plugin installed: one line, exit 2
     (the core ships no broker client; lib/fetchers)."""
     from taxjson.lib.fetchers import INSTALL_HINT
     # One message (one line when captured): the checklist and scripts
@@ -30186,12 +30210,12 @@ def _no_fetcher_exit() -> None:
 
 
 def cmd_fetch(args: argparse.Namespace) -> None:
-    """`taxjson fetch [ACCOUNT ...]`: the thin dispatcher over the
+    """`tjs fetch [ACCOUNT ...]`: the thin dispatcher over the
     installed fetcher plugins (entry-point group `taxjson.fetchers`;
     lib/fetchers). Each [accounts.<name>] with a `brokerage` goes to the
     fetcher that serves that brokerage; the core itself holds no broker
     client and reads no credential. `--list` names the installed
-    fetchers. Run `taxjson run` afterwards (or chain: `taxjson fetch
+    fetchers. Run `tjs run` afterwards (or chain: `tjs fetch
     run`)."""
     from taxjson.lib import fetchers as FP
     found, problems = FP.discover()
@@ -30221,7 +30245,7 @@ def cmd_fetch(args: argparse.Namespace) -> None:
         if not chosen:
             _die(f"no installed fetcher named {args.fetcher!r}",
                  f"Installed: {', '.join(f.name for f in found)}; see "
-                 f"`taxjson fetch --list`.")
+                 f"`tjs fetch --list`.")
     serves = FP.served_brokerages(chosen)
     root = Path(args.dir).resolve()
     cfg = load_config(root)
@@ -30248,7 +30272,7 @@ def cmd_fetch(args: argparse.Namespace) -> None:
             _die(f"[accounts.{a}] brokerage {declared[a]!r} has no "
                  f"installed fetcher",
                  f"Served: {', '.join(sorted(serves)) or 'none'}; see "
-                 f"`taxjson fetch --list`.")
+                 f"`tjs fetch --list`.")
         by_fetcher.setdefault(f.name, []).append(a)
     json_mode = bool(getattr(args, "json", False))
     dry_run = bool(getattr(args, "dry_run", False))
@@ -30290,8 +30314,8 @@ def cmd_fetch(args: argparse.Namespace) -> None:
     if json_mode:
         _json_out({"accounts": results, "dry_run": dry_run})
     elif not dry_run:
-        print("fetch complete: run `taxjson run` to rebuild (or chain: "
-              "`taxjson fetch run`).")
+        print("fetch complete: run `tjs run` to rebuild (or chain: "
+              "`tjs fetch run`).")
 
 
 FX_CASH_LEDGERS = ("v1", "v2")
@@ -30305,7 +30329,7 @@ def _fx_cash_ledger_choice(settings: Dict[str, Any],
     v = flag or (settings or {}).get("fx_cash_ledger") or "v1"
     v = str(v).strip().lower()
     if v not in FX_CASH_LEDGERS:
-        sys.exit(exit_text(f"taxjson fx-cash: fx_cash_ledger must be "
+        sys.exit(exit_text(f"tjs fx-cash: fx_cash_ledger must be "
                            f"\"v1\" or \"v2\" (got {v!r})"))
     return v
 
@@ -30330,25 +30354,25 @@ def _fx_cash_status(root: Path, cache: Path,
 
 
 def _fx_sum_item(st: Dict[str, Any], money) -> str:
-    """`taxjson sum` FOR THE RETURN's FX-on-cash line."""
+    """`tjs sum` FOR THE RETURN's FX-on-cash line."""
     if st.get("ledger") == "v2" and st.get("status") == "computed":
         return (f"FX on foreign cash, ledger {st.get('label')}, "
                 f"s.39(1.1): net {money(st['net_gain'])}, reportable "
                 f"{money(st['reportable'])} after the $200 exemption — not "
                 f"in the rows above; T4037 puts it on line 15300. Review "
-                f"`taxjson fx-cash` and mark the checklist's fx-cash step "
+                f"`tjs fx-cash` and mark the checklist's fx-cash step "
                 f"reviewed before using it.")
     if st.get("ledger") == "v2":
-        return (st["headline"] + " (`taxjson fx-cash` lists each "
+        return (st["headline"] + " (`tjs fx-cash` lists each "
                 "problem).")
-    return (st["headline"] + " (line 15300; `taxjson fx-cash` shows the "
+    return (st["headline"] + " (line 15300; `tjs fx-cash` shows the "
             "raw ledger, and the opt-in ledger v2 reads the missing "
             "cash events).")
 
 
-def _fx_cash_native(root: Path, cache: Path, prog: str = "taxjson fx-cash"):
+def _fx_cash_native(root: Path, cache: Path, prog: str = "tjs fx-cash"):
     """(rows, base, year, country, fx history) for the FX-on-cash
-    ledgers (and `taxjson cash`, `prog` naming it in the errors): every
+    ledgers (and `tjs cash`, `prog` naming it in the errors): every
     TAXABLE account's native rows (each with `account`) — s.39(1.1) /
     §988 reach the person's taxable holdings; registered accounts are
     exempt."""
@@ -30372,7 +30396,7 @@ def _fx_cash_native(root: Path, cache: Path, prog: str = "taxjson fx-cash"):
                 # A partial ledger flipped the line-15300 figure's sign
                 # with rc 0 (S005-04, S046-19).
                 sys.exit(exit_text(f"{prog}: no native transaction file "
-                                   f"for taxable account {name!r} — run `taxjson "
+                                   f"for taxable account {name!r} — run `tjs "
                                    f"run` first; a ledger without it would be "
                                    f"partial."))
             continue
@@ -30382,8 +30406,8 @@ def _fx_cash_native(root: Path, cache: Path, prog: str = "taxjson fx-cash"):
             _m = str(e)                 # (named once: A2-1413)
             sys.exit(exit_text(f"{prog}: "
                                f"{_m if str(f) in _m else f'could not read {f}: {_m}'}"
-                               + ("" if "taxjson run" in _m else
-                        " — re-run `taxjson run` to rebuild it")
+                               + ("" if "tjs run" in _m else
+                        " — re-run `tjs run` to rebuild it")
                                + f"; a ledger without account {name!r} would be "
                        f"partial."))
         found = True
@@ -30392,7 +30416,7 @@ def _fx_cash_native(root: Path, cache: Path, prog: str = "taxjson fx-cash"):
             txs.append(t)
     if not found:
         sys.exit(exit_text(f"{prog}: no native transaction files in "
-                           f"{cache} (run `taxjson run` first)."))
+                           f"{cache} (run `tjs run` first)."))
     try:
         fx = load_fx_history(cache / "to_base.csv", base)
     except (OSError, ValueError) as e:
@@ -30401,7 +30425,7 @@ def _fx_cash_native(root: Path, cache: Path, prog: str = "taxjson fx-cash"):
 
 
 def cmd_cash(args: argparse.Namespace) -> None:
-    """`taxjson cash`: the cash events of the taxable accounts over a
+    """`tjs cash`: the cash events of the taxable accounts over a
     window — the conversions, deposits and withdrawals the exports carry
     and the project's .tt cash lines, the rows the FX-on-cash ledger v2
     reads — each as the .tt line that declares it (lib/cash_events
@@ -30409,9 +30433,9 @@ def cmd_cash(args: argparse.Namespace) -> None:
     line), oldest to latest, with per-currency totals. A broker's move
     that no .tt line declares shows `?` where its own / kept / spot /
     cost= / proceeds= goes; one in the base currency needs none (a
-    `#CASHMOVE` comment line). Statement balances are not listed (`taxjson
+    `#CASHMOVE` comment line). Statement balances are not listed (`tjs
     fx-cash --ledger v2` reconciles them). `[PERIOD] [ACCOUNT]` as
-    `taxjson events`."""
+    `tjs events`."""
     from taxjson.lib import cash_events as CE
     root = Path(args.dir).resolve()
     cache = root / "work"
@@ -30430,7 +30454,7 @@ def cmd_cash(args: argparse.Namespace) -> None:
                  "(s.39(1.1) / §988 reach those alone): "
                  f"{', '.join(taxable) or 'none'}.")
     txs, _base, _year, country, _fx = _fx_cash_native(root, cache,
-                                                       prog="taxjson cash")
+                                                       prog="tjs cash")
     by_label: Dict[str, List[Dict[str, Any]]] = {}
     for t in txs:
         by_label.setdefault(str(t.get("account")), []).append(t)
@@ -30487,7 +30511,7 @@ def cmd_cash(args: argparse.Namespace) -> None:
         print("(no cash events in this window)")
         return
     # One account prints the lines as they are; the merged view prefixes
-    # each with its account, as `taxjson events` does. The keyword, date,
+    # each with its account, as `tjs events` does. The keyword, date,
     # currency and amount line up in columns (the amounts on their
     # decimal points); what follows (a conversion's other side, a move's
     # declaration) is as written, and the comments line up after the
@@ -30531,7 +30555,7 @@ def _fx_cash_doc(root: Path, cache: Path):
     try:      # a futures refusal (A2-1424/1434)
         ledger = FX.build_ledger(txs, base, fx, int(year), country=country)
     except (OSError, ValueError) as e:
-        sys.exit(exit_text(f"taxjson fx-cash: error: {e}"))
+        sys.exit(exit_text(f"tjs fx-cash: error: {e}"))
     verdict = FX.apply_jurisdiction(ledger["net_gain"], country)
     return ledger, verdict, base, int(year), country
 
@@ -30639,7 +30663,7 @@ def _fx_cash_v2_doc(root: Path, cache: Path, holdings: bool = False,
     ledger v2 (lib/fx_cash_v2): the native rows attributed to their
     broker account's book, the cash events (lib/cash_events), the prior
     year's close. `holdings`: the doc carries each book's cash day by
-    day (lib/fx_cash_v2.build; `taxjson t1135`), on the date basis
+    day (lib/fx_cash_v2.build; `tjs t1135`), on the date basis
     `holdings_basis` (the project's tax_date: backlog TJ-0627)."""
     import re as _re
     from taxjson.lib import cash_events as CE
@@ -30655,7 +30679,7 @@ def _fx_cash_v2_doc(root: Path, cache: Path, holdings: bool = False,
     try:
         cash = CE.collect(root, cfg, country, by_label)
     except (OSError, ValueError) as e:
-        sys.exit(exit_text(f"taxjson fx-cash: error: {e}"))
+        sys.exit(exit_text(f"tjs fx-cash: error: {e}"))
     books = cash["books"]
     for t in txs:
         src = _re.sub(r"#\d+$", "", str(t.get("source") or ""))
@@ -30676,7 +30700,7 @@ def _fx_cash_v2_doc(root: Path, cache: Path, holdings: bool = False,
                                        or "").strip().lower() == "spot",
                        holdings=holdings, holdings_basis=holdings_basis)
     except ValueError as e:
-        sys.exit(exit_text(f"taxjson fx-cash: error: {e}"))
+        sys.exit(exit_text(f"tjs fx-cash: error: {e}"))
     verdict = FX.v2_verdict(doc, country)
     return doc, verdict, cash, base, year, country
 
@@ -30732,7 +30756,7 @@ def _cmd_fx_cash_v2(root: Path, cache: Path, args) -> None:
 
 
 def cmd_fx_cash(args: argparse.Namespace) -> None:
-    """`taxjson fx-cash`: FX gains on foreign-currency cash (ITA
+    """`tjs fx-cash`: FX gains on foreign-currency cash (ITA
     s.39(1.1) with the $200 de minimis; the §988 ordinary-income figure
     for US projects). A standalone REPORT — nothing here changes the
     engine's gains, sum, or the filing exports. The default ledger (v1)
@@ -30848,7 +30872,7 @@ def _refuse_map_problems(ticker_map: Path, problems: Sequence[str],
                          effect: str, code: int = 1) -> None:
     """Stop on ticker.map / tobase.map lines map_file_problems found
     (`effect`: what a dropped or contradictory rule changes), naming
-    each line, exit `code`. `taxjson run` and the wash checks refuse
+    each line, exit `code`. `tjs run` and the wash checks refuse
     the same map with the same words."""
     # The files the problems are in (tobase.map is read with
     # ticker.map): a tobase.map line was headed "ticker.map
@@ -30877,7 +30901,7 @@ def _strict_ticker_map(root: Path, effect: str):
     a line it cannot parse (a warning), and the verdict read without a
     dropped `GLOBAL OLD NEW` turned UNSAFE into SAFE (backlog TJ-0304),
     harvest quoted another option contract (TJ-0352) and lib/similar
-    lost a SIMILAR group. A problem line stops the command as `taxjson
+    lost a SIMILAR group. A problem line stops the command as `tjs
     run` stops (`effect`: what a dropped rule changes here), and so
     does a map that cannot be read (audit A2-0683): both exit 2, an
     input to fix, never a verdict's 1 (backlog TJ-0351)."""
@@ -30892,7 +30916,7 @@ def _strict_ticker_map(root: Path, effect: str):
             return load_map_file(_map_path)
     except Exception as e:                                 # noqa: BLE001
         _die_input(f"ticker.map cannot be read ({e})",
-                   "`taxjson run` refuses it too; fix it first (its "
+                   "`tjs run` refuses it too; fix it first (its "
                    "cross-listing and rename rules decide which listings "
                    "are the same security).")
     _refuse_map_problems(_map_path, _map_problems, effect, code=2)
@@ -30916,11 +30940,11 @@ def _wash_class_context(root: Path, cache: Path, prog: str,
     from taxjson.lib.report_model import resolve_gains_files
     bases = _radar_taxable_bases(root, cache, prog, json_doc=json_doc)
     # The map decides which listings are one security: refused, as
-    # `taxjson run` refuses it, before any verdict (backlog TJ-0304).
+    # `tjs run` refuses it, before any verdict (backlog TJ-0304).
     _tm = _strict_ticker_map(
         root, "the map decides which listings are one security, so a "
         "verdict without the rule can miss a cross-listed loss and read "
-        "SAFE (`taxjson run` refuses this map too)")
+        "SAFE (`tjs run` refuses this map too)")
     cmd = _cmd("taxjson-wash-radar") + [
         "--taxable", *[str(b) for b in bases], "--all", "--json"]
     _proj_country = _country(_radar_config(root, prog).get("settings", {}))
@@ -30939,7 +30963,7 @@ def _wash_class_context(root: Path, cache: Path, prog: str,
                    "accounts' trades are missing from this check",
                    "A registered account's recent buy can deny a loss "
                    "for good, so a verdict without them can read SAFE. "
-                   "Run `taxjson run` first to rebuild it.")
+                   "Run `tjs run` first to rebuild it.")
     res = _run(cmd, capture_output=True)
     if res.returncode != 0:
         _die("the wash radar failed", _child_error(res.stderr))
@@ -31193,9 +31217,9 @@ def _last_loss_by_class(gains_files, canon, taxable, *, usa: bool
             # The context line vanished in silence (S047-03).
             from taxjson.lib.out import warn as _warn
             _warn(f"could not read {Path(_p).name} ({e})",
-                  prog="taxjson",
+                  prog="tjs",
                   details=[f"The 'last loss sale' line leaves out account "
-                           f"{_a}; re-run `taxjson run`."])
+                           f"{_a}; re-run `tjs run`."])
             continue
         # A sale routed to manual reporting (unknown cost) is still a
         # loss sale for the window: its row has no 'gain', only the
@@ -31612,7 +31636,7 @@ def _check_na_json(root: Path, args: argparse.Namespace):
 
 
 def cmd_buy_check(args: argparse.Namespace) -> None:
-    """`taxjson buy-check SYMBOL...`: is buying this ticker TODAY safe
+    """`tjs buy-check SYMBOL...`: is buying this ticker TODAY safe
     from the wash-sale / superficial-loss rules? Unsafe when a loss
     was sold within the past 30 days (the rebuy cancels it — deferred
     if bought taxable, PERMANENTLY denied if bought sheltered);
@@ -31623,7 +31647,7 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
     root = Path(args.dir).resolve()
     cache = root / "work"
     radar, _canon, _last_loss = _wash_class_context(
-        root, cache, "taxjson buy-check",
+        root, cache, "tjs buy-check",
         json_doc=_check_na_json(root, args))
     _usa = _radar_country_is_usa(root)
 
@@ -31835,7 +31859,7 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
                     f"{'in an IRA' if _usa else 'sheltered'})."
                     + (f" Safe to buy from {_cd}." if _cd else
                        " Wait until 31 days after the LATEST in-window "
-                       "loss sale (its REBUY ON date: `taxjson rebuy`)."))
+                       "loss sale (its REBUY ON date: `tjs rebuy`)."))
             elif cat == "WASHED":
                 # US §1091: the loss is already disallowed (nothing a
                 # buy can make worse) unless part of an in-window loss
@@ -31947,7 +31971,7 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
 
 
 def cmd_sell_check(args: argparse.Namespace) -> None:
-    """`taxjson sell-check SYMBOL...`: is selling this ticker AT A
+    """`tjs sell-check SYMBOL...`: is selling this ticker AT A
     LOSS today safe from the superficial-loss / wash-sale rules?
     UNSAFE when a registered account's recent buy it still holds
     would deny the loss on the WHOLE taxable position (LOCKED), or when
@@ -31959,11 +31983,11 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
     — with the standard rule: no rebuy on EITHER side for 30 days
     after. Root-matched with ticker.map equivalences. Exit 1 when any
     queried symbol is UNSAFE or PARTIAL. Whether the sale would BE a
-    loss at today's price is `taxjson harvest`'s job."""
+    loss at today's price is `tjs harvest`'s job."""
     root = Path(args.dir).resolve()
     cache = root / "work"
     radar, _canon, _last_loss = _wash_class_context(
-        root, cache, "taxjson sell-check",
+        root, cache, "tjs sell-check",
         json_doc=_check_na_json(root, args))
     _usa = _radar_country_is_usa(root)
     unsafe = 0
@@ -32123,7 +32147,7 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
                 lines.append(f"{t}: {_n}")
         if len(lines) == bool(_note):
             lines.append(f"{wroot}: no tracked taxable position — "
-                         f"nothing to sell (or run `taxjson run` to "
+                         f"nothing to sell (or run `tjs run` to "
                          f"refresh the books).")
         for _sl in _similar_lines(radar, _canon, wroot, want, "sell", _usa):
             if verdict == "SAFE":
@@ -32155,7 +32179,7 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
 
 
 def cmd_rebuy(args: argparse.Namespace) -> None:
-    """`taxjson rebuy [SYMBOL ...] [--date D]`: every ticker sold at a
+    """`tjs rebuy [SYMBOL ...] [--date D]`: every ticker sold at a
     loss whose repurchase window is still open, with the first day it
     can be bought back without the loss being denied (CA-PLAN-05 /
     US-PLAN-06). The rows are the wash radar's own (its `losses` and
@@ -32183,7 +32207,7 @@ def cmd_rebuy(args: argparse.Namespace) -> None:
                  any_account=RB.any_account_line(c))
         return d
     radar, canon, _ll = _wash_class_context(
-        root, cache, "taxjson rebuy",
+        root, cache, "tjs rebuy",
         ["--date", as_of, "--cleared-days", str(RB.CLEARED_DAYS)],
         json_doc=_na_doc if getattr(args, "json", False) else None)
     country = "usa" if _radar_country_is_usa(root) else "canada"
@@ -32278,18 +32302,18 @@ def _check_books_before_merge(paths: List[Path]) -> None:
             msg = str(e).strip().splitlines()[0] if str(e).strip() \
                 else type(e).__name__
             msg = msg.replace(f"load_transactions({b}): ", "")
-            _die(f"cannot read {b}: {msg} — re-run `taxjson run` to "
+            _die(f"cannot read {b}: {msg} — re-run `tjs run` to "
                  f"rebuild it.")
 
 
 def _audit_diag(kind: str, text: str) -> None:
-    """`taxjson audit: <kind>: ...` on stderr, wrapped (lib/out)."""
+    """`tjs audit: <kind>: ...` on stderr, wrapped (lib/out)."""
     from taxjson.lib.out import emit
-    emit(kind, text, prog="taxjson audit")
+    emit(kind, text, prog="tjs audit")
 
 
 def cmd_audit(args: argparse.Namespace) -> None:
-    """`taxjson audit`: the authoritative justification of every
+    """`tjs audit`: the authoritative justification of every
     capital-gain figure. One block per taxable disposition: the parsed
     broker row (nominal currency, original ticker, source file), the
     ticker.map rename, the exact FX rate applied (with provenance and
@@ -32543,7 +32567,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
         _uncovered.extend(missing)
         if missing:
             _audit_diag("note", f"no books yet for {', '.join(missing)} "
-                                f"— run `taxjson run` to include them.")
+                                f"— run `tjs run` to include them.")
         if not bases:
             return
         cleanup: Optional[Path] = None
@@ -32605,7 +32629,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
             if n not in _no_input:
                 _uncovered.append(n)
                 _audit_diag("note", f"no books yet for {n} — run "
-                                    f"`taxjson run` to include it.")
+                                    f"`tjs run` to include it.")
             continue
         fl = common_flags() + ["--base", str(base)]
         if country in ("us", "usa"):
@@ -32633,9 +32657,9 @@ def cmd_audit(args: argparse.Namespace) -> None:
                         f"pass)" if _also else ""))
     if not invocations and _pending:
         _die(_pending_head,
-             "Decide them (`taxjson elect --pending`), then `taxjson run`.")
+             "Decide them (`tjs elect --pending`), then `tjs run`.")
     if not invocations:
-        _die("no computed books in work/ — run `taxjson run` first.")
+        _die("no computed books in work/ — run `tjs run` first.")
 
     rc = 0
     no_match = 0
@@ -32683,7 +32707,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
     if no_match and no_match == len(invocations) and _also:
         # The filter's dispositions may be in an account held back.
         _die(_pending_head,
-             "Decide them (`taxjson elect --pending`), then `taxjson run`.")
+             "Decide them (`tjs elect --pending`), then `tjs run`.")
     if no_match and no_match == len(invocations):
         _filt = [f"{k} {v}" for k, v in (
             ("symbol", " ".join(getattr(args, "symbol", None) or [])),
@@ -32692,7 +32716,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
             ("--account", _acct)) if v]
         _die(f"no disposition matches {', '.join(_filt)}"
              + (f" in {year}" if year else "")
-             + " — check the filter (`taxjson audit --summary` lists "
+             + " — check the filter (`tjs audit --summary` lists "
                "every event; --date matches the trade or settlement "
                "date).")
 
@@ -32710,7 +32734,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
         not_audited += [{"account": n, "reason": "no_books"} for n in _nb]
         coverage_failures.append(
             f"not audited — no books for {', '.join(_nb)}; their "
-            f"dispositions are not in the tie-out above. Run `taxjson "
+            f"dispositions are not in the tie-out above. Run `tjs "
             f"run`.")
     if _pending and not _acct:
         not_audited += [{"account": n, "reason": "elections_pending"}
@@ -32718,8 +32742,8 @@ def cmd_audit(args: argparse.Namespace) -> None:
         not_audited += [{"account": n, "reason": "no_cross_account_pass"}
                         for n in _also]
         coverage_failures.append(
-            f"{_pending_head}; decide them (`taxjson elect --pending`), "
-            f"then `taxjson run`.")
+            f"{_pending_head}; decide them (`tjs elect --pending`), "
+            f"then `tjs run`.")
     if coverage_failures:
         rc = max(rc, 1)
     if getattr(args, "json", False):
@@ -32736,14 +32760,14 @@ def cmd_audit(args: argparse.Namespace) -> None:
     if coverage_failures:
         from taxjson.lib.out import warn as _warn
         for _cf in coverage_failures:
-            _warn(_cf, prog="taxjson audit")
+            _warn(_cf, prog="tjs audit")
     if rc:
         raise SystemExit(rc)
 
 
 def _merge_audit_json(docs: List[Dict[str, Any]], base_currency: str,
                       country: str) -> Dict[str, Any]:
-    """One `taxjson audit --json` document from the per-book
+    """One `tjs audit --json` document from the per-book
     taxjson-audit runs: events concatenated, totals summed over EVERY
     book (S026-11 pins it), reconciliation failures kept (they were
     dropped when two books were merged). The gain total is the computed
@@ -32951,7 +32975,7 @@ def _write_missing_history_tt(root: Path, cache: Path,
              "The purchase is in your files under the old ticker: "
              "declare the late trades with a .tt line, not an opening — "
              + "; ".join(late) + " (`late=separate` when it is another "
-             "security; `taxjson renames` prints the lines).", prog=prog)
+             "security; `tjs renames` prints the lines).", prog=prog)
     if ambiguous:
         _say("warning", f"{flag}: not written: {len(ambiguous)} sale(s) "
              f"with no purchase of a symbol two holdings were renamed "
@@ -32960,7 +32984,7 @@ def _write_missing_history_tt(root: Path, cache: Path,
         _say("note", f"{flag}: not written: "
              + ", ".join(unsized + nodate),
              "No shortage to size (the rows never go short), or no books "
-             "for the account (run `taxjson run`).", prog=prog)
+             "for the account (run `tjs run`).", prog=prog)
     if not plan.n_add:
         _say("note", f"nothing to add: "
              + (f"{len(plan.same)} line(s) already there"
@@ -32990,7 +33014,7 @@ def _write_missing_history_tt(root: Path, cache: Path,
                    if _PL.shared_inputs(root) else "")
                   + "Review each line: remove any that is a real short "
                   "position, and give the units held before your data and "
-                  "the date (before the first sale they cover). `taxjson "
+                  "the date (before the first sale they cover). `tjs "
                   "run` reads them.")
     for _note in _notes:
         for _ln in _out_wrap(_note, file=sys.stderr):
@@ -33029,7 +33053,7 @@ def _refuse_stale_books_write(root: Path, flag: str) -> None:
              f"{' ...' if len(stale) > 3 else ''})",
              "Lines written from them could open a position the inputs "
              "already fix (a purchase just added to a .tt file). Run "
-             "`taxjson run` first; nothing was written.")
+             "`tjs run` first; nothing was written.")
 
 
 def _is_configured_account(root: Path, name: str) -> bool:
@@ -33082,14 +33106,14 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
     if args.account:
         f = cache / f"{args.account}_base.json"
         if not f.exists():
-            _die_input(f"no {f.name} in {cache} (run `taxjson run` first, "
+            _die_input(f"no {f.name} in {cache} (run `tjs run` first, "
                        f"or check the name).")
         files = [f]
     else:
         files = all_files
         if not files:
-            sys.exit(exit_text(f"taxjson find-missing-history: no base files in {cache} "
-                               f"(run `taxjson run` first)."))
+            sys.exit(exit_text(f"tjs find-missing-history: no base files in {cache} "
+                               f"(run `tjs run` first)."))
     outside = bool(getattr(args, "outside_year", False))
     if outside and args.write_missing_history is None:
         _die_input("--outside-year goes with --write-missing-history (it "
@@ -33175,7 +33199,7 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
                 if line.strip():
                     print(f"  [{f.name}] {line}", file=sys.stderr)
             if proc.returncode != 0:
-                sys.exit(exit_text(f"taxjson find-missing-history {_flag}: "
+                sys.exit(exit_text(f"tjs find-missing-history {_flag}: "
                                    f"taxjson-gains failed on {f.name} "
                                    f"(exit {proc.returncode})."))
             try:
@@ -33260,9 +33284,9 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
         _quiet = _accounts_skipped_for_no_inputs(root)
         for _n in sorted((_soft_config(root).get("accounts") or {})):
             if _n not in _have and _n not in _quiet:
-                emit_line(f"taxjson find-missing-history: note: account {_n} "
+                emit_line(f"tjs find-missing-history: note: account {_n} "
                           f"has no work/{_n}_base.json — not checked (run "
-                          f"`taxjson run`).", file=sys.stderr)
+                          f"`tjs run`).", file=sys.stderr)
                 cmd += ["--unchecked-account", _n]
     if year:
         cmd += ["--year", str(year)]
@@ -33299,7 +33323,7 @@ def cmd_fees_sum(args: argparse.Namespace) -> None:
     root = Path(args.dir).resolve()
     cache = root / "work"
     if not cache.exists():
-        _die("no work/ — run `taxjson run` first")
+        _die("no work/ — run `tjs run` first")
     _require_books(root, also=("*_*.json",))
     settings = _soft_settings(root)
 
@@ -33321,7 +33345,7 @@ def cmd_fees_sum(args: argparse.Namespace) -> None:
             if not any(f.name.startswith(f"{sib}_") for sib in siblings))
         if not files:
             _die_input(f"no files for account {account!r} in work/ — run "
-                       f"`taxjson run` first, or check the name")
+                       f"`tjs run` first, or check the name")
         cmd += [str(f) for f in files]
     else:
         cmd += ["--cache", str(cache)]
@@ -33377,7 +33401,7 @@ def _backup_config(cfg: Path) -> str:
 
 
 def cmd_format(args: argparse.Namespace) -> None:
-    """`taxjson format [--write [--no-backup] | --check]`: re-render
+    """`tjs format [--write [--no-backup] | --check]`: re-render
     taxjson.toml into the country's template (lib/config_template):
     every key in its place, set ones active, the rest commented with
     their description and default; the user's values, unknown keys and
@@ -33391,7 +33415,7 @@ def cmd_format(args: argparse.Namespace) -> None:
     cfg = root / "taxjson.toml"
     if not cfg.exists() and not cfg.is_symlink():
         _die_input(f"no taxjson.toml in {root}",
-                   "Run `taxjson init` first.")
+                   "Run `tjs init` first.")
     text = _read_config_text(cfg)
     try:
         res = format_config(text)
@@ -33414,7 +33438,7 @@ def cmd_format(args: argparse.Namespace) -> None:
         return
     if args.check:
         _say("warning", "taxjson.toml is not formatted",
-             "`taxjson format` shows the changes, `taxjson format "
+             "`tjs format` shows the changes, `tjs format "
              "--write` applies them.", prog=f"{_PROG} format")
         sys.exit(1)
     if not args.write:
@@ -33424,11 +33448,11 @@ def cmd_format(args: argparse.Namespace) -> None:
             fromfile="taxjson.toml", tofile="taxjson.toml (formatted)"))
         if _details(args):
             _say("note", "dry run: nothing written",
-                 "`taxjson format --write` applies this; your "
+                 "`tjs format --write` applies this; your "
                  "configuration loads the same either way.",
                  prog=f"{_PROG} format")
         else:
-            _say("note", "dry run: nothing written — `taxjson format "
+            _say("note", "dry run: nothing written — `tjs format "
                  "--write` applies it (your settings load the same)",
                  prog=f"{_PROG} format")
         return
@@ -33462,7 +33486,7 @@ def cmd_format(args: argparse.Namespace) -> None:
 
 
 def cmd_format_map(args: argparse.Namespace) -> None:
-    """`taxjson format-map [--write [--no-backup] | --check]`: lay
+    """`tjs format-map [--write [--no-backup] | --check]`: lay
     ticker.map out in keyword groups (lib/ticker_map_format): a short
     header, then Spellings, Listings of one security, Clean-up and
     Lookups, each under its heading, the user's order kept in a group, a
@@ -33484,7 +33508,7 @@ def cmd_format_map(args: argparse.Namespace) -> None:
     added again, and a failed write says what was already written.
     Default: print a unified diff, the .tt additions and the lines per
     group; --check fails while the map is not formatted, a migration is
-    pending, or `taxjson run` refuses the map."""
+    pending, or `tjs run` refuses the map."""
     import difflib
     from taxjson.lib.cli_diag import read_text_utf8
     from taxjson.lib.ticker_map_format import FormatError, format_map
@@ -33499,7 +33523,7 @@ def cmd_format_map(args: argparse.Namespace) -> None:
     tm = _PL.ticker_map_path(root)
     if not tm.exists() and not tm.is_symlink():
         _die_input(f"no ticker.map in {root}",
-                   "`taxjson init` writes one; the run needs none.")
+                   "`tjs init` writes one; the run needs none.")
     if tm.is_dir():
         _die_input(f"{tm} is a directory, not a file")
     try:
@@ -33513,7 +33537,7 @@ def cmd_format_map(args: argparse.Namespace) -> None:
     if res.problems:
         _n_bad = res.counts.get("Unrecognized", 0)
         _say("warning", f"{len(res.problems)} ticker.map problem(s): "
-             f"`taxjson run` refuses the map until each is fixed",
+             f"`tjs run` refuses the map until each is fixed",
              *[f"- {m}" for m in res.problems],
              *([f"The {_n_bad} line(s) taxjson cannot use are kept as "
                 f"written in the \"Unrecognized\" group."] if _n_bad
@@ -33538,22 +33562,22 @@ def cmd_format_map(args: argparse.Namespace) -> None:
     if args.check:
         # --check reports; it plans nothing (a project without accounts
         # can still be checked). It fails while the map is not formatted,
-        # a migration is pending, or `taxjson run` refuses the map.
+        # a migration is pending, or `tjs run` refuses the map.
         if pending:
             _say("warning", f"ticker.map holds dated events to migrate: "
                  f"{len(res.journals)} JOURNAL line(s) (to TOBASE), "
                  f"{len([m for m in res.moved if not m.commented])} dated "
                  f"RENAME line(s) (to a .tt file)",
-                 "`taxjson format-map` shows the changes, `taxjson "
+                 "`tjs format-map` shows the changes, `tjs "
                  "format-map --write` applies them.", prog=prog)
         elif res.changed:
             _say("warning", "ticker.map is not formatted",
-                 "`taxjson format-map` shows the changes, `taxjson "
+                 "`tjs format-map` shows the changes, `tjs "
                  "format-map --write` applies them.", prog=prog)
         else:
             print("ticker.map is already formatted.")
         if res.problems:
-            _say("warning", f"`taxjson run` refuses this ticker.map: "
+            _say("warning", f"`tjs run` refuses this ticker.map: "
                  f"{len(res.problems)} problem(s), listed above",
                  "Fix each line, then check again.", prog=prog)
         if pending or res.changed or res.problems:
@@ -33575,10 +33599,10 @@ def cmd_format_map(args: argparse.Namespace) -> None:
                        *[f"- {m}" for m in plan.twins],
                        "Make the map line and the .tt line(s) of each "
                        "change say the same (or delete one), run "
-                       "`taxjson run`, then format the map again. An "
+                       "`tjs run`, then format the map again. An "
                        "account without books yet (no work/<account>_"
                        "base.json) is compared on every change of its "
-                       "kind: run `taxjson run` first.")
+                       "kind: run `tjs run` first.")
     if not res.changed and not pending:
         print("ticker.map is already formatted.")
         return
@@ -33633,7 +33657,7 @@ def cmd_format_map(args: argparse.Namespace) -> None:
                          plan.twins, root, text)
         _say("note", f"lines per group: {counts}", prog=prog)
         _say("note", "dry run: nothing written",
-             "`taxjson format-map --write` applies this; the books are "
+             "`tjs format-map --write` applies this; the books are "
              "the same either way.", prog=prog)
         return
     # Every target is checked before anything is written: ticker.map and
@@ -33689,7 +33713,7 @@ def cmd_format_map(args: argparse.Namespace) -> None:
         _die_input(head, *([fix] if fix else []),
                    ("Already written: " + ", ".join(written)
                     + " — ticker.map is unchanged; re-running "
-                    "`taxjson format-map --write` does not add those "
+                    "`tjs format-map --write` does not add those "
                     "lines twice.") if written else "Nothing was written.")
     for rel, (cur, new_txt, n_rules) in sorted(texts.items()):
         p = _PL.project_path(root, rel)
@@ -33829,7 +33853,7 @@ def _migration_notes(res, homes: List[str], skipped: List[str],
              prog=prog)
     if res.dropped_examples:
         _say("note", f"dropped {len(res.dropped_examples)} switched-off "
-             f"example(s) an earlier `taxjson init` wrote",
+             f"example(s) an earlier `tjs init` wrote",
              *res.dropped_examples, prog=prog)
 
 
@@ -33846,7 +33870,7 @@ def _year_accounts(d: Path) -> List[str]:
 
 
 def cmd_init(args: argparse.Namespace) -> None:
-    """`taxjson init`: one folder of exports for every year — inputs/
+    """`tjs init`: one folder of exports for every year — inputs/
     shared by the year projects, and the year's folder (YYYY/), a
     complete project whose taxjson.toml names the shared folders
     (lib/project_layout); `--single`: one folder for one year."""
@@ -33880,8 +33904,8 @@ def cmd_init(args: argparse.Namespace) -> None:
         _refuse_init_in_year_folder(top, country, _year)
     if years and (top / "taxjson.toml").is_file():
         _die(f"{top} is a single-folder project (it has a taxjson.toml)",
-             "`taxjson migrate --to-years` there turns it into one folder "
-             "of exports for every year; `taxjson init --single --force` "
+             "`tjs migrate --to-years` there turns it into one folder "
+             "of exports for every year; `tjs init --single --force` "
              "re-templates it.")
     root = top / str(first_year) if years else top
     cfg = root / "taxjson.toml"
@@ -34060,7 +34084,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         _stub(_TB.TOBASE_MAP, _TB.render(_TB.load_master(), shared=years))
     _stub(".gitignore", _TEMPLATE_GITIGNORE + (
         "# The newest year's positions and wash radar, for other tools "
-        "(`taxjson run`).\n/exports/\n" if years else ""))
+        "(`tjs run`).\n/exports/\n" if years else ""))
     if years:
         from taxjson.lib.holdings_dir import README as _HREADME
         _stub(f"{_yrel}{_PL.HOLDINGS}/README.txt", _HREADME)
@@ -34153,8 +34177,8 @@ def cmd_init(args: argparse.Namespace) -> None:
               + (f" (every year), positions snapshots in {_yrel}holdings/."
                  if years else "."))
         # Commands to copy: their own lines, never wrapped.
-        print(f"  3. taxjson -C {_shlex.quote(str(root))} run")
-        print(f"  4. taxjson -C {_shlex.quote(str(root))} checklist --run")
+        print(f"  3. tjs -C {_shlex.quote(str(root))} run")
+        print(f"  4. tjs -C {_shlex.quote(str(root))} checklist --run")
         _init_filing_hint(_year, first_year, country, years, top)
         if country == "usa":
             _say("note", f"{_US_EXPERIMENTAL_NOTE[0]}: treat the output "
@@ -34184,11 +34208,11 @@ def cmd_init(args: argparse.Namespace) -> None:
         print("  2. Drop broker CSV exports into inputs/<account>/.")
     print("  3. Run:")
     # A command to copy: its own line, never wrapped.
-    print(f"       taxjson -C {_shlex.quote(str(root))} run")
+    print(f"       tjs -C {_shlex.quote(str(root))} run")
     print("  4. Every step after that, checked, and which one is next:")
-    print(f"       taxjson -C {_shlex.quote(str(root))} checklist --run")
+    print(f"       tjs -C {_shlex.quote(str(root))} checklist --run")
     if years:
-        for _ln in _out_wrap(f"Next year: `taxjson -C "
+        for _ln in _out_wrap(f"Next year: `tjs -C "
                              f"{_shlex.quote(str(top))} new-year "
                              f"{first_year + 1}` copies this year's "
                              f"taxjson.toml and ticker.map into "
@@ -34203,7 +34227,7 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 
 def _init_refuse_outside_links(top: Path, rels: List[str]) -> None:
-    """Die (exit 2, nothing written) when a folder `taxjson init` would
+    """Die (exit 2, nothing written) when a folder `tjs init` would
     write into — each of `rels` and every folder above it, under `top` —
     is a symlink leaving `top` (#45). A link inside `top` is kept."""
     from taxjson.lib.safe_write import link_outside
@@ -34244,7 +34268,7 @@ _REQ_KEY = "requires_taxjson"         # lib/requires.KEY
 
 def _init_requires(cfg: Path, country: str, layout: Dict[str, Any],
                    own_tobase: bool) -> str:
-    """The requires_taxjson `taxjson init` writes: the release that
+    """The requires_taxjson `tjs init` writes: the release that
     reads the layout it makes (lib/requires.FEATURES) — the previous
     config's value when `--force` re-templates one that asks for more
     (never lowered)."""
@@ -34264,7 +34288,7 @@ def _init_requires(cfg: Path, country: str, layout: Dict[str, Any],
 
 
 def _init_demo(args: argparse.Namespace) -> None:
-    """`taxjson init --demo [DIR]`: the demo project (lib/demo) — DIR
+    """`tjs init --demo [DIR]`: the demo project (lib/demo) — DIR
     (new or empty) holding inputs/ with the made-up exports, tobase.map
     and 2024/, a ready taxjson.toml — and the commands to try."""
     import shlex as _shlex
@@ -34316,7 +34340,7 @@ def _init_demo(args: argparse.Namespace) -> None:
                  _TB.render(_TB.load_master(), shared=True))
     write_atomic(top / ".gitignore", _TEMPLATE_GITIGNORE
                  + "# The newest year's positions and wash radar, for "
-                   "other tools (`taxjson run`).\n/exports/\n")
+                   "other tools (`tjs run`).\n/exports/\n")
     for name, cfg in DM.ACCOUNTS:
         d = top / _PL.INPUTS / name
         d.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -34347,7 +34371,7 @@ def _init_demo(args: argparse.Namespace) -> None:
 
 def _refuse_init_in_year_folder(top: Path, country: str,
                                 year: Optional[int]) -> None:
-    """`taxjson init` makes the year's folder (YYYY/) inside the folder
+    """`tjs init` makes the year's folder (YYYY/) inside the folder
     it runs in: run inside an empty folder named like a year
     (~/taxes/2026) it built ~/taxes/2026/2026/ without a word. Refuse,
     with the command for the folder above it."""
@@ -34401,7 +34425,7 @@ def _years_folder(root: Path) -> Path:
     if not _PL.has_config(root):
         _die_input(f"{root} holds no year folder (YYYY/ with a "
                    f"taxjson.toml)",
-                   "`taxjson init` creates one folder of exports for every "
+                   "`tjs init` creates one folder of exports for every "
                    "year; docs/getting-started.md, \"One folder of exports "
                    "for every year\".")
     return root.parent
@@ -34412,20 +34436,20 @@ def _single_folder_project(root: Path, top: Path) -> bool:
     taxjson.toml and the folder `years` / `new-year` would read holds no
     year folder at all (2026-10 workflow audit: `years` there offered
     `new-year`, which refused and offered an `init` that refused too;
-    the move is `taxjson migrate --to-years`)."""
+    the move is `tjs migrate --to-years`)."""
     return (_PL.has_config(root) and _PL.multi_root(root) is None
             and not _PL.year_dirs(top))
 
 
 def _single_folder_hint(root: Path) -> str:
     return (f"{root} is a single-folder project, not a year folder: "
-            f"`taxjson migrate --to-years` makes it the first year folder "
-            f"(its exports shared by every year), then `taxjson new-year "
+            f"`tjs migrate --to-years` makes it the first year folder "
+            f"(its exports shared by every year), then `tjs new-year "
             f"YYYY` adds the next.")
 
 
 def cmd_years(args: argparse.Namespace) -> None:
-    """`taxjson years [--json] [--diff A B]`: the year projects of a
+    """`tjs years [--json] [--diff A B]`: the year projects of a
     multi-year folder and the state of each (lib/project_layout
     .years_report); --diff: what differs between two years' ticker.map
     and taxjson.toml."""
@@ -34457,7 +34481,7 @@ def cmd_years(args: argparse.Namespace) -> None:
     print(f"Year projects in {root if single else top}")
     if not rep["years"]:
         print(_out.fill(_single_folder_hint(root) if single else
-                        "No year folder yet — `taxjson new-year YYYY` "
+                        "No year folder yet — `tjs new-year YYYY` "
                         "creates one."))
         return
     for r in rep["years"]:
@@ -34471,14 +34495,14 @@ def cmd_years(args: argparse.Namespace) -> None:
                       f"denied {float(t.get('disallowed') or 0):,.2f})")
         if r.get("drifted"):
             state += (f", DRIFTED from filed/{r['year']}.json at its last "
-                      f"run (`taxjson -C {_year_dir_arg(top, r['year'])} "
+                      f"run (`tjs -C {_year_dir_arg(top, r['year'])} "
                       f"check-filed`)")
         run = (f"last run {r['last_run'][:16].replace('T', ' ')}"
                if r["last_run"] else "not run yet")
         if r["stale"]:
             run += f" — inputs changed since ({r['changed']})"
             if r["filed"]:
-                run += ("; `taxjson run` there rechecks the filed figures "
+                run += ("; `tjs run` there rechecks the filed figures "
                         "against the lock")
         diff = r["differs_from_newest"]
         extra = ""
@@ -34494,7 +34518,7 @@ def cmd_years(args: argparse.Namespace) -> None:
                      + ("a filed year's own: `align` there would change "
                         "what its lock recorded; " if _years_as_filed(r)
                         else "")
-                     + f"`taxjson years --diff {r['year']} "
+                     + f"`tjs years --diff {r['year']} "
                      f"{rep['newest']}`)")
         _sm = r.get("shared_exports_changed") or []
         if _sm:
@@ -34503,7 +34527,7 @@ def cmd_years(args: argparse.Namespace) -> None:
                       f"a generic mapping that reads it) since the close "
                       f"({', '.join(_sm[:4])}"
                       + (" ..." if len(_sm) > 4 else "")
-                      + f"): the year reads its frozen copy — `taxjson -C "
+                      + f"): the year reads its frozen copy — `tjs -C "
                       f"{_year_dir_arg(top, r['year'])} check-filed` says "
                       f"what to do")
         _nc = r.get("shared_not_compared") or []
@@ -34540,7 +34564,7 @@ def cmd_years(args: argparse.Namespace) -> None:
     if own:
         for _ln in _out.wrap(
                 f"tobase.map: a copy in each of "
-                f"{', '.join(str(y) for y in own)} — `taxjson migrate` "
+                f"{', '.join(str(y) for y in own)} — `tjs migrate` "
                 f"here makes them one file every year reads", None, "",
                 "  "):
             print(_ln)
@@ -34654,7 +34678,7 @@ def _year_dir_arg(top: Path, year: Any) -> str:
 
 
 def _years_table(top: Path, rep: Dict[str, Any], root: Path) -> None:
-    """`taxjson years`, the default view (docs/output-style.md,
+    """`tjs years`, the default view (docs/output-style.md,
     Essentials first): one table row per year, then one line per thing
     to do; --details prints each year's state in words."""
     from taxjson.lib import out as _out
@@ -34824,7 +34848,7 @@ def _implicit_grant_since(doc: Dict[str, Any]) -> Optional[int]:
 def _new_year_publish(top: Path, folder: Path, config_text: str,
                       files: Dict[str, bytes],
                       holdings: Optional[str]) -> None:
-    """`taxjson new-year`: the new year's files made in a staging folder
+    """`tjs new-year`: the new year's files made in a staging folder
     beside the years, then moved into place — the whole folder in one
     rename when it does not exist yet, else file by file with
     taxjson.toml last and every one moved before it taken back when one
@@ -34911,7 +34935,7 @@ def _templated(text: str) -> str:
 
 
 def cmd_new_year(args: argparse.Namespace) -> None:
-    """`taxjson new-year YYYY`: the year's folder beside the others,
+    """`tjs new-year YYYY`: the year's folder beside the others,
     with the previous year's taxjson.toml and ticker.map copied in
     (year bumped, prior_year_record set, the year's own tables commented
     out — lib/project_layout.new_year_text; a Canadian project's
@@ -34933,16 +34957,16 @@ def cmd_new_year(args: argparse.Namespace) -> None:
     if (folder / "taxjson.toml").exists() \
             or (folder / "taxjson.toml").is_symlink():
         _die_input(f"{year}/taxjson.toml already exists — the year folder "
-                   f"is there (`taxjson years` lists them).")
+                   f"is there (`tjs years` lists them).")
     earlier = [(y, d) for y, d in _PL.year_dirs(top) if y < year]
     if not earlier:
         if _single_folder_project(root, top):
             _die_input(f"{root} is a single-folder project, not a year "
-                       f"folder", "`taxjson migrate --to-years` makes it "
+                       f"folder", "`tjs migrate --to-years` makes it "
                        f"the first year folder (its exports shared by "
-                       f"every year); then `taxjson new-year {year}`.")
+                       f"every year); then `tjs new-year {year}`.")
         _die_input(f"no earlier year folder in {top} to start {year} from",
-                   f"`taxjson init --year {year} --country ...` creates a "
+                   f"`tjs init --year {year} --country ...` creates a "
                    f"first one.")
     prev_year, prev = earlier[-1]
     if prev_year != year - 1:
@@ -34953,9 +34977,9 @@ def cmd_new_year(args: argparse.Namespace) -> None:
         _die_input(f"{year - 1} has no year folder: start it first",
                    f"{year} would start from {prev_year}/, and the "
                    f"carryforwards it reads from {prev_year}'s lock would "
-                   f"skip whatever {year - 1} used. `taxjson new-year "
+                   f"skip whatever {year - 1} used. `tjs new-year "
                    f"{year - 1}` makes {year - 1}/ from {prev_year}/; then "
-                   f"`taxjson new-year {year}`. Nothing was created.")
+                   f"`tjs new-year {year}`. Nothing was created.")
     text = _read_config_text(prev / "taxjson.toml")
     kept_since = None
     # A frozen previous year (close-year copied its exports into its
@@ -35023,7 +35047,7 @@ def cmd_new_year(args: argparse.Namespace) -> None:
     # tobase.map: the interlisted pairs, one file every year reads
     # (`[settings] tobase_map`, kept by the taxjson.toml copy): no
     # per-year copy. A year from before v0.27.1 with its own copy passes
-    # it on (`taxjson migrate` makes the copies one file).
+    # it on (`tjs migrate` makes the copies one file).
     # (A frozen year's own tobase.map is the shared one's copy: not a
     # legacy per-year file to pass on.)
     _legacy_tobase = (not _PL.shared_tobase(prev)
@@ -35098,7 +35122,7 @@ def cmd_new_year(args: argparse.Namespace) -> None:
             print(_ln)
         if _legacy_tobase:
             _say("note", f"{year}/ got its own copy of {prev_year}'s "
-                 f"tobase.map — `taxjson migrate` makes it one file",
+                 f"tobase.map — `tjs migrate` makes it one file",
                  prog=_PROG)
         print("\nNEXT STEPS")
         for _ln in _out_wrap(
@@ -35108,16 +35132,16 @@ def cmd_new_year(args: argparse.Namespace) -> None:
                 + f", positions snapshots in {_hold_where}.",
                 indent="  ", hang="     "):
             print(_ln)
-        print(f"  2. taxjson -C {_yd} run")
-        print(f"  3. taxjson -C {_yd} checklist --run")
-        print(f"  4. Later, in {year}/: taxjson align --from {prev_year}")
+        print(f"  2. tjs -C {_yd} run")
+        print(f"  3. tjs -C {_yd} checklist --run")
+        print(f"  4. Later, in {year}/: tjs align --from {prev_year}")
         if _PL.lock_missing_frozen(prev, prev_year):
             # Closed and frozen, its lock deleted: never "not locked
             # yet" (backlog TJ-0263).
             _h, _d = _PL.lock_missing_parts(prev_year)
             _say("warning", f"{prev_year}: {_h}", _d)
         elif not (prev / "filed" / f"{prev_year}.json").is_file():
-            _say("note", f"{prev_year} is not locked yet: `taxjson "
+            _say("note", f"{prev_year} is not locked yet: `tjs "
                  f"close-year` in {prev_year}/ after filing it")
         return
     for _ln in _out_wrap(
@@ -35138,7 +35162,7 @@ def cmd_new_year(args: argparse.Namespace) -> None:
     if _legacy_tobase:
         _say("note", f"{year}/ got its own copy of {prev_year}'s "
              f"tobase.map: the years keep one copy each",
-             f"`taxjson -C {_shlex.quote(str(top))} migrate` makes "
+             f"`tjs -C {_shlex.quote(str(top))} migrate` makes "
              f"them one tobase.map every year reads ([settings] "
              f"{_PL.TOBASE_KEY} = \"{_PL.SHARED_TOBASE}\").", prog=_PROG)
     _yd = _shlex.quote(str(folder))
@@ -35154,10 +35178,10 @@ def cmd_new_year(args: argparse.Namespace) -> None:
             indent="  ", hang="     "):
         print(_ln)
     print(f"  2. Build the {year} books and see what is next:")
-    print(f"       taxjson -C {_yd} run")
-    print(f"       taxjson -C {_yd} checklist --run")
+    print(f"       tjs -C {_yd} run")
+    print(f"       tjs -C {_yd} checklist --run")
     for _ln in _out_wrap(
-            f"3. Later, `taxjson align --from {prev_year}` in {year}/ shows "
+            f"3. Later, `tjs align --from {prev_year}` in {year}/ shows "
             f"the ticker.map lines and settings that differ from "
             f"{prev_year} and brings chosen ones over.",
             indent="  ", hang="     "):
@@ -35168,13 +35192,13 @@ def cmd_new_year(args: argparse.Namespace) -> None:
         _say("warning", f"{prev_year}: {_h}", _d)
     elif not (prev / "filed" / f"{prev_year}.json").is_file():
         _say("note", f"{prev_year} is not locked yet: after filing it, "
-             f"`taxjson close-year` in {prev_year}/ (keep a positions "
+             f"`tjs close-year` in {prev_year}/ (keep a positions "
              f"snapshot taken at or just after the year end in "
              f"{_PL.shown(_PL.holdings_folder(prev), top)}/).")
 
 
 def cmd_update_tobase_map(args: argparse.Namespace) -> None:
-    """`taxjson update-tobase-map [--write] [--json]`: bring the
+    """`tjs update-tobase-map [--write] [--json]`: bring the
     project's tobase.map in step with the installed interlisted master
     (lib/tobase_map, tax-logic CA-XLIST-06). Dry run by default; --write
     applies it (the previous file kept as tobase.map.bak). Canada only
@@ -35252,7 +35276,7 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
                 print(_ln)
             if no_run:
                 for _ln in _out_wrap(
-                        "The books are not built yet (`taxjson run`): "
+                        "The books are not built yet (`tjs run`): "
                         "what the pairs change in them cannot be shown."):
                     print(_ln)
             elif changes:
@@ -35286,8 +35310,8 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
                            "`tjs run`", "tjs update-tobase-map --write"))
             elif not args.json:
                 for _ln in _out_wrap(
-                        "Nothing written: `taxjson update-tobase-map "
-                        "--write` creates tobase.map; then `taxjson run`."):
+                        "Nothing written: `tjs update-tobase-map "
+                        "--write` creates tobase.map; then `tjs run`."):
                     print(_ln)
             return
         if not tm.is_file():
@@ -35296,7 +35320,7 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
         write_user_file(TB.tobase_path(root), text, boundary, backup=False)
         if not args.json:
             print(f"Wrote {_PL.tobase_shown(root)} ({n_lines} lines). Run "
-                  f"`taxjson run` "
+                  f"`tjs run` "
                   + (f"in each year that reads it ({_yrs_text}) "
                      if shared else "")
                   + "to rebuild the books with it.")
@@ -35453,11 +35477,11 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
         if (plan.changes or stale) and not args.json and not _det:
             print(_act("Nothing written", "tjs update-tobase-map --write"))
         elif (plan.changes or stale) and not args.json:
-            print("Nothing written: `taxjson update-tobase-map --write` "
+            print("Nothing written: `tjs update-tobase-map --write` "
                   "applies it.")
         if not tm.is_file() and not args.json:
             print("There is no ticker.map beside tobase.map (it is not "
-                  "read without one): `taxjson update-tobase-map --write` "
+                  "read without one): `tjs update-tobase-map --write` "
                   "makes one.")
         return
     if made_map and not args.json:
@@ -35469,7 +35493,7 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
     if not args.json:
         print(f"Wrote {_PL.tobase_shown(root)}"
               + (f" (the previous file kept as {bak.name})" if bak else "")
-              + ". Run `taxjson run` "
+              + ". Run `tjs run` "
               + (f"in each year that reads it ({_yrs_text}) "
                  if shared else "")
               + "to rebuild the books with it.")
@@ -35491,7 +35515,7 @@ def _tobase_root_year(top: Path, as_json: bool) -> Path:
         _die_input(f"the year folders {', '.join(str(y) for y in sorted(lay['own']))} "
                    f"keep a tobase.map of their own — which file to "
                    f"update is ambiguous here",
-                   "`taxjson migrate` here makes the copies one file every "
+                   "`tjs migrate` here makes the copies one file every "
                    "year reads; or run update-tobase-map in a year folder.")
     if len(lay["shared"]) != 1:
         if not lay["shared"]:
@@ -35537,7 +35561,7 @@ def _align_show(c: Dict[str, Any], here: str, there: str,
                 for r in rows:
                     print(f"  {r}")
         print("(tobase.map: the interlisted pairs, a copy in each year; "
-              "`taxjson migrate` in the folder holding the years makes "
+              "`tjs migrate` in the folder holding the years makes "
               "them one file every year reads.)")
     _accts = _align_lone_accounts(c, here, there)
     if _accts:
@@ -35638,7 +35662,7 @@ def _align_filed_year(root: Path) -> Optional[int]:
 
 
 def cmd_align(args: argparse.Namespace) -> None:
-    """`taxjson align --from YEAR [--write [--all]] [--json]`: the
+    """`tjs align --from YEAR [--write [--all]] [--json]`: the
     ticker.map rules and taxjson.toml keys of another year's project
     that differ from this one's; --write brings chosen ones into THIS
     project (asked one by one on a terminal, or --all), backing up each
@@ -35655,7 +35679,7 @@ def cmd_align(args: argparse.Namespace) -> None:
         c = _PL.compare(root, other)
     except _PL.LayoutError as e:
         _die_input(str(e), "Nothing was compared: fix the file, then run "
-                   "`taxjson align` again.")
+                   "`tjs align` again.")
     if not args.write:
         _align_show(c, root.name, other.name, args.json)
         return
@@ -35664,7 +35688,7 @@ def cmd_align(args: argparse.Namespace) -> None:
         # JSON (backlog TJ-0318).
         _die_input("--write --json needs --all: one by one, the "
                    "questions would mix with the JSON",
-                   "Nothing was written. `taxjson align --from "
+                   "Nothing was written. `tjs align --from "
                    f"{args.from_year} --json` lists the differences; "
                    f"`--write --all --json` brings them all over.")
     interactive = sys.stdin.isatty() and not args.all
@@ -35684,10 +35708,10 @@ def cmd_align(args: argparse.Namespace) -> None:
         _say("warning", f"{_filed} is filed: --write changes the "
              f"taxjson.toml and ticker.map filed/{_filed}.json was "
              f"closed with",
-             "`taxjson run` here then says a frozen input changed since "
+             "`tjs run` here then says a frozen input changed since "
              "the close, and DRIFTED if a filed figure moves. To keep the "
              "year as filed, put the .bak copy back; for an amendment, "
-             "`taxjson close-year --force` once it is filed.",
+             "`tjs close-year --force` once it is filed.",
              prog=_cmd_prog())
 
     def _ask(what: str) -> bool:
@@ -35717,7 +35741,7 @@ def cmd_align(args: argparse.Namespace) -> None:
     if lines:
         cur = tm.read_text(encoding="utf-8-sig") if tm.is_file() else ""
         head = (cur.rstrip("\n") + ("\n\n" if cur.strip() else "")
-                + f"# from {other.name}/ticker.map (`taxjson align`, "
+                + f"# from {other.name}/ticker.map (`tjs align`, "
                   f"{date_cls.today().isoformat()})\n")
         from taxjson.bin.taxjson_ticker_map import map_file_problems
         import tempfile as _tf
@@ -35856,7 +35880,7 @@ def cmd_align(args: argparse.Namespace) -> None:
             warnings=warnings))
         return
     if done:
-        print("Run `taxjson run` to rebuild the books with them.")
+        print("Run `tjs run` to rebuild the books with them.")
 
 
 def _align_write_result(c: Dict[str, Any], here: str, there: str, *,
@@ -35866,7 +35890,7 @@ def _align_write_result(c: Dict[str, Any], here: str, there: str, *,
                         order: Optional[Dict[str, Any]],
                         filed: Optional[int],
                         warnings: List[str]) -> Dict[str, Any]:
-    """`taxjson align --write --all --json`: the comparison
+    """`tjs align --write --all --json`: the comparison
     (_align_show's keys) and the outcome — the files written (with
     their backups), the ticker.map lines added and skipped (with why),
     the keys set, the differences align never changes, the warnings."""
@@ -35933,7 +35957,7 @@ def _add_deduction_flags(p: argparse.ArgumentParser) -> None:
 
 def _interrupt_note() -> str:
     if _CURRENT_CMD == "run":
-        return ("work/ is incomplete — re-run `taxjson run` before "
+        return ("work/ is incomplete — re-run `tjs run` before "
                 "trusting any report")
     return ""
 
@@ -35944,14 +35968,12 @@ def main() -> None:
     traceback (re-audit A2-0782, A2-0785); report text the terminal
     cannot encode degrades to '?' (A2-0786)."""
     from taxjson.lib.cli_diag import run_top_level
-    global _PROG
-    _PROG = _invoked_name()
     run_top_level(lambda: (f"{_PROG} {_CURRENT_CMD}" if _CURRENT_CMD
                            else _PROG),
                   _main, interrupt_note=_interrupt_note)
 
 
-def _build_parser(prog: str = "taxjson"
+def _build_parser(prog: str = "tjs"
                   ) -> Tuple[argparse.ArgumentParser, Any]:
     """The `taxjson` / `tjs` argument parser and its subparsers action.
     `prog` is the name the program was invoked as (usage lines and the
@@ -35983,7 +36005,7 @@ def _build_parser(prog: str = "taxjson"
                     "unchanged. The run ends with the broker positions "
                     "cross-check when there are positions snapshots "
                     "(holdings/, found without a setting). "
-                    "Commands chain: `taxjson run sum`.")
+                    "Commands chain: `tjs run sum`.")
     p_run.add_argument("--account", help="Process only one account")
     p_run.add_argument("--fast", action="store_true",
                        help="Incremental run: reuse cached stage "
@@ -35992,7 +36014,7 @@ def _build_parser(prog: str = "taxjson"
     p_run.add_argument("--no-input", action="store_true",
                        help="Never prompt (scripts/CI): unresolved corp-action "
                             "elections write work/pending_elections.json "
-                            "and exit 3 — resolve with `taxjson elect "
+                            "and exit 3 — resolve with `tjs elect "
                             "... --set`, then re-run")
     p_run.add_argument("--strict", action="store_true",
                        help="Promote per-account validation ERRORs "
@@ -36015,7 +36037,7 @@ def _build_parser(prog: str = "taxjson"
                          help="Clear the election(s) and re-prompt now")
     p_elect.add_argument("--reset", action="store_true",
                          help="Clear the election(s) without re-prompting "
-                              "(next `taxjson run` asks again)")
+                              "(next `tjs run` asks again)")
     p_elect.add_argument("--event", metavar="ID",
                          help="Scope --redo/--reset to one event id "
                               "(from the list); default is all")
@@ -36026,7 +36048,7 @@ def _build_parser(prog: str = "taxjson"
                               "20250317-abg-abh-1a2b=rollover_s_85_1_5 "
                               "(Canada) or =reorg_368 (USA); the "
                               "event's own choices are listed by "
-                              "`taxjson elect ACCOUNT`")
+                              "`tjs elect ACCOUNT`")
     p_elect.add_argument("--hint", action="append", metavar="KEY=VALUE",
                          help="Hint for --set (repeatable), e.g. "
                               "--hint fmv_per_share=12.5")
@@ -36074,7 +36096,7 @@ def _build_parser(prog: str = "taxjson"
 
     p_fmt = sub.add_parser(
         "format", help="Lay out taxjson.toml like the template",
-        description="Rewrite taxjson.toml in the layout `taxjson init` "
+        description="Rewrite taxjson.toml in the layout `tjs init` "
                     "writes: every key of the project's country in its "
                     "place — the ones you set active, the rest commented "
                     "out with a description and the default. Your "
@@ -36095,7 +36117,7 @@ def _build_parser(prog: str = "taxjson"
 
     p_fmap = sub.add_parser(
         "format-map", help="Lay out ticker.map in keyword groups",
-        description="Rewrite ticker.map in the layout `taxjson init` "
+        description="Rewrite ticker.map in the layout `tjs init` "
                     "writes: a short header, then the rules in groups "
                     "(Spellings, Listings of one security, Clean-up, Dated "
                     "events, Lookups), each under its heading, your order "
@@ -36131,10 +36153,10 @@ def _build_parser(prog: str = "taxjson"
                     "snapshots; in Canada also tobase.map (the interlisted "
                     "pairs) beside the year folders, one file every year "
                     "reads. Every other command runs in the year "
-                    "folder (`taxjson -C DIR/YYYY run`); `taxjson new-year` "
+                    "folder (`tjs -C DIR/YYYY run`); `tjs new-year` "
                     "adds the next year's. --single scaffolds one folder "
                     "for one tax year instead (taxjson.toml, ticker.map "
-                    "and inputs/ in DIR itself: `taxjson -C DIR run`). An "
+                    "and inputs/ in DIR itself: `tjs -C DIR run`). An "
                     "existing taxjson.toml is kept unless --force (then it "
                     "is backed up first).")
     p_init.add_argument("path", nargs="?", help="Directory to initialize (default: cwd)")
@@ -36163,7 +36185,7 @@ def _build_parser(prog: str = "taxjson"
                              "command runs there. Without it, DIR holds "
                              "inputs/ shared by every year and the year's "
                              "project is DIR/YYYY/ (the --year one; "
-                             "`taxjson new-year` adds more)")
+                             "`tjs new-year` adds more)")
     p_init.set_defaults(func=cmd_init)
 
     p_years = sub.add_parser(
@@ -36176,7 +36198,7 @@ def _build_parser(prog: str = "taxjson"
                     "and settings differ from the newest year's, and its "
                     "checklist marks.")
     p_years.add_argument("--json", action="store_true",
-                         help="Emit JSON (docs/settings.md, `taxjson years "
+                         help="Emit JSON (docs/settings.md, `tjs years "
                               "--json`)")
     p_years.add_argument("--diff", nargs=2, type=_tax_year_arg,
                          metavar="YEAR",
@@ -36253,7 +36275,7 @@ def _build_parser(prog: str = "taxjson"
                     "look-back window (default: the tax year): the "
                     "conversions, deposits and withdrawals the exports "
                     "carry and the project's .tt cash lines — what "
-                    "`taxjson fx-cash --ledger v2` reads — each as the "
+                    "`tjs fx-cash --ledger v2` reads — each as the "
                     ".tt line that declares it (FXCONV, CASHMOVE, "
                     "CASHOPEN; a fee as a #FEE comment line), oldest to "
                     "latest, with per-currency totals. A broker's move no "
@@ -36344,7 +36366,7 @@ def _build_parser(prog: str = "taxjson"
                               "unpaired (that arrival was unrelated)")
     p_csend.add_argument("--unset", action="append", metavar="ID",
                          help="Remove the saved decision for a send id "
-                              "(it is undecided again: `taxjson run` "
+                              "(it is undecided again: `tjs run` "
                               "asks); repeatable")
     p_csend.add_argument("--note", metavar="TEXT",
                          help="With --set: a note kept with the decision "
@@ -36435,7 +36457,7 @@ def _build_parser(prog: str = "taxjson"
                     "listing in a taxable account or a TFSA, US dividend "
                     "payers in a TFSA (unrecoverable withholding). It "
                     "changes no number of this year (listing pairs "
-                    "ticker.map does not join: `taxjson ticker-map "
+                    "ticker.map does not join: `tjs ticker-map "
                     "--suggest`). Exit 0 with or without tips; 2 when "
                     "the project cannot be read.")
     p_tips.add_argument("--online", action="store_true",
@@ -36583,7 +36605,7 @@ def _build_parser(prog: str = "taxjson"
              "dates (Mar/Jun/Sep/Dec 15) calls for under your chosen "
              "basis, what you have paid, and the offset interest plus "
              "s.163.1 penalty that follow from any gap. The "
-             "current-year basis is driven by `taxjson estimate` "
+             "current-year basis is driven by `tjs estimate` "
              "itself (AMT included). Configure [instalments] in "
              "taxjson.toml.")
     p_inst.add_argument("--json", action="store_true",
@@ -36598,7 +36620,7 @@ def _build_parser(prog: str = "taxjson"
         description="Dividend total per ticker over a window (default: "
                     "the tax year), each payment counted in its own tax "
                     "year: the pay date, or in Canada a Canadian trust's "
-                    "record date (`taxjson tax-logic` states the "
+                    "record date (`tjs tax-logic` states the "
                     "rule).")
     p_dsum.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_dsum.add_argument("account", nargs="?", help="Account (default: all)")
@@ -36832,7 +36854,7 @@ def _build_parser(prog: str = "taxjson"
                             "date basis (settlement date unless tax_date "
                             "= \"trade\"): the engine's pools that day "
                             "from the pass plain `list` reads, which "
-                            "`taxjson run` writes per day with the gains "
+                            "`tjs run` writes per day with the gains "
                             "(Canada: each account's share of the s.47 "
                             "ACB across the taxable accounts; USA: the "
                             "account's own FIFO lots), the deferred "
@@ -37006,7 +37028,7 @@ def _build_parser(prog: str = "taxjson"
         "check-tt",
         help="Check every .tt line and name each problem",
         description="Read every line of the .tt files with the parsers "
-             "`taxjson run` uses and name each problem with its file "
+             "`tjs run` uses and name each problem with its file "
              "and line (the run stops at the first): a typo'd action, "
              "a bad date or number, an OPENING in a crypto account, "
              "two declarations that disagree; warnings for what the "
@@ -37037,20 +37059,34 @@ def _build_parser(prog: str = "taxjson"
         description="Compare reports/ with a snapshot of an earlier "
              "run: the run before (`prev`, kept by every full run), one "
              "saved with --save, or the reports as filed (`filed`, kept "
-             "by close-year). Shows the account figures that moved, the "
+             "by close-year), or a full copy made by `tjs snapshot`. "
+             "Shows the account figures that moved, the "
              "report files and the inputs that changed; exit 1 when a "
              "report differs.")
     p_cmp.add_argument("name", nargs="?", default=None,
-                       help="prev (default), filed, or a saved name")
+                       help="prev (default), filed, a saved name, or a "
+                            "`tjs snapshot` name or its folder")
     p_cmp.add_argument("--save", metavar="NAME",
                        help="Keep the current reports/ as NAME")
     p_cmp.add_argument("--delete", metavar="NAME",
-                       help="Remove the saved snapshot NAME")
+                       help="Remove the snapshot NAME")
     p_cmp.add_argument("--list", action="store_true",
                        help="List the snapshots")
     p_cmp.add_argument("--json", action="store_true",
                        help="Emit JSON instead of text")
     p_cmp.set_defaults(func=cmd_compare)
+
+    p_snap = sub.add_parser(
+        "snapshot",
+        help="Copy the whole project, to diff or compare later",
+        description="Copy the project (reports, books, inputs, settings "
+             "and maps) to snapshot/<year>.<timestamp>/, laid out as the "
+             "project is, beside the year folders in a multi-year project. "
+             "`diff -r` reads it file by file, `tjs compare NAME` "
+             "reads it, and taxjson runs in it. It holds your real figures.")
+    p_snap.add_argument("--json", action="store_true",
+                        help="Emit JSON instead of text")
+    p_snap.set_defaults(func=cmd_snapshot)
 
     p_spin = sub.add_parser(
         "spinoffs",
@@ -37078,7 +37114,7 @@ def _build_parser(prog: str = "taxjson"
     p_tm = sub.add_parser(
         "ticker-map",
         help="ticker.map lines the last run suggested; add them",
-        description="Every ticker.map line the last `taxjson run` "
+        description="Every ticker.map line the last `tjs run` "
              "suggested — two listings a transfer journal pairs but the "
              "run did not join, a Questrade code with a likely ticker, "
              "a ticker change IB, Questrade or RBC shows, a coin's "
@@ -37117,7 +37153,7 @@ def _build_parser(prog: str = "taxjson"
              "suggested (the reason, and the `.tt` line `JOURNAL <date> "
              "FROM TO QTY` or ticker.map line that settles it) or "
              "refused (the reason, and the undo). Read from the last "
-             "`taxjson run`; no network.")
+             "`tjs run`; no network.")
     p_jn.add_argument("--account", metavar="NAME",
                       help="Only this account's journals")
     p_jn.add_argument("--year", type=int, metavar="YYYY",
@@ -37292,7 +37328,7 @@ def _build_parser(prog: str = "taxjson"
         description="Superficial-loss / wash-sale radar per taxable "
              "account: the open windows and their clear dates, "
              "recomputed live as of today (also written to "
-             "reports/wash_radar_<account>.rpt by `taxjson run`).")
+             "reports/wash_radar_<account>.rpt by `tjs run`).")
     p_wash.add_argument("account", nargs="?",
                         help="Account (default: all taxable)")
     p_wash.add_argument("--date", help="As-of date YYYY-MM-DD (default: today)")
@@ -37319,7 +37355,7 @@ def _build_parser(prog: str = "taxjson"
              "work/.watch_state.json.")
     p_watch.add_argument("--harvest", action="store_true",
                          help="Also watch the harvestable-now loss "
-                              "total (runs `taxjson harvest --json`; "
+                              "total (runs `tjs harvest --json`; "
                               "needs a price source)")
     p_watch.add_argument("--threshold", type=_nonneg_float_arg, default=100.0,
                          metavar="AMT",
@@ -37340,7 +37376,7 @@ def _build_parser(prog: str = "taxjson"
     p_watch.add_argument("--exit-code", action="store_true",
                          help="Exit 1 when changes were reported "
                               "(default: always 0, so chains like "
-                              "`taxjson run watch` don't fail on news)")
+                              "`tjs run watch` don't fail on news)")
     p_watch.add_argument("--json", action="store_true",
                          help="Emit the change list as JSON")
     p_watch.set_defaults(func=cmd_watch)
@@ -37416,7 +37452,7 @@ def _build_parser(prog: str = "taxjson"
              "how many); ACTION when a rescueable violation is open "
              "(sell the replacement); SAFE*/SAFE otherwise with the "
              "applicable caveats. buy-check's sell-side twin; whether "
-             "it IS a loss at today's price is `taxjson harvest`'s "
+             "it IS a loss at today's price is `tjs harvest`'s "
              "job. Exit 1 on UNSAFE or PARTIAL.")
     p_sellchk.add_argument("symbol", nargs="+",
                            help="Ticker(s) to check (root or full, "
@@ -37700,7 +37736,7 @@ def _build_parser(prog: str = "taxjson"
                          help="The dispositions the return actually "
                               "reported, when it was prepared with another "
                               "tool (CSV: symbol,date,qty,proceeds,cost,gain"
-                              "[,account]); the next year's `taxjson "
+                              "[,account]); the next year's `tjs "
                               "handoff` checks doubles against these")
     p_close.set_defaults(func=cmd_close_year)
 
@@ -37749,7 +37785,7 @@ def _build_parser(prog: str = "taxjson"
                             "rows) as dated lines `OPENING <date> <SYMBOL> "
                             "<qty> cost=unknown` in inputs/<account>/"
                             "missing_history.tt (merged with the lines "
-                            "there; `taxjson run` reads them)")
+                            "there; `tjs run` reads them)")
     # The flag's old name, hidden (refused with FILE like the new one).
     p_fmh.add_argument("--gen-phantoms", metavar="FILE",
                        help=argparse.SUPPRESS)
@@ -37763,7 +37799,7 @@ def _build_parser(prog: str = "taxjson"
                             "the tax year (no row of the year draws on or "
                             "touches them; Canada: no other taxable "
                             "account trades the symbol that year), keeping "
-                            "every entry already there. `taxjson run` then "
+                            "every entry already there. `tjs run` then "
                             "stops listing them; the year's numbers do not "
                             "change")
     p_fmh.add_argument("--write-purchases", metavar="FILE", nargs="?",
@@ -37797,7 +37833,7 @@ def _build_parser(prog: str = "taxjson"
              "in a US project. An opening balance is not a purchase "
              "(no superficial-loss / wash-sale window), and it replaces "
              "the account's rows of those symbols dated on or before it "
-             "(`taxjson tax-logic`: CA-OPEN / US-OPEN).")
+             "(`tjs tax-logic`: CA-OPEN / US-OPEN).")
     p_open.add_argument("account", help="The taxjson account it opens")
     p_open.add_argument("file", help="The positions report")
     p_open.add_argument("--date", metavar="YYYY-MM-DD",
@@ -37827,7 +37863,7 @@ def _build_parser(prog: str = "taxjson"
         help="Trading fees by broker over a window",
         description="Trading-fee report by brokerage (base currency) over "
              "a window (default: tax year; trade dates); the totals "
-             "`taxjson run` writes to reports/fees.rpt, by account by "
+             "`tjs run` writes to reports/fees.rpt, by account by "
              "default.")
     p_fsum.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_fsum.add_argument("account", nargs="?", help="Account (default: all)")
@@ -37866,7 +37902,7 @@ def _build_parser(prog: str = "taxjson"
     # Synopsis in every subcommand's own -h: argparse prints only a
     # parser's `description` there, and add_parser does NOT inherit it
     # from the `help` one-liner shown in the top-level listing — so
-    # `taxjson run -h` listed options with no statement of what the
+    # `tjs run -h` listed options with no statement of what the
     # command does. Reuse the curated help text as the description.
     # (_choices_actions is argparse's stable-in-practice registry of
     # the per-command help strings; there is no public accessor.)
@@ -37968,14 +38004,14 @@ def _main() -> None:
     p.help_country = _help_country(argv, _prefix_dir(
         p, argv[:_command_index(p, argv, set(sub.choices))]))
     if _no_command(argv, set(sub.choices), p):
-        # `taxjson` / `taxjson -C DIR` alone: the help page, exit 0
+        # `taxjson` / `tjs -C DIR` alone: the help page, exit 0
         # (it was an argparse "COMMAND is required" error, exit 2).
         p.print_help()
         return
     commands = set(sub.choices)
     segments = _split_command_segments(p, argv, commands)
     if "fetch" in argv:
-        # `taxjson fetch` with no fetcher plugin installed: one line
+        # `tjs fetch` with no fetcher plugin installed: one line
         # naming the install, exit 2 — whatever options were typed
         # (they belong to the absent plugin, so argparse would only
         # call them unrecognized). Before any segment runs.
@@ -37987,7 +38023,7 @@ def _main() -> None:
                     _no_fetcher_exit()
     if len(segments) > 1:
         # Validate the WHOLE chain before executing ANY of it — a
-        # bad later segment (`taxjson events -- 30d`: '30d' is not a
+        # bad later segment (`tjs events -- 30d`: '30d' is not a
         # command) previously half-ran the chain, executing `events`
         # and then dying rc 2.
         for seg in segments:
@@ -38021,7 +38057,7 @@ def _main() -> None:
         if (args.cmd not in ("init", "help", "redact") + _RELEASE_CMDS
                 and not Path(args.dir).is_dir()):
             # `-C typo sum` said "no gains files in typo/work (run
-            # `taxjson run` first)" — send the user to the real problem.
+            # `tjs run` first)" — send the user to the real problem.
             _die_input(f"no such directory: {args.dir} (-C/--dir names the "
                  f"project root — the folder holding taxjson.toml)")
         # A project that needs a newer taxjson: before any other check.
@@ -38032,7 +38068,7 @@ def _main() -> None:
                 + _RELEASE_CMDS and not _reads_no_project(args):
             # An old per-purpose file (yf_ticker.map, distributions.map
             # ...) stops every command that reads the project (lib/
-            # migrate), naming `taxjson migrate` — the checklist shows it
+            # migrate), naming `tjs migrate` — the checklist shows it
             # as its configure item instead (_checklist_config). One
             # that reads none (`fetch --list`, `check-tt FILE.tt`) runs,
             # as the other project guards let it (backlog TJ-0217).
@@ -38050,7 +38086,7 @@ def _main() -> None:
         try:
             # An input a command reads itself (not through a guarded
             # tool) that is missing, a directory, not UTF-8 or not JSON:
-            # one `taxjson <cmd>: error:` line with exit 2, never a
+            # one `tjs <cmd>: error:` line with exit 2, never a
             # traceback — the S070-23 / S079-10 contract (A2-1420).
             with _brief_messages(args):
                 _guarded_func(args)
@@ -38066,7 +38102,7 @@ def _main() -> None:
             # line naming the file, never a traceback (audit S072-05);
             # exit 2, an input that cannot be read (docs/commands.md;
             # backlog TJ-0406: `elect --json` said 0, the text 1).
-            print(exit_text(f"taxjson {args.cmd}: error: {e}"),
+            print(exit_text(f"tjs {args.cmd}: error: {e}"),
                   file=sys.stderr)
             sys.exit(2)
         except subprocess.CalledProcessError as e:
@@ -38139,7 +38175,7 @@ _STAGE_WHAT = {
 }
 
 
-# The sub-tool options `taxjson run` passes that take no value.
+# The sub-tool options `tjs run` passes that take no value.
 _STAGE_FLAG_OPTS = frozenset({
     "--strict", "--dedup", "--sort", "--validate", "--transfers",
     "--require-inputs", "--no-input", "--global-only", "--spot-crypto",
@@ -38347,7 +38383,7 @@ def _refuse_outside_links(args: argparse.Namespace) -> None:
 def _refuse_no_project(args: argparse.Namespace) -> None:
     """Stop a project command in a folder that is no project (no
     taxjson.toml, no year folders): each said "no gains files
-    in work/ — run `taxjson run` first", or blamed a key missing from a
+    in work/ — run `tjs run` first", or blamed a key missing from a
     taxjson.toml that does not exist (workflow audit 2026-10-22, item
     15). Every one of them reads the country from taxjson.toml, so a
     folder with a work/ but no taxjson.toml is no project either."""
@@ -38387,7 +38423,7 @@ def _refuse_years_root(args: argparse.Namespace) -> None:
                  + ", ".join(f"`{_PROG} -C {w} check-filed`"
                              for w in filed) + ".") if filed else
                 "No year folder holds a filed/<year>.json lock yet — "
-                "`taxjson close-year` in a year's folder creates one "
+                "`tjs close-year` in a year's folder creates one "
                 "after you file.")
     _die_input(f"`{args.cmd}` works on one year's project, and this "
                f"folder holds the year folders "
@@ -38400,7 +38436,7 @@ def _filed_year_folders(folder: Path, skip: Optional[Path] = None
                         ) -> List[Path]:
     """The year folders of the multi-year `folder` holding a filed-year
     lock (filed/<year>.json), newest first, `skip` left out: where
-    `taxjson check-filed` has something to check (backlog TJ-0092)."""
+    `tjs check-filed` has something to check (backlog TJ-0092)."""
     out = []
     for _y, p in reversed(_PL.year_dirs(folder)):
         if skip is not None and p.resolve() == Path(skip).resolve():
@@ -38460,11 +38496,11 @@ _NO_INPUT_REPORT_CMDS = _RUN_STATE_BANNER_CMDS | frozenset({
 
 
 def _refuse_no_input_books(args: argparse.Namespace) -> None:
-    """Stop a report command when the last `taxjson run` had no input at
+    """Stop a report command when the last `tjs run` had no input at
     all (every configured account skipped for an empty folder, which
     still is, and no books in work/), naming the empty folders as the
     project reads them (../inputs/margin with shared exports): `sum`
-    said "Run `taxjson run` first" right after that run exited 0 with
+    said "Run `tjs run` first" right after that run exited 0 with
     "nothing was computed" (backlog TJ-0155). The fix is the export, not
     another run, so the run is not named (option-boundary's contract,
     workflow audit 2026-10-22 item 12)."""
@@ -38723,8 +38759,8 @@ def _argument_taking(before: argparse.Namespace,
 def _split_command_segments(parser: argparse.ArgumentParser,
                             argv: List[str],
                             commands: set) -> List[List[str]]:
-    """Split one argv into per-command segments so `taxjson run sum`
-    (or `taxjson run --fast sum --json`) executes the commands in
+    """Split one argv into per-command segments so `tjs run sum`
+    (or `tjs run --fast sum --json`) executes the commands in
     order.
 
     Everything before the FIRST command token is a global prefix
@@ -38752,7 +38788,7 @@ def _split_command_segments(parser: argparse.ArgumentParser,
         if cur and cur[0] == "redact":
             # Every later token is redact's: its FILEs are optional (no
             # FILE = the project's inputs/), so `redact` alone parses and
-            # `taxjson redact -- --check` (a file named --check) or a
+            # `tjs redact -- --check` (a file named --check) or a
             # file named like a command would otherwise start a chain.
             cur.append(tok)
         elif tok == "--" and cur and _parses_ok(parser, prefix + cur):
@@ -38760,7 +38796,7 @@ def _split_command_segments(parser: argparse.ArgumentParser,
             cur = []
         elif (tok in commands
                 and cur                 # empty right after a `--`
-                and cur[0] != "help"):  # `taxjson help divs` — help's
+                and cur[0] != "help"):  # `tjs help divs` — help's
                                         # argument IS a command name
             now = _trial_parse(parser, prefix + cur)
             more = (_trial_parse(parser, prefix + cur + [tok])

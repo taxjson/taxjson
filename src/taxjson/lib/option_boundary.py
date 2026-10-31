@@ -1,5 +1,5 @@
 """Written options that straddle a tax-year boundary — the data behind
-`taxjson option-boundary`.
+`tjs option-boundary`.
 
 Walks the taxable books' option rows FIFO per account and symbol (the
 same order the engine's grant-timing pre-scan uses) and returns one row per WRITE lot
@@ -419,7 +419,7 @@ def filed_locks(root, settings: Optional[Dict[str, Any]] = None,
             doc = None
             if warn:
                 warn(f"cannot read {_lbl} as a close-year lock ({e}) — its "
-                     f"recorded option timing is unknown; `taxjson "
+                     f"recorded option timing is unknown; `tjs "
                      f"check-filed` checks the lock.")
         ot = doc.get("option_timing") if isinstance(doc, dict) else None
         if isinstance(ot, dict):
@@ -436,7 +436,7 @@ def expired_test(transactions: List[TaxTransaction], year: int,
     """The one "this contract can no longer be open" predicate
     (`_expired_test`: expired by the later of the year end and the last
     date the books cover, and before today) for straddling, expired_open
-    and `taxjson run`'s per-account warning (audit A2-1210, A2-1112)."""
+    and `tjs run`'s per-account warning (audit A2-1210, A2-1112)."""
     return _expired_test(transactions, year, today, date_basis_of(tax_date))
 
 def _filed_on_close(wy: int, filed_timing: Optional[Dict[int, Dict[str, Any]]]) -> Optional[bool]:
@@ -467,7 +467,7 @@ def _unknown_rows(lot: WriteLot, later: List[Close], still_open: bool,
                "export covering the write")
     else:
         held = f"held before the data ({lot.write_date})"
-        add = ("add the export covering the write (`taxjson "
+        add = ("add the export covering the write (`tjs "
                "find-missing-history`)")
     out: List[Dict[str, Any]] = []
 
@@ -513,7 +513,7 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                filed_premiums: Optional[Dict[int, Dict[Tuple[str, str],
                                                       float]]] = None
                ) -> List[Dict[str, Any]]:
-    """Rows for `taxjson option-boundary`: every write lot with a close in a
+    """Rows for `tjs option-boundary`: every write lot with a close in a
     later year than the write, or still open at the end of `year`.
     `filed_timing` maps a locked year to the option timing its lock
     recorded (`option_premium_timing`, `option_grant_since`). `today`
@@ -608,8 +608,8 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                           + "): the sale closed a LONG position bought "
                             "before the data — not a written option"),
                 "action": ("ATTENTION: add the missing purchase "
-                           "(`taxjson find-missing-history "
-                           "--write-missing-history`, then `taxjson run`); "
+                           "(`tjs find-missing-history "
+                           "--write-missing-history`, then `tjs run`); "
                            "until "
                            "then the books treat the sale as a write "
                            "whose premium is a gain"),
@@ -736,7 +736,7 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                     f"option_grant_timing_since = {wy} in [settings] (the "
                     f"premium then stays in {wy} and only the close is "
                     f"this year's); if not, the transition is right — "
-                    f"confirm with `taxjson checklist --done "
+                    f"confirm with `tjs checklist --done "
                     f"option-boundary`")
         for c in later:
             prem = c.premium
@@ -928,7 +928,7 @@ def expired_open(transactions: List[TaxTransaction], year: int,
 
 
 # The checklist step whose mark answers the transition question
-# (lib/checklist; `taxjson checklist --done option-boundary`).
+# (lib/checklist; `tjs checklist --done option-boundary`).
 QUESTION_STEP = "option-boundary"
 
 
@@ -1049,8 +1049,8 @@ def question_message(rows: List[Dict[str, Any]], year: int,
         f"{shown} (option_grant_timing_since = {since} keeps contracts "
         f"written before {since} on close timing).",
         ask,
-        "If not, the transition is right: confirm it with `taxjson "
-        "checklist --done option-boundary`. `taxjson option-boundary` "
+        "If not, the transition is right: confirm it with `tjs "
+        "checklist --done option-boundary`. `tjs option-boundary` "
         "lists each contract."]
 
 
@@ -1066,5 +1066,5 @@ def question_detail(rows: List[Dict[str, Any]], year: int) -> str:
             f"closed in {year} on transition close timing ({total:,.2f} "
             f"of premium taxed in {year}): did your {yrs} return report "
             f"these premiums when written? If yes set "
-            f"option_grant_timing_since = {first}; if not, `taxjson "
+            f"option_grant_timing_since = {first}; if not, `tjs "
             f"checklist --done option-boundary`")

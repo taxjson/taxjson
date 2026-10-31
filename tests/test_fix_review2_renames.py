@@ -10,12 +10,12 @@
 - 8: the event-level `late=` applies to the accounts that held OLD before
   the date; another account's rows in the old ticker are listed as
   unresolved, never folded.
-- 9: `taxjson format-map --write` compares only the accounts whose books
+- 9: `tjs format-map --write` compares only the accounts whose books
   a change can reach (an account without books, or of the other kind, is
   not "changed"), and homes a moved line in an account whose own lines
   agree with it.
 - 11: a declared rename that books nothing is said (Warning per line) and
-  listed by `taxjson renames`; a same-day chain books both links.
+  listed by `tjs renames`; a same-day chain books both links.
 
 Every fixture is SYNTHETIC: invented QZ* tickers, fake account names.
 """

@@ -1,6 +1,6 @@
 """The house output style (docs/output-style.md): lib/out.py, and the two
-commands converted first — `taxjson elect` (its listings, --set, the
-election prompt, the run's pending block) and `taxjson wash-sales` (the
+commands converted first — `tjs elect` (its listings, --set, the
+election prompt, the run's pending block) and `tjs wash-sales` (the
 table and --explain).
 
 Layout is pinned with out.lint at width 100: no prose line over the
@@ -90,10 +90,10 @@ class TestWidth(_NoWidthEnv):
 
 class TestWrapAndMessages(_NoWidthEnv):
     def test_code_spans_and_ids_never_break(self):
-        text = ("word " * 15 + "`taxjson elect margin --set "
+        text = ("word " * 15 + "`tjs elect margin --set "
                 "20240603-abc-def-1234=rollover` and CA-SL-08-style ids")
         lines = out.wrap(text, 40)
-        self.assertTrue(any("`taxjson elect margin --set "
+        self.assertTrue(any("`tjs elect margin --set "
                             "20240603-abc-def-1234=rollover`" in ln
                             for ln in lines), lines)
         self.assertTrue(any("CA-SL-08-style" in ln for ln in lines))
@@ -158,7 +158,7 @@ class TestWrapAndMessages(_NoWidthEnv):
                          "Error: taxjson-gains: x")
         self.assertEqual(R("taxjson-gains: error: x", source=False),
                          "Error: x")
-        self.assertEqual(R("taxjson run: warning: x", source=False),
+        self.assertEqual(R("tjs run: warning: x", source=False),
                          "Warning: x")
         for same in ("margin: note: x", "taxjson.toml: warning: x",
                      "Warning: ok", "no label here"):
@@ -174,14 +174,14 @@ class TestWrapAndMessages(_NoWidthEnv):
 
     def test_exit_text(self):
         with out.unwrapped():
-            self.assertEqual(out.exit_text("taxjson sum: no gains"),
-                             "taxjson sum: no gains")
-        self.assertEqual(out.exit_text("taxjson sum: no gains"),
+            self.assertEqual(out.exit_text("tjs sum: no gains"),
+                             "tjs sum: no gains")
+        self.assertEqual(out.exit_text("tjs sum: no gains"),
                          "Error: no gains")
         self.assertEqual(out.exit_text("taxjson-x: error: bad"),
                          "Error: bad")
         self.assertEqual(out.exit_text(
-            "taxjson run --strict: 1 year drifted"),
+            "tjs run --strict: 1 year drifted"),
             "Error: 1 year drifted")
 
     def test_fail_exit_1_carries_the_text(self):
@@ -453,12 +453,12 @@ class TestElectStyle(_NoWidthEnv):
             root = _elect_project(tmp, pending=_pending_doc())
             brief, _ = _elect(root, pending=True)
             text, _ = _elect(root, pending=True, details=True)
-        self.assertEqual(out.lint(brief, allow=("taxjson elect ",)), [],
+        self.assertEqual(out.lint(brief, allow=("tjs elect ",)), [],
                          brief)
         self.assertEqual(len([ln for ln in brief.splitlines()
                               if ln.lstrip().startswith("set:")]), 1)
         self.assertEqual(brief.splitlines()[-1], text.splitlines()[-1])
-        self.assertEqual(out.lint(text, allow=("taxjson elect ",)), [],
+        self.assertEqual(out.lint(text, allow=("tjs elect ",)), [],
                          text)
         lines = text.splitlines()
         self.assertEqual(lines[0], "PENDING ELECTIONS — 1 event")
@@ -466,7 +466,7 @@ class TestElectStyle(_NoWidthEnv):
         self.assertIn("  2. rollover_s_86_1", lines)
         sets = [ln for ln in lines if ln.lstrip().startswith("set:")]
         self.assertEqual(len(sets), 3)
-        self.assertIn(f"taxjson elect margin --set {_EV}=rollover_s_86_1 "
+        self.assertIn(f"tjs elect margin --set {_EV}=rollover_s_86_1 "
                       f"--hint allocated_acb_cad=...", sets[1])
         # The checklist's elections step shows the last line.
         self.assertTrue(lines[-1].startswith("1 election pending: "),
@@ -479,7 +479,7 @@ class TestElectStyle(_NoWidthEnv):
                 _EV: {"election": "taxable_deemed_dividend"}})
             text, _ = _elect(root, pending=True)
         self.assertIn("already elected: taxable_deemed_dividend", text)
-        self.assertIn("run `taxjson run`", text.splitlines()[-1])
+        self.assertIn("run `tjs run`", text.splitlines()[-1])
 
     def test_set_errors_are_headline_and_detail(self):
         with tempfile.TemporaryDirectory() as tmp:

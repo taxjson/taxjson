@@ -1,5 +1,5 @@
 """2026-10-29 fix round, group taxtext: the two .tt writers
-(taxjson-convert-tt's tx_to_tt_line and the `taxjson events` view's
+(taxjson-convert-tt's tx_to_tt_line and the `tjs events` view's
 _tx_display_line) write what the .tt reader reads back, and the reader
 refuses an ambiguous line.
 
@@ -213,7 +213,7 @@ class TestWarrantExerciseRoundTrip(unittest.TestCase):
     @rule("CA-OPT-09")
     @rule("US-OPT-06")
     def test_tjs_run_books_a_tt_warrant_exercise(self):
-        """`taxjson run` on a .tt file holding the exercise: the only
+        """`tjs run` on a .tt file holding the exercise: the only
         disposition is the shares' sale, at a cost that carries the
         warrants' 201 (each country in its own currency: no rates)."""
         from taxjson.lib.country import COUNTRIES, HOME_CURRENCY
@@ -441,7 +441,7 @@ class TestEventsViewIncomeFacts(unittest.TestCase):
                     self.assertEqual(b.get(key), row[key], (key, shown))
 
     def test_events_command_prints_the_facts(self):
-        """`taxjson events all margin` (one account: taxtext) shows the
+        """`tjs events all margin` (one account: taxtext) shows the
         facts on the dividend's line."""
         import os
         import subprocess

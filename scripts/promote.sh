@@ -14,7 +14,7 @@
 # the publisher to copy that one file to the public repo with a fast-lane
 # tag (channels-YYYYMMDDTHHMMSSZ, UTC) on that commit — no release tag, no
 # rebuild, no wait. Moving a channel BACKWARDS (rolling a bad release
-# back) is allowed, but it asks first. `taxjson promote` runs this.
+# back) is allowed, but it asks first. `tjs promote` runs this.
 #
 # origin is the private dev repo; the remote `public` is the public repo,
 # read only. It promotes only what GitHub holds: the local main must BE
@@ -108,7 +108,7 @@ fast_lane() {
     sleep 1
     name="channels-$(date -u +%Y%m%dT%H%M%SZ)"
   done
-  git tag -a "$name" "$c" -m "taxjson channels: $CH → $TAG"
+  git tag -a "$name" "$c" -m "tjs channels: $CH → $TAG"
   if ! printf 'refs/tags/%s %s refs/tags/%s %s\n' "$name" "$(git rev-parse "$name")" "$name" "$Z" \
        | bash scripts/hooks/pre-push origin "$(git remote get-url origin)"; then
     git tag -d "$name" >/dev/null

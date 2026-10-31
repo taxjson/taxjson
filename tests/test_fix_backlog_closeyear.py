@@ -83,7 +83,7 @@ def _env(**extra):
 
 
 def _cli(root, *args, env=None, stdin=subprocess.DEVNULL):
-    """`taxjson -C ROOT ARGS` as a child of THIS tree's code."""
+    """`tjs -C ROOT ARGS` as a child of THIS tree's code."""
     cmd = python_module_argv("taxjson.bin.taxjson_run",
                              ["-C", str(root), *map(str, args)])
     return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True,
@@ -301,7 +301,7 @@ class TestGate(unittest.TestCase):
         self.assertEqual(sorted(got), ["fx-cash", "inputs-committed"])
 
     def test_tj0117_handoff_step_names_carry_forward_problems(self):
-        """TJ-0117: close-year's gate listed `- handoff: — taxjson
+        """TJ-0117: close-year's gate listed `- handoff: — tjs
         handoff`: d_handoff labelled every problem kind but `carry`."""
         rep = json.dumps({"year": 2024, "problems": 1, "positions": [],
                           "missed": [], "double": [], "timing": [],
@@ -338,7 +338,7 @@ class TestTerminalGate(_Years):
 
 
 class _Demo(unittest.TestCase):
-    """`taxjson init --demo` (years layout, 2024), run once; each test
+    """`tjs init --demo` (years layout, 2024), run once; each test
     works on its own copy."""
 
     @classmethod

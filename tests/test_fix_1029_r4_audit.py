@@ -39,7 +39,7 @@ def _env() -> dict:
 
 
 def _cli(root: Path, *args: str) -> subprocess.CompletedProcess:
-    """`taxjson -C root args...` from this tree's sources (width 0)."""
+    """`tjs -C root args...` from this tree's sources (width 0)."""
     return subprocess.run(
         python_module_argv("taxjson.bin.taxjson_run")
         + ["-C", str(root), *args],
@@ -329,7 +329,7 @@ class TestRowOrigin(unittest.TestCase):
               "corp_election": "rollover_s_85_1_5"},
              "corporate action 20260301-zzq-zzr-0001 (rollover_s_85_1_5): "
              "no row of the corp-actions file has its id — re-run "
-             "`taxjson run`"),
+             "`tjs run`"),
             ({"event_source": "map", "symbol": "ZZQ.TO",
               "symbol_new": "ZZR.TO", "date": "2026-04-01"},
              "a dated RENAME line of ticker.map: a ticker change, booked "
@@ -352,7 +352,7 @@ class TestRowOrigin(unittest.TestCase):
              "a move between your own accounts, booked by the run"),
             ({"source": "trades.tt"},
              "a row of trades.tt that no parsed file holds now — stale "
-             "work/ files: re-run `taxjson run`"),
+             "work/ files: re-run `tjs run`"),
             ({}, "made by the run (the row names no stage)"),
         ]
         for row, want in cases:

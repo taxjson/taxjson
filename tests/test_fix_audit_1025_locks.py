@@ -1,7 +1,7 @@
 """Fixes for the 2026-10-25 workflow audit, group locks: the one check
 of a close-year lock (bin/taxjson_filed.read_lock, lock_damage) that
 every reader applies — check-filed and the run's filed-year check,
-`taxjson years`, and the next year's carryover, estimate, amt,
+`tjs years`, and the next year's carryover, estimate, amt,
 close-year and handoff — so a lock one of them refuses is never taken
 as sound by another. One test per finding, each named for it.
 Synthetic data only."""
@@ -40,7 +40,7 @@ def _row(i, date, sym, qty, net, cur):
 
 def _project(root, year, country, cur, extra=""):
     """A project whose books are built (work/margin_base.json: one
-    round trip of `year`, a 100.00 gain): `taxjson carryover` reads
+    round trip of `year`, a 100.00 gain): `tjs carryover` reads
     them and the filed-year locks it answers to."""
     root.mkdir(parents=True, exist_ok=True)
     (root / "inputs" / "margin").mkdir(parents=True, exist_ok=True)

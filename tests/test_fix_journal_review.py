@@ -295,7 +295,7 @@ class TestDeclaredJournalNeedsEvidence(unittest.TestCase):
             self.assertIn("inputs/margin/m.tt:2", out)
             self.assertRegex(out, rf"`TOBASE QZ(AAA|BBB)\.{x} "
                                   rf"QZ(AAA|BBB)\.{x}`")
-            # `taxjson journals` lists it as pending, with the way out.
+            # `tjs journals` lists it as pending, with the way out.
             doc = json.loads(cli(root, "journals", "--json").stdout)
             (j,) = doc["journals"]
             self.assertEqual((j["state"], j["pending"]), ("refused", True))

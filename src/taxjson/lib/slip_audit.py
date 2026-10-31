@@ -1,9 +1,9 @@
-"""`taxjson slip-audit`: the broker's T5 / T3 slips against the books'
+"""`tjs slip-audit`: the broker's T5 / T3 slips against the books'
 income, per account and slip box (Canada; tax-logic CA-SLIP-01..03).
 
 The slips come from inputs/slips/:
 
-- `slips.toml`, typed from the PDFs (`taxjson slip-audit --template`
+- `slips.toml`, typed from the PDFs (`tjs slip-audit --template`
   prints one per account) — one `[[slip]]` table per slip:
 
       [[slip]]
@@ -287,7 +287,7 @@ def map_roots(root: Path) -> Dict[str, str]:
     changes a security's root (`GLOBAL RAW.TO CANON.TO`: RAW -> CANON;
     TOBASE too, the books being in the base currency): the run's
     effective map (work/), else ticker.map. A root renamed to two
-    roots is left out; {} for a map that cannot be read (`taxjson run`
+    roots is left out; {} for a map that cannot be read (`tjs run`
     says why)."""
     from taxjson.bin.taxjson_ticker_map import _parse_map_file, merge_renames
     from taxjson.lib.cross_listings import EFFECTIVE_MAP
@@ -641,7 +641,7 @@ def _slip_from_table(t: Any, where: str, accounts: Dict[str, Any]) -> Slip:
     key = str(t.get("broker_key") or "").strip().lower()
     if key and not re.fullmatch(r"[0-9a-f]{10}", key):
         raise SlipsError(f"{where}: broker_key {t.get('broker_key')!r} is "
-                         f"not the books' 10-character key (`taxjson "
+                         f"not the books' 10-character key (`tjs "
                          f"slip-audit --import-cra` writes it; type "
                          f"broker_account instead)")
     if key and number:
@@ -886,7 +886,7 @@ def _report_to_cad(rep: Any, where: str, fx_cache: Optional[dict]):
                 f"{rep.base_currency} (the account's base currency) and "
                 f"the FX cache has no Bank of Canada {p.currency} rate "
                 f"for {p.symbol}'s payment of {p.pay_date or '?'} — run "
-                f"`taxjson run` (it fills the cache), then slip-audit")
+                f"`tjs run` (it fills the cache), then slip-audit")
         return c.gross * r, c.withheld * r
     return conv
 
@@ -1012,7 +1012,7 @@ def year_sales(root: Path, cfg: Dict[str, Any], year: int
 
 
 def _no_books_text(acct: str) -> str:
-    return f"{acct}: no readable work/{acct}_base.json — run `taxjson run`"
+    return f"{acct}: no readable work/{acct}_base.json — run `tjs run`"
 
 
 def load_books(root: Path, cfg: Dict[str, Any], year: int,
@@ -2122,7 +2122,7 @@ def _audit_group(acct, key, g, year, tol, rate, issues, sugg_cgd, sugg_tt,
                    f"slip {fmt_money(s_roc)}, books {fmt_money(b_roc)} "
                    f"{rec['currency']} ({b_roc - s_roc:+,.2f}) — the "
                    f"account's total agrees, so another fund's ADJUST "
-                   f"rows offset it: check them (`taxjson roc-sum`)")
+                   f"rows offset it: check them (`tjs roc-sum`)")
     record_year = [{"symbol": r.symbol, "paid": r.pay_date,
                     "counted_in": r.tax_date[:4]}
                    for r in rows
@@ -2519,7 +2519,7 @@ def _securities(acct, where, slips, rows, year, tol, sugg_cgd, sugg_tt,
             notes.append(f"{where}: the books return {fmt_money(bk_roc)} "
                          f"{cur} of {sym}'s capital and the slip "
                          f"{fmt_money(s_roc)} — check the ADJUST rows "
-                         f"(`taxjson roc-sum`)")
+                         f"(`tjs roc-sum`)")
     # A T3's split, said once per security.
     for s in slips:
         if s.type == "T3" and s.security and s.source == "typed":
@@ -2922,7 +2922,7 @@ def _t5008(root: Path, slips: List[Slip], year: int, tol: float,
            rate: Dict[str, Optional[float]]) -> List[Dict[str, Any]]:
     """Aggregated T5008 slips (per type code, IB's 'Various') against the
     account's computed dispositions: options (OPC) apart from the rest.
-    Information only — `taxjson reconcile-slips` reconciles per
+    Information only — `tjs reconcile-slips` reconciles per
     security (the checklist's t5008 step)."""
     t = [s for s in slips if s.type == "T5008" and not s.empty]
     if not t:
@@ -3015,7 +3015,7 @@ def template(root: Path, cfg: Dict[str, Any]) -> str:
     for _path, rep, acct in _reports(root, books, reports_map, []):
         covered.setdefault(acct, {})[rep.account_hash] = rep.account_masked
     out = [f"# T5 / T3 slips for {year}, typed from the PDFs "
-           f"(`taxjson slip-audit` compares them with the books).",
+           f"(`tjs slip-audit` compares them with the books).",
            "# One [[slip]] per slip. Type each box as the slip prints it; "
            "leave out the boxes it leaves blank.",
            "# Never type a name, a SIN, an address or an account number "
@@ -3087,7 +3087,7 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None,
     if not rep["sources"]:
         if details:
             d.para("No slips in inputs/slips/: type them into inputs/slips/"
-                   f"{SLIPS_FILE} (`taxjson slip-audit --template` prints "
+                   f"{SLIPS_FILE} (`tjs slip-audit --template` prints "
                    "one to fill in), or add IB's dividends report "
                    "(U*.YYYY.dividends.csv).")
         else:
@@ -3112,7 +3112,7 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None,
                    f"{a['source']}")
         else:
             d.item(f"Annual average {cur}/CAD: none (no {rep['year']} "
-                   f"Bank of Canada rates in the FX cache; `taxjson run` "
+                   f"Bank of Canada rates in the FX cache; `tjs run` "
                    f"fetches them)")
     legend = True
     for acc in rep["accounts"]:
@@ -3222,7 +3222,7 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None,
             d.item(f"{e['account']}: {e['slip']} ({e['where']}) has no "
                    f"income in the books")
     if rep.get("t5008"):
-        d.section("T5008 (aggregated slips; `taxjson reconcile-slips` "
+        d.section("T5008 (aggregated slips; `tjs reconcile-slips` "
                   "reconciles per security)")
         if any(t["at_annual_average"] for t in rep["t5008"]):
             d.line("*: converted at the annual average.")
@@ -3230,7 +3230,7 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None,
                           for c in t.get("no_rate") or ()})
         if missing:
             d.line(f"—: no {'/'.join(missing)} rate for {rep['year']} in "
-                   f"the FX cache (`taxjson run` fetches them).")
+                   f"the FX cache (`tjs run` fetches them).")
         hdr = ["ACCOUNT", "CLASS", "CODES", "SLIP PROCEEDS",
                "BOOKS PROCEEDS", "SLIP COST", "BOOKS COST"]
         body = [[t["account"], t["class"], "/".join(t["codes"]),
@@ -3245,7 +3245,7 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None,
         d.section("SUGGESTIONS")
         if sg["capital_gains_dividends"]:
             d.para("Add to taxjson.toml (T5 box 18 is a capital gain, "
-                   "CA-INC-06; `taxjson divs-sum` then shows it apart):"
+                   "CA-INC-06; `tjs divs-sum` then shows it apart):"
                    if details else "Add to taxjson.toml (T5 box 18):")
             for e in sg["capital_gains_dividends"]:
                 d.blank()
@@ -3260,7 +3260,7 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None,
             d.para(f"Add to {e['file']} (return of capital lowers the "
                    f"ACB, T3 box 42; a DIVIDEND line with a negative "
                    f"amount takes it out of the dividend income; "
-                   f"`taxjson roc-sum` then shows it{where}):" if details
+                   f"`tjs roc-sum` then shows it{where}):" if details
                    else f"Add to {e['file']} (T3 box 42, return of "
                    f"capital{where}):")
             for ln in e["lines"]:

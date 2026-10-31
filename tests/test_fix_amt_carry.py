@@ -1,5 +1,5 @@
 """Minimum tax (AMT) detail and carry-forwards that flow from one year
-to the next (owner request): `taxjson amt`, the s.120.2 carryover in
+to the next (owner request): `tjs amt`, the s.120.2 carryover in
 the estimate ([estimate] amt_carryover / the prior
 close-year lock), close-year's `carryforwards` record, `carryover` and
 `handoff` reading it. Synthetic figures only."""
@@ -173,7 +173,7 @@ class TestInputs(unittest.TestCase):
                                                   "2024": 800}})
             self.assertEqual(r["by_year"], {2023: 1200.5, 2024: 800.0})
             self.assertEqual(r["source"], "[estimate] amt_carryover")
-            # The old file is no longer an input (taxjson migrate moves
+            # The old file is no longer an input (tjs migrate moves
             # it; every command stops while it is there): the config
             # alone decides.
             (root / "amt_carryover.txt").write_text("2023 1\n")
@@ -192,7 +192,7 @@ class TestInputs(unittest.TestCase):
                              ["by_year"], None)
 
     def test_legacy_file_reader_kept_for_migrate(self):
-        # load_amt_file reads the old amt_carryover.txt for `taxjson
+        # load_amt_file reads the old amt_carryover.txt for `tjs
         # migrate`, as loudly as before.
         with tempfile.TemporaryDirectory() as td:
             f = Path(td) / "amt_carryover.txt"

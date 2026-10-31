@@ -1,4 +1,4 @@
-"""`taxjson ticker-map --suggest` quality: two kinds of invalid suggestion
+"""`tjs ticker-map --suggest` quality: two kinds of invalid suggestion
 a new user's run produced. Synthetic data only (invented tickers, conids,
 ISINs and names).
 
@@ -278,7 +278,7 @@ class TestSymbolCollision(unittest.TestCase):
         head, det = XL.collision_note(c)
         self.assertTrue(head.startswith('QZD.US names two securities: '))
         self.assertTrue(head.endswith('— add the EXTRACT line '
-                                      '(`taxjson ticker-map --suggest`)'))
+                                      '(`tjs ticker-map --suggest`)'))
         self.assertIn('  EXTRACT DLR CURRENCY ETF | USD | QZD.U.TO', det)
 
     @rule("US-XLIST-01")
@@ -401,7 +401,7 @@ class TestCollisionRun(unittest.TestCase):
             self.assertIn("QZD.US names two securities: ", out)
             self.assertIn("'QZREALTY TRUST INC' in rrsp at Interactive "
                           "Brokers", out)
-            self.assertIn("add the EXTRACT line (`taxjson ticker-map "
+            self.assertIn("add the EXTRACT line (`tjs ticker-map "
                           "--suggest`)", out)
             st = XL.read_state(root / 'work' / XL.STATE)
             self.assertEqual(st['suggested'], [])

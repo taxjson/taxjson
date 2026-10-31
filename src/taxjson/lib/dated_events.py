@@ -5,7 +5,7 @@ DISTINCT, DELETE, the lookups). A journal between two listings and a
 ticker change happen ON A DATE: they are events in the books, like a
 trade or a dividend, written date first in a .tt file of an account
 (`taxjson-convert-tt` checks the line; it is never a row of the
-converted file — `taxjson run` reads it here):
+converted file — `tjs run` reads it here):
 
   JOURNAL <date> <FROM> <TO> <qty> [separate]
       <qty> units moved from listing FROM to listing TO of one security
@@ -53,7 +53,7 @@ converted file — `taxjson run` reads it here):
 
 The legacy ticker.map forms (`JOURNAL FROM TO`: read as TOBASE;
 `RENAME OLD NEW YYYY-MM-DD`) are still read, with one Warning per run
-(legacy_note); `taxjson format-map --write` migrates them
+(legacy_note); `tjs format-map --write` migrates them
 (lib/ticker_map_format.migrate).
 
 Every event the run booked or refused is recorded in
@@ -107,7 +107,7 @@ def sidecar_path(cache: Path, account: str) -> Path:
 
 
 def tt_files(acct_dir: Path) -> List[Path]:
-    """An account folder's .tt files, as `taxjson run` reads them (the
+    """An account folder's .tt files, as `tjs run` reads them (the
     suffix in any case; hidden and Office lock files skipped)."""
     acct_dir = Path(acct_dir)
     if not acct_dir.is_dir():
@@ -385,7 +385,7 @@ def resolve_renames(tt: Sequence[Any], mapped: Sequence[Any]
                 f"{prim.new} is declared late=fold in one account and "
                 f"late=separate in another: each applies to its own "
                 f"account's late rows; an account with no line of its "
-                f"own has its late rows listed as unresolved (`taxjson "
+                f"own has its late rows listed as unresolved (`tjs "
                 f"renames`)")
         lates = tuple(sorted((a, next(iter(by))) for a, by in own.items()
                              if len(by) == 1))
@@ -534,7 +534,7 @@ def check_against_map(decl: Declarations, tmap) -> List[str]:
 
 def project_renames(root: Path, accounts: Optional[Dict[str, Any]] = None,
                     tmap: Any = None) -> List[Any]:
-    """Every rename event of a project as `taxjson run` books it
+    """Every rename event of a project as `tjs run` books it
     (resolve_renames over the .tt lines and ticker.map's dated lines);
     only the map's lines when a .tt line cannot be read (the run names
     it). `tmap` the parsed ticker.map (None: none)."""
@@ -642,7 +642,7 @@ def write_sidecars(cache: Path, accounts: Iterable[str],
                "metadata": {"kind": "transfer_sidecar", "account": acct,
                             "brokerage": SIDECAR_BROKER,
                             "source_brokerage": "manual (.tt)",
-                            "converted_by": "taxjson run (dated events)"}}
+                            "converted_by": "tjs run (dated events)"}}
         text = json.dumps(doc, indent=2, sort_keys=True,
                           ensure_ascii=False) + "\n"
         try:
@@ -739,7 +739,7 @@ def apply_meta(dated: List[Any], metas: List[Dict[str, Any]],
 def tt_renames(root: Path, accounts: Optional[Dict[str, Any]] = None
                ) -> List[Any]:
     """The .tt RENAME declarations of a project (empty when a line cannot
-    be read: `taxjson run` names it). `accounts` defaults to the
+    be read: `tjs run` names it). `accounts` defaults to the
     project's taxjson.toml."""
     if accounts is None:
         accounts = _project_accounts(root)
@@ -762,7 +762,7 @@ def _project_accounts(root: Path) -> Dict[str, Any]:
 
 def legacy_lines(tmap) -> Tuple[int, int]:
     """(JOURNAL lines, dated RENAME lines) of a parsed ticker.map: the
-    legacy forms `taxjson format-map --write` migrates."""
+    legacy forms `tjs format-map --write` migrates."""
     if tmap is None:
         return 0, 0
     return (len(getattr(tmap, "journal", {}) or {}),
@@ -787,7 +787,7 @@ def legacy_note(tmap) -> Optional[Tuple[str, List[str]]]:
              "a .tt line `JOURNAL <date> FROM TO <qty>` when the export "
              "lacks them. Dated events now go in an account's .tt file, "
              "date first (`JOURNAL <date> FROM TO <qty>`, `RENAME <date> "
-             "OLD NEW`); `taxjson format-map --write` migrates the lines "
+             "OLD NEW`); `tjs format-map --write` migrates the lines "
              "(the tax books stay the same — it refuses a move that would "
              "change them) and names a JOURNAL line to add where the "
              "holdings show the two listings long and short."])
@@ -1035,7 +1035,7 @@ def home_account(root: Path, accounts: Dict[str, Any], old: str, new: str,
 
 @dataclass
 class MigrationPlan:
-    """What `taxjson format-map --write` adds to which .tt file, and
+    """What `tjs format-map --write` adds to which .tt file, and
     whether the books stay the same (plan_migration)."""
     # {inputs/<acct>/renames.tt: [blocks]}: each block a moved line's
     # comments and line, in order.
@@ -1103,7 +1103,7 @@ def plan_migration(root: Path, accounts: Dict[str, Any], map_text: str,
     before, _n, bad = resolve_renames(decl.tt_declared, mapped)
     if bad:
         plan.refused = [f"the project's dated renames contradict each "
-                        f"other (`taxjson run` stops on them): {m}"
+                        f"other (`tjs run` stops on them): {m}"
                         for m in bad]
         return plan
     have = {(d.old, d.new, d.date, d.late, d.kind): d.where
@@ -1214,7 +1214,7 @@ def plan_migration(root: Path, accounts: Dict[str, Any], map_text: str,
                     f"account {acct} has no books yet (no work/{acct}_"
                     f"base.json), so whether its trades name {o} or {nw} "
                     f"is not known, and the moved line would no longer "
-                    f"reach it — run `taxjson run`, then format the map "
+                    f"reach it — run `tjs run`, then format the map "
                     f"again")
                 continue
             # An account without books or inputs, of a kind the moved

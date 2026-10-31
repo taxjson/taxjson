@@ -3,7 +3,7 @@
 Detect which brokerage parser reads a CSV — by its content first.
 
 Prints the parser id (the name taxjson_brokerage.py takes) on stdout and,
-on stderr, the same per-file line `taxjson run` prints: how the file was
+on stderr, the same per-file line `tjs run` prints: how the file was
 detected (generic mapping, content signature, or file name fallback).
 The rules live in taxjson.lib.brokerages.detect.
 """
@@ -15,7 +15,7 @@ from typing import Optional
 
 from taxjson.lib import cli_diag
 from taxjson.lib.brokerages.base import BrokerageParseError, decode_broker_text
-# Re-exported: `taxjson fetch` and older callers import them from here.
+# Re-exported: `tjs fetch` and older callers import them from here.
 from taxjson.lib.brokerages.detect import (  # noqa: F401
     IB_SECTIONS, SCAN_ROWS as _SCAN_ROWS, AmbiguousBroker,
     ambiguity_message, content_matches, csv_rows as _csv_rows, detect,
@@ -46,7 +46,7 @@ def detect_brokerage(file_path: Path) -> Optional[str]:
 
 
 def cannot_detect_message(det, shown=None) -> str:
-    """The advice for a CSV no rule routes (shared with `taxjson run`):
+    """The advice for a CSV no rule routes (shared with `tjs run`):
     the header first, then a generic mapping, then the rename
     fallback. `shown`: how to name the file. The message goes to the
     person's own terminal, so it names the file as it is on disk (the
@@ -74,7 +74,7 @@ def main():
                     "(stdout: the parser id; stderr: how it was "
                     "detected — a generic mapping, the content's header "
                     "signature, or the file-name fallback), by the same "
-                    "rules `taxjson run` uses.")
+                    "rules `tjs run` uses.")
     ap.add_argument("csv", type=Path, help="CSV file to identify")
     args = ap.parse_args()
 

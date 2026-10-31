@@ -1,4 +1,4 @@
-"""`taxjson spinoffs` / `taxjson splits` (lib/corp_views)."""
+"""`tjs spinoffs` / `tjs splits` (lib/corp_views)."""
 import json
 import tempfile
 import unittest

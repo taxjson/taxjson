@@ -11,7 +11,7 @@ QZCC.US, a listing that does not exist. The transfer journal then joined
 QZCJ.US to the phantom QZCC.US (lib/cross_listings), and quotes, the
 T1135 domicile and the loss rules read a symbol no market lists.
 
-Before such an account is parsed, `taxjson run` reads the listing from
+Before such an account is parsed, `tjs run` reads the listing from
 the project's other books instead, in this order:
 
 1. transfer pairing: a transfer-in of the symbol (quantity q, date d) is
@@ -737,7 +737,7 @@ def suggestions(cache: Path) -> List[Tuple[str, str, bool]]:
             to = str(r["symbol"]).upper()
             out.append((f"GLOBAL {frm} {to}",
                         f"{acct}: {why(frm, r)} ({r.get('evidence')}); "
-                        f"`taxjson run` already books it so — the line "
+                        f"`tjs run` already books it so — the line "
                         f"only makes it explicit", False))
             pr = r.get("pair") or {}
             o = str(pr.get("symbol") or "").upper()

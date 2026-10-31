@@ -211,7 +211,7 @@ class TestForeignCustody(unittest.TestCase):
         self.assertEqual((rep["max_total_cost"], rep["max_total_date"]),
                          (293.33, "2025-08-01"))
         self.assertNotIn("custody_mixed_symbols", rep)
-        # The same share `taxjson list --date` gives the account of the
+        # The same share `tjs list --date` gives the account of the
         # engine's own year-end pool (taxjson-split-gains).
         from taxjson.lib.pipeline import GainsRequest, run_gains
         from taxjson.lib.core import coerce_transaction_row

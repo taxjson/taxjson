@@ -14,7 +14,7 @@ ticker changes are booked as rename events.
 - IB's contract id under two symbols: booked, with the DISTINCT /
   late=separate way out;
 - legacy ticker.map JOURNAL / dated RENAME lines: still read, one
-  Warning; `taxjson format-map --write` migrates them losslessly.
+  Warning; `tjs format-map --write` migrates them losslessly.
 
 Every fixture is SYNTHETIC: invented QZ* tickers and names, fake account
 ids (pii-ok: U5550001, 55500001).
@@ -629,7 +629,7 @@ class TestFormatMigration(unittest.TestCase):
 # ------------------------------------------- the two listing commands
 
 class TestSourcesInTheCommands(unittest.TestCase):
-    """`taxjson journals` and `taxjson renames` name where each dated
+    """`tjs journals` and `tjs renames` name where each dated
     event came from: a .tt line, a legacy ticker.map line, IB's contract
     id (both countries)."""
 

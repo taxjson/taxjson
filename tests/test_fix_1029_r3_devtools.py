@@ -31,7 +31,7 @@ REPO = Path(__file__).resolve().parents[1]
 
 
 def _cli(root, *args, width=None):
-    """`taxjson -C ROOT ARGS` in a child: captured output (width 0), or
+    """`tjs -C ROOT ARGS` in a child: captured output (width 0), or
     a person piping it (`width=""`: no TAXJSON_WIDTH, width 120)."""
     env = dict(os.environ, TAXJSON_OFFLINE="1", NO_COLOR="1",
                PYTHONPATH=str(REPO / "src"))
@@ -103,17 +103,17 @@ class TestChildErrorKeepsTheErrorLine(unittest.TestCase):
 
     def test_the_error_line_and_its_hint_are_kept(self):
         from taxjson.bin.taxjson_run import _child_error
-        for label in ("taxjson estimate: error: ", "Error: "):
+        for label in ("tjs estimate: error: ", "Error: "):
             err = (f"Info: crypto account(s) excluded: cb\n"
                    f"{label}could not read work/margin_gains_wash.json: "
                    f"{self.LONG}/work/margin_gains_wash.json: not valid "
                    f"JSON (Unterminated string)\n  A taxable account's "
                    f"gains cannot be left out of the totals. Re-run "
-                   f"`taxjson run` to rebuild it.\n")
+                   f"`tjs run` to rebuild it.\n")
             self.assertGreater(len(err), 400)
             msg = _child_error(err)
             self.assertIn("could not read work/margin_gains_wash.json", msg)
-            self.assertIn("Re-run `taxjson run`", msg)
+            self.assertIn("Re-run `tjs run`", msg)
             self.assertNotIn("crypto account(s) excluded", msg)
 
     def test_a_long_message_without_an_error_line_keeps_the_last(self):
@@ -141,7 +141,7 @@ class TestChildErrorKeepsTheErrorLine(unittest.TestCase):
                         self.assertNotEqual(r.returncode, 0)
                         self.assertIn("margin_gains_wash.json", r.stderr)
                         self.assertIn("not valid JSON", flat(r.stderr))
-                        self.assertIn("Re-run `taxjson run`",
+                        self.assertIn("Re-run `tjs run`",
                                       flat(r.stderr))
 
 
@@ -174,7 +174,7 @@ class TestPendingElectionDocument(unittest.TestCase):
                           ev["cash_in_lieu_date"]),
                          (12.0, "CAD", "2024-06-18"))
         doc = (REPO / "docs" / "commands.md").read_text(encoding="utf-8")
-        elect = doc[doc.index("#### taxjson elect"):]
+        elect = doc[doc.index("#### tjs elect"):]
         elect = elect[:elect.index("\n#### ", 1)]
         for f in self.FIELDS:
             self.assertIn(f"`{f}`", elect, f)
@@ -185,7 +185,7 @@ class TestPendingElectionDocument(unittest.TestCase):
 class TestPlantedRatesSurviveARebuild(unittest.TestCase):
     """test_fix_a2_checklist's crypto-sends case failed once in a busy
     parallel batch ("run --no-input" exit 1). The crypto-sends tests
-    plant work/to_base.csv; `taxjson run` rebuilds that file when a
+    plant work/to_base.csv; `tjs run` rebuilds that file when a
     taxjson source file is newer than it (an edit made while the suite
     runs), from the HOME's currency cache, which the tests' own HOME did
     not have: the rebuild kept no rate and the conversion stopped. The

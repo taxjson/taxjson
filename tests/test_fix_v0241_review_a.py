@@ -232,7 +232,7 @@ class TestSpinoffLegIgnoresTheParentsClass(unittest.TestCase):
 class TestReinvestmentKeepsTheNativeBooksSingleCurrency(unittest.TestCase):
     """GitHub issue #3's CSV: the USD REI row bound to the CAD listing is
     restated in CAD in the native-currency books, so the raw holdings
-    report is written and `taxjson tips` runs."""
+    report is written and `tjs tips` runs."""
 
     def _check(self, country):
         from test_fix_v0241_leftovers import _ISSUE3

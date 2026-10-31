@@ -1,8 +1,8 @@
-"""`taxjson format-map` and the headers earlier taxjson versions wrote
+"""`tjs format-map` and the headers earlier taxjson versions wrote
 into ticker.map (lib/ticker_map_legacy, lib/ticker_map_format).
 
 Every variant in tests/fixtures/ticker_map/legacy_headers.txt (each
-`taxjson init` template, the earliest projects' header, `taxjson
+`tjs init` template, the earliest projects' header, `tjs
 migrate`'s line, the first grouped layout) is template text: replaced by
 the current header, whole, re-wrapped, re-cased, split into pieces, or
 with the user's notes directly below its last line. A copy the user
@@ -88,7 +88,7 @@ class TestTables(unittest.TestCase):
 
     def test_fixture_has_every_variant(self):
         names = [n for n, _t in variants()]
-        self.assertEqual(len(names), 12, names)
+        self.assertEqual(len(names), 13, names)
         self.assertTrue(any("earliest" in n for n in names))
         self.assertTrue(any("migrate" in n for n in names))
 

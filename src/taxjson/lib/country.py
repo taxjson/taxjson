@@ -174,7 +174,7 @@ def basis_pooled_across_accounts(country: str) -> bool:
 
 # How a sale takes cost from the units held: Canada's average cost (the
 # pool's ACB per unit, CA-ACB-01) or the US's first in, first out
-# (US-BASIS-01). A view that replays a book's cost (`taxjson renames`)
+# (US-BASIS-01). A view that replays a book's cost (`tjs renames`)
 # replays it by this rule (backlog TJ-0309).
 LOT_RULE = {CANADA: "average", USA: "fifo"}
 
@@ -259,7 +259,7 @@ def settings_tax_date(settings: Mapping[str, Any]) -> str:
 
 
 # ------------------------------------------------------------ setting resolvers
-# The engine and `taxjson tax-logic` read these settings through the SAME
+# The engine and `tjs tax-logic` read these settings through the SAME
 # functions, so the rendered rule can never drift from what runs
 # (partition audit SPEC-12). Option-premium timing: lib/pipeline
 # option_timing_from_settings.
@@ -397,7 +397,7 @@ CONFIG_WHY: Dict[str, str] = {
 
 # [accounts.X] plan kinds: each registered plan belongs to one country
 # (audit A2-0739, A2-1272, A2-1332); "taxable" and "sheltered" to both.
-# The one table `taxjson`'s config check and `taxjson tips` read.
+# The one table `taxjson`'s config check and `tjs tips` read.
 PLAN_COUNTRY: Dict[str, str] = {
     "tfsa": CANADA, "rrsp": CANADA, "rrif": CANADA, "lira": CANADA,
     "lif": CANADA, "lrif": CANADA, "fhsa": CANADA, "resp": CANADA,
@@ -693,11 +693,11 @@ def command_country_problem(command: str, country: str,
     key = f"{command}:{variant}" if variant and \
         f"{command}:{variant}" in COMMAND_COUNTRY else command
     if key == command:
-        shown = f"`taxjson {command}`"
+        shown = f"`tjs {command}`"
     elif command == "form-export":
-        shown = f"`taxjson form-export --form {variant}`"
+        shown = f"`tjs form-export --form {variant}`"
     else:
-        shown = f"`taxjson {command}` with {variant!r}"
+        shown = f"`tjs {command}` with {variant!r}"
     return (f"{shown} is {DISPLAY_NAME[owner]}-only "
             f"({COMMAND_WHY.get(key, '')}); this project is "
             f"country = \"{c}\"")

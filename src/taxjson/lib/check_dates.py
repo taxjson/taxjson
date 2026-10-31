@@ -1,4 +1,4 @@
-"""`taxjson check-dates`: every trade and settlement date the parsers
+"""`tjs check-dates`: every trade and settlement date the parsers
 produced, checked against the calendar of what was traded.
 
 Trading hours by asset class (times as the broker reports them, Eastern
@@ -103,7 +103,7 @@ def _rows(path: Path) -> List[Dict[str, Any]]:
     try:
         doc = read_work_doc(path)
     except InputFileError as e:
-        raise ValueError(f"{e} — re-run `taxjson run`") from None
+        raise ValueError(f"{e} — re-run `tjs run`") from None
     return list(doc.get("transactions") or [])
 
 
@@ -115,7 +115,7 @@ def sources(cache: Path, account: str) -> List[Tuple[str, str, Path]]:
     try:
         lines = lst.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError):
-        # unreadable reads as absent: 'run `taxjson run` first', which
+        # unreadable reads as absent: 'run `tjs run` first', which
         # rewrites it (re-audit A2-0795)
         return out
     brokers = []
@@ -346,7 +346,7 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
             add("ERROR", "missing",
                 f"work/{acct}_sources.list {lost}: the parsed sources of "
                 f"{acct} cannot be found, so none of its dates were "
-                f"checked — re-run `taxjson run`", acct, SOURCES_LIST_LABEL,
+                f"checked — re-run `tjs run`", acct, SOURCES_LIST_LABEL,
                 {"symbol": "-", "action": "-", "date": "-"})
             continue
         for kind, label, path in sources(cache, acct):
@@ -360,7 +360,7 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
                 add("ERROR", "missing",
                     f"work/{path.name} is missing: the parsed rows of "
                     f"{what} (work/{acct}_sources.list names them) were "
-                    f"not checked — re-run `taxjson run`", acct, label,
+                    f"not checked — re-run `tjs run`", acct, label,
                     {"symbol": "-", "action": "-", "date": "-"})
                 continue
             try:
@@ -613,7 +613,7 @@ def render(doc: Dict[str, Any], show_all: bool = False,
     wrong = doc["errors"] - unchecked
     if unchecked:
         d.line(act(f"{unchecked} parsed source(s) not checked: re-run "
-                   f"`taxjson run`"))
+                   f"`tjs run`"))
     if not doc["issues"]:
         d.para("Every date lands where its market allows.")
     elif wrong and not details:

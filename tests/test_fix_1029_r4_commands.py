@@ -243,7 +243,7 @@ class TestTJ0630SanityUsageErrorsExit2(unittest.TestCase):
             self.assertIn("Error: taxjson.toml: account 'zempty' has no "
                           "inputs", out)
             self.assertIn("Warning: holdings check could not run — "
-                          "`taxjson sanity`", out)
+                          "`tjs sanity`", out)
             self.assertNotIn("could not run: The Error above", out)
 
 
@@ -329,7 +329,7 @@ class TestTJ0631SanityNamesTheGainsFileOnce(unittest.TestCase):
             self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
             err = " ".join(r.stderr.split())
             self.assertIn("no gains files in work/", err)
-            self.assertIn("run `taxjson run`", err)
+            self.assertIn("run `tjs run`", err)
             self.assertNotIn(str(root), err)
 
 
@@ -337,22 +337,22 @@ class TestTJ0631SanityNamesTheGainsFileOnce(unittest.TestCase):
 class TestTJ0633RelayedChildErrorHasOneLabel(unittest.TestCase):
     """TJ-0633: `tjs amt` and `tjs instalments` relay a failed estimate
     under their own "Error: could not compute the estimate it builds
-    on". The kept line still began `taxjson estimate: error:` (captured)
-    and showed as a second "Error: taxjson estimate: …" on a terminal:
+    on". The kept line still began `tjs estimate: error:` (captured)
+    and showed as a second "Error: tjs estimate: …" on a terminal:
     _child_error dropped only the person's form of the label."""
 
     def test_both_forms_of_the_label_are_dropped(self):
         from taxjson.bin.taxjson_run import _child_error
-        for label in ("taxjson estimate: error: ", "Error: taxjson "
+        for label in ("tjs estimate: error: ", "Error: tjs "
                       "estimate: ", "taxjson-merge: error: ", "error: ",
                       "Error: ", "ERROR: "):
             with self.subTest(label=label):
                 msg = _child_error(
                     f"{label}could not read work/margin_gains.json: not "
-                    f"valid JSON\n  Re-run `taxjson run` to rebuild it.\n")
+                    f"valid JSON\n  Re-run `tjs run` to rebuild it.\n")
                 self.assertTrue(msg.startswith("could not read work/"), msg)
                 self.assertNotIn("error:", msg.lower())
-                self.assertIn("Re-run `taxjson run`", msg)
+                self.assertIn("Re-run `tjs run`", msg)
         # Over the limit: the error line found, its label dropped too.
         long = _child_error("Info: a note\ntaxjson estimate: error: "
                             "could not read " + "x" * 500 + "\n  Re-run.\n")
@@ -379,7 +379,7 @@ class TestTJ0633RelayedChildErrorHasOneLabel(unittest.TestCase):
                     r = _tjs(root, cmd)
                     self.assertNotEqual(r.returncode, 0, r.stdout)
                     err = r.stderr
-                    self.assertIn(f"taxjson {cmd}: error: could not compute "
+                    self.assertIn(f"tjs {cmd}: error: could not compute "
                                   f"the estimate it builds on", err)
                     self.assertIn("could not read work/", err)
                     self.assertEqual(err.lower().count("error:"), 1, err)
@@ -387,7 +387,7 @@ class TestTJ0633RelayedChildErrorHasOneLabel(unittest.TestCase):
                     self.assertIn("Error: could not compute the estimate "
                                   "it builds on", out)
                     self.assertEqual(out.count("Error:"), 1, out)
-                    self.assertNotIn("taxjson estimate:", out)
+                    self.assertNotIn("tjs estimate:", out)
 
 
 if __name__ == "__main__":

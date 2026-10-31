@@ -191,7 +191,7 @@ class TestCli(unittest.TestCase):
 
 
 class TestWrapperExcludesCrypto(unittest.TestCase):
-    """2026-09 audit: `taxjson reconcile-slips` fed every taxable
+    """2026-09 audit: `tjs reconcile-slips` fed every taxable
     account, crypto included — and exchanges issue no T5008/1099-B, so
     each crypto disposition was MISSING_FROM_SLIP and the command could
     never exit 0 on a project with one. The wrapper drops `crypto =

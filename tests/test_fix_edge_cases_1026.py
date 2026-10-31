@@ -1,7 +1,7 @@
-"""`taxjson edge-cases` (lib/edge_cases): the 2026-10-26 report on it
+"""`tjs edge-cases` (lib/edge_cases): the 2026-10-26 report on it
 (backlog TJ-0282, TJ-0283), engine-backed — run_gains computes every
 gains and inventory row from synthetic trades (ZZ* tickers, made-up
-amounts), as `taxjson run` writes them to work/.
+amounts), as `tjs run` writes them to work/.
 
 TJ-0282: the denied losses "still held at the end of <year>" come from
 the Canadian engine's pools at the year end (`inventory_year_end`), not

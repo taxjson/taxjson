@@ -29,10 +29,10 @@ class TestUnits(unittest.TestCase):
     def test_child_error_strips_the_label_on_every_line(self):
         from taxjson.bin.taxjson_run import _child_error
         text = _child_error("Info: crypto account(s) excluded: crypto\n"
-                            "Error: taxjson estimate: the canada estimate "
+                            "Error: tjs estimate: the canada estimate "
                             "needs a province\nPass --province ON|BC|AB.")
         self.assertNotIn("Error:", text)
-        self.assertNotIn("taxjson estimate:", text)
+        self.assertNotIn("tjs estimate:", text)
         self.assertIn("the canada estimate needs a province", text)
 
     def test_one_frozen_note_over_adjacent_keys(self):
@@ -155,7 +155,7 @@ class TestSingleProject(unittest.TestCase):
         self.assertIn("Error:", r.stderr)
         self.assertIn("no slip CSV matches inputs/slips/*.csv", r.stderr)
         # The step is to do, not flagged: a plain --done (TJ-0046).
-        self.assertIn("`taxjson checklist --done t5008`", r.stderr)
+        self.assertIn("`tjs checklist --done t5008`", r.stderr)
         self.assertNotIn("--force", r.stderr)
         self.assertNotIn("skip", r.stderr)
 
@@ -195,7 +195,7 @@ class TestSingleProject(unittest.TestCase):
     def test_migrate_note_in_the_house_style(self):
         r = tj(self.root, "migrate", "--dry-run", check=False)
         self.assertRegex(r.stdout, r"(?m)^Info: .*nothing to migrate")
-        self.assertNotIn("taxjson migrate: nothing", r.stdout)
+        self.assertNotIn("tjs migrate: nothing", r.stdout)
 
     def test_redact_done_line(self):
         r = tj(self.root, "redact", check=False)

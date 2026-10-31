@@ -26,8 +26,8 @@ gains file records what the rule would have denied and why
 What the run does: a line that matches no denied loss, or several,
 stops it with a message naming the line (`problems`); every position
 is said once per run as a Warning (`warning_message`), listed in
-`taxjson sum` (FILING POSITIONS, `filing_positions` in --json), in
-`taxjson wash-sales` and in the checklist's filing-positions step.
+`tjs sum` (FILING POSITIONS, `filing_positions` in --json), in
+`tjs wash-sales` and in the checklist's filing-positions step.
 
 The run writes the project's lines to work/loss_overrides.json (STATE)
 before any gains pass; every engine run of the project's books gets
@@ -556,7 +556,7 @@ def entry_note(item: Dict[str, Any], sale: Dict[str, Any],
 
 def note_text(note: Dict[str, Any], country: str) -> str:
     """One sentence for a row carrying `loss_override` (entry_note):
-    the form-export rows, `taxjson audit`, `wash-sales --explain`. The
+    the form-export rows, `tjs audit`, `wash-sales --explain`. The
     figure is the row's own share of the sale's denial."""
     us = country in ("us", "usa")
     dis = float(note.get("would_disallow") or 0.0)
@@ -655,7 +655,7 @@ def problems(items: Sequence[Dict[str, Any]],
         if ov.get("where") not in recorded:
             out.append(f"{ov.get('where')}: {ov.get('line')!r} — no final "
                        f"gains file of account {ov.get('account')} "
-                       f"recorded it (re-run `taxjson run`)")
+                       f"recorded it (re-run `tjs run`)")
     for it in items:
         st = it.get("status")
         if st == STATUS_APPLIED:
@@ -706,7 +706,7 @@ def problems(items: Sequence[Dict[str, Any]],
         out.append(f"{it.get('where')}: {it.get('line')!r} — no denied "
                    f"loss matches {what} in account {it.get('account')}"
                    + seen_txt + (f"; {hint}" if hint else "")
-                   + " (`taxjson wash-sales` lists the "
+                   + " (`tjs wash-sales` lists the "
                    "denied ones; the symbol as the books spell it)")
     return out
 
@@ -837,7 +837,7 @@ def warning_message(items: Sequence[Dict[str, Any]],
     details.append(
         "This is your position, not the rule's test: the numbers include "
         "it and no " + ("basis" if us else "ACB") + " is raised for it. "
-        "`taxjson sum` lists it under FILING POSITIONS; delete the line to "
+        "`tjs sum` lists it under FILING POSITIONS; delete the line to "
         "apply the rule.")
     return head, details
 

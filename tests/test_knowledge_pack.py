@@ -10,7 +10,7 @@ so this test fails when:
   in that file (a reference is `` `path` — `sym1`, `sym2` ``; an identifier
   must occur as a whole word, any other text — a message fragment — as a
   plain substring);
-- a `tjs COMMAND` / `taxjson COMMAND` it quotes is not a command;
+- a `tjs COMMAND` / `tjs COMMAND` it quotes is not a command;
 - a troubleshooting entry lacks Check / Cause / Fix / Fixed in / Code, or its
   "Fixed in" is not a released version heading in CHANGELOG.md, `—`, or
   `unreleased` (scripts/release.sh turns `unreleased` into the new tag);

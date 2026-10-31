@@ -198,7 +198,7 @@ class TestUsTrustRocKeepsThePayDate(unittest.TestCase):
 
 
 class TestUsEstimateInputs(unittest.TestCase):
-    """US-RPT-07 (mutants USRPT07-pil, USRPT07-unterm): `taxjson
+    """US-RPT-07 (mutants USRPT07-pil, USRPT07-unterm): `tjs
     estimate` taxes a payment in lieu as ordinary income (never
     qualified) and folds gains with no term into short-term."""
 

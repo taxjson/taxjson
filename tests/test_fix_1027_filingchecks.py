@@ -185,7 +185,7 @@ class TestTJ0305SlipAuditNotCompared(unittest.TestCase):
 
 def _run_project(tmp: Path, trades: str) -> Path:
     """A Canada project of one taxable account, `margin`, built by
-    `taxjson run`."""
+    `tjs run`."""
     root = tmp / "p"
     (root / "inputs/margin").mkdir(parents=True)
     (root / "taxjson.toml").write_text(
@@ -224,7 +224,7 @@ class TestTJ0306T1135NeedsTheGains(unittest.TestCase):
                 self.assertEqual(r.stdout, "")
                 self.assertIn("no gains file for taxable account(s) margin",
                               r.stderr)
-                self.assertIn("`taxjson run`", r.stderr)
+                self.assertIn("`tjs run`", r.stderr)
 
 
 class TestTJ0307SanityCoverage(unittest.TestCase):

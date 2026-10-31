@@ -10,7 +10,7 @@ test failing when reverted.
 - the LEAPS view's same-stamp order follows the engine (A2-0891, S040-01);
 - crypto-sends' per-year stablecoin currency gain counts only gifts and
   payments and leaves a superficial loss out (A2-0507, A2-0874);
-- `taxjson audit` passes the crypto fill prices (A2-0860, R1-271).
+- `tjs audit` passes the crypto fill prices (A2-0860, R1-271).
 
 Synthetic data only.
 """

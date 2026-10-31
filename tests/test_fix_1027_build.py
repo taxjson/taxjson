@@ -49,7 +49,7 @@ def _snapshot(root):
 
 
 class TestMigratePlansEveryPhaseFirst(unittest.TestCase):
-    """TJ-0300: `taxjson migrate` in a year folder made the year folders'
+    """TJ-0300: `tjs migrate` in a year folder made the year folders'
     tobase.map copies one shared file (every year's taxjson.toml edited,
     the copies moved to .bak) before it read the selected project's old
     files — then stopped at a malformed one saying "Nothing was
@@ -204,7 +204,7 @@ class TestWriteMissingHistoryDateBasis(unittest.TestCase):
 
 
 class TestOpeningDate(unittest.TestCase):
-    """TJ-0317: `taxjson opening margin FILE --date 2025-1-1` wrote
+    """TJ-0317: `tjs opening margin FILE --date 2025-1-1` wrote
     opening_2025-1-1.tt, which the next run refused ("snapshot date
     '2025-1-1' is not a valid YYYY-MM-DD date"). The date is checked
     with the .tt reader's rule, and every line is read back as the run
@@ -292,7 +292,7 @@ class TestOpeningDate(unittest.TestCase):
 
 
 class TestAlignWriteJson(unittest.TestCase):
-    """TJ-0318: `taxjson align --from 2025 --write --all --json` changed
+    """TJ-0318: `tjs align --from 2025 --write --all --json` changed
     ticker.map and printed prose: json.loads failed. It now prints one
     JSON result after the writes — what was added, set and skipped, the
     files and their backups, and the warnings."""
@@ -348,7 +348,7 @@ class TestAlignWriteJson(unittest.TestCase):
             self.assertNotIn("ZZZ.US",
                              (top / "2024" / "ticker.map").read_text())
             self.assertIn("not brought over", r.stderr)
-            self.assertNotIn("Run `taxjson run`", r.stdout)
+            self.assertNotIn("Run `tjs run`", r.stdout)
 
     def test_a_key_set_is_listed(self):
         with tempfile.TemporaryDirectory() as d:
@@ -398,14 +398,14 @@ class TestAlignWriteJson(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertIn("ticker.map: 1 line(s) added (the previous file "
                           "kept as ticker.map.bak)", r.stdout)
-            self.assertIn("Run `taxjson run` to rebuild the books with "
+            self.assertIn("Run `tjs run` to rebuild the books with "
                           "them.", r.stdout)
 
 
 class TestFetchListBesideALegacyFile(unittest.TestCase):
     """TJ-0217 (TJ-0326): `fetch --list` reads no project, yet a project
     with an old per-purpose file (yf_ticker.map) refused it, asking for
-    `taxjson migrate`; the other project guards already let it run.
+    `tjs migrate`; the other project guards already let it run.
     `fetch` itself, which reads the project, is still refused."""
 
     def _legacy(self, d):
@@ -419,7 +419,7 @@ class TestFetchListBesideALegacyFile(unittest.TestCase):
             root = self._legacy(d)
             r = _tjs(root, "fetch", "--list", "--json")
             self.assertNotIn("yf_ticker.map", r.stderr)
-            self.assertNotIn("taxjson migrate", r.stderr)
+            self.assertNotIn("tjs migrate", r.stderr)
             if r.returncode == 2:
                 # No fetcher plugin installed here: the one install hint.
                 self.assertIn("no fetcher is installed", r.stderr)
@@ -435,7 +435,7 @@ class TestFetchListBesideALegacyFile(unittest.TestCase):
                           "100.00 0\n")
             r = _tjs(root, "check-tt", str(tt))
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            self.assertNotIn("taxjson migrate", r.stderr)
+            self.assertNotIn("tjs migrate", r.stderr)
 
     def test_fetch_itself_is_still_refused(self):
         with tempfile.TemporaryDirectory() as d:
@@ -456,7 +456,7 @@ class TestPromoteDocsNameTheChannelsTag(unittest.TestCase):
     def test_the_docs_say_what_promote_tags(self):
         from taxjson.bin import taxjson_run as R
         doc = (REPO / "docs" / "commands.md").read_text(encoding="utf-8")
-        sect = doc.split("#### taxjson promote", 1)[1].split("\n#### ", 1)[0]
+        sect = doc.split("#### tjs promote", 1)[1].split("\n#### ", 1)[0]
         flat = " ".join(sect.split()).lower()
         self.assertNotIn("no tag,", flat)
         self.assertIn("no new release tag", flat)

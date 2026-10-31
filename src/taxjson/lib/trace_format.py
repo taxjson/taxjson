@@ -541,7 +541,7 @@ def render_gain_block(g: Dict[str, Any], align: bool = True,
     account = g.get('account', '')
     term = g.get('term')
     # Unmasked on purpose (owner decision, audit A2-1379): the id is
-    # the handle `taxjson audit --id` / explain take; a broker-issued id
+    # the handle `tjs audit --id` / explain take; a broker-issued id
     # (a Kraken ledger txid) is an exchange reference, not an account id.
     gid = (g.get('id') or '')[:16]
 
@@ -697,8 +697,8 @@ def render_summary_table(gains: List[Dict[str, Any]]) -> List[str]:
 # The report layout (docs/output-style.md): the same facts as
 # render_gain_block, for a reader at a terminal — no '#' comment column, prose
 # wrapped to the width, the pool history and the window as tables that fit
-# (a row too wide becomes a per-record block). `taxjson wash-sales
-# --explain` prints it, and `taxjson audit` its trace sections
+# (a row too wide becomes a per-record block). `tjs wash-sales
+# --explain` prints it, and `tjs audit` its trace sections
 # (render_report_trace); render_gain_block stays the layout of the trace
 # files.
 
@@ -940,7 +940,7 @@ def render_report_trace(g: Dict[str, Any],
                         width_: Optional[int] = None) -> List[str]:
     """The sections of render_report_block after its figures — the pool
     history, the denial and the window — each opening with a blank line
-    and an indented sub-heading. `taxjson audit` prints them under its
+    and an indented sub-heading. `tjs audit` prints them under its
     own figures (render_gain_block's '#' lines stay the trace files').
     [] when the gain carries no trace."""
     from taxjson.lib.out import width

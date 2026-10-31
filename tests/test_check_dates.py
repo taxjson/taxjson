@@ -1,4 +1,4 @@
-"""`taxjson check-dates` (lib/check_dates): dates against each market."""
+"""`tjs check-dates` (lib/check_dates): dates against each market."""
 import json
 import tempfile
 import unittest

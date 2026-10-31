@@ -248,7 +248,7 @@ def main():
     parser.add_argument("--require-prices", action="store_true",
                         help="ERROR on a BUYSELL/DIVIDEND with a nonzero "
                              "quantity but price 0 and net 0 (an unpriced "
-                             "crypto row; `taxjson run` sets it for crypto "
+                             "crypto row; `tjs run` sets it for crypto "
                              "accounts)")
     args = parser.parse_args()
     

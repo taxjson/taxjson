@@ -88,7 +88,7 @@ class TestUsCryptoOnlyJson(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 r = tj(self.root, cmd, check=False)
                 self.assertEqual(r.returncode, 0, r.stderr)
-                self.assertIn(f"taxjson {cmd}: no wash-checkable taxable "
+                self.assertIn(f"tjs {cmd}: no wash-checkable taxable "
                               "account", r.stdout)
 
 

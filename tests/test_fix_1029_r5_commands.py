@@ -71,8 +71,8 @@ class TestTJ0639SanityAccountWithNoInputs(unittest.TestCase):
                           "inputs (inputs/zempty/ is missing): nothing to "
                           "compare", err)
             self.assertIn("Its holdings are compared with the books "
-                          "`taxjson run` builds from its exports. Save them "
-                          "in inputs/zempty/ and run `taxjson run`, or take "
+                          "`tjs run` builds from its exports. Save them "
+                          "in inputs/zempty/ and run `tjs run`, or take "
                           "out its `holdings` setting until it has some.",
                           err)
             self.assertNotIn("is not an account", err)
@@ -111,7 +111,7 @@ class TestTJ0639SanityAccountWithNoInputs(unittest.TestCase):
             self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
             err = _flat(r.stderr)
             self.assertIn("no gains file in work/ for account 'zempty', "
-                          "whose inputs are there — the last `taxjson "
+                          "whose inputs are there — the last `tjs "
                           "run` did not build them", err)
             self.assertNotIn("is not an account", err)
 
@@ -137,7 +137,7 @@ class TestTJ0639SanityAccountWithNoInputs(unittest.TestCase):
                           "inputs (inputs/zempty/ is missing): nothing to "
                           "compare\n", out)
             self.assertIn("Warning: holdings check could not run — "
-                          "`taxjson sanity`", out)
+                          "`tjs sanity`", out)
             self.assertNotIn("is not an account", out)
 
 
@@ -300,7 +300,7 @@ class TestTJ0641SumNamesADamagedGainsFileOnce(unittest.TestCase):
 # ---- TJ-0642: wash-sales names work/, exit 2 ------------------------------
 class TestTJ0642WashSalesNamesWork(unittest.TestCase):
     """TJ-0642: with no gains files in work/, `tjs wash-sales` said "no
-    gains files in /abs/…/work (run `taxjson run` first)." and exited 1.
+    gains files in /abs/…/work (run `tjs run` first)." and exited 1.
     work/ is named from the project and the input missing is exit 2, as
     sanity says it (TJ-0631); so are --explain's "no base files" and an
     account with none."""
@@ -312,31 +312,31 @@ class TestTJ0642WashSalesNamesWork(unittest.TestCase):
                 p.unlink()
             for args, says in (
                     (("wash-sales",), "no gains files in work/ — run "
-                                      "`taxjson run` first."),
+                                      "`tjs run` first."),
                     (("wash-sales", "--json"), "no gains files in work/"),
                     (("wash-sales", "nosuch"),
                      "no gains for account 'nosuch' in work/ — run "
-                     "`taxjson run` first, or check the name.")):
+                     "`tjs run` first, or check the name.")):
                 with self.subTest(args=args):
                     r = _tjs(root, *args)
                     self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
                     self.assertEqual(r.stdout, "")
                     err = _flat(r.stderr)
-                    self.assertIn(f"taxjson wash-sales: error: {says}", err)
+                    self.assertIn(f"tjs wash-sales: error: {says}", err)
                     self.assertNotIn(str(root), err)
             for p in (root / "work").glob("*_base.json"):
                 p.unlink()
             for args, says in (
                     (("wash-sales", "--explain"),
-                     "no base files in work/ — run `taxjson run` first."),
+                     "no base files in work/ — run `tjs run` first."),
                     (("wash-sales", "--explain", "nosuch"),
-                     "no nosuch_base.json in work/ — run `taxjson run` "
+                     "no nosuch_base.json in work/ — run `tjs run` "
                      "first, or check the name.")):
                 with self.subTest(args=args):
                     r = _tjs(root, *args)
                     self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
                     err = _flat(r.stderr)
-                    self.assertIn(f"taxjson wash-sales: error: {says}", err)
+                    self.assertIn(f"tjs wash-sales: error: {says}", err)
                     self.assertNotIn(str(root), err)
 
 

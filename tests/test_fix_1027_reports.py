@@ -37,7 +37,7 @@ SRC = REPO_ROOT / "src"
 
 
 def _cli(root: Path, *args: str) -> subprocess.CompletedProcess:
-    """`taxjson -C root args...` from this tree's sources (width 0)."""
+    """`tjs -C root args...` from this tree's sources (width 0)."""
     env = dict(os.environ, PYTHONPATH=str(SRC), TAXJSON_OFFLINE="1",
                TAXJSON_WIDTH="0")
     r = subprocess.run(
@@ -77,7 +77,7 @@ def _pinned(day: date):
 
 
 def _inproc(root: Path, *args: str):
-    """`taxjson -C root ARGS` in this process: (rc, stdout, stderr)."""
+    """`tjs -C root ARGS` in this process: (rc, stdout, stderr)."""
     out, err = io.StringIO(), io.StringIO()
     with mock.patch.object(sys, "argv", ["taxjson", "-C", str(root), *args]), \
             mock.patch.dict(os.environ, {"TAXJSON_OFFLINE": "1",

@@ -1,4 +1,4 @@
-"""`taxjson ccd-sum` — covered-call (short call) gains per underlying.
+"""`tjs ccd-sum` — covered-call (short call) gains per underlying.
 
 Pins: SHORT-call-only selection (long calls and puts excluded; the
 direction fallback for older files without `direction`), per-underlying

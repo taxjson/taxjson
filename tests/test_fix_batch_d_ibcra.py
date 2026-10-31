@@ -153,7 +153,7 @@ class TestImpossibleDate(unittest.TestCase):
             r = tj(root, home, "slip-audit")
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         self.assertNotIn("Traceback", r.stderr)
-        self.assertIn("taxjson slip-audit: error: ", r.stderr)
+        self.assertIn("tjs slip-audit: error: ", r.stderr)
         self.assertIn("line 4: date '20250230' is not a calendar day",
                       r.stderr)
 

@@ -295,7 +295,7 @@ def _settle(transactions: List[TaxTransaction], method: str,
                 f"book is settled once, as a whole, so the unsettled "
                 f"fill's notional would stay its money. Keep the raw "
                 f"fills in a book of their own, or rebuild the book from "
-                f"the exports (`taxjson run`).")
+                f"the exports (`tjs run`).")
         return {}, stats                           # already settled
     fut_idx = []
     for i, tx in enumerate(transactions):
@@ -570,7 +570,7 @@ def pool_across_accounts(transactions: List[TaxTransaction]
             notes.append(
                 f"note: {sym}: held in several taxable accounts, but its "
                 f"settled rows do not record their native amounts — each "
-                f"account's own average cost is used; re-run `taxjson "
+                f"account's own average cost is used; re-run `tjs "
                 f"run` to rebuild the books (tax-logic CA-FX-04).")
             continue
         order = sorted(legs, key=lambda i: (

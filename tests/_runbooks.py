@@ -1,7 +1,7 @@
 """The run's gains passes over a project's hand-written books (tests only).
 
 A test that writes `work/<account>_base.json` itself, with no inputs/,
-gets the files `taxjson run` leaves after its books: each account's own
+gets the files `tjs run` leaves after its books: each account's own
 gains pass (`<account>_gains.json` and its cost timeline), then the
 blended pass over the taxable equity accounts (`<account>_gains_wash.json`
 and `.blend_gains_wash.timeline.json`), through the run's own stage

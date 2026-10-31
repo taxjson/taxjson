@@ -944,7 +944,7 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
     #   3. what survives is a real acquisition or disposal by the
     #      sheltered side — rewritten to BUYSELL so the wash walk sees
     #      it (as trigger and in still-held balances).
-    # Own-account custody moves `taxjson run` pairs into a US blended
+    # Own-account custody moves `tjs run` pairs into a US blended
     # book (core.LOT_MOVE_TYPE, US-BASIS-05), and the journals between
     # two listings it writes into a native book (core.
     # LISTING_JOURNAL_TYPE, backlog TJ-0361), are not transfers in or
@@ -1079,7 +1079,7 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
         more = "" if n_main <= 5 else f"\n  (+{n_main - 5} more)"
         _accts = sorted({t.account for t in transactions
                          if t.action == 'TRANSFER' and t.account})
-        # Worded for both callers: `taxjson run` never passes a flag the
+        # Worded for both callers: `tjs run` never passes a flag the
         # user typed (re-audit A2-1221, the S076-19 twin).
         raise TransferValidationError(
             f"taxable account {', '.join(_accts) or '?'}: its input holds "
@@ -1122,7 +1122,7 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
 
 
 # A position short where none can exist (a registered account, spot
-# crypto, a sale the broker codes CLOSING): `taxjson run` echoes these
+# crypto, a sale the broker codes CLOSING): `tjs run` echoes these
 # and `run --strict` refuses them.
 ATTENTION_SHORT = "warning: ATTENTION: short: "
 
@@ -1150,7 +1150,7 @@ def prepare_books(transactions, sheltered_transactions=(),
 
     With the hint on, a position that goes short where no short can
     exist — a registered account (TFSA/RRSP/IRA), or a spot-crypto book
-    (`spot_crypto`) — is said as an ATTENTION `short:` line (`taxjson
+    (`spot_crypto`) — is said as an ATTENTION `short:` line (`tjs
     run` echoes it and `run --strict` refuses), as is a sale the broker
     codes CLOSING with no position (re-audit A2-0395, A2-0137, A2-1223).
 
@@ -1259,7 +1259,7 @@ def prepare_books(transactions, sheltered_transactions=(),
                     f"CLOSING (IB code C{_basis}), but the data holds no "
                     f"position to close",
                     ["It is booked as a new short until the missing "
-                     "purchase is supplied (`taxjson find-missing-history "
+                     "purchase is supplied (`tjs find-missing-history "
                      "--write-missing-history` writes its .tt OPENING "
                      "cost=unknown line)."],
                     legacy=f"{ATTENTION_SHORT}{c.symbol} ({c.account}): the "
@@ -1267,7 +1267,7 @@ def prepare_books(transactions, sheltered_transactions=(),
                     f"CLOSING (IB code C" + _basis
                     + f"), but the data holds no position to close — "
                       f"it is booked as a new short until the missing "
-                      f"purchase is supplied (`taxjson "
+                      f"purchase is supplied (`tjs "
                       f"find-missing-history --write-missing-history` "
                       f"writes its .tt OPENING cost=unknown line).")
         # A short where none can exist (A2-0395 / A2-0137): the main
@@ -1304,14 +1304,14 @@ def prepare_books(transactions, sheltered_transactions=(),
                 ["History is missing (a transfer-in, a deposit, or a "
                  f"purchase before the data). Until it is supplied, "
                  f"{tail}. Supply it (the transfer or purchase rows, or "
-                 f"`taxjson find-missing-history --write-missing-history`, "
+                 f"`tjs find-missing-history --write-missing-history`, "
                  f"which writes .tt OPENING cost=unknown lines)."],
                 legacy=f"{ATTENTION_SHORT}{c.symbol} ({c.account}): {why} — "
                 f"it sells {abs(c.peak_short):g} more than the data "
                 f"holds from {c.first_negative_date}: history is missing "
                 f"(a transfer-in, a deposit, or a purchase before the "
                 f"data). Until it is supplied, {tail}. Supply it (the "
-                f"transfer or purchase rows, or `taxjson "
+                f"transfer or purchase rows, or `tjs "
                 f"find-missing-history --write-missing-history`, which "
                 f"writes .tt OPENING cost=unknown lines).")
         if candidates:
@@ -1324,9 +1324,9 @@ def prepare_books(transactions, sheltered_transactions=(),
                  f"these are sales of shares bought before your files "
                  f"start (no purchase in the data) rather than real short "
                  f"trades, open the units held before the data with .tt "
-                 f"OPENING cost=unknown lines: `taxjson "
+                 f"OPENING cost=unknown lines: `tjs "
                  f"find-missing-history --write-missing-history` in a "
-                 f"project writes them (`taxjson run` reads them)."],
+                 f"project writes them (`tjs run` reads them)."],
                 legacy=f"NOTE: {len(candidates)} (symbol, account) pair(s) "
                 f"go short in this data: "
                 f"{preview}{more}. {n_reg} are in "
@@ -1334,9 +1334,9 @@ def prepare_books(transactions, sheltered_transactions=(),
                 f"If any of these are sales of shares bought before your "
                 f"files start (no purchase in the data) rather than real "
                 f"short trades, open the units held before the data with "
-                f".tt OPENING cost=unknown lines: `taxjson "
+                f".tt OPENING cost=unknown lines: `tjs "
                 f"find-missing-history --write-missing-history` in a "
-                f"project writes them (`taxjson run` reads them).")
+                f"project writes them (`tjs run` reads them).")
     return (transactions, sheltered_transactions, affiliated_transactions,
             missing_history_log)
 
@@ -1375,7 +1375,7 @@ class GainsRequest:
     # Canada needs no flag — its symbol-global pools already blend
     # (ITA s.47), so this is forwarded to the US engine only. None →
     # the US default, True: FIFO is per account (tax-logic US-BASIS-01)
-    # on any merged book, not only inside `taxjson run` (SPEC-30).
+    # on any merged book, not only inside `tjs run` (SPEC-30).
     per_account_basis: Optional[bool] = None
     # Income dating overrides (lib/income_dating): Canada — symbols
     # whose "distribution" is a corporation's payout (dated when paid);
@@ -1498,14 +1498,14 @@ def apply_trust_roc_record_dates(transactions, income_rules) -> list:
 
 
 def add_loss_override_args(parser) -> None:
-    """--loss-overrides FILE: the project's .tt ALLOWLOSS lines as `taxjson
+    """--loss-overrides FILE: the project's .tt ALLOWLOSS lines as `tjs
     run` writes them (work/loss_overrides.json, lib/loss_overrides) — the
     engine CLIs that recompute the books share the spelling (taxjson-gains,
     -audit, -explain, -carryover, -t1135)."""
     parser.add_argument(
         "--loss-overrides", metavar="FILE", default=None,
         help="Filing positions against the superficial-loss / wash-sale "
-             "rule (.tt ALLOWLOSS lines; `taxjson run` writes "
+             "rule (.tt ALLOWLOSS lines; `tjs run` writes "
              "work/loss_overrides.json): each named sale's denial is not "
              "applied, and what the rule would have denied is recorded.")
 
@@ -1547,7 +1547,7 @@ def _warn_roc_moved_into_prior_year(results, moved, tax_date, year):
     """A trust ROC paid in one year with a record date in the year before
     lowers the ACB of a sale made between the two dates in that earlier
     year — a year that may already be filed without it (re-audit
-    A2-0039). Name each such sale on the ATTENTION channel (`taxjson
+    A2-0039). Name each such sale on the ATTENTION channel (`tjs
     run` echoes it) when this run's year is the pay year (or no year)."""
     from taxjson.lib.income_dating import ATTENTION_INCOME_YEAR
     key = 'date_settle' if tax_date == 'settle' else 'date'
@@ -1575,7 +1575,7 @@ def _warn_roc_moved_into_prior_year(results, moved, tax_date, year):
                   f"return needs an adjustment (T1-ADJ) for the gain.")
 
 # The run's ATTENTION channel for a wash-sale basis add that reaches a
-# replacement sold in a filed year (`taxjson run` echoes it).
+# replacement sold in a filed year (`tjs run` echoes it).
 ATTENTION_WASH_LOCKED = "ATTENTION: wash sale reaches a filed year: "
 
 
@@ -1673,7 +1673,7 @@ def place_retro_wash_adjustments(results, tax_date: str,
                           f"{e.get('account')} — that {e_year} sale's gain "
                           f"changes (US-WASH-22). If {e_year} was filed "
                           f"without it, amend that return, or lock the year "
-                          f"(`taxjson close-year`) to book the add in "
+                          f"(`tjs close-year`) to book the add in "
                           f"{l_year} instead.")
         if moved and filed.get(int(e_year)):
             moved = moved[_filed_with(e, moved, key,
@@ -2082,7 +2082,7 @@ def run_gains(transactions, sheltered_transactions=(),
     # TAXABLE transactions only (FUZZ #I): the cross-account wash pass
     # feeds this account's book PLUS sheltered_base — summing fees over
     # all three lists booked every sheltered account's fees into EVERY
-    # taxable account's wash file, so `taxjson sum` counted an RRSP's
+    # taxable account's wash file, so `tjs sum` counted an RRSP's
     # 14.95 three times. The sheltered accounts' own gains files carry
     # their own fees.
     for tx in list(transactions):
@@ -2451,7 +2451,7 @@ def transfer_window_message(items, country: Optional[str]
 
 
 def tt_json_path(cache: Path, account: str, tt_name: str) -> Path:
-    """Where `taxjson run` writes the converted JSON of one account's
+    """Where `tjs run` writes the converted JSON of one account's
     .tt file: `<cache>/<account>_tt_<stem>.json`. The `tt_` namespace
     keeps a .tt named after a broker group (`questrade.tt`) or a
     pipeline intermediate (`base.tt`) from overwriting that file —

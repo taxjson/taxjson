@@ -576,7 +576,7 @@ class TestRedactUsAddress(unittest.TestCase):
 
 class TestStandaloneFormExport(unittest.TestCase):
     """COMMANDS-04 residue: the standalone taxjson-form-export is gated
-    by the same ownership table as `taxjson form-export`, and refuses a
+    by the same ownership table as `tjs form-export`, and refuses a
     Schedule 3 built from US-engine gains."""
 
     def test_form_needs_the_countrys_form(self):

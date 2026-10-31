@@ -1,7 +1,7 @@
 """Mutation pins for lib/tax_estimate.py (audit G1-0).
 
 Each test kills mutants that survived the whole suite in the
-2026-09-30 mutation round: a behaviour of `taxjson estimate` that is
+2026-09-30 mutation round: a behaviour of `tjs estimate` that is
 right but was never asserted. Expected figures are hand arithmetic from
 the published charts, not re-derivations through the same code.
 """

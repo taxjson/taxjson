@@ -125,14 +125,14 @@ def underlying_of(symbol: str, aliases: dict) -> str:
 #       the T1135 domicile of SYMBOL where its listing suffix is wrong
 #       (an interlisted company): an ISO 3166 alpha-3 code, or
 #       CA/CAN/CANADA/EXCLUDE for "not specified foreign property"
-#       (lib/t1135_country). Read by taxjson-t1135 / `taxjson t1135`.
+#       (lib/t1135_country). Read by taxjson-t1135 / `tjs t1135`.
 #   SIMILAR     A B [C ...]
 #       share listings you treat as look-alikes (two index funds on one
 #       index, a fund and its Canadian wrapper): two or more, each with
 #       its listing suffix, never an option or a future. They stay
 #       separate securities (their own ACB pools; nothing is denied),
 #       but a loss on one with another bought inside the loss window is
-#       a Warning of `taxjson run` and a caveat of the planning tools
+#       a Warning of `tjs run` and a caveat of the planning tools
 #       (lib/similar; tax-logic CA-SL-20 / US-WASH-26). Lines sharing a
 #       symbol are one group.
 #
@@ -155,13 +155,13 @@ def underlying_of(symbol: str, aliases: dict) -> str:
 #
 # These used to be files of their own (yf_ticker.map,
 # crypto_ticker.map, ticker_extraction_overrides.txt, t1135.map);
-# `taxjson migrate` folds an old project's files into ticker.map.
+# `tjs migrate` folds an old project's files into ticker.map.
 #
 # TRADINGVIEW SYMBOL EXCHANGE was a fourth lookup (the exchange prefix of
 # the TradingView watchlist export, once tv_exchange.map). The export was
 # removed: a TRADINGVIEW line left in a ticker.map is ignored — never a
-# problem — and `taxjson run` says once that it can be deleted
-# (SideRules.retired). `taxjson migrate` only renames an old
+# problem — and `tjs run` says once that it can be deleted
+# (SideRules.retired). `tjs migrate` only renames an old
 # tv_exchange.map (RETIRED_MAP_FILES).
 # ---------------------------------------------------------------------------
 
@@ -187,7 +187,7 @@ LEGACY_MAP_FILES = {
     "t1135.map": "T1135",
 }
 # Old per-purpose files of REMOVED features: nothing reads them, so no
-# command stops for them (no rule could be silently lost); `taxjson
+# command stops for them (no rule could be silently lost); `tjs
 # migrate` renames them to <name>.migrated without converting anything.
 RETIRED_MAP_FILES = {
     "tv_exchange.map": "TradingView export removed",
@@ -201,7 +201,7 @@ from taxjson.lib.cli_diag import InputContentError as _InputContentError
 
 class LegacyMapFileError(_InputContentError):
     """An old per-purpose map file sits where ticker.map is read: its
-    rules would be silently ignored. `taxjson migrate` moves them."""
+    rules would be silently ignored. `tjs migrate` moves them."""
 
 
 class SideRules:
@@ -544,7 +544,7 @@ def refuse_legacy_map_file(directory, name: str) -> None:
         raise LegacyMapFileError(
             f"{Path(directory) / name}: {name} is no longer read — its "
             f"lines are now `{LEGACY_MAP_FILES[name]}` lines in "
-            f"ticker.map. Run `taxjson migrate` in the project (preview "
+            f"ticker.map. Run `tjs migrate` in the project (preview "
             f"with --dry-run).")
 
 
@@ -563,18 +563,18 @@ def find_ticker_map(dirs):
 
 
 # The map messages (a problem line, a no-op line) this process said:
-# `taxjson run` reads the map in many in-process passes and the
+# `tjs run` reads the map in many in-process passes and the
 # checklist in many checks, and each said every line again (one map
 # line warned 22 times, folded to 2 + a count: backlog TJ-0112,
 # TJ-0126). A captured stage is a process of its own, so its .diag
-# keeps its line; `taxjson run` starts each run afresh.
+# keeps its line; `tjs run` starts each run afresh.
 MAP_MESSAGES_SAID: set = set()
 
 
 def map_problem_line(msg: str) -> str:
-    """The loader's line for a map line `taxjson run` refuses (`msg`:
+    """The loader's line for a map line `tjs run` refuses (`msg`:
     `<file>:<n>: <message>`)."""
-    return (f"warning: ticker.map problem: {msg} (`taxjson run` refuses "
+    return (f"warning: ticker.map problem: {msg} (`tjs run` refuses "
             f"this map)")
 
 
@@ -602,7 +602,7 @@ def say_map_message(text: str) -> None:
 def side_rules_in(dirs) -> "SideRules":
     """The side rules of the first ticker.map in `dirs` (an empty set
     when none). A line that cannot be read is skipped with a warning
-    naming it, once (`taxjson run` refuses such a map up front)."""
+    naming it, once (`tjs run` refuses such a map up front)."""
     p = find_ticker_map(dirs)
     if p is None:
         return SideRules()

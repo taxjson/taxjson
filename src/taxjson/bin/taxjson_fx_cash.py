@@ -35,14 +35,14 @@ per tax year with their amounts. Every v1 output says NOT RELIABLE —
 do not file this figure (`unreliable_status`).
 
 v2 (lib/fx_cash_v2, opt-in: [settings] fx_cash_ledger = "v2" or
-`taxjson fx-cash --ledger v2`) reads those cash events (lib/
+`tjs fx-cash --ledger v2`) reads those cash events (lib/
 cash_events), models foreign-currency debt per broker account,
 reconciles each account's balance to the statement and REFUSES
 (no figure) instead of guessing. Even when it computes it is labelled
 "v2 (opt-in, under audit)".
 
 Nothing here changes the capital-gains engine, Schedule 3 / 8949
-exports, or `taxjson sum` totals.
+exports, or `tjs sum` totals.
 """
 from taxjson.lib.out import exit_text
 import sys
@@ -55,7 +55,7 @@ from taxjson.lib.core import (IN_KIND_TYPES, OPENING_TYPE,
 
 CA_EXEMPTION = 200.0
 # The BUYSELL types that move securities and no cash (_non_cash): an
-# opening balance (a .tt OPENING line, `taxjson opening`) records a
+# opening balance (a .tt OPENING line, `tjs opening`) records a
 # position already held on the snapshot day, never a purchase (backlog
 # TJ-0622).
 _SECURITY_ONLY_TYPES = IN_KIND_TYPES + (TRANSFER_BOOK_VALUE_TYPE,
@@ -527,7 +527,7 @@ def unreliable_status(doc: Dict[str, Any], year: int,
 def render_brief(doc: Dict[str, Any], base: str, year: int,
                  country: str, verdict: Dict[str, Any],
                  width_: Optional[int] = None) -> str:
-    """`taxjson fx-cash`'s default view (docs/output-style.md, Essentials
+    """`tjs fx-cash`'s default view (docs/output-style.md, Essentials
     first): the NOT RELIABLE line first, a legend, the table, the
     year-end balance to compare and the lines to act on; the reasons,
     the rule and the caveats with --details (render_report)."""
@@ -607,7 +607,7 @@ def render_report(doc: Dict[str, Any], base: str, year: int,
                       "acquisition (pooled average cost). The opt-in "
                       "ledger v2 reads conversions, deposits and "
                       "statement balances: [settings] fx_cash_ledger = "
-                      "\"v2\" or `taxjson fx-cash --ledger v2`.", w)
+                      "\"v2\" or `tjs fx-cash --ledger v2`.", w)
     lines.append("")
     # Currencies with in-year activity only — a stale pool with no
     # movement this year is noise. Largest flow first.
@@ -669,7 +669,7 @@ def render_report(doc: Dict[str, Any], base: str, year: int,
         counts = ", ".join(f"{c} {n}" for c, n
                            in sorted(doc["unrated"].items()))
         warn.append(f"{_W}cash events skipped with no FX rate on "
-                    f"file ({counts}) — run `taxjson run` to refresh "
+                    f"file ({counts}) — run `tjs run` to refresh "
                     f"rates.")
     lines.append("")
     for i, t in enumerate(warn):
@@ -700,5 +700,5 @@ def render_events(events: List[Dict[str, Any]],
 
 if __name__ == "__main__":                       # pragma: no cover
     sys.exit(exit_text("taxjson-fx-cash is not a standalone tool — use "
-                       "`taxjson fx-cash` (it needs the project's native "
+                       "`tjs fx-cash` (it needs the project's native "
                        "books and FX history)."))

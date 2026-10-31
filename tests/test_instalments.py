@@ -241,7 +241,7 @@ class TestInstalmentsCli(unittest.TestCase):
             r = _cli(root, "estimate")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("INSTALMENTS", r.stdout)
-        self.assertIn("taxjson instalments", r.stdout)
+        self.assertIn("tjs instalments", r.stdout)
 
     def test_no_config_is_a_clean_error_with_an_example(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -455,7 +455,7 @@ class TestStatusVocabulary(unittest.TestCase):
 
 class TestEstimateAndInstalmentsAgree(unittest.TestCase):
     """The documented invariant, which a 5.5x divergence slipped past:
-    `taxjson instalments` shells out to `estimate`, so both must
+    `tjs instalments` shells out to `estimate`, so both must
     resolve the SAME other-income inputs. Previously the standalone
     command always assumed zero."""
 
@@ -536,7 +536,7 @@ class TestEstimateAndInstalmentsAgree(unittest.TestCase):
                 us_toml.split("[instalments]")[0])
             r = _cli(root, "instalments")
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn("`taxjson instalments` is Canada-only", r.stderr)
+            self.assertIn("`tjs instalments` is Canada-only", r.stderr)
             doc = json.loads(_cli(root, "sum", "--other-income", "0",
                                   "--json").stdout)
         self.assertNotIn("instalments", doc)

@@ -41,15 +41,15 @@ is cached under the project's `work/`, so a repeat run sends nothing new.
 
 | When | Where | What is sent |
 | --- | --- | --- |
-| `taxjson run`, FX stage (`taxjson-to-base-curr`), on a cache miss | Bank of Canada Valet API (www.bankofcanada.ca) for a CAD base: the daily rate from 2017-03-01, the legacy noon rate from 2007-05-01 to 2017-02-28 | currency-pair series names and a date range |
+| `tjs run`, FX stage (`taxjson-to-base-curr`), on a cache miss | Bank of Canada Valet API (www.bankofcanada.ca) for a CAD base: the daily rate from 2017-03-01, the legacy noon rate from 2007-05-01 to 2017-02-28 | currency-pair series names and a date range |
 | the same stage, on a cache miss | Yahoo Finance (the `[fx]` extra, yfinance): rates before 2007-05-01, currencies the Bank of Canada does not publish, and every rate for a non-CAD base | the pair symbol (e.g. `EURCAD=X`) and a date range |
-| `taxjson run`, crypto stage (`taxjson-fill-crypto`): a crypto row the export left unpriced (staking rewards, for example) | Yahoo Finance chart API | the coin's Yahoo id (`<COIN>-USD`) and the day |
-| `taxjson crypto-sends` and `taxjson run`: a send you marked `gift` or `payment` whose row carries no price of its own | Yahoo Finance chart API (the same lookup as above) | the coin's Yahoo id and the day of the send |
-| `taxjson run`: an in-kind move between a taxable and a registered account with no `INKIND` line and no market value on the broker's row | Yahoo Finance (yfinance): the security's close on the transfer date, marked ESTIMATED | the symbol's Yahoo spelling and the date |
-| `taxjson harvest`, `taxjson watch --harvest` | first a running IB TWS / IB Gateway on this machine (127.0.0.1, the `[ibkr]` extra; it asks Interactive Brokers with your own session), then Yahoo Finance | the symbols you hold |
-| `taxjson tips --online` | Yahoo Finance | the symbols it probes for a cross-listed twin |
-| `taxjson channels`; on a development machine `promote` and `deploy` | `git fetch` against the taxjson checkout's own remote (GitHub for an installed copy) | nothing about your books |
-| `taxjson fetch` (only with the taxjson-fetch plugin, below) | your broker's API | your credentials and the account and date range to download |
+| `tjs run`, crypto stage (`taxjson-fill-crypto`): a crypto row the export left unpriced (staking rewards, for example) | Yahoo Finance chart API | the coin's Yahoo id (`<COIN>-USD`) and the day |
+| `tjs crypto-sends` and `tjs run`: a send you marked `gift` or `payment` whose row carries no price of its own | Yahoo Finance chart API (the same lookup as above) | the coin's Yahoo id and the day of the send |
+| `tjs run`: an in-kind move between a taxable and a registered account with no `INKIND` line and no market value on the broker's row | Yahoo Finance (yfinance): the security's close on the transfer date, marked ESTIMATED | the symbol's Yahoo spelling and the date |
+| `tjs harvest`, `tjs watch --harvest` | first a running IB TWS / IB Gateway on this machine (127.0.0.1, the `[ibkr]` extra; it asks Interactive Brokers with your own session), then Yahoo Finance | the symbols you hold |
+| `tjs tips --online` | Yahoo Finance | the symbols it probes for a cross-listed twin |
+| `tjs channels`; on a development machine `promote` and `deploy` | `git fetch` against the taxjson checkout's own remote (GitHub for an installed copy) | nothing about your books |
+| `tjs fetch` (only with the taxjson-fetch plugin, below) | your broker's API | your credentials and the account and date range to download |
 | `taxjson-generate-parser` (a developer tool, opt-in) | the LLM API you choose (Anthropic or Google, with your API key) | the first `--sample-lines` lines (default 30) of the sample CSV you give it |
 | the installer | taxjson.com (the script), github.com (the release), PyPI (the dependencies, each checked against the release's hash-pinned lock; never taxjson itself) | an ordinary download |
 
@@ -66,8 +66,8 @@ first seven rows. Each then serves its cache only:
 - `harvest` / `watch --harvest` serve `work/.price_cache.json` and refuse
   the lookup on a miss; `tips --online` skips its probe with a note (the
   offline checks still run).
-- `taxjson fetch` refuses outright (one line, before any fetcher plugin
-  runs; `--list` still works); `taxjson channels` skips its `git fetch`
+- `tjs fetch` refuses outright (one line, before any fetcher plugin
+  runs; `--list` still works); `tjs channels` skips its `git fetch`
   (as does `channels --offline`).
 
 `taxjson-generate-parser` sends only when you run it. Its sample lines are
@@ -75,10 +75,10 @@ where broker exports keep the holder's name, account number and address,
 so it runs the redactor over them first and refuses a sample the
 redactor would change or that holds lines it lists for review
 (`--allow-unredacted` overrides and sends the file as it is): run
-`taxjson redact` on the sample first. A sample that passes is sent as
+`tjs redact` on the sample first. A sample that passes is sent as
 the redactor's copy, never as the file's own text.
 
-**Broker fetch is a separate package.** `taxjson fetch` in the core is
+**Broker fetch is a separate package.** `tjs fetch` in the core is
 a dispatcher over installed fetcher plugins (entry-point group
 `taxjson.fetchers`); with none installed it only prints how to install
 one. The Questrade / IBKR Flex fetcher is the `taxjson-fetch`
@@ -89,7 +89,7 @@ separate package, and `--without-fetch` (remembered for upgrades)
 leaves it out or removes it. An install from before v0.19.0 (core only)
 gains it on its next upgrade, and the installer says so: "adding
 taxjson-fetch (installed by default since v0.19.0; re-run with
---without-fetch to keep it out)". It does nothing unless you run `taxjson
+--without-fetch to keep it out)". It does nothing unless you run `tjs
 fetch` with an account that names a `brokerage` in `taxjson.toml`;
 then it adds the broker egress: the
 Questrade login and REST API (`https://login.questrade.com`, the
@@ -97,7 +97,7 @@ Questrade login and REST API (`https://login.questrade.com`, the
 --positions` reads live positions) and the IBKR Flex Web Service
 (`https://ndcdyn.interactivebrokers.com`), with your credentials, and
 nothing else. A third-party fetcher plugin runs with your user's
-rights inside `taxjson fetch` — install only ones you trust.
+rights inside `tjs fetch` — install only ones you trust.
 
 **Install only from the installer or a checkout.** taxjson and
 taxjson-fetch are not published on PyPI yet, so a `taxjson` or
@@ -132,7 +132,7 @@ response is refused.
 taxjson never imports code from your project folder. The `taxjson` /
 `tjs` console scripts do not put the current directory on `sys.path`,
 and every child Python process taxjson starts (the corp-action
-election prompt of `taxjson run`, `taxjson checklist`'s sub-commands,
+election prompt of `tjs run`, `tjs checklist`'s sub-commands,
 `taxjson-safe-to-sell`'s radar) runs with `-P` (Python 3.11+) or a
 bootstrap that drops the current directory before importing anything
 (3.10). Running `python -m taxjson...` yourself from inside a
@@ -146,10 +146,10 @@ console script, or `python -P -m` on 3.11+.
 at startup (a tool run as `python -m taxjson.bin.<tool>` too), so everything they create — `work/`, `reports/`,
 `filed/`, `export/`, `checklist.json`, a new project's
 `inputs/<account>/` — is `0600` (files) / `0700` (directories)
-whatever your shell's umask. `taxjson fetch` (the taxjson-fetch
+whatever your shell's umask. `tjs fetch` (the taxjson-fetch
 plugin) also tightens an existing `inputs/<account>/` to `0700` and writes the fetched
 statements (which carry your account numbers) `0600`. Directories
-created by earlier versions keep their old mode; `taxjson run` warns
+created by earlier versions keep their old mode; `tjs run` warns
 once per run when the project folder, `inputs/` or `reports/` is open
 to other users, naming the command that tightens the project once:
 `chmod -R go-rwx <project>`.
@@ -165,16 +165,16 @@ target, inside or outside the project, is left alone. Lock files
 (`work/.run.lock`, the price caches', the fetch plugin's) are opened
 with `O_NOFOLLOW` too; a link at a lock's name is replaced by a lock
 file of its own.
-`taxjson migrate` (which rewrites your `ticker.map` / `taxjson.toml`)
+`tjs migrate` (which rewrites your `ticker.map` / `taxjson.toml`)
 refuses, before writing anything, when either is a symlink to a file
 outside the project; a link inside the project is kept and its target
 updated. The same goes for the folders taxjson writes into: every
 command stops when `work/`, `reports/`, `filed/`, `export/`, `inputs/`
 or an `inputs/<account>/` folder is a symlink leaving the project,
-before it reads or writes anything (`taxjson redact`, which writes
+before it reads or writes anything (`tjs redact`, which writes
 only its own `inputs_redact/`, aside).
 
-Ids in audit output: `taxjson audit` and the gains traces (`explain`,
+Ids in audit output: `tjs audit` and the gains traces (`explain`,
 `--trace`) print each row's own id unmasked, on purpose — it is the
 handle `--id` takes. For most brokers it is a content hash; for Kraken
 it is the exchange's ledger txid (an exchange reference, never an
@@ -182,7 +182,7 @@ account number or wallet address). Parser messages mask such refs
 (`LG***`). Review audit and trace output before sharing it.
 
 **Keep a tax project repository PRIVATE.** A project is designed to be
-versioned — `taxjson init` writes a `.gitignore` that commits
+versioned — `tjs init` writes a `.gitignore` that commits
 `inputs/` (your broker statements) and `taxjson.toml` (your accounts)
 so the books can be rebuilt. That makes the repository itself
 sensitive: host it only as a private repository (or not at all), never
@@ -218,7 +218,7 @@ reproduction: copy the broker's `examples/*_demo.csv`, edit its rows to
 the same shape as the ones that fail (same columns, actions and wording;
 made-up symbols, ids and amounts) and confirm it fails the same way —
 its amounts are made up, so they are fine to share. When that is not
-possible, `taxjson redact` copies an export (or the project's whole
+possible, `tjs redact` copies an export (or the project's whole
 `inputs/` to `inputs_redact/`) and strips the account numbers, names
 and contact details it recognises. It is pattern-based and keeps
 amounts, prices, quantities, dates and symbols, so read the whole copy

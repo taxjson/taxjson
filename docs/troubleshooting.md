@@ -21,9 +21,9 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ## Installing and upgrading
 
 ### close-year: "Error: inputs/qt/ already holds files this project does not read"
-- **Check:** `ls inputs/qt/` in the year folder (not the shared `../inputs/qt/`): the files there. The project reads the shared folder (`[settings] inputs_dir`), so nothing in its own `inputs/<account>/` is read (`taxjson run` warns about them).
+- **Check:** `ls inputs/qt/` in the year folder (not the shared `../inputs/qt/`): the files there. The project reads the shared folder (`[settings] inputs_dir`), so nothing in its own `inputs/<account>/` is read (`tjs run` warns about them).
 - **Cause:** `close-year` freezes the inputs by copying each account's files from the shared folder into the project's own `inputs/<account>/`; a file already there (an export dropped in the wrong folder) would be mixed into the frozen copy, so it refuses and writes nothing.
-- **Fix:** move those files away — into the shared `../inputs/<account>/` if they belong to the books (then `taxjson run` again), else out of the project — and run `taxjson close-year` again.
+- **Fix:** move those files away — into the shared `../inputs/<account>/` if they belong to the books (then `tjs run` again), else out of the project — and run `tjs close-year` again.
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_freeze_inputs`, `already holds files this project`
 
@@ -44,7 +44,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### close-year run beside a `tjs run`: the lock's `totals` and its `return_row` disagree, and `tjs check-filed` reports drift right after the close
 - **Check:** `python3 -m json.tool filed/2025.json`: `totals.realized` differs from `return_row.realized`.
 - **Cause:** close-year read the books, then froze the inputs and read the RETURN row again, while a run started meanwhile rebuilt the books from edited inputs.
-- **Fix:** upgrade: close-year holds the run lock, so a run started meanwhile stops with "another `taxjson run` (or `taxjson close-year`) is in progress", and close-year stops while a run is building the books. For a lock made this way: `tjs run`, then `tjs close-year --force`.
+- **Fix:** upgrade: close-year holds the run lock, so a run started meanwhile stops with "another `tjs run` (or `tjs close-year`) is in progress", and close-year stops while a run is building the books. For a lock made this way: `tjs run`, then `tjs close-year --force`.
 - **Fixed in:** `v0.39.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_close_year`, `_acquire_run_lock`
 
@@ -99,8 +99,8 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ## Setting up a project
 
-### "Error: no taxjson.toml in …/taxes/2025 — not a taxjson project" (older releases: "… Run `taxjson init` first.")
-- **Check:** `ls taxjson.toml` in the folder you ran from. Every project command says it; inside a project's sub-folder (its `inputs/`) the next line names the project: "The project is in ../..: `cd ../..`, or `taxjson -C ../.. sanity`".
+### "Error: no taxjson.toml in …/taxes/2025 — not a taxjson project" (older releases: "… Run `tjs init` first.")
+- **Check:** `ls taxjson.toml` in the folder you ran from. Every project command says it; inside a project's sub-folder (its `inputs/`) the next line names the project: "The project is in ../..: `cd ../..`, or `tjs -C ../.. sanity`".
 - **Cause:** taxjson runs on the project in the current folder (or the one `-C DIR` names), and this folder has no `taxjson.toml`.
 - **Fix:** `cd` into the project folder or pass `-C ~/taxes/2025`; for a new project, in the folder for your taxes (not a year folder): `mkdir -p ~/taxes && cd ~/taxes && tjs init --country canada --year 2025 && cd 2025`.
 - **Fixed in:** —
@@ -120,21 +120,21 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/lib/config_check.py` — `invalid_account_name`, `ascii_account_name`, `ACCOUNT_NAME_RULE`, `account_name_problem`
 
-### Outside a project: "Error: no gains files in …/work (run `taxjson run` first)." (sanity, wash-sales, list, find-missing-history, events, fees …), or fx-cash / stats / divs-sum: "Error: [settings] country is missing … in taxjson.toml" where there is no taxjson.toml
+### Outside a project: "Error: no gains files in …/work (run `tjs run` first)." (sanity, wash-sales, list, find-missing-history, events, fees …), or fx-cash / stats / divs-sum: "Error: [settings] country is missing … in taxjson.toml" where there is no taxjson.toml
 - **Check:** `ls taxjson.toml` in the folder you ran from (or the one `-C` names): there is none, and no year folders either.
-- **Cause:** each command looked for its work/ files (or the country) before it looked for the project, so it sent you to `taxjson run`, which then failed with "no taxjson.toml", or blamed a key in a file that does not exist. Now every project command first says the folder is no project, and how to start one or which folder to `cd` to.
+- **Cause:** each command looked for its work/ files (or the country) before it looked for the project, so it sent you to `tjs run`, which then failed with "no taxjson.toml", or blamed a key in a file that does not exist. Now every project command first says the folder is no project, and how to start one or which folder to `cd` to.
 - **Fix:** `cd` into the project folder (the one holding taxjson.toml) or pass `-C DIR`; for a new project, `tjs init --country canada|usa` (docs/getting-started.md).
 - **Fixed in:** `v0.32.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_refuse_no_project`, `_NO_PROJECT_CMDS`, `_project_above`, `_no_project_message`
 
-### Empty project: `tjs sum` says "Error: no gains files in work/" / "Run `taxjson run` first." right after `tjs run` said "no account had any input — nothing was computed"
+### Empty project: `tjs sum` says "Error: no gains files in work/" / "Run `tjs run` first." right after `tjs run` said "no account had any input — nothing was computed"
 - **Check:** every `inputs/<account>/` folder (`../inputs/<account>/` in the years layout) is empty, and `work/skipped_accounts.json` names every account. Since the fix `tjs sum`, `list`, `gains` and the other report commands say "Error: the last run had no input: inputs/margin is empty, so it made no books" (`../inputs/margin` in the years layout), naming each empty folder.
 - **Cause:** the report commands did not read that the last run had no input at all, and sent you back to the run you had just done.
 - **Fix:** put each broker's export in `inputs/<account>/` (`../inputs/<account>/` when every year shares one, docs/brokers.md), then `tjs run`.
 - **Fixed in:** `v0.36.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_refuse_no_input_books`, `_NO_INPUT_REPORT_CMDS`, `_accounts_skipped_for_no_inputs`
 
-### A script that runs `tjs sum` (or `estimate`, `plot-tax`, `shares`, `list`, `gains`, `leaps`, `leaps-sum`, `ccd-sum`, `winners`, `losers`) reads exit 2 where it read 1: "Error: no gains files in work/" / "Run `taxjson run` first."
+### A script that runs `tjs sum` (or `estimate`, `plot-tax`, `shares`, `list`, `gains`, `leaps`, `leaps-sum`, `ccd-sum`, `winners`, `losers`) reads exit 2 where it read 1: "Error: no gains files in work/" / "Run `tjs run` first."
 - **Check:** `work/` holds no gains file (no `tjs run` yet, or its files were deleted).
 - **Cause:** these views stopped with exit 1, the code of a command's finding, while docs/commands.md's exit-code table, `sanity` and `wash-sales` give 2 for a named input that is missing (backlog TJ-0644). Now every view gives 2 for it.
 - **Fix:** `tjs run`, then the view. A script that tells "no books yet" from a finding should test for exit 2.
@@ -191,7 +191,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_align`, `cannot_write`, `_config_shown`
 
 ### "Error: …/taxes/2026 is named like a tax year and is empty: `init` makes the year's folder itself, so this would build 2026/2026/ in it"
-- **Check:** you ran `tjs init` inside an empty folder named like a year (an older installer and README said `mkdir -p ~/taxes/2026 && cd ~/taxes/2026 && taxjson init …`).
+- **Check:** you ran `tjs init` inside an empty folder named like a year (an older installer and README said `mkdir -p ~/taxes/2026 && cd ~/taxes/2026 && tjs init …`).
 - **Cause:** `init` makes the year's folder (`YYYY/`) inside the folder it runs in, beside the shared `inputs/`; run in `~/taxes/2026` it built `~/taxes/2026/2026/` without a word.
 - **Fix:** run it in the folder above, as the message says: `cd ~/taxes && tjs init --country canada && cd 2026`. A project already built nested works as it is; to tidy it, move `2026/2026/` up with its `inputs/` beside it. `tjs init --single` makes one folder for one year where you are.
 - **Fixed in:** `v0.28.0`
@@ -239,7 +239,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.26.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `stage_account`, `is beside this year folder`
 
-### "Error: ../inputs/crypto/crypto_sends.tt (a .tt file you wrote) and work/crypto_sends/crypto/crypto_sends.tt (generated from sends.json by `taxjson crypto-sends`) have the same name"
+### "Error: ../inputs/crypto/crypto_sends.tt (a .tt file you wrote) and work/crypto_sends/crypto/crypto_sends.tt (generated from sends.json by `tjs crypto-sends`) have the same name"
 - **Check:** `head -1 ../inputs/crypto/crypto_sends.tt` has no "# GENERATED" line; the year generates its own from `sends.json`.
 - **Cause:** both files would be read as the account's `crypto_sends` .tt, and only one of them would reach the books.
 - **Fix:** rename yours (`crypto_manual.tt`) and `tjs run`.
@@ -283,7 +283,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### `tjs redact` in a year folder: the copy's taxjson.toml, ticker.map or tobase.map still holds an account id, a comment or an `--also` match, and the console said "taxjson.toml: nothing to redact" (or `tjs redact --check`: "Done. Nothing to redact.")
 - **Check:** search the copy (`inputs_redact/taxjson.toml`, `ticker.map`, `tobase.map`) for the values of your accounts' `account`, `broker_accounts` and `query_id` keys and for the `--also` text. On an older release the year's own files were copied as they were.
-- **Cause:** in a year folder of a shared-exports project, `taxjson redact` copies the year's own files beside the exports as a runnable project, but it replaced in them only the ids it had found in the exports: an id only the configuration holds, the denylist and `--also` patterns and the contact details in their comments were never applied to them.
+- **Cause:** in a year folder of a shared-exports project, `tjs redact` copies the year's own files beside the exports as a runnable project, but it replaced in them only the ids it had found in the exports: an id only the configuration holds, the denylist and `--also` patterns and the contact details in their comments were never applied to them.
 - **Fix:** upgrade and run `tjs redact --force` again. The configuration's ids get placeholders (the same as in the exports, so the copy still runs), e-mail addresses and denylist / `--also` matches are replaced in every file, phones, addresses and names in their comments, and `--check` counts them. In a single-folder project an id only taxjson.toml names is now replaced in the exports too. Review the copy before sharing it.
 - **Fixed in:** `v0.27.1`
 - **Code:** `src/taxjson/bin/taxjson_redact.py` — `redact_project_text`, `config_ids`, `redact_tree`
@@ -337,7 +337,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.39.0`
 - **Code:** `src/taxjson/bin/taxjson_redact.py` — `_COMMENT_PATH`, `_redact_comment_paths`
 
-### `tjs -C DIR redact --out REL`: "==> Done. Review REL/ before sharing it." and the copy is not in the project; or "a single-folder project of : inputs/", or the hint `taxjson -C inputs_redact/ run` stops with "Error: no such directory: inputs_redact/"
+### `tjs -C DIR redact --out REL`: "==> Done. Review REL/ before sharing it." and the copy is not in the project; or "a single-folder project of : inputs/", or the hint `tjs -C inputs_redact/ run` stops with "Error: no such directory: inputs_redact/"
 - **Check:** `ls -a REL` in the shell's folder: a relative `--out` folder is made there, with its `.taxjson-redacted` marker.
 - **Cause:** a relative `--out DIR` is the shell's folder's (like every path argument, `-C` or not), but the closing line printed it as typed, so it read as a folder of the project (`Review inputs/` named the unredacted exports). The year's name was taken from `.` as given, and the run hint was relative to the project, not to the shell.
 - **Fix:** upgrade: off the project's own folder (`-C DIR`, `--out DIR`) the closing line and the run hint give the copy's full path, and the year is named. On an older release, look for the copy in the shell's folder.
@@ -379,14 +379,14 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/bin/taxjson_redact.py` — `_csv_records`, `_open_quote_after`, `UNBALANCED_REASON`, `redact_text`, `_tree_ids`
 
-### `tjs redact` in a year folder: "`taxjson -C inputs_redact/ run` runs it.", and that run stops: the copy has no taxjson.toml; or "Warning: taxjson.toml not copied: a symlink to a file outside the folder holding the project (not followed)"
+### `tjs redact` in a year folder: "`tjs -C inputs_redact/ run` runs it.", and that run stops: the copy has no taxjson.toml; or "Warning: taxjson.toml not copied: a symlink to a file outside the folder holding the project (not followed)"
 - **Check:** `ls -l taxjson.toml` in the year folder: a link (`->`), such as to `config-real.toml` beside it.
 - **Cause:** the year's own files (taxjson.toml, ticker.map, tobase.map) were copied only when they were regular files: a link was left out without a word, and the closing line still called the copy runnable (backlog TJ-0580).
 - **Fix:** upgrade and run `tjs redact --force` again: a link to a file inside the folder holding the project is copied as that file (redacted like the original). A link pointing elsewhere is not followed: the warning names it, and the closing line says the copy has no taxjson.toml; add one before running the copy.
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/bin/taxjson_redact.py` — `_project_tree`, `its taxjson.toml was not copied`
 
-### `tjs redact` in a year folder: the copy's `taxjson estimate` shows no loss carried in from the year before (and more tax) where the project's own estimate shows one
+### `tjs redact` in a year folder: the copy's `tjs estimate` shows no loss carried in from the year before (and more tax) where the project's own estimate shows one
 - **Check:** the project's taxjson.toml has `prior_year_record = "../2024/filed/2024.json"` (or the year folder holds `filed/<year>.json` of an earlier year); on an older release the copy has no `prior/` folder and its taxjson.toml keeps the same relative path, which from inside `inputs_redact/` names no file.
 - **Cause:** the copy is a single-folder project of the year, but the close-year record its estimate reads the carry-forwards from was neither copied nor its path rebased, so the copy's estimate ran as if no year had been closed (backlog TJ-0581).
 - **Fix:** upgrade and run `tjs redact --force` again: the record is copied, redacted like the settings files, to `prior/<name>` in the copy, and the copy's `prior_year_record` names it (the closing line says so). A `prior_year_record` naming no file is commented out in the copy.
@@ -435,7 +435,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/bin/taxjson_redact.py` — `_is_identity_line`, `_is_flat_header`, `_HEADER_LINE`, `redact_text`
 
-### `tjs run` after `tjs redact FILE` on an export in inputs/: "Warning: inputs/questrade/questrade_demo.redacted.csv is not read: a copy `taxjson redact` made of the export beside it"; or, on an older release, "Info: questrade_demo.redacted.csv: 6 tax objects" and the account's gains and dividends doubled
+### `tjs run` after `tjs redact FILE` on an export in inputs/: "Warning: inputs/questrade/questrade_demo.redacted.csv is not read: a copy `tjs redact` made of the export beside it"; or, on an older release, "Info: questrade_demo.redacted.csv: 6 tax objects" and the account's gains and dividends doubled
 - **Check:** `ls inputs/<account>/` (`../inputs/<account>/` with exports shared by every year): a `NAME.redacted.csv` (or `.tt`) beside the export. On an older release `tjs sum` shows the account's figures at twice what they were before the redact, with no warning.
 - **Cause:** `tjs redact FILE` writes its copy beside the export, and the run read every CSV and `.tt` of the account's folder: the copy's rows are the export's again under a placeholder account id, so the de-duplication kept both (backlog TJ-0476).
 - **Fix:** upgrade: a `NAME.redacted.EXT` copy in a folder that also holds an export (a file that is no redacted copy) is not read, and a warning names it; a folder of redacted copies alone (a sample project) is read. Move the copy out of the inputs folder, or write it elsewhere with `tjs redact --out DIR FILE`, then `tjs run`.
@@ -485,8 +485,8 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_new_year`, `has no year folder: start it first`
 
 ### `tjs new-year 2025`: the commented-out `[estimate]` / `[instalments]` "kept for reference" lists each key twice (`# other_income = 90000`, then `# other_income = 0`), and uncommenting the table gives "Cannot overwrite a value" / a duplicate key
-- **Check:** `grep -n "other_income\|prior_year_net_tax\|basis" 2025/taxjson.toml` shows two commented lines per key under the "2024's figures, kept for reference by `taxjson new-year`" note.
-- **Cause:** `taxjson format` (which new-year's copy goes through) kept the commented-out line of last year's value and wrote the template's own example line for the same key under it, its `=` out of line with the others.
+- **Check:** `grep -n "other_income\|prior_year_net_tax\|basis" 2025/taxjson.toml` shows two commented lines per key under the "2024's figures, kept for reference by `tjs new-year`" note.
+- **Cause:** `tjs format` (which new-year's copy goes through) kept the commented-out line of last year's value and wrote the template's own example line for the same key under it, its `=` out of line with the others.
 - **Fix:** upgrade: in a commented-out table, a commented-out key of yours with no example line beside it takes the example's place, aligned, so a new year lists each key once. For a year made by an older release, delete the template's example line of each pair (the second; keep last year's value, or put this year's in) before uncommenting the table, then `tjs format --write`.
 - **Fixed in:** `v0.36.0`
 - **Code:** `src/taxjson/lib/config_template.py` — `own_example`, `own_examples`, `examples`; `src/taxjson/lib/project_layout.py` — `new_year_text`; `src/taxjson/bin/taxjson_run.py` — `_templated`
@@ -563,7 +563,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### `tjs format` on an older Canadian project shows `option_grant_timing_since` or `corporate_distributions` described twice: "## Contracts written before this year keep close timing … SET ONCE …" or "(README "Income dating")" above the current description
 - **Check:** `tjs format` (a dry run) keeps those lines above the key, each as one of your own notes, and adds the current description under them.
-- **Cause:** a project `taxjson init` wrote before v0.30.1 has the older wording of these two descriptions; `format` recognises the template's earlier lines by their text, and these two were missing from its list, so it kept them as yours (backlog TJ-0595).
+- **Cause:** a project `tjs init` wrote before v0.30.1 has the older wording of these two descriptions; `format` recognises the template's earlier lines by their text, and these two were missing from its list, so it kept them as yours (backlog TJ-0595).
 - **Fix:** upgrade, then `tjs format --write`: the older lines are replaced by the current description (no setting changes). On an older release, delete the older lines by hand.
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/lib/config_template.py` — `_LEGACY_TEMPLATE_HASHES_BY_COUNTRY`, `format_config`
@@ -582,7 +582,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.26.0`
 - **Code:** `src/taxjson/lib/project_layout.py` — `unconfigured_inputs`; `src/taxjson/bin/taxjson_run.py` — `not an account of`
 
-### "Warning: these books are not the clean result of the current inputs (1 problem; the filed year's inputs changed): `taxjson checklist`"
+### "Warning: these books are not the clean result of the current inputs (1 problem; the filed year's inputs changed): `tjs checklist`"
 - **Check:** the same command with `--details` (`tjs sum --details`) lists the problems: "inputs changed since the last full run (added: inputs/margin/late.tt)" and "2024 is filed (filed/2024.json) and its inputs changed since the last run". `tjs years` shows the filed year with "inputs changed since"; the file is a download saved in the shared `inputs/` while working on a later year, or (in a year closed with its inputs frozen) a file put in the year's own `inputs/<account>/`.
 - **Cause:** a filed year closed before v0.31.0 still reads the shared exports, so a new or corrected file there can change its figures; a year closed since reads only its own frozen copy, which changes only when a file is put in it. Its books in `work/` were built before the change.
 - **Fix:** `tjs run` in the filed year's folder: it recomputes the year and warns `filed 2024 DRIFTED vs 2024.json` when the filed figures moved (then amend the return, or keep the books consistent with it), or says `filed 2024: OK`. A year closed with frozen inputs never sees a file saved in the shared `inputs/`: next year's `tjs handoff` shows it (see "A filed year and later downloads" in getting-started.md).
@@ -660,16 +660,16 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_shared_decisions_moved`, `_decisions_moved`, `_DECISION_FILES`, `_check_filed_years`, `_years_shared_moved`
 
 ### "Warning: ../inputs/crypto/crypto_sends.tt: generated by an older taxjson into the exports every year shares — not read"
-- **Check:** the file starts with "# GENERATED by `taxjson crypto-sends --write`"; the project reads a shared `inputs_dir`.
+- **Check:** the file starts with "# GENERATED by `tjs crypto-sends --write`"; the project reads a shared `inputs_dir`.
 - **Cause:** the sales of your crypto-send decisions are generated from `sends.json` and the year's own ticker.map; with exports shared by every year, each year generates them in its own `work/crypto_sends/` so no year's run rewrites another's. The old file in the shared folder would book them twice.
 - **Fix:** delete it once no single-folder project still reads that folder; nothing is lost (the decisions are in `sends.json`). A `.tt` file of that name you wrote yourself (no GENERATED line) is read as before.
 - **Fixed in:** `v0.26.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_account_tt_files`; `src/taxjson/lib/crypto_sends.py` — `tt_path`, `GENERATED_DIR`
 
-### "Error: missing_history.json is no longer read — missing history is dated .tt lines (OPENING <date> <SYMBOL> <qty> cost=unknown in inputs/<account>/missing_history.tt): run `taxjson migrate` to convert it"
+### "Error: missing_history.json is no longer read — missing history is dated .tt lines (OPENING <date> <SYMBOL> <qty> cost=unknown in inputs/<account>/missing_history.tt): run `tjs migrate` to convert it"
 - **Check:** `ls missing_history.json phantoms.json` in the project (or the year folder); every command but `migrate`, `init` and `help` stops with this line (exit 2), and `tjs checklist` shows it as its configure item.
 - **Cause:** since v0.27.0 missing history is a dated event in the account's inputs — `OPENING <date> <SYMBOL> <qty> cost=unknown [reason="..."]` beside the exports, its quantity and date fixed (with one folder of exports for every year: one record for every year). The project-root file (and its older name `phantoms.json`) is no longer read; running on without it would silently drop its openings and move sales back into the totals.
-- **Fix:** `tjs migrate --dry-run`, then `tjs migrate` (in a year folder it merges every year folder's file). It sizes each entry as the last `taxjson run` opened it, from the books in `work/`; without books it says so: move the file aside, `tjs run`, move it back, `tjs migrate`. Each entry becomes a line dated the day before the account's first row; entries every year sizes the same are one line, entries that open nothing anywhere (no rows, never short) are dropped and listed, and each file is renamed `missing_history.json.migrated` (delete it once satisfied). When the year folders disagree it writes nothing — see the next entry. Then `tjs run` in each year and compare `tjs sum` with your last figures; the dates and quantities are yours to correct.
+- **Fix:** `tjs migrate --dry-run`, then `tjs migrate` (in a year folder it merges every year folder's file). It sizes each entry as the last `tjs run` opened it, from the books in `work/`; without books it says so: move the file aside, `tjs run`, move it back, `tjs migrate`. Each entry becomes a line dated the day before the account's first row; entries every year sizes the same are one line, entries that open nothing anywhere (no rows, never short) are dropped and listed, and each file is renamed `missing_history.json.migrated` (delete it once satisfied). When the year folders disagree it writes nothing — see the next entry. Then `tjs run` in each year and compare `tjs sum` with your last figures; the dates and quantities are yours to correct.
 - **Fixed in:** `v0.27.0`
 - **Code:** `src/taxjson/lib/migrate.py` — `MISSING_HISTORY_FILES`, `legacy_message`; `src/taxjson/lib/missing_history.py` — `plan_missing_history_migration`, `project_view`, `apply_missing_history_migration`, `read_legacy_entries`; `src/taxjson/bin/taxjson_run.py` — `_migrate_missing_history`, `_refuse_legacy_project_files`
 
@@ -764,7 +764,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/lib/migrate.py` — `legacy_message`, `this project still has`; `src/taxjson/bin/taxjson_run.py` — `_refuse_legacy_project_files`
 
-### `tjs fetch --list` in a project folder: "Error: this project still has yf_ticker.map (now ticker.map QUOTE lines) — these files are no longer read … Run `taxjson migrate` to move them"
+### `tjs fetch --list` in a project folder: "Error: this project still has yf_ticker.map (now ticker.map QUOTE lines) — these files are no longer read … Run `tjs migrate` to move them"
 - **Check:** the same `tjs fetch --list` in an empty folder lists the installed fetchers; `ls yf_ticker.map` (or another old file the error names) in the project.
 - **Cause:** `fetch --list` lists the installed fetcher plugins and reads no project, so it runs in any folder (the installer runs it from yours). The guard for the old per-purpose files did not know that, as the other project guards did, and refused it.
 - **Fix:** upgrade, or run `tjs fetch --list` from another folder. `tjs migrate` moves the old file in any case: `tjs fetch` itself (which reads the project) is still refused until it has.
@@ -808,7 +808,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### "Error: [accounts.crypto] is a crypto account but [settings] has no local_timezone"
 - **Check:** `tjs run` stops at "Checking the project" (exit 1); the message suggests this machine's zone when it can read one. `grep local_timezone taxjson.toml` finds no active line. A name that is not an IANA zone (`"EST5"`) stops instead with "[settings] local_timezone must be an IANA zone name".
-- **Cause:** Coinbase and Kraken stamp every row in UTC, and taxjson dates each row in your own zone. There is no default zone (tax-logic CA-DATE-12): a midnight fill near December 31 could land in the wrong year. The `taxjson init` scaffold has a `[accounts.crypto]` table whether or not you hold coins.
+- **Cause:** Coinbase and Kraken stamp every row in UTC, and taxjson dates each row in your own zone. There is no default zone (tax-logic CA-DATE-12): a midnight fill near December 31 could land in the wrong year. The `tjs init` scaffold has a `[accounts.crypto]` table whether or not you hold coins.
 - **Fix:** add `local_timezone = "America/Toronto"` (your IANA zone) under `[settings]`. If you hold no crypto, delete the `[accounts.crypto]` table instead. `tjs format` and `tjs migrate` still run without the key.
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_normalize_settings`, `but [settings] has no local_timezone`; `src/taxjson/lib/brokerages/_crypto_common.py` — `missing_timezone_message`; `src/taxjson/lib/config_check.py` — `must be an IANA zone`
@@ -827,9 +827,9 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `ticker.map problem(s)`; `src/taxjson/lib/ticker_map.py` — `read_side_rules`, `parse_side_line`, `line has no ticker.map keyword`; `src/taxjson/bin/taxjson_ticker_map.py` — `map_file_problems`
 
-### `tjs t1135`: "Error: ticker.map:54: 'ZZC CA' has no ticker.map keyword — a T1135 override is a `T1135 SYMBOL COUNTRY` line" (older releases: "… (`taxjson migrate` converts an old t1135.map)", and the checklist's t1135 step "(blocked): /…/ticker.map … — tjs migrate")
+### `tjs t1135`: "Error: ticker.map:54: 'ZZC CA' has no ticker.map keyword — a T1135 override is a `T1135 SYMBOL COUNTRY` line" (older releases: "… (`tjs migrate` converts an old t1135.map)", and the checklist's t1135 step "(blocked): /…/ticker.map … — tjs migrate")
 - **Check:** the named line of `ticker.map` is a symbol and a country with no keyword in front (`ZZC CA`). An older `tjs t1135 --details` told you to write `SYMBOL CA`, and `tjs migrate` then said "nothing to migrate".
-- **Cause:** a T1135 domicile override is a `T1135 SYMBOL COUNTRY` line; a line without the keyword might be an old t1135.map line pasted in, and a dropped override can flip the filing verdict, so T1135 stops on it. The notes left the keyword out, and the refusal named `taxjson migrate` for every such line although there was no t1135.map to convert.
+- **Cause:** a T1135 domicile override is a `T1135 SYMBOL COUNTRY` line; a line without the keyword might be an old t1135.map line pasted in, and a dropped override can flip the filing verdict, so T1135 stops on it. The notes left the keyword out, and the refusal named `tjs migrate` for every such line although there was no t1135.map to convert.
 - **Fix:** put `T1135` in front of the line (`T1135 ZZC CA`), or fix or delete it if it is no override; then `tjs t1135`. `tjs migrate` is named only when an old `t1135.map` is in the project. The checklist's blocked line now shows the problem and names `tjs t1135`.
 - **Fixed in:** `v0.36.0`
 - **Code:** `src/taxjson/bin/taxjson_t1135.py` — `load_overrides`, `_overrides_problem`, `has no ticker.map keyword`; `src/taxjson/lib/checklist.py` — `d_t1135`
@@ -961,7 +961,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/lib/project_layout.py` — `tobase_both_problem`, `tobase_setting`, `setting_problems`; `src/taxjson/bin/taxjson_run.py` — `_refuse_folder_settings`, `_migrate_shared_tobase`
 
 ### A filed year: "Error: two tobase.map files for this year: … but this year is filed and its tobase.map is the copy close-year froze", or "filed 2024 was closed with its inputs frozen, but taxjson.toml names the shared inputs_dir (../inputs) and tobase_map (../tobase.map) again"
-- **Check:** `grep -n "inputs_dir\|tobase_map" 2024/taxjson.toml` shows live lines besides the commented ones under `## frozen by`; `ls 2024/tobase.map*`. An older taxjson said "… and this folder holds a tobase.map of its own — `taxjson migrate` …" here, and after `tjs migrate` the year's run warned `filed 2024 DRIFTED` with "frozen input(s) changed … (restore them from your records)" although the frozen copy was untouched.
+- **Check:** `grep -n "inputs_dir\|tobase_map" 2024/taxjson.toml` shows live lines besides the commented ones under `## frozen by`; `ls 2024/tobase.map*`. An older taxjson said "… and this folder holds a tobase.map of its own — `tjs migrate` …" here, and after `tjs migrate` the year's run warned `filed 2024 DRIFTED` with "frozen input(s) changed … (restore them from your records)" although the frozen copy was untouched.
 - **Cause:** `tjs years` counted a filed year's frozen `inputs_dir` and `tobase_map` (commented out by close-year) as settings that differ from the newest year's, and `tjs align --from 2025 --write` in the filed year wrote them back: the year read the shared exports again, not its frozen copy. The run's error then named `migrate`, which removed the frozen `tobase.map` (kept as `tobase.map.bak`). Now `years`, `years --diff` and `align` leave those two keys out whenever either year is frozen, the error names the lines to delete, and `migrate` never takes a filed year's frozen copy for one to merge.
 - **Fix:** delete the live `inputs_dir` and `tobase_map` lines from the filed year's `[settings]` (leave the commented ones); if `migrate` removed its copy, `mv 2024/tobase.map.bak 2024/tobase.map`. Then `tjs run` there says `filed 2024: OK`. Do not `close-year --force` before that: it would lock books built from the shared exports.
 - **Fixed in:** `v0.32.0`
@@ -981,7 +981,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/lib/checklist.py` — `d_filed_lock`, `longer read the frozen copy`; `src/taxjson/lib/project_layout.py` — `frozen_year`, `shared_inputs`, `shared_tobase`
 
-### `tjs years --details`: "tobase.map: a copy in each of 2024 — `taxjson migrate` here makes them one file every year reads" for a filed year; `tjs migrate` then says "nothing to migrate here"
+### `tjs years --details`: "tobase.map: a copy in each of 2024 — `tjs migrate` here makes them one file every year reads" for a filed year; `tjs migrate` then says "nothing to migrate here"
 - **Check:** the default `tjs years` says "tobase.map: frozen copy of its own in 2024 (filed)" for the same year; `2024/filed/2024.json` exists.
 - **Cause:** the details view did not tell the copy close-year froze (the filed year's own by design) from a per-year copy of the layout before v0.27.1; the default view did.
 - **Fix:** nothing to do: the frozen copy stays. After the upgrade `--details` says "frozen copy of its own in 2024 (filed: close-year froze it, the year reads it)".
@@ -998,7 +998,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### `tjs run` or `tjs check-filed` in a filed year after `tjs migrate --to-years` (or `tjs migrate`): "filed 2024: 1 frozen input(s) changed since the year was closed: taxjson.toml — … (restore them from your records …)"
 - **Check:** `git diff 2024/taxjson.toml` (or the file against your records) shows only the lines migrate wrote (`exports_dir`, `requires_taxjson`, paths one level down).
 - **Cause:** migrate edits a frozen year's taxjson.toml (the oldest taxjson the layout needs, where the shared folders are), and nothing told its own edit from anyone else's: the lock's hash of the file no longer matched.
-- **Fix:** upgrade, then run the migration on a project an older release has not migrated yet: migrate now records its edit in the lock (`frozen.migrated`; "filed/2024.json: records this edit of 2024's frozen taxjson.toml (settings.requires_taxjson) as migrate's own"), and `tjs check-filed` says "taxjson.toml is as `taxjson migrate --to-years` rewrote it on … — not a changed input". Any later edit of the file is a changed input again. A year an older release migrated still shows the note (its lock recorded no edit): when the diff holds only those lines, the books are as filed, and `filed 2024: OK` says the figures match.
+- **Fix:** upgrade, then run the migration on a project an older release has not migrated yet: migrate now records its edit in the lock (`frozen.migrated`; "filed/2024.json: records this edit of 2024's frozen taxjson.toml (settings.requires_taxjson) as migrate's own"), and `tjs check-filed` says "taxjson.toml is as `tjs migrate --to-years` rewrote it on … — not a changed input". Any later edit of the file is a changed input again. A year an older release migrated still shows the note (its lock recorded no edit): when the diff holds only those lines, the books are as filed, and `filed 2024: OK` says the figures match.
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_migrate`, `_frozen_configs`, `_record_migrate_edits`, `_migrate_edit`, `_check_filed_years`; `src/taxjson/lib/checklist.py` — `run_config_state`, `run_config_keys_changed`
 
@@ -1024,7 +1024,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/bin/taxjson_filed.py` — `missing_lock_problem`, `missing_prior_lock`, `read_lock`; `src/taxjson/lib/carryforward.py` — `_from_lock`; `src/taxjson/bin/taxjson_run.py` — `_fx_cash_carry`, `cmd_handoff`, `cmd_carryover`
 
 ### "Error: [settings] prior_year_record (../2024/filed/2024.json): the 2024 close-year lock is missing, while the 2024 project holds the reports close-year kept as filed (filed/2024/reports/)" (older releases: no carried loss, no error, for a year closed as a single folder and then moved by `migrate --to-years`)
-- **Check:** `2024/filed/2024.json` is gone, `2024/filed/2024/reports/` is there, and 2024's taxjson.toml has no "## frozen by `taxjson close-year`" note (the year was closed before `migrate --to-years` made the year folders, so close-year had no shared folder to freeze).
+- **Check:** `2024/filed/2024.json` is gone, `2024/filed/2024/reports/` is there, and 2024's taxjson.toml has no "## frozen by `tjs close-year`" note (the year was closed before `migrate --to-years` made the year folders, so close-year had no shared folder to freeze).
 - **Cause:** only the freeze note told a closed year's deleted lock from a year never closed, so such a year's deleted lock read as no record: `tjs estimate` carried no loss and `tjs carryover` rebuilt the year as "maybe partial" (backlog TJ-0272, the part left open in `v0.38.0`). The year's own `tjs years` (`open`) and `tjs check-filed` ("No filed/<year>.json snapshots") did the same until TJ-1119: they now say `lock missing`, as a year with the note does. The reports close-year keeps as filed now count as that sign too, when one was written after the year ended: reports all dated within the year are a lock taken during it (a snapshot, `close-year --force`), and with that lock gone the year stays open (TJ-1247). A fresh `git clone` dates every file by the clone: a snapshot's reports read as a closing there.
 - **Fix:** as in the entry above: restore `2024/filed/2024.json`, or check 2024's figures against the return you filed and run `tjs close-year` in 2024/ again. A year really never closed has neither the note nor `filed/2024/reports/`; delete a stray `filed/2024/` folder there.
 - **Fixed in:** `v0.39.0`
@@ -1032,7 +1032,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### `tjs checklist`, step handoff blocked by "the 2024 close-year lock is missing", then "Set [settings] prior_year_record to last year's filed/<year>.json", and "! … handoff (blocked): … — tjs close-year"
 - **Check:** 2025's taxjson.toml sets `prior_year_record` (to `../2024/filed/2024.json`) and that file is gone (the entry above).
-- **Cause:** the step's standing advice was to set the key, which is set, and its `! ` line named the `taxjson close-year` the message names, which run in 2025/ closes 2025, not 2024 (backlog TJ-0605).
+- **Cause:** the step's standing advice was to set the key, which is set, and its `! ` line named the `tjs close-year` the message names, which run in 2025/ closes 2025, not 2024 (backlog TJ-0605).
 - **Fix:** upgrade: the step says to restore `../2024/filed/2024.json` from git or a backup, or close 2024 again with `tjs -C ../2024 close-year`, and its advice no longer says to set the key once it is set.
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/lib/checklist.py` — `d_handoff`, `_missing_prior_lock`, `_project_cmds`, `HANDOFF_SET_HOW`, `_prior_record_set`
@@ -1086,7 +1086,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.37.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_migrate_steps`, `_migrate_plan`, `_migrate_done_note`, `_migrate_shared_tobase`, `_migrate_missing_history`; `src/taxjson/lib/migrate.py` — `plan`, `MigrateError`
 
-### "Error: `taxjson update-tobase-map` is Canada-only (Canada only for now: the interlisted pairs pool identical property …); this project is country = "usa""
+### "Error: `tjs update-tobase-map` is Canada-only (Canada only for now: the interlisted pairs pool identical property …); this project is country = "usa""
 - **Check:** `[settings] country` in taxjson.toml.
 - **Cause:** the interlisted master's pairs apply to Canadian projects only for now (tax-logic US-XLIST-05); a US project does not read a tobase.map either (an Info line says so when one is there).
 - **Fix:** in a US project, write the pairs you need in ticker.map (`TOBASE` / `DISTINCT`).
@@ -1100,24 +1100,24 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/bin/taxjson_convert_tt.py` — `_join_derivative_check`; `src/taxjson/bin/taxjson_ticker_map.py` — `_parse_map_text`
 
-### `tjs format-map`: "Warning: 2 ticker.map problem(s): `taxjson run` refuses the map until each is fixed" or "Error: ticker.map: laying the map out in groups would change what it means"
+### `tjs format-map`: "Warning: 2 ticker.map problem(s): `tjs run` refuses the map until each is fixed" or "Error: ticker.map: laying the map out in groups would change what it means"
 - **Check:** the warning lists each problem as `- ticker.map:<line>: …` (the line numbers of the file before formatting) and says how many lines went to the "Unrecognized" group; the error writes nothing (exit 2).
-- **Cause:** a line `taxjson run` cannot use (no keyword, malformed, a second target for one symbol) is kept exactly as written at the end of the file, in the "Unrecognized" group, so the line that wins stays first. The error means that moving the lines into their groups would change which of two contradicting lines wins, or the order of two dated renames that contradict each other.
+- **Cause:** a line `tjs run` cannot use (no keyword, malformed, a second target for one symbol) is kept exactly as written at the end of the file, in the "Unrecognized" group, so the line that wins stays first. The error means that moving the lines into their groups would change which of two contradicting lines wins, or the order of two dated renames that contradict each other.
 - **Fix:** fix or delete each named line (see "Error: 2 ticker.map problem(s)" above), then `tjs format-map --write` again.
 - **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/ticker_map_format.py` — `format_map`, `would change what it means`; `src/taxjson/bin/taxjson_run.py` — `cmd_format_map`
 
 ### `tjs format-map` keeps an old header ("# ticker.map — symbol rules for the taxjson pipeline. … JOURNAL from to A Norbert's Gambit pair …") above the new one, or "Info: a comment block looks like an old taxjson header you edited — kept; delete it if it no longer applies"
 - **Check:** ticker.map holds two headers after `tjs format-map --write`: the `## ticker.map: standing truths …` one and, below it, a `#` block describing GLOBAL, TOBASE, JOURNAL and DELETE. The Info line names the first line of a block kept because it differs from every header taxjson wrote; "Info: 1 comment block(s) still describe JOURNAL or a dated RENAME as a ticker.map rule" names a comment of yours that documents the legacy dated events.
-- **Cause:** format-map replaced only the headers of the recent `taxjson init` templates, and only a paragraph standing alone: the earliest projects' header (written before `taxjson init` had a template), a header re-wrapped or re-cased, and one with your notes directly below its last line were kept as your notes.
+- **Cause:** format-map replaced only the headers of the recent `tjs init` templates, and only a paragraph standing alone: the earliest projects' header (written before `tjs init` had a template), a header re-wrapped or re-cased, and one with your notes directly below its last line were kept as your notes.
 - **Fix:** upgrade, then `tjs format-map` (the dry run shows the old header removed and says how many lines) and `tjs format-map --write`; `--check` fails while an old header is there. A block it keeps as edited is yours to delete. Your comments that mention JOURNAL or a dated RENAME are kept: a journal or a ticker change on a date is a `.tt` line now (see "ticker.map holds 1 JOURNAL line(s)" below).
 - **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/ticker_map_legacy.py` — `is_legacy_paragraph`, `near_legacy`, `corpus_tables`; `src/taxjson/lib/ticker_map_format.py` — `_scan_template`, `_legacy_spans`, `_dated_comment_blocks`; `src/taxjson/bin/taxjson_run.py` — `_format_map_header_notes`
 
 ### `tjs format-map --write` moves the commented-out examples under `## --- Lookups ---` (`# QUOTE XYZQ.TO XYZQ.V` … `# MULT ZZQ1 50`) above a line you appended at the end of ticker.map
-- **Check:** `diff ticker.map.bak ticker.map` shows the eight `taxjson init` examples removed from the Lookups group and added directly above your new line in its own group.
-- **Cause:** a commented-out rule directly above a line moves with it like a comment, and the template's Lookups examples end the file `taxjson init` writes, so a line appended at the end sat directly under them.
-- **Fix:** upgrade: the examples `taxjson init` writes stay in their keyword's group wherever they sit (a commented-out rule of your own still moves with the line below it). On an older release, leave a blank line before the line you append.
+- **Check:** `diff ticker.map.bak ticker.map` shows the eight `tjs init` examples removed from the Lookups group and added directly above your new line in its own group.
+- **Cause:** a commented-out rule directly above a line moves with it like a comment, and the template's Lookups examples end the file `tjs init` writes, so a line appended at the end sat directly under them.
+- **Fix:** upgrade: the examples `tjs init` writes stay in their keyword's group wherever they sit (a commented-out rule of your own still moves with the line below it). On an older release, leave a blank line before the line you append.
 - **Fixed in:** `v0.36.0`
 - **Code:** `src/taxjson/lib/ticker_map_format.py` — `_items`, `_INIT_EXAMPLES`
 
@@ -1143,8 +1143,8 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_grant_since_warning`, `_books_write_options`
 
 ### "Warning: option_grant_timing_since = 2026 is after year = 2025: 2025's written options are taxed at the close (right only if 2025 was filed that way)"
-- **Check:** `grep -n option_grant_timing_since taxjson.toml`: usually `year` was lowered (filing an earlier year) and the key kept the value an earlier `taxjson init` wrote.
-- **Cause:** contracts written before `option_grant_timing_since` keep close timing, so every option written in the project year is taxed when it closes, not when written (ITA s.49(1)). A `taxjson init` before this release wrote the key set to the init year in every new project.
+- **Check:** `grep -n option_grant_timing_since taxjson.toml`: usually `year` was lowered (filing an earlier year) and the key kept the value an earlier `tjs init` wrote.
+- **Cause:** contracts written before `option_grant_timing_since` keep close timing, so every option written in the project year is taxed when it closes, not when written (ITA s.49(1)). A `tjs init` before this release wrote the key set to the init year in every new project.
 - **Fix:** set it to the first year you file under grant timing (or delete the line for the project year); keep it unchanged in later years. When the year was filed on close timing (a reconstruction of a return filed that way), the value is right: nothing to do.
 - **Fixed in:** `v0.28.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_grant_since_after_year`, `_books_write_options`, `_grant_since_warning`; `src/taxjson/lib/config_template.py` — `scaffold_document`
@@ -1247,16 +1247,16 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.39.0`
 - **Code:** `src/taxjson/bin/taxjson_instalments.py` — `balance_payment_deadline`; `src/taxjson/bin/taxjson_run.py` — `_instalment_config`
 
-### `tjs instalments` / `tjs amt`: "Error: could not compute the estimate it builds on", then only a hint ("A taxable account's gains cannot be left out of the totals. Re-run `taxjson run` to rebuild it.") with no file or reason named
+### `tjs instalments` / `tjs amt`: "Error: could not compute the estimate it builds on", then only a hint ("A taxable account's gains cannot be left out of the totals. Re-run `tjs run` to rebuild it.") with no file or reason named
 - **Check:** run `tjs estimate` in the same folder: it names what failed ("could not read work/margin_gains_wash.json: …: not valid JSON …"). The project's folder has a long path (the message names it in full).
 - **Cause:** these commands run the estimate and relay its error. A relayed error over 400 characters kept the estimate's last lines, so a long project path pushed out the line that names the file and the reason, and only the hint was left (backlog TJ-0625).
 - **Fix:** upgrade: the relay keeps the estimate's error line (its start when it is very long) and then its hint. Then do what the error says (here: `tjs run` to rebuild the file).
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_child_error`, `_CHILD_ERROR_LINE`
 
-### `tjs instalments` / `tjs amt`: "Error: could not compute the estimate it builds on" and then a second "Error: taxjson estimate: could not read work/…" (captured: "  taxjson estimate: error: …" under "taxjson amt: error: …")
+### `tjs instalments` / `tjs amt`: "Error: could not compute the estimate it builds on" and then a second "Error: tjs estimate: could not read work/…" (captured: "  tjs estimate: error: …" under "tjs amt: error: …")
 - **Check:** `tjs estimate` in the same folder shows the second line's reason on its own.
-- **Cause:** a command that relays a failed child's error dropped the child's label only in a person's form ("Error: taxjson estimate: …"). The estimate runs captured, so its line began "taxjson estimate: error:" and showed as a message of its own inside the command's Error (backlog TJ-0633). close-year's carry-forwards, `watch` (the wash radar, harvest) and wash-sales' merge of the books relay the same way.
+- **Cause:** a command that relays a failed child's error dropped the child's label only in a person's form ("Error: tjs estimate: …"). The estimate runs captured, so its line began "tjs estimate: error:" and showed as a message of its own inside the command's Error (backlog TJ-0633). close-year's carry-forwards, `watch` (the wash radar, harvest) and wash-sales' merge of the books relay the same way.
 - **Fix:** upgrade: one Error, with the child's reason under it and no label of its own. Then do what the reason says (here: `tjs run` to rebuild the file).
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_child_error`, `_CHILD_LABEL`
@@ -1776,7 +1776,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_positions`, `_dated_inventory`, `timeline_beside`; `src/taxjson/bin/taxjson_split_gains.py` — `_split_inventory`; `src/taxjson/lib/cost_timeline.py` — `inventory_on`
 
-### `tjs list --date`: "Error: work/.blend_gains_wash.timeline.json: row 0 has 5 values, the timeline names 12 fields" / "Run `taxjson run` to rebuild it." (exit 2); an older release showed a held position at 0.00 cost, or no positions at all (exit 0)
+### `tjs list --date`: "Error: work/.blend_gains_wash.timeline.json: row 0 has 5 values, the timeline names 12 fields" / "Run `tjs run` to rebuild it." (exit 2); an older release showed a held position at 0.00 cost, or no positions at all (exit 0)
 - **Check:** the file named is the cost timeline beside the gains file the view reads (`work/.<gains file>.timeline.json`); it was edited, cut short, or copied from another taxjson.
 - **Cause:** the reader checked only the timeline's version and its list of rows, so a short row read its missing cost as 0 and a timeline without its field names read as no holdings (backlog TJ-0684). Now every field name, each row's length and each value's type are checked first (the numbers finite), and the refusal is exit 2, a damaged input.
 - **Fix:** `tjs run` (it writes the timeline again with the gains), then `tjs list --date` again.
@@ -1797,7 +1797,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.36.0`
 - **Code:** `src/taxjson/lib/check_tt.py` — `_taxable_transfers`, `TRANSFER is not allowed in taxable accounts`; `src/taxjson/lib/pipeline.py` — `_handle_transfers`, `_drop_self_cancelling_transfers`, `TransferValidationError`; `src/taxjson/lib/opening.py` — `apply_opening_cutoff`
 
-### "Warning: NOT in the totals: 2 sales with no purchase (QZQ.TO, QZR.US) — `taxjson find-missing-history`" (or "Info: 1 position(s) go short in margin's data (QZQ.TO) — `taxjson find-missing-history`")
+### "Warning: NOT in the totals: 2 sales with no purchase (QZQ.TO, QZR.US) — `tjs find-missing-history`" (or "Info: 1 position(s) go short in margin's data (QZQ.TO) — `tjs find-missing-history`")
 - **Check:** the first is the closing block under "Before you trust these numbers"; `tjs run --details` words it "2 positions sold in 2025 with no purchase in your files, not in missing_history.tt: QZQ.TO (margin), QZR.US (margin)". A narrow terminal drops the symbols (and spells the command `tjs`). `tjs find-missing-history` lists each pair under "AFFECTS 2025" with its first negative date and the sales it touches.
 - **Cause:** the exports start after the shares were bought (or the shares were transferred in), so the sale has nothing to close. It is booked as a short and its gain is in no total.
 - **Fix:** in this order: add an older export that holds the purchase to `inputs/<account>/`; or enter the purchase as a `.tt` BUYSELL line with its real date and cost (`tjs find-missing-history --write-purchases` drafts these from IB's Basis or a transfer's stated book value); only when the history cannot be recovered, `tjs find-missing-history --write-missing-history` writes `OPENING <date> <SYMBOL> <qty> cost=unknown` lines into `inputs/<account>/missing_history.tt`, and those sales must then be reported by hand. docs/getting-started.md step 5 walks through it.
@@ -1818,10 +1818,10 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/missing_history.py` — `undeclared_journal_days`; `src/taxjson/bin/taxjson_run.py` — `_report_short_positions`, `that a ticker.map TOBASE line `
 
-### "Warning: NOT in the totals: 1 sale with no purchase (QZQ.US)" (`--details`: "… with no purchase in your files … Those sales are NOT in `taxjson sum`") while `tjs sum` has the sale in its totals; or "`taxjson sum` books those sales as short sales closed by a later purchase" or "Info: 1 position read short in 2025 by `taxjson find-missing-history`" (the default view's one-line forms: "Warning: 1 sale with no purchase booked as shorts covered later (QZQ.US)", "Info: 1 position read short by the history check is in the totals (QZQ.US)")
+### "Warning: NOT in the totals: 1 sale with no purchase (QZQ.US)" (`--details`: "… with no purchase in your files … Those sales are NOT in `tjs sum`") while `tjs sum` has the sale in its totals; or "`tjs sum` books those sales as short sales closed by a later purchase" or "Info: 1 position read short in 2025 by `tjs find-missing-history`" (the default view's one-line forms: "Warning: 1 sale with no purchase booked as shorts covered later (QZQ.US)", "Info: 1 position read short by the history check is in the totals (QZQ.US)")
 - **Check:** `tjs sum --json`: `no_purchase_uncovered` lists the sales the totals lack; `no_purchase_in_totals` lists those the gains engine booked, with `booked` = `short_cover` or `matched`.
-- **Cause:** the closing summary and `tjs sum` said "NOT in `taxjson sum`" for every sale the missing-history walk read as sold before bought, also when the gains engine had booked it: as a short sale a later purchase of the year closed (in the totals, at that purchase's cost), or from a purchase it reads first (the walk and the engine order a day's rows differently). Now the claim is made only for sales the gains files lack (an open short at the year's end); a short closed within the year is a Warning saying so, and a sale the engine matched is an Info line.
-- **Fix:** for "NOT in `taxjson sum`" and for a short closed by a later purchase when you held the shares before your files start, supply the purchase (`tjs find-missing-history`, docs/getting-started.md step 5). For the Info line, compare the day's trades with the broker's: the totals already have the sale.
+- **Cause:** the closing summary and `tjs sum` said "NOT in `tjs sum`" for every sale the missing-history walk read as sold before bought, also when the gains engine had booked it: as a short sale a later purchase of the year closed (in the totals, at that purchase's cost), or from a purchase it reads first (the walk and the engine order a day's rows differently). Now the claim is made only for sales the gains files lack (an open short at the year's end); a short closed within the year is a Warning saying so, and a sale the engine matched is an Info line.
+- **Fix:** for "NOT in `tjs sum`" and for a short closed by a later purchase when you held the shares before your files start, supply the purchase (`tjs find-missing-history`, docs/getting-started.md step 5). For the Info line, compare the day's trades with the broker's: the totals already have the sale.
 - **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/first_run.py` — `engine_booking`, `BOOKED_SHORT_COVER`, `render_blocks`; `src/taxjson/bin/taxjson_run.py` — `_uncovered_sales`, `no_purchase_in_totals`
 
@@ -1867,7 +1867,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.39.0`
 - **Code:** `src/taxjson/lib/missing_history.py` — `synthesize_openings`, `real_short`, `broker_short_marker`, `unbacked_close`
 
-### "Warning: Short position: QZQ.US (margin): its purchase is missing — `taxjson find-missing-history`" (`--details`: "the broker codes the sale on 2025-04-01 CLOSING (IB code C, IB Basis …), but the data holds no position to close")
+### "Warning: Short position: QZQ.US (margin): its purchase is missing — `tjs find-missing-history`" (`--details`: "the broker codes the sale on 2025-04-01 CLOSING (IB code C, IB Basis …), but the data holds no position to close")
 - **Check:** `tjs find-missing-history` shows the pair with "broker says closing (IB code C)" and IB's Basis for the shares sold.
 - **Cause:** IB marks the sale as closing a position, so it is not a short sale: the purchase predates the statements in `inputs/`.
 - **Fix:** add the older statement, or `tjs find-missing-history --write-purchases` to draft the purchase line from IB's Basis; fill in the real purchase date and check the cost (IB's Basis is FIFO over IB's lots, not your ACB).
@@ -1951,7 +1951,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.36.0`
 - **Code:** `src/taxjson/lib/missing_history.py` — `_draft_transfers`, `no_slow`, `in_kind_legs`; `src/taxjson/bin/taxjson_missing_history.py` — `in_kind_taxable_legs`
 
-### "Warning: Short position: QZQ.TO (tfsa): its purchase is missing — `taxjson find-missing-history`" in a registered or crypto account (`--details`: "a registered account (TFSA/RRSP) cannot be short" or "spot crypto cannot be short")
+### "Warning: Short position: QZQ.TO (tfsa): its purchase is missing — `tjs find-missing-history`" in a registered or crypto account (`--details`: "a registered account (TFSA/RRSP) cannot be short" or "spot crypto cannot be short")
 - **Check:** `tjs find-missing-history`; the pair is listed as in a registered account, or the account is a crypto account.
 - **Cause:** a registered account or a coin balance cannot go negative, so the books are missing an acquisition (a transfer in, a deposit, a purchase before the exports). Until it is supplied, later purchases cover the phantom short, so a superficial-loss denial they cause is missed; for crypto no gain is booked.
 - **Fix:** add the transfer or purchase rows (an older export, or a `.tt` line), or list the pair with `tjs find-missing-history --write-missing-history`. `tjs run --strict` stops on this.
@@ -1972,8 +1972,8 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.39.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_is_configured_account`, `_refuse_path_account`, `cmd_find_missing_history`
 
-### "Warning: Transfer-in: margin: 1 with NO cost, kept out of the books (QZQ.US) — `taxjson transfers`"
-- **Check:** `tjs run --details` words it "1 transfer-in(s) from outside your books have NO cost in the books (30 QZQ.US (2025-05-01))", and the closing block says "Warning: 1 transfer-in kept out with no cost (QZQ.US) — `taxjson transfers`". `tjs transfers` lists the row with IN_BOOKS `NO_COST`.
+### "Warning: Transfer-in: margin: 1 with NO cost, kept out of the books (QZQ.US) — `tjs transfers`"
+- **Check:** `tjs run --details` words it "1 transfer-in(s) from outside your books have NO cost in the books (30 QZQ.US (2025-05-01))", and the closing block says "Warning: 1 transfer-in kept out with no cost (QZQ.US) — `tjs transfers`". `tjs transfers` lists the row with IN_BOOKS `NO_COST`.
 - **Cause:** shares arrived from another broker and the row states no book value (IB's value column is the market value, never your ACB), so they are kept out of the books and a later sale reads as a short.
 - **Fix:** add the original purchase as a `.tt` BUYSELL line (date and ACB from the sending broker) dated on or before the transfer; the warning then stops. docs/getting-started.md step 5c.
 - **Fixed in:** —
@@ -1986,7 +1986,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_transfer_key`, `effective=True`, `_paired_transfers`; `src/taxjson/bin/taxjson_missing_history.py` — `_kmap`
 
-### "Warning: Transfer-in: margin: 1 booked at the broker's stated cost (QZQ.US): check it — `taxjson transfers`"
+### "Warning: Transfer-in: margin: 1 booked at the broker's stated cost (QZQ.US): check it — `tjs transfers`"
 - **Check:** `tjs run --details` words it "1 transfer-in(s) from outside your books booked at the ACB the broker states on the row". `tjs transfers` shows the row with IN_BOOKS `book_value`.
 - **Cause:** a Questrade "TRANSFER BOOK VALUE" or RBC "BOOK VALUE" row is booked as an acquisition on its arrival date at that value. It is the sending broker's record, which is not always your ACB (an earlier superficial-loss denial, a return of capital, the same stock in another account). Tax-logic CA-ACB-TRANSFER-BV / US-BASIS-TRANSFER-BV.
 - **Fix:** if the figure is right, nothing; it is said every run. To use your own figure, add the original purchase as a `.tt` BUYSELL dated on or before the transfer; the book value is then no longer used. In a US project the holding period starts at arrival unless you enter the original lots.
@@ -2000,7 +2000,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.35.0`
 - **Code:** `src/taxjson/lib/transfer_in.py` — `stated_book_value`, `zero_book_value`, `states a book value of 0`; `src/taxjson/bin/taxjson_run.py` — `0 stated`
 
-### "Warning: Transfer-in: margin: 1 only PARTLY covered by .tt purchases, NOT booked (QZQ.US) — `taxjson transfers`" (`--details`: "… only PARTLY covered by your .tt purchases (20 QZQ.US (2025-03-03, 10 of 20 covered)): NOT booked …")
+### "Warning: Transfer-in: margin: 1 only PARTLY covered by .tt purchases, NOT booked (QZQ.US) — `tjs transfers`" (`--details`: "… only PARTLY covered by your .tt purchases (20 QZQ.US (2025-03-03, 10 of 20 covered)): NOT booked …")
 - **Check:** `tjs transfers` shows the row's IN_BOOKS as `PARTLY_covered` and a `!` line names it; the account's `.tt` BUYSELL lines of the stock dated on or before the transfer add up to fewer units than arrived. The closing block of `tjs run` counts the arrival among the transfer-ins kept out with no cost.
 - **Cause:** your `.tt` purchases account for some of the transferred units only. Booking the whole arrival at the broker's book value would hold the covered units twice (before this release it did: 10 `.tt` units and a 20-unit arrival made 30 in the books, 2026-10-24 audit B41); booking the rest pro rata would guess which units the `.tt` lines are. So nothing is booked: the units the `.tt` lines do not account for have no cost and a later sale of them reads as a short (tax-logic CA-ACB-TRANSFER-BV / US-BASIS-TRANSFER-BV).
 - **Fix:** add the purchase of the other units as a `.tt` BUYSELL line dated on or before the transfer (date and ACB from the sending broker; the book value the broker states on the row is a start for the figure). If the `.tt` purchases are another holding of the stock in this account (bought there, not the shares that arrived), add the arrival's whole quantity instead. The line stops once the `.tt` purchases cover the arrival.
@@ -2070,10 +2070,10 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/bin/taxjson_export.py` — `render_holdings_toml`, `_cost_unknown_note`, `_own_move_arrivals`, `_holdings_toml_to_inventory`, `cost_unknown`, `_blended_fill`, `_blended_note`, `--blended-gains`; `src/taxjson/bin/taxjson_run.py` — `fill_moved_holdings`, `holdings_cmd`; `src/taxjson/lib/core.py` — `unknown_cost`, `_own_move_units`
 
-### `reports/<account>.sum`: "MANUAL REPORTING REQUIRED — 1 sale(s) with no purchase in your files (unknown cost, .tt OPENING cost=unknown) … (`taxjson find-missing-history`)" for a sale of shares or coins that came by a move from another of your accounts; its HOLDINGS REPORT shows them at a cost of 0.00
+### `reports/<account>.sum`: "MANUAL REPORTING REQUIRED — 1 sale(s) with no purchase in your files (unknown cost, .tt OPENING cost=unknown) … (`tjs find-missing-history`)" for a sale of shares or coins that came by a move from another of your accounts; its HOLDINGS REPORT shows them at a cost of 0.00
 - **Check:** `tjs transfers` shows the arrival as `own_move` (coins: `tjs crypto-sends` pairs the send with it); `reports/<account>_wash.sum` and `tjs sum` book the same sale with its cost, not under MANUAL REPORTING.
 - **Cause:** `<account>.sum` is the account's own books before the passes across accounts. A move of your own reaches them as units only (CA-ACB-OWN-MOVE; US: the lots' basis is carried by the blended pass, US-BASIS-05), so their sales there have no cost, and the block asked for an opening at an unknown cost as if a purchase were missing from your files (backlog TJ-0279). Its holdings table wrote the missing cost as 0.
-- **Fix:** upgrade, then `tjs run`: those sales are in a block of their own, "MOVED IN FROM YOUR OWN ACCOUNT — N sale(s) of units moved in from qa … nothing to report by hand from here … the figures you file have it: <account>_wash.sum and `taxjson sum`". A sale whose units also include an opening at an unknown cost stays under MANUAL REPORTING REQUIRED. The holdings table reads `unknown` for a cost the books do not have (an own move's units, or an opening at an unknown cost), with a line naming `taxjson list`. No figure you file changes.
+- **Fix:** upgrade, then `tjs run`: those sales are in a block of their own, "MOVED IN FROM YOUR OWN ACCOUNT — N sale(s) of units moved in from qa … nothing to report by hand from here … the figures you file have it: <account>_wash.sum and `tjs sum`". A sale whose units also include an opening at an unknown cost stays under MANUAL REPORTING REQUIRED. The holdings table reads `unknown` for a cost the books do not have (an own move's units, or an opening at an unknown cost), with a line naming `tjs list`. No figure you file changes.
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/bin/taxjson_form_export.py` — `manual_section`, `own_move_section`; `src/taxjson/lib/core.py` — `_taint`, `_own_move_only`, `own_move_from`; `src/taxjson/bin/taxjson_sum_gains.py` — `manual_rows`; `src/taxjson/bin/taxjson_export.py` — `render_report`
 
@@ -2119,7 +2119,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.39.0`
 - **Code:** `src/taxjson/lib/transfer_in.py` — `arrivals`, `apart`; `src/taxjson/bin/taxjson_run.py` — `_map_distinct`, `_paired_transfers`
 
-### "taxjson transfers: warning: transfer-ins not classified: …/work/margin_tt_synthetic.json: "transactions" must be a list of JSON objects"; `tjs transfers` shows `UNCLASSIFIED` (on an older release: `own_move` for every transfer-in, with no warning)
+### "tjs transfers: warning: transfer-ins not classified: …/work/margin_tt_synthetic.json: "transactions" must be a list of JSON objects"; `tjs transfers` shows `UNCLASSIFIED` (on an older release: `own_move` for every transfer-in, with no warning)
 - **Check:** `tjs transfers --json`: each taxable transfer-in's `arrival` is `UNCLASSIFIED`, and the warning names a file in `work/` and what is wrong with it (not valid JSON, `"transactions"` not a list, a row that is not an object). On an older release the same damage read `own move` for every transfer-in that was not otherwise booked, with exit status 0 and no warning, though no transfer-out of yours was matched.
 - **Cause:** the view classifies each transfer-in from the run's converted `.tt` files (`work/<account>_tt_<name>.json`). A damaged one (hand-edited, truncated) raised inside the classification, the view dropped the error, and a transfer-in with no arrival record defaulted to "own move" (backlog TJ-0308). Now the converted files are read with the strict `work/` reader, a failure is named, and "own move" comes only from the pairing itself: a transfer-out of yours it cancelled the transfer-in against.
 - **Fix:** upgrade, then `tjs run` (it rebuilds `work/`) and `tjs transfers` again. The books are not changed by the view.
@@ -2322,28 +2322,28 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.35.0`
 - **Code:** `src/taxjson/lib/in_kind.py` — `_parts`, `_PARTS_STEPS`, `pair_all`
 
-### "Warning: 2 positions at a $0 cost (QZA.US, QZB.TO) — `taxjson find-missing-history`"
+### "Warning: 2 positions at a $0 cost (QZA.US, QZB.TO) — `tjs find-missing-history`"
 - **Check:** `tjs run --details` words it "2 positions at a $0 cost (1 sold in 2025, 1 still held)"; `tjs find-missing-history` lists them under "$0-cost corp-action shares". One lot partly sold and partly held is one position, listed under both (before this release it was counted twice: "2 positions at a $0 cost (QZA.US, QZA.US)", backlog TJ-0044).
 - **Cause:** a corporate action (a spin-off, a stock dividend, a merger) put shares in the books at no cost, so their sale overstates the gain.
 - **Fix:** give the event its value: `tjs elect ACCOUNT --set EVENT_ID=ELECTION --hint fmv_per_share=<value>` for a spin-off or merger, or a `[[distributions]]` entry / `.tt` ADJUST for a stock dividend. docs/getting-started.md step 5d.
 - **Fixed in:** —
 - **Code:** `src/taxjson/lib/first_run.py` — `zero_cost_sold`, `zero_cost_held`, `_distinct`; `src/taxjson/lib/missing_history.py` — `detect_missing_history`
 
-### "Warning: 1 position at a $0 cost (ZZS.TO) — `taxjson find-missing-history`" (and find-missing-history "$0-COST CORP-ACTION SHARES LATER SOLD — inflated gain") after the `.tt` BUY of an s.86.1 spin-off's fraction at 0 and its SELL for the cash
+### "Warning: 1 position at a $0 cost (ZZS.TO) — `tjs find-missing-history`" (and find-missing-history "$0-COST CORP-ACTION SHARES LATER SOLD — inflated gain") after the `.tt` BUY of an s.86.1 spin-off's fraction at 0 and its SELL for the cash
 - **Check:** you elected `rollover_s_86_1` with an `allocated_acb_cad`, and added the `.tt` pair the UNBOOKED warning asks for (`BUYSELL … ZZS.TO 0.5 CAD 0 0` and its sale); `tjs gains` gives the fraction's sale a cost (its share of the pooled allocation), not $0.
 - **Cause:** the $0-cost check flagged any lot entered at $0 and later sold, though this one joins a pool whose cost the election set, which covers the fraction (backlog TJ-0101).
 - **Fix:** upgrade: a `.tt` BUY of less than one share at $0, sold again by a `.tt` line within the days the corporate-action stage accepts (from the spin-off to 50 days after the cash was paid), into a pool an s.86.1 election gave a cost, is not flagged. The books were right either way.
 - **Fixed in:** `v0.36.0`
 - **Code:** `src/taxjson/lib/missing_history.py` — `detect_zero_basis_acquisitions`, `_hand_fraction`; `src/taxjson/lib/corp_actions.py` — `_TT_FRACTION_DAYS`
 
-### "Warning: 1 security paid income the books do not hold (QZQ.US) — `taxjson sanity`"
+### "Warning: 1 security paid income the books do not hold (QZQ.US) — `tjs sanity`"
 - **Check:** `tjs run --details` words it "1 security paid income in 2025 that the books do not hold (a holding with no purchase in your files?)"; `tjs sanity` (and `tjs divs` for the symbol) shows dividends on a symbol with no position.
 - **Cause:** the shares were bought before the exports start, or arrived by transfer, and were never sold this year, so nothing goes short; only the income shows they are held.
 - **Fix:** add the purchase history as for a missing purchase (an older export or a `.tt` BUYSELL line), or check the dividend's symbol against `ticker.map`.
 - **Fixed in:** —
 - **Code:** `src/taxjson/lib/first_run.py` — `income_not_held`, `that the books do not hold`
 
-### "Warning: 1 security paid income the books do not hold (SYN.UN.TO) — `taxjson sanity`" for a distribution paid early in the year on units sold after its December record date
+### "Warning: 1 security paid income the books do not hold (SYN.UN.TO) — `tjs sanity`" for a distribution paid early in the year on units sold after its December record date
 - **Check:** the row has a record date (a `.tt` `record=`, or "REC 12/13/24" in the broker's description) on which the books held the units, and `tjs run` also says the distribution is the year before's income ("ATTENTION: income year: …"); or a dividend's record date is more than 60 days before its pay date.
 - **Cause:** the closing check read only the pay date: the units had to be held on it or in the 60 days before it, and the row counted in the pay date's year, while the income stage dates a Canadian trust's distribution by its record date and the units were held on that day (backlog TJ-0811).
 - **Fix:** upgrade: the check counts a row in the year the income stage gives it, and a row whose plausible record date (less than 92 days before payment) falls while the books held the security is held. Nothing to add to the files.
@@ -2485,7 +2485,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ## Holdings
 
-### "Info: 5 accounts with positions not checked against the broker's holdings — `taxjson sanity`" (`--details`: "5 accounts with open positions and no holdings file to check them against"; or `tjs sanity`: "UNCHECKED: 5 account(s) with positions and no holdings file: … — nothing to compare with")
+### "Info: 5 accounts with positions not checked against the broker's holdings — `tjs sanity`" (`--details`: "5 accounts with open positions and no holdings file to check them against"; or `tjs sanity`: "UNCHECKED: 5 account(s) with positions and no holdings file: … — nothing to compare with")
 - **Check:** `tjs checklist --all` shows step `sanity` as `[!]` with the same `UNCHECKED` line (`[m]`, to confirm, on releases before the fix below); `ls holdings/` holds no `.toml`.
 - **Cause:** nothing compares the books' positions with the broker's own positions report yet.
 - **Fix:** save the broker's positions snapshot (a `[[holding]]` TOML, as a download tool writes it) in the year's `holdings/` folder, named for the account (`margin_holdings.toml`) or carrying its broker account id in `[meta] broker_account` (or `[meta] account`); or add `holdings = ["~/holdings/margin.toml"]` under `[accounts.margin]`. Then `tjs sanity` and `tjs run` check it every time. One-off: `tjs sanity margin=/full/path/positions.toml`.
@@ -2534,7 +2534,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/lib/positions_reports.py` — `_read_ib`, `Financial Instrument Information Multiplier`
 
-### `tjs run` ends with "Info: 3 accounts with positions not checked against the broker's holdings — `taxjson sanity`" although the run's positions check just compared their holdings/ snapshots
+### `tjs run` ends with "Info: 3 accounts with positions not checked against the broker's holdings — `tjs sanity`" although the run's positions check just compared their holdings/ snapshots
 - **Check:** `tjs run --details` names the accounts ("… and no holdings file to check them against: margin (8), …"); `tjs sanity` lists a snapshot in `holdings/` for each of them (and `UNCHECKED:` names none of them).
 - **Cause:** the closing summary counted an account as checked only when taxjson.toml gave it `holdings = [...]`; a snapshot the holdings check finds in `holdings/` by its broker account id or its file name was compared but not counted.
 - **Fix:** upgrade: an account with a `holdings/` snapshot that `tjs sanity` claims for it counts as checked; one with none (a crypto account, say) is still listed. On an older release the line is harmless for such accounts.
@@ -2593,19 +2593,19 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### `tjs run` ends with "Warning: holdings check could not run" after an "Error: …" naming a holdings file; on an older release "holdings check returned no result ('')" (`--details`), or "positions differ from the broker holdings files … missing history" in captured output
 - **Check:** `tjs sanity` stops with the same Error (exit 2): a holdings file it refuses (a `holdings_count` that is not its number of tables, a contract size that is not a positive number, a date that is no calendar day, snapshots of one account at different dates that do not name their broker account).
 - **Cause:** the run's positions check read sanity's refusal of an input (exit 2, its Error already printed) as a check that returned nothing, or, in captured output (`TAXJSON_WIDTH=0`), as a position difference (audit 2026-10-25 first-project#3).
-- **Fix:** fix the file the Error names, then `tjs sanity`. The run now says "The Error above names the file to fix; then `taxjson sanity`." Nothing in the books changes.
+- **Fix:** fix the file the Error names, then `tjs sanity`. The run now says "The Error above names the file to fix; then `tjs sanity`." Nothing in the books changes.
 - **Fixed in:** `v0.35.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_sanity_console`, `_SANITY_REFUSED`
 
 ### `tjs run` ends with a bare "Warning: holdings check could not run" (no file, no reason, no command); `tjs run --details` adds "Error: ib_holdings.toml has no [[holding]] array (a holdings file has [[holding]] tables)"
 - **Check:** `tjs sanity` prints the same Error (exit 1): a holdings file it cannot use as one (no `[[holding]]` tables, a `[positions]` table of another tool's layout), or a `holdings = [...]` setting it cannot follow.
 - **Cause:** sanity stopped with a message (exit 1, not the exit-2 refusal of the entry above), and the run's default view showed only the warning's headline: the reason was in its detail lines, which `--details` alone shows.
-- **Fix:** upgrade: the one line names the reason and the command ("Warning: holdings check could not run: ib_holdings.toml has no [[holding]] array — `taxjson sanity`"), and `--details` adds "Fix what it names; then `taxjson sanity`." Then fix the file it names (a holdings TOML has one `[[holding]]` table per position: docs/settings.md, Holdings TOML) and run `tjs sanity`.
+- **Fix:** upgrade: the one line names the reason and the command ("Warning: holdings check could not run: ib_holdings.toml has no [[holding]] array — `tjs sanity`"), and `--details` adds "Fix what it names; then `tjs sanity`." Then fix the file it names (a holdings TOML has one `[[holding]]` table per position: docs/settings.md, Holdings TOML) and run `tjs sanity`.
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_sanity_failed_line`, `_SANITY_FIX`
 
 ### `tjs sanity`: "Error: margin_live_holdings.toml has no [[holding]] array (a holdings file has [[holding]] tables)" for a snapshot of an account that holds nothing
-- **Check:** the file has a `[meta]` table and no `[[holding]]` table (`holdings_count = 0`): `taxjson fetch --positions` wrote it after every position of the account was closed.
+- **Check:** the file has a `[meta]` table and no `[[holding]]` table (`holdings_count = 0`): `tjs fetch --positions` wrote it after every position of the account was closed.
 - **Cause:** sanity read a holdings file without `[[holding]]` tables as a broken file, so the positions check stopped for every account once one of them held nothing.
 - **Fix:** upgrade: a snapshot with only its `[meta]` (no `holdings_count` above 0, no other table) is an account that holds nothing, and any position the books still hold there is listed as a difference. A file with a `[[holdings]]` typo, another table or a `holdings_count` above 0 and no rows is still refused. On an older release, move the file out of `holdings/`.
 - **Fixed in:** `v0.28.2`
@@ -2613,7 +2613,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### `tjs sanity`: "Info: holdings/download.toml: no account claims it — add its broker account id to the account" although the account declares the snapshot's broker id
 - **Check:** the file's `[meta] broker_account` is in the account's `account` or `broker_accounts`, and its `[meta] account` is another name (the taxjson account's name when the snapshot was fetched: the account was renamed since, or the file was).
-- **Cause:** the snapshot was matched by its `[meta] account` first, and `taxjson fetch --positions` writes the taxjson account's name there, not the broker's id; the broker id in `[meta] broker_account` was only read when `account` was missing.
+- **Cause:** the snapshot was matched by its `[meta] account` first, and `tjs fetch --positions` writes the taxjson account's name there, not the broker's id; the broker id in `[meta] broker_account` was only read when `account` was missing.
 - **Fix:** upgrade: `[meta] broker_account` is matched first, then `[meta] account`, then the file name. On an older release, name the file `<account>_holdings.toml` or list it in the account's `holdings = [...]`.
 - **Fixed in:** `v0.28.2`
 - **Code:** `src/taxjson/lib/holdings_dir.py` — `discover`, `broker_account`
@@ -2705,7 +2705,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### `taxjson-export --holdings-toml`: "Warning: ZZQ.TO: its cost after the passes across accounts (cost_source = "blended") is left out: more than one input holds it, so the holding is written cost_unknown"; on an older build the warning said so while `total_cost` still summed the blended figure, unlabelled, with the other input's
 - **Check:** the input holding with `cost_source = "blended"`, and any other input of the same symbol.
 - **Cause:** a blended figure in the base currency was read as the holding's known cost as well as kept apart, so it stayed in the sum when the label was dropped (backlog TJ-1071). A sum of a figure after the passes across accounts and one before them is no cost of either kind.
-- **Fix:** upgrade: the holding is written `cost_unknown = true`, with no `total_cost` or `base_total_cost`. Export the blended account's snapshot on its own to keep its figure; `taxjson list` gives each account's cost.
+- **Fix:** upgrade: the holding is written `cost_unknown = true`, with no `total_cost` or `base_total_cost`. Export the blended account's snapshot on its own to keep its figure; `tjs list` gives each account's cost.
 - **Fixed in:** `v0.39.0`
 - **Code:** `src/taxjson/bin/taxjson_export.py` — `blended_left_out`, `_cost_unknown_note`
 
@@ -2718,13 +2718,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### `taxjson-apply-distributions work/margin_base.json --config taxjson.toml` (without `--country`) stops with a traceback ending "CountryError: country is missing"
 - **Check:** the same command with `--country canada` or `--country usa` runs. It happens when a sale traded on or before a record date settles after it, with another trade of the symbol in between (the warning about the lots a per-lot engine reaches).
-- **Cause:** without `--country` the tool words its output neutrally, but that warning asked whether the project is a US one with a check that refuses an unknown country. `taxjson run` always passes the country, so a run never stopped.
+- **Cause:** without `--country` the tool words its output neutrally, but that warning asked whether the project is a US one with a check that refuses an unknown country. `tjs run` always passes the country, so a run never stopped.
 - **Fix:** upgrade: without `--country` the warning is shown (only a per-lot engine, the US one, misplaces the adjustment, and the tool cannot tell which engine reads the book). On an older release, pass `--country`.
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/bin/taxjson_apply_distributions.py` — `apply_distributions`, `_stamp_problem`
 
-### "Error: base.json holds the rows of 2 accounts ('ira', 'margin'): size each account's own book (`taxjson run` does), one file per account" from `taxjson-apply-distributions`
-- **Check:** the book's rows carry more than one `account` value. `taxjson run` passes each taxable account's own `work/<account>_base.json`, which never does.
+### "Error: base.json holds the rows of 2 accounts ('ira', 'margin'): size each account's own book (`tjs run` does), one file per account" from `taxjson-apply-distributions`
+- **Check:** the book's rows carry more than one `account` value. `tjs run` passes each taxable account's own `work/<account>_base.json`, which never does.
 - **Cause:** one book is one account's. Given a book of several accounts, older releases summed every account's shares on the record date and booked the whole adjustment on the `--account` named (or the first one), and a later call for another account dropped the first one's rows.
 - **Fix:** run the tool on each account's own book (`work/<account>_base.json`), or let `tjs run` apply `[[distributions]]`.
 - **Fixed in:** `v0.38.0`
@@ -2779,28 +2779,28 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`, `_undated_apart`, `An undated file is read as of`
 
-### `tjs sanity`: "Error: the books of 'margin' cannot be read (work/margin_base.json: not JSON (…)) — re-run `taxjson run` to rebuild them"; on an older release a dated snapshot compared clean against books that could not be read
+### `tjs sanity`: "Error: the books of 'margin' cannot be read (work/margin_base.json: not JSON (…)) — re-run `tjs run` to rebuild them"; on an older release a dated snapshot compared clean against books that could not be read
 - **Check:** `work/margin_base.json` is there but is not valid JSON (cut short by a full disk or an interrupted run, or edited); `tjs sanity --json` (older release) shows the group with `"as_of": null` although the snapshot has an `as_of` date.
 - **Cause:** the account's merged books (`work/<account>_base.json`) that were there but unreadable were read as an empty history, so a snapshot dated before the books' last day was compared with the latest books instead and certified clean and complete (2026-10-24 audit B18).
 - **Fix:** `tjs run` rewrites the file. Unreadable books now stop `sanity` with this error (no clean verdict); books that are missing altogether are still no history, said in a note when a dated file is compared ("the books' rows (work/<account>_base.json) are missing: compared with the latest books").
 - **Fixed in:** `v0.35.0`
 - **Code:** `src/taxjson/lib/positions_check.py` — `BaseBookError`, `load_base_rows`, `book_rows`; `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`, `_rows_of`
 
-### `tjs sanity`: "Warning: work/margin_gains.json: QZQ.US: inventory qty nan is not a finite number" then "Error: work/margin_gains.json: QZQ.US: … — the books of 'margin' cannot be read: re-run `taxjson run` to rebuild them" (v0.35.0: "Error: taxjson.toml: the books of 'margin' cannot be read (…)"); on an older release the position vanished and the check was clean
+### `tjs sanity`: "Warning: work/margin_gains.json: QZQ.US: inventory qty nan is not a finite number" then "Error: work/margin_gains.json: QZQ.US: … — the books of 'margin' cannot be read: re-run `tjs run` to rebuild them" (v0.35.0: "Error: taxjson.toml: the books of 'margin' cannot be read (…)"); on an older release the position vanished and the check was clean
 - **Check:** `grep -n 'NaN\|Infinity' work/margin_gains.json` finds the quantity in the gains file's `inventory`.
-- **Cause:** a quantity that is not a finite number fails every comparison, so the position dropped out of the books' side and an empty snapshot compared clean and complete (2026-10-24 audit B19). The gains file is damaged or hand-edited: `taxjson run` never writes one.
+- **Cause:** a quantity that is not a finite number fails every comparison, so the position dropped out of the books' side and an empty snapshot compared clean and complete (2026-10-24 audit B19). The gains file is damaged or hand-edited: `tjs run` never writes one.
 - **Fix:** `tjs run` rebuilds the file. The books are now refused as unreadable, like a gains file that is not JSON. v0.35.0 began the error with `taxjson.toml:` (where the account's `holdings` is set) although the damaged file is the gains file; the error now starts with that file.
 - **Fixed in:** `v0.35.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`, `is not a finite number`, `the books of {name!r}`
 
-### `tjs sanity`: "Error: the books of 'margin' cannot be read (work/margin_base.json: not a books document (no transactions list)) — re-run `taxjson run` to rebuild them"; on an older release a dated snapshot compared "OK" when that file held `{}` or `[]`
-- **Check:** `head -c 200 work/margin_base.json`: the books `taxjson run` writes are a JSON object with a `transactions` list; `{}`, `[]` or an object without that list is not one (a hand edit, or a tool that wrote an empty document).
+### `tjs sanity`: "Error: the books of 'margin' cannot be read (work/margin_base.json: not a books document (no transactions list)) — re-run `tjs run` to rebuild them"; on an older release a dated snapshot compared "OK" when that file held `{}` or `[]`
+- **Check:** `head -c 200 work/margin_base.json`: the books `tjs run` writes are a JSON object with a `transactions` list; `{}`, `[]` or an object without that list is not one (a hand edit, or a tool that wrote an empty document).
 - **Cause:** the fix for books that are not JSON (entry above) still read `{}` and any bare list as an empty history: a snapshot dated before the books' last day was compared with the latest books instead, and a wrong snapshot was certified "OK: tickers and quantities agree" (backlog TJ-0010).
 - **Fix:** `tjs run` rewrites the file. Such books now stop `sanity` with this error; books that are missing altogether are still no history.
 - **Fixed in:** `v0.36.0`
 - **Code:** `src/taxjson/lib/positions_check.py` — `load_base_rows`, `not a books document`, `BaseBookError`
 
-### `tjs sanity` (no arguments): "Error: work/margin_gains_wash.json: … — the books of 'margin' cannot be read: re-run `taxjson run` to rebuild them." or "Error: no gains file in work/ for account(s) rrsp, whose inputs are there — the last `taxjson run` did not build them (did it fail?)"; on an older release `--json` said `clean` and `complete` true with `uncovered_accounts` empty, after only "Warning: could not read …"
+### `tjs sanity` (no arguments): "Error: work/margin_gains_wash.json: … — the books of 'margin' cannot be read: re-run `tjs run` to rebuild them." or "Error: no gains file in work/ for account(s) rrsp, whose inputs are there — the last `tjs run` did not build them (did it fail?)"; on an older release `--json` said `clean` and `complete` true with `uncovered_accounts` empty, after only "Warning: could not read …"
 - **Check:** the file the error names: `head -c 200 work/margin_gains_wash.json` (not JSON, or an inventory quantity that is no number), or `ls work/rrsp_gains*.json` (none, while `inputs/rrsp/` holds exports).
 - **Cause:** an account whose gains file could not be read, or that had no gains file, dropped out of the check: with no holdings file, "nothing to compare with" counted only the accounts it could read, so the only unchecked account vanished and the check read complete.
 - **Fix:** upgrade, then `tjs run` (a failed account's error names its input). Every account of taxjson.toml is in the check without arguments; an account named in arguments (`tjs sanity margin=positions.toml`) is checked as asked.
@@ -2816,12 +2816,12 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### `tjs sanity nosuch` ("… is neither an account … nor an existing .toml file"), `tjs sanity margin` ("the aggregate form needs at least one ACCOUNT and one FILE.toml …") or another refusal of its arguments exits 1, the status of "positions differ"
 - **Check:** `tjs sanity nosuch; echo $?` prints 1 on an older release. The same for "paired form is ACCOUNT[+ACCOUNT...]=FILE[+FILE...]", "'x' is not an account", "account 'margin' appears in more than one group" and "file … appears in more than one group".
-- **Cause:** sanity refused arguments it could not use through the exit 1 of its verdict, so a script or cron job read a typo as a difference in positions (backlog TJ-0630). On a terminal, `tjs run`'s holdings check over a refusal with exit 2 (a holdings file it cannot read, or an account taxjson.toml pairs with a holdings file that has no books) ended "Warning: holdings check could not run: The Error above names the file to fix; then `taxjson sanity` — `taxjson sanity`".
-- **Fix:** upgrade: a usage error exits 2, as docs/commands.md's exit-code table says; exit 1 is only a difference in positions. Fix the argument the Error names. The run's line is now "Warning: holdings check could not run — `taxjson sanity`", after the Error.
+- **Cause:** sanity refused arguments it could not use through the exit 1 of its verdict, so a script or cron job read a typo as a difference in positions (backlog TJ-0630). On a terminal, `tjs run`'s holdings check over a refusal with exit 2 (a holdings file it cannot read, or an account taxjson.toml pairs with a holdings file that has no books) ended "Warning: holdings check could not run: The Error above names the file to fix; then `tjs sanity` — `tjs sanity`".
+- **Fix:** upgrade: a usage error exits 2, as docs/commands.md's exit-code table says; exit 1 is only a difference in positions. Fix the argument the Error names. The run's line is now "Warning: holdings check could not run — `tjs sanity`", after the Error.
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`, `_die_input`, `_SANITY_REFUSED`, `_sanity_console`
 
-### `tjs sanity`: "Warning: could not read /home/…/work/margin_gains_wash.json: …" and then "Error: work/margin_gains_wash.json: … — the books of 'margin' cannot be read …", the file and its reason twice; or "Error: no gains files in /home/…/work (run `taxjson run` first)."
+### `tjs sanity`: "Warning: could not read /home/…/work/margin_gains_wash.json: …" and then "Error: work/margin_gains_wash.json: … — the books of 'margin' cannot be read …", the file and its reason twice; or "Error: no gains files in /home/…/work (run `tjs run` first)."
 - **Check:** `head -c 200 work/margin_gains_wash.json`: the gains file is cut short or edited. `tjs sanity margin positions.toml` (the account named bare) said "'margin' is neither an account … nor an existing .toml file" after that warning on an older release.
 - **Cause:** sanity warned about each gains file it could not read, by its absolute path, before it knew whether its Error would name the same file; "no gains files" named the folder by its absolute path too (backlog TJ-0631).
 - **Fix:** upgrade, then `tjs run` to rebuild the file. The file is named `work/…`, once: the Error alone when the check needs the account (named bare, paired, or from taxjson.toml), else "Warning: could not read work/margin_gains_wash.json — 'margin' is not in this check" with the reason under it.
@@ -2863,14 +2863,14 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.39.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_box18_by_year`, `_work_read_why`, `cmd_carryover`
 
-### `tjs wash-sales`: "taxjson wash-sales: no gains files in /home/…/work (run `taxjson run` first)." exits 1
+### `tjs wash-sales`: "tjs wash-sales: no gains files in /home/…/work (run `tjs run` first)." exits 1
 - **Check:** `ls work/*gains*.json` lists nothing (`work/*_base.json` for `tjs wash-sales --explain`): the books are not built, or were deleted.
 - **Cause:** wash-sales named work/ by its absolute path and stopped with exit 1, the code of a finding; sanity and the other views name it `work/` (backlog TJ-0642). An account with no books (`tjs wash-sales margin`) and `--explain`'s "no base files" did the same.
-- **Fix:** upgrade: "Error: no gains files in work/ — run `taxjson run` first." with exit 2, an input missing. Run `tjs run`.
+- **Fix:** upgrade: "Error: no gains files in work/ — run `tjs run` first." with exit 2, an input missing. Run `tjs run`.
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_wash_sales`, `_explain_wash_sales`
 
-### `tjs shares`, `tjs list`, `tjs wash-sales` (or another view of the books): "Error: could not read …/work/margin_gains_wash.json: not valid JSON (…) — rerun `taxjson run`" exits 1, the status of a command's finding
+### `tjs shares`, `tjs list`, `tjs wash-sales` (or another view of the books): "Error: could not read …/work/margin_gains_wash.json: not valid JSON (…) — rerun `tjs run`" exits 1, the status of a command's finding
 - **Check:** `tjs shares --json; echo $?` prints 1 after that Error; `head -c 200 work/margin_gains_wash.json` is cut short or `{}`.
 - **Cause:** the views' reader of a work/ file stopped with exit 1, the code of a finding, not the 2 of an input that cannot be read (docs/commands.md, Exit codes); the Error also named the file by its absolute path (backlog TJ-0596).
 - **Fix:** upgrade: the views exit 2 and name the file `work/…`. `tjs run` rebuilds it.
@@ -2928,7 +2928,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### `tjs sanity --json` prints "UNCHECKED: 5 account(s) with books and no holdings file: … — nothing to compare with" (text, not JSON) when no account has a holdings file, and the checklist's sanity step is `[m]`
 - **Check:** `holdings/` holds no `.toml` and no account in taxjson.toml has `holdings = [...]`.
-- **Cause:** with nothing to compare, sanity printed its text whatever the flags, counted only the taxable accounts (the run counts every account with positions), said `taxjson init` wrote holdings/README.txt (an `init --single` project has no holdings/), and the checklist made the step one to confirm, so `--done sanity` closed it with nothing compared (backlog TJ-0135, TJ-0136).
+- **Cause:** with nothing to compare, sanity printed its text whatever the flags, counted only the taxable accounts (the run counts every account with positions), said `tjs init` wrote holdings/README.txt (an `init --single` project has no holdings/), and the checklist made the step one to confirm, so `--done sanity` closed it with nothing compared (backlog TJ-0135, TJ-0136).
 - **Fix:** upgrade: `--json` is a document like the compare's (`complete` false, `uncovered_accounts` naming every account with positions); `UNCHECKED` counts every account with positions (`--details` lists each); the checklist step needs attention, as when one account has a file. Save the broker's positions in `holdings/` (the "5 accounts with positions not checked" entry above says how), or accept it unchecked with `tjs checklist --done sanity --force`.
 - **Fixed in:** `v0.36.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`, `nothing to compare with`; `src/taxjson/lib/checklist.py` — `d_sanity`
@@ -3212,7 +3212,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### `tjs stats all` (or `stats 2y`, `winners all`, `ccd-sum 2023`, `leaps-sum all`, `win-rates --all-history`) warns "the computed gains cover tax year N only — rows outside it are NOT in this report" and shows the tax year alone
 - **Check:** `ls work/*_gains_all.json` lists nothing after the command; `tjs --version` is older than the release below. With a current release the command prints `Info: the window reaches outside tax year N: read from the full-history books` and the file exists.
-- **Cause:** `taxjson run` computes the gains files for the tax year only (earlier years are read for cost, not written as dispositions), and the seven views that read them had no other source for a wider window.
+- **Cause:** `tjs run` computes the gains files for the tax year only (earlier years are read for cost, not written as dispositions), and the seven views that read them had no other source for a wider window.
 - **Fix:** upgrade: a window outside the tax year builds `work/<account>_gains_all.json` on demand from the same consolidated base-currency book (`<account>_base.json`) through the gains engine with no year, and reads that: the rows inside the tax year equal the filing file's; the superficial-loss / wash-sale denials in it are the engine's own, within each account (the cross-account pass runs for the tax year; since TJ-0677 the accounts that pass blends are computed together, see below). An account with no base book (a hand-made `work/`) keeps the warning. On an older release, run `tjs stats` in each year's folder, or `tjs gains all` (native currency, per listing).
 - **Fixed in:** `v0.31.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_window_gains_files`, `_gains_all_file`
@@ -3469,7 +3469,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.39.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_format_map`, `are one file (a link`
 
-### `tjs format-map --write` before the first run: "account coins has no books yet (no work/coins_base.json), so whether its trades name COIN.KR or NEWC.KR is not known … run `taxjson run`, then format the map again"; or, on an older release, a crypto RENAME moved to the securities account and the crypto sale flagged with missing history
+### `tjs format-map --write` before the first run: "account coins has no books yet (no work/coins_base.json), so whether its trades name COIN.KR or NEWC.KR is not known … run `tjs run`, then format the map again"; or, on an older release, a crypto RENAME moved to the securities account and the crypto sale flagged with missing history
 - **Check:** `ls work/*_base.json`: the crypto account (or any account of the other kind) has no books, while `inputs/<account>/` holds its exports.
 - **Cause:** a legacy ticker.map `RENAME` applies to every account; its `.tt` line applies to one kind (securities or crypto). With no books the formatter could not tell which kind's trades name the symbols, chose the securities account, and waived the check for the account without books.
 - **Fix:** upgrade: the move is refused until the account's books exist, when the folder holds a file that builds books (a `.tt` or an activity `.csv`; a README, a sidecar or a positions report builds none and does not block it). Run `tjs run`, then `tjs format-map --write`. After an older release: move the line (`RENAME <date> OLD NEW`) from the securities account's `renames.tt` to the crypto account's, then `tjs run`.
@@ -3658,7 +3658,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.39.0`
 - **Code:** `src/taxjson/lib/renames.py` — `late_of`, `pending_renames`, `render`; `src/taxjson/bin/taxjson_run.py` — `cmd_renames`
 
-### `tjs splits`, `tjs spinoffs` or `tjs renames`: "Error: …/work/margin_base.json: "transactions" must be a list of JSON objects (row 0 is null) — re-run `taxjson run` to rebuild it"
+### `tjs splits`, `tjs spinoffs` or `tjs renames`: "Error: …/work/margin_base.json: "transactions" must be a list of JSON objects (row 0 is null) — re-run `tjs run` to rebuild it"
 - **Check:** the error names a book in `work/` and the first row that is not a JSON object (or `"transactions" must be a list, got int`). On an older release the same book read as "No splits", "No spin-offs" or no renames, exit 0.
 - **Cause:** the views kept only the rows that were objects, and `tjs renames` read a `transactions` that is not a list as an empty one, so a damaged book (hand-edited, truncated) reported clean (backlog TJ-0320). Now the three read the books with the strict `work/` reader every other view uses: such a book is refused, naming the file and the row. A valid empty list is still an empty, clean view.
 - **Fix:** `tjs run` rebuilds the books; then the command again.
@@ -3724,7 +3724,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/lib/brokerages/ib_extractor.py` — `no Cash Report — parsed money is NOT reconciled`, `parsed rows do not reconcile with IB's own`
 
 ### "Warning: Webull exports for margin end 2025-10-06 with 1 position(s) open: download the rest of 2026"
-- **Check:** on a wide terminal, and with `tjs run --details`, the line names the positions: "Webull exports for margin end 2025-10-06 with open positions (QZT270115C00090000.US 14); download the rest of 2026". The details (`--details`) say how the end was read: an IB statement's Period, an RBC export's "as of" date, a Webull export's date range or trading-summary year, or — for a broker whose export names no end (Questrade, a generic mapping) — the last row. `tjs checklist` shows "! 5 export-coverage: Webull exports for margin end 2025-10-06 with 5 open position(s)... — tjs run", counting the positions instead of naming them; `tjs checklist --all` shows the whole line: "Webull exports for margin end 2025-10-06 with 5 open position(s) in Webull's rows — `taxjson list margin 2025-10-06` lists the account's positions on that day (every source); next recorded activity: 2026-06-18 (wb_2026_manual.tt)" (the run's Warning names the same command and date): `tjs list <account> <end date>` shows what was open at the end, the positions from the account's other sources (a `.tt` opening, another broker) among them, and the next activity a later `.tt` line or export of the account records on those positions (any date after the end) shows when they moved next.
+- **Check:** on a wide terminal, and with `tjs run --details`, the line names the positions: "Webull exports for margin end 2025-10-06 with open positions (QZT270115C00090000.US 14); download the rest of 2026". The details (`--details`) say how the end was read: an IB statement's Period, an RBC export's "as of" date, a Webull export's date range or trading-summary year, or — for a broker whose export names no end (Questrade, a generic mapping) — the last row. `tjs checklist` shows "! 5 export-coverage: Webull exports for margin end 2025-10-06 with 5 open position(s)... — tjs run", counting the positions instead of naming them; `tjs checklist --all` shows the whole line: "Webull exports for margin end 2025-10-06 with 5 open position(s) in Webull's rows — `tjs list margin 2025-10-06` lists the account's positions on that day (every source); next recorded activity: 2026-06-18 (wb_2026_manual.tt)" (the run's Warning names the same command and date): `tjs list <account> <end date>` shows what was open at the end, the positions from the account's other sources (a `.tt` opening, another broker) among them, and the next activity a later `.tt` line or export of the account records on those positions (any date after the end) shows when they moved next.
 - **Cause:** that broker's exports for the account stop before the tax year's end (before today in the year still running; an explicit end may trail today by 14 days) while it still holds positions there, so its later sales, option expiries and assignments, and income are not in the books — and nothing else says so. Only positions still open after the account's later rows of any source, dated inside the gap (after the end, up to Dec 31 of a finished year or today), are named: a `.tt` line that closes one (a hand-entered sale or expiry), another broker's sale or a transfer-out counts, and a broker whose positions are all closed is never listed — when `.tt` lines closed them, the run says "Info: … the positions open at the export end (…) were closed by .tt lines — no export needed" instead. An end read from the last row is flagged only after more than 30 days of the year with no row.
 - **Fix:** download the broker's activity for the rest of the year into `inputs/<account>/` and `tjs run`. If the broker really had no activity in the account after that end (an account you stopped using), answer "No <broker> activity in <account> after <end>?" with `tjs checklist --done export-coverage` — whatever the end was read from; the run then says a note. The mark answers the gaps shown when you made it (account, broker and end; `checklist.json` keeps them under `answers`): a new gap, or a later end after you add an export that is still short, asks again. An option the warning lists as "expired after it with no expiry row" expired inside the gap: the missing export holds its expiry, assignment or buy-back.
 - **Fixed in:** `v0.24.1`
@@ -3752,7 +3752,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/lib/brokerages/ib_extractor.py` — `accrued but not yet booked as posted dividends`
 
 ### IB: "Warning: IB corporate action taxjson cannot book: 'OLDX(US…) Merged(Acquisition) WITH US… 1 for 2 AND USD 5.00 (…)' on 2025-06-03", then the run stops (exit 3)
-- **Check:** the run lists the event as `2025-06-03 UNSUPPORTED corporate action: OLDX.US -> … — taxjson cannot book it` with the `taxjson elect margin --set <event id>=<ignore>` line.
+- **Check:** the run lists the event as `2025-06-03 UNSUPPORTED corporate action: OLDX.US -> … — taxjson cannot book it` with the `tjs elect margin --set <event id>=<ignore>` line.
 - **Cause:** a merger paying shares and cash, or a merger row of a shape taxjson does not know. Neither the old shares' disposal nor the new position is booked. Before v0.17.0 such a row was skipped with only a `.sum` note, leaving the old shares in the books.
 - **Fix:** record the exchange by hand in a `.tt` file (the disposal of the old shares and the purchase of the new ones), then `tjs elect margin --set <event id>=ignore` and run again.
 - **Fixed in:** `v0.17.0`
@@ -4526,7 +4526,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.37.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `stage_account`, `write_holdings_toml`; `src/taxjson/bin/taxjson_export.py` — `render_holdings_toml`, `--crypto`
 
-### `tjs checklist`: "! 16 crypto-sends (blocked): no crypto transfer evidence in work/ — tjs run" and "! 24 option-boundary (blocked): no books for crypto — tjs run" (older releases: "… — run `taxjson run`"); `tjs option-boundary`: "Warning: no work/crypto_base.json — `taxjson run`", and running it changes nothing
+### `tjs checklist`: "! 16 crypto-sends (blocked): no crypto transfer evidence in work/ — tjs run" and "! 24 option-boundary (blocked): no books for crypto — tjs run" (older releases: "… — run `tjs run`"); `tjs option-boundary`: "Warning: no work/crypto_base.json — `tjs run`", and running it changes nothing
 - **Check:** `tjs run` says "no CSVs or .tt files in inputs/crypto; skipping account 'crypto'": the `[accounts.crypto]` table `tjs init` wrote is still there with nothing in its folder.
 - **Cause:** the run skips an account whose inputs folder is empty, but option-boundary counted the crypto account (which writes no options) and any skipped account as a missing book, and the checklist's crypto-sends step asked for a run. Now option-boundary leaves out crypto and empty accounts (with the only taxable account empty it says "NOT CHECKED — inputs/margin is empty"), and the checklist says "inputs/crypto is empty: add exports or delete [accounts.crypto]".
 - **Fix:** save the exchange's exports in inputs/crypto, or, with no crypto, delete `[accounts.crypto]` from taxjson.toml (docs/getting-started.md step 2).
@@ -4633,7 +4633,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### A coin swapped for a stablecoin (1 QZCOIN for 10 USDC, both legs unpriced in the export) books the coin's proceeds at Yahoo's close of the coin (8) while the USDC costs 10; `taxjson-fill-crypto`'s "crypto-to-crypto swap(s) valued ONCE" note does not count it
 - **Check:** the two rows share one id stem (Coinbase Convert `<id>-sell` / `<id>-buy`, Kraken `<refid>-sell` / `-buy` or `<txid>-base` / `-quote`) and neither carries a price or total; after the fill the stablecoin leg's price is 1.00 and the coin leg's is the daily close, so the books show a gain or loss of the difference that no trade made. A US project (stablecoins are property, US-CRYPTO-02) or a hand-entered pair: a Canada project folds stablecoins to US-dollar cash in the parsers (CA-CRYPTO-02), so its exchange rows do not reach this.
-- **Cause:** swap pairing left stablecoin legs out, so the coin leg took its own daily close while the stablecoin leg was priced at par: one exchange, two values. A stablecoin leg now pairs like any coin's, and the pair takes the stablecoin's 1.00 USD par on both legs (the spent coin's proceeds are the stablecoins received; a coin bought with stablecoins costs the stablecoins spent), as `taxjson tax-logic` US-CRYPTO-02 states.
+- **Cause:** swap pairing left stablecoin legs out, so the coin leg took its own daily close while the stablecoin leg was priced at par: one exchange, two values. A stablecoin leg now pairs like any coin's, and the pair takes the stablecoin's 1.00 USD par on both legs (the spent coin's proceeds are the stablecoins received; a coin bought with stablecoins costs the stablecoins spent), as `tjs tax-logic` US-CRYPTO-02 states.
 - **Fix:** upgrade and `tjs run`.
 - **Fixed in:** `v0.35.0`
 - **Code:** `src/taxjson/bin/fill_crypto_prices.py` — `_swap_pairs`, `_value_swaps_once`, `valued ONCE`
@@ -4715,7 +4715,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/lib/brokerages/coinbase.py` — `_cb_symbol`, `coinbase_cash_events`; `src/taxjson/lib/crypto_sends.py` — `coinbase_pool_flows`
 
-### "Warning: Short position: ETH (coins): its purchase is missing — `taxjson find-missing-history`" for a coin you bought twice in one second, with a Coinbase file whose ID cells are blank (or a Kraken file whose `txid` cells are blank)
+### "Warning: Short position: ETH (coins): its purchase is missing — `tjs find-missing-history`" for a coin you bought twice in one second, with a Coinbase file whose ID cells are blank (or a Kraken file whose `txid` cells are blank)
 - **Check:** the export has an `ID` column (Kraken: `txid`) but the cell is empty on the rows in question, and two of them are alike in every other cell (same second, asset, quantity, price and total). `tjs sum` books fewer units and a smaller gain than the export holds; `tjs sanity` against a holdings file shows the short. On v0.29.2 and older (audit 93).
 - **Cause:** taxjson keeps two identical rows of one file apart by the broker's row id. A row with no id is told apart by its order among identical rows (as rows of an older Coinbase layout with no ID column always were), but a blank cell in an ID column took neither path, so the two purchases became one row and the sale went short.
 - **Fix:** upgrade and `tjs run`: rows without an id are now kept apart, while the same rows in an overlapping export are still read once. On an older release, delete the empty ID column (or fill in distinct ids).
@@ -5167,7 +5167,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### "Error: rates file work/to_base.csv, line 1: rate '1e400' for USD->CAD on 2026-01-02 is not a positive finite number — refusing to convert money with it", or "Error: BUYSELL ZZQ.US 2026-01-02 (id=…): net_amount=1e+300 x rate 1E+10 (USD->CAD) is not a finite number — refusing to convert money with that rate"
 - **Check:** the rates-file line the first message names, or the row and rate the second quotes: the rate, or an amount times it, is beyond what a number this tool books can hold (`1e400`; `1e-400` reads as 0).
-- **Cause:** a rate that is a finite decimal but has no float value (too large or too small) passed the reader's checks and turned every amount it was applied to into `inf` (or 0), relabelled in the target currency, at exit 0 (audit 2026-10-24 B33). Both are refused now: the rates reader refuses the rate as it refuses NaN, and the conversion stops when a result is not a finite number. Only a hand-edited rates file or `--default-rate` holds such a rate; the rates `taxjson run` fetches are ordinary numbers.
+- **Cause:** a rate that is a finite decimal but has no float value (too large or too small) passed the reader's checks and turned every amount it was applied to into `inf` (or 0), relabelled in the target currency, at exit 0 (audit 2026-10-24 B33). Both are refused now: the rates reader refuses the rate as it refuses NaN, and the conversion stops when a result is not a finite number. Only a hand-edited rates file or `--default-rate` holds such a rate; the rates `tjs run` fetches are ordinary numbers.
 - **Fix:** correct the rate (or regenerate the file: delete `work/to_base.csv` and `tjs run`), or the amount when the row is the error.
 - **Fixed in:** `v0.35.0`
 - **Code:** `src/taxjson/bin/taxjson_convert_currency.py` — `load_exchange_rates`, `convert_transaction`, `is not a finite number`
@@ -5287,7 +5287,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.39.0`
 - **Code:** `src/taxjson/lib/markets.py` — `option_contract_size`; `src/taxjson/lib/brokerages/webull.py` — `_deliverable_size`
 
-### "Warning: 1 option contract(s) written in 2025: is 400.00 of premium taxed in 2026 right? — `taxjson checklist`"
+### "Warning: 1 option contract(s) written in 2025: is 400.00 of premium taxed in 2026 right? — `tjs checklist`"
 - **Check:** `tjs run --details` words it "1 option contract you wrote in 2025 and closed in 2026 is on transition close timing: 400.00 of premium is taxed in 2026", with the question under it. `tjs option-boundary` lists the contract with "QUESTION: did your 2025 return report the … premium when the contract was written?"; `tjs checklist` lists option-boundary as a "! 24 option-boundary: …" line (`--all`: `[!]`, or `[>]` when it is the next step) with the same question. The project's `[settings] option_grant_timing_since` is the project year (the default: `tjs init` leaves the key commented) and no `filed/2025.json` lock (or `prior_year_record`) records how 2025 was filed.
 - **Cause:** grant timing (ITA s.49(1)) puts a written option's premium in the year written, but a contract written before `option_grant_timing_since` keeps close timing (the transition from books filed the old way): its premium is in this year's gain at the buy-back or expiry. That is right only if the write year's return did not report the premium; if it did (last year's return was on grant timing — a previous taxjson project, or your preparer's), the premium is taxed twice. Only you know which; nothing was said before (the checklist showed "no amendment required").
 - **Fix:** if last year's return reported these premiums when written, set `option_grant_timing_since = 2025` (the first year filed under grant timing) and keep it in every later project: the premium then stays in 2025 and only the buy-back is 2026's. If it did not, the transition is right: `tjs checklist --done option-boundary` (add `--note`) answers it, and the run says a note instead. A `filed/2025.json` lock that records the timing answers it too.
@@ -5695,7 +5695,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.32.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_wash_radar`, `stage_cross_reports`; `src/taxjson/bin/taxjson_wash_radar.py` — `--show`, `_shown_for_line`
 
-### `tjs wash-radar margn`: "Error: no margn_base.json in work/" with "Run `taxjson run` first, or check the account name.", though the run is current
+### `tjs wash-radar margn`: "Error: no margn_base.json in work/" with "Run `tjs run` first, or check the account name.", though the run is current
 - **Check:** `tjs wash-radar margin` (the name as taxjson.toml has it) works; the error names an account taxjson.toml has no `[accounts.NAME]` table for.
 - **Cause:** wash-radar looked for the account's books before it checked the name, so a typo read as a missing run (backlog TJ-0157), where `winners` and the other account views name the configured accounts.
 - **Fix:** upgrade: it says "no [accounts.margn] in taxjson.toml — check the name (configured: …)", exit 2. Use one of the names listed.
@@ -5765,7 +5765,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/bin/taxjson_wash_radar.py` — `_bought_on`, `trade_date`, `last_date`, `sheltered_buy`
 
-### `tjs buy-check`: a VIOLATION says "Wait until 31 days after the LATEST in-window loss sale (see `taxjson wash-radar`)", and wash-radar's CLEARS for it is earlier than `tjs rebuy`'s REBUY ON
+### `tjs buy-check`: a VIOLATION says "Wait until 31 days after the LATEST in-window loss sale (see `tjs wash-radar`)", and wash-radar's CLEARS for it is earlier than `tjs rebuy`'s REBUY ON
 - **Check:** `tjs rebuy SYMBOL` shows the REBUY ON date; `tjs wash-radar --json` has the row's `rebuy_at` beside its `clears_at`.
 - **Cause:** a VIOLATION's CLEARS date is its sell-by date (the last trade date to rescue the loss), inside the window: a buy that day still adds to the denial. buy-check rightly did not print it as a safe-from date, but sent the reader to wash-radar, whose legend called it "the day its window closes". buy-check now prints the radar's re-entry date (`rebuy_at`, the latest across the class), and the radar's legend says a VIOLATION's CLEARS is the last day to sell.
 - **Fix:** upgrade; on an older release use `tjs rebuy SYMBOL` for the date a buy is safe.
@@ -5800,7 +5800,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.36.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_rebuy`, `others_open`; `src/taxjson/lib/rebuy.py` — `_acts`, `not in the books`, `No loss of`
 
-### `tjs buy-check SYNOLD.US`: "Error: 1 ticker.map problem(s)" with "- ticker.map:1: GLOBAL line needs `from to` (two symbols separated by a space): 'GLOBAL SYNOLD.US'" (also `sell-check`, `rebuy`); or, on an older release, SAFE under "warning: ticker.map problem: ticker.map:1: … (`taxjson run` refuses this map)"
+### `tjs buy-check SYNOLD.US`: "Error: 1 ticker.map problem(s)" with "- ticker.map:1: GLOBAL line needs `from to` (two symbols separated by a space): 'GLOBAL SYNOLD.US'" (also `sell-check`, `rebuy`); or, on an older release, SAFE under "warning: ticker.map problem: ticker.map:1: … (`tjs run` refuses this map)"
 - **Check:** `tjs run` stops on the same line. On an older release the warning above the verdict names it.
 - **Cause:** the checks read ticker.map (with tobase.map's pairs) to know which listings are one security, through a loader that skips a line it cannot parse with a warning. A broken `GLOBAL SYNOLD.US SYN.TO` (no target) was dropped, so a recent loss on SYN.TO no longer reached SYNOLD.US and an UNSAFE buy read SAFE, exit 0 (backlog TJ-0304). The checks now refuse the map before any verdict, as `tjs run` does.
 - **Fix:** upgrade; fix the named line (or delete it), then `tjs run` and the check again. Exit 2 is the refusal, an input to fix; exit 1 stays UNSAFE (sell-check: UNSAFE or PARTIAL).
@@ -5922,7 +5922,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### `tjs divs` / `tjs events`: some rows have one more amount at the end, and their columns are shifted left
 - **Check:** the rows with the extra field are a broker's that books the withholding on the dividend row itself (IB, with a `09:30:00` time): the last two fields are the gross and the net amount. Before the fix, when the first row of the listing had fewer fields than a later one, that later row's account and action were squeezed into one cell and every column after them moved left.
 - **Cause:** the aligner reads the first line as a table header and merges a longer row's leading extras into its first cell (an account name with a space); the row views are positional taxtext with no header, where a dividend with withholding simply has one more field.
-- **Fix:** the row views align without a header (`align_columns(header=False)`), the columns lined up with a single-space gap: a row with one more field keeps its columns. The extra field is by design: the net amount after withholding, so a pasted line re-imports as gross and net (`taxjson events` in docs/commands.md).
+- **Fix:** the row views align without a header (`align_columns(header=False)`), the columns lined up with a single-space gap: a row with one more field keeps its columns. The extra field is by design: the net amount after withholding, so a pasted line re-imports as gross and net (`tjs events` in docs/commands.md).
 - **Fixed in:** `v0.30.4`
 - **Code:** `src/taxjson/lib/report_model.py` — `align_columns`, `_tokenize`, `header`; `src/taxjson/bin/taxjson_run.py` — `_run_tx_view`, `_tx_display_line`, `net9`
 
@@ -6129,9 +6129,9 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/lib/price_chain.py` — `_money`, `_usable_price`, `_cached_price`
 
-### `tjs harvest`: "Warning: QZL.TO omitted: no GBP->CAD rate — add "GBP" to source_currencies in taxjson.toml, then `taxjson run`"; on an older release "no GBP->CAD rate in …/work/to_base.csv — QZL.TO omitted (run `taxjson run` to refresh rates)", once per account, and the run fixed nothing
+### `tjs harvest`: "Warning: QZL.TO omitted: no GBP->CAD rate — add "GBP" to source_currencies in taxjson.toml, then `tjs run`"; on an older release "no GBP->CAD rate in …/work/to_base.csv — QZL.TO omitted (run `tjs run` to refresh rates)", once per account, and the run fixed nothing
 - **Check:** the quote is in a currency the books do not hold: a ticker.map `QUOTE` line quotes the holding on another market (`QUOTE QZL.TO QZL.L`), or the price source names that currency. `work/to_base.csv` has no rows for it, and `tjs harvest --json` lists the position under `omitted` with its reason.
-- **Cause:** harvest converts each quote to the base currency with the run's rates, and `tjs run` fetches the rates of the `[settings] source_currencies` only, never a currency only a `QUOTE` line's listing is in. The row was left out with one warning per account whose one-line form ended before the symbol, the advice (`taxjson run`) fetched nothing new, and `--json` had no trace of the row.
+- **Cause:** harvest converts each quote to the base currency with the run's rates, and `tjs run` fetches the rates of the `[settings] source_currencies` only, never a currency only a `QUOTE` line's listing is in. The row was left out with one warning per account whose one-line form ended before the symbol, the advice (`tjs run`) fetched nothing new, and `--json` had no trace of the row.
 - **Fix:** add the currency to `source_currencies` in taxjson.toml (`source_currencies = ["USD", "GBP"]`), then `tjs run` and `tjs harvest`. Or quote a listing in a currency the books already hold.
 - **Fixed in:** `v0.36.0`
 - **Code:** `src/taxjson/bin/taxjson_harvest.py` — `no_rate`, `_omit`, `omitted`; `src/taxjson/bin/taxjson_run.py` — `source_currencies`
@@ -6199,7 +6199,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.39.0`
 - **Code:** `src/taxjson/bin/taxjson_harvest.py` — `read_side_rules`, `external_map`, `crypto_overrides`
 
-### US project: "Error: `taxjson instalments` is Canada-only (CRA instalments (ITA s.156); US estimated tax is not modelled); this project is country = "usa"" after `tjs plot-tax` named it
+### US project: "Error: `tjs instalments` is Canada-only (CRA instalments (ITA s.156); US estimated tax is not modelled); this project is country = "usa"" after `tjs plot-tax` named it
 - **Check:** `tjs plot-tax` on an older release ended "the instalments it calls for: tjs instalments." in a US project, and its year line named "a T5 box 18 or §1256 reclassification".
 - **Cause:** the chart's footer named Canada's instalments command whatever the project's country (US-CTRY-02 refuses it in a US project), and the year line named both countries' adjustments.
 - **Fix:** upgrade: a US footer names `tjs estimate` only, and the year line the §1256 fold. US estimated tax is not modelled; for the payments, see the IRS Form 1040-ES instructions or a tax professional.
@@ -6458,7 +6458,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_wash_class_context`, `_explain_wash_sales`, `_sheltered_expected`
 
-### US crypto-only project: `tjs wash-radar --json` (or `watch`, `rebuy`, `buy-check`, `sell-check`) prints "taxjson wash-radar: no wash-checkable taxable account in taxjson.toml (…) — nothing to check." and no JSON
+### US crypto-only project: `tjs wash-radar --json` (or `watch`, `rebuy`, `buy-check`, `sell-check`) prints "tjs wash-radar: no wash-checkable taxable account in taxjson.toml (…) — nothing to check." and no JSON
 - **Check:** every taxable account in taxjson.toml has `crypto = true` and the project is `country = "usa"` (or it has sheltered accounts only); `tjs wash-sales --json` there prints a document.
 - **Cause:** the wash-sale rule reaches none of the project's accounts (§1091 does not reach a US project's crypto, US-WASH-13; sheltered accounts are context only), and the five commands stopped with that sentence whatever the output mode, so a `--json` reader could not parse it (backlog TJ-0330). `tjs wash-radar ACCOUNT --json` on a US crypto account did the same.
 - **Fix:** upgrade: with `--json` each prints its usual document with nothing in it (no `sections`, `rows`, `results` or `changes`) and `not_applicable` giving the reason, exit 0; `tjs watch` records no baseline. There is nothing to check: the books allow those losses as they stand.
@@ -6993,14 +6993,14 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/lib/checklist.py` — `d_journals`; `src/taxjson/lib/journals.py` — `report`, `_classify`; `src/taxjson/lib/cross_listings.py` — `analyze`, `refused`
 
 ### `tjs journals --pending` says nothing is pending (exit 0) and `tjs checklist` has step `journals` done, although `work/cross_listings.state` is damaged
-- **Check:** `work/cross_listings.state` does not read as JSON (truncated by an interrupted run, or edited), or its `"format"` is not `cross_listings/1`. Since the fix: "Error: work/cross_listings.state is not JSON (…) — run `taxjson run` first" (or "has format …, not 'cross_listings/1'"), and the checklist step is blocked with the same words.
+- **Check:** `work/cross_listings.state` does not read as JSON (truncated by an interrupted run, or edited), or its `"format"` is not `cross_listings/1`. Since the fix: "Error: work/cross_listings.state is not JSON (…) — run `tjs run` first" (or "has format …, not 'cross_listings/1'"), and the checklist step is blocked with the same words.
 - **Cause:** the state reader answers a missing, unreadable or foreign-format file with empty record lists, so no reader can crash on it; `tjs journals` and the checklist took those empty lists as "no journals", not as "no record".
 - **Fix:** `tjs run` rewrites the file. Since the fix, the journals report refuses a state file it cannot read and names why, and the checklist step stays blocked until a run rewrites it.
 - **Fixed in:** `v0.35.0`
 - **Code:** `src/taxjson/lib/cross_listings.py` — `state_problem`, `read_state`; `src/taxjson/lib/journals.py` — `report`, `JournalsError`; `src/taxjson/lib/checklist.py` — `d_journals`
 
 ### `tjs journals --pending` says nothing is pending (exit 0) though `work/cross_listings.state` reads as JSON with format `cross_listings/1`: a record list holds a `null`, is not a list, or a record lacks its listings
-- **Check:** on a fixed release: "Error: work/cross_listings.state has a record that is not a JSON object (refused[0] is null; it is damaged) — run `taxjson run` first" (or "has 'refused' as int, not a list", "has a journal record without its 'in' listing (…)", "has a collision record without its symbol (…)"), and the checklist step `journals` is blocked with the same words.
+- **Check:** on a fixed release: "Error: work/cross_listings.state has a record that is not a JSON object (refused[0] is null; it is damaged) — run `tjs run` first" (or "has 'refused' as int, not a list", "has a journal record without its 'in' listing (…)", "has a collision record without its symbol (…)"), and the checklist step `journals` is blocked with the same words.
 - **Cause:** the check above looked at the file's JSON and its format tag only; the reader then skipped a record list that is not a list and every record that is not an object, so a damaged file with a valid tag erased a journal waiting for review (backlog TJ-0321). Now every record list and record is checked first: each pair names its two listings (each leg's symbol, or the record's `from` and `to`), each collision its symbol. An absent list is still an empty one.
 - **Fix:** `tjs run` rewrites the file.
 - **Fixed in:** `v0.37.0`
@@ -7041,7 +7041,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.25.0`
 - **Code:** `src/taxjson/lib/report_model.py` — `stale_wash_inputs`, `record_wash_inputs`, `WASH_INPUTS_FILE`, `resolve_gains_files`; `src/taxjson/bin/taxjson_run.py` — `_record_wash_inputs`, `stage_blended_wash_pass`
 
-### A full `tjs run` opens with "Warning: margin_gains_wash.json was built before margin_base.json changed — `taxjson run`", one per taxable account, after a `tjs run --account`
+### A full `tjs run` opens with "Warning: margin_gains_wash.json was built before margin_base.json changed — `tjs run`", one per taxable account, after a `tjs run --account`
 - **Check:** the warnings come under "==> Checking the project" of the full run that rebuilds those files; the commands after it say nothing.
 - **Cause:** a full run first keeps the reports it is about to replace as `tjs compare`'s `prev` snapshot, and reading those books' figures said they were stale — to the run rebuilding them.
 - **Fix:** nothing to do. Since the fix the snapshot reads them quietly; `tjs sum` and the other readers still warn while the books are stale.
@@ -7083,7 +7083,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.36.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_run_state_problems`; `src/taxjson/lib/checklist.py` — `d_run_clean`, `problems`
 
-### Crypto only: `tjs gains` says "Error: no native gains files in work/ — run `taxjson run` first" after a run that succeeded
+### Crypto only: `tjs gains` says "Error: no native gains files in work/ — run `tjs run` first" after a run that succeeded
 - **Check:** the line above it is "Info: crypto account 'crypto' is not shown (crypto has no native-currency gains)", and the exit is 1.
 - **Cause:** crypto has no native-currency gains file, so a project whose only books are crypto has none, and the view asked for a run that cannot make one.
 - **Fix:** the gains are in `tjs sum` and `tjs winners`. Since the fix `tjs gains` stops after the `Info:` line with exit 0.
@@ -7156,7 +7156,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### `tjs carryover`, `tjs audit` or `tjs wash-sales --explain`: "Warning: option-replacement (warn-only, numbers unchanged)" with no symbol, date or command, once per flag
 - **Check:** `tjs wash-sales` shows "! MANUAL CHECK: N warn-only flag(s) to decide by hand"; `tjs wash-sales --details` lists each.
 - **Cause:** these commands rebuild the books and print the engine's warn-only flags (a call or an opening-balance lot bought in a loss's window); their one-line view cut each at its first colon (backlog TJ-0474).
-- **Fix:** upgrade: "Warning: ZZA.US loss on 2026-06-01: ZZA261218C00045000.US may replace it (warn-only) — `taxjson wash-sales --details`". `--details` keeps the whole line.
+- **Fix:** upgrade: "Warning: ZZA.US loss on 2026-06-01: ZZA261218C00045000.US may replace it (warn-only) — `tjs wash-sales --details`". `--details` keeps the whole line.
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/lib/stage_msg.py` — `_CONCISE`, `console_lines`; `src/taxjson/lib/core.py` — `format_option_replacement_warning`
 
@@ -7230,7 +7230,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/bin/taxjson_form_export.py` — `render_schedule3`, `loss denied for good`
 
-### `tjs audit` right after a `tjs run` that stopped at a corp-action election: "pipeline tie-out 3 tied, 3 MISMATCHED" and "CHECKS FAILED … The usual cause is stale work/ artifacts; re-run `taxjson run`"
+### `tjs audit` right after a `tjs run` that stopped at a corp-action election: "pipeline tie-out 3 tied, 3 MISMATCHED" and "CHECKS FAILED … The usual cause is stale work/ artifacts; re-run `tjs run`"
 - **Check:** `tjs elect --pending` lists the election; `work/<account>_pending_elections.json` exists. Running `tjs run` again without deciding it gives the same result.
 - **Cause:** a deferred account stops the run before its cross-account pass, so the other taxable accounts' saved gains are their own, unblended figures; the audit recomputes them blended across your taxable accounts and could not tie them (backlog TJ-0196).
 - **Fix:** upgrade: the accounts blended with a deferred one are not audited either, and the audit says so: "Warning: not audited — corp-action elections pending for margin (so ib, questrade, webull too: no cross-account pass)" (exit 1; crypto accounts audited on their own are still audited). Decide the election (`tjs elect --pending`), then `tjs run` and `tjs audit`.
@@ -7303,7 +7303,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### `tjs audit`: "PIPELINE TIE-OUT FAILED: engine re-run vs saved gains file: term SHORT_TERM vs LONG_TERM" (or `proceeds …`, `cost (lot 2024-01-02 LONG_TERM) …`, `qty …`, `date_settle …`), or "MANUAL REPORTING TIE-OUT FAILED"; before, the same files tied (✓)
 - **Check:** the FAILED line names each field that differs, the engine's value first; `tjs audit --json`: the event's `tie_out.mismatched`. Then `tjs run` and `tjs audit` again: a failure that stays after a fresh run is a bug to report (`AGENTS.md`, Reporting a bug).
 - **Cause:** the tie-out compared the gain and the disallowed amount only, so a saved gains file with another term, quantity, date or account, with proceeds and cost moved by the same amount, or with cost moved from one lot to another, tied, and the audit passed (backlog TJ-0332).
-- **Fix:** upgrade: each sale's quantity, proceeds, cost, gain, disallowed amounts, symbol, dates, account, direction and term are compared, each lot's acquired date and share (US), and the replacement lots; an unknown-cost sale's quantity and proceeds with its MANUAL REPORTING REQUIRED row. What is compared: `tjs audit --details`, `--json`'s `scope`, docs/commands.md (`taxjson audit`). A difference after `tjs run` means the saved files were changed or are from other inputs.
+- **Fix:** upgrade: each sale's quantity, proceeds, cost, gain, disallowed amounts, symbol, dates, account, direction and term are compared, each lot's acquired date and share (US), and the replacement lots; an unknown-cost sale's quantity and proceeds with its MANUAL REPORTING REQUIRED row. What is compared: `tjs audit --details`, `--json`'s `scope`, docs/commands.md (`tjs audit`). A difference after `tjs run` means the saved files were changed or are from other inputs.
 - **Fixed in:** `v0.37.0`
 - **Code:** `src/taxjson/bin/taxjson_audit.py` — `tie_out_differences`, `manual_differences`, `TIE_FIELDS`, `differences_text`
 
@@ -7335,7 +7335,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.39.0`
 - **Code:** `src/taxjson/bin/taxjson_audit.py` — `_row_day`, `pool_scope`, `pool_other_rows_check`
 
-### `tjs audit QZD.U.TO`: "taxjson audit: error: no disposition matches symbol QZD.U.TO in 2026 — check the filter", while `tjs audit` alone shows the sale of that listing (booked as QZD.TO)
+### `tjs audit QZD.U.TO`: "tjs audit: error: no disposition matches symbol QZD.U.TO in 2026 — check the filter", while `tjs audit` alone shows the sale of that listing (booked as QZD.TO)
 - **Check:** the run joined the two listings by their transfer journal ("joined as one security by their transfer journal: QZD.TO ↔ QZD.U.TO"): `work/ticker.map.effective` has `TOBASE QZD.U.TO QZD.TO`, and your `ticker.map` does not.
 - **Cause:** the audit's symbol filter takes a broker's ticker through the ticker.map lines that map it, but `tjs audit` passed it your `ticker.map` only, not the run's effective map that holds the listings the run joined (backlog TJ-0773).
 - **Fix:** upgrade: the audit reads the run's effective map too, so `tjs audit QZD.U.TO` audits the sale booked as QZD.TO, and its MAPPING line says "joined by the run: TOBASE in work/ticker.map.effective". On an older release, filter by the booked ticker (`tjs audit QZD.TO`).
@@ -7468,14 +7468,14 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_check_dates`; `src/taxjson/lib/check_dates.py`
 
-### `tjs check-dates`: "missing: 1 — work/margin_tt_trades.json is missing: the parsed rows of trades.tt (work/margin_sources.list names them) were not checked — re-run `taxjson run`" and "! 1 parsed source(s) not checked" (exit 1); or `tjs renames`: "no work/ — run `taxjson run` first"
+### `tjs check-dates`: "missing: 1 — work/margin_tt_trades.json is missing: the parsed rows of trades.tt (work/margin_sources.list names them) were not checked — re-run `tjs run`" and "! 1 parsed source(s) not checked" (exit 1); or `tjs renames`: "no work/ — run `tjs run` first"
 - **Check:** `tjs check-dates --json`: an issue with `code` `missing` names the parsed file of a source the account's `work/<account>_sources.list` lists. On an older release the same project said `checked: 0`, `errors: 0` with the source at 0 rows (exit 0), and `tjs renames` over a project with no `work/` said nothing was pending (exit 0).
 - **Cause:** both views read a file that is not there as an empty one, so evidence the project records (a `.tt` file or a broker export it parsed; the books) passed as checked and clean (backlog TJ-0319). Now a parsed source the sources list names but `work/` lacks is an ERROR (`missing`, like `unreadable` for a damaged one) and `tjs renames` refuses without books, as `tjs splits` and `tjs spinoffs` do; an account with inputs but no books is named in a warning.
 - **Fix:** `tjs run` (it rebuilds `work/`), then the command again. If the run itself stops, its error says why.
 - **Fixed in:** `v0.37.0`
 - **Code:** `src/taxjson/lib/check_dates.py` — `analyze`, `sources`, `"missing"`, `parsed source(s) not checked`; `src/taxjson/bin/taxjson_run.py` — `cmd_renames`, `_require_books`, `_warn_accounts_without_books`
 
-### `tjs check-dates`: "missing: 1 — work/margin2_sources.list is missing: the parsed sources of margin2 cannot be found, so none of its dates were checked — re-run `taxjson run`" (exit 1)
+### `tjs check-dates`: "missing: 1 — work/margin2_sources.list is missing: the parsed sources of margin2 cannot be found, so none of its dates were checked — re-run `tjs run`" (exit 1)
 - **Check:** `ls work/*_sources.list`: one per account the last `tjs run` read. On an older release, with an account's list gone (or unreadable) but its books there, `tjs check-dates` counted one source fewer and said "Every date lands where its market allows" (exit 0), even when that account held an impossible date.
 - **Cause:** the list names the parsed files of each account's exports and `.tt` files; read as an empty list, the account dropped out of the check, and the warning about an account with no books did not fire, since its books were there (backlog TJ-0395).
 - **Fix:** `tjs run` (it writes the list again), then `tjs check-dates`.
@@ -7650,7 +7650,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/slip_audit.py` — `audit`, `find_ib_reports`; `src/taxjson/lib/ib_dividends.py` — `read_report`
 
-### `tjs slip-audit`: "! Incomplete: income not compared, no readable books (b) — tjs run" with exit 1, and `tjs checklist` step `t5-t3` blocked ("b: no readable work/b_base.json — run `taxjson run`"); on an older release NOT COMPARED named the account, then "Every slip agrees with the books within the tolerance.", exit 0 and the step done
+### `tjs slip-audit`: "! Incomplete: income not compared, no readable books (b) — tjs run" with exit 1, and `tjs checklist` step `t5-t3` blocked ("b: no readable work/b_base.json — run `tjs run`"); on an older release NOT COMPARED named the account, then "Every slip agrees with the books within the tolerance.", exit 0 and the step done
 - **Check:** `tjs slip-audit --json`: `not_compared` lists what the audit could not compare: an account with inputs and no readable books (`"kind": "no-books"`), an IB dividends report no account's books carry (`report-no-account`), an IB component taxjson does not know that has an amount (`unknown-component`), a `broker_key` no broker account matches (`broker-key`). `status` is then `incomplete` (`attention` when there are findings too).
 - **Cause:** the verdict, the exit status and the checklist read the findings only. What could not be compared was listed under NOT COMPARED, and the audit still said every slip agreed, exited 0 and the `t5-t3` step was done over an account it never read (its run failed, or its books were damaged).
 - **Fix:** upgrade, then clear each item: `tjs run` builds the missing books (a failed account's error names its input); name an IB report's account in `inputs/slips/slips.toml` (`[[ib_report]]`); import a slip whose `broker_key` matches nothing again. A component taxjson does not know is compared by hand, then accepted with `tjs checklist --done t5-t3 --force`. A second copy of a report (read once), a pay-dated ROC line counted in its record year and a `broker_key` written by an earlier version stay notices: they change nothing.
@@ -8133,7 +8133,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `group_inputs_detailed`
 
-### `tjs reconcile-slips inputs/slips/*.csv`: "Info: skipped U5***.2025.dividends.csv: IB's dividends report (T5/T3 income, read by `taxjson slip-audit`), not a T5008"
+### `tjs reconcile-slips inputs/slips/*.csv`: "Info: skipped U5***.2025.dividends.csv: IB's dividends report (T5/T3 income, read by `tjs slip-audit`), not a T5008"
 - **Check:** the skipped file is IBKR's dividends report.
 - **Cause:** IB's dividends report lives in `inputs/slips/` beside the T5008 CSVs; it is T5/T3 income, which `reconcile-slips` does not read (before, it failed the reconciliation as an unreadable T5008).
 - **Fix:** nothing: `tjs slip-audit` reads it. With only the report given, `reconcile-slips` stops with "no T5008 slip CSV to reconcile".
@@ -8161,7 +8161,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.36.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_close_year_attention`, `_CLOSE_YEAR_TODO`; `src/taxjson/lib/checklist.py` — `d_inputs_committed`
 
-### `tjs close-year`: "- handoff: — `taxjson handoff`" with no reason
+### `tjs close-year`: "- handoff: — `tjs handoff`" with no reason
 - **Check:** `tjs handoff` lists the problem under CARRY-FORWARD INPUTS VS THE 2024 RECORD (an `[estimate] other_losses`, `long_term_losses`, `amt_carryover` or `[carryover] claimed` entry that differs from what the record carried out).
 - **Cause:** the checklist's handoff step named every kind of handoff problem but the carry-forward one.
 - **Fix:** upgrade: the line says "1 carry-forward input(s) differ from the 2024 record". Fix whichever is wrong (your notice of assessment decides).
@@ -8274,7 +8274,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/lib/checklist.py` — `frozen_files`, `fingerprint_changes`, `LOCKED_YEARS_KEY`; `src/taxjson/lib/compare.py` — `frozen_files`; `src/taxjson/bin/taxjson_run.py` — `_freeze_inputs`, `_frozen_inputs_changed`
 
 ### "Info: filed 2024: 1 frozen input(s) changed since the year was closed: inputs/crypto/crypto_sends.tt — … (restore them from your records …)" on every run and `check-filed` of a filed year with a crypto send decided; `tjs compare filed`: "Inputs: 1 added: inputs/crypto/crypto_sends.tt"
-- **Check:** the only file named is `crypto_sends.tt`; it starts "# GENERATED by `taxjson crypto-sends --write`"; the year reads a shared `inputs_dir` (now commented out by the freeze).
+- **Check:** the only file named is `crypto_sends.tt`; it starts "# GENERATED by `tjs crypto-sends --write`"; the year reads a shared `inputs_dir` (now commented out by the freeze).
 - **Cause:** with shared exports the year generates its crypto_sends.tt in `work/crypto_sends/<account>/`, so the freeze did not record it; once frozen, the year writes it in its own `inputs/<account>/`, a file the lock did not have. It follows from the frozen `sends.json` and exports: nothing to restore.
 - **Fix:** upgrade: close-year copies it into `inputs/<account>/` with the exports, and a lock written before is compared without it (no re-close needed).
 - **Fixed in:** `v0.36.0`
@@ -8302,7 +8302,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/lib/project_layout.py` — `frozen_from_shared`; `src/taxjson/lib/check_dates.py` — `analyze`
 
 ### `tjs close-year --force` locked books whose last run did not finish: `filed/<year>/reports/` is empty and `tjs compare filed` lists every report as added
-- **Check:** `ls reports/*.sum` finds none; `tjs close-year` says "the last `taxjson run` did not finish: reports/ has no .sum, but work/ holds the partial books it wrote".
+- **Check:** `ls reports/*.sum` finds none; `tjs close-year` says "the last `tjs run` did not finish: reports/ has no .sum, but work/ holds the partial books it wrote".
 - **Cause:** that refusal offered `--force`, which locked the partial books, though commands.md said such books are refused.
 - **Fix:** upgrade: refused even with `--force`. Fix the run and re-run `tjs run`, then close. A year already locked this way: re-run `tjs run` and close again with `--force` once the books are the filed ones.
 - **Fixed in:** `v0.36.0`
@@ -8318,11 +8318,11 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### `tjs close-year --force` with an account deferred at a pending election: "Error: wash-adjusted gains for … are STALE" / "A --account rerun skipped the cross-account wash pass", though no `--account` run happened
 - **Check:** `tjs elect --pending` lists the election; `tjs run` exits 3 with "account deferred".
 - **Cause:** a run deferred at an election skips the cross-account pass, as `run --account` does; the refusal assumed the latter, and the first refusal offered a `--force` that could not lock these books.
-- **Fix:** upgrade: the refusal names the deferred account and `taxjson elect --pending`, and `--force` is offered only where it would lock the books. Make the election (`tjs elect ACCOUNT --set …`), `tjs run`, then close.
+- **Fix:** upgrade: the refusal names the deferred account and `tjs elect --pending`, and `--force` is offered only where it would lock the books. Make the election (`tjs elect ACCOUNT --set …`), `tjs run`, then close.
 - **Fixed in:** `v0.36.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_close_year`, `_why_unblended`, `deferred`
 
-### `tjs check-filed` in the folder holding the year folders says to run it in the newest year, which answers "No filed/<year>.json snapshots — `taxjson close-year` creates one after you file." though earlier years are filed
+### `tjs check-filed` in the folder holding the year folders says to run it in the newest year, which answers "No filed/<year>.json snapshots — `tjs close-year` creates one after you file." though earlier years are filed
 - **Check:** `tjs years` shows the filed years; each has its lock in its own folder (`2024/filed/2024.json`).
 - **Cause:** a lock lives in its year's folder and check-filed checks the project's own `filed/`; the hint named the newest year folder, usually the open one.
 - **Fix:** upgrade: both answers name the filed year folders (`tjs -C 2024 check-filed`); run it there.
@@ -8469,7 +8469,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.31.1`
 - **Code:** `src/taxjson/lib/compare.py` — `compare`, `render`
 
-### `tjs compare` (or `--save`): "Error: reports/a.rpt cannot be read: Permission denied"; `tjs run`: "warning: the previous reports were not kept for `taxjson compare`: reports/ cannot be read: …"; on an older release the file was counted as removed or left out of the snapshot
+### `tjs compare` (or `--save`): "Error: reports/a.rpt cannot be read: Permission denied"; `tjs run`: "warning: the previous reports were not kept for `tjs compare`: reports/ cannot be read: …"; on an older release the file was counted as removed or left out of the snapshot
 - **Check:** `ls -l reports/ work/compare/prev/reports/` for a file or folder the user cannot read.
 - **Cause:** a read error was treated as "no such file".
 - **Fix:** restore the permissions (`chmod u+rw` on the file, `u+rwx` on the folder) and run again.
@@ -8486,18 +8486,18 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### `tjs compare` after a `tjs run --account` and a full run: a corrected account's report shows as unchanged
 - **Check:** the order of the runs: a full `tjs run`, a correction rebuilt with `tjs run --account NAME`, then a full `tjs run`; `tjs compare` lists only the combined and wash reports among those that changed, not `NAME.sum`.
 - **Cause:** every full run kept the reports it replaced as `prev`. After a `--account` run those are partial: the account's own reports already hold the correction, the others are the full run's. So the full run compared with that mixed state, not with the run before the correction.
-- **Fix:** upgrade: the first `--account` run after a full run keeps the full run's reports as `prev` before it replaces some, and the full run after it leaves them, so `prev` is always a full run's. `tjs compare` says "Partial: reports/ hold a `taxjson run --account NAME` over the last full run's" until the next full run (`partial_now` in `--json`; a snapshot saved meanwhile carries `partial_before`). A `prev` an older release kept is not marked: run fully twice for a clean one.
+- **Fix:** upgrade: the first `--account` run after a full run keeps the full run's reports as `prev` before it replaces some, and the full run after it leaves them, so `prev` is always a full run's. `tjs compare` says "Partial: reports/ hold a `tjs run --account NAME` over the last full run's" until the next full run (`partial_now` in `--json`; a snapshot saved meanwhile carries `partial_before`). A `prev` an older release kept is not marked: run fully twice for a clean one.
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/lib/compare.py` — `rotate_previous`, `partial_accounts`, `full_run_done`, `PARTIAL_MARK`, `partial_now`; `src/taxjson/bin/taxjson_run.py` — `_cmd_run`, `full_run_done`
 
-### `tjs compare saved`: "Error: no snapshot named 'saved'" right after a `tjs compare --save saved` that failed; or `tjs compare`: "no previous run kept yet" after a `tjs run` that warned "the previous reports were not kept for `taxjson compare`"
+### `tjs compare saved`: "Error: no snapshot named 'saved'" right after a `tjs compare --save saved` that failed; or `tjs compare`: "no previous run kept yet" after a `tjs run` that warned "the previous reports were not kept for `tjs compare`"
 - **Check:** `ls work/compare/`: the folder of that name is missing although an earlier save (or full run) had made it, and the failed command's message named a rename or disk error (`No space left on device`, `Permission denied`).
 - **Cause:** replacing a snapshot deleted the earlier one before renaming the new one into place; when that rename failed, the name was left empty.
 - **Fix:** upgrade: the earlier snapshot is moved aside, the new one renamed in, and when that fails the earlier one is moved back ("… cannot be replaced (…); the earlier snapshot is kept", exit 2). If even the move back fails, the message says where it is (`work/compare/.saved.<random>.old/saved/`): move that folder to `work/compare/saved/`. A snapshot an older release lost cannot be recovered.
 - **Fixed in:** `v0.35.0`
 - **Code:** `src/taxjson/lib/compare.py` — `_publish`, `cannot be replaced`
 
-### `tjs compare saved`: "AttributeError: 'list' object has no attribute 'get'" (older release), or "Error: work/compare/saved/snapshot.json is not a snapshot (accounts is a list, not a table of accounts) — `taxjson compare --delete saved` removes it"
+### `tjs compare saved`: "AttributeError: 'list' object has no attribute 'get'" (older release), or "Error: work/compare/saved/snapshot.json is not a snapshot (accounts is a list, not a table of accounts) — `tjs compare --delete saved` removes it"
 - **Check:** open `work/compare/saved/snapshot.json`: the field the message names does not have the shape taxjson writes (`files` a table of inputs, `accounts` a table keyed by account, each a table of figures, `reports` a list of file names, `kind` and `taken` text). A snapshot taxjson wrote has them; a hand-edited or truncated one may not.
 - **Cause:** the loader checked only `files`; a malformed `accounts` or `reports` passed, and the comparison (or `--list`) crashed on it.
 - **Fix:** `tjs compare --delete saved`, then save it again when you can (`prev` is rewritten by the next full `tjs run`). Upgrade for the message in place of the traceback; `--list` then leaves such a snapshot out.
@@ -8505,7 +8505,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/lib/compare.py` — `_check_snapshot`, `is not a snapshot`
 
 ### `tjs compare saved` says "Unchanged: margin", exit 0, with a snapshot whose account figure is NaN (a hand-edited or damaged `snapshot.json`)
-- **Check:** since the fix "Error: work/compare/saved/snapshot.json is not a snapshot (accounts.margin.realized is NaN, not a finite number) — `taxjson compare --delete saved` removes it", exit 2.
+- **Check:** since the fix "Error: work/compare/saved/snapshot.json is not a snapshot (accounts.margin.realized is NaN, not a finite number) — `tjs compare --delete saved` removes it", exit 2.
 - **Cause:** the loader checked the tables' shape, not their figures, and a figure compared with NaN is never more than the tolerance apart, so it read as unchanged. Each figure must be a finite number now (not text, not true/false), and a NaN compared with any figure is a difference.
 - **Fix:** `tjs compare --delete saved`, then save it again when you can.
 - **Fixed in:** `v0.38.0`
@@ -8590,7 +8590,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### `tjs checklist` shows no "Since then the inputs changed …" line after `--run --only ID` (or `--run --quick`) although ticker.map, a holdings snapshot or a slip changed since the other verdicts were made
 - **Check:** `tjs checklist` after a `--run --only ID`: the "Checked …" line says nothing moved, while `ls -l` shows ticker.map, a file `holdings = [...]` names, a `holdings/` snapshot, `inputs/slips/` or `filed/` newer than the verdicts it shows (the oldest verdict's time is on the line).
-- **Cause:** the kept verdicts carried one fingerprint, re-stamped with the current inputs by every `--run --only ID` / `--run --quick`, so the verdicts it did not refresh read as fresh; and the fingerprint covered what `taxjson run` reads only, never the positions snapshots `sanity` compares against, the slips or the filed-year locks.
+- **Cause:** the kept verdicts carried one fingerprint, re-stamped with the current inputs by every `--run --only ID` / `--run --quick`, so the verdicts it did not refresh read as fresh; and the fingerprint covered what `tjs run` reads only, never the positions snapshots `sanity` compares against, the slips or the filed-year locks.
 - **Fix:** upgrade, then `tjs checklist --run` once. Each verdict now keeps its own basis (`work/checklist_results.json`, `bases`); a partial refresh leaves the others' as it was, and the line says how many of the verdicts shown are from before the change. The first `tjs checklist` after the upgrade lists the holdings and slip files as changed (they were not tracked before): the re-check clears it.
 - **Fixed in:** `v0.35.0`
 - **Code:** `src/taxjson/lib/checklist.py` — `save_results`, `_bases`, `_basis_now`, `_stale_reasons`, `checklist_fingerprint`, `_check_only_files`, `run_info_lines`
@@ -8637,7 +8637,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.39.0`
 - **Code:** `src/taxjson/lib/checklist.py` — `reset_state`, `_StateLock`, `set_override`
 
-### `tjs checklist --skip ID`: "Error: unrecognized arguments: --skip ID" (or "Error: --skip was replaced by --done --force: `taxjson checklist --done ID --force`")
+### `tjs checklist --skip ID`: "Error: unrecognized arguments: --skip ID" (or "Error: --skip was replaced by --done --force: `tjs checklist --done ID --force`")
 - **Check:** `tjs --version` is v0.35.0 or newer; `tjs checklist --help` lists `--done ID[,ID]` and `--force`, and no `--skip`.
 - **Cause:** v0.35.0 replaced `--skip ID` with `--done ID --force`: a done mark over the check's finding, shown `[f]` with the finding beside it. v0.35.0 refused the old flag with argparse's bare message, which does not name the new form.
 - **Fix:** `tjs checklist --done ID --force` (`--note "..."` stores your reason); in a script, write each `--skip ID` that way. The `skipped` marks already in `checklist.json` need nothing: they read as forced. Upgrade: `--skip` names its replacement (exit 2, nothing written).
@@ -8771,7 +8771,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/bin/taxjson_carryover.py` — `build_canada_ledger`, `claims_over_gain`, `render_brief`
 
 ### First year with taxjson: `tjs close-year` records "Net capital loss: applied 0.00, created 0.00, carried into 2026: 0.00" while `tjs carryover` shows an unused loss from earlier years
-- **Check:** `tjs carryover` in that year: the balance carried into it; `taxjson.toml` has no `[estimate] other_losses` and there is no earlier close-year record (`[settings] prior_year_record`). Since the fix close-year adds "note: these books carry a net capital loss of 100.00 into 2025 (`taxjson carryover`) that the lock does not take in", and the next year's `tjs carryover` "! 2025: its lock carried out 0.00; these books, 100.00".
+- **Check:** `tjs carryover` in that year: the balance carried into it; `taxjson.toml` has no `[estimate] other_losses` and there is no earlier close-year record (`[settings] prior_year_record`). Since the fix close-year adds "note: these books carry a net capital loss of 100.00 into 2025 (`tjs carryover`) that the lock does not take in", and the next year's `tjs carryover` "! 2025: its lock carried out 0.00; these books, 100.00".
 - **Cause:** with no input and no record the estimate starts the year from no net capital loss (documented), and the lock carries what it computes; nothing compared it with the books' ledger.
 - **Fix:** if that loss is yours, enter your notice of assessment's balance as `[estimate] other_losses`, `tjs run`, then `tjs close-year --force` (after filing). A loss already applied on an earlier return: record it in `[carryover] claimed`.
 - **Fixed in:** `v0.38.0`
@@ -9013,7 +9013,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### US project: docs/filing.md's steps run `tjs t1135`, `instalments` and `amt`, which refuse it
 
 - **Symptom:** following docs/filing.md in a US project, step 4 stops
-  with "Error: `taxjson instalments` is Canada-only ..." (and the same
+  with "Error: `tjs instalments` is Canada-only ..." (and the same
   for `amt` and `t1135`), and its carryover step says to record
   `[carryover] claimed` as the line 25300 amount divided by the
   inclusion rate.
@@ -9037,14 +9037,14 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### `tjs carryover --details`: "what you claimed on filed returns may differ: --claimed FILE", and `tjs carryover --claimed FILE` is refused ("unrecognized arguments")
 - **Check:** `tjs carryover --details` names `--claimed`.
 - **Cause:** the command reused the notes of the standalone `taxjson-carryover`, which takes `--claimed FILE`.
-- **Fix:** upgrade: the notes name taxjson.toml. Record the claims there: `[carryover]` then `claimed = { 2023 = 400.00 }` (docs/commands.md, `taxjson carryover`).
+- **Fix:** upgrade: the notes name taxjson.toml. Record the claims there: `[carryover]` then `claimed = { 2023 = 400.00 }` (docs/commands.md, `tjs carryover`).
 - **Fixed in:** `v0.36.0`
 - **Code:** `src/taxjson/bin/taxjson_carryover.py` — `render`, `claims-in-project`; `src/taxjson/bin/taxjson_run.py` — `cmd_carryover`
 
 ### `tjs estimate`: INSTALMENTS says "=> balance due April 30" for an amount far below the year's tax
 - **Check:** the amount is `tjs instalments`' shortfall: the instalments required less those paid, not the tax still owed.
 - **Cause:** the instalments still behind were labelled as the balance due.
-- **Fix:** upgrade: the line reads "=> instalments behind … [due with the balance April 30; taxjson instalments]". What is owed at filing is the year's tax less the instalments paid and the tax withheld.
+- **Fix:** upgrade: the line reads "=> instalments behind … [due with the balance April 30; tjs instalments]". What is owed at filing is the year's tax less the instalments paid and the tax withheld.
 - **Fixed in:** `v0.36.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_print_tax_estimate`, `instalments behind`
 
@@ -9415,9 +9415,9 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/lib/dates.py` — `as_of_date_problem`; `src/taxjson/bin/taxjson_run.py` — `cmd_wash_radar`; `src/taxjson/bin/taxjson_wash_radar.py` — `main`; `src/taxjson/bin/taxjson_safe_to_sell.py` — `main`
 
 ### `taxjson-generate-parser sample.csv`: "error: the first 30 line(s) of sample.csv still carry personal data (1 identity row(s)/cell(s) (name, alias, address), the redactor changes line 1) and would be sent to claude", or "(1 line(s) the redactor could not classify (line 2))"
-- **Check:** run `taxjson redact --check sample.csv`: it reports the same findings and lists the REVIEW lines by number. On v0.29.0 and older a sample whose first line was the holder's name alone (a statement preamble), or whose Description held a name-like phrase, was sent to the provider as it was (audit 80).
+- **Check:** run `tjs redact --check sample.csv`: it reports the same findings and lists the REVIEW lines by number. On v0.29.0 and older a sample whose first line was the holder's name alone (a statement preamble), or whose Description held a name-like phrase, was sent to the provider as it was (audit 80).
 - **Cause:** the gate kept its own list of the redactor's counters and missed identity rows (a bare preamble name, an alias or address cell) and the review list, then sent the file's own text. Now it counts every kind the redactor reports (`Report.identity_counts`), refuses when the redactor would change any line beyond a transaction-id pseudonym, and sends only the redactor's copy of a sample that passed.
-- **Fix:** `taxjson redact sample.csv` and use its output. A redacted copy can still list REVIEW lines (free text the redactor cannot classify, such as a security named like a person): read those lines, and if they hold no personal data pass `--allow-unredacted` (the file is then sent as it is).
+- **Fix:** `tjs redact sample.csv` and use its output. A redacted copy can still list REVIEW lines (free text the redactor cannot classify, such as a security named like a person): read those lines, and if they hold no personal data pass `--allow-unredacted` (the file is then sent as it is).
 - **Fixed in:** `v0.29.1`
 - **Code:** `src/taxjson/bin/taxjson_generate_parser.py` — `gate_sample`, `identity_findings`, `main`; `src/taxjson/bin/taxjson_redact.py` — `Report.identity_counts`, `IDENTITY_KINDS`, `UNREPLACED_REASON`
 
@@ -9430,14 +9430,14 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### `taxjson-convert-currency book.json --to CAD --country canada`: "Error: futures book mixes 1 row(s) already on the settlement basis (e.g. F:ZZH6.US 2026-01-01 (id=…)) with 1 unsettled fill(s) (e.g. F:ZZM6.US 2026-01-02 (id=…)): a book is settled once, as a whole"
 - **Check:** the book holds plain-futures rows of `type` `futures_settlement` (a converted book: `work/<account>_base.json`) and, in the same file, a `BUYSELL` fill of a futures contract without that type (a raw export's row, a `.tt` line).
-- **Cause:** the settlement pass is idempotent — a book already rewritten comes back as is — but it decided that on the first settled row it met and returned the whole book, so a raw fill beside it kept its notional as its money, which the conversion then translated at the day's rate: the FX-on-notional error the settlement basis exists to prevent (audit 2026-10-24 B09). A mixed book is refused now; a settled book and a raw book are handled as before. `taxjson run` never writes a mixed book; one comes from rows appended to a converted file by hand.
+- **Cause:** the settlement pass is idempotent — a book already rewritten comes back as is — but it decided that on the first settled row it met and returned the whole book, so a raw fill beside it kept its notional as its money, which the conversion then translated at the day's rate: the FX-on-notional error the settlement basis exists to prevent (audit 2026-10-24 B09). A mixed book is refused now; a settled book and a raw book are handled as before. `tjs run` never writes a mixed book; one comes from rows appended to a converted file by hand.
 - **Fix:** keep the raw fills in a book of their own and convert that; in a project, put them in `inputs/<account>/` (an export or a `.tt` file) and `tjs run`, which settles and converts them with the rest.
 - **Fixed in:** `v0.35.0`
 - **Code:** `src/taxjson/lib/futures.py` — `_settle`, `futures book mixes`
 
 ### `taxjson-convert-currency` run twice on futures books (USD to EUR, then EUR to CAD): the Canadian gain of a contract held in two taxable accounts differs from one converted USD to CAD directly (CAD 120 instead of 180)
 - **Check:** the converted rows' `settle_native` (`LC 300 150 USD 0.8`) ends with the FIRST conversion's rate, not the product of both (0.8 × 1.5 = 1.2); the amounts in CAD agree between the two routes, and the difference is only in a close the Canadian engine re-averages across accounts (tax-logic `CA-FX-04`).
-- **Cause:** each settlement part records the rate its native P/L was converted at, so the Canadian engine can re-average a close across accounts and convert it again. A second conversion changed the amounts and the currency but kept the first rate, which took the native P/L to the intermediate currency (backlog TJ-0745). The rates now compose: the recorded rate always takes the native P/L to the currency the row is in. `taxjson run` converts once and is not affected.
+- **Cause:** each settlement part records the rate its native P/L was converted at, so the Canadian engine can re-average a close across accounts and convert it again. A second conversion changed the amounts and the currency but kept the first rate, which took the native P/L to the intermediate currency (backlog TJ-0745). The rates now compose: the recorded rate always takes the native P/L to the currency the row is in. `tjs run` converts once and is not affected.
 - **Fix:** upgrade and convert the books again. On an older release, convert the native books once, straight to the target currency.
 - **Fixed in:** `v0.39.0`
 - **Code:** `src/taxjson/lib/futures.py` — `stamp_rate`, `parse_settle_native`, `pool_across_accounts`
@@ -9449,7 +9449,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.35.0`
 - **Code:** `src/taxjson/bin/taxjson_sum_income.py` — `load_income_data`, `_checked_amount`
 
-### `taxjson-sum-gains gains.json`: "Error: gains.json: "transactions" row 0 (ZZQ.US): dividend is inf, a non-finite number — the file is damaged or hand-edited: fix it or re-run `taxjson run`"; or, on an older release, "TOTAL DIVIDENDS / STAKING: inf CAD" and an infinite grand total at exit 0
+### `taxjson-sum-gains gains.json`: "Error: gains.json: "transactions" row 0 (ZZQ.US): dividend is inf, a non-finite number — the file is damaged or hand-edited: fix it or re-run `tjs run`"; or, on an older release, "TOTAL DIVIDENDS / STAKING: inf CAD" and an infinite grand total at exit 0
 - **Check:** the row the message names: its `dividend` (or `pil`) is a number too large for a float (`1e400` is valid JSON). Only a hand-written file holds one; the engines never write it.
 - **Cause:** the row funnel every report reader runs checked the disposition fields (qty, cost, proceeds, gain, …) for finite numbers but not the income fields a gains file carries beside them, so the row was summed and the text report printed `inf` (`--json` refused the output; audit 2026-10-24 D03). `dividend` and `pil` are checked now, in every reader.
 - **Fix:** correct the amount, or `tjs run` to rebuild the file.
@@ -9494,7 +9494,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### `taxjson-t1135 ... --gains margin_gains.json`: "taxjson-t1135: margin_gains.json: its sales carry short/long-term terms — gains the US engine computed" (older releases: a GAIN(LOSS) column from FIFO lots beside average-cost cost amounts, exit 0)
 - **Check:** the gains file's sales have a `term` of `SHORT_TERM` or `LONG_TERM`: a US project's run (or `taxjson-gains --country usa`) wrote it.
 - **Cause:** the stand-alone tool checked the gains file's currency but not which country's engine computed it, so a US gains file's FIFO gains were joined to the Canadian average-cost pools the cost columns come from.
-- **Fix:** upgrade and pass the gains file of a `country = "canada"` run (`tjs t1135` in the Canadian project passes its own). The US engine's terms are refused, as `taxjson form-export` refuses them on Schedule 3.
+- **Fix:** upgrade and pass the gains file of a `country = "canada"` run (`tjs t1135` in the Canadian project passes its own). The US engine's terms are refused, as `tjs form-export` refuses them on Schedule 3.
 - **Fixed in:** `v0.38.0`
 - **Code:** `src/taxjson/bin/taxjson_t1135.py` — `check_gains_country`, `WrongCountryGains`, `build_report`
 
@@ -9570,10 +9570,10 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.38.0`
 - **Code:** `scripts/release.sh` — `is not the last commit on local main`, `VC`
 
-### `taxjson reconcile-slips inputs/slips/*.csv` says "no slip CSV matches inputs/slips/*.csv: nothing to reconcile yet"
+### `tjs reconcile-slips inputs/slips/*.csv` says "no slip CSV matches inputs/slips/*.csv: nothing to reconcile yet"
 - **Check:** `ls inputs/slips/` lists no `.csv` file (an older release printed `taxjson-reconcile-slips: no such file: inputs/slips/*.csv`, the unexpanded pattern, with no label and no fix).
 - **Cause:** the checklist's and filing.md's command names the slip files by a pattern; with none saved yet the shell passes the pattern through as a file name.
-- **Fix:** save the broker's T5008 / 1099-B slip CSV in `inputs/slips/` (docs/filing.md); with no slip to reconcile, mark the step done: `taxjson checklist --done t5008` (the step is to do, not flagged, so it needs no `--force`).
+- **Fix:** save the broker's T5008 / 1099-B slip CSV in `inputs/slips/` (docs/filing.md); with no slip to reconcile, mark the step done: `tjs checklist --done t5008` (the step is to do, not flagged, so it needs no `--force`).
 - **Fixed in:** `v0.31.0`
 - **Code:** `src/taxjson/bin/taxjson_reconcile_slips.py` — `no slip CSV matches`
 

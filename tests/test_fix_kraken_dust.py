@@ -388,7 +388,7 @@ class TestZeroQuantityMessage(unittest.TestCase):
 
 
 class TestDustSweepRun(unittest.TestCase):
-    """`taxjson run` books the ledger in both countries; the swept coins
+    """`tjs run` books the ledger in both countries; the swept coins
     are conserved (the dust stays as a residue)."""
 
     @rule("CA-CRYPTO-11")

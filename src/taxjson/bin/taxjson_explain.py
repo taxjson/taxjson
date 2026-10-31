@@ -101,7 +101,7 @@ def parse_args():
         "--account", metavar="NAME",
         help="Show only this account's dispositions; the computation "
              "still runs on every book given (a merged book's pooled "
-             "ACB and its wash windows), as `taxjson wash-sales "
+             "ACB and its wash windows), as `tjs wash-sales "
              "ACCOUNT --explain` passes it.")
     parser.add_argument(
         "--tax-date",
@@ -132,7 +132,7 @@ def parse_args():
     parser.add_argument("--option-premium-timing", choices=["grant", "close"],
                         default=None, help="Canada: s.49(1) grant timing "
                         "or close timing for written options (match the "
-                        "run). Default: close, with a note — `taxjson run` "
+                        "run). Default: close, with a note — `tjs run` "
                         "defaults a Canada project to grant.")
     parser.add_argument("--option-grant-since", type=tax_year, default=None,
                         metavar="YEAR")
@@ -162,10 +162,10 @@ def parse_args():
     parser.add_argument(
         "--no-wash", action="store_true",
         help="Skip superficial-loss / wash-sale detection. Use it for a "
-             "REGISTERED (sheltered) account's book: `taxjson run` "
+             "REGISTERED (sheltered) account's book: `tjs run` "
              "computes those with the rule off, and without this flag "
              "explain applies it as if the book were taxable.")
-    # Internal (`taxjson wash-sales --explain`, one call per book):
+    # Internal (`tjs wash-sales --explain`, one call per book):
     # nothing matched exits with this status and no note, so the caller
     # says "no matching gains" once, only when no book matched.
     parser.add_argument("--no-match-status", type=int, default=None,
@@ -180,8 +180,8 @@ def parse_args():
     parser.add_argument(
         "--layout", choices=["trace", "report"], default="trace",
         help="trace (default): the '#'-commented blocks trace files and "
-             "`taxjson audit` use; report: the house report layout, "
-             "wrapped to the terminal (`taxjson wash-sales --explain`).")
+             "`tjs audit` use; report: the house report layout, "
+             "wrapped to the terminal (`tjs wash-sales --explain`).")
     return parser.parse_args()
 
 
@@ -199,7 +199,7 @@ def gain_matches(g, args) -> bool:
         return False
     date_key = 'date_settle' if args.tax_date == 'settle' else 'date'
     effective_date = g.get(date_key) or g.get('date', '')
-    # Case-insensitive, like `taxjson audit` and buy-check (S029-19).
+    # Case-insensitive, like `tjs audit` and buy-check (S029-19).
     if args.symbol and not str(g.get('symbol') or '').upper().startswith(
             args.symbol.upper()):
         return False
@@ -303,12 +303,12 @@ def print_trace(g, args, use_color):
 
 def _timing_default_note(args, prog):
     """Standalone runs default to CLOSE timing, while a Canada project
-    (`taxjson run`) defaults to s.49(1) grant timing from the project
+    (`tjs run`) defaults to s.49(1) grant timing from the project
     year: say so instead of silently disagreeing with the .sum (audit
     R1-177)."""
     if args.option_premium_timing is None and args.country == 'canada':
         emit_line(f"{prog}: note: --option-premium-timing not given — using "
-                  f"close timing. `taxjson run` on a Canada project uses "
+                  f"close timing. `tjs run` on a Canada project uses "
                   f"grant timing from the project year; pass "
                   f"--option-premium-timing grant --option-grant-since YEAR "
                   f"to match it.", file=sys.stderr)
@@ -336,7 +336,7 @@ def main():
 
     # SHARED preprocessing (lib/pipeline.prepare_books) so a trace can't
     # contradict the .sum it explains: missing-history opening balances
-    # (--incomplete-history, same file `taxjson run` auto-applies),
+    # (--incomplete-history, same file `tjs run` auto-applies),
     # self-cancelling TRANSFER pairs dropped, remaining main-file
     # TRANSFERs rewritten to BUYSELL (sheltered approximation — explain
     # never hard-errors: taxable books coming out of the pipeline carry

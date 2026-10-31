@@ -45,7 +45,7 @@ from taxjson.lib.ticker_map import map_ticker
 #   JOURNAL from to   — legacy: read as TOBASE (one security). The
 #                       journal itself is a dated event now, a .tt line
 #                       `JOURNAL <date> FROM TO <qty>` (lib/dated_events);
-#                       `taxjson format-map --write` rewrites the line.
+#                       `tjs format-map --write` rewrites the line.
 #   DELETE  from      — nuke that ticker's transactions (a pure artifact).
 #   DISTINCT a b      — declares two look-alike listings are SEPARATE
 #                       securities (a CDR vs its US underlying); changes
@@ -55,7 +55,7 @@ from taxjson.lib.ticker_map import map_ticker
 #   RENAME  from to YYYY-MM-DD [late=fold|late=separate]
 #                     — legacy: a ticker change on that date, a DATED
 #                       event (lib/renames) now written in a .tt file as
-#                       `RENAME <date> OLD NEW` (`taxjson format-map
+#                       `RENAME <date> OLD NEW` (`tjs format-map
 #                       --write` moves it). Without a date it is GLOBAL.
 # Five more keywords are lookups that change no symbol (lib/ticker_map,
 # which parses them): QUOTE (Yahoo quote spelling), CRYPTO (a coin's
@@ -63,7 +63,7 @@ from taxjson.lib.ticker_map import map_ticker
 # symbol's T1135 domicile) and SIMILAR (look-alike funds: flagged in a
 # loss window, never pooled). A
 # TRADINGVIEW line (the removed TradingView export) is skipped here;
-# `taxjson run` notes it once (lib/ticker_map.RETIRED_KEYWORDS).
+# `tjs run` notes it once (lib/ticker_map.RETIRED_KEYWORDS).
 _MAP_KEYWORDS = ("GLOBAL", "TOBASE", "JOURNAL", "DELETE", "DISTINCT",
                  "RENAME")
 
@@ -254,7 +254,7 @@ def _parse_map_text(text: str, name: str = "ticker.map",
     notes: List[str] = []
     buckets = {"GLOBAL": glob, "TOBASE": tobase, "JOURNAL": journal,
                "RENAME": glob}
-    # The effective map `taxjson run` writes (lib/cross_listings) carries
+    # The effective map `tjs run` writes (lib/cross_listings) carries
     # the .tt RENAME declarations with their origin in a note (`# .tt:
     # inputs/<acct>/<file>.tt:<n>`, lib/dated_events): read back as that
     # declaration's place and source.
@@ -294,12 +294,12 @@ def _parse_map_text(text: str, name: str = "ticker.map",
             syms = [p.upper() for p in parts[1:]]
             if kw in RETIRED_KEYWORDS:
                 # TRADINGVIEW: a removed feature's line — ignored, never
-                # a problem (`taxjson run` asks once to delete it).
+                # a problem (`tjs run` asks once to delete it).
                 continue
             if kw in SIDE_KEYWORDS:
                 # QUOTE / CRYPTO / EXTRACT / T1135: lookups that
                 # change no symbol (lib/ticker_map); checked here so
-                # `taxjson run` refuses a malformed one up front too.
+                # `tjs run` refuses a malformed one up front too.
                 try:
                     _k, _key, _val = parse_side_line(kw, line)
                 except ValueError as e:
@@ -557,7 +557,7 @@ def named_symbols(tmap: "TickerMap", lookups: bool = False) -> frozenset:
 
 def map_file_problems(file_path: Path) -> List[str]:
     """The ticker-map lines that cannot be parsed (their rules would be
-    dropped), each as `<file>:<lineno>: <message>`. `taxjson run`
+    dropped), each as `<file>:<lineno>: <message>`. `tjs run`
     refuses a map with any: a dropped TOBASE/GLOBAL/JOURNAL rule
     silently changes ACB pools and the Schedule 3 gain (S009-03)."""
     return _parse_map_file(file_path)[1]
@@ -566,7 +566,7 @@ def map_file_problems(file_path: Path) -> List[str]:
 def load_map_file(file_path: Path) -> "TickerMap":
     """Parse a keyword-prefixed ticker-map file into a TickerMap. A
     malformed line is skipped with a warning naming its line number
-    (`taxjson run` refuses such a map up front — map_file_problems),
+    (`tjs run` refuses such a map up front — map_file_problems),
     said once per process (lib/ticker_map.say_map_message)."""
     from taxjson.lib.ticker_map import map_problem_line, say_map_message
     tmap, problems, notes = _parse_map_file(file_path)
@@ -586,7 +586,7 @@ def merge_renames(tmap: "TickerMap", to_base: bool) -> Dict[str, str]:
     Chains resolve to their fixed point: `GLOBAL OLD.US NEW.US` plus
     `TOBASE NEW.US NEW.TO` sends OLD.US to NEW.TO. A one-hop lookup left
     OLD.US's lots in NEW.US — a split pool and a phantom short (R1-139).
-    A cycle raises (`taxjson run` refuses such a map up front)."""
+    A cycle raises (`tjs run` refuses such a map up front)."""
     raw = raw_renames(tmap, to_base)
     out: Dict[str, str] = {}
     for frm in raw:
@@ -723,7 +723,7 @@ def map_symbol(symbol: str, mapping: Dict[str, str]) -> str:
     """The rename a mapping implies for ONE symbol — exact match first,
     else options map through their UNDERLYING (SAMPLM.US -> SAMPLM.TO also
     renames SAMPLM260116C00150000.US -> ...TO). Pure-string twin of
-    apply_mapping so non-transaction consumers (taxjson sanity) apply
+    apply_mapping so non-transaction consumers (tjs sanity) apply
     the same consolidation the pipeline does."""
     if symbol in mapping:
         return mapping[symbol]
@@ -821,7 +821,7 @@ def main():
             "                                                  or CA/EXCLUDE)\n"
             "The old yf_ticker.map, crypto_ticker.map,\n"
             "ticker_extraction_overrides.txt and t1135.map are folded in by\n"
-            "`taxjson migrate`.\n"
+            "`tjs migrate`.\n"
             "A TRADINGVIEW line (the removed TradingView export) is ignored."))
     parser.add_argument("input", help="Input JSON file with transactions")
     parser.add_argument("map_file", nargs="?", help="Optional map file (ticker.map). If provided, outputs updated JSON.")
@@ -839,14 +839,14 @@ def main():
                              "line of a crypto account declares books "
                              "only in crypto accounts, a securities "
                              "account's only in securities accounts "
-                             "(`taxjson run` passes it; default: every "
+                             "(`tjs run` passes it; default: every "
                              "dated RENAME).")
     from taxjson.lib.country import country_arg
     parser.add_argument("--country", type=country_arg, default=None,
                         metavar="{canada,ca,usa,us}",
                         help="The project's country: the engine order "
                              "that decides a dated RENAME's late rows "
-                             "on the rename row's day (`taxjson run` "
+                             "on the rename row's day (`tjs run` "
                              "passes it).")
     args = parser.parse_args()
     if args.map_flag and args.map_file:

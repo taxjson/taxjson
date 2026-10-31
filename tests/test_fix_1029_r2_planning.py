@@ -402,7 +402,7 @@ class TestOptionReplacementOneLine(unittest.TestCase):
         self.assertEqual(
             console_lines(self.LINE, width_=120, concise=True),
             ["Warning: ZZA.US loss on 2026-06-01: ZZA261218C00045000.US "
-             "may replace it (warn-only) — `taxjson wash-sales --details`"])
+             "may replace it (warn-only) — `tjs wash-sales --details`"])
         self.assertEqual(
             console_lines(self.LOT, width_=120, concise=True),
             ["Warning: ZZA.US loss on 2026-06-01: ZZA261218C00045000.US, "

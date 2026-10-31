@@ -4,7 +4,7 @@ taxjson-fetch stays its own package (an entry-point plugin with its own
 dependencies) in the same release; install.sh puts it into the same
 environment unless --without-fetch / TAXJSON_WITH_FETCH=0 says not to.
 The opt-out is remembered in ~/.config/taxjson/fetch like the channel,
-so a plain re-run (or `taxjson deploy`) keeps it out; --with-fetch /
+so a plain re-run (or `tjs deploy`) keeps it out; --with-fetch /
 TAXJSON_WITH_FETCH=1 (still accepted: old command lines and the
 taxjson.com shim pass them) puts it back. A stub python records every
 pip call; git remotes are local temporary repositories.
@@ -125,7 +125,7 @@ class TestInstallerFetch(_Repos):
                 self.assertIn("taxjson-fetch left out", r.stdout)
                 self.assertIn("auto-fetch is left out", r.stdout)
                 self.assertEqual(self.fetchfile.read_text().strip(), "off")
-                # A plain re-run (an upgrade, `taxjson deploy`) keeps it out.
+                # A plain re-run (an upgrade, `tjs deploy`) keeps it out.
                 self.install()
                 self.assertEqual(self.fetch_installs(), [])
 

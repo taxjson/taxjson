@@ -1,5 +1,5 @@
 """Release channels — where `stable`, `beta` and `latest` point, and what
-this machine's production copy runs (`taxjson channels`; the release
+this machine's production copy runs (`tjs channels`; the release
 verbs `promote` and `deploy` find the development checkout here too).
 
 The model (docs/releasing.md):
@@ -323,7 +323,7 @@ def this_box(env: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
 
 def check_deployed(prod: Path, target: str
                    ) -> Tuple[Optional[str], str, List[str]]:
-    """After `taxjson deploy`: does the production copy run the release
+    """After `tjs deploy`: does the production copy run the release
     it was asked for? `target` is a vX.Y.Z tag or "latest" (the newest
     release tag the copy knows). Returns (the release expected, what
     `<prod>/venv/bin/taxjson --version` printed, problems) — problems
@@ -412,7 +412,7 @@ def status(repo: Path, *, fetch_remote: bool = True,
            limit: Optional[int] = DEFAULT_LIMIT,
            env: Optional[Mapping[str, str]] = None,
            source_kind: str = "") -> Dict[str, Any]:
-    """Everything `taxjson channels` shows, as data."""
+    """Everything `tjs channels` shows, as data."""
     if fetch_remote:
         online, why = fetch(repo, env)
     else:
@@ -449,9 +449,9 @@ def status(repo: Path, *, fetch_remote: bool = True,
             "releases": releases, "total": len(rows)}
 
 
-def render(st: Dict[str, Any], prog: str = "taxjson",
+def render(st: Dict[str, Any], prog: str = "tjs",
            width_: Optional[int] = None) -> str:
-    """The text page for `taxjson channels`, in the house layout
+    """The text page for `tjs channels`, in the house layout
     (docs/output-style.md): a title naming where it reads, the channels
     and this machine as aligned `label:  value` lines, then the releases
     as a table whose CHANGELOG column is cut to fit the width."""

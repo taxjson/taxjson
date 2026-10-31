@@ -1,4 +1,4 @@
-"""`taxjson tax-logic`: the rule summary follows the project's settings."""
+"""`tjs tax-logic`: the rule summary follows the project's settings."""
 import json
 import subprocess
 import sys

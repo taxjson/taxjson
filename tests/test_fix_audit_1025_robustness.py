@@ -20,7 +20,7 @@ REPO = Path(__file__).resolve().parents[1]
 
 
 def _cli(root, *args):
-    """`taxjson -C ROOT ...` as a child of THIS tree's code."""
+    """`tjs -C ROOT ...` as a child of THIS tree's code."""
     env = dict(os.environ, TAXJSON_WIDTH="0", TAXJSON_OFFLINE="1",
                NO_COLOR="1")
     env["PYTHONPATH"] = str(REPO / "src") + os.pathsep + env.get(

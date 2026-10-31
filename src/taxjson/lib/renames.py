@@ -21,7 +21,7 @@ After the date OLD is NOT automatically the same security. A trade in
 OLD after the rename date is either the broker still booking the
 renamed shares under the old ticker, or another company that now uses
 the ticker — the export cannot tell. Such rows are listed by
-`taxjson renames`, stop `taxjson run --strict`, and stay a separate
+`tjs renames`, stop `tjs run --strict`, and stay a separate
 security until the user declares them on the dated line (.tt form):
 
   RENAME YYYY-MM-DD OLD NEW late=fold      the late OLD rows ARE the
@@ -30,7 +30,7 @@ security until the user declares them on the dated line (.tt form):
 
 An UNDATED ticker.map rename (`GLOBAL OLD NEW`, or `RENAME OLD NEW`
 without a date) keeps its old meaning — every row of OLD, at any date,
-is NEW — and `taxjson renames` suggests the dated form when a broker
+is NEW — and `tjs renames` suggests the dated form when a broker
 event gives the date.
 """
 from __future__ import annotations
@@ -193,7 +193,7 @@ def rename_target(r: Any) -> str:
     return "" if not new or new == str(_g(r, "symbol")) else new
 
 
-# The words of a rename's `source` (the SOURCE column of `taxjson
+# The words of a rename's `source` (the SOURCE column of `tjs
 # renames`): the stamp a stage writes on the SPLIT row. A source not
 # named here is shown as it is (a broker row's file name: `broker row
 # (<file>)`).
@@ -614,7 +614,7 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
                       f"late=fold applies to the accounts that held "
                       f"{dr.old} before the date, and {acct} did not "
                       f"(another company may use the ticker now) — "
-                      f"`taxjson renames` lists them; a .tt line of "
+                      f"`tjs renames` lists them; a .tt line of "
                       f"{acct}'s own (`RENAME {dr.date} {dr.old} {dr.new} "
                       f"late=fold` or `late=separate`) settles them.",
                       file=stream)
@@ -656,7 +656,7 @@ def _load_rows(path: Path) -> List[Dict[str, Any]]:
     try:
         doc = read_work_doc(path)
     except InputFileError as e:
-        raise ValueError(f"{e} — re-run `taxjson run` to rebuild it") \
+        raise ValueError(f"{e} — re-run `tjs run` to rebuild it") \
             from None
     return list(doc.get("transactions") or [])
 
@@ -1111,7 +1111,7 @@ def _denied_into_cost(root: Path, cfg: Dict[str, Any]
 def report(root: Path, cfg: Dict[str, Any],
            account: Optional[str] = None, *,
            undated: bool = True, hints: bool = True) -> Dict[str, Any]:
-    """`taxjson renames`: every rename event with its date, source and
+    """`tjs renames`: every rename event with its date, source and
     the position / book cost it carried per account; every late trade
     in an old ticker with its resolution; the undated ticker.map renames
     (with the dated form when a broker event gives the date)."""
@@ -1237,7 +1237,7 @@ def late_of(x: Dict[str, Any], e: Dict[str, Any]) -> bool:
 
 
 def pending_renames(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """report()'s rename events with an unresolved late trade (`taxjson
+    """report()'s rename events with an unresolved late trade (`tjs
     renames --pending`)."""
     bad = [x for x in doc["late"] if x["resolution"] == "unresolved"]
     return [e for e in doc["renames"] if any(late_of(x, e) for x in bad)]
@@ -1358,7 +1358,7 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
                 d.line(f"    RENAME {e['date']} {e['old']} {e['new']} "
                        f"late=separate")
                 _hang(d, "Until then they are a separate security and "
-                       "`taxjson run --strict` stops.", "  ", "    ")
+                       "`tjs run --strict` stops.", "  ", "    ")
     if unused:
         d.section(f"DECLARED, NOT BOOKED ({len(unused)})")
         d.para("No account's books hold the old symbol before the date "
@@ -1379,7 +1379,7 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
                "in the account's inputs/ folder (a ticker change is a dated "
                "event) — the date is the new symbol's first row; use the "
                "broker's change date if you know it — then re-run "
-               "`taxjson run`.", "  ")
+               "`tjs run`.", "  ")
         for h in hints:
             d.blank()
             d.item(f"{h['old']} -> {h['new']} ({h['account'] or '?'}, "

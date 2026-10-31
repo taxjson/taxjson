@@ -12,7 +12,7 @@ artifact findings.
   R1-208  the .sum TOTAL PROCEEDS/COST say they are the engine convention
   R1-310  sum-income year filter, withholding and grand total pinned
   S022-00 / S041-14  account names that shadow artifact suffixes refused
-  S037-23 `taxjson gains` names an account with no native gains
+  S037-23 `tjs gains` names an account with no native gains
   S044-21 list --date says its ACB is per-account
 
 All data is synthetic.
@@ -273,14 +273,14 @@ class TestSumTotalsConvention(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             text = (root / "reports" / "margin.sum").read_text()
         i = text.index("TOTAL PROCEEDS:")
-        self.assertIn("taxjson form-export", text[i:i + 400])
+        self.assertIn("tjs form-export", text[i:i + 400])
 
 
 # ------------------------------------------------- R1-310 sum-income pins
 @rule("CA-INC-05", "CA-INC-DATE-DIV")
 @rule("US-INC-03", "US-INC-DATE-DIV")
 class TestSumIncomeYearPin(unittest.TestCase):
-    """A multi-year base book (as `taxjson run` passes it) summarised for
+    """A multi-year base book (as `tjs run` passes it) summarised for
     one year: the year filter, the withholding subtraction and the
     interest in the grand total are each pinned."""
     ROWS = [

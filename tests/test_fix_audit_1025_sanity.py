@@ -1,4 +1,4 @@
-"""Audit 2026-10-25, group sanity: `taxjson sanity` against the broker's
+"""Audit 2026-10-25, group sanity: `tjs sanity` against the broker's
 holdings files. brokers-inputs#1, robustness#2 and first-project#3 are
 one defect (a holdings TOML whose `[meta] holdings_count` disagrees with
 its tables, or whose contract size is 0 or negative, compared "OK");

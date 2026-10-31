@@ -1,5 +1,5 @@
 """T5 / T3 slips downloaded from CRA My Account ("Tax information
-slips"), one PDF per slip, read into slips.toml tables for `taxjson
+slips"), one PDF per slip, read into slips.toml tables for `tjs
 slip-audit --import-cra` (tax-logic CA-SLIP-04).
 
 CRA prints every issuer's slip in one layout (pdftotext -layout):
@@ -758,7 +758,7 @@ def place(slips: List[CraSlip], groups: List[Group], year: int,
             # Its amounts cannot be set against the books' CAD: never
             # placed by a guess.
             pl.how = (f"a {s.currency} slip and no {s.currency} rate for "
-                      f"{year} in the FX cache — run `taxjson run` (it "
+                      f"{year} in the FX cache — run `tjs run` (it "
                       f"fills the cache), or type the slip into slips.toml")
             continue
         by_broker.setdefault(broker_of_issuer(s.issuer), []).append(pl)
@@ -790,7 +790,7 @@ def place(slips: List[CraSlip], groups: List[Group], year: int,
                     pl.how = (f"its {shown} broker account cannot be told: "
                               f"the books hold {len(gs)} and no {year} "
                               f"payments in them to match — import it "
-                              f"again naming its account (`taxjson "
+                              f"again naming its account (`tjs "
                               f"slip-audit ACCOUNT --import-cra FILE`), or "
                               f"type it into slips.toml with "
                               f"broker_account")
@@ -799,13 +799,13 @@ def place(slips: List[CraSlip], groups: List[Group], year: int,
                               + _via(pl.slip.issuer)
                               + f" and the books hold no {shown} broker "
                                 f"account — import it again naming its "
-                                f"account (`taxjson slip-audit ACCOUNT "
+                                f"account (`tjs slip-audit ACCOUNT "
                                 f"--import-cra FILE`), or add the {shown} "
                                 f"export to inputs/<account>/")
                 else:
                     pl.how = ("no broker in the books by the issuer's "
                               "name — import it again naming its account "
-                              "(`taxjson slip-audit ACCOUNT --import-cra "
+                              "(`tjs slip-audit ACCOUNT --import-cra "
                               "FILE`), or it is outside the books (a bank "
                               "account)")
             continue
@@ -884,7 +884,7 @@ def place(slips: List[CraSlip], groups: List[Group], year: int,
                     pl.how = (f"no {shown} broker account in the books has "
                               f"its {kinds} in {year} — an export missing "
                               f"from inputs/? Import it again naming its "
-                              f"account (`taxjson slip-audit ACCOUNT "
+                              f"account (`tjs slip-audit ACCOUNT "
                               f"--import-cra FILE`), or type it into "
                               f"slips.toml with broker_account")
                 continue

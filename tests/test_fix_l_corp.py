@@ -215,7 +215,7 @@ class TestManifestErrors(unittest.TestCase):
                     r = _run_cli(root, *args)
                     self.assertNotIn("Traceback", r.stderr, content)
                     self.assertNotEqual(r.returncode, 0, content)
-                    self.assertIn("taxjson elect: error: manifest at",
+                    self.assertIn("tjs elect: error: manifest at",
                                   r.stderr, content)
 
     def test_s072_16_bad_record_refused_by_load(self):
@@ -316,7 +316,7 @@ class TestRbcLow(unittest.TestCase):
             _, err2 = _quiet(parse_rbc_corporate_actions, p, "margin",
                              renames={"X000006.TO": "SPNC.TO"})
             self.assertNotIn("temporary code", err2)
-            # Through the CLI flag `taxjson run` passes.
+            # Through the CLI flag `tjs run` passes.
             tm = Path(tmp) / "ticker.map"
             tm.write_text("GLOBAL X000006.TO SPNC.TO\n")
             r = subprocess.run(
@@ -438,7 +438,7 @@ class TestElectionsLow(unittest.TestCase):
         buy = [r for r in rows if r['action'] == 'BUYSELL']
         self.assertEqual(buy[0]['net_amount'], 0.0)
         self.assertIn("allocated cost of 0", err)
-        # `taxjson run` repeats it on every run, into the .sum/checklist.
+        # `tjs run` repeats it on every run, into the .sum/checklist.
         from taxjson.bin.taxjson_run import _warn_zero_value_spinoffs
         with tempfile.TemporaryDirectory() as tmp:
             corp = Path(tmp) / "margin_ib_corp.json"

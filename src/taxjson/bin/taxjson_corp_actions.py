@@ -90,7 +90,7 @@ def extract_events(extractor, csv_paths: List[Path],
     `symbol_codes`: the account's internal-code record (work/<acct>
     _symbol_codes.state), for an extractor that books a chain under
     a broker's internal code (Questrade). The one extraction definition
-    for the CLI, `taxjson elect` and `taxjson spinoffs`, so all three
+    for the CLI, `tjs elect` and `tjs spinoffs`, so all three
     compute the same event ids and targets."""
     events: List[CorporateAction] = []
     paths = [Path(p) for p in csv_paths]
@@ -119,10 +119,10 @@ def map_renames(path: Path) -> dict:
 
 
 def project_corp_map(root: Path) -> Optional[Path]:
-    """The map `taxjson run`'s corporate-action stage read for the
+    """The map `tjs run`'s corporate-action stage read for the
     project at `root`: the run's effective map (work/ticker.map.effective:
     ticker.map plus the listings it joined and the .tt renames) when the
-    last run wrote one, else ticker.map; None without either. `taxjson
+    last run wrote one, else ticker.map; None without either. `tjs
     elect` extracts with it, so its event ids are the run's (backlog
     TJ-0849)."""
     from taxjson.lib import project_layout as _PL
@@ -136,7 +136,7 @@ def project_corp_map(root: Path) -> Optional[Path]:
 
 def project_corp_renames(root: Path) -> Optional[dict]:
     """map_renames of project_corp_map (None when there is no map or it
-    cannot be read: `taxjson run` refuses a bad map up front)."""
+    cannot be read: `tjs run` refuses a bad map up front)."""
     p = project_corp_map(root)
     if p is None:
         return None
@@ -389,7 +389,7 @@ EXIT_ELECTIONS_REQUIRED = 3
 def _pending_doc(missing: List[CorporateAction], manifest_path: Path,
                  country: str, sheltered: bool = False) -> dict:
     """Machine-readable pending-elections document — everything a GUI
-    (or `taxjson elect --set`) needs to resolve each event without a
+    (or `tjs elect --set`) needs to resolve each event without a
     TTY: the event's identity/quantities/source rows, every available
     election with its description, and the numeric hints that election
     would prompt for (hint `needed` predicates evaluated against THIS
@@ -424,7 +424,7 @@ def _pending_doc(missing: List[CorporateAction], manifest_path: Path,
             "ratio_old": ev.ratio_old,
             "source_rows": list(ev.raw_descriptions or []),
             # A spin-off's fraction paid in cash: the holding was
-            # entitled to it too (`taxjson elect --pending` says so; the
+            # entitled to it too (`tjs elect --pending` says so; the
             # s.86.1 allocation covers it, CA-CORP-05; backlog TJ-0166).
             "cash_in_lieu": float(ev.cash_in_lieu or 0.0),
             "cash_in_lieu_currency": ev.cash_in_lieu_currency or "",
@@ -478,8 +478,8 @@ def main():
     )
     parser.add_argument(
         '--manifest-shown', metavar='TEXT', default=None,
-        help="How the messages name the manifest (`taxjson run` passes "
-             "it as `taxjson elect` shows it: relative to the project, "
+        help="How the messages name the manifest (`tjs run` passes "
+             "it as `tjs elect` shows it: relative to the project, "
              "../inputs/<account>/manifest.json for shared exports); "
              "default: --manifest as given.",
     )
@@ -518,12 +518,12 @@ def main():
              'side effect)')
     parser.add_argument(
         '--ticker-map', metavar='FILE', default=None,
-        help="The project's ticker.map (`taxjson run` passes it): a "
+        help="The project's ticker.map (`tjs run` passes it): a "
              "temporary code it already renames is not warned about.",
     )
     parser.add_argument(
         '--symbol-codes', metavar='FILE', default=None,
-        help="The account's internal-code record (`taxjson run` passes "
+        help="The account's internal-code record (`tjs run` passes "
              "work/<acct>_symbol_codes.state): a Questrade chain booked "
              "under an internal code takes the listing it resolves to.",
     )
@@ -532,7 +532,7 @@ def main():
         help="The account is sheltered (registered): no tax in the "
              "account depends on an election, which only sets the "
              "holdings' cost; the holdings still count for the "
-             "superficial-loss / wash-sale rule (`taxjson run` passes "
+             "superficial-loss / wash-sale rule (`tjs run` passes "
              "it). See --sheltered-elections.",
     )
     parser.add_argument(
@@ -547,21 +547,21 @@ def main():
     )
     parser.add_argument(
         '--tt', metavar='FILE', action='append', default=[],
-        help="One of the account's .tt files (`taxjson run` passes each): "
+        help="One of the account's .tt files (`tjs run` passes each): "
              "a spin-off's fraction sold there by hand is its cash in "
              "lieu booked, not an UNBOOKED warning.",
     )
     parser.add_argument(
         '--ask-event', metavar='ID', default=None,
-        help="Ask only about this event (`taxjson elect --redo --event "
+        help="Ask only about this event (`tjs elect --redo --event "
              "ID`): no other event is asked about or elected, and the "
              "rows of an event that has no election are left out of the "
-             "output (`taxjson run` asks about it).",
+             "output (`tjs run` asks about it).",
     )
     parser.add_argument(
         '--saved-log', metavar='FILE', default=None,
         help="Append each election this run saves (one JSON line: the "
-             "record) to FILE: `taxjson elect --redo` reads it to tell "
+             "record) to FILE: `tjs elect --redo` reads it to tell "
              "its own answers from an election another command saved "
              "meanwhile when it puts the cleared ones back (backlog "
              "TJ-0955).",
@@ -579,12 +579,12 @@ def main():
         '--pending-json', metavar='FILE', default=None,
         help="When elections are required and prompting isn't possible, "
              "write the pending events (with their options and hints) "
-             "as JSON to FILE for a GUI or `taxjson elect --set` to "
+             "as JSON to FILE for a GUI or `tjs elect --set` to "
              "resolve.",
     )
     parser.add_argument(
         '--pending-json-shown', metavar='TEXT', default=None,
-        help="How the note names --pending-json (`taxjson run` passes it "
+        help="How the note names --pending-json (`tjs run` passes it "
              "relative to the project, work/<account>_pending_elections"
              ".json); default: --pending-json as given.",
     )
@@ -673,7 +673,7 @@ def main():
     # the manifest, so an id-scheme change never re-prompts for (or
     # orphans) decisions the user already made. Each save is a locked
     # load-change-save of the file as it is then (Manifest.update): an
-    # election `taxjson elect --set` saved meanwhile is kept (backlog
+    # election `tjs elect --set` saved meanwhile is kept (backlog
     # TJ-0544).
     if manifest.migrate_legacy(events) and not args.decisions_only:
         manifest, _n = _update_or_die(
@@ -683,7 +683,7 @@ def main():
 
     # Auto-defaults first: event types with exactly one sane treatment
     # (name changes) are elected without prompting — the manifest record
-    # is still written, so the audit trail is intact and `taxjson elect
+    # is still written, so the audit trail is intact and `tjs elect
     # --redo` can override like any hand-made election.
     # --ask-event: that event only — another event's election is never
     # saved by a redo of one (backlog TJ-0847).
@@ -699,7 +699,7 @@ def main():
                     if ev.event_id in manifest.records])
         for ev in auto_applied:
             emit_line(f"note: auto-elected {ev.event_id} ({ev.summary()}) — "
-                      f"no decision required; `taxjson elect --redo` to "
+                      f"no decision required; `tjs elect --redo` to "
                       f"override.", file=sys.stderr)
 
     missing = _unresolved(events, manifest)
@@ -729,8 +729,8 @@ def main():
                 f"— not asked: {reason}", prog="taxjson-corp-actions",
                 details=[f"- {ev.event_id}: {ev.summary()}"
                          for ev in missing]
-                + [f"Answer at a terminal (`taxjson run`), or set each "
-                   f"with `taxjson elect ACCOUNT --set EVENT_ID=ELECTION`; "
+                + [f"Answer at a terminal (`tjs run`), or set each "
+                   f"with `tjs elect ACCOUNT --set EVENT_ID=ELECTION`; "
                    f"the elections are saved in {shown}."])
             if args.pending_json:
                 doc = _pending_doc(missing, manifest_path, args.country,
@@ -792,7 +792,7 @@ def main():
     if not_asked:
         emit_line(f"note: {len(not_asked)} other event(s) without an "
                   f"election not asked (only {args.ask_event} was): "
-                  f"`taxjson run` asks about them.", file=sys.stderr)
+                  f"`tjs run` asks about them.", file=sys.stderr)
         events = [ev for ev in events if ev.event_id not in not_asked]
     try:
         out = _emit_resolved(events, manifest, args.country, fx=fx,
@@ -807,7 +807,7 @@ def main():
                   f"{shown})", file=sys.stderr)
         raise SystemExit(2)
     # The statements the events were read from, by their shown names:
-    # `taxjson audit` names them beside a corporate-action row, as a
+    # `tjs audit` names them beside a corporate-action row, as a
     # parsed row names its export (backlog TJ-0359). Not `input_files`,
     # which the export checks read as broker exports of their own.
     from taxjson.lib.brokerages.base import shown_name

@@ -1,6 +1,6 @@
-"""`taxjson amt`: the year's Canadian minimum tax (AMT) line by line.
+"""`tjs amt`: the year's Canadian minimum tax (AMT) line by line.
 
-Every figure comes from the estimate's own result (`taxjson estimate
+Every figure comes from the estimate's own result (`tjs estimate
 --json`, lib/tax_estimate._amt_canada and ca_amt_carryover) — this
 module only arranges and words it, so `amt` and the estimate's AMT
 section agree to the cent (tax-logic CA-AMT-01).
@@ -77,7 +77,7 @@ def _notes(notes: List[str]) -> List[str]:
 
 
 def render(doc: Dict[str, Any], details: bool = True) -> List[str]:
-    """The `taxjson amt` report. Not `details` (the default view, docs/
+    """The `tjs amt` report. Not `details` (the default view, docs/
     output-style.md, Essentials first): the law line, notes that do
     not fit a row and the NOTES move to --details."""
     import functools
@@ -329,6 +329,6 @@ def render_recorded(year: Any, label: str, mt: Dict[str, Any]
                      "entered ([estimate] other_income) — compare it "
                      "with the T691 you filed.")
     notes.append(f"The full computation is in the {year} project "
-                 f"(`taxjson amt` there).")
+                 f"(`tjs amt` there).")
     L += _notes(notes)
     return L

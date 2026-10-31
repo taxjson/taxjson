@@ -1,4 +1,4 @@
-"""`taxjson checklist`: every step from install to filing, in order, each
+"""`tjs checklist`: every step from install to filing, in order, each
 checked for you.
 
 One ordered list in ten sections (SECTIONS: Set up, Get your files, Build
@@ -12,8 +12,8 @@ one-line why (items()). An item is either
     attention  the evidence says something is wrong (fix, then re-check)
     todo       the evidence is missing (the step has not been started)
     manual     no evidence can prove it — the user confirms with
-               `taxjson checklist --done ID`
-    blocked    a prerequisite (usually `taxjson run`) is missing
+               `tjs checklist --done ID`
+    blocked    a prerequisite (usually `tjs run`) is missing
     n/a        the step does not apply to this project
 - or a STEP of the workflow no command can prove (STEP_RULES: install,
   init, the config's layout, the views to read ...), marked from the
@@ -35,10 +35,10 @@ the NEXT one, named with its command on the last line.
 
 Outside a project (no taxjson.toml) the same items are printed as a
 step-by-step guide, without marks (render_guide).
-The checks run only with `taxjson checklist --run` (`-j N`: N slow checks
+The checks run only with `tjs checklist --run` (`-j N`: N slow checks
 at a time, each a sub-command reading the books). Their verdicts are
 stored in work/checklist_results.json (RESULTS_FILE; save_results,
-load_results): a plain `taxjson checklist` shows the stored verdicts,
+load_results): a plain `tjs checklist` shows the stored verdicts,
 with the marks of checklist.json applied as they are now and a line
 saying when they were made and what changed since (RunInfo); with
 nothing stored it lists the steps unchecked. A `--run --quick` refreshes
@@ -56,7 +56,7 @@ steps; a project with no taxable account gets `n/a` for every step that
 only concerns taxable accounts. The other country's commands are left
 out of a project's list.
 
-`--json`: schema_version 3 (docs/settings.md, "taxjson checklist
+`--json`: schema_version 3 (docs/settings.md, "tjs checklist
 --json"; to_json, guide_json).
 """
 from __future__ import annotations
@@ -92,10 +92,10 @@ LONG_FORM = "--details"
 # in the list is items()'s.
 STEPS: List[Tuple[str, str, str, str, str]] = [
     ("inputs-frozen", "Get your files", "Each account's broker exports, through January of the next year",
-     "taxjson fetch / broker exports",
+     "tjs fetch / broker exports",
      "December trades settle in January and option closes after year end change the year."),
     ("export-coverage", "Get your files", "Each broker's exports reach the year end wherever it still holds positions",
-     "taxjson run (its export-coverage warnings)",
+     "tjs run (its export-coverage warnings)",
      "A broker whose exports stop while it holds positions leaves its later sales, option "
      "expiries and income out of the books — nothing else says so."),
     ("sheltered-inputs", "Get your files", "Sheltered accounts' activity present",
@@ -111,102 +111,102 @@ STEPS: List[Tuple[str, str, str, str, str]] = [
      "git status",
      "The filed books must be rebuildable years later."),
     ("run-clean", "Build the books", "Full run with zero validation errors and nothing pending",
-     "taxjson run",
+     "tjs run",
      "A validation error means a row the engine could not book; a pending election means an account was skipped."),
     ("check-dates", "Check", "Every trade and settlement date is possible for its market",
-     "taxjson check-dates",
+     "tjs check-dates",
      "A date on a closed day, or a settlement before the trade, moves a sale to the wrong day's rate or the wrong year."),
     ("sanity", "Check", "Positions tie to the broker holdings",
-     "taxjson sanity",
+     "tjs sanity",
      "The only acceptable differences are trades after the last export."),
     ("missing-history", "Fill the gaps", "No position with missing cost basis affects the year",
-     "taxjson find-missing-history",
+     "tjs find-missing-history",
      "Missing basis distorts the year either way: a sale with no earlier buy in the data "
      "(truncated history) is booked as a short and left out of the year, understating the "
      "proceeds and gain; shares acquired at $0 cost (an undeclared corporate action) "
      "overstate the gain by the missing basis."),
     ("renames", "Fill the gaps", "Every ticker change dated; no undeclared trade in an old ticker after its rename",
-     "taxjson renames",
+     "tjs renames",
      "A rename carries the position and cost on its date; a later trade in the old ticker is "
      "another security unless ticker.map folds it (`late=fold` / `late=separate`)."),
     ("journals", "Fill the gaps", "Every journal between two listings joined or settled",
-     "taxjson journals --pending",
+     "tjs journals --pending",
      "A broker journal moves a position from one listing of a security to another; one the books do "
      "not pool leaves a long on one listing and a short on the other, and a sale's cost wrong."),
     ("elections", "Build the books", "No unresolved merger or spin-off election",
-     "taxjson elect --pending",
+     "tjs elect --pending",
      "A deferred election leaves the account out of the run."),
     ("crypto-sends", "Fill the gaps", "Crypto sends classified (own wallet, gift or payment)",
-     "taxjson crypto-sends",
+     "tjs crypto-sends",
      "A crypto send that left your ownership is a disposition at fair value; only you know which sends did."),
     ("audit", "Check", "Every disposition traced and tied",
-     "taxjson audit",
+     "tjs audit",
      "The audit walks each sale from the broker row to the reported gain."),
     ("wash-reviewed", "Check", "Every superficial-loss denial reviewed",
-     "taxjson wash-sales",
+     "tjs wash-sales",
      "A permanently denied loss (registered-account or affiliated-person repurchase) is gone from "
      "your return; make sure each is real (an affiliated person adds it to their own ACB)."),
     ("filing-positions", "Check", "Every filing position against the superficial-loss rule confirmed",
-     "taxjson sum (FILING POSITIONS)",
+     "tjs sum (FILING POSITIONS)",
      "An ALLOWLOSS line claims a loss the rule would deny: it is your position, not the rule's "
      "test. Keep its reason and be ready to support it; delete the line to apply the rule."),
     ("option-boundary", "Check", "Year-straddling written options need no prior-year amendment",
-     "taxjson option-boundary",
+     "tjs option-boundary",
      "Under ITA s.49 an assignment in a later year moves the premium; a filed year may need a T1-ADJ."),
     ("handoff", "Check", "Last year's closing positions carried in exactly once",
-     "taxjson handoff",
+     "tjs handoff",
      "A Dec 31 trade settling in January, a dropped lot, or a correction applied to one year only makes a gain vanish or count twice."),
     ("t5008", "Results", "T5008 slips reconcile to the computed dispositions",
-     "taxjson reconcile-slips inputs/slips/*.csv",
+     "tjs reconcile-slips inputs/slips/*.csv",
      "The CRA matches Schedule 3 proceeds to the T5008s — this step prevents the review letter."),
     ("t5-t3", "Results", "T5 / T3 / NR4 slips agree with the books' income (dividends, box 18, ROC, foreign tax, "
      "interest)",
-     "taxjson slip-audit",
+     "tjs slip-audit",
      "Trust units report on a T3, often weeks after the T5s; split-share and mutual-fund "
      "corporations report on a T5, where box 18 capital-gains dividends go on line 17400 "
      "(taxjson books them as dividends until [[capital_gains_dividends]] names them). "
-     "`taxjson slip-audit` compares each slip box with the books (the slips typed into "
-     "inputs/slips/slips.toml or read from CRA My Account's PDFs with `taxjson slip-audit "
+     "`tjs slip-audit` compares each slip box with the books (the slips typed into "
+     "inputs/slips/slips.toml or read from CRA My Account's PDFs with `tjs slip-audit "
      "--import-cra`, IB's dividends reports) and lists the lines that bring the "
      "books to the slips: payments in lieu, trust distributions dated by their record "
      "year, a T3's split (capital gains box 21, return of capital box 42). A difference "
-     "you accept is answered per account by `taxjson checklist --done t5-t3`; NR4 slips "
+     "you accept is answered per account by `tjs checklist --done t5-t3`; NR4 slips "
      "are compared by hand."),
     ("foreign-tax", "Results", "Foreign tax withheld taken from the slips (line 40500 / T2209)",
      "T5 box 15/16, T3 box 33/34",
      "The credit is limited to what the slips show, not what the broker rows imply."),
     ("form-export", "Results", "Schedule 3 rows exported and their total equals the report",
-     "taxjson form-export",
+     "tjs form-export",
      "The export is what goes on the return; the .sum is what the engine computed — they must agree."),
     ("t1135", "Results", "T1135 filed when foreign property cost exceeded CAD 100,000",
-     "taxjson t1135",
+     "tjs t1135",
      "ITA 233.3: the test is on cost at any time in the year, not year-end value."),
     ("carryover", "Results", "Net capital losses of other years applied and recorded",
-     "taxjson carryover, [carryover] claimed in taxjson.toml",
+     "tjs carryover, [carryover] claimed in taxjson.toml",
      "Line 25300; the ledger only knows what was claimed if you write it down — "
      "record the 100% loss applied (line 25300 divided by the inclusion rate)."),
     ("fx-cash", "Results", "FX gain on foreign cash reviewed (ITA s.39(1.1), $200 de minimis)",
-     "taxjson fx-cash",
+     "tjs fx-cash",
      "Foreign currency is property; the net gain above $200 is a capital gain. The default "
      "ledger is NOT RELIABLE (it reads no conversions, deposits or margin balances); the "
      "opt-in ledger v2 (fx_cash_ledger = \"v2\") is under audit."),
     ("fees", "Results", "Carrying charges (margin interest) for line 22100 taken from the statements",
-     "broker statements (`taxjson events` lists the INTEREST rows)",
+     "broker statements (`tjs events` lists the INTEREST rows)",
      "Interest on money borrowed to invest is deductible on line 22100; trade "
      "commissions are not (they are already in the ACB and proceeds). The "
      "account .sum's CASH INTEREST line is interest earned; its INTEREST PAID "
      "line, per currency, is the interest charged (margin interest)."),
     ("estimate", "Results", "Tax estimate and instalment position checked",
-     "taxjson estimate, taxjson instalments",
+     "tjs estimate, tjs instalments",
      "A sanity check on the tax owed and on what was already paid."),
     ("amt", "Results", "Minimum tax (AMT) and its carryover checked",
-     "taxjson amt, [estimate] amt_carryover",
+     "tjs amt, [estimate] amt_carryover",
      "Minimum tax paid in the 7 preceding years is recovered against regular tax above "
      "the minimum (ITA s.120.2, line 40427), and a year where AMT binds starts a new "
      "carryover; the estimate applies one only when [estimate] amt_carryover (your notice of "
      "assessment / T691) or last year's close-year lock carries it."),
     ("filed-lock", "Year end", "Return filed and the year locked",
-     "taxjson close-year",
+     "tjs close-year",
      "The lock is what check-filed and option-boundary use to detect drift and to word a T1-ADJ."),
     ("lock-committed", "Year end", "The filed/<year>.json lock committed",
      "git status filed/",
@@ -226,12 +226,12 @@ US_STEPS: Dict[str, Any] = {
                     "ADJUST lines / [[distributions]] in taxjson.toml",
                     "Return of capital reduces basis; funds often reclassify after year end."),
     "crypto-sends": ("Crypto sends classified (own wallet, gift or payment)",
-                     "taxjson crypto-sends",
+                     "tjs crypto-sends",
                      "Paying with crypto is a sale at fair value; a gift is not a sale for the donor."),
-    "wash-reviewed": ("Every wash-sale disallowance reviewed", "taxjson wash-sales",
+    "wash-reviewed": ("Every wash-sale disallowance reviewed", "tjs wash-sales",
                       "A wash sale triggered by an IRA purchase is permanently disallowed."),
     "filing-positions": ("Every filing position against the wash-sale rule confirmed",
-                         "taxjson sum (FILING POSITIONS)",
+                         "tjs sum (FILING POSITIONS)",
                          "An ALLOWLOSS line claims a loss §1091 would disallow: it is your "
                          "position, not the rule's test. Keep its reason and be ready to "
                          "support it; delete the line to apply the rule."),
@@ -239,46 +239,46 @@ US_STEPS: Dict[str, Any] = {
     # but a contract past its expiry with no close row keeps its premium
     # or cost out of the return — the check stays (S066-15).
     "option-boundary": ("No option left open past its expiry",
-                        "taxjson list (option positions)",
+                        "tjs list (option positions)",
                         "Under §1234 an expired written option's premium is a "
                         "short-term gain, and an expired long option's cost a "
                         "loss, in the expiry year; a missing expiry, exercise "
                         "or assignment row leaves either out of the return."),
     "t5008": ("1099-B (and, for crypto from 2025, 1099-DA) slips reconcile "
               "to the computed dispositions",
-              "taxjson reconcile-slips inputs/slips/*.csv",
+              "tjs reconcile-slips inputs/slips/*.csv",
               "The IRS matches Form 8949 / Schedule D to the 1099-Bs and "
               "1099-DAs — this step prevents a CP2000."),
     "t5-t3": ("1099-DIV / 1099-INT slips agree with the dividend and ROC totals",
-              "taxjson divs-sum, taxjson roc-sum (the TAXABLE lines)",
+              "tjs divs-sum, tjs roc-sum (the TAXABLE lines)",
               "Qualified vs ordinary dividends and nondividend distributions come from the slips."),
     "foreign-tax": ("Foreign tax paid taken from the 1099-DIV (box 7) for the credit (Form 1116)",
                     "1099-DIV box 7",
                     "The credit is limited to what the slips show."),
     "form-export": ("Form 8949 rows exported and their totals equal the report",
-                    "taxjson form-export",
+                    "tjs form-export",
                     "The export is what goes on Form 8949 / Schedule D; the .sum is what the engine computed — they must agree."),
     "t1135": "US project (T1135 is a Canadian form)",
     "carryover": ("Capital loss carryover applied and recorded (Schedule D line 21 deduction)",
-                  "taxjson carryover, [carryover] claimed in taxjson.toml",
+                  "tjs carryover, [carryover] claimed in taxjson.toml",
                   "The ledger only knows what was claimed if you write it down — "
                   "record each year's Schedule D line 21 deduction, not the "
                   "line 6 / 14 carryover."),
-    "fx-cash": ("FX gain on foreign cash reviewed (§988)", "taxjson fx-cash",
+    "fx-cash": ("FX gain on foreign cash reviewed (§988)", "tjs fx-cash",
                 "§988 currency gains on investment cash are ordinary income; "
-                "`taxjson fx-cash`'s default ledger is NOT RELIABLE and the "
+                "`tjs fx-cash`'s default ledger is NOT RELIABLE and the "
                 "opt-in ledger v2 is under audit (the §988(e) "
                 "personal-transaction exclusion is not modelled)."),
     "fees": ("Margin interest collected (Form 4952, if itemizing)",
-             "broker statements (`taxjson events` lists the INTEREST rows)",
+             "broker statements (`tjs events` lists the INTEREST rows)",
              "Investment interest is deductible only when itemizing; the account "
              ".sum's CASH INTEREST line is interest earned and its INTEREST PAID "
              "line the interest charged, per currency; trade commissions are not "
              "investment interest."),
-    "estimate": ("Tax estimate and estimated payments checked", "taxjson estimate",
+    "estimate": ("Tax estimate and estimated payments checked", "tjs estimate",
                  "A sanity check on the tax owed."),
     "amt": "US project (the US alternative minimum tax, Form 6251, is not modelled)",
-    "filed-lock": ("Return filed and the year locked", "taxjson close-year",
+    "filed-lock": ("Return filed and the year locked", "tjs close-year",
                    "The lock is what check-filed uses to detect drift after filing."),
     "noa": "US project (no Notice of Assessment)",
 }
@@ -474,7 +474,7 @@ class Ctx:
 def has_books(ctx: Ctx) -> bool:
     """work/ holds a run's files. A work/ holding only the checklist's
     own results file (RESULTS_FILE, written by `--run` before any
-    `taxjson run`) is no work/ for the detectors that ask."""
+    `tjs run`) is no work/ for the detectors that ask."""
     return ctx.cache.is_dir() and any(f.name != RESULTS_FILE
                                       for f in ctx.cache.iterdir())
 
@@ -501,7 +501,7 @@ def default_run_sub(root: Path) -> Callable[..., Tuple[int, str, str]]:
 
 
 def _data_files(folder: Path) -> List[Path]:
-    """The activity files `taxjson run` actually reads: .csv and .tt
+    """The activity files `tjs run` actually reads: .csv and .tt
     directly in the folder. Counting .xlsx/.txt too marked an account
     whose only file was an unread spreadsheet as present (R1-248)."""
     if not folder.is_dir():
@@ -729,9 +729,9 @@ def _inputs_reach(ctx: Ctx) -> Result:
     if bad:
         return Result("inputs-frozen", "blocked",
                       f"cannot read {', '.join(bad)} — its latest activity "
-                      f"is unknown; re-run `taxjson run`")
+                      f"is unknown; re-run `tjs run`")
     if not docs:
-        return Result("inputs-frozen", "blocked", "no work/*_base.json — run `taxjson run`")
+        return Result("inputs-frozen", "blocked", "no work/*_base.json — run `tjs run`")
     latest = ""
     for d in docs.values():
         for t in d.get("transactions") or []:
@@ -824,7 +824,7 @@ def d_export_coverage(ctx: Ctx) -> Result:
         return Result("export-coverage", "n/a", "no broker account")
     if not any((ctx.cache / f"{n}_base.json").is_file() for n in names):
         return Result("export-coverage", "blocked",
-                      "no work/*_base.json — run `taxjson run`")
+                      "no work/*_base.json — run `tjs run`")
     gaps = [g for g in EC.find_gaps(ctx.root, ctx.cfg, today=ctx.today)
             if not g.info]
     if gaps:
@@ -870,7 +870,7 @@ def d_roc_entered(ctx: Ctx) -> Result:
     if bad:
         return Result("roc-entered", "blocked",
                       f"cannot read {', '.join(bad)} — its ADJUST rows "
-                      f"cannot be counted; re-run `taxjson run`")
+                      f"cannot be counted; re-run `tjs run`")
     # The year an ADJUST lowers the cost in: a Canadian trust's ROC on
     # its record date (CA-INC-DATE-ROC-TRUST) — roc-sum's window, not the
     # pay date (A2-0680).
@@ -966,7 +966,7 @@ def d_inputs_committed(ctx: Ctx) -> Result:
 def d_run_clean(ctx: Ctx) -> Result:
     sums = sorted(ctx.reports.glob("*.sum")) if ctx.reports.is_dir() else []
     if not sums:
-        return Result("run-clean", "blocked", "no reports — run `taxjson run`")
+        return Result("run-clean", "blocked", "no reports — run `tjs run`")
     per_account: Dict[str, int] = {}
     unbooked: Dict[str, int] = {}
     empty_parse: List[str] = []
@@ -1030,7 +1030,7 @@ def d_run_clean(ctx: Ctx) -> Result:
             f"rows the run could not book are not in the books "
             f"(`run --strict` refuses them)")
     if pend:
-        problems.append("pending elections (`taxjson elect --pending`)")
+        problems.append("pending elections (`tjs elect --pending`)")
     orphans = orphan_work_accounts(ctx.root, ctx.accounts)
     if orphans:
         problems.append(
@@ -1089,7 +1089,7 @@ def d_run_clean(ctx: Ctx) -> Result:
                   and not (ctx.reports / f"{n}.sum").is_file()]
     if unreported:
         problems.append(f"no reports/<account>.sum for {', '.join(unreported)} "
-                        f"— the last run did not finish them (run `taxjson run` "
+                        f"— the last run did not finish them (run `tjs run` "
                         f"with no --account)")
     # Two or more taxable equity accounts are filed on ONE blended
     # (s.47 ACB / cross-account wash) pass. `run --account` and a run
@@ -1115,14 +1115,14 @@ def d_run_clean(ctx: Ctx) -> Result:
                 f"no {_pass} for {', '.join(unblended)} — "
                 f"the last run was per-account (`run --account`) or "
                 f"stopped at pending elections, so the filing figures "
-                f"are {_books} (run `taxjson run` "
+                f"are {_books} (run `tjs run` "
                 f"with no --account)")
     empty_only = False
     if empty_parse:
         empty_only = not problems
         problems.append(f"{', '.join(empty_parse)} parsed to 0 "
                         f"transactions (its rows are not in the books)")
-    # An unconverted spreadsheet is never read; `taxjson run` refuses
+    # An unconverted spreadsheet is never read; `tjs run` refuses
     # it (R1-248) — the checklist must not call that run clean.
     sheets = []
     for n in ctx.accounts:
@@ -1174,7 +1174,7 @@ FINGERPRINT_FILE = ".inputs_fingerprint.json"     # in work/
 # without it (1) was written by an older taxjson and is compared the
 # old way until the next full run rewrites it.
 FINGERPRINT_VERSION = 2
-# Project-root maps `taxjson run` reads (taxjson_run._PROJECT_ROOT_INPUTS
+# Project-root maps `tjs run` reads (taxjson_run._PROJECT_ROOT_INPUTS
 # is the same list; a test keeps the two equal — A2-0363, A2-1158).
 PROJECT_ROOT_MAPS = ("ticker.map", "tobase.map")
 # phantoms.json is the old name of missing_history.json (neither is read
@@ -1189,7 +1189,7 @@ _LEGACY_ROOT_INPUTS = ("taxjson.toml", "ticker.map", "distributions.map",
 # corp-action elections (A2-0124, A2-0126) and a crypto account's send
 # decisions, which regenerate crypto_sends.tt (A2-0358).
 _ACCOUNT_SIDECARS = ("manifest.json", "sends.json")
-# taxjson.toml content no `taxjson run` stage reads — planning tables,
+# taxjson.toml content no `tjs run` stage reads — planning tables,
 # the estimate's province, handoff's prior-year path, `sanity`'s
 # holdings files and `fetch`'s broker keys. An edit to them (or to a
 # comment) does not make the books stale (A2-0681, A2-1157).
@@ -1206,7 +1206,7 @@ _PLANNING_SETTINGS = ("province", "prior_year_record", "holdings_dir",
                       # Where the shared tobase.map is: its content is
                       # fingerprinted itself (_input_paths), so the year
                       # that starts reading an identical shared copy
-                      # (`taxjson migrate`) is not stale.
+                      # (`tjs migrate`) is not stale.
                       "tobase_map")
 _PLANNING_ACCOUNT_KEYS = ("holdings", "brokerage", "account", "query_id",
                           "broker_accounts",
@@ -1223,14 +1223,14 @@ def _skipped_input_name(name: str) -> bool:
 
 def _skipped_input(p: Path) -> bool:
     """A file `run` never reads: hidden, an Office lock file, or the
-    copy `taxjson redact FILE` wrote beside its export (backlog
+    copy `tjs redact FILE` wrote beside its export (backlog
     TJ-0476)."""
     return (_skipped_input_name(p.name)
             or _PL.redacted_copy_beside_exports(p))
 
 
 def _input_paths(root: Path, cfg: Dict[str, Any]) -> List[Path]:
-    """Every file `taxjson run` reads to build the books: the project-
+    """Every file `tjs run` reads to build the books: the project-
     root config and maps, and each configured account's activity files,
     generic-mapping sidecars (inputs/<acct>/*.toml), its elections
     manifest and its crypto send decisions (from the shared inputs/ when
@@ -1456,7 +1456,7 @@ def record_input_fingerprint(root: Path, cfg: Dict[str, Any], *,
                              booked_twice: Sequence[str] = (),
                              started: Optional[Dict[str, str]] = None
                              ) -> List[str]:
-    """Called by a successful FULL `taxjson run`: what the reports were
+    """Called by a successful FULL `tjs run`: what the reports were
     built from, for run-clean's staleness check. `booked_twice`: what
     the run found booked in two accounts (one export file in two
     folders, one broker account in two taxjson accounts), each in one
@@ -1615,7 +1615,7 @@ def inputs_changed(root: Path, cfg: Dict[str, Any]) -> Optional[str]:
 
 
 def input_files(root: Path, cfg: Dict[str, Any]) -> List[Path]:
-    """Every file `taxjson run` reads to build the books (what
+    """Every file `tjs run` reads to build the books (what
     close-year's freeze copies): _input_paths."""
     return _input_paths(root, cfg)
 
@@ -1672,7 +1672,7 @@ def _fingerprint_name(key: str) -> str:
 def fingerprint_delta(before: Dict[str, str], now: Dict[str, str]
                       ) -> Tuple[List[str], List[str], List[str]]:
     """(changed, added, removed) keys between two fingerprints, each
-    sorted — `taxjson compare`'s inputs lines; the shared / own
+    sorted — `tjs compare`'s inputs lines; the shared / own
     tobase.map treated as _fingerprint_diff does."""
     before, now = _same_tobase(_canon_fingerprint(before),
                                _canon_fingerprint(now))
@@ -1684,7 +1684,7 @@ def fingerprint_delta(before: Dict[str, str], now: Dict[str, str]
 
 def _same_tobase(before: Dict[str, str], now: Dict[str, str]
                  ) -> Tuple[Dict[str, str], Dict[str, str]]:
-    """The year's own tobase.map made the shared one (`taxjson
+    """The year's own tobase.map made the shared one (`tjs
     migrate`), or the shared one copied in as the year's own
     (close-year's freeze), with the same content: the books read the
     same pairs, so `before` is keyed as `now` is."""
@@ -1774,7 +1774,7 @@ def d_sanity(ctx: Ctx) -> Result:
         manual = Result("sanity", "manual",
                         f"no positions snapshot in {_hold}/ and no "
                         f"`holdings = [...]` in taxjson.toml — save the "
-                        f"broker's positions in {_hold}/, or run `taxjson "
+                        f"broker's positions in {_hold}/, or run `tjs "
                         f"sanity ACCOUNT=FILE.toml` by hand")
         if not resolve_gains_files(Path(ctx.root) / "work"):
             return manual
@@ -1934,7 +1934,7 @@ def d_elections(ctx: Ctx) -> Result:
         return Result("elections", "attention",
                       f"{zero} spin-off/merger(s) booked at $0 — set "
                       f"fmv_per_share (or {roll}) "
-                      f"with `taxjson elect` (see "
+                      f"with `tjs elect` (see "
                       f"the .sum DIAGNOSTICS)")
     if "No pending elections" in out or (code == 0 and not out.strip()):
         return Result("elections", "done", "none pending")
@@ -1953,7 +1953,7 @@ def d_crypto_sends(ctx: Ctx) -> Result:
     if not any((ctx.cache / f"{n}_{b}_transfers.json").is_file()
                for n in names for b in ("kraken", "coinbase")):
         # Every crypto folder empty: the run skips the account, so
-        # "run `taxjson run`" looped (audit 2026-10-22, item 12).
+        # "run `tjs run`" looped (audit 2026-10-22, item 12).
         empty = [n for n in names
                  if not _data_files(_PL.inputs_dir(ctx.root) / n)]
         if empty and len(empty) == len(names):
@@ -1965,7 +1965,7 @@ def d_crypto_sends(ctx: Ctx) -> Result:
                           + ", ".join(f"[accounts.{n}]" for n in empty),
                           cmd="-")
         return Result("crypto-sends", "blocked",
-                      "no crypto transfer evidence in work/ — run `taxjson run`")
+                      "no crypto transfer evidence in work/ — run `tjs run`")
     # A crypto account not parsed yet: a send to it reads as unmatched
     # and undecided (A2-0359) — the books are not ready to judge.
     # (The command's own guard, crypto_sends.stale_evidence.)
@@ -1981,7 +1981,7 @@ def d_crypto_sends(ctx: Ctx) -> Result:
         return Result("crypto-sends", "blocked",
                       f"the transfer evidence is not current for "
                       f"{'; '.join(unparsed)} — a send may look unmatched; "
-                      f"run `taxjson run`")
+                      f"run `tjs run`")
     try:
         rep = cs.build_report(ctx.root, ctx.cfg, None, None, with_pool=False)
     except ValueError as e:
@@ -2013,7 +2013,7 @@ def d_crypto_sends(ctx: Ctx) -> Result:
         return Result("crypto-sends", "attention",
                       f"saved as `gift`, which a US project refuses (not "
                       f"booked): {', '.join(refused)} — record each as "
-                      f"self or payment (`taxjson crypto-sends ACCOUNT "
+                      f"self or payment (`tjs crypto-sends ACCOUNT "
                       f"--set ID=self`)")
     if overridden:
         # A saved gift/payment the pairing overrode is not booked
@@ -2021,16 +2021,16 @@ def d_crypto_sends(ctx: Ctx) -> Result:
         return Result("crypto-sends", "attention",
                       f"saved gift/payment now paired with an arrival "
                       f"(booked as your own move, NOT as the decision): "
-                      f"{', '.join(overridden)} — `taxjson crypto-sends "
+                      f"{', '.join(overridden)} — `tjs crypto-sends "
                       f"ACCOUNT` says how to unpair or confirm it")
     if undecided:
         return Result("crypto-sends", "attention",
                       f"undecided send(s) — {', '.join(undecided)}; "
-                      f"decide with `taxjson crypto-sends ACCOUNT --set ID=...`")
+                      f"decide with `tjs crypto-sends ACCOUNT --set ID=...`")
     if stale:
         return Result("crypto-sends", "attention",
                       f"crypto_sends.tt out of date for {', '.join(stale)} — "
-                      f"`taxjson crypto-sends ACCOUNT --write`")
+                      f"`tjs crypto-sends ACCOUNT --write`")
     return Result("crypto-sends", "done",
                   f"{total} unmatched send(s), all decided" if total
                   else "every send arrived on another exchange")
@@ -2068,12 +2068,12 @@ def _books_state(ctx: Ctx) -> Optional[Result]:
         return Result("", "blocked",
                       f"work/ was built for another tax year "
                       f"({', '.join(other)}; [settings] year is {ctx.year}) "
-                      f"— rebuild with `taxjson run`")
+                      f"— rebuild with `tjs run`")
     if stale:
         return Result("", "attention",
                       f"the wash-adjusted books of {', '.join(stale)} are "
                       f"older than their inputs (a `run --account` skipped "
-                      f"the cross-account pass) — run `taxjson run`")
+                      f"the cross-account pass) — run `tjs run`")
     return None
 
 
@@ -2089,8 +2089,8 @@ def d_audit(ctx: Ctx) -> Result:
     if pending:
         return Result("audit", "blocked",
                       f"corp-action elections pending for "
-                      f"{', '.join(pending)} — `taxjson elect --pending`, "
-                      f"then `taxjson run`")
+                      f"{', '.join(pending)} — `tjs elect --pending`, "
+                      f"then `tjs run`")
     code, out, err = ctx.sub("audit", LONG_FORM)
     if not out:
         return Result("audit", "blocked", _last_line(err) or f"exit {code}")
@@ -2112,7 +2112,7 @@ def d_audit(ctx: Ctx) -> Result:
     if notfound:
         return Result("audit", "attention",
                       f"{notfound} disposition(s) not found in the gains file "
-                      f"— stale books? re-run `taxjson run`")
+                      f"— stale books? re-run `tjs run`")
     if code != 0:
         return Result("audit", "attention", _last_line(err) or f"exit {code}")
     return Result("audit", "done", f"{events} disposition(s) tied"
@@ -2202,14 +2202,14 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
                         f"; [settings] year is {ctx.year})")
     if blockers:
         return Result("wash-reviewed", "blocked",
-                      "; ".join(blockers) + " — re-run `taxjson run`")
+                      "; ".join(blockers) + " — re-run `tjs run`")
     if not seen:
-        return Result("wash-reviewed", "blocked", "no gains files — run `taxjson run`")
+        return Result("wash-reviewed", "blocked", "no gains files — run `tjs run`")
     if stale:
         return Result("wash-reviewed", "attention",
                       f"the wash-adjusted books of {', '.join(stale)} are "
                       f"older than their inputs (a `run --account` skipped "
-                      f"the cross-account pass) — run `taxjson run`")
+                      f"the cross-account pass) — run `tjs run`")
     # US projects in §1091's words, never CRA's (S049-14).
     _us = is_us(ctx.settings.get("country"))
     # A loss on one listing with the other listing bought in its window,
@@ -2225,7 +2225,7 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
                       f"across listings: {', '.join(xl[:4])}"
                       f"{' ...' if len(xl) > 4 else ''} — add the TOBASE "
                       f"(one security) or DISTINCT (two) line to ticker.map "
-                      f"(`taxjson ticker-map --suggest`)")
+                      f"(`tjs ticker-map --suggest`)")
     flag_note = ""
     if flags:
         shown = sorted(flags)
@@ -2233,7 +2233,7 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
                      f"(nothing denied by the books): "
                      f"{', '.join(shown[:4])}"
                      f"{' ...' if len(shown) > 4 else ''} — decide each "
-                     f"by hand (`taxjson wash-sales` lists them)")
+                     f"by hand (`tjs wash-sales` lists them)")
     # A loss with a fund ticker.map declares SIMILAR bought in the
     # window (lib/similar): the books deny nothing; the user decides.
     from taxjson.lib import similar as _SIM
@@ -2244,7 +2244,7 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
                       f"{perm:,.2f} permanently denied ("
                       f"{'IRA' if _us else 'registered-account or affiliated-person'}"
                       f" repurchase) "
-                      f"— confirm each with `taxjson wash-sales`"
+                      f"— confirm each with `tjs wash-sales`"
                       + (f"; {flag_note}" if flag_note else ""))
     if flag_note:
         return Result("wash-reviewed", "manual",
@@ -2282,7 +2282,7 @@ def d_filing_positions(ctx: Ctx) -> Result:
                       f"{len(probs)} {LO.KEYWORD} line(s) name no single "
                       f"denied loss — {probs[0]}"
                       + (" ..." if len(probs) > 1 else "")
-                      + " (`taxjson run` stops on it)",
+                      + " (`tjs run` stops on it)",
                       do=f"fix or delete the {LO.KEYWORD} line(s) named, "
                          f"then `tjs run`")
     verb = "disallow" if is_us(ctx.settings.get("country")) else "deny"
@@ -2296,7 +2296,7 @@ def d_filing_positions(ctx: Ctx) -> Result:
                   f"{len(shown)} filing position(s) taken against the "
                   f"rule: {'; '.join(shown[:3])}"
                   f"{' ...' if len(shown) > 3 else ''} — confirm each "
-                  f"(`taxjson sum` lists them under FILING POSITIONS)")
+                  f"(`tjs sum` lists them under FILING POSITIONS)")
 
 
 def _us_expired_options(ctx: Ctx) -> Result:
@@ -2309,10 +2309,10 @@ def _us_expired_options(ctx: Ctx) -> Result:
     docs, bad = _base_docs_checked(ctx, names)
     if bad:
         return Result("option-boundary", "blocked",
-                      f"unreadable: {', '.join(bad)} — re-run `taxjson run`")
+                      f"unreadable: {', '.join(bad)} — re-run `tjs run`")
     if not docs:
         return Result("option-boundary", "blocked",
-                      "no work/*_base.json — run `taxjson run`")
+                      "no work/*_base.json — run `tjs run`")
     found = []
     fields = TaxTransaction.__dataclass_fields__
     for name, d in sorted(docs.items()):
@@ -2338,7 +2338,7 @@ def _us_expired_options(ctx: Ctx) -> Result:
                       f"import the expiry, exercise or assignment row"
                       + (f" ({len(_closing)} opened by a trade the broker "
                          f"codes CLOSING, IB code C: add the missing "
-                         f"purchase instead — `taxjson find-missing-history`)"
+                         f"purchase instead — `tjs find-missing-history`)"
                          if _closing else ""))
     return Result("option-boundary", "done",
                   "no option position open past its expiry")
@@ -2359,7 +2359,7 @@ _ATTENTION_PHRASES = (
 
 def _attention_reason(row: Dict[str, Any]) -> str:
     """Why an option-boundary row needs attention, in a few words (the
-    `! ` line is short; the contract is in `taxjson option-boundary`):
+    `! ` line is short; the contract is in `tjs option-boundary`):
     a phrase for each ATTENTION action, else its first clause."""
     act = str(row.get("action") or "")
     if act.startswith("ATTENTION:"):
@@ -2404,10 +2404,10 @@ def d_option_boundary(ctx: Ctx) -> Result:
             from taxjson.lib.option_boundary import question_detail
             parts.append(question_detail(_asked, ctx.year))
         return Result("option-boundary", "attention",
-                      "; ".join(parts) + " — `taxjson option-boundary`")
+                      "; ".join(parts) + " — `tjs option-boundary`")
     if doc.get("missing_books"):
         return Result("option-boundary", "blocked",
-                      f"no books for {', '.join(doc['missing_books'])} — run `taxjson run`")
+                      f"no books for {', '.join(doc['missing_books'])} — run `tjs run`")
     # Flagged only where option-boundary (and the run) warned — the
     # books hold a written option: a project that writes none has no
     # premium for the default to move (audit 2026-10-22, item 10).
@@ -2443,18 +2443,18 @@ def d_check_dates(ctx: Ctx) -> Result:
         return Result("check-dates", "blocked", _last_line(err) or f"exit {code}")
     if doc.get("errors"):
         return Result("check-dates", "attention",
-                      f"{doc['errors']} impossible date(s) — `taxjson check-dates`")
+                      f"{doc['errors']} impossible date(s) — `tjs check-dates`")
     if doc.get("warnings"):
         return Result("check-dates", "attention",
                       f"{doc['warnings']} unusual date(s) to review — "
-                      f"`taxjson check-dates`")
+                      f"`tjs check-dates`")
     return Result("check-dates", "done", f"{doc.get('checked', 0)} rows checked")
 
 
 def d_renames(ctx: Ctx) -> Result:
     from taxjson.lib.renames import report
     if not has_books(ctx):
-        return Result("renames", "blocked", "no work/ — run `taxjson run`")
+        return Result("renames", "blocked", "no work/ — run `tjs run`")
     try:
         doc = report(ctx.root, ctx.cfg)
     except ValueError as e:
@@ -2462,15 +2462,15 @@ def d_renames(ctx: Ctx) -> Result:
     if doc["unresolved"]:
         return Result("renames", "attention",
                       f"{doc['unresolved']} trade(s) in an old ticker after "
-                      f"its rename not declared — `taxjson renames`")
+                      f"its rename not declared — `tjs renames`")
     if doc.get("suggested"):
         return Result("renames", "attention",
                       f"{len(doc['suggested'])} look-alike rename(s) not "
-                      f"booked — `taxjson renames --pending`")
+                      f"booked — `tjs renames --pending`")
     if doc.get("unused"):
         return Result("renames", "attention",
                       f"{len(doc['unused'])} declared rename(s) book "
-                      f"nothing — `taxjson renames --pending`")
+                      f"nothing — `tjs renames --pending`")
     return Result("renames", "done",
                   f"{len(doc['renames'])} dated rename(s); no undeclared "
                   f"late trade")
@@ -2479,19 +2479,19 @@ def d_renames(ctx: Ctx) -> Result:
 def d_journals(ctx: Ctx) -> Result:
     from taxjson.lib.journals import JournalsError, report
     if not has_books(ctx):
-        return Result("journals", "blocked", "no work/ — run `taxjson run`")
+        return Result("journals", "blocked", "no work/ — run `tjs run`")
     try:
         doc = report(ctx.root, ctx.cfg)
     except JournalsError as e:
         return Result("journals", "blocked",
-                      f"{e} — run `taxjson run`")
+                      f"{e} — run `tjs run`")
     c = doc["counts"]
     if doc["pending"]:
         return Result("journals", "attention",
                       f"{doc['pending']} pending journal(s) between two "
                       f"listings ({c['suggested']} suggested, "
                       f"{c['refused'] - c['decided']} refused) — "
-                      f"`taxjson journals --pending`")
+                      f"`tjs journals --pending`")
     return Result("journals", "done",
                   f"{c['joined']} journal(s) between two listings joined"
                   + (f", {c['decided']} kept apart by ticker.map"
@@ -2522,7 +2522,7 @@ def d_handoff(ctx: Ctx) -> Result:
     local = ctx.root / "filed" / f"{y - 1}.json"
     if not configured and not local.exists():
         return Result("handoff", "manual",
-                      f"no {y - 1} record: run `taxjson close-year` in the "
+                      f"no {y - 1} record: run `tjs close-year` in the "
                       f"{y - 1} project and set [settings] prior_year_record "
                       f"to it (mark done if {y} is the first year)")
     code, out, err = ctx.sub("handoff", "--json")
@@ -2575,7 +2575,7 @@ def d_handoff(ctx: Ctx) -> Result:
             if doc.get(k):
                 parts.append(f"{len(doc[k])} {label}")
         return Result("handoff", "attention",
-                      "; ".join(parts) + " — `taxjson handoff`")
+                      "; ".join(parts) + " — `tjs handoff`")
     return Result("handoff", "done", f"{y - 1} carried forward once")
 
 
@@ -2588,7 +2588,7 @@ def slip_files(root: Path) -> List[Path]:
     slips = _PL.slips_dir(root)
     if not slips.is_dir():
         return []
-    # IB's dividends report is a T5/T3 source (`taxjson slip-audit`,
+    # IB's dividends report is a T5/T3 source (`tjs slip-audit`,
     # lib/ib_dividends), not a T5008 CSV.
     from taxjson.lib.ib_dividends import is_dividends_report
     return sorted((p for p in slips.iterdir()
@@ -2602,7 +2602,7 @@ def _unread_slip_files(root: Path) -> List[Path]:
     slips = _PL.slips_dir(root)
     if not slips.is_dir():
         return []
-    # slips.toml holds the T5/T3 slips `taxjson slip-audit` reads.
+    # slips.toml holds the T5/T3 slips `tjs slip-audit` reads.
     from taxjson.lib.slip_audit import SLIPS_FILE
     return sorted(p for p in slips.iterdir()
                   if p.is_file() and not _skipped_input_name(p.name)
@@ -2688,20 +2688,20 @@ def d_t5008(ctx: Ctx) -> Result:
 
 
 def d_t5_t3(ctx: Optional[Ctx]) -> Result:
-    """Canada: `taxjson slip-audit` (lib/slip_audit) — done when every
+    """Canada: `tjs slip-audit` (lib/slip_audit) — done when every
     taxable account with income has a slip and every box agrees within
     the tolerance; a finding is a question answered per account by a
     DONE mark (QUESTION_STEPS); something not compared (the report's
     `not_compared`) is never done. US: compared by hand."""
     if ctx is None or is_us(ctx.settings.get("country")):
         return Result("t5-t3", "manual", "compare the slips with the TAXABLE "
-                      "line of `taxjson divs-sum` / `roc-sum`"
+                      "line of `tjs divs-sum` / `roc-sum`"
                       + ("" if ctx is not None and is_us(
                           ctx.settings.get("country")) else
                          "; NR4 slips by hand"))
     from taxjson.lib import slip_audit as SA
     if not has_books(ctx):
-        return Result("t5-t3", "blocked", "no work/ — run `taxjson run`")
+        return Result("t5-t3", "blocked", "no work/ — run `tjs run`")
     import contextlib
     import io
     try:
@@ -2714,7 +2714,7 @@ def d_t5_t3(ctx: Optional[Ctx]) -> Result:
         return Result("t5-t3", "blocked", str(e))
     issues = rep.get("issues") or []
     # What the audit could not compare keeps the step open: an account
-    # with no readable books is blocked until `taxjson run` builds them;
+    # with no readable books is blocked until `tjs run` builds them;
     # a report, a slip or an IB component matched to nothing needs
     # attention a DONE mark does not answer (fix the input, or accept
     # it with --done --force). Done over them certified an account it
@@ -2728,16 +2728,16 @@ def d_t5_t3(ctx: Optional[Ctx]) -> Result:
         found = (f"; and {len(issues)} finding(s)" if issues else "")
         return Result("t5-t3", "attention",
                       f"{len(nc)} slip input(s) not compared, e.g. "
-                      f"{nc[0]['text']}{found} — `taxjson slip-audit`")
+                      f"{nc[0]['text']}{found} — `tjs slip-audit`")
     if not rep.get("sources"):
         if not issues:
             return Result("t5-t3", "done", "no taxable income that a T5 or "
                           "T3 reports")
         return Result("t5-t3", "todo",
                       "no T5/T3 slips in inputs/slips/ — read CRA My "
-                      "Account's slip PDFs (`taxjson slip-audit "
+                      "Account's slip PDFs (`tjs slip-audit "
                       "--import-cra <folder> --write`), type them into "
-                      "inputs/slips/slips.toml (`taxjson slip-audit "
+                      "inputs/slips/slips.toml (`tjs slip-audit "
                       "--template` prints one) or add IB's dividends "
                       "report (U*.YYYY.dividends.csv); NR4 slips by hand")
     if issues:
@@ -2747,7 +2747,7 @@ def d_t5_t3(ctx: Optional[Ctx]) -> Result:
         parts = [f"{a}: {len(t)} finding(s), e.g. {t[0]}"
                  for a, t in sorted(by.items())]
         return Result("t5-t3", "attention",
-                      "; ".join(parts) + " — `taxjson slip-audit`",
+                      "; ".join(parts) + " — `tjs slip-audit`",
                       question=True, answers=SA.question_keys(rep))
     n = sum(len(g["slips"]) for a in rep["accounts"] for g in a["groups"])
     return Result("t5-t3", "done", f"{n} slip(s) agree with the books "
@@ -2756,7 +2756,7 @@ def d_t5_t3(ctx: Optional[Ctx]) -> Result:
 
 def d_form_export(ctx: Ctx) -> Result:
     """The export must equal what the engine computed: form-export's totals
-    against `taxjson sum`'s FOR THE RETURN block (same dispositions), and
+    against `tjs sum`'s FOR THE RETURN block (same dispositions), and
     that block's gain against the taxable accounts' realized gain."""
     st = _books_state(ctx)
     if st is not None:
@@ -2875,13 +2875,13 @@ def d_t1135(ctx: Ctx) -> Result:
         rep = json.loads(out)
     except ValueError:
         # `tjs t1135` shows the whole refusal: the `! ` line named the
-        # `taxjson migrate` its detail mentioned (backlog TJ-0083).
+        # `tjs migrate` its detail mentioned (backlog TJ-0083).
         return Result("t1135", "blocked", _last_line(err) or f"exit {code}",
                       cmd="tjs t1135")
     if rep.get("filing_required"):
         return Result("t1135", "manual",
                       "cost of foreign property exceeded the threshold — file "
-                      "the T1135 (`taxjson t1135` for the tables)")
+                      "the T1135 (`tjs t1135` for the tables)")
     # The cash an account holds outside Canada (tax-logic CA-RPT-20): a
     # cost the FX-on-cash ledger v2 could not give leaves the total
     # open, so below the line is no verdict (backlog TJ-0454).
@@ -2961,7 +2961,7 @@ def d_carryover(ctx: Ctx) -> Result:
 
 
 def d_fx_cash(ctx: Ctx) -> Result:
-    """`taxjson fx-cash --json` (tax-logic CA-FX-07 / US-FX-03). The
+    """`tjs fx-cash --json` (tax-logic CA-FX-07 / US-FX-03). The
     default ledger (v1) is NOT RELIABLE: attention whenever it saw
     foreign cash move (a `--done --force` mark is the deliberate accept). The
     opt-in v2: attention with its problems when it refused; when it
@@ -2974,15 +2974,15 @@ def d_fx_cash(ctx: Ctx) -> Result:
     try:
         doc = json.loads(out)
     except ValueError:
-        return Result("fx-cash", "blocked", "unreadable `taxjson fx-cash "
+        return Result("fx-cash", "blocked", "unreadable `tjs fx-cash "
                                             "--json`")
     head = str(doc.get("headline") or "")
     if doc.get("ledger") == "v2":
         if doc.get("status") == "computed":
             key = fx_review_key(doc)
             return Result("fx-cash", "attention",
-                          f"{head} — review `taxjson fx-cash` and mark it "
-                          f"reviewed: `taxjson checklist --done fx-cash`",
+                          f"{head} — review `tjs fx-cash` and mark it "
+                          f"reviewed: `tjs checklist --done fx-cash`",
                           question=True, answers=[key] if key else [],
                           do="review `tjs fx-cash`, then `tjs checklist "
                              "--done fx-cash`")
@@ -3006,12 +3006,12 @@ def d_fees(ctx: Ctx) -> Result:
     if is_us(ctx.settings.get("country")):
         return Result("fees", "manual",
                       "investment interest (Form 4952) is entered by hand "
-                      "from the statements' margin interest (`taxjson "
+                      "from the statements' margin interest (`tjs "
                       "fees` lists commissions and fees, which are not "
                       "investment interest)")
     return Result("fees", "manual",
                   "line 22100 is entered by hand from the statements' margin "
-                  "interest (`taxjson fees` lists commissions and fees, which "
+                  "interest (`tjs fees` lists commissions and fees, which "
                   "are not carrying charges)")
 
 
@@ -3031,7 +3031,7 @@ def d_estimate(ctx: Ctx) -> Result:
 
 
 def d_amt(ctx: Ctx) -> Result:
-    """`taxjson amt --json`: whether AMT binds, what carryover was
+    """`tjs amt --json`: whether AMT binds, what carryover was
     recovered and where it came from (Canada only)."""
     code, out, err = ctx.sub("amt", "--json")
     if code != 0 or not out.strip():
@@ -3039,7 +3039,7 @@ def d_amt(ctx: Ctx) -> Result:
     try:
         doc = json.loads(out)
     except ValueError:
-        return Result("amt", "blocked", "unreadable `taxjson amt --json`")
+        return Result("amt", "blocked", "unreadable `tjs amt --json`")
     a = doc.get("amt") or {}
     c = a.get("carryover") or {}
     src = (doc.get("carry_sources") or {}).get("amt_carryover")
@@ -3080,7 +3080,7 @@ def _lock_state(ctx: Ctx, sid: str) -> Optional[Result]:
         return Result(sid, "blocked", _PL.lock_missing_text(ctx.year))
     if not lock.exists() and not lock.is_symlink():
         return Result(sid, "todo",
-                      "no filed/<year>.json — `taxjson close-year` after filing"
+                      "no filed/<year>.json — `tjs close-year` after filing"
                       if sid == "filed-lock" else "no lock yet")
     try:
         doc = json.loads(lock.read_text(encoding="utf-8"))
@@ -3090,7 +3090,7 @@ def _lock_state(ctx: Ctx, sid: str) -> Optional[Result]:
         return Result(sid, "blocked",
                       f"filed/{ctx.year}.json cannot be read ({why}) — "
                       f"restore the lock from git, or remove it and "
-                      f"`taxjson close-year` after filing")
+                      f"`tjs close-year` after filing")
     from taxjson.bin.taxjson_filed import partial_year_note
     note = partial_year_note(doc, ctx.year)
     if note:
@@ -3115,7 +3115,7 @@ def d_filed_lock(ctx: Ctx) -> Result:
                       f"names {' and '.join(back)} again: the books no "
                       f"longer read the frozen copy — delete "
                       f"{'those lines' if len(back) > 1 else 'that line'} "
-                      f"from taxjson.toml, then `taxjson run`",
+                      f"from taxjson.toml, then `tjs run`",
                       cmd="edit taxjson.toml")
     # check-filed recomputes from work/: books built before an input
     # changed (in a multi-year project, a shared input or ticker.map
@@ -3128,7 +3128,7 @@ def d_filed_lock(ctx: Ctx) -> Result:
     if changed:
         return Result("filed-lock", "attention",
                       f"inputs changed since the last run ({changed}) — "
-                      f"`taxjson run` recomputes the filed year against "
+                      f"`tjs run` recomputes the filed year against "
                       f"filed/{ctx.year}.json")
     code, out, err = ctx.sub("check-filed", LONG_FORM)
     if code != 0:
@@ -3288,13 +3288,13 @@ def load_state(root: Path) -> Dict[str, Any]:
                else f"{e}")
         raise StateFileError(
             f"{STATE_FILE} cannot be read ({why}) — fix it or restore it "
-            f"from git; nothing was written. `taxjson checklist --reset` "
+            f"from git; nothing was written. `tjs checklist --reset` "
             f"discards every mark.") from e
     if not isinstance(doc, dict) or not isinstance(
             doc.setdefault("overrides", {}), dict):
         raise StateFileError(f"{STATE_FILE} is not a checklist state "
                              f"file (no overrides table) — fix it or "
-                             f"`taxjson checklist --reset`.")
+                             f"`tjs checklist --reset`.")
     for old, new in _SAVED_ID_MIGRATION.items():
         # A mark saved under an item's former id is the item's mark (a
         # mark under the new id wins).
@@ -3310,7 +3310,7 @@ def load_state(root: Path) -> Dict[str, Any]:
             raise StateFileError(
                 f"{STATE_FILE}: overrides entry {sid!r} is {ov!r}, not a "
                 f"{{\"status\": ..., \"note\": ...}} table — fix it, or "
-                f"`taxjson checklist --undo {sid}` / `--reset`.")
+                f"`tjs checklist --undo {sid}` / `--reset`.")
         if ov.get("status") == "skipped":
             # The `--skip` mark of releases before v0.35: a forced done.
             ov["status"] = "done"
@@ -3549,6 +3549,8 @@ EXCLUDED: Dict[str, str] = {
     "deploy": "development machine only: puts a release on this "
               "machine's production copy",
     "promote": "development machine only: moves a release channel",
+    "snapshot": "optional at any step: a copy of the project, a record "
+                "no step of the filing needs",
 }
 
 
@@ -4182,7 +4184,7 @@ def _load_json(p: Path) -> Optional[Dict[str, Any]]:
 
 
 class _Facts:
-    """What several items read, read once: whether `taxjson run` wrote
+    """What several items read, read once: whether `tjs run` wrote
     reports, and its closing counts (reports/run_summary.json,
     lib/first_run) for this year."""
 
@@ -4535,7 +4537,7 @@ STEP_RULES: Dict[str, Callable[[Ctx, _Facts], Result]] = {
 
 def _before_run(sid: str, ctx: Ctx, f: _Facts) -> Optional[Result]:
     """A check's state before there is anything for its detector to
-    read: no export at all, no `taxjson run` yet. None: run it."""
+    read: no export at all, no `tjs run` yet. None: run it."""
     if sid == "inputs-frozen":
         names = list(ctx.accounts)
         if names and not any(_data_files(_PL.inputs_dir(ctx.root) / n)
@@ -4549,11 +4551,11 @@ def _before_run(sid: str, ctx: Ctx, f: _Facts) -> Optional[Result]:
 
 # ----------------------------------------------------------------- evaluate
 QUICK_SKIPPED = "skipped by --quick (`tjs checklist --run` checks it)"
-# A check blocked because the project has no books at all (no `taxjson
+# A check blocked because the project has no books at all (no `tjs
 # run` yet): one wording for every such check, so the summary's `! `
 # lines group them into one (each detector words its own reason;
 # backlog TJ-0178).
-NO_BOOKS = "no books yet — run `taxjson run`"
+NO_BOOKS = "no books yet — run `tjs run`"
 
 
 def _overrides(ctx: Ctx) -> Dict[str, Any]:
@@ -4729,7 +4731,7 @@ def _stamp(when: Optional[datetime] = None) -> str:
 
 
 def _check_only_files(ctx: Ctx) -> List[Path]:
-    """The files only the checks read (`taxjson run` reads none of
+    """The files only the checks read (`tjs run` reads none of
     them, so input_fingerprint leaves them out): the positions
     snapshots sanity compares against (holdings/ and each account's
     `holdings = [...]`), the slips (inputs/slips/) and the filed-year
@@ -4989,7 +4991,7 @@ def _basis_stale(basis: Dict[str, Any], now_fp: Optional[Dict[str, str]],
                 shown += f" +{len(moved) - 3} more"
             out.append(f"the inputs changed ({shown})")
     if (basis.get("books") or None) != now_books:
-        out.append("the books were rebuilt (`taxjson run`)")
+        out.append("the books were rebuilt (`tjs run`)")
     v = basis.get("version")
     if now_version and v and v != now_version:
         out.append(f"taxjson was upgraded ({v} to {now_version})")
@@ -5000,7 +5002,7 @@ def _stale_reasons(ctx: Ctx, doc: Dict[str, Any], sids: List[str]
                    ) -> Tuple[List[str], List[str]]:
     """(what moved since the kept verdicts of `sids` were made, the ids
     of those made before a change): the inputs or the config (the
-    fingerprint), the books (a `taxjson run`), taxjson itself — each
+    fingerprint), the books (a `tjs run`), taxjson itself — each
     verdict judged by its own basis (_bases). Marks are applied live,
     so a new mark is never staleness."""
     try:
@@ -5154,7 +5156,7 @@ def _do(it: Item, r: Optional[Result] = None,
         inputs_label: str = "inputs") -> str:
     """What the closing line tells the user to do for item `it`. A
     blocked result whose detail names the command that unblocks it
-    ("run `taxjson run`") says that, not the item's standing advice
+    ("run `tjs run`") says that, not the item's standing advice
     (2026-10 workflow audit: the first checklist said "download the
     exports" while its own detector asked for a run). `inputs_label`:
     the exports folder as the project sees it (`../inputs` when every
@@ -5195,7 +5197,7 @@ _RUNNABLE_RE = re.compile(r"(?:tjs|taxjson|git) ")
 def stderr_progress(sid: str, cmd: str) -> None:
     """Default progress line: what is being checked, on stderr so that
     `--json` stdout stays machine-readable. Shown to a person it is a
-    step (`==> Checking sanity (taxjson sanity)`, docs/output-style.md,
+    step (`==> Checking sanity (tjs sanity)`, docs/output-style.md,
     The run's console); captured (width 0), the old line."""
     from taxjson.lib import out
     if out.width(sys.stderr) > 0:
@@ -5512,7 +5514,7 @@ def _act_line(head: str, detail: str, cmd: str,
     detail = " ".join(str(detail or "").split())
     # The command is said once, at the end: a detail closing on its own
     # `taxjson X` pointer loses it, and on "— run `taxjson X` (first)"
-    # naming the line's command ("— run `taxjson run` — tjs run").
+    # naming the line's command ("— run `tjs run` — tjs run").
     detail = re.sub(r"\s+—\s+`(?:taxjson|tjs) [^`]+`\.?$", "", detail)
     m = re.search(r"\s+—\s+(?:re-?)?run\s+(`(?:taxjson|tjs) [^`]+`)"
                   r"(?:\s+first)?\.?$", detail)
@@ -5636,8 +5638,8 @@ def render_guide(year: Optional[int] = None,
     d = Doc("CHECKLIST — from install to filing, step by step"
             + (f" — {sections_label(secs)}" if secs else ""),
             width_=width_)
-    d.para("Each step: the command(s) to type and why. `tjs` is the "
-           f"short name of `taxjson`. Worked examples: {GUIDE}.")
+    d.para("Each step: the command(s) to type and why. "
+           f"Worked examples: {GUIDE}.")
     for k, sec in enumerate(SECTIONS, 1):
         if secs and sec not in secs:
             continue

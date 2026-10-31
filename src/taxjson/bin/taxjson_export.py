@@ -30,7 +30,7 @@ PROG = "taxjson-export"
 
 def _die(msg: str) -> None:
     """A named input that cannot be used stops the tool: exit 2 means
-    `taxjson run`'s run_to_file keeps the previous output (its .part
+    `tjs run`'s run_to_file keeps the previous output (its .part
     rename never happens) and fails the stage, instead of publishing an
     empty or partial snapshot at exit 0 (audit R1-291, S030-19)."""
     cli_diag.error(PROG, msg)
@@ -68,7 +68,7 @@ def _read_rows_doc(path, **kw):
             if sym is not None and not isinstance(sym, str):
                 _die(f'{path}: "{key}" row {i}: symbol is {sym!r}, not '
                      f'a ticker — the file is damaged or hand-edited: '
-                     f'fix it or re-run `taxjson run`')
+                     f'fix it or re-run `tjs run`')
     return doc
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -141,7 +141,7 @@ def _is_dust(qty: float, total_cost: float, threshold: float,
 
 _DUST_COST = 1.0
 # Under this many units a holding of unknown cost is a rounding residue
-# (a sale of "all" leaving 1e-07 of a coin), as `taxjson run`'s crypto
+# (a sale of "all" leaving 1e-07 of a coin), as `tjs run`'s crypto
 # export takes it.
 _DUST_UNKNOWN_QTY = 1e-6
 
@@ -278,7 +278,7 @@ def _apply_transfer_evidence(agg: Dict[str, Dict[str, Any]],
     finds the holding under its new name; a leg that names a holding as
     it is stays, for a book that keeps that spelling (backlog TJ-1070).
 
-    `taxjson run` passes no evidence: it books the journals into the
+    `tjs run` passes no evidence: it books the journals into the
     native books on their dates instead (lib/listing_journals, backlog
     TJ-0361), so a later trade of the new listing finds its units."""
     applied: list = []
@@ -586,7 +586,7 @@ def render_report(agg: Dict[str, Dict[str, Any]],
         "",
         "=" * banner_w,
         (" HOLDINGS REPORT - open positions at the end of the data"
-         + (f" (not {year}-12-31 positions; `taxjson list --date` gives "
+         + (f" (not {year}-12-31 positions; `tjs list --date` gives "
             f"a date)" if year else "")
          + " - Sorted by: ticker"),
         "=" * banner_w,
@@ -606,7 +606,7 @@ def render_report(agg: Dict[str, Dict[str, Any]],
     if unknown:
         out.append("unknown: some of the units have no cost in these books "
                    "(moved in from another of your accounts, or an opening "
-                   "at an unknown cost); the cost you file: `taxjson list`.")
+                   "at an unknown cost); the cost you file: `tjs list`.")
     return out
 
 
@@ -971,7 +971,7 @@ def _own_move_arrivals(paths, mapping=None
 
 
 # "own-account move #N: FROM -> TO (...)": a lot-move leg's description
-# (taxjson run's _move_legs).
+# (tjs run's _move_legs).
 _OWN_MOVE_FROM = re.compile(r"own-account move #\d+: (\S+) -> \S+")
 
 
@@ -1007,8 +1007,8 @@ def _blended_fill(agg: Dict[str, Dict[str, Any]], blended_paths,
                   base_currency: Optional[str], dust: float,
                   leg_currency: Dict[str, str]) -> Dict[str, Dict[str, Any]]:
     """{holding symbol: {total_cost, currency, native}}: the cost after
-    the passes across accounts (`taxjson run`'s <account>_gains_wash.json,
-    the blended pass split per account: what `taxjson list` shows) of
+    the passes across accounts (`tjs run`'s <account>_gains_wash.json,
+    the blended pass split per account: what `tjs list` shows) of
     each holding whose own books have none (`unknown_cost`: units moved
     in from another of your accounts) — the account's share of the ACB
     pool (Canada, s.47) or its lots with the basis the move carried (US)
@@ -1088,7 +1088,7 @@ def _blended_note(sym: str, b: Dict[str, Any], country,
             + ("total_cost and base_total_cost are" if both else
                f"total_cost and cost_per_share ({native}) are left out "
                f"(cost_unknown); base_total_cost is")
-            + f" {fig} after the passes across accounts, as `taxjson "
+            + f" {fig} after the passes across accounts, as `tjs "
               f"list` gives it, not this account's own books.")
     return ["# " + ln for ln in textwrap.wrap(text, 70)]
 
@@ -1120,9 +1120,9 @@ def _cost_unknown_note(sym: str, b: Dict[str, Any], country,
         if country:
             from taxjson.lib.country import basis_pooled_across_accounts
             text += (" The ACB is one pool across your taxable accounts: "
-                     "`taxjson list` gives this account's share."
+                     "`tjs list` gives this account's share."
                      if basis_pooled_across_accounts(country) else
-                     " The basis moved with the lots: `taxjson list` "
+                     " The basis moved with the lots: `tjs list` "
                      "gives it.")
     else:
         text = ("cost_unknown: some of these units have no cost in this "
@@ -1267,13 +1267,13 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
             lines.append(f'base_cost_basis = "this crypto account\'s own '
                          f'books, before the passes across accounts'
                          f'{_cross}; total_cost is the same figure; '
-                         f'the filing {COST_TERM[_c]} is `taxjson list`"')
+                         f'the filing {COST_TERM[_c]} is `tjs list`"')
         else:
             lines.append(f'base_cost_basis = "per-account, per-listing, '
                          f'before {_adj} and '
                          f'[[distributions]] adjustments (total_cost '
                          f'excludes those too; the filing {COST_TERM[_c]} '
-                         f'is `taxjson list`)"')
+                         f'is `tjs list`)"')
     if blended:
         lines.append('# except a holding with cost_source = "blended": '
                      'its figures are the ones')
@@ -1352,7 +1352,7 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
         unknown = bool(b.get('unknown_cost')
                        or (base is not None and base.get('unknown_cost')))
         # Moved-in units' cost from the passes across accounts, the
-        # figure `taxjson list` shows (backlog TJ-0598).
+        # figure `tjs list` shows (backlog TJ-0598).
         fill = blended.get(sym) if unknown and not mixed else None
         if fill and fill["native"] == fill["currency"]:
             _ft = fill["total_cost"]
@@ -1515,9 +1515,9 @@ def _holdings_toml_to_inventory(doc: Dict[str, Any],
     YYYY-MM-DD as a date object, so the adapter stringifies it."""
     holdings = doc.get("holding")
     if holdings is None:
-        # An empty taxjson snapshot has no [[holding]] entries but has
+        # An empty tjs snapshot has no [[holding]] entries but has
         # its [meta] table; anything else (a [[holdings]] typo, another
-        # tool's file) used to export NOTHING at exit 0 while `taxjson
+        # tool's file) used to export NOTHING at exit 0 while `tjs
         # sanity` refused the same file (audit S030-10).
         from taxjson.lib.holdings_dir import empty_snapshot
         if empty_snapshot(doc):
@@ -1668,7 +1668,7 @@ def _holdings_toml_to_inventory(doc: Dict[str, Any],
                 _die(f"{path}: [[holding]] {i} ({sym}): mixed_currency = "
                      f"true but no total_cost_<currency> figure — its "
                      f"cost is unknown; regenerate the file with "
-                     f"`taxjson run`")
+                     f"`tjs run`")
             for j, (pcur, cost) in enumerate(parts):
                 inventory.append({
                     "symbol": sym,
@@ -1797,14 +1797,14 @@ def main():
     )
     parser.add_argument(
         "--crypto", action="store_true",
-        help="The inputs are a crypto account's books (`taxjson run` "
+        help="The inputs are a crypto account's books (`tjs run` "
              "passes them twice: as the holdings and as --base-gains): "
              "each --holdings-toml holding is asset_type \"crypto\", its "
              "quantity and per-unit costs kept to significant digits.",
     )
     parser.add_argument(
         "--symbol-suffix", default=None, metavar="SFX",
-        help="With --crypto: write each coin as COIN.SFX (`taxjson run` "
+        help="With --crypto: write each coin as COIN.SFX (`tjs run` "
              "passes the exchange's venue suffix from data/markets.toml "
              "[crypto_venues], KR for Kraken: the form the exchange's own "
              "holdings snapshot uses).",
@@ -1813,7 +1813,7 @@ def main():
         "--venue-book", action="append", default=[],
         metavar="BROKER=FILE",
         help="With --crypto, an account holding several exchanges' "
-             "exports (`taxjson run` passes each exchange's parsed rows "
+             "exports (`tjs run` passes each exchange's parsed rows "
              "and transfer rows): a coin one exchange alone holds is "
              "written with that exchange's venue suffix, one several "
              "hold (or held at an exchange with none) bare. Replaces "
@@ -1823,7 +1823,7 @@ def main():
         "--country", type=country_arg, default=None,
         metavar="{canada,ca,usa,us}",
         help="Words the --holdings-toml cost note in the country's terms "
-             "(neutral without it); `taxjson run` passes it.",
+             "(neutral without it); `tjs run` passes it.",
     )
     parser.add_argument(
         "--map", dest="map_file", metavar="FILE", default=None,
@@ -1887,10 +1887,10 @@ def main():
     parser.add_argument(
         "--blended-gains", action="append", default=[], metavar="FILE",
         help="For --holdings-toml: the account's books after the passes "
-             "across accounts (`taxjson run` passes work/<account>"
+             "across accounts (`tjs run` passes work/<account>"
              "_gains_wash.json after its blended pass). A holding whose "
              "own books have no cost for units moved in from another of "
-             "your accounts takes its figure there (`taxjson list`'s), "
+             "your accounts takes its figure there (`tjs list`'s), "
              "marked cost_source = \"blended\".",
     )
 
@@ -1917,7 +1917,7 @@ def main():
     # A holdings snapshot read back has had no rename pass: the map's
     # GLOBAL renames (chains to their end, an option through its
     # underlying) apply to its symbols here (backlog TJ-0883). A gains
-    # file of `taxjson run` has them already.
+    # file of `tjs run` has them already.
     toml_renames: Dict[str, str] = {}
     if _tmap is not None:
         from taxjson.bin.taxjson_ticker_map import map_symbol, merge_renames
@@ -1982,7 +1982,7 @@ def main():
                 _conv = _holdings_toml_to_inventory(doc, input_path)
                 if args.platform == "holdings_toml" and _conv["lots"]:
                     # One table per symbol here: the lots would be merged
-                    # and their dates lost, and `taxjson opening` needs a
+                    # and their dates lost, and `tjs opening` needs a
                     # US lot's date for its holding period (backlog
                     # TJ-1110). The --report table is of totals.
                     _n, _s = _conv["lots"][0]
@@ -1990,7 +1990,7 @@ def main():
                          f"with its own purchase day (`acquired`): "
                          f"--holdings-toml writes one table per symbol, so "
                          f"the lots would be merged and their dates lost. "
-                         f"`taxjson sanity` and `taxjson opening` read this "
+                         f"`tjs sanity` and `tjs opening` read this "
                          f"file as it is; --report sums it")
                 dispatch_toml(_conv, input_path)
                 continue

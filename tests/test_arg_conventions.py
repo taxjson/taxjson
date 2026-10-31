@@ -6,7 +6,7 @@ pre-1.0 compat purge:
   work without deprecation noise;
 - --taxable/--sheltered accept BOTH the historical `--taxable a b` shape and
   the repeatable `--taxable a --taxable b` shape (nargs='+' + extend);
-- the PERIOD positional is optional everywhere: bare `taxjson events`
+- the PERIOD positional is optional everywhere: bare `tjs events`
   defaults to the config tax year (like the -sum roll-ups), and a literal
   YYYY is a valid period token;
 - --json on sum-gains / sum-income emits parseable JSON to stdout.
@@ -171,8 +171,8 @@ class TestCountryIsRequired(unittest.TestCase):
 
 
 class TestOptionalPeriod(unittest.TestCase):
-    """Bare `taxjson events` == `taxjson events <config-year>` ==
-    `taxjson events tax_year` (period optional on the per-transaction views,
+    """Bare `tjs events` == `tjs events <config-year>` ==
+    `tjs events tax_year` (period optional on the per-transaction views,
     same default flow as the -sum roll-ups; literal YYYY is a period token)."""
 
     def _project(self, tmp):
@@ -247,7 +247,7 @@ class TestOptionalPeriod(unittest.TestCase):
             r30 = _run_taxjson(root, "fees-sum", "30d")
         self.assertEqual(r.returncode, 0, r.stderr)
         # The wrapper drives taxjson-fees --since internally for windows;
-        # the deprecation note must not reach `taxjson fees-sum PERIOD` users.
+        # the deprecation note must not reach `tjs fees-sum PERIOD` users.
         self.assertNotIn("--since", r30.stderr)
 
 
@@ -274,7 +274,7 @@ class TestSumJson(unittest.TestCase):
         self.assertIn('no "transactions" list', r.stderr)
 
 class TestSubcommandSynopsis(unittest.TestCase):
-    """`taxjson <cmd> -h` must state what the command DOES, not just
+    """`tjs <cmd> -h` must state what the command DOES, not just
     list options — argparse only prints `description` there, and
     add_parser doesn't inherit it from the listing's `help` text."""
 

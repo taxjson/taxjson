@@ -1,8 +1,8 @@
 """Stage messages in the house style (docs/output-style.md), for the
-pipeline stages `taxjson run` captures and for the run's own console.
+pipeline stages `tjs run` captures and for the run's own console.
 
 A stage (a parser, merge2, the gains engine, corp-actions ...) prints its
-diagnostics to stderr. Under `taxjson run` that stderr is captured,
+diagnostics to stderr. Under `tjs run` that stderr is captured,
 unwrapped (lib/out.unwrapped, TAXJSON_WIDTH=0), into work/*.diag — the
 text the .sum DIAGNOSTICS fold in and users diff across runs and years.
 Those bytes never change in a style pass. So a stage message has two
@@ -201,7 +201,7 @@ _REWORD = [
                 r"them — if any paid for something \(payment\), .*"),
      lambda m: [f"note: {_plural(m['n'], 'crypto send')} among them: a "
                 f"payment is a sale at fair value",
-                "`taxjson crypto-sends` lists them (a gift is not a sale "
+                "`tjs crypto-sends` lists them (a gift is not a sale "
                 "for a US donor; a move to your own wallet needs nothing)."]),
     (re.compile(r"\s*NOTE: (?P<n>\d+) crypto withdrawal/send\(s\) among "
                 r"them — if any left your ownership \(gift or payment\), "
@@ -209,15 +209,15 @@ _REWORD = [
                 r"sale)?\."),
      lambda m: [f"note: {_plural(m['n'], 'crypto send')} among them: a "
                 f"gift or payment is a disposition at fair value",
-                "`taxjson crypto-sends` lists them (a move to your own "
+                "`tjs crypto-sends` lists them (a move to your own "
                 "wallet needs nothing" + ("; with --country usa only a "
                                           "payment is a sale" if m["us"]
                                           else "") + ")."]),
     (re.compile(r"\s+(?P<f>\S.*?): (?P<n>\d+) TRANSFER row\(s\) kept aside "
                 r"\(custody evidence, not tax events — view with "
-                r"`taxjson transfers`\)"),
+                r"`tjs transfers`\)"),
      lambda m: [f"note: {m['f']}: {_plural(m['n'], 'transfer row')} kept "
-                f"aside (not tax events; `taxjson transfers` lists them)"]),
+                f"aside (not tax events; `tjs transfers` lists them)"]),
     (re.compile(r"\s+(?P<f>\S.*?): (?P<n>\d+) tax objects\b(?P<r>.*)"),
      lambda m: [f"note: {m['f']}: {m['n']} tax objects{m['r']}"]),
 ]
@@ -261,7 +261,7 @@ def _codes_note(line: str) -> Optional[List[str]]:
                 evidence = fmt.format(**m.groupdict())
                 break
         out.append(f"{code} → {listing} ({evidence})")
-    out.append("Inferred from your exports (`taxjson transfers` "
+    out.append("Inferred from your exports (`tjs transfers` "
                "lists them); a ticker.map GLOBAL line for a code "
                "overrides it.")
     return out
@@ -299,12 +299,12 @@ def is_continuation(line: str) -> bool:
 
 # Essentials first (docs/output-style.md): the run's console shows each
 # message as ONE line, its headline naming the command with the detail;
-# `taxjson run --details` (and the captured .diag) keep the rest.
-_CMD_RE = re.compile(r"`(taxjson [^`]+)`")
+# `tjs run --details` (and the captured .diag) keep the rest.
+_CMD_RE = re.compile(r"`((?:tjs|taxjson) [^`]+)`")
 
 
 def detail_command(texts: Iterable[str]) -> Optional[str]:
-    """The first `taxjson ...` command a message's detail names (the
+    """The first `tjs ...` command a message's detail names (the
     command that lists or fixes it), or None."""
     for t in texts:
         m = _CMD_RE.search(t or "")
@@ -317,7 +317,7 @@ def concise_line(text: str, details: Iterable[str] = (),
                  width_: int = 0, cmd: Optional[str] = None) -> str:
     """A message as one line: its headline (split_message) and, when the
     headline names no command, ` — `<the command its detail names>``
-    (just `taxjson <command>`, then `tjs <command>`, when the whole one
+    (just `tjs <command>`, then `tjs <command>`, when the whole one
     would not fit `width_`; the headline alone when none fits). `cmd`:
     the command to name instead. `text` carries its label."""
     if width_ > 0 and len(text) <= width_:
@@ -359,7 +359,7 @@ def _maybe_own(m: "re.Match", then: str = "") -> str:
     return ": maybe a move of your own" if _DEPARTED in m.string else then
 
 
-# Set by `taxjson run` for itself and its stages when its console shows
+# Set by `tjs run` for itself and its stages when its console shows
 # each message as one line (no --details): a stage's own message shown
 # to a person is then its one-line form too.
 CONCISE_ENV = out.CONCISE_ENV
@@ -390,11 +390,11 @@ _CONCISE = [
     (re.compile(r"(?:[\w./-]+: )?warning: ATTENTION: short: (?P<s>\S+) "
                 r"\((?P<a>[^()]+)\)(?P<rest>.*)"),
      lambda m: f"Warning: Short position: {m['s']} ({m['a']}): its purchase "
-               f"is missing — `taxjson find-missing-history`"),
+               f"is missing — `tjs find-missing-history`"),
     (re.compile(r"(?:[\w./-]+: )?note: pending elections written to "
                 r"(?P<p>.*/)?(?P<f>work/[^/]+)"),
      lambda m: f"Info: pending elections written to {m['f']} — "
-               f"`taxjson elect --pending`"),
+               f"`tjs elect --pending`"),
     (re.compile(r"(?:[\w./-]+: )?note: FX (?P<p>\S+): Bank of Canada .*?"
                 r"Yahoo fallback for (?P<y>\d+).*"),
      lambda m: f"Info: FX {m['p']}: Bank of Canada rates"
@@ -405,14 +405,14 @@ _CONCISE = [
                 r"the row states.*"),
      lambda m: f"Warning: Transfer-in: {m['a']}: {m['n']} with NO cost, "
                f"kept out of the books ({_names_of(m['l'])})"
-               f"{_maybe_own(m)} — `taxjson transfers`"),
+               f"{_maybe_own(m)} — `tjs transfers`"),
     (re.compile(r"(?:[\w./-]+: )?warning: ATTENTION: transfer-in: "
                 r"(?P<a>[^:]+): (?P<n>\d+) transfer-in\(s\) from outside "
                 r"your books booked at the \w+ the broker states on the "
                 r"row \([^:]*: (?P<l>.*?)\)\. .*"),
      lambda m: f"Warning: Transfer-in: {m['a']}: {m['n']} booked at the "
                f"broker's stated cost ({_names_of(m['l'])})"
-               f"{_maybe_own(m, ': check it')} — `taxjson transfers`"),
+               f"{_maybe_own(m, ': check it')} — `tjs transfers`"),
     # .tt purchases for some of the units only: nothing booked (audit
     # 2026-10-24 B41).
     (re.compile(r"(?:[\w./-]+: )?warning: ATTENTION: transfer-in: "
@@ -421,7 +421,7 @@ _CONCISE = [
                 r"\((?P<l>.*?)\): NOT booked\..*"),
      lambda m: f"Warning: Transfer-in: {m['a']}: {m['n']} only PARTLY "
                f"covered by .tt purchases, NOT booked "
-               f"({_names_of(m['l'])}) — `taxjson transfers`"),
+               f"({_names_of(m['l'])}) — `tjs transfers`"),
     # The engine's warn-only replacement flags (lib/core
     # format_option_replacement_warning), printed by the commands that
     # rebuild the books in-process (carryover, audit, wash-sales
@@ -432,12 +432,12 @@ _CONCISE = [
                 r"numbers unchanged\): (?P<l>\S+) loss \S+ on (?P<d>\S+) "
                 r"has (?P<o>\S+) acquired .*"),
      lambda m: f"Warning: {m['l']} loss on {m['d']}: {m['o']} may replace "
-               f"it (warn-only) — `taxjson wash-sales --details`"),
+               f"it (warn-only) — `tjs wash-sales --details`"),
     (re.compile(r"(?:[\w./-]+: )?warning: opening-balance lot \(warn-only, "
                 r"numbers unchanged\): (?P<l>\S+) loss \S+ on (?P<d>\S+): "
                 r"the opening balance dates \S+ (?P<o>\S+) as bought .*"),
      lambda m: f"Warning: {m['l']} loss on {m['d']}: {m['o']}, an opening "
-               f"lot, may replace it — `taxjson wash-sales --details`"),
+               f"lot, may replace it — `tjs wash-sales --details`"),
 ]
 
 

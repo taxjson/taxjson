@@ -1,4 +1,4 @@
-"""`taxjson slip-audit --import-cra`: T5 / T3 slip PDFs downloaded from
+"""`tjs slip-audit --import-cra`: T5 / T3 slip PDFs downloaded from
 CRA My Account read into slips.toml and placed in an account by the
 books (tax-logic CA-SLIP-04; lib/cra_slips).
 

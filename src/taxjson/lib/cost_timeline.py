@@ -7,10 +7,10 @@ dated, in the order the engine walked the rows: Canada's pools (one per
 symbol across the book's taxable accounts, ITA s.47: account "") and
 the US engine's lots per account (per-account FIFO basis: the account's
 own). The readers take the pools from it instead of replaying the books
-on their own, so they hold what the engine holds: `taxjson t1135` (the
+on their own, so they hold what the engine holds: `tjs t1135` (the
 cost amounts, src/taxjson/bin/taxjson_t1135.py `walk_costs`), the
 year-end snapshot `close-year` records and `handoff` compares
-(lib/handoff `snapshot`) and `taxjson list --date`
+(lib/handoff `snapshot`) and `tjs list --date`
 (src/taxjson/bin/taxjson_run.py `cmd_positions`).
 
 A row's date is the day from which its state holds, on the engine's own

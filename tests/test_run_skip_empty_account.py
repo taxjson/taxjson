@@ -1,5 +1,5 @@
 """An account configured in taxjson.toml but not yet populated with CSVs
-(e.g. straight after `taxjson init`) must warn-and-skip, not abort the run.
+(e.g. straight after `tjs init`) must warn-and-skip, not abort the run.
 """
 import io
 import tempfile

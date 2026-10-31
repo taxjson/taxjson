@@ -1,6 +1,6 @@
 # taxjson CRA slip issuers — the SHIPPED DEFAULTS.
 #
-# `taxjson slip-audit --import-cra` places a T5 downloaded from CRA My
+# `tjs slip-audit --import-cra` places a T5 downloaded from CRA My
 # Account by the issuer CRA prints on it (the copy shows no account
 # number). An issuer that carries a broker's whole name (Interactive
 # Brokers, RBC Direct Investing, Questrade, ...) is that broker's
@@ -23,7 +23,7 @@
 # An alias places a slip only in a broker account of that broker the
 # project's books hold; with several, the slips are shared out by the
 # books' payments, as for any broker. An issuer not placed is listed:
-# `taxjson slip-audit ACCOUNT --import-cra FILE` puts it in ACCOUNT.
+# `tjs slip-audit ACCOUNT --import-cra FILE` puts it in ACCOUNT.
 
 # Webull Canada (Webull Securities (Canada) Ltd.) is an introducing
 # broker: its clients' accounts are carried by CI Investment Services

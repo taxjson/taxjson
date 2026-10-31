@@ -4,7 +4,7 @@ Who this is for: an individual whose NET TAX OWING (tax minus amounts
 withheld at source) exceeds $3,000 in the current year AND in either of
 the two preceding years must pay by instalment — the classic case being
 an investor with no employment withholding, which is exactly the profile
-`taxjson estimate` serves.
+`tjs estimate` serves.
 
 Four due dates: March 15, June 15, September 15, December 15 (rolled to
 the next business day when they land on a weekend).

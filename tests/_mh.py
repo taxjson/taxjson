@@ -1,5 +1,5 @@
 """Missing history for tests: the .tt `OPENING <date> <SYMBOL> <qty>
-cost=unknown` lines (lib/missing_history), written the way `taxjson
+cost=unknown` lines (lib/missing_history), written the way `tjs
 migrate` converts an old missing_history.json entry — each line opens
 what the entry used to: the deepest shortage of the pair's rows (through
 `until`, the tax year's end, when given) or its recorded `quantity`,
@@ -102,7 +102,7 @@ def mh_dir(txs: Iterable[Any], entries: Iterable[Entry], *,
 
 def tt_from_books(root: Path, entries: Iterable[Entry], *,
                   year: Optional[int] = None) -> List[Path]:
-    """After a `taxjson run` of project `root` (its work/<acct>_base.json
+    """After a `tjs run` of project `root` (its work/<acct>_base.json
     books): write the entries' lines into its accounts' inputs (the
     shared folder with `inputs_dir`), sized through `year`'s end (default
     the project's year) — then run again."""

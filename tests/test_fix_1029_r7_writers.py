@@ -1,8 +1,8 @@
 """Backlog fix round 7 of 2026-10-29, group `writers`: the writers that
 draft input for the user (`find-missing-history --write-missing-history`
-/ `--write-purchases`, `taxjson opening`).
+/ `--write-purchases`, `tjs opening`).
 
-TJ-0814  `taxjson opening` compared the new snapshot's symbols with the
+TJ-0814  `tjs opening` compared the new snapshot's symbols with the
 TJ-0825  account's earlier OPENING lines as spelled, before the project's
          ticker.map (GLOBAL / TOBASE): an earlier OPENING of SYN.A.TO
          (GLOBAL SYN.A.TO SYN.TO) and a new SYN.TO snapshot were written
@@ -64,7 +64,7 @@ def _project(root: Path, *, year=2025, country="canada",
 
 # ---- TJ-0814 / TJ-0825: an opening of a mapped spelling ------------------
 class TestTJ0825OpeningAliasDuplicate(unittest.TestCase):
-    """TJ-0825 / TJ-0814: `taxjson opening` refuses a snapshot of a
+    """TJ-0825 / TJ-0814: `tjs opening` refuses a snapshot of a
     security the account already opened under another spelling the
     ticker.map joins with it."""
 

@@ -1,4 +1,4 @@
-"""Custody-transfer sidecar + `taxjson transfers` view.
+"""Custody-transfer sidecar + `tjs transfers` view.
 
 TRANSFER rows are deliberately NOT tax events in a taxable book (basis
 comes from the buy/sell history), but they are custody EVIDENCE — a

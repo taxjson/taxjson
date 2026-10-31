@@ -75,7 +75,7 @@ class TestUnhandledCorporateActionWarning(unittest.TestCase):
         _, stderr = _run_parser_capture_stderr(_IB_WITH_UNKNOWN)
         self.assertIn('unhandled Corporate Action', stderr)
         self.assertIn('QZX', stderr)
-        # Console-visible (echoed by `taxjson run`, fatal under
+        # Console-visible (echoed by `tjs run`, fatal under
         # --strict) and pointing at a .tt booking — a manual TRANSFER
         # row is dropped in a taxable account (audit R1-140).
         self.assertIn('warning: UNBOOKED:', stderr)

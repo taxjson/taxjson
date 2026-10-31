@@ -26,7 +26,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# The old project-root files; only `taxjson migrate` reads them now
+# The old project-root files; only `tjs migrate` reads them now
 # (load_amt_file) — the inputs are [estimate] amt_carryover and
 # [carryover] claimed in taxjson.toml.
 AMT_FILE = "amt_carryover.txt"
@@ -61,7 +61,7 @@ def _plausible_year(y: int) -> bool:
 
 
 def load_amt_file(path: Path) -> Dict[int, float]:
-    """The old amt_carryover.txt (read by `taxjson migrate` only):
+    """The old amt_carryover.txt (read by `tjs migrate` only):
     `YEAR AMOUNT` lines (`#` comments) -> {year of origin: amount}.
     Loud: a line that cannot be read, a year twice or an implausible
     year raises CarryInputError naming file:line — a dropped line would
@@ -425,10 +425,10 @@ def resolve_losses(root: Path, settings: Dict[str, Any], country: str,
 def record_block(country: str, r: Dict[str, Any],
                  sources: Dict[str, Any]) -> Dict[str, Any]:
     """The `carryforwards` block close-year writes into filed/<year>.json,
-    from the year's estimate result `r` (the same computation `taxjson
-    estimate` and `taxjson amt` print) and the input sources it used."""
+    from the year's estimate result `r` (the same computation `tjs
+    estimate` and `tjs amt` print) and the input sources it used."""
     out: Dict[str, Any] = {"version": BLOCK_VERSION,
-                           "computed_by": "taxjson estimate"}
+                           "computed_by": "tjs estimate"}
     if country == "canada":
         out["net_capital_loss"] = {
             "opening": float(r.get("losses_opening") or 0.0),

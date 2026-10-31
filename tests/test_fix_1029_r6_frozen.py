@@ -40,7 +40,7 @@ def _env():
 
 
 def _cli(root, *args, cwd=None):
-    """`taxjson -C ROOT ARGS` as a child of THIS tree's code (`root`
+    """`tjs -C ROOT ARGS` as a child of THIS tree's code (`root`
     None: no -C, run in `cwd`)."""
     pre = [] if root is None else ["-C", str(root)]
     cmd = python_module_argv("taxjson.bin.taxjson_run",

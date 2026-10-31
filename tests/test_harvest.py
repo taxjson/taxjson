@@ -1,4 +1,4 @@
-"""taxjson harvest — unrealized gain/(loss) at current prices.
+"""tjs harvest — unrealized gain/(loss) at current prices.
 
 Offline throughout: prices come from an injected fake fetcher (the
 price chain's `fetchers` test hook), never the network.
@@ -552,7 +552,7 @@ class TestOptionsMode(unittest.TestCase):
 
 
 class TestHarvestWrapperCrypto(unittest.TestCase):
-    """`taxjson harvest` wrapper: crypto = true accounts are excluded by
+    """`tjs harvest` wrapper: crypto = true accounts are excluded by
     default (--crypto opts in). Offline: an empty inventory makes the
     tool return before any price resolution."""
 

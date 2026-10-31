@@ -1,4 +1,4 @@
-"""Low-round fixes to `taxjson option-boundary` (lib/option_boundary.py):
+"""Low-round fixes to `tjs option-boundary` (lib/option_boundary.py):
 R1-39 / R1-180 (statutory citations), S075-00 (an expiry after Dec 31 but
 inside the books), S075-02 / S075-03 / S075-04 (pins), S075-05 (the
 project's tax_date dates writes and closes)."""

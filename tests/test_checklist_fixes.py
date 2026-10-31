@@ -1,4 +1,4 @@
-"""`taxjson checklist` fixes from the 2026-09 filing audit: detectors that
+"""`tjs checklist` fixes from the 2026-09 filing audit: detectors that
 said "done" on nothing, a form-export step that compared nothing, a DONE
 mark that hid a finding, US and sheltered-only projects, and the CLI's
 mark/undo/reset/--json/--only/--walk edges."""
@@ -41,7 +41,7 @@ class TestDetectors(unittest.TestCase):
     def test_missing_history_without_books_is_blocked(self):
         with tempfile.TemporaryDirectory() as td:
             r = cl.d_missing_history(_ctx(Path(td), {"find-missing-history": (
-                1, "", "taxjson find-missing-history: no base files in work (run `taxjson run` first).")}))
+                1, "", "tjs find-missing-history: no base files in work (run `tjs run` first).")}))
         self.assertEqual(r.status, "blocked")
         self.assertIn("no base files", r.detail)
 
@@ -49,7 +49,7 @@ class TestDetectors(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             r = cl.d_option_boundary(_ctx(root, {"option-boundary": (
-                1, "", "taxjson option-boundary: NOT CHECKED — no taxable base files")}))
+                1, "", "tjs option-boundary: NOT CHECKED — no taxable base files")}))
             self.assertEqual(r.status, "blocked")
             self.assertIn("NOT CHECKED", r.detail)
             doc = {"rows": [{"action": "ATTENTION: 2025 is locked ...", "attention": True}],

@@ -1,7 +1,7 @@
 """Journals between two listings of one security in the native books
 (backlog TJ-0361).
 
-The native-currency books (`taxjson run`'s work/<account>_raw*.json,
+The native-currency books (`tjs run`'s work/<account>_raw*.json,
 behind reports/<account>_holdings.toml) keep each listing apart: a TSX
 line and its US line are two pools there. A journal between them (IB's
 InterDepot, RBC's TFR "TRANSFER TO C$", Questrade's BRW journal, a .tt

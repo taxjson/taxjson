@@ -1,4 +1,4 @@
-"""`taxjson run`'s console scoped to the tax year (owner feedback from a
+"""`tjs run`'s console scoped to the tax year (owner feedback from a
 new-user run).
 
 * Positions that go short with no purchase in the files are listed one
@@ -230,7 +230,7 @@ class TestShortsScopedToTheYear(unittest.TestCase):
 
 
 class TestListMarksMissingHistory(unittest.TestCase):
-    """`taxjson list` tells a purchase missing from the files (a sale
+    """`tjs list` tells a purchase missing from the files (a sale
     with nothing to close) from a real short (the broker marks it, IB
     code O), with the pairs find-missing-history reports."""
 
@@ -282,7 +282,7 @@ class TestListMarksMissingHistory(unittest.TestCase):
         # view names the command.
         self.assertIn("tjs find-missing-history", out)
         out = _tj(root, "list", "--negative", "--details").stdout
-        self.assertIn("`taxjson find-missing-history --write-missing-history "
+        self.assertIn("`tjs find-missing-history --write-missing-history "
                       "--all-history`", " ".join(out.split()))
         # find-missing-history reports the same pairs, the real short
         # apart.

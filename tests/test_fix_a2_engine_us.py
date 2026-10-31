@@ -308,7 +308,7 @@ class TestFuturesOutside1091(unittest.TestCase):
 
 
 def _us_run(book, year):
-    """run_gains (the `taxjson run` gains stage) under the US only."""
+    """run_gains (the `tjs run` gains stage) under the US only."""
     from taxjson.lib.pipeline import GainsRequest, run_gains
     err = io.StringIO()
     with contextlib.redirect_stderr(err):

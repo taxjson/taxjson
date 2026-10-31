@@ -1,4 +1,4 @@
-"""`taxjson run`, `init`, `format`, `migrate` and `fetch` in the house
+"""`tjs run`, `init`, `format`, `migrate` and `fetch` in the house
 output style (docs/output-style.md), and the stage messages they show:
 lib/stage_msg (captured text unchanged, wrapped for a person at display
 time), the run's "before you trust these numbers" summary.
@@ -167,7 +167,7 @@ class TestBookStateWarnings(_Width):
             text = self._err(lambda: R._warn_artifact_year({}, 2024))
         self.assertEqual(text.strip().splitlines(), [
             "Warning: these figures are NOT 2024's: work/ was built for "
-            "another year — run `taxjson run`"])
+            "another year — run `tjs run`"])
         with mock.patch.object(R, "_CURRENT_CMD", "sum"), \
                 mock.patch.object(R, "_refuse_other_country_books"), \
                 mock.patch.object(R, "_run_state_problems",
@@ -176,7 +176,7 @@ class TestBookStateWarnings(_Width):
             text = self._err(lambda: R._warn_run_state(Path("."), {}))
         self.assertEqual(text.strip().splitlines(), [
             "Warning: these books are not the clean result of the "
-            "current inputs (2 problems): `taxjson checklist --run`"])
+            "current inputs (2 problems): `tjs checklist --run`"])
 
     @mock.patch("taxjson.bin.taxjson_run._CURRENT_DETAILS", True)
     def test_artifact_year_and_run_state(self):
@@ -244,7 +244,7 @@ class TestRunStyle(unittest.TestCase):
                 r = p.run("run", "--no-input")
                 self.assertEqual(r.returncode, 3, r.stderr)
                 assert_styled(self, r.stdout)
-                assert_styled(self, r.stderr, allow=("taxjson elect ",))
+                assert_styled(self, r.stderr, allow=("tjs elect ",))
 
     def test_captured_stage_text_is_unchanged(self):
         # The .diag keeps the one-line ATTENTION text the console wraps.
@@ -275,12 +275,12 @@ class TestRunStyle(unittest.TestCase):
                 # The project's path cannot wrap; its length is the
                 # temp folder's (the gate's no-extras stage nests it).
                 assert_styled(self, r.stdout,
-                              allow=("taxjson -C ", str(Path(tmp) / "p")))
+                              allow=("tjs -C ", str(Path(tmp) / "p")))
                 assert_styled(self, r.stderr)
                 # The next steps, one line each (docs/output-style.md,
                 # Essentials first): the commands to copy.
-                self.assertIn("  3. taxjson -C ", r.stdout)
-                self.assertIn("  4. taxjson -C ", r.stdout)
+                self.assertIn("  3. tjs -C ", r.stdout)
+                self.assertIn("  4. tjs -C ", r.stdout)
                 if country == "usa":
                     self.assertTrue(r.stderr.lstrip().startswith(
                         "Info: the US engine is "

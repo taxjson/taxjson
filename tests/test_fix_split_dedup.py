@@ -159,7 +159,7 @@ class TestOtherSplitWalksCountOnce(unittest.TestCase):
     @rule("CA-CORP-12")
     @rule("US-CORP-13")
     def test_positions_on_two_accounts(self):
-        # `taxjson sanity` walks a group of accounts keyed by symbol:
+        # `tjs sanity` walks a group of accounts keyed by symbol:
         # each account's copy of the split is the same event.
         from taxjson.lib.positions_check import positions_on
         rows = _simple("A") + _simple("B", second="2025-06-03")
@@ -244,7 +244,7 @@ def _files(country):
 
 
 class TestIssue92EndToEnd(unittest.TestCase):
-    """The issue's synthetic repro through `taxjson run`, both countries:
+    """The issue's synthetic repro through `tjs run`, both countries:
     duplicate split reports + a sale settling across the split + a
     reinvested per-share distribution + a later sale."""
 

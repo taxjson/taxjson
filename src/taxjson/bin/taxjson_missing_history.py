@@ -30,13 +30,13 @@ To fix an AFFECTS row, add the purchase. When the broker states its cost
 (IB's Basis on a sale coded C, a transfer-in's stated book value),
 --write-purchases drafts the .tt lines for you to review, into a file the
 run does not read (inputs/<account>/purchases_draft.tt.txt in a project):
-  taxjson find-missing-history --write-purchases
+  tjs find-missing-history --write-purchases
   # fill in each YYYY-MM-DD / COST, then rename the file to .tt
 Only when a purchase cannot be recovered, open the units held before
 the data at an unknown cost (a .tt line `OPENING <date> <SYMBOL> <qty>
 cost=unknown`) and re-run. In a project:
-  taxjson find-missing-history --write-missing-history   # writes inputs/<account>/missing_history.tt
-  # then prune any real shorts from it, and: taxjson run
+  tjs find-missing-history --write-missing-history   # writes inputs/<account>/missing_history.tt
+  # then prune any real shorts from it, and: tjs run
 Standalone, the engine reads a project's lines:
   taxjson-gains --country canada --incomplete-history <project> ...
   (usa for a US project)
@@ -135,7 +135,7 @@ def _late_line(c, late) -> str:
             f"broker booked the renamed shares under the old ticker, so "
             f"the purchase is in your files. Declare it with a .tt line "
             f"(`RENAME {d} {c.symbol} {new} late=fold`; `late=separate` "
-            f"when it is another security) — `taxjson renames` prints "
+            f"when it is another security) — `tjs renames` prints "
             f"it; an older export or a BUYSELL would enter the purchase "
             f"twice.")
 
@@ -177,7 +177,7 @@ def _in_kind_line(m) -> str:
             f"{m.get('taxable')} of {q}on {m.get('date')} brought these "
             f"shares and is NOT booked: their cost is its fair market "
             f"value, not a purchase in the plan. Add the INKIND line "
-            f"`taxjson run --details` names for it.")
+            f"`tjs run --details` names for it.")
 
 
 def _table(headers, rows, details=()):
@@ -328,7 +328,7 @@ def _listed_pairs(mh_path):
 
 
 def _opening_sizes(txs, mh_path, year, types=None):
-    """What `taxjson run` opens for each .tt OPENING cost=unknown line —
+    """What `tjs run` opens for each .tt OPENING cost=unknown line —
     the same synthesize_openings call, sized from the rows through
     `year`'s end (or the project's): (symbol, account) -> its applied-
     log entry. {} when the file cannot be read."""
@@ -442,7 +442,7 @@ def _print_zero_fix(country, cost) -> None:
     for item in ((["a stock dividend: its declared amount as a .tt ADJUST "
                    "line on the dividend date (or [[distributions]])"]
                   if _stk else [])
-                 + ["a merger or spin-off: its election (`taxjson elect`)",
+                 + ["a merger or spin-off: its election (`tjs elect`)",
                     "shares transferred in: a .tt BUYSELL with the "
                     "original purchase date and cost"]):
         _P.para(f"- {item}", "  ", "    ")
@@ -465,7 +465,7 @@ def _project_root(path):
 
 def _transfer_sidecar_rows(files):
     """Every TRANSFER row of the transfer sidecars beside the book files
-    (work/<account>_<broker>_transfers.json — the rows `taxjson run`
+    (work/<account>_<broker>_transfers.json — the rows `tjs run`
     leaves out of a taxable account's books), each stamped with its
     sidecar's account."""
     rows, seen = [], set()
@@ -504,7 +504,7 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
     if not country:
         _diag("taxjson-missing-history: error: --write-purchases needs the "
               "project's country: run it on a project's work/ files "
-              "(`taxjson find-missing-history --write-purchases`) or pass "
+              "(`tjs find-missing-history --write-purchases`) or pass "
               "--country canada|usa.", file=sys.stderr)
         return 2
     mh_pairs = set()
@@ -626,7 +626,7 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
         _diag(f"taxjson-missing-history: error: drafts for "
               f"{len(drafting)} accounts ({', '.join(drafting)}) — a .tt "
               f"file belongs to one account: name it (--account, or "
-              f"`taxjson find-missing-history ACCOUNT --write-purchases "
+              f"`tjs find-missing-history ACCOUNT --write-purchases "
               f"FILE`), or leave FILE out to write "
               f"inputs/<account>/{DRAFT_NAME} for each.", file=sys.stderr)
         return 2
@@ -650,7 +650,7 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
                       f"account {ascii(a)}, which is not an account in "
                       f"taxjson.toml (have: "
                       f"{', '.join(sorted(configured)) or '-'}) — not "
-                      f"written; rebuild the books with `taxjson run`, "
+                      f"written; rebuild the books with `tjs run`, "
                       f"or pass --write-purchases FILE.", file=sys.stderr)
                 return 2
     targets = {a: (explicit if explicit is not None
@@ -716,7 +716,7 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
     _P.gap()
     _P.para("taxjson does not read a draft. Review every line, fill in "
             "the placeholders, then rename the file to end in .tt (e.g. "
-            "purchases.tt) and `taxjson run`; `taxjson find-missing-"
+            "purchases.tt) and `tjs run`; `tjs find-missing-"
             "history` should then drop the fixed positions.")
     if root and _PL.shared_inputs(root) and any(
             _inside(out, _PL.inputs_dir(root)) for out in targets.values()):
@@ -945,7 +945,7 @@ def main(argv=None):
     candidates = [c for c in candidates if not c.broker_marked_short]
     # Canada: the other taxable accounts of a symbol's ACB pool that
     # trade it in the year (lib/missing_history.year_pool) — the same
-    # test `taxjson run` lists a short on its console by.
+    # test `tjs run` lists a short on its console by.
     from taxjson.lib.missing_history import year_pool
     _pool = year_pool(txs, candidates, args.year, country=country,
                       registered=types, date_basis=basis)
@@ -1133,7 +1133,7 @@ def main(argv=None):
                  ", ".join(r.event_ids) or "?"] for r in zero_declared],
                [[] for _ in zero_declared])
         _one = zero_declared[0]
-        _P.para("To change it: `taxjson elect "
+        _P.para("To change it: `tjs elect "
                 + (f"{_one.account} --redo --event {_one.event_ids[0]}`"
                    if len(zero_declared) == 1 and len(_one.event_ids) == 1
                    else "ACCOUNT --redo --event ID`")
@@ -1260,7 +1260,7 @@ def main(argv=None):
             sheltered = [r for r in short_rows if r.affects_year
                          and r.candidate.registered]
             # Touched in the year (a trade, a transfer, income) with no
-            # row drawing on the missing basis: `taxjson run` lists
+            # row drawing on the missing basis: `tjs run` lists
             # these one by one too (MissingHistoryRow.year_listed).
             active = [r for r in short_rows if r.year_listed
                       and r not in affects and r not in covered
@@ -1284,7 +1284,7 @@ def main(argv=None):
             # Pairs the missing-history file already covers (the run
             # applies them) are not work still to do (R1-339).
             _print_section(f"COVERED by {mh_name} - the run applies these "
-                           f"openings; nothing more to do unless `taxjson "
+                           f"openings; nothing more to do unless `tjs "
                            f"sum` lists the sale under manual reporting:"
                            if DETAILS else
                            f"COVERED by {mh_name} - the run applies these:",
@@ -1298,14 +1298,14 @@ def main(argv=None):
                            show_year_cols=True, sizes=_sizes)
             _print_section(f"ACTIVE IN {yr} - no {yr} sale draws on the "
                            f"missing basis, but the position trades, moves "
-                           f"or pays income in {yr} (`taxjson run` lists "
+                           f"or pays income in {yr} (`tjs run` lists "
                            f"these):" if DETAILS else
                            f"ACTIVE IN {yr} - traded, but no {yr} sale "
                            f"draws on it:", active, show_year_cols=True,
                            year=yr, sizes=_sizes)
             _print_section(f"NOT relevant to {yr} - short only from other-year "
                            f"sales (or since drained), no {yr} activity; "
-                           f"safe to ignore (`taxjson find-missing-history "
+                           f"safe to ignore (`tjs find-missing-history "
                            f"--write-missing-history --outside-year` records "
                            f"them so the run stops listing them):"
                            if DETAILS else
@@ -1428,8 +1428,8 @@ def main(argv=None):
                     + ", ".join(sorted({r.candidate.symbol
                                         for r in _ik_rows}))
                     + "): add the INKIND line the in-kind warning of "
-                    "`taxjson run --details` names, with the fair market "
-                    "value on the withdrawal date; then `taxjson run`.")
+                    "`tjs run --details` names, with the fair market "
+                    "value on the withdrawal date; then `tjs run`.")
         if _late_rows:
             _P.gap()
             _P.para(f"{len(_late_rows)} row(s) a trade after a rename "
@@ -1437,9 +1437,9 @@ def main(argv=None):
                     + ", ".join(sorted({r.candidate.symbol
                                         for r in _late_rows}))
                     + "): the purchase is in your files under the old "
-                    "ticker. Add the .tt RENAME line `taxjson renames` "
+                    "ticker. Add the .tt RENAME line `tjs renames` "
                     "prints (`late=fold`, or `late=separate` for another "
-                    "security); then `taxjson run`.")
+                    "security); then `tjs run`.")
         if _short_open:
             _P.gap()
             _P.line("To fix a sale with no purchase in your files, in this "
@@ -1450,11 +1450,11 @@ def main(argv=None):
                     "2. Or enter the purchase as a .tt BUYSELL line with its "
                     "real date and cost; `--write-purchases` drafts these "
                     "from IB's Basis or a transfer's book value, to review.",
-                    "3. Only when it cannot be recovered: `taxjson "
+                    "3. Only when it cannot be recovered: `tjs "
                     "find-missing-history --write-missing-history` in the "
                     "project writes .tt OPENING cost=unknown lines into "
                     "inputs/<account>/missing_history.tt — review them, "
-                    "then `taxjson run` (it reads them); those sales leave "
+                    "then `tjs run` (it reads them); those sales leave "
                     "the totals and are reported by hand."):
                 _P.para(item, "  ", "     ")
         if _zero_open:

@@ -9,7 +9,7 @@ rules count the account's units. So with [settings] sheltered_elections =
 shares (the parent keeps its cost) and a merger carries the old shares'
 cost, with one Info line per run — never pending, never a warning, and
 `run --strict` passes. "ask" restores the question; an election saved
-with `taxjson elect` wins; a taxable account is still asked.
+with `tjs elect` wins; a taxable account is still asked.
 
 Every fixture is synthetic: invented tickers, amounts and account ids.
 """
@@ -169,7 +169,7 @@ class _Base:
             head = f"sheltered account {self.PLAN}: spin-off SPNCO"
             self.assertEqual(flat.count(head), 1, flat)
             self.assertIn("booked at $0 cost for the distributed shares; "
-                          "cost only affects the holdings view — `taxjson "
+                          "cost only affects the holdings view — `tjs "
                           "elect` sets a fair value if you want it there",
                           flat)
             self.assertNotIn("need an election", flat)

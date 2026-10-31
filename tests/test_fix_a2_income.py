@@ -548,7 +548,7 @@ class TestUsStockDividendAfterSale(unittest.TestCase):
 
 
 class TestEventsLineRoundTrip(unittest.TestCase):
-    """A2-0989: `taxjson events` lines keep a dividend's netted 9th
+    """A2-0989: `tjs events` lines keep a dividend's netted 9th
     column and a TRANSFER's DECLARED token."""
 
     def test_dividend_net_and_declared_transfer(self):

@@ -188,7 +188,7 @@ class TestRbcOpenCloseMarker(unittest.TestCase):
 
 class TestRbcCloseContractEndToEnd(unittest.TestCase):
     """A2-0006 end to end: the run console names the CLOSE CONTRACT row,
-    and `taxjson handoff` accepts the re-described root and refuses the
+    and `tjs handoff` accepts the re-described root and refuses the
     closed year's root."""
 
     @classmethod
@@ -274,7 +274,7 @@ class TestMoneyWarningsReachTheConsole(unittest.TestCase):
     """A2-0005, A2-0007, A2-0027, A2-0096, A2-0612, A2-0613, A2-0276,
     A2-0279, A2-0282, A2-0283: parser warnings about money the books
     get wrong (a guessed listing or code, income left out, shares with
-    no cost) carry the ATTENTION prefix `taxjson run` prints on the
+    no cost) carry the ATTENTION prefix `tjs run` prints on the
     console; plain warnings reached only the .sum."""
 
     def test_rbc_temporary_code_assumption(self):

@@ -65,7 +65,7 @@ def _env(**extra):
 
 
 def _cli(root, *args, cwd=None):
-    """`taxjson -C ROOT ARGS` as a child of THIS tree's code (`root`
+    """`tjs -C ROOT ARGS` as a child of THIS tree's code (`root`
     None: no -C, run in `cwd`)."""
     pre = [] if root is None else ["-C", str(root)]
     cmd = python_module_argv("taxjson.bin.taxjson_run",
@@ -171,7 +171,7 @@ class TestLockWithAnotherYearsRows(unittest.TestCase):
 
     def test_check_filed_shape_unchanged(self):
         """The lock is not damaged in its own year's checks (check-filed
-        and `taxjson years` read it as before): only the readers of
+        and `tjs years` read it as before): only the readers of
         what it carried stop."""
         from taxjson.bin import taxjson_filed as F
         root = self._project()
@@ -324,7 +324,7 @@ class TestMigrateEditOfAFrozenYear(_FrozenMigrated):
         lock = json.loads((self.base / "2024" / "filed" / "2024.json")
                           .read_text())
         m = lock["frozen"]["migrated"]
-        self.assertEqual(m["by"], "taxjson migrate --to-years")
+        self.assertEqual(m["by"], "tjs migrate --to-years")
         self.assertIn("settings.requires_taxjson", m["keys"])
         self.assertNotEqual(m["taxjson.toml"],
                             lock["frozen"]["inputs"]["taxjson.toml"])
@@ -338,7 +338,7 @@ class TestMigrateEditOfAFrozenYear(_FrozenMigrated):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         out = " ".join(r.stdout.split())
         self.assertNotIn("frozen input(s) changed", out)
-        self.assertIn("taxjson.toml is as `taxjson migrate --to-years` "
+        self.assertIn("taxjson.toml is as `tjs migrate --to-years` "
                       "rewrote it on", out)
         self.assertIn("not a changed input", out)
 
@@ -423,7 +423,7 @@ class TestYearsLockPathAndHints(unittest.TestCase):
         r = _cli(None, "years", cwd=top)
         self.assertIn("tjs -C 2024 check-filed", r.stdout)
         r = _cli(None, "years", "--details", cwd=y5)
-        self.assertIn("`taxjson -C ../2024 check-filed`",
+        self.assertIn("`tjs -C ../2024 check-filed`",
                       " ".join(r.stdout.split()))
 
 
@@ -521,7 +521,7 @@ class TestDeletedPriorLock(_ClosedPerYear):
     _GONE = ("the 2024 close-year lock is missing, while the 2024 "
              "project's taxjson.toml still carries close-year's freeze "
              "note (the year was closed) — restore filed/2024.json from "
-             "git or a backup, or run `taxjson close-year` in the 2024 "
+             "git or a backup, or run `tjs close-year` in the 2024 "
              "project again")
 
     def _said(self, r):
@@ -723,7 +723,7 @@ class TestPrevAfterAnAccountRun(unittest.TestCase):
         doc = json.loads(_cli(root, "compare", "--json").stdout)
         self.assertEqual(doc["partial_now"], ["margin"])
         text = " ".join(_cli(root, "compare").stdout.split())
-        self.assertIn("Partial: reports/ hold a `taxjson run --account "
+        self.assertIn("Partial: reports/ hold a `tjs run --account "
                       "margin` over the last full run's", text)
         r = _cli(root, "run", "--no-input")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

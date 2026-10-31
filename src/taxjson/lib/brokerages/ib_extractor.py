@@ -455,12 +455,12 @@ _IB_STRUCTURE_ROW_TYPES = frozenset({'', 'Total', 'SubTotal', 'Notes'})
 
 # Parser warnings about statement COVERAGE or identity that the numbers
 # may silently depend on (a statement ending before year end, a missing
-# Cash Report, one security under two symbols). `taxjson run` echoes
+# Cash Report, one security under two symbols). `tjs run` echoes
 # lines with this prefix to the console (they used to live only in the
 # .diag / .sum DIAGNOSTICS banner).
 ATTENTION_PREFIX = "warning: ATTENTION:"
 # Known tax events the parser could not book (same prefix Kraken uses):
-# echoed to the console by `taxjson run`, fatal under `run --strict`.
+# echoed to the console by `tjs run`, fatal under `run --strict`.
 UNBOOKED_PREFIX = "warning: UNBOOKED:"
 # The security an IB tender allocation DELIVERS: the first token of the
 # row's trailing `(TICKER, NAME, ISIN)` parenthetical.
@@ -775,7 +775,7 @@ def _warn_coverage_gaps(periods, today=None, tax_year=None) -> None:
     statements of two IB accounts, and one account's full year hid the
     other's missing half-year (audit A2-0091 / A2-0261).
 
-    `tax_year` (taxjson run passes the project year): an account whose
+    `tax_year` (tjs run passes the project year): an account whose
     statements stop before Dec 31 of that FINISHED year — or hold
     nothing of it — is reported; a statement running into the next year
     covers it (A2-0262 / A2-0609). Without it, the year of the last
@@ -956,7 +956,7 @@ def _ib_market_trade_date(date: str, time: str, asset_cat: str,
     one night keeping their export (clock) order. An Asia-Pacific fill
     takes its exchange's local date AND time, so one day's fills share
     one clock. A Friday- or Saturday-night US fill is left as stamped:
-    there is no session then, and `taxjson check-dates` flags it.
+    there is no session then, and `tjs check-dates` flags it.
     `exch`: the contract's Listing Exch (futures: its venue's session,
     lib/markets.ib_futures_session)."""
     stamp = f"{date} {time} ET"
@@ -2046,7 +2046,7 @@ def _flush_ca_side_effects(path, late_warnings, cash_takeovers,
     if corp_owned_rows:
         emit_line(f"note: {len(corp_owned_rows)} merger/spin-off "
               f"Corporate Action row(s) in {shown_name(path)} are booked by "
-              f"taxjson-corp-actions after the tax election (`taxjson "
+              f"taxjson-corp-actions after the tax election (`tjs "
               f"run` runs it), not by this parser.")
     for _m in stock_dividends:
         emit_line(f"{ATTENTION_PREFIX} {_m}")
@@ -2070,7 +2070,7 @@ def _flush_ca_side_effects(path, late_warnings, cash_takeovers,
 
 def _project_map_file(paths) -> Optional[Path]:
     """The project's ticker.map: the one the parser loaded (--ticker-map;
-    `taxjson run` passes it), else the map of the project of the first of
+    `tjs run` passes it), else the map of the project of the first of
     `paths` that has one (lib/project_layout.project_of_input: the
     project the run names, whose exports may sit in a folder shared by
     every year), else None."""
@@ -2799,7 +2799,7 @@ class IbBrokerage(BaseBrokerage):
     # "return of capital" — a distribution beyond E&P — need not; s.90(2)
     # is the foreign-AFFILIATE rule and does not apply to a portfolio
     # holding. Canadian law, so only a Canada project asks for it). Set by taxjson-brokerage --foreign-roc / --country,
-    # which `taxjson run` passes from the project (lib/country
+    # which `tjs run` passes from the project (lib/country
     # .foreign_roc_mode; partition INPUTS-03).
     foreign_return_of_capital = 'acb'
     # 'trade' (default) | 'next_day': settle date of futures and futures
@@ -5889,7 +5889,7 @@ class IbBrokerage(BaseBrokerage):
                                 f"share(s) on {date} (IB Value {val:,.2f} "
                                 f"{currency}) booked as a stock-dividend "
                                 f"event — the gains run applies your "
-                                f"country's rule to its cost (`taxjson "
+                                f"country's rule to its cost (`tjs "
                                 f"tax-logic`).")
                         stock_dividends.append(_msg)
                         _eff.update(kind='stockdiv', txs=[_stx], msg=_msg)
@@ -6246,7 +6246,7 @@ class IbBrokerage(BaseBrokerage):
                       f"{_c['symbol']} trade of {-_c['quantity']:g} @ "
                       f"{_c['price']:g} on {_c['date']} whose original "
                       f"row is not in this statement — kept as a "
-                      f"cancellation leg; taxjson-merge2 (taxjson run) "
+                      f"cancellation leg; taxjson-merge2 (tjs run) "
                       f"drops it with the original from the account's "
                       f"other statement.")
 

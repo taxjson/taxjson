@@ -1,6 +1,6 @@
 """Re-audit 2 (crypto-sends): pairing, decisions, prices and the
-stablecoin pool of lib/crypto_sends.py and the `taxjson run` /
-`taxjson crypto-sends` wiring.
+stablecoin pool of lib/crypto_sends.py and the `tjs run` /
+`tjs crypto-sends` wiring.
 
 Synthetic exports only; a hand-written work/to_base.csv and a
 fill-crypto cache under a temporary HOME with TAXJSON_OFFLINE set, so

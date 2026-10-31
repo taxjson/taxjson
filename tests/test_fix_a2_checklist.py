@@ -624,10 +624,10 @@ class TestStepWording(unittest.TestCase):
 
     def test_t5_t3_command_names_the_taxable_line(self):
         """A2-1152: the command field too. A Canadian project's step is
-        `taxjson slip-audit` now (it compares the slips itself)."""
+        `tjs slip-audit` now (it compares the slips itself)."""
         self.assertIn("TAXABLE", cl.step_meta("t5-t3", "usa")[3])
         self.assertEqual(cl.step_meta("t5-t3", "canada")[3],
-                         "taxjson slip-audit")
+                         "tjs slip-audit")
 
     def test_8949_rounding_gap_passes(self):
         """A2-1154: 40 gains of 1.0053 and 40 superficial losses — the

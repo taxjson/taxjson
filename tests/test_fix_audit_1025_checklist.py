@@ -25,14 +25,14 @@ from test_checklist import FakeSub, _ctx, _project
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# `taxjson fx-cash --json` of the default ledger (v1) that saw foreign
+# `tjs fx-cash --json` of the default ledger (v1) that saw foreign
 # cash move: its NOT RELIABLE headline (made-up figures).
 FX_V1 = json.dumps({
     "ledger": "v1", "active": True, "overdrafts_in_year": 3,
     "reliable": False,
     "headline": "FX on foreign cash: NOT RELIABLE for 2025 — 3 in-year "
                 "overdrafts (412.50 USD); do not file this figure"})
-# `taxjson option-boundary --json`: a contract whose premium needs a
+# `tjs option-boundary --json`: a contract whose premium needs a
 # T1-ADJ (an amendment, no question).
 OB_AMEND = json.dumps({"rows": [{
     "account": "margin", "symbol": "ZZQ.US 2025-01-17 C 10",
@@ -40,7 +40,7 @@ OB_AMEND = json.dumps({"rows": [{
 
 
 def _cli(root, *a):
-    """`taxjson -C ROOT checklist ...` as a child of THIS tree's code."""
+    """`tjs -C ROOT checklist ...` as a child of THIS tree's code."""
     cmd = python_module_argv("taxjson.bin.taxjson_run",
                              ["-C", str(root), "checklist", *a])
     return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True,
@@ -81,7 +81,7 @@ class TestQuestionStepFindings(unittest.TestCase):
             for r in (fx, ob):
                 self.assertEqual(cl.finding_over_done(r), "attention")
             blocked = cl.Result("t5-t3", "blocked", "no books — run "
-                                "`taxjson run`")
+                                "`tjs run`")
             self.assertEqual(cl.finding_over_done(blocked), "blocked")
             cl.save_results(ctx, [fx, ob, blocked])
 

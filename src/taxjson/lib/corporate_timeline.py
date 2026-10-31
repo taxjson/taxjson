@@ -668,7 +668,7 @@ class SplitTimeline:
     # up to the rename date and NEW after it are one security; OLD after
     # the date is NOT automatically that security (the broker
     # may still book the renamed shares under OLD, or another company
-    # may now use the ticker — `taxjson renames` lists such rows and the
+    # may now use the ticker — `tjs renames` lists such rows and the
     # user declares which in ticker.map). Each symbol therefore has one
     # identity per "epoch": epoch 0 before its first rename away, epoch
     # k after its k-th. A rename at date d joins OLD's identity just

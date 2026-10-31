@@ -32,8 +32,8 @@ source in [REFERENCES.md](REFERENCES.md).
 ## Install
 
 One line, no clone — installs the `stable` release into
-`~/.local/share/taxjson` with its own virtualenv and puts `taxjson` on
-your PATH, with `tjs` as its short name (re-run it to upgrade):
+`~/.local/share/taxjson` with its own virtualenv and puts `tjs` on
+your PATH (re-run it to upgrade):
 
 ```bash
 bash -c "$(curl -fsSL https://taxjson.com/install.sh)"
@@ -184,151 +184,152 @@ what it sends: [SECURITY.md](SECURITY.md#network-access-and-data-egress).
 
 ### Subcommands
 
-`tjs` is the same program as `taxjson` under a shorter name (`tjs sum`,
-`tjs -C ~/taxes/2025 stats`); with no command it prints the help page,
+`tjs` is taxjson's command (`tjs sum`, `tjs -C ~/taxes/2025 stats`; `taxjson`
+still runs it too, for old scripts); with no command it prints the help page,
 grouped as below. Inside a project the help page leaves out the other
-country's commands (`taxjson help --all` lists them). Every command takes
+country's commands (`tjs help --all` lists them). Every command takes
 `--help`; [docs/commands.md](docs/commands.md) describes each in full.
 
 #### Set up
 
 | Command | Purpose |
 | --- | --- |
-| [`taxjson checklist`](docs/commands.md#taxjson-checklist) | Every step from install to filing, checked, ending with the next step's command |
-| [`taxjson init`](docs/commands.md#taxjson-init) | Create the folder of exports for every year and the year's project (`--single`: one folder) |
-| [`taxjson years`](docs/commands.md#taxjson-years) | The year folders sharing one folder of exports, each filed or open |
-| [`taxjson new-year`](docs/commands.md#taxjson-new-year) | Start next year's folder from this year's |
-| [`taxjson align`](docs/commands.md#taxjson-align) | Bring another year's ticker.map lines and settings over |
-| [`taxjson format`](docs/commands.md#taxjson-format) | Lay out `taxjson.toml` like the template `init` writes |
-| [`taxjson format-map`](docs/commands.md#taxjson-format-map) | Lay out `ticker.map` in keyword groups |
-| [`taxjson migrate`](docs/commands.md#taxjson-migrate) | Convert an older project's files (`missing_history.json`, old maps) |
-| [`taxjson fetch`](docs/commands.md#taxjson-fetch) | Download Questrade / IBKR activity (taxjson-fetch plugin) |
-| [`taxjson elect`](docs/commands.md#taxjson-elect) | Review or set a merger or spin-off election |
-| [`taxjson ticker-map`](docs/commands.md#taxjson-ticker-map) | The ticker.map lines the last run suggested; `--write` adds them |
-| [`taxjson update-tobase-map`](docs/commands.md#taxjson-update-tobase-map) | Canada: update the interlisted pairs in `tobase.map` |
+| [`tjs checklist`](docs/commands.md#tjs-checklist) | Every step from install to filing, checked, ending with the next step's command |
+| [`tjs init`](docs/commands.md#tjs-init) | Create the folder of exports for every year and the year's project (`--single`: one folder) |
+| [`tjs years`](docs/commands.md#tjs-years) | The year folders sharing one folder of exports, each filed or open |
+| [`tjs new-year`](docs/commands.md#tjs-new-year) | Start next year's folder from this year's |
+| [`tjs align`](docs/commands.md#tjs-align) | Bring another year's ticker.map lines and settings over |
+| [`tjs format`](docs/commands.md#tjs-format) | Lay out `taxjson.toml` like the template `init` writes |
+| [`tjs format-map`](docs/commands.md#tjs-format-map) | Lay out `ticker.map` in keyword groups |
+| [`tjs migrate`](docs/commands.md#tjs-migrate) | Convert an older project's files (`missing_history.json`, old maps) |
+| [`tjs fetch`](docs/commands.md#tjs-fetch) | Download Questrade / IBKR activity (taxjson-fetch plugin) |
+| [`tjs elect`](docs/commands.md#tjs-elect) | Review or set a merger or spin-off election |
+| [`tjs ticker-map`](docs/commands.md#tjs-ticker-map) | The ticker.map lines the last run suggested; `--write` adds them |
+| [`tjs update-tobase-map`](docs/commands.md#tjs-update-tobase-map) | Canada: update the interlisted pairs in `tobase.map` |
 
 #### Build the books
 
 | Command | Purpose |
 | --- | --- |
-| [`taxjson run`](docs/commands.md#taxjson-run) | Build the books and every report from your exports (`--fast`, `--strict`, `--account`) |
-| [`taxjson compare`](docs/commands.md#taxjson-compare) | What moved since the run before, a saved snapshot or the reports as filed |
-| [`taxjson crypto-sends`](docs/commands.md#taxjson-crypto-sends) | Decide each crypto send that did not arrive in another of your accounts (an arrival from 10 minutes before to 3 days after the send is yours) |
-| [`taxjson find-missing-history`](docs/commands.md#taxjson-find-missing-history) | Sales and holdings whose purchase is not in your files |
-| [`taxjson opening`](docs/commands.md#taxjson-opening) | An opening balance from a broker's positions report |
+| [`tjs run`](docs/commands.md#tjs-run) | Build the books and every report from your exports (`--fast`, `--strict`, `--account`) |
+| [`tjs compare`](docs/commands.md#tjs-compare) | What moved since the run before, a saved snapshot or the reports as filed |
+| [`tjs snapshot`](docs/commands.md#tjs-snapshot) | Copy the whole project to `snapshot/<year>.<timestamp>/`, to diff file by file or `compare` later |
+| [`tjs crypto-sends`](docs/commands.md#tjs-crypto-sends) | Decide each crypto send that did not arrive in another of your accounts (an arrival from 10 minutes before to 3 days after the send is yours) |
+| [`tjs find-missing-history`](docs/commands.md#tjs-find-missing-history) | Sales and holdings whose purchase is not in your files |
+| [`tjs opening`](docs/commands.md#tjs-opening) | An opening balance from a broker's positions report |
 
 #### Summaries
 
 | Command | Purpose |
 | --- | --- |
-| [`taxjson amt`](docs/commands.md#taxjson-amt) | Canada: the year's minimum tax, line by line |
-| [`taxjson div-estimate`](docs/commands.md#taxjson-div-estimate) | Upcoming dividends from each holding's own history (planning only) |
-| [`taxjson estimate`](docs/commands.md#taxjson-estimate) | Estimated tax on the year's investment income (planning only) |
-| [`taxjson fx-cash`](docs/commands.md#taxjson-fx-cash) | Currency gains on foreign cash |
-| [`taxjson instalments`](docs/commands.md#taxjson-instalments) | Canada: instalments due, paid, and the interest owed |
-| [`taxjson option-yield`](docs/commands.md#taxjson-option-yield) | Option premiums, profit or loss and yield on an underlying over a window (planning only) |
-| [`taxjson plot-tax`](docs/commands.md#taxjson-plot-tax) | ASCII chart of the tax each month's investment income generated, against the year's estimate (planning only) |
-| [`taxjson stats`](docs/commands.md#taxjson-stats) | Win/loss statistics on closed trades |
-| [`taxjson sum`](docs/commands.md#taxjson-sum) | The year's realized gains by account, ending with the lines for your return |
-| [`taxjson win-rates`](docs/commands.md#taxjson-win-rates) | Win rate of your closed trades per ticker, account, month or class |
+| [`tjs amt`](docs/commands.md#tjs-amt) | Canada: the year's minimum tax, line by line |
+| [`tjs div-estimate`](docs/commands.md#tjs-div-estimate) | Upcoming dividends from each holding's own history (planning only) |
+| [`tjs estimate`](docs/commands.md#tjs-estimate) | Estimated tax on the year's investment income (planning only) |
+| [`tjs fx-cash`](docs/commands.md#tjs-fx-cash) | Currency gains on foreign cash |
+| [`tjs instalments`](docs/commands.md#tjs-instalments) | Canada: instalments due, paid, and the interest owed |
+| [`tjs option-yield`](docs/commands.md#tjs-option-yield) | Option premiums, profit or loss and yield on an underlying over a window (planning only) |
+| [`tjs plot-tax`](docs/commands.md#tjs-plot-tax) | ASCII chart of the tax each month's investment income generated, against the year's estimate (planning only) |
+| [`tjs stats`](docs/commands.md#tjs-stats) | Win/loss statistics on closed trades |
+| [`tjs sum`](docs/commands.md#tjs-sum) | The year's realized gains by account, ending with the lines for your return |
+| [`tjs win-rates`](docs/commands.md#tjs-win-rates) | Win rate of your closed trades per ticker, account, month or class |
 
 #### Positions
 
 | Command | Purpose |
 | --- | --- |
-| [`taxjson list`](docs/commands.md#taxjson-list) | Open positions per account, with book cost (`--date` for a past day) |
-| [`taxjson shares`](docs/commands.md#taxjson-shares) | Total held per symbol across all accounts |
+| [`tjs list`](docs/commands.md#tjs-list) | Open positions per account, with book cost (`--date` for a past day) |
+| [`tjs shares`](docs/commands.md#tjs-shares) | Total held per symbol across all accounts |
 
 #### Row listings
 
 | Command | Purpose |
 | --- | --- |
-| [`taxjson cash`](docs/commands.md#taxjson-cash) | Cash deposits, withdrawals and conversions over a window, as `.tt` lines |
-| [`taxjson dil`](docs/commands.md#taxjson-dil) | Payments in lieu of dividends over a window |
-| [`taxjson divs`](docs/commands.md#taxjson-divs) | Dividends over a window |
-| [`taxjson events`](docs/commands.md#taxjson-events) | Every transaction over a window |
-| [`taxjson fees`](docs/commands.md#taxjson-fees) | Fees per trade over a window |
-| [`taxjson gains`](docs/commands.md#taxjson-gains) | Realized gains in the trade's own currency |
-| [`taxjson leaps`](docs/commands.md#taxjson-leaps) | Closed LEAPS positions |
-| [`taxjson roc`](docs/commands.md#taxjson-roc) | Return-of-capital and other cost adjustments |
-| [`taxjson staking`](docs/commands.md#taxjson-staking) | Rewards, commissions, net income and acquisition evidence |
-| [`taxjson trades`](docs/commands.md#taxjson-trades) | Buys, sells and assignments |
-| [`taxjson transfers`](docs/commands.md#taxjson-transfers) | Custody transfers the books leave out, and what was done with each |
+| [`tjs cash`](docs/commands.md#tjs-cash) | Cash deposits, withdrawals and conversions over a window, as `.tt` lines |
+| [`tjs dil`](docs/commands.md#tjs-dil) | Payments in lieu of dividends over a window |
+| [`tjs divs`](docs/commands.md#tjs-divs) | Dividends over a window |
+| [`tjs events`](docs/commands.md#tjs-events) | Every transaction over a window |
+| [`tjs fees`](docs/commands.md#tjs-fees) | Fees per trade over a window |
+| [`tjs gains`](docs/commands.md#tjs-gains) | Realized gains in the trade's own currency |
+| [`tjs leaps`](docs/commands.md#tjs-leaps) | Closed LEAPS positions |
+| [`tjs roc`](docs/commands.md#tjs-roc) | Return-of-capital and other cost adjustments |
+| [`tjs staking`](docs/commands.md#tjs-staking) | Rewards, commissions, net income and acquisition evidence |
+| [`tjs trades`](docs/commands.md#tjs-trades) | Buys, sells and assignments |
+| [`tjs transfers`](docs/commands.md#tjs-transfers) | Custody transfers the books leave out, and what was done with each |
 
 #### Totals by type
 
 | Command | Purpose |
 | --- | --- |
-| [`taxjson ccd-sum`](docs/commands.md#taxjson-ccd-sum) | Covered-call gains per underlying |
-| [`taxjson dil-sum`](docs/commands.md#taxjson-dil-sum) | Payments in lieu per symbol, with their tax treatment |
-| [`taxjson divs-sum`](docs/commands.md#taxjson-divs-sum) | Dividends per ticker |
-| [`taxjson fees-sum`](docs/commands.md#taxjson-fees-sum) | Trading fees by broker |
-| [`taxjson leaps-sum`](docs/commands.md#taxjson-leaps-sum) | LEAPS gains per contract |
-| [`taxjson losers`](docs/commands.md#taxjson-losers) | Biggest realized losers |
-| [`taxjson roc-sum`](docs/commands.md#taxjson-roc-sum) | Return of capital per ticker |
-| [`taxjson staking-sum`](docs/commands.md#taxjson-staking-sum) | Reward and commission totals by exchange and coin |
-| [`taxjson trades-sum`](docs/commands.md#taxjson-trades-sum) | Buys, sells and fees per ticker |
-| [`taxjson winners`](docs/commands.md#taxjson-winners) | Biggest realized winners |
+| [`tjs ccd-sum`](docs/commands.md#tjs-ccd-sum) | Covered-call gains per underlying |
+| [`tjs dil-sum`](docs/commands.md#tjs-dil-sum) | Payments in lieu per symbol, with their tax treatment |
+| [`tjs divs-sum`](docs/commands.md#tjs-divs-sum) | Dividends per ticker |
+| [`tjs fees-sum`](docs/commands.md#tjs-fees-sum) | Trading fees by broker |
+| [`tjs leaps-sum`](docs/commands.md#tjs-leaps-sum) | LEAPS gains per contract |
+| [`tjs losers`](docs/commands.md#tjs-losers) | Biggest realized losers |
+| [`tjs roc-sum`](docs/commands.md#tjs-roc-sum) | Return of capital per ticker |
+| [`tjs staking-sum`](docs/commands.md#tjs-staking-sum) | Reward and commission totals by exchange and coin |
+| [`tjs trades-sum`](docs/commands.md#tjs-trades-sum) | Buys, sells and fees per ticker |
+| [`tjs winners`](docs/commands.md#tjs-winners) | Biggest realized winners |
 
 #### Before you trade
 
 | Command | Purpose |
 | --- | --- |
-| [`taxjson wash-radar`](docs/commands.md#taxjson-wash-radar) | Open superficial-loss / wash-sale windows as of today |
-| [`taxjson buy-check`](docs/commands.md#taxjson-buy-check) | Would buying this today cancel a recent loss? |
-| [`taxjson sell-check`](docs/commands.md#taxjson-sell-check) | Would selling this at a loss today keep the loss? |
-| [`taxjson rebuy`](docs/commands.md#taxjson-rebuy) | When each ticker sold at a loss can be bought back |
-| [`taxjson harvest`](docs/commands.md#taxjson-harvest) | Unrealized gains and losses at current prices |
-| [`taxjson tips`](docs/commands.md#taxjson-tips) | Tax-efficiency tips for next year |
-| [`taxjson watch`](docs/commands.md#taxjson-watch) | What changed since the last watch (for cron) |
+| [`tjs wash-radar`](docs/commands.md#tjs-wash-radar) | Open superficial-loss / wash-sale windows as of today |
+| [`tjs buy-check`](docs/commands.md#tjs-buy-check) | Would buying this today cancel a recent loss? |
+| [`tjs sell-check`](docs/commands.md#tjs-sell-check) | Would selling this at a loss today keep the loss? |
+| [`tjs rebuy`](docs/commands.md#tjs-rebuy) | When each ticker sold at a loss can be bought back |
+| [`tjs harvest`](docs/commands.md#tjs-harvest) | Unrealized gains and losses at current prices |
+| [`tjs tips`](docs/commands.md#tjs-tips) | Tax-efficiency tips for next year |
+| [`tjs watch`](docs/commands.md#tjs-watch) | What changed since the last watch (for cron) |
 
 #### Before you file
 
 | Command | Purpose |
 | --- | --- |
-| [`taxjson form-export`](docs/commands.md#taxjson-form-export) | Schedule 3 / Form 8949 rows, or a TurboTax TXF |
-| [`taxjson t1135`](docs/commands.md#taxjson-t1135) | Canada: the foreign-property test and tables |
-| [`taxjson reconcile-slips`](docs/commands.md#taxjson-reconcile-slips) | Compare broker T5008 / 1099-B slips with the books |
-| [`taxjson slip-audit`](docs/commands.md#taxjson-slip-audit) | Canada: T5 / T3 slips against the books' income |
-| [`taxjson carryover`](docs/commands.md#taxjson-carryover) | Capital-loss carryforward ledger across years |
-| [`taxjson option-boundary`](docs/commands.md#taxjson-option-boundary) | Canada: written options across a year end |
-| [`taxjson close-year`](docs/commands.md#taxjson-close-year) | Lock the year you filed (`filed/<year>.json`) |
-| [`taxjson check-filed`](docs/commands.md#taxjson-check-filed) | Recompute filed years and report any drift |
-| [`taxjson handoff`](docs/commands.md#taxjson-handoff) | Check this year starts where last year's return ended |
+| [`tjs form-export`](docs/commands.md#tjs-form-export) | Schedule 3 / Form 8949 rows, or a TurboTax TXF |
+| [`tjs t1135`](docs/commands.md#tjs-t1135) | Canada: the foreign-property test and tables |
+| [`tjs reconcile-slips`](docs/commands.md#tjs-reconcile-slips) | Compare broker T5008 / 1099-B slips with the books |
+| [`tjs slip-audit`](docs/commands.md#tjs-slip-audit) | Canada: T5 / T3 slips against the books' income |
+| [`tjs carryover`](docs/commands.md#tjs-carryover) | Capital-loss carryforward ledger across years |
+| [`tjs option-boundary`](docs/commands.md#tjs-option-boundary) | Canada: written options across a year end |
+| [`tjs close-year`](docs/commands.md#tjs-close-year) | Lock the year you filed (`filed/<year>.json`) |
+| [`tjs check-filed`](docs/commands.md#tjs-check-filed) | Recompute filed years and report any drift |
+| [`tjs handoff`](docs/commands.md#tjs-handoff) | Check this year starts where last year's return ended |
 
 #### Explain and check
 
 | Command | Purpose |
 | --- | --- |
-| [`taxjson audit`](docs/commands.md#taxjson-audit) | Trace every capital gain back to its broker row |
-| [`taxjson wash-sales`](docs/commands.md#taxjson-wash-sales) | Each loss denied this year, and why (`--explain`) |
-| [`taxjson tax-logic`](docs/commands.md#taxjson-tax-logic) | Every tax rule applied, a bullet each (`--ids`) |
-| [`taxjson edge-cases`](docs/commands.md#taxjson-edge-cases) | Trades on a year-end or 30-day-window edge |
-| [`taxjson check-dates`](docs/commands.md#taxjson-check-dates) | Trade and settlement dates checked against each market |
-| [`taxjson check-tt`](docs/commands.md#taxjson-check-tt) | Every `.tt` line read as the run reads it, each problem named with its file and line |
-| [`taxjson sanity`](docs/commands.md#taxjson-sanity) | Compare positions (and costs) with the broker's holdings |
-| [`taxjson journals`](docs/commands.md#taxjson-journals) | Broker journals between two listings of one security |
-| [`taxjson renames`](docs/commands.md#taxjson-renames) | Ticker changes as dated events |
-| [`taxjson spinoffs`](docs/commands.md#taxjson-spinoffs) | Spin-offs: election, value used, cost booked |
-| [`taxjson splits`](docs/commands.md#taxjson-splits) | Splits and consolidations, holdings before and after |
+| [`tjs audit`](docs/commands.md#tjs-audit) | Trace every capital gain back to its broker row |
+| [`tjs wash-sales`](docs/commands.md#tjs-wash-sales) | Each loss denied this year, and why (`--explain`) |
+| [`tjs tax-logic`](docs/commands.md#tjs-tax-logic) | Every tax rule applied, a bullet each (`--ids`) |
+| [`tjs edge-cases`](docs/commands.md#tjs-edge-cases) | Trades on a year-end or 30-day-window edge |
+| [`tjs check-dates`](docs/commands.md#tjs-check-dates) | Trade and settlement dates checked against each market |
+| [`tjs check-tt`](docs/commands.md#tjs-check-tt) | Every `.tt` line read as the run reads it, each problem named with its file and line |
+| [`tjs sanity`](docs/commands.md#tjs-sanity) | Compare positions (and costs) with the broker's holdings |
+| [`tjs journals`](docs/commands.md#tjs-journals) | Broker journals between two listings of one security |
+| [`tjs renames`](docs/commands.md#tjs-renames) | Ticker changes as dated events |
+| [`tjs spinoffs`](docs/commands.md#tjs-spinoffs) | Spin-offs: election, value used, cost booked |
+| [`tjs splits`](docs/commands.md#tjs-splits) | Splits and consolidations, holdings before and after |
 
 #### Maintainer
 
-The release commands, for the machine taxjson is developed on: `taxjson help`
-lists them only there (`taxjson help --all` everywhere).
+The release commands, for the machine taxjson is developed on: `tjs help`
+lists them only there (`tjs help --all` everywhere).
 
 | Command | Purpose |
 | --- | --- |
-| [`taxjson channels`](docs/commands.md#taxjson-channels) | Where each release channel points; what this machine runs |
-| [`taxjson deploy`](docs/commands.md#taxjson-deploy) | Development machine: install a release here |
-| [`taxjson promote`](docs/commands.md#taxjson-promote) | Development machine: point `stable` or `beta` at a release |
+| [`tjs channels`](docs/commands.md#tjs-channels) | Where each release channel points; what this machine runs |
+| [`tjs deploy`](docs/commands.md#tjs-deploy) | Development machine: install a release here |
+| [`tjs promote`](docs/commands.md#tjs-promote) | Development machine: point `stable` or `beta` at a release |
 
 #### Tools
 
 | Command | Purpose |
 | --- | --- |
-| [`taxjson redact`](docs/commands.md#taxjson-redact) | Copy exports with account numbers, names and addresses removed |
-| [`taxjson help`](docs/commands.md#taxjson-help) | The help page, or one command's (`--all`: both countries') |
+| [`tjs redact`](docs/commands.md#tjs-redact) | Copy exports with account numbers, names and addresses removed |
+| [`tjs help`](docs/commands.md#tjs-help) | The help page, or one command's (`--all`: both countries') |
 
 ## Contributing and licence
 

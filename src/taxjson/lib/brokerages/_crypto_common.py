@@ -503,14 +503,14 @@ def warn_depeg(coin: str, usd_price: float, qty: float, date: str,
                 _DEPEG_UNCHECKED.add(cur)
                 emit_line(f"note: {where}: a {coin} fill valued in {cur} on "
                       f"{date} is not checked for a de-peg: no {cur} and "
-                      f"USD rate for that day (`taxjson run` passes its "
+                      f"USD rate for that day (`tjs run` passes its "
                       f"rates; add {cur} to source_currencies). Further "
                       f"{cur} fills are not named.")
             return False
         price = conv
     if abs(price - 1.0) <= DEPEG_TOLERANCE:
         return False
-    # The ATTENTION channel: `taxjson run` echoes it on the console
+    # The ATTENTION channel: `tjs run` echoes it on the console
     # (it was only in the .sum, re-audit A2-1001) — money the books
     # leave out.
     via = (f" ({native:.4f} {cur} at the day's rate)" if cur != 'USD'

@@ -1,4 +1,4 @@
-"""`taxjson redact` with no FILE: the project's inputs/ copied to
+"""`tjs redact` with no FILE: the project's inputs/ copied to
 inputs_redact/ (or --out DIR) and the COPY redacted; inputs/ is never
 written. Every fixture is synthetic (fake ids, marked pii-ok)."""
 import hashlib
@@ -45,7 +45,7 @@ def _env(**extra):
 
 
 def tj(root: Path, *args, **env):
-    """`taxjson -C root <args>` (captured width 0 unless env says)."""
+    """`tjs -C root <args>` (captured width 0 unless env says)."""
     env.setdefault("TAXJSON_WIDTH", "0")
     return subprocess.run(
         [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root),
@@ -295,7 +295,7 @@ class TestRedactProjectModes(unittest.TestCase):
         (other / "mine.txt").write_text("keep\n")
         r = tj(self.root, "redact", "--no-denylist", "--force")
         self.assertEqual(r.returncode, 2)
-        self.assertIn("was not made by taxjson redact", flat(r))
+        self.assertIn("was not made by tjs redact", flat(r))
         self.assertEqual((other / "mine.txt").read_text(), "keep\n")
 
     def test_check_writes_nothing(self):

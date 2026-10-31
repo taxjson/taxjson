@@ -1,4 +1,4 @@
-"""`taxjson migrate`: fold an old project's per-purpose files into
+"""`tjs migrate`: fold an old project's per-purpose files into
 ticker.map and taxjson.toml.
 
 The old files and where their contents go:
@@ -52,7 +52,7 @@ LEGACY_DATA_FILES = {
     "distributions.map": "[[distributions]]",
 }
 # The old missing-history file (and its older name): converted into the
-# accounts' .tt OPENING cost=unknown lines by `taxjson migrate`
+# accounts' .tt OPENING cost=unknown lines by `tjs migrate`
 # (lib/missing_history.plan_missing_history_migration), not by plan().
 MISSING_HISTORY_FILES = {
     "missing_history.json": "OPENING <date> <SYMBOL> <qty> cost=unknown "
@@ -94,7 +94,7 @@ def retired_file_note(names: List[str]) -> str:
     """The once-per-run NOTE for a leftover retired file."""
     what = ", ".join(f"{n} ({RETIRED_MAP_FILES[n]})" for n in names)
     return (f"{what} is no longer used and is ignored — delete it, or "
-            f"run `taxjson migrate` to rename it to *.migrated.")
+            f"run `tjs migrate` to rename it to *.migrated.")
 
 
 def legacy_message(names: List[str]) -> str:
@@ -107,8 +107,8 @@ def legacy_message(names: List[str]) -> str:
                 f"{'is' if len(mh) == 1 else 'are'} no longer read — "
                 f"missing history is dated "
                 f".tt lines (OPENING <date> <SYMBOL> <qty> cost=unknown in "
-                f"inputs/<account>/missing_history.tt): run `taxjson "
-                f"migrate` to convert it (preview with `taxjson migrate "
+                f"inputs/<account>/missing_history.tt): run `tjs "
+                f"migrate` to convert it (preview with `tjs migrate "
                 f"--dry-run`; in a year folder it merges every year's "
                 f"file); nothing was run.")
     where = []
@@ -120,8 +120,8 @@ def legacy_message(names: List[str]) -> str:
         where.append(f"{n} (now {target})")
     return ("this project still has " + ", ".join(where)
             + " — these files are no longer read, so their contents "
-              "would be silently ignored. Run `taxjson migrate` to move "
-              "them (preview with `taxjson migrate --dry-run`); nothing "
+              "would be silently ignored. Run `tjs migrate` to move "
+              "them (preview with `tjs migrate --dry-run`); nothing "
               "was run.")
 
 
@@ -438,7 +438,7 @@ def _toml_tables(root: Path, cfg: Dict[str, Any], text: str,
             return
         line = (f"{key} = {{ " + ", ".join(
             f"{y} = {_toml_num(a)}" for y, a in want.items())
-            + f" }}  # from {src} (taxjson migrate, {stamp})")
+            + f" }}  # from {src} (tjs migrate, {stamp})")
         expect.setdefault(section, {})[key] = want
         has_header = re.search(rf"(?m)^[ \t]*\[[ \t]*{section}[ \t]*\]"
                                rf"[ \t]*(#.*)?$", text) is not None
@@ -503,7 +503,7 @@ def _toml_tables(root: Path, cfg: Dict[str, Any], text: str,
 def _array_text(table: str, entries: List[Tuple[Dict[str, Any], str]],
                 src: str) -> str:
     stamp = _dt.date.today().isoformat()
-    out = [f"\n# --- from {src} (taxjson migrate, {stamp}) ---"]
+    out = [f"\n# --- from {src} (tjs migrate, {stamp}) ---"]
     for t, note in entries:
         if note:
             out.append(f"# {note}")
@@ -569,7 +569,7 @@ def _canon_cfg(v: Any) -> Any:
 
 
 def plan(root) -> Plan:
-    """What `taxjson migrate` would do in `root`. Raises MigrateError
+    """What `tjs migrate` would do in `root`. Raises MigrateError
     when an old file cannot be converted or a target conflicts."""
     from taxjson.lib.tomlcompat import tomllib
     root = Path(root).resolve()
@@ -638,7 +638,7 @@ def plan(root) -> Plan:
                 keep_lines.append(line)
                 added += 1
             if keep_lines:
-                chunks.append(f"\n# --- from {name} (taxjson migrate, "
+                chunks.append(f"\n# --- from {name} (tjs migrate, "
                               f"{stamp}) ---\n" + "\n".join(keep_lines)
                               + "\n")
             kw = LEGACY_MAP_FILES[name]
@@ -727,13 +727,13 @@ def plan(root) -> Plan:
         except ValueError as e:
             raise MigrateError(
                 f"taxjson.toml could not take the new entries safely ({e}) "
-                f"— add them by hand (`taxjson migrate --dry-run` shows "
+                f"— add them by hand (`tjs migrate --dry-run` shows "
                 f"them)") from None
         if _canon_cfg(got) != _canon_cfg(expect):
             raise MigrateError(
                 "taxjson.toml did not read back as intended after adding "
                 "the entries (an unusual layout of [estimate] or "
-                "[carryover]) — add them by hand (`taxjson migrate "
+                "[carryover]) — add them by hand (`tjs migrate "
                 "--dry-run` shows them)")
         from taxjson.lib.config_check import settings_problems
 
@@ -809,7 +809,7 @@ def apply(pl: Plan) -> None:
             refuse_read_only(_p.resolve() if _p.is_symlink() else _p)
     if pl.map_append:
         tm = root / "ticker.map"
-        # A new map starts with the header `taxjson format-map` writes.
+        # A new map starts with the header `tjs format-map` writes.
         from taxjson.lib.ticker_map_format import header_text
         before = (tm.read_text(encoding="utf-8-sig") if tm.is_file()
                   else header_text())

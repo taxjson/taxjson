@@ -95,7 +95,7 @@ class TestEdgeCases(unittest.TestCase):
                 d = _run(country, "edge-cases", "--details")
                 for frag in ("HOW THE WINDOW IS COUNTED",
                              "of denied losses sits in the cost",
-                             "`taxjson handoff`", "(0)"):
+                             "`tjs handoff`", "(0)"):
                     self.assertIn(frag, _flat(d.stdout))
 
 
@@ -120,7 +120,7 @@ class TestCloseYear(unittest.TestCase):
                 self.assertNotIn("check-filed` now guards", r.stdout)
                 d = w.run("close-year", "--yes", "--force", "--details", **W)
                 self.assertEqual(d.returncode, 0, d.stderr)
-                self.assertIn("`taxjson check-filed` now guards it",
+                self.assertIn("`tjs check-filed` now guards it",
                               _flat(d.stdout))
                 self.assertIn("handoff checks its inputs against them",
                               _flat(d.stdout))
@@ -189,7 +189,7 @@ class TestYears(unittest.TestCase):
         self.assertIn("1 rule(s) (filed)", r.stdout)
         self.assertNotIn("What differs", r.stdout)
         d = years("--details")
-        self.assertIn("taxjson years --diff 2024 2025", d.stdout)
+        self.assertIn("tjs years --diff 2024 2025", d.stdout)
         self.assertIn("rechecks the filed figures against the lock",
                       _flat(d.stdout))
 
@@ -231,7 +231,7 @@ class TestOptionBoundary(unittest.TestCase):
         self.assertIn("No amended return is required", r.stdout)
         d = _run("canada", "option-boundary", "--details")
         self.assertIn("=> if assigned in a later year", _flat(d.stdout))
-        self.assertIn("No filed-year locks (run `taxjson close-year`",
+        self.assertIn("No filed-year locks (run `tjs close-year`",
                       _flat(d.stdout))
 
 

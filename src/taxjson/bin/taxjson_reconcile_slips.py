@@ -52,7 +52,7 @@ Usage:
         --gains margin_gains.json [--gains ...]
         [--year 2025] [--tolerance 1.00] [--json]
 
-Or through the project wrapper: `taxjson reconcile-slips t5008.csv`.
+Or through the project wrapper: `tjs reconcile-slips t5008.csv`.
 """
 
 from taxjson.lib.out import exit_text
@@ -573,7 +573,7 @@ def check_computed_currency(gains_paths: List[Path],
                 f"{p}: computed dispositions in {got}, not {base}, the "
                 f"slips' currency — pass the converted "
                 f"<account>_gains(_wash).json, not the native "
-                f"*_raw_gains.json (`taxjson reconcile-slips` does)")
+                f"*_raw_gains.json (`tjs reconcile-slips` does)")
 
 
 def _computed_record() -> Dict[str, Any]:
@@ -1304,7 +1304,7 @@ def render(rep: Dict[str, Any], tolerance: float,
     return "\n".join(lines)
 
 
-# Guarded here as well as by the console script: `taxjson reconcile-slips`
+# Guarded here as well as by the console script: `tjs reconcile-slips`
 # calls this main directly, and an unreadable ticker.map was a traceback
 # there while `taxjson-reconcile-slips` printed one line (A2-0161).
 @guard_main("taxjson-reconcile-slips")
@@ -1329,7 +1329,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Which date the --year filter scopes on: "
                              "'settle' (CRA/T5008) or 'trade' "
                              "(IRS/1099-B). Default: the country's "
-                             "(canada: settle, usa: trade). The `taxjson "
+                             "(canada: settle, usa: trade). The `tjs "
                              "reconcile-slips` wrapper passes the "
                              "project's convention automatically.")
     from taxjson.lib.country import add_country_argument
@@ -1341,7 +1341,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser, help="The project's country (required): canada | usa. "
                      "It sets the base currency slip amounts must be "
                      "in (CAD / USD), the default --date-basis and the "
-                     "slip wording (T5008 vs 1099-B). The `taxjson "
+                     "slip wording (T5008 vs 1099-B). The `tjs "
                      "reconcile-slips` wrapper passes it.")
     parser.add_argument("--tolerance", type=nonneg_float_arg, default=1.00,
                         help="Absolute per-symbol amount tolerance "
@@ -1349,13 +1349,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--json", action="store_true",
                         help="Emit the report as JSON instead of text")
     parser.add_argument("--brief", action="store_true",
-                        help="The essentials only (what `taxjson reconcile-slips` prints "
+                        help="The essentials only (what `tjs reconcile-slips` prints "
                              "without --details): the notes and each "
                              "message's detail are left out")
     parser.add_argument("--ticker-map", type=Path, default=None,
                         help="The project's ticker.map: slip symbols are "
                              "renamed the way the books were (SAMPLK -> SAMPLJ, "
-                             "SAMPLD -> SAMPLD.B). The `taxjson reconcile-slips` "
+                             "SAMPLD -> SAMPLD.B). The `tjs reconcile-slips` "
                              "wrapper passes it automatically.")
     args = parser.parse_args(argv)
 
@@ -1368,22 +1368,22 @@ def main(argv: Optional[List[str]] = None) -> int:
                 # With no slip file the checklist's t5008 step is to do,
                 # not flagged: a plain --done marks it (backlog TJ-0046).
                 _out.fail(f"no slip CSV matches {sp}: nothing to "
-                          f"reconcile yet", prog="taxjson reconcile-slips",
+                          f"reconcile yet", prog="tjs reconcile-slips",
                           details=["Save the broker's T5008 / 1099-B slip "
                                    "CSV there (docs/filing.md); with no "
                                    "slip to reconcile, mark the step done: "
-                                   "`taxjson checklist --done t5008`."],
+                                   "`tjs checklist --done t5008`."],
                           code=2)
-            _out.fail(f"no such file: {sp}", prog="taxjson reconcile-slips",
+            _out.fail(f"no such file: {sp}", prog="tjs reconcile-slips",
                       code=2)
         if not sp.is_file():
             # A directory raised IsADirectoryError (S036-09).
-            _out.fail(f"{sp} is not a file", prog="taxjson reconcile-slips",
+            _out.fail(f"{sp} is not a file", prog="tjs reconcile-slips",
                       code=2)
     for p in args.gains:
         if not p.exists():
-            _out.fail(f"no such file: {p}", prog="taxjson reconcile-slips",
-                      details=["Run `taxjson run` first."], code=2)
+            _out.fail(f"no such file: {p}", prog="tjs reconcile-slips",
+                      details=["Run `tjs run` first."], code=2)
 
     # One slip per broker is the norm (R1-207): each file on its own
     # reported every other broker's sales as MISSING_FROM_SLIP.

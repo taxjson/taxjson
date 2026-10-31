@@ -132,7 +132,7 @@ class TestRecordDateBasis(unittest.TestCase):
     sale traded 06-19 settling 06-22 made the seller NOT a holder on a
     06-19 record date (wrong — unsettled, still holder of record), and
     a buy traded ON the record date was credited (wrong — it settles
-    after). `--date-basis settle` (the CRA default; `taxjson run`
+    after). `--date-basis settle` (the CRA default; `tjs run`
     passes the project's tax_date) keys the walk on date_settle."""
 
     _BOOK = [

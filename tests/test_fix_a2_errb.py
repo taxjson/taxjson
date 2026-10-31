@@ -1,10 +1,10 @@
 """Regression pins for the re-audit-2 error-handling lists errors-02 and
 errors-05: one-line errors (never a traceback) and consistent exit codes
 in `taxjson` (bin/taxjson_run.py), the console-script trampoline
-(bin/_entry.py) and `taxjson watch`.
+(bin/_entry.py) and `tjs watch`.
 
 Exit-code rule (lib/cli_diag): 0 ok, 1 the command's finding (or a
-refusal such as 'run `taxjson run` first'), 2 a named input or output
+refusal such as 'run `tjs run` first'), 2 a named input or output
 that cannot be read or written, 130 Ctrl-C, 141 a closed stdout pipe.
 
 Synthetic projects only (account `m`, hand-written FX rates in work/,
@@ -403,13 +403,13 @@ class TestViews(_Built):
         for c in ("spinoffs", "splits", "transfers"):
             with self.subTest(cmd=c):
                 self.assertOneLine(self.cli(root, c), 1,
-                                   "run `taxjson run` first")
+                                   "run `tjs run` first")
         (root / "work").mkdir()
         (root / "work" / ".project_maps_applied").write_text("x\n")
         for c in ("edge-cases", "fees-sum", "spinoffs"):
             with self.subTest(cmd=c, work="empty"):
                 self.assertOneLine(self.cli(root, c), 1,
-                                   "run `taxjson run` first")
+                                   "run `tjs run` first")
 
     def test_harvest_with_dangling_base_symlink(self):
         """A2-1422."""
@@ -432,13 +432,13 @@ class TestViews(_Built):
     def test_list_date_fails_when_an_account_recompute_fails(self):
         """A2-1450: never a list without the account. The dated view
         reads the cost timeline the run wrote (backlog TJ-0417): without
-        it, one line naming the file and `taxjson run`."""
+        it, one line naming the file and `tjs run`."""
         root = self.copy()
         for t in (root / "work").glob(".*.timeline.json"):
             t.unlink()
         r = self.cli(root, "list", "--date", "2025-06-30")
         self.assertOneLine(r, 1, "no cost timeline for m")
-        self.assertIn("taxjson run", r.stderr)
+        self.assertIn("tjs run", r.stderr)
         self.assertNotIn("no base files", r.stderr)
 
     def test_audit_one_line_and_same_code_with_json(self):
@@ -635,7 +635,7 @@ class TestTopLevel(unittest.TestCase):
         with redirect_stderr(err), self.assertRaises(SystemExit) as cm:
             R._guarded_func(argparse.Namespace(cmd="demo", func=cmd))
         self.assertEqual(cm.exception.code, 2)
-        self.assertIn("taxjson demo: error: no such file", err.getvalue())
+        self.assertIn("tjs demo: error: no such file", err.getvalue())
 
 
 # ----------------------------------------- checklist --walk prompts

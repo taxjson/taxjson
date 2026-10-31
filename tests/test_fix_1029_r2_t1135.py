@@ -34,7 +34,7 @@ def tx(a, d, s, q, n=0.0, acct="margin", settle=None, **kw):
 
 def gains_of(rows, year=2025):
     """The Canada engine's gains file of `rows` for `year` (None: the
-    whole history), as `taxjson run` writes it."""
+    whole history), as `tjs run` writes it."""
     with contextlib.redirect_stderr(io.StringIO()):
         return run_gains(list(rows), [], [], GainsRequest(
             country="canada", taxable=True, year=year, phantom_hint=False))

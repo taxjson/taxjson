@@ -26,7 +26,7 @@ SRC = REPO_ROOT / "src"
 
 
 def _cli(root: Path, *args: str) -> subprocess.CompletedProcess:
-    """`taxjson -C root args...` from this worktree's sources (the
+    """`tjs -C root args...` from this worktree's sources (the
     audit's CLI probes; python_module_argv, never `-m` from the cwd)."""
     env = dict(os.environ, PYTHONPATH=str(SRC), TAXJSON_OFFLINE="1",
                TAXJSON_WIDTH="0")
@@ -232,14 +232,14 @@ class TestD05DamagedJournalState(unittest.TestCase):
             self.assertNotEqual(run.returncode, 0, run.stdout)
             self.assertEqual(run.stdout, "")
             self.assertIn(f"work/{XL.STATE} is not JSON", run.stderr)
-            self.assertIn("run `taxjson run` first", run.stderr)
+            self.assertIn("run `tjs run` first", run.stderr)
             with self.assertRaises(JournalsError) as cm:
                 report(root, _CFG)
             self.assertIn("is not JSON", str(cm.exception))
             res = checklist.d_journals(ctx)
             self.assertEqual(res.status, "blocked")
             self.assertIn(f"work/{XL.STATE} is not JSON", res.detail)
-            self.assertIn("run `taxjson run`", res.detail)
+            self.assertIn("run `tjs run`", res.detail)
             # Another version's record (or a hand-edited one): the same.
             state.write_text(json.dumps({"format": "cross_listings/0",
                                          "joined": []}))

@@ -1,4 +1,4 @@
-"""Audit 2026-10-24, group "compare": `taxjson compare` snapshots
+"""Audit 2026-10-24, group "compare": `tjs compare` snapshots
 (lib/compare), the stand-alone `taxjson-diff` (bin/taxjson_diff) and
 the backup helper every user-file rewrite goes through
 (lib/safe_write.backup_copy). One test per finding, each named after
@@ -169,7 +169,7 @@ class TestSnapshots(unittest.TestCase):
                 msg = str(c.exception)
                 self.assertIn("work/compare/saved/snapshot.json is not a "
                               "snapshot", msg)
-                self.assertIn("`taxjson compare --delete saved`", msg)
+                self.assertIn("`tjs compare --delete saved`", msg)
                 # --list leaves it out instead of crashing.
                 self.assertEqual(cmp.list_snapshots(root, cfg), [])
                 return msg

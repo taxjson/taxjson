@@ -14,11 +14,11 @@ said too (the loss would miss the excess commission).
 The warning is captured in the stage's .diag (work/<acct>_tt_<stem>.json
 .diag, the .sum DIAGNOSTICS). This module reads it back, so that
 
-* `taxjson run` shows each line on its console as a `Warning:` naming
+* `tjs run` shows each line on its console as a `Warning:` naming
   file:line, the written total, qty x price + fee and that the total is
   what is booked — on every run, cached or not — and `run --strict`
   stops on one (lib/out house style; QA F2);
-* `taxjson checklist` lists them in its run-clean step.
+* `tjs checklist` lists them in its run-clean step.
 
 A total that is right as written (a charge the line does not show)
 agrees once the difference is in the line's fee column.
@@ -190,7 +190,7 @@ def read_diag(tt_json: Path) -> List[Mismatch]:
 def project_mismatches(root: Path, accounts: Iterable[str]
                        ) -> List[Tuple[str, str, Mismatch]]:
     """[(account, .tt file name, Mismatch)] over every configured
-    account's .tt inputs, read from the last run's work/ (what `taxjson
+    account's .tt inputs, read from the last run's work/ (what `tjs
     checklist` lists)."""
     from taxjson.lib.pipeline import tt_json_path
     root = Path(root)

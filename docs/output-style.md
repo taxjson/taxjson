@@ -1,5 +1,9 @@
 # Output style
 
+The command is always `tjs` in what people read: messages, usage, reports and
+docs (`tests/test_command_name.py`). `taxjson` is the project's name, and the
+same program for old scripts.
+
 How taxjson prints to people. One module implements it,
 `src/taxjson/lib/out.py`; a command's text output goes through it, and its
 tests check the result with `out.lint()`.
@@ -96,7 +100,7 @@ Output **captured for a program** is never wrapped: inside
 `out.unwrapped()` `width()` is 0. `lib/dispatch.run_cmd` enters it (and
 sets `TAXJSON_WIDTH=0` for a subprocess) whenever it captures a tool's
 stdout or stderr — a stage's work/ or reports/ file, the `.diag` the
-`.sum` DIAGNOSTICS fold in — and `taxjson checklist` runs the commands
+`.sum` DIAGNOSTICS fold in — and `tjs checklist` runs the commands
 it reads with `TAXJSON_WIDTH=0`. So those bytes never depend on a
 terminal, every line a program greps stays whole, and the checklist
 still shows a failed command's whole last line. Whoever shows captured
@@ -126,7 +130,7 @@ Captured output (width 0) keeps its bytes.
 - **Key/value blocks** align their values: `label:  value`, the labels
   padded to the longest; a long value wraps under itself.
 - The **last line** of a listing that asks for action says what to do, in
-  one line (`taxjson checklist` shows a command's last line as its
+  one line (`tjs checklist` shows a command's last line as its
   detail).
 
 ## Messages
@@ -151,7 +155,7 @@ Warning: Short position: ABC.TO (margin) goes short on 2025-03-04
 The books sell 10 more than they hold. ...
 
 Error: no gains files in work/
-Run `taxjson run` first.
+Run `tjs run` first.
 ```
 
 Shown to a person, every line after a message's label line continues
@@ -173,10 +177,10 @@ built as lines at once: `out.join_blocks` / `out.show_blocks`.
 
 **The source.** A message never starts with a program name. The
 command the person typed is not named at all (`Warning: ...`, not
-`taxjson sum: warning: ...`). A line captured from *another* program
+`tjs sum: warning: ...`). A line captured from *another* program
 and shown by the command that ran it — a child's error relayed in a
 detail line — keeps that program's name right after the label, as its
-source: `Error: taxjson-x: ...`. The one exception is `taxjson run`'s
+source: `Error: taxjson-x: ...`. The one exception is `tjs run`'s
 console: its stages are its own parts, so a stage's line is shown
 without the stage's name (`Error: 1 corp-action event(s) need an
 election ...`; the .diag keeps it). Messages from a parser or the engine
@@ -187,7 +191,7 @@ the account's step line.
 `lib/out.label` / `out.message` (and `out.relabel` for a captured line
 shown later), keyed on the width: shown to a person (width > 0) the
 label starts the line; captured for a program (width 0: a work/ or
-reports/ file, a `.diag`, the text the run and `taxjson checklist`
+reports/ file, a `.diag`, the text the run and `tjs checklist`
 read back, every subprocess under `TAXJSON_WIDTH=0`) the message keeps
 its GNU bytes, `[<prog>: ]note: / warning: / warning: ATTENTION: /
 error: ...` lower case — never changed by a style pass (see below).
@@ -208,10 +212,10 @@ Retired at the start of a line a person sees: the lower-case `note:`,
 ```python
 from taxjson.lib import out
 out.warn("fmv_per_share=0 books this taxable_deemed_dividend at $0",
-         prog="taxjson elect",
+         prog="tjs elect",
          details=["No income and a $0 cost for the new shares. ..."])
 out.fail("'X' matches no pending event — nothing was saved",
-         prog="taxjson elect", details=["Check the id with ..."])
+         prog="tjs elect", details=["Check the id with ..."])
 ```
 
 `prog=` names the program in the captured form only. `out.fail(...,
@@ -223,7 +227,7 @@ The shared helpers speak it:
 
 - `taxjson_run._die(headline, *details)` (exit 1) and
   `_die_input(headline, *details)` (exit 2) print `Error: <headline>`
-  and the details under it, flush-left (`taxjson <cmd>: error:
+  and the details under it, flush-left (`tjs <cmd>: error:
   <headline>` and the details two spaces in, captured). An old
   one-string call still works (the string wraps under its label); when
   you touch one, split it into a short headline and details.
@@ -243,7 +247,7 @@ The shared helpers speak it:
 
 ## The run's console
 
-What `taxjson run` prints for a person (width > 0, stdout and stderr) is
+What `tjs run` prints for a person (width > 0, stdout and stderr) is
 read by someone with little attention to spare. Every non-blank line
 starts with exactly one of:
 
@@ -270,7 +274,7 @@ Info: ib_demo.csv: 9 tax objects
 ==> Processing corporate actions
 ```
 
-`taxjson run --details` shows each message with its detail lines (the
+`tjs run --details` shows each message with its detail lines (the
 captured .diag always has them):
 
 ```
@@ -289,8 +293,8 @@ only after an entry of more than one line);
 tests/test_run_console.py runs it on the style projects, on stdout and
 stderr apart and merged (`2>&1`). The same rule holds for any command's
 stderr messages (`tests/_style.assert_console`). The other commands'
-progress lines are steps too (`taxjson checklist`: `==> Checking sanity
-(taxjson sanity)`).
+progress lines are steps too (`tjs checklist`: `==> Checking sanity
+(tjs sanity)`).
 
 A message an engine pass says is shown once per run, whichever pass
 says it (the account's gains, the blended pass, a failed stage's echo):
@@ -348,8 +352,8 @@ whose stage is cached under `--fast` is not shown):
 | `==> Checking the filed years` | filed/ locks exist |
 | `==> Calculating FX gains on cash (fx_cash_gains = true)` | opted in |
 | `==> Done. Reports are in reports/` | the run finished |
-| `==> Checking positions against the broker's holdings files` | `holdings` configured (one message per finding; `taxjson sanity` has the tables) |
-| `==> Before you trust these numbers (docs/getting-started.md, step 5)` | something is incomplete: a `Warning:` per number the totals miss, an `Info:` per check not made, `Info: Then run taxjson checklist ...` |
+| `==> Checking positions against the broker's holdings files` | `holdings` configured (one message per finding; `tjs sanity` has the tables) |
+| `==> Before you trust these numbers (docs/getting-started.md, step 5)` | something is incomplete: a `Warning:` per number the totals miss, an `Info:` per check not made, `Info: Then run tjs checklist ...` |
 
 ## Numbers, dates
 
@@ -394,7 +398,7 @@ bytes alone:
   `(prog: )?(ok|warning|note|error|validation):` plus the indented lines
   that follow it — so a wrapped message keeps its marker on the first line
   and indents the rest;
-- the text `taxjson checklist` reads from other commands: `sanity` (lines
+- the text `tjs checklist` reads from other commands: `sanity` (lines
   starting `INCOMPLETE` / `UNCHECKED`, the `N discrepancy(ies).` line of
   `--details` and the table rows above it, the last line), `find-missing-history`
   (the `AFFECTS` / `REMOVE from ` / `STALE in ` sections and their row

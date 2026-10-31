@@ -9,7 +9,7 @@ the same rows taxjson-gains counts for `summary.total_fees_by_currency`
 (dividends, transfers, and other non-trade rows are excluded). Rebates
 (negative net fees) ARE included, so a brokerage's true net cost shows.
 The YEAR is the TRADE date's and each fee is converted at its trade
-date's rate (the per-trade `taxjson fees` view's window); `taxjson sum`
+date's rate (the per-trade `tjs fees` view's window); `tjs sum`
 FEES and the .sum use the project's tax_date (settle in Canada) and the
 book's converted amounts, so the two differ by the fees of trades that
 straddle Dec 31 and by a few cents of FX (audit R1-290).
@@ -270,7 +270,7 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
         fee = float(tx.get("commission") or 0) + float(tx.get("fee") or 0)
         if fee == 0:
             continue
-        # TRADE-date basis, matching the per-trade `taxjson fees`
+        # TRADE-date basis, matching the per-trade `tjs fees`
         # view — the two windows disagreed at year boundaries
         # (Dec-30 trade settling Jan-2 landed in different years
         # per tool; 2026-09 audit). Fees are incurred at trade.
@@ -587,9 +587,9 @@ def main():
                         "date). Default: all years.")
     p.add_argument("--since", metavar="YYYY-MM-DD", type=_iso_date,
                    help="Only count fees on/after this date — the cutoff "
-                        "channel `taxjson fees-sum PERIOD` drives.")
+                        "channel `tjs fees-sum PERIOD` drives.")
     p.add_argument("--until", metavar="YYYY-MM-DD", type=_iso_date,
-                   help="Only count fees on/before this date (`taxjson "
+                   help="Only count fees on/before this date (`tjs "
                         "fees-sum PERIOD` passes today with --since).")
     p.add_argument("--to", dest="to_curr", metavar="CURR",
                    # 'cad' / ' CAD' converted every CAD fee at the
@@ -613,7 +613,7 @@ def main():
                    help="Emit machine-readable JSON instead of a text table.")
     p.add_argument("--brief", action="store_true",
                    help="The essentials (docs/output-style.md): no "
-                        "provenance line or definitions (`taxjson "
+                        "provenance line or definitions (`tjs "
                         "fees-sum` passes it unless --details)")
     args = p.parse_args()
 
@@ -626,7 +626,7 @@ def main():
     # A --cache dir with zero parsed per-broker JSONs is a real state
     # (brand-new project, nothing imported yet) and the pipeline calls
     # us unconditionally — exit 2 here crashed the whole first
-    # `taxjson run` of a wizard-created project with a raw traceback
+    # `tjs run` of a wizard-created project with a raw traceback
     # (REVIEW #13; same no-data-is-success rule as FUZZ #H). Fall
     # through: aggregate([]) yields the honest empty report.
 
@@ -636,7 +636,7 @@ def main():
             history = load_exchange_rates(Path(args.rates),
                                           target_curr=args.to_curr)
         except ValueError as e:
-            # A NaN/0/negative rate: one line, exit 2, as `taxjson
+            # A NaN/0/negative rate: one line, exit 2, as `tjs
             # audit` says it (re-audit A2-1423).
             cli_diag.error(PROG, str(e))
             sys.exit(2)
@@ -647,7 +647,7 @@ def main():
     year = str(args.year) if args.year is not None else None
     deleted = frozenset()
     # The map's MULT lines size an option's trade value (backlog TJ-1079);
-    # without one, TAXJSON_TICKER_MAP (`taxjson run` sets it).
+    # without one, TAXJSON_TICKER_MAP (`tjs run` sets it).
     from taxjson.lib.markets import use_ticker_map
     use_ticker_map(args.ticker_map)
     if args.ticker_map:
@@ -668,7 +668,7 @@ def main():
 
     if not buckets:
         # No-data is SUCCESS (exit-code convention: 0 = success incl.
-        # no-data). Returning 1 here crashed the whole `taxjson run`
+        # no-data). Returning 1 here crashed the whole `tjs run`
         # pipeline for anyone whose broker charges no commissions —
         # found independently by four fuzz agents (FUZZ-2026-07 #H).
         if args.json:

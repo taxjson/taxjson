@@ -203,7 +203,7 @@ class TestDiffEngine4SlowOwnMove(unittest.TestCase):
             console_lines(f"warning: ATTENTION: {line}", width_=120,
                           concise=True),
             ["Warning: Transfer-in: qb: 1 booked at the broker's stated "
-             "cost (ZZQ.TO): maybe a move of your own — `taxjson transfers`"])
+             "cost (ZZQ.TO): maybe a move of your own — `tjs transfers`"])
         # Two arrivals that could be one departure's other end.
         found, slow = _arrivals([
             _leg("qa", "2024-03-01", -100),
@@ -276,7 +276,7 @@ class TestDiffEngine4SlowOwnMove(unittest.TestCase):
 
 
 class TestDiffEngine4Run(unittest.TestCase):
-    """diff-engine#4 end to end: `taxjson run` on two Questrade accounts,
+    """diff-engine#4 end to end: `tjs run` on two Questrade accounts,
     the legs 5 and 15 days apart, books the same cost and gain."""
 
     @rule("CA-ACB-TRANSFER-BV")

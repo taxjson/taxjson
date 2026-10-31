@@ -225,7 +225,7 @@ class TestInitThroughLinkOutside(unittest.TestCase):
 
 
 _EMPTY_FETCHED = (
-    '# Live Questrade holdings snapshot — taxjson fetch/verify.\n'
+    '# Live Questrade holdings snapshot — tjs fetch/verify.\n'
     '[meta]\naccount = "margin"\nbroker_account = "99900001"\n'  # pii-ok
     'source = "questrade-api"\ngenerated_at = "2024-12-31T20:00:00Z"\n'
     'holdings_count = 0\n')

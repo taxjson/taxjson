@@ -1,13 +1,13 @@
 """New-user guidance (owner-approved gaps from the getting-started study).
 
-1. A closing summary at the end of `taxjson run`: sales with no purchase
+1. A closing summary at the end of `tjs run`: sales with no purchase
    not covered by missing history, $0-cost positions (sold or still
    held), transfer-ins kept out with no cost, accounts with open
    positions and no holdings check, income on a security the books do
    not hold — each with its command; silent when clean; the counts in
    reports/run_summary.json. The short-position NOTE of a taxable account
    is on the console.
-2. `taxjson sum` warns about uncovered sales with no purchase; "tainted"
+2. `tjs sum` warns about uncovered sales with no purchase; "tainted"
    is "unknown cost" in every message (JSON keys kept, aliases added).
 3. A transfer-in from outside the books takes the broker's STATED book
    value as its cost (never a market value), with an ATTENTION that a
@@ -91,7 +91,7 @@ _CLEAN_TT = ("BUYSELL  2025-01-10  09:30:00  ABC.TO  10  CAD  20  200  0\n"
 
 
 class TestFirstRunSummary(unittest.TestCase):
-    """Item 1: the closing summary of `taxjson run`."""
+    """Item 1: the closing summary of `tjs run`."""
 
     def test_every_finding_is_counted_with_its_command(self):
         with tempfile.TemporaryDirectory() as td:
@@ -106,19 +106,19 @@ class TestFirstRunSummary(unittest.TestCase):
             self.assertIn("1 position sold in 2025 with no purchase in "
                           "your files, not in missing_history.tt", tail)
             self.assertIn("SMA.TO (margin)", tail)
-            self.assertIn("`taxjson find-missing-history`", tail)
+            self.assertIn("`tjs find-missing-history`", tail)
             # $0 cost: still held, which the detector used to ignore.
             self.assertIn("1 position at a $0 cost (1 still held): "
                           "ZRO.TO (margin)", tail)
             self.assertIn("1 transfer-in from outside your books kept "
                           "out with no cost: QRS.TO (margin)", tail)
-            self.assertIn("`taxjson transfers`", tail)
+            self.assertIn("`tjs transfers`", tail)
             self.assertIn("no holdings file to check them against: "
                           "margin", tail)
             self.assertIn("paid income in 2025 that the books do not "
                           "hold", tail)
             self.assertIn("DIV.TO (margin)", tail)
-            self.assertIn("`taxjson checklist --run`", tail)
+            self.assertIn("`tjs checklist --run`", tail)
             self.assertIn("docs/getting-started.md", tail)
             # Short: a heading, one line per finding, one closing line.
             block = tail[tail.index("==> Before"):].strip().splitlines()
@@ -275,12 +275,12 @@ class TestSumWarnsUncoveredSales(unittest.TestCase):
             self.assertEqual(cli(root, "run", "--no-input").returncode, 0)
             r = cli(root, "sum")
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("taxjson sum: warning: 1 position(s) sold in "
+            self.assertIn("tjs sum: warning: 1 position(s) sold in "
                           "2025 with no purchase in your files: their gain "
                           "is NOT in these totals", r.stderr)
             self.assertIn("No .tt OPENING cost=unknown line: SMA.TO "
                           "(margin)", r.stderr)
-            self.assertIn("taxjson find-missing-history", r.stderr)
+            self.assertIn("tjs find-missing-history", r.stderr)
             j = json.loads(cli(root, "sum", "--json").stdout)
             self.assertEqual(j["no_purchase_uncovered"],
                              [{"symbol": "SMA.TO", "account": "margin",
@@ -440,7 +440,7 @@ class TestTransferInBookValue(unittest.TestCase):
             # says it (or not) once.
             self.assertNotIn("carry no TRANSFER BOOK VALUE", r.stderr)
             self.assertEqual(self._gain(root), 1000.0)
-            # `taxjson transfers` says what the books did with the row.
+            # `tjs transfers` says what the books did with the row.
             j = json.loads(cli(root, "transfers", "--json").stdout)
             self.assertEqual([t["arrival"] for t in j["transfers"]],
                              ["book value"])

@@ -1,4 +1,4 @@
-"""`taxjson tips` — tax-efficiency advice for next year (all offline).
+"""`tjs tips` — tax-efficiency advice for next year (all offline).
 
 Checks pinned: US-LISTING (cross-listed Canadian dividend payer held via
 its US line in taxable/TFSA), TFSA-US-DIV (US-domiciled payer in a
@@ -27,7 +27,7 @@ def _run(root, *args):
 
 
 def _suggest_json(root):
-    """`taxjson ticker-map --suggest --json` of the project."""
+    """`tjs ticker-map --suggest --json` of the project."""
     r = subprocess.run(
         [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root),
          "ticker-map", "--suggest", "--json"],

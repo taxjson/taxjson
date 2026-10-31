@@ -61,7 +61,7 @@ class TestSettingsKeyWhitelist(unittest.TestCase):
                         "removed setting should warn as unknown")
 
     # The year tokens resolve through _period_keep — THE calendar year
-    # (what `taxjson events 2025` runs); the old _tx_period_cutoff(...,
+    # (what `tjs events 2025` runs); the old _tx_period_cutoff(...,
     # root) lower-bound reading was dead code these tests pinned
     # (S039-04).
     def test_literal_year_is_that_calendar_year(self):
@@ -527,7 +527,7 @@ class Test2026_08_21AuditFixes(unittest.TestCase):
 
 
 class TestCanBuy(unittest.TestCase):
-    """`taxjson buy-check` — buy-side wash safety."""
+    """`tjs buy-check` — buy-side wash safety."""
 
     def _project(self, tmp, with_recent_loss=True):
         from datetime import date, timedelta
@@ -766,7 +766,7 @@ class TestBuyCheckShelteredSide(unittest.TestCase):
 
 
 class TestSellCheck(unittest.TestCase):
-    """`taxjson sell-check` — the sell-side twin."""
+    """`tjs sell-check` — the sell-side twin."""
 
     def _project(self, tmp, taxable_rows, rrsp_rows=None):
         from datetime import date

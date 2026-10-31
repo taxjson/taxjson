@@ -282,7 +282,7 @@ class TestMissingEvidence(_RunOnce):
         t = _cli(root, "check-dates")
         self.assertEqual(t.returncode, 1)
         self.assertIn("missing: 1", t.stdout)
-        self.assertIn("re-run `taxjson run`", " ".join(t.stdout.split()))
+        self.assertIn("re-run `tjs run`", " ".join(t.stdout.split()))
 
     def test_tj0319_renames_with_no_books_refuses(self):
         root = self.copy("nobook")
@@ -290,7 +290,7 @@ class TestMissingEvidence(_RunOnce):
         r = _cli(root, "renames", "--json")
         self.assertNotEqual(r.returncode, 0, r.stdout)
         self.assertEqual(r.stdout.strip(), "")
-        self.assertIn("run `taxjson run` first", r.stderr)
+        self.assertIn("run `tjs run` first", r.stderr)
         good = _cli(self.base, "renames", "--json")
         self.assertEqual(good.returncode, 0, good.stderr[-2000:])
         self.assertEqual(json.loads(good.stdout)["pending"], 0)
@@ -315,7 +315,7 @@ class TestMalformedBookRows(_RunOnce):
             self.assertEqual(r.stdout.strip(), "", cmd)
             self.assertIn("margin_base.json", r.stderr, cmd)
             self.assertIn("(row 0 is null)", r.stderr, cmd)
-            self.assertIn("re-run `taxjson run`", r.stderr, cmd)
+            self.assertIn("re-run `tjs run`", r.stderr, cmd)
 
     def test_tj0320_renames_refuses_a_non_list(self):
         root = self._book("badshape", '{"transactions": 42}')
@@ -382,7 +382,7 @@ class TestJournalsDamagedState(unittest.TestCase):
             self.assertEqual(r.stdout.strip(), "")
             self.assertIn("work/cross_listings.state has a record that is "
                           "not a JSON object", r.stderr)
-            self.assertIn("run `taxjson run` first", r.stderr)
+            self.assertIn("run `tjs run` first", r.stderr)
             # A state with no refused list at all is still valid.
             f.write_text(json.dumps({k: v for k, v in good.items()
                                      if k != "refused"}), encoding="utf-8")

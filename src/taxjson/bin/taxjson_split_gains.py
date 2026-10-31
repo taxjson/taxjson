@@ -166,7 +166,7 @@ def _split_inventory(rows: List[Dict[str, Any]], account: str,
     """The account's inventory rows: its own (US per-account lots), and
     its share of each blended pool by its balance at the end of `until`
     (on `date_basis`: the pools' own, a trade-date project's year end on
-    trade dates, backlog TJ-0343; `taxjson list --date` gives the
+    trade dates, backlog TJ-0343; `tjs list --date` gives the
     project's). A short pool's row beside a long (`short_pool`) is its
     account's own, so the account's balance takes it back before its
     share of the long is read: the two never net (backlog TJ-1028)."""
@@ -301,7 +301,7 @@ def split_for_account(combined: Dict[str, Any], account: str,
     if "count" in summary:          # US: this file's records (S050-23)
         summary["count"] = len(txs)
     # Per-slice fee map: copying the COMBINED map into every account's
-    # file made each .sum carry all accounts' fees (`taxjson sum`
+    # file made each .sum carry all accounts' fees (`tjs sum`
     # multi-counted them — the FUZZ #I class). The map is rebuilt from
     # the account's BASE book exactly the way pipeline.run_gains builds
     # it (raw BUYSELL/ASSIGN rows, year-scoped, nested

@@ -119,12 +119,12 @@ class TestTJ0073DividendWhileShort(unittest.TestCase):
             warn = [ln for ln in r.stderr.splitlines()
                     if "while the books show it short" in ln]
             self.assertEqual(warn, [
-                "taxjson div-estimate: warning: margin: ZZSA.TO dividend "
+                "tjs div-estimate: warning: margin: ZZSA.TO dividend "
                 "paid on 2024-05-15 while the books show it short",
-                "taxjson div-estimate: warning: margin: 3 ZZSB.TO "
+                "tjs div-estimate: warning: margin: 3 ZZSB.TO "
                 "dividends paid from 2024-03-15 while the books show it "
                 "short"], r.stderr)
-            self.assertIn("`taxjson find-missing-history`", r.stderr)
+            self.assertIn("`tjs find-missing-history`", r.stderr)
             doc = json.loads(r.stdout)
             # --json: the flags carry it, the schema is the same.
             self.assertEqual(sorted(doc), sorted([
@@ -275,7 +275,7 @@ class TestTJ0252BlendMessageNamesItsAccount(unittest.TestCase):
             self.assertNotIn("never coded", (rep / "ib.sum").read_text())
 
 
-_NOTE = ("## frozen by `taxjson close-year`: this year reads its own copy "
+_NOTE = ("## frozen by `tjs close-year`: this year reads its own copy "
          "of the exports it was filed from")
 _HEAD = ('[settings]\nyear = {y}\ncountry = "canada"\n'
          'base_currency = "CAD"\nsource_currencies = []\n')
@@ -352,7 +352,7 @@ class TestTJ0263DeletedLockStaysFrozen(unittest.TestCase):
             det = " ".join(_tjs("-C", str(top), "years", "--details")
                            .stdout.split())
             self.assertIn("restore the lock from git or a backup, or "
-                          "`taxjson close-year` locks the year again", det)
+                          "`tjs close-year` locks the year again", det)
             rep = json.loads(_tjs("-C", str(top), "years", "--json").stdout)
             y = rep["years"][0]
             self.assertEqual((y["filed"], y["tobase_frozen"]), (True, True))

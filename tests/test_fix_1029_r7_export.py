@@ -89,7 +89,7 @@ def _holding(doc, sym):
 
 
 _FETCH = """\
-# Live Questrade holdings snapshot — taxjson fetch/verify.
+# Live Questrade holdings snapshot — tjs fetch/verify.
 [meta]
 account = "margin"
 broker_account = "99900001"

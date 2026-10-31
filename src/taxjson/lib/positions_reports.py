@@ -2,8 +2,8 @@
 
 A positions (holdings) report is not activity: it lists each position
 with its quantity and, when the broker states it, its book cost. Two
-commands read one: `taxjson sanity` compares it with the books, and
-`taxjson opening` turns it into OPENING rows. `taxjson run` never books
+commands read one: `tjs sanity` compares it with the books, and
+`tjs opening` turns it into OPENING rows. `tjs run` never books
 one (a positions-only file dropped into inputs/<account>/ is skipped
 with a note — lib/brokerages/detect).
 
@@ -52,7 +52,7 @@ Supported reports (detected by CONTENT, never by file name):
                       otherwise), a label naming CAD or USD sets the
                       cost's currency, Market Value is market value
                       only, and Account is masked.
-  holdings_toml       a `[[holding]]` TOML (the file `taxjson sanity`
+  holdings_toml       a `[[holding]]` TOML (the file `tjs sanity`
                       has always read; taxjson-fetch's Questrade
                       snapshot; other tools' exports): symbol,
                       quantity, currency, total_cost (or book_cost /
@@ -93,7 +93,7 @@ SUPPORTED: Dict[str, str] = {
 
 UNSUPPORTED: Dict[str, str] = {
     "questrade": "no positions CSV is known to the Questrade parser; "
-                 "`taxjson fetch --positions` (the taxjson-fetch plugin) "
+                 "`tjs fetch --positions` (the taxjson-fetch plugin) "
                  "writes the account's live positions as a [[holding]] "
                  "TOML, which is supported",
     "webull": "the Webull parser reads the Trading Summary only; no "
@@ -324,7 +324,7 @@ def _num(raw, *, field: str, where: str, blank_ok: bool) -> Optional[float]:
     return v
 
 
-# A symbol or currency cell is copied into .tt lines (`taxjson opening`)
+# A symbol or currency cell is copied into .tt lines (`tjs opening`)
 # and reports: a control character (a newline) or, in a symbol taxjson
 # builds, whitespace is refused, never carried (security review M2).
 _CTRL_RE = re.compile('[\x00-\x1f\x7f\x85\u2028\u2029]')

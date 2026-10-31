@@ -3,7 +3,7 @@ date the 30-day superficial-loss / wash window measures from (an add to
 an old position matters even when position_start_date is years old).
 
 Both engines: Canada ACB pool tracks it directly; US FIFO derives it
-from the newest surviving lot. `taxjson harvest --sheltered` consumes it
+from the newest surviving lot. `tjs harvest --sheltered` consumes it
 for the SH_ADD column.
 """
 

@@ -1,4 +1,4 @@
-"""`taxjson win-rates`: the win rate of every closed trade, grouped per
+"""`tjs win-rates`: the win rate of every closed trade, grouped per
 ticker (an option under its underlying), account, month or class
 (CA-RPT-16 / US-RPT-12: the trades `stats` counts). Synthetic books
 only."""

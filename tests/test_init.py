@@ -1,4 +1,4 @@
-"""Tests for `taxjson init` — scaffolding a new, ready-to-populate project."""
+"""Tests for `tjs init` — scaffolding a new, ready-to-populate project."""
 import argparse
 import io
 import re

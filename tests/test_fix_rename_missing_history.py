@@ -4,7 +4,7 @@ The project file that listed sales whose purchase is not in the broker
 files (bought before the data starts) — phantoms.json, renamed
 missing_history.json in 2026-10 — is replaced by dated .tt lines
 (`OPENING <date> <SYMBOL> <qty> cost=unknown`). Either name stops every
-command naming `taxjson migrate`, which converts it; a project holding
+command naming `tjs migrate`, which converts it; a project holding
 both is refused by migrate too. --gen-phantoms FILE is refused like
 --write-missing-history FILE; --suggest-phantoms and --phantoms still
 work; the old module name (taxjson.lib.phantom_holdings) is a shim.
@@ -95,7 +95,7 @@ def _gains(root):
 
 class TestOldFileNamesRefused(unittest.TestCase):
     """phantoms.json (or missing_history.json): every command stops,
-    naming `taxjson migrate`, which converts it; both names: migrate
+    naming `tjs migrate`, which converts it; both names: migrate
     refuses too (which one is current cannot be guessed)."""
 
     @rule("CA-ACB-11")
@@ -128,7 +128,7 @@ class TestOldFileNamesRefused(unittest.TestCase):
             self.assertEqual(r.returncode, 2, r.stderr[-2000:])
             self.assertIn("missing_history.json", r.stderr)
             self.assertIn("phantoms.json", r.stderr)
-            self.assertIn("taxjson migrate", r.stderr)
+            self.assertIn("tjs migrate", r.stderr)
             r = _run_cli(root, "migrate")
             self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
             self.assertIn("both missing_history.json and phantoms.json",
@@ -165,7 +165,7 @@ class TestWriteMissingHistory(unittest.TestCase):
             self.assertEqual([ln.split()[2] for ln in
                               out.read_text().splitlines()
                               if ln.startswith("OPENING ")], ["ZZZ.TO"])
-            self.assertIn("`taxjson run` reads them", r.stderr)
+            self.assertIn("`tjs run` reads them", r.stderr)
             self.assertIn("no purchase in your", r.stderr)
             self.assertNotIn("phantom", r.stderr.lower())
 

@@ -348,7 +348,7 @@ class CoinbaseBrokerage(BaseBrokerage):
                         continue
                     # Send/Receive: custody EVIDENCE — emitted as
                     # TRANSFER rows so the sidecar machinery keeps
-                    # them queryable (`taxjson transfers crypto`)
+                    # them queryable (`tjs transfers crypto`)
                     # instead of dropping them. A Send that left your
                     # ownership (gift/payment) is a taxable
                     # disposition at FMV — the parse-time note says
@@ -419,7 +419,7 @@ class CoinbaseBrokerage(BaseBrokerage):
                     # Rewards-of-unknown-type etc.: no tax-event
                     # semantics ASSUMED — but never silent. One that
                     # moves coins (an airdrop, a new reward label) is an
-                    # UNBOOKED warning: echoed by `taxjson run`, fatal
+                    # UNBOOKED warning: echoed by `tjs run`, fatal
                     # under --strict, a --lint failure (S056-12).
                     self.count_skip(f"type {type_raw.strip() or '?'!s}")
                     try:

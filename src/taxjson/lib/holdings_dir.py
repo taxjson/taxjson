@@ -3,8 +3,8 @@
 A project keeps the broker's positions files for its year in holdings/
 (`[settings] holdings_dir` names another folder): a `[[holding]]` TOML
 per broker account, as a download tool writes it (taxjson-fetch
---positions writes the same shape). `taxjson sanity` and the end of
-`taxjson run` find them without any `holdings = [...]` setting:
+--positions writes the same shape). `tjs sanity` and the end of
+`tjs run` find them without any `holdings = [...]` setting:
 
 - each file belongs to the account whose broker account ids include the
   file's `[meta] broker_account`, else its `[meta] account`
@@ -13,7 +13,7 @@ per broker account, as a download tool writes it (taxjson-fetch
   its name starts with
   (`<account>_..._holdings.toml`, `<account>.toml`); several files of
   one account at one date are summed; at different dates each broker
-  account's snapshots are compared one date at a time (`taxjson
+  account's snapshots are compared one date at a time (`tjs
   sanity` refuses files that do not name their broker account);
 - a snapshot is compared at its date (`[meta] as_of`, else the day of
   `[meta] generated_at`); one newer than the books' last day is compared
@@ -41,9 +41,9 @@ HOLDINGS_DIR = "holdings"
 
 README = """\
 The broker's positions snapshots for this tax year, one [[holding]] TOML
-per broker account (a download tool writes them; `taxjson fetch
+per broker account (a download tool writes them; `tjs fetch
 --positions` writes the same shape). Keep one taken at (or just after)
-the year end. `taxjson sanity` and the end of `taxjson run` compare the
+the year end. `tjs sanity` and the end of `tjs run` compare the
 books with them at each file's date ([meta] as_of, else [meta]
 generated_at), with no setting: a file belongs to the account whose
 broker account id is its [meta] broker_account (or [meta] account)
@@ -128,7 +128,7 @@ def _listing(folder: Path) -> List[Path]:
 
 def report_kind(path: Path) -> Optional[str]:
     """'rbc_holdings' | 'ib_open_positions' when `path` is a broker's
-    positions report `taxjson sanity` reads (lib/positions_reports),
+    positions report `tjs sanity` reads (lib/positions_reports),
     else None."""
     if Path(path).suffix.lower() not in _REPORT_SUFFIXES:
         return None
@@ -143,7 +143,7 @@ def report_kind(path: Path) -> Optional[str]:
 def snapshot_files(folder: Path) -> List[Path]:
     """The folder's positions files: each `.toml`, and each broker's
     positions report (report_kind) — an RBC Holdings Export or an IB
-    statement saved there was skipped while `taxjson sanity` read the
+    statement saved there was skipped while `tjs sanity` read the
     same file given by name (backlog TJ-0424)."""
     if not Path(folder).is_dir():
         return []
@@ -175,7 +175,7 @@ def unread_files(folder: Path) -> List[Path]:
 
 def unread_notes(folder: Path, accounts_cfg: Dict[str, Any],
                  root: Optional[Path] = None) -> List[str]:
-    """A note naming each thing in the folder `taxjson sanity` does not
+    """A note naming each thing in the folder `tjs sanity` does not
     read (unread_files), with the fix; a file an account's own
     `holdings = [...]` names is that setting's (`root`: the project
     its paths are relative to; default the folder's parent)."""

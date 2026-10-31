@@ -1,5 +1,5 @@
 """Fixes of 2026-10-29, round 2, group fxcrypto: the FX-on-cash ledger
-v2 (lib/fx_cash_v2, lib/cash_events, `taxjson cash`) and crypto-sends'
+v2 (lib/fx_cash_v2, lib/cash_events, `tjs cash`) and crypto-sends'
 USD-cash / stablecoin pool (lib/crypto_sends). One test class per
 backlog item, each named for it. Synthetic data only."""
 import os
@@ -94,7 +94,7 @@ class TestTJ0493UsStablecoinRewardMovesNoForeignCash(unittest.TestCase):
 
 
 class TestTJ0494InKindMovesNoCash(unittest.TestCase):
-    """TJ-0494: the rows `taxjson run` books for securities moved in kind
+    """TJ-0494: the rows `tjs run` books for securities moved in kind
     (into or out of a plan at fair value, an arrival at book value) are
     BUYSELL rows with a structured type and no cash leg; ledger v2 read
     them as trades: a contribution made up 500 USD of cash, a withdrawal

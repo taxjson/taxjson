@@ -2,7 +2,7 @@
 
 The IRS treats digital assets as property, not "securities" — the
 wash-sale rule does not reach them (this is the basis of crypto
-tax-loss harvesting). Before the 2026-07b audit fix, `taxjson run`
+tax-loss harvesting). Before the 2026-07b audit fix, `tjs run`
 passed a usa-project crypto account the same --taxable flags as
 equities and the engine denied legitimate crypto losses.
 

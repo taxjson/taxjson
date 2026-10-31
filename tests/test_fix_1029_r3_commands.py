@@ -58,7 +58,7 @@ def _run_project(tmp: Path, trades: str = _TRADES, extra: str = "",
                  more_inputs=None) -> Path:
     """A Canada project of one taxable account, `margin` (and the
     accounts `extra` declares, whose .tt `more_inputs` gives), built by
-    `taxjson run`."""
+    `tjs run`."""
     root = tmp / "p"
     (root / "inputs/margin").mkdir(parents=True)
     (root / "taxjson.toml").write_text(
@@ -125,7 +125,7 @@ class TestTJ0353SanityUnreadableBooksExit2(unittest.TestCase):
                 p.unlink()
             r = _tjs(root, "sanity")
             self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
-            self.assertIn("run `taxjson run`", r.stderr)
+            self.assertIn("run `tjs run`", r.stderr)
 
     def test_the_run_and_the_checklist_still_name_it(self):
         from taxjson.bin import taxjson_run as tr
@@ -144,7 +144,7 @@ class TestTJ0353SanityUnreadableBooksExit2(unittest.TestCase):
             self.assertEqual(cm.exception.code, tr._SANITY_REFUSED)
             self.assertIn("the books of 'margin' cannot be read",
                           err.getvalue())
-            self.assertIn("re-run `taxjson run`", err.getvalue())
+            self.assertIn("re-run `tjs run`", err.getvalue())
             # The checklist's step: attention, naming the books, and its
             # Next is the run that rebuilds them.
             ctx = cl.Ctx(root=root, cfg=load_config(root), year=2025,
@@ -182,7 +182,7 @@ class TestTJ0596QueryViewsExit2OnADamagedWorkFile(unittest.TestCase):
                         err = " ".join(r.stderr.split())
                         self.assertIn(f"could not read work/{g.name}", err)
                         self.assertNotIn(str(root), err)
-                        self.assertIn("rerun `taxjson run`", err)
+                        self.assertIn("rerun `tjs run`", err)
 
 
 class TestTJ0601WashRadarShelteredAccountExit2(unittest.TestCase):

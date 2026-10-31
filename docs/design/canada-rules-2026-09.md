@@ -62,7 +62,7 @@ the holdings export keep the economic book cost. Grant timing is an
 
 **Amendment signal.** Because the engine computes from full history, a
 grant year that was filed before an assignment happened shows the
-premium as drift in `check-filed`. `taxjson option-boundary` says so in
+premium as drift in `check-filed`. `tjs option-boundary` says so in
 words: which contract, which filed year, which amount, T1-ADJ or not.
 
 ## 2. Negative ACB is a deemed gain (s.40(3))
@@ -87,7 +87,7 @@ Short-sale character (IT-479R para 18: income account) is a
 filing position the tool does not take; it is documented, and short
 records carry `direction = SHORT` so they can be moved.
 
-## 4. `taxjson option-boundary`
+## 4. `tjs option-boundary`
 
 Lists every written option whose write and close straddle a tax-year
 boundary (or that is still open at the project year's end) in the

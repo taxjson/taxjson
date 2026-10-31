@@ -10,13 +10,13 @@ TJ-0095  an in-kind contribution that could not be valued was NOT
          the transfers step done.
 TJ-0109  one "inputs changed (changed: ...; added: ...)" problem was
          split at "; " into two run-state problems.
-TJ-0130  crypto only: `tjs gains` said "run `taxjson run` first" after a
+TJ-0130  crypto only: `tjs gains` said "run `tjs run` first" after a
          successful run, and exited 1.
 TJ-0133  in the years layout the run named the year folder's inputs/
          instead of ../inputs/ in its skip and nothing-computed lines.
 TJ-0154  a full run after `run --account` opened with a stale-wash
-         warning per account telling the user to run `taxjson run`.
-TJ-0155  empty project: `tjs sum` said "Run `taxjson run` first" right
+         warning per account telling the user to run `tjs run`.
+TJ-0155  empty project: `tjs sum` said "Run `tjs run` first" right
          after that run said nothing was computed.
 TJ-0162  crypto-only use of the scaffold warned about
          option_grant_timing_since.
@@ -329,7 +329,7 @@ class TestCryptoOnly(unittest.TestCase):
         r = _cli(self.root, "gains", width="120")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("crypto account 'crypto' is not shown", r.stderr)
-        self.assertNotIn("run `taxjson run` first", r.stdout + r.stderr)
+        self.assertNotIn("run `tjs run` first", r.stdout + r.stderr)
         self.assertNotIn("Error:", r.stderr)
 
     def test_grant_since_warning_needs_books(self):
@@ -390,7 +390,7 @@ class TestSharedExportsFolder(unittest.TestCase):
                           text, cmd)
             # The fix is the export, not another run (the older
             # option-boundary contract, test_fix_audit_1022_b).
-            self.assertNotIn("`taxjson run`", text, cmd)
+            self.assertNotIn("`tjs run`", text, cmd)
 
     def test_single_folder_names_the_empty_folder(self):
         """TJ-0155, one account in a single-folder project."""
@@ -403,7 +403,7 @@ class TestSharedExportsFolder(unittest.TestCase):
             self.assertEqual(r.returncode, 1)
             self.assertIn("Error: the last run had no input: inputs/margin "
                           "is empty, so it made no books", r.stderr)
-            self.assertNotIn("`taxjson run`", r.stderr)
+            self.assertNotIn("`tjs run`", r.stderr)
 
     def test_an_export_added_since_asks_for_the_run(self):
         """TJ-0155: once a folder has a file, the run is the fix."""
@@ -418,7 +418,7 @@ class TestSharedExportsFolder(unittest.TestCase):
             r = _cli(root, "sum")
             self.assertEqual(r.returncode, 2)  # a missing input (backlog TJ-0644)
             self.assertNotIn("had no input", r.stderr)
-            self.assertIn("Run `taxjson run` first", r.stderr)
+            self.assertIn("Run `tjs run` first", r.stderr)
 
 
 class TestStaleWashBeforeAFullRun(unittest.TestCase):

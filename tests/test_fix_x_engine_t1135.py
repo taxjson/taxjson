@@ -365,7 +365,7 @@ class TestT1135EarlierYearDenial(unittest.TestCase):
 
 
 class TestT1135WrapperFullHistory(unittest.TestCase):
-    """`taxjson t1135` in a project: the 2025 denial reaches the 2026
+    """`tjs t1135` in a project: the 2025 denial reaches the 2026
     cost columns."""
 
     @rule("CA-RPT-12")

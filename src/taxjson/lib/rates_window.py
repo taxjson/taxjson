@@ -1,4 +1,4 @@
-"""The first date a project's FX rates must cover (`taxjson run`'s rates
+"""The first date a project's FX rates must cover (`tjs run`'s rates
 stage, stage_currency_rates).
 
 The rates stage runs before any export is parsed, so it used to ask

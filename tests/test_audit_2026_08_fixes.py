@@ -472,7 +472,7 @@ class TestCoinbaseHeaderVariantsAndDedup(unittest.TestCase):
 
 
 class TestSumBasisMatchesBanner(unittest.TestCase):
-    """Audit 2026-08 #8: `taxjson sum`'s fast path served
+    """Audit 2026-08 #8: `tjs sum`'s fast path served
     work/<acct>_report.json on freshness alone. After `run --account X`
     (which skips the wash pass and rewrites the report from PRE-wash
     gains) sum printed pre-wash aggregates under a "wash-adjusted"
@@ -1202,7 +1202,7 @@ class TestCrossTaxableOverlapWarning(unittest.TestCase):
 
 class TestStrictRunFlag(unittest.TestCase):
     """KNOWN_ISSUES "per-account validation is non-fatal": a CI/cron
-    `taxjson run` could publish a wrong .sum at exit 0. `--strict`
+    `tjs run` could publish a wrong .sum at exit 0. `--strict`
     promotes per-account validation ERRORs to fatal."""
 
     def _project(self, tmp):

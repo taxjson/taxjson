@@ -4,7 +4,7 @@ taxjson computes capital gains, adjusted cost base (ACB), income and the
 superficial-loss rule from broker CSV exports (Questrade, RBC Direct,
 Interactive Brokers, Webull, Coinbase, Kraken, or a generic mapping). Canada
 first; the US engine (FIFO basis, wash sales) is experimental. It runs on the
-user's own machine. Python 3.10+, `src/taxjson/`; the CLI is `taxjson` (`tjs`).
+user's own machine. Python 3.10+, `src/taxjson/`; the CLI is `tjs`.
 
 ## Helping someone use taxjson
 
@@ -79,13 +79,13 @@ IRS guidance and a tax professional.
     comment stays under 1,000 or carries a `pii-ok` marker on its line.
   - No hard-coded security data (coin ids, tickers, ratios): it goes in the
     user's ticker.map or taxjson.toml, with an error naming the line to add.
-  - Output follows `docs/output-style.md`: essentials first (a legend, the
-    data, one-line `! ` items; the rest behind `--details`; `--json`
-    unchanged); `Info:` / `Warning:` / `Error:` labels, `==>` steps; a
-    message's later lines flush-left, one blank line after a message of more
-    than one line (`out.show` / `out.emit`, not a loop of `print`); width
-    120 piped, the terminal's up to 160; captured `.diag` / `.sum` / work/
-    bytes stay stable (`TAXJSON_WIDTH=0`).
+  - Output follows `docs/output-style.md`: the command is always `tjs`;
+    essentials first (a legend, the data, one-line `! ` items; the rest behind
+    `--details`; `--json` unchanged); `Info:` / `Warning:` / `Error:` labels,
+    `==>` steps; a message's later lines flush-left, one blank line after a
+    message of more than one line (`out.show` / `out.emit`, not a loop of
+    `print`); width 120 piped, the terminal's up to 160; captured `.diag` /
+    `.sum` / work/ bytes stay stable (`TAXJSON_WIDTH=0`).
   - User files (taxjson.toml, ticker.map, .tt) go through `src/taxjson/lib/safe_write.py`.
   - Child Python: `lib/dispatch.py` `python_module_argv` (`-P`), never
     `[sys.executable, "-m", ...]` (imports a planted `json.py` from the

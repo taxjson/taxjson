@@ -5,7 +5,7 @@ A coin whose default id does not resolve is named with the exact line
 to add; a coin priced under its default id while the price cache holds
 a numbered id of the same ticker (the project was priced under it
 before), or whose Yahoo closes are far off its own trade prices, is an
-ATTENTION line `taxjson run` echoes to the console.
+ATTENTION line `tjs run` echoes to the console.
 
 Fictional coins only (QZT, QZX); no network: urlopen is stubbed, and
 the end-to-end runs use a price cache under a temporary HOME with
@@ -197,7 +197,7 @@ class TestCacheEvidence(unittest.TestCase):
 class TestCryptoSendsLookupEvidence(unittest.TestCase):
     """crypto-sends' fair-value lookup (a gift or payment the exchange
     did not price) asks the same question: its `.attention` carries the
-    line, which `taxjson run` and `taxjson crypto-sends` print."""
+    line, which `tjs run` and `tjs crypto-sends` print."""
 
     def _lookup(self, td, ticker_map=None):
         from taxjson.lib import crypto_sends as CS
@@ -264,7 +264,7 @@ class TestImplausibleYahooPrice(unittest.TestCase):
 
 @rule("CA-CRYPTO-07")
 class TestRunWarnsWithoutTheLine(unittest.TestCase):
-    """`taxjson run` on a project whose coin was priced under a numbered
+    """`tjs run` on a project whose coin was priced under a numbered
     id before, with no CRYPTO line: an ATTENTION on the console (also
     under --fast) and in the .sum — never a silent re-price. With the
     line: the numbered id's price, no ATTENTION."""

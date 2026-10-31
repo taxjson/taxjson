@@ -30,7 +30,7 @@ Convention notes encoded here (the "why" behind the checks):
   * ADJUST: signed ACB delta in `net_amount` (negative = reduction,
     e.g. return of capital).
   * FEE: `net_amount` POSITIVE = charged, NEGATIVE = a refund or
-    rebate — the sign IB, Questrade, RBC, the .tt FEE line, taxjson
+    rebate — the sign IB, Questrade, RBC, the .tt FEE line, tjs
     fx-cash and the fees report use (a broker's cash sign is the
     opposite: flip it, as TAX is flipped). Audit S065-10.
   * date/date_settle: `YYYY-MM-DD`. `date_settle` is the settlement
@@ -254,7 +254,7 @@ def validate_transactions(txs: List[Dict[str, Any]],
             # A SELL may net negative: closing an option at 0.01 with a
             # 1.00+ commission brings in less than nothing, and the
             # engine books those negative proceeds (core._trade_money).
-            # Refusing them failed every `taxjson run` on a routine
+            # Refusing them failed every `tjs run` on a routine
             # penny close (audit S017-00). A negative BUY is still wrong.
             _sym = str(tx.get('symbol') or '')
             _fut = _sym.startswith(_FUTURES_PREFIXES)

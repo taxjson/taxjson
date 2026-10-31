@@ -1,4 +1,4 @@
-"""taxjson watch — change detection over the radar (cron-quiet mode)."""
+"""tjs watch — change detection over the radar (cron-quiet mode)."""
 import json
 import subprocess
 import sys

@@ -37,21 +37,21 @@ _VALID_ACTIONS = (
 )
 # Line-level sugar expanded by tt_to_json before parse_tt_line, and
 # INKIND (the value of an in-kind move between a taxable and a registered
-# account: read by `taxjson run`, lib/in_kind — never a row of the books).
+# account: read by `tjs run`, lib/in_kind — never a row of the books).
 _SUGAR_ACTIONS = ('ACQUIRED', 'INKIND')
 # Dated events written date first (lib/dated_events): a JOURNAL between
 # two listings of one security inside the account, and a ticker change
-# (RENAME). `taxjson run` reads them from the .tt files of every account
+# (RENAME). `tjs run` reads them from the .tt files of every account
 # and books them as events (the journal's transfer legs, the rename's
 # SPLIT row in each account holding the old symbol) — they are checked
 # here and never rows of the converted file.
 _EVENT_ACTIONS = ('JOURNAL', 'RENAME', 'ALLOWLOSS', 'FXCONV', 'CASHMOVE',
                   'CASHOPEN', 'CASHBAL', 'CASHBOOK', 'NOTOWN')
 # ALLOWLOSS (lib/loss_overrides) is a filing position against the loss
-# rule on one sale of the account: read by `taxjson run`, checked here,
+# rule on one sale of the account: read by `tjs run`, checked here,
 # never a row of the books. NOTOWN (lib/transfer_in.NotOwn) undoes one
 # pairing of a transfer-in with a transfer-out as a move of your own:
-# read by `taxjson run`, checked here, never a row of the books.
+# read by `tjs run`, checked here, never a row of the books.
 JOURNAL_FORM = "JOURNAL <date> <FROM> <TO> <qty> [separate]"
 # The trailing word that marks a .tt JOURNAL line as a journal of its
 # own, never a restatement of a broker's journal near it
@@ -105,7 +105,7 @@ _MULT_RE = re.compile(r'^[xX](\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)$')
 # warrant's or a right's exercise leg, delivering that share listing —
 # no disposition; the warrant's cost goes into the shares (core.
 # exercise_target, tax-logic CA-OPT-09 / US-OPT-06). The broker parsers
-# mark the leg; a json -> tt -> json round trip, or a pasted `taxjson
+# mark the leg; a json -> tt -> json round trip, or a pasted `tjs
 # events` line, lost the mark and booked the warrants as a sale at 0
 # (backlog TJ-0377).
 EXERCISE_KEY = 'exercise_of'
@@ -115,7 +115,7 @@ EXERCISE_KEY = 'exercise_of'
 # country's rule to it (US: §307 spreads the old shares' basis and
 # keeps their dates, US-STKDIV-01..05; Canada: $0 until an ADJUST
 # gives the declared amount). A json -> tt -> json round trip, or a
-# pasted `taxjson events` line, read it back as an ordinary purchase
+# pasted `tjs events` line, read it back as an ordinary purchase
 # at $0: a US sale's gain moved (backlog TJ-0528).
 STOCK_DIVIDEND_TOKEN = 'type=stock_dividend'
 _STOCKDIV_DATE_KEYS = {'ex': 'ex_date', 'record': 'record_date'}
@@ -286,7 +286,7 @@ def parse_tt_line(line: str, account_name: str = 'default',
             # (checked by parse_unknown_opening_line; never a row)
             raise ValueError(
                 f"{_where(source)}an `OPENING ... cost=unknown` line is "
-                f"units held before the data, read by `taxjson run` "
+                f"units held before the data, read by `tjs run` "
                 f"(lib/missing_history) — not a row of the books: "
                 f"{line.strip()!r}")
         return parse_opening_line(parts, line, account_name, source)
@@ -535,7 +535,7 @@ def parse_tt_line(line: str, account_name: str = 'default',
     # A SPLIT ratio of 0 or below is never a corporate action: refused
     # here, at its line, as the books' loader refuses it (core.
     # coerce_transaction_row) — that refusal named the converted work
-    # file, and `taxjson check-tt` said the line parses (TJ-0006).
+    # file, and `tjs check-tt` said the line parses (TJ-0006).
     if action == 'SPLIT' and not tx['quantity'] > 0:
         raise ValueError(
             f"{_where(source)}SPLIT ratio must be > 0 (got {parts[5]}) — "
@@ -610,7 +610,7 @@ def parse_journal_line(line: str, source: str = ''):
     not a JOURNAL line. No time column. A trailing `separate` says the
     line is a journal of its own, never the restatement of a broker's
     journal near it: booked in full, nothing asked (v0.24.1 leftovers,
-    3). `taxjson run` books it as the move's two transfer legs and
+    3). `tjs run` books it as the move's two transfer legs and
     joins the listings (lib/dated_events, tax-logic CA-XLIST-04 /
     US-XLIST-03): no disposition. Raises ValueError naming the form on a
     malformed line."""
@@ -687,7 +687,7 @@ def parse_journal_line(line: str, source: str = ''):
 _MAX_EVENT_QTY = 1e12
 
 # Units held before the data starts, cost unknown (lib/missing_history:
-# missing history, read by `taxjson run`).
+# missing history, read by `tjs run`).
 UNKNOWN_OPENING_FORM = ('OPENING <date> <SYMBOL> <qty> cost=unknown '
                         '[reason="..."]')
 
@@ -731,7 +731,7 @@ def parse_unknown_opening_line(line: str, source: str = ''):
     give — missing history (tax-logic
     CA-ACB-11 / US-BASIS-04). None when the line is not an OPENING line
     with a `cost=` word (a positions-report OPENING line has a currency
-    and a total instead). `taxjson run` reads it from the account's .tt
+    and a total instead). `tjs run` reads it from the account's .tt
     files (lib/missing_history.read_tt_openings); it is never a row of
     the converted file. Raises ValueError naming the form on a
     malformed line."""
@@ -929,7 +929,7 @@ def parse_rename_line(line: str, source: str = ''):
     """`RENAME <date> <OLD> <NEW> [late=fold|late=separate]` -> {date,
     old, new, late}: a ticker change on that date (lib/renames: the
     position, cost and acquisition dates carry from OLD to NEW), or None
-    when the line is not a RENAME line. `taxjson run` books it in every
+    when the line is not a RENAME line. `tjs run` books it in every
     account whose books carry OLD (lib/dated_events). Two spellings of
     one listing in the books (A.TO / A.CN: a Canadian venue folds into
     .TO) return the line with `noop`, the Info line to say: nothing is
@@ -1119,7 +1119,7 @@ def parse_opening_line(parts, line: str, account_name: str,
     `opening` (core.OPENING_TYPE) dated the snapshot day at 00:00:00,
     with the lot's acquisition date in `lot_date`. It sets a position
     and its cost but is not a purchase (tax-logic CA-OPEN-01 /
-    US-OPEN-01); `taxjson opening` writes these lines from a positions
+    US-OPEN-01); `tjs opening` writes these lines from a positions
     report. Only a long position can be opened (a written option's or a
     short sale's premium depends on its write date: enter the write as
     a BUYSELL line). `x<size>`: an option's contract size other than
@@ -1514,7 +1514,7 @@ def _check_facts(action: str, facts: dict, line: str, source: str) -> dict:
 
 def tt_tail(tx: dict, action: str) -> str:
     """The optional tokens at the end of a row's .tt line, as BOTH .tt
-    writers append them (tx_to_tt_line and the `taxjson events` view,
+    writers append them (tx_to_tt_line and the `tjs events` view,
     taxjson_run._tx_display_line): a trade's contract size and warrant
     exercise (`x<size>`, `exercise_of=`), an income row's facts
     (`record=`, `label=` ...). The view wrote none of the facts, so a
@@ -1644,7 +1644,7 @@ def _num(x: float) -> str:
 def _tt_contract_size(tx: dict) -> float:
     """The units one contract of a .tt BUYSELL / ASSIGN line covers,
     for the total check: an equity option's ticker.map `MULT` line (the
-    option, its root, or its underlying; the one `taxjson run` reads,
+    option, its root, or its underlying; the one `tjs run` reads,
     lib/markets.contract_size) first, as the engine sizes it (core.
     equity_option_size); else the line's `x<size>`; else 100 for an
     equity option and 1 for anything else. Without the MULT line a
@@ -1973,7 +1973,7 @@ def _warn_bare_equity_symbol(tx: dict, line: str, source: str) -> None:
 
 def tt_to_json(input_path: Path, account_name: str,
                equity: Optional[bool] = None) -> dict:
-    """`equity`: the account is not `crypto = true` (taxjson run says
+    """`equity`: the account is not `crypto = true` (tjs run says
     so: with exports shared by every year the .tt is not under the
     project's folder); None: read from the taxjson.toml above it."""
     from taxjson.lib.brokerages.base import shown_name, source_key
@@ -1997,33 +1997,33 @@ def tt_to_json(input_path: Path, account_name: str,
     with io.StringIO(_text) as f:
         for lineno, line in enumerate(f, 1):
             source = f"{shown_name(input_path)}:{lineno}"
-            # An INKIND line values an in-kind move (`taxjson run` reads
+            # An INKIND line values an in-kind move (`tjs run` reads
             # it, lib/in_kind): checked here, never a row of the books.
             if parse_inkind_line(line, source) is not None:
                 continue
-            # A dated JOURNAL / RENAME is an event `taxjson run` books
+            # A dated JOURNAL / RENAME is an event `tjs run` books
             # (lib/dated_events): checked here, never a row of the file.
             if (parse_journal_line(line, source) is not None
                     or parse_rename_line(line, source) is not None):
                 continue
             # Units held before the data, cost unknown (lib/
-            # missing_history.read_tt_openings): read by `taxjson run`,
+            # missing_history.read_tt_openings): read by `tjs run`,
             # checked here, never a row of the file.
             if parse_unknown_opening_line(line, source) is not None:
                 continue
             # A filing position against the loss rule (lib/loss_overrides):
-            # read by `taxjson run`, never a row of the books.
+            # read by `tjs run`, never a row of the books.
             from taxjson.lib.loss_overrides import parse_line as _allowloss
             if _allowloss(line, source) is not None:
                 continue
             # Not one move of your own (lib/transfer_in.NotOwn): read by
-            # `taxjson run`, never a row of the books.
+            # `tjs run`, never a row of the books.
             from taxjson.lib.transfer_in import parse_not_own_line
             if parse_not_own_line(line, source) is not None:
                 continue
             # A line of the FX-on-cash ledger v2 (lib/cash_events: FXCONV,
             # CASHMOVE, CASHOPEN, CASHBAL, CASHBOOK): checked here, read by
-            # `taxjson fx-cash --ledger v2`, never a row of the books.
+            # `tjs fx-cash --ledger v2`, never a row of the books.
             from taxjson.lib.cash_events import (CashLineError,
                                                  parse_line as _cashline)
             try:
@@ -2035,7 +2035,7 @@ def tt_to_json(input_path: Path, account_name: str,
                 # it (pre-release review).
                 raise CashLineError(
                     f"{e} — a line of the FX-on-cash ledger v2 only "
-                    f"(read with fx_cash_ledger = \"v2\" or `taxjson "
+                    f"(read with fx_cash_ledger = \"v2\" or `tjs "
                     f"fx-cash --ledger v2`; the default ledger ignores "
                     f"it): fix it to the form shown, or delete it") from e
             try:
@@ -2056,7 +2056,7 @@ def tt_to_json(input_path: Path, account_name: str,
     # parser does: two byte-identical hand-entered lines (one order
     # filled in two pieces at the same price; the default 09:30:00
     # time gives no sub-day resolution) hashed to the same id and
-    # collapsed to ONE trade under `taxjson run`'s always-on --dedup
+    # collapsed to ONE trade under `tjs run`'s always-on --dedup
     # (stage-tools audit). The 2nd+ instance gets a `[fill #N]`
     # description marker and its id is recomputed from the marked
     # content; the first keeps its stable id. DECLARED counter-
@@ -2089,7 +2089,7 @@ def tt_to_json(input_path: Path, account_name: str,
     transactions = combined
     _key = source_key(input_path)
     # {id: line}: the line each row came from, as a broker row's id and
-    # file trace it — `taxjson audit` names it (backlog TJ-0359). In the
+    # file trace it — `tjs audit` names it (backlog TJ-0359). In the
     # metadata, not on the row: a reader that builds a TaxTransaction
     # from a converted row's keys keeps working.
     lines: dict = {}
@@ -2214,7 +2214,7 @@ def _main():
     parser.add_argument(
         "--equity",
         action="store_true",
-        help=("tt→json: the account is not a crypto account (taxjson run "
+        help=("tt→json: the account is not a crypto account (tjs run "
               "passes it), so a symbol without a market suffix is "
               "warned about; without it, read from the project's "
               "taxjson.toml above the file."),

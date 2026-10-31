@@ -1,4 +1,4 @@
-"""`taxjson spinoffs` and `taxjson splits`: every spin-off and every split
+"""`tjs spinoffs` and `tjs splits`: every spin-off and every split
 or consolidation in the books, with how it was booked and what to check.
 
 Spin-offs (Canada): by default a spin-off is a dividend equal to the fair
@@ -70,13 +70,13 @@ def _rows(path: Path) -> List[Dict[str, Any]]:
     try:
         doc = read_work_doc(path)
     except InputFileError as e:
-        raise ViewError(f"{e} — re-run `taxjson run` to rebuild it") \
+        raise ViewError(f"{e} — re-run `tjs run` to rebuild it") \
             from None
     return list(doc.get("transactions") or [])
 
 
 def _manifest(root: Path, acct: str) -> Dict[str, Any]:
-    """The account's saved elections, read the way `taxjson elect` reads
+    """The account's saved elections, read the way `tjs elect` reads
     them (Manifest.load, canonical inputs/<acct>/manifest.json first,
     else the legacy work/ copy). A malformed or unreadable manifest is
     refused with elect's one-line error (A2-0968): it crashed on a
@@ -167,7 +167,7 @@ _SHELTER_WORD = {CANADA: "registered account",
 
 def _current_events(root: Path, acct: str) -> Dict[str, Any]:
     """The corporate-action events the broker extractors find in this
-    account's inputs NOW, by event id (the same events `taxjson run`
+    account's inputs NOW, by event id (the same events `tjs run`
     books). Elections saved under ids no current event has are stale."""
     import contextlib
     import io
@@ -322,18 +322,18 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
             if election == SHELTERED_DEFAULT:
                 why.append("booked without asking: the new shares at $0 "
                            "cost, the parent keeps its cost (the holdings "
-                           "view only). Set a value with `taxjson elect "
+                           "view only). Set a value with `tjs elect "
                            f"{acct} --set {eid}=<"
                            f"{'|'.join(spin_options)}>`.")
             elif election != "(none)" and election not in own_keys:
                 # Another country's election (a project switched from
-                # canada to usa keeps its rollover_s_86_1): `taxjson run`
+                # canada to usa keeps its rollover_s_86_1): `tjs run`
                 # refuses it, so it is described as invalid here — never
                 # in the other country's law (re-audit A2-0725).
                 flags.append("WRONG-COUNTRY")
                 why.append(f"{election} is not an election of a "
-                           f"{display_name(country)} project — `taxjson "
-                           f"run` refuses it. Choose one: `taxjson elect "
+                           f"{display_name(country)} project — `tjs "
+                           f"run` refuses it. Choose one: `tjs elect "
                            f"{acct} --set {eid}="
                            f"<{'|'.join(spin_options)}>`.")
             elif election in _FMV_ELECTIONS:
@@ -359,7 +359,7 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                     why.append("booked at the $0 value you declared "
                                "(fmv_per_share=0): no dividend income and "
                                "a $0 cost for the new shares. To change "
-                               f"it: `taxjson elect {acct} --redo --event "
+                               f"it: `tjs elect {acct} --redo --event "
                                f"{eid}`.")
                 elif not fmv_ps and not sheltered:
                     flags.append("ZERO-VALUE")
@@ -369,7 +369,7 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                     if broker_fmv:
                         msg += (f"; the broker reported {broker_fmv:,.2f} "
                                 f"{broker_cur}")
-                    why.append(msg + ". Set it with `taxjson elect "
+                    why.append(msg + ". Set it with `tjs elect "
                                f"{acct} --set {eid}={election} "
                                "--hint fmv_per_share=<value>`.")
                 elif not fmv_ps:
@@ -388,7 +388,7 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                     why.append("no cost allocated to the new shares "
                                f"({hint}): the parent keeps its whole "
                                "cost and the spin-off's sale books the "
-                               "gain. Set it with `taxjson elect "
+                               "gain. Set it with `tjs elect "
                                f"{acct} --set {eid}={election} --hint "
                                f"{hint}=<amount>`.")
             elif election == "ignore":
@@ -397,7 +397,7 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                            "broker noise")
             elif election == "(none)":
                 flags.append("PENDING")
-                why.append("no election yet: `taxjson elect --pending`")
+                why.append("no election yet: `tjs elect --pending`")
             out.append({
                 "account": acct, "sheltered": sheltered, "event_id": eid,
                 "date": date, "parent": parent, "child": child,
@@ -420,7 +420,7 @@ def wrong_country_elections(root: Path, cfg: Dict[str, Any]
                             ) -> List[Dict[str, str]]:
     """Saved elections (any corporate action) the project's country does
     not know — e.g. a Canadian rollover_s_86_1 left in a project switched
-    to usa. `taxjson run` stops on each; `taxjson elect --pending` lists
+    to usa. `tjs run` stops on each; `tjs elect --pending` lists
     them so 'No pending elections' never hides one (re-audit A2-0725)."""
     from taxjson.lib.corp_actions import election_keys
     country = settings_country(cfg.get("settings"))
@@ -631,7 +631,7 @@ def render_spinoffs(doc: Dict[str, Any],
         for st in stale:
             d.item(f"{st['account']}: {st['event_id']}  "
                    f"({st['summary']})", "  ")
-            d.kv([("remove", Verbatim(f"taxjson elect {st['account']} "
+            d.kv([("remove", Verbatim(f"tjs elect {st['account']} "
                                       f"--reset --event "
                                       f"{st['event_id']}"))], "    ")
     d.blank()

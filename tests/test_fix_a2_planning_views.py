@@ -199,7 +199,7 @@ class TestUnknownAccountRefused(unittest.TestCase):
                 self.assertNotEqual(r.returncode, 0, c)
                 self.assertIn("margn", r.stderr, c)
                 self.assertIn("check the name", r.stderr, c)
-                self.assertNotIn("run `taxjson run` first", r.stderr, c)
+                self.assertNotIn("run `tjs run` first", r.stderr, c)
                 self.assertNotIn("Traceback", r.stderr, c)
             ok = _cli(root, "winners", "margin")
             self.assertEqual(ok.returncode, 0, ok.stderr)

@@ -158,7 +158,7 @@ class TestGuardMain(unittest.TestCase):
 
 
 class TestDispatchGuard(unittest.TestCase):
-    """A2-0161 / A2-1417: `taxjson <cmd>` runs a tool's main under the
+    """A2-0161 / A2-1417: `tjs <cmd>` runs a tool's main under the
     console script's guard, in process and out of process."""
 
     def _cmd(self, mod, *args):
@@ -196,7 +196,7 @@ class TestDispatchGuard(unittest.TestCase):
         self.assertNotIn("Traceback", r.stderr)
 
     def test_reconcile_slips_main_is_guarded(self):
-        # `taxjson reconcile-slips` calls this main directly.
+        # `tjs reconcile-slips` calls this main directly.
         from taxjson.bin import taxjson_reconcile_slips as RS
         with tempfile.TemporaryDirectory() as td:
             g = Path(td) / "margin_gains.json"

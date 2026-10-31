@@ -1,4 +1,4 @@
-"""`taxjson redact` — account ids and identity out, row shapes intact.
+"""`tjs redact` — account ids and identity out, row shapes intact.
 All fixtures synthetic (fake ids)."""
 import subprocess
 import sys

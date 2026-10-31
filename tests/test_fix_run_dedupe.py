@@ -1,4 +1,4 @@
-"""`taxjson run` shows each parser message once (owner request).
+"""`tjs run` shows each parser message once (owner request).
 
 With two or more taxable equity accounts the run reads every one of
 them first (the transfer evidence pre-pass: a transfer-in that pairs

@@ -10,7 +10,7 @@ are now read; an account of a broker with no reader that moves foreign
 cash is refused until `CASHBOOK <book> complete` says its .tt cash lines
 are all of them.
 
-Lows: `taxjson elect` lists an event the sheltered default booked; a US
+Lows: `tjs elect` lists an event the sheltered default booked; a US
 project's checklist has no T5 / T3 step; a malformed v2 cash line
 says it is read only by ledger v2.
 

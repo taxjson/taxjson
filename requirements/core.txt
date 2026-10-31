@@ -5,7 +5,7 @@
 # body-sha256: 229f45713503d3500c8582d66afca0cae80498c7bdc9629435dffeb75344841c
 # python: >=3.10
 # exclude-newer: 2026-10-17T00:00:00Z
-# security-updates: certifi, setuptools
+# security-updates: certifi, pyasn1, setuptools
 # uv: 0.13.5
 
 tomli==2.5.0 ; python_full_version < '3.11' \

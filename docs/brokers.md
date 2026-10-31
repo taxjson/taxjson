@@ -176,7 +176,7 @@ refused.
 
 **Positions report:** taxjson knows no Questrade positions export. Type
 the positions into a `[[holding]]` TOML, or let the fetch plugin
-snapshot them (`taxjson fetch --positions`, below).
+snapshot them (`tjs fetch --positions`, below).
 
 **Auto-fetch:** Questrade activity can be downloaded through its API
 instead: see [Auto-fetch](#auto-fetch-questrade-interactive-brokers).
@@ -477,7 +477,7 @@ Code: `src/taxjson/lib/brokerages/generic.py` — `_load_mapping`.
 
 The **taxjson-fetch** plugin downloads Questrade and Interactive
 Brokers activity straight into the inputs folder. It is a separate
-package (`packages/taxjson-fetch`) behind `taxjson fetch`: the core
+package (`packages/taxjson-fetch`) behind `tjs fetch`: the core
 holds no broker API client and never reads a broker credential.
 
 **Install.** The one-line installer installs it by default
@@ -486,12 +486,12 @@ first (`pip install -e .`), then the plugin into the same environment:
 
 ```bash
 pip install --no-deps -e packages/taxjson-fetch
-taxjson fetch --list            # the installed fetchers
+tjs fetch --list            # the installed fetchers
 ```
 
 taxjson is not published on PyPI, so a `taxjson` or `taxjson-fetch`
 package there is not ours: never install either by name from PyPI.
-Without the plugin, `taxjson fetch` prints the install line and exits 2.
+Without the plugin, `tjs fetch` prints the install line and exits 2.
 
 **Configure** the source on each account in `taxjson.toml`:
 
@@ -526,8 +526,8 @@ the rotated token in `~/.questrade_token` (`$QUESTRADE_TOKEN_FILE`
 overrides). IBKR reads `$IBKR_FLEX_TOKEN` (or `--flex-token`). Prefer
 the environment variables: flags show in the process list.
 
-**Run** `taxjson fetch` (every account with a `brokerage`), or
-`taxjson fetch run` to rebuild the books right after. One fetch runs
+**Run** `tjs fetch` (every account with a `brokerage`), or
+`tjs fetch run` to rebuild the books right after. One fetch runs
 per project at a time; a second one waits (Ctrl-C stops it).
 
 **Where the files land.** In the shared inputs folder,

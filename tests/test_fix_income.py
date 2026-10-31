@@ -510,7 +510,7 @@ _QT = ("Transaction Date,Settlement Date,Action,Symbol,Description,Quantity,"
 
 
 class TestEndToEnd(unittest.TestCase):
-    """`taxjson run` carries the facts through merge, conversion and the
+    """`tjs run` carries the facts through merge, conversion and the
     gains run, and the .sum / divs-sum / estimate agree."""
 
     @rule("CA-INC-DATE-TRUST")

@@ -171,7 +171,7 @@ def _scan_project(tmp, *, accounts, holdings, raws, ticker_map=None):
 
 
 def _suggest(root):
-    """`taxjson ticker-map --suggest` (scan's MAP-GAP pairs moved
+    """`tjs ticker-map --suggest` (scan's MAP-GAP pairs moved
     there, to verify)."""
     return subprocess.run(
         [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root),

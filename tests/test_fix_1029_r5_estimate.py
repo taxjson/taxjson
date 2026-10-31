@@ -45,7 +45,7 @@ def _ca(**kw):
 
 
 def _cli(root: Path, *args: str) -> subprocess.CompletedProcess:
-    """`taxjson -C root args...` from this tree's sources (width 0)."""
+    """`tjs -C root args...` from this tree's sources (width 0)."""
     env = dict(os.environ, PYTHONPATH=str(SRC), TAXJSON_OFFLINE="1",
                TAXJSON_WIDTH="0")
     return subprocess.run(

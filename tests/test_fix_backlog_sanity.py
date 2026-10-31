@@ -1,5 +1,5 @@
-"""Backlog group `sanity`: `taxjson sanity`, the holdings check at the end
-of `taxjson run` and the checklist's sanity step (TJ-0010, TJ-0020,
+"""Backlog group `sanity`: `tjs sanity`, the holdings check at the end
+of `tjs run` and the checklist's sanity step (TJ-0010, TJ-0020,
 TJ-0064, TJ-0065, TJ-0066, TJ-0082 = TJ-0094, TJ-0135, TJ-0136,
 TJ-0160). The projects are built from synthetic work/ files (no
 pipeline run): made-up tickers, fake account ids."""
@@ -285,7 +285,7 @@ class TestDatedSnapshots(unittest.TestCase):
             self.assertIn("snapshots of one broker account at different "
                           "dates", err)
             self.assertNotIn("in a group of their own", err)
-            m = re.search(r"`(taxjson sanity [^`]+)`", err)
+            m = re.search(r"`(tjs sanity [^`]+)`", err)
             self.assertIsNotNone(m, err)
             argv = m.group(1).split()[2:]
             self.assertEqual(argv, [("margin=holdings/margin_x_dec.toml"
@@ -404,7 +404,7 @@ class TestNoHoldingsFiles(unittest.TestCase):
 
     def test_tj0135_json_every_account_and_no_readme_claim(self):
         """TJ-0135: with no holdings file `sanity --json` printed text,
-        the hint claimed `taxjson init` wrote holdings/README.txt (an
+        the hint claimed `tjs init` wrote holdings/README.txt (an
         `init --single` project has no holdings/), and UNCHECKED counted
         the taxable accounts only (the run counts every account with
         positions); --details did not list them."""

@@ -151,7 +151,7 @@ _OPEN = "their gain is in no total"
 class TestShortNoteReadsThisRun(unittest.TestCase):
     """Run 1 with one book, run 2 with the other, in one project: the
     mid-run note says what run 2's engine booked (as the closing summary
-    and `taxjson sum` do)."""
+    and `tjs sum` do)."""
 
     def _two_runs(self, country, first, second):
         with tempfile.TemporaryDirectory() as td:
@@ -320,7 +320,7 @@ class TestRadarCap(unittest.TestCase):
                                     "listings: QZ"), XR.RADAR_SHOWN)
         self.assertIn("3 more possible superficial losses across listings",
                       text)
-        self.assertIn("taxjson ticker-map --suggest", text)
+        self.assertIn("tjs ticker-map --suggest", text)
 
 
 _ACQ = ("ACQUIRED 2024-01-10 09:30:00 QZA.TO 40 CAD 12.00 530.00 "

@@ -123,7 +123,7 @@ class TestDeclaredZeroValueRun(unittest.TestCase):
             self.assertNotIn("is booked at $0 —", out)
             self.assertNotIn("at a $0 cost (", out)
             self.assertIn("the $0 value you declared", out)
-            self.assertIn(f"taxjson elect margin --redo --event {eid}", out)
+            self.assertIn(f"tjs elect margin --redo --event {eid}", out)
             summ = json.loads((root / "reports" / "run_summary.json")
                               .read_text())
             self.assertEqual(summ["zero_cost_held"], [])
@@ -239,7 +239,7 @@ class TestDeclaredZeroValueBothCountries(unittest.TestCase):
         text = "\n".join(FR.render(doc, width_=0))
         self.assertIn("Info: 1 position at the $0 cost you declared", text)
         self.assertIn("SPW.US (margin, event ev-1)", text)
-        self.assertIn("`taxjson elect margin --redo --event ev-1`", text)
+        self.assertIn("`tjs elect margin --redo --event ev-1`", text)
         self.assertNotIn("Warning", text)
 
     def test_run_warning_split(self):
@@ -351,7 +351,7 @@ class TestDeclaredRenameQuietsLookAlikeHint(unittest.TestCase):
 
 
 class TestBrokerageDeclaredRenames(unittest.TestCase):
-    """taxjson-brokerage --declared-renames (what `taxjson run` passes):
+    """taxjson-brokerage --declared-renames (what `tjs run` passes):
     each parser's look-alike hint for a declared pair is a note naming
     the line; another pair, or --lint, keeps the hint."""
 

@@ -112,7 +112,7 @@ class TestDeferredWash(unittest.TestCase):
 
 
 class TestSurfacing(unittest.TestCase):
-    """`taxjson list` DEFERRED column and the wash-sales embedded
+    """`tjs list` DEFERRED column and the wash-sales embedded
     footer read the new inventory field."""
 
     def _project(self, tmp):

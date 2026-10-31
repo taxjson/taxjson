@@ -4,7 +4,7 @@ same taxpayer (tax-logic CA-INKIND-01..06 / US-INKIND-01..03).
 Shares that leave a taxable account into an RRSP, RRIF, TFSA, FHSA,
 LIRA/LIF ... (a contribution in kind), or come back from one (a
 withdrawal in kind), are not custody moves: the taxpayer's ownership
-changes. `taxjson run` finds them and books them:
+changes. `tjs run` finds them and books them:
 
 * the PAIR: a taxable account's transfer-out row and a registered
   account's transfer-in row (or the reverse) of the same security
@@ -39,7 +39,7 @@ changes. `taxjson run` finds them and books them:
   pair from a taxable account into one is a likely error: warned, not
   booked. A distribution in kind is a purchase at fair market value.
 
-Pure functions over plain dicts; `taxjson run` feeds the transfer rows,
+Pure functions over plain dicts; `tjs run` feeds the transfer rows,
 the INKIND lines and the close lookup, and writes the rows.
 """
 from __future__ import annotations
@@ -1135,7 +1135,7 @@ def message(moves: Sequence[Move], problems: Sequence[str],
                 f"shares into one is likely an error (a rollover between "
                 f"retirement accounts is not a move from a taxable "
                 f"account). The shares stay in {m.taxable.account}'s "
-                f"books; check the transfer rows (`taxjson transfers`).")
+                f"books; check the transfer rows (`tjs transfers`).")
         else:
             why = ("TAXJSON_OFFLINE is set and the close cache has no "
                    "price for the date" if m.problem == "offline" else
@@ -1198,7 +1198,7 @@ def parts_message(found: Sequence[Tuple[Leg, List[Leg]]],
             f"at that value, with the plan's legs that add up to it); if "
             f"it was a move of your own: `{ln} plan=own`.")
     details.append("Not booked: the shares stay where the transfer rows "
-                   "put them (`taxjson transfers` lists the rows; "
+                   "put them (`tjs transfers` lists the rows; "
                    "`run --strict` stops until a line answers each).")
     return (f"{len(found)} transfer row(s) of a taxable account "
             f"possibly in-kind in parts with a registered account — NOT "

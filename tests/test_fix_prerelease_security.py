@@ -8,7 +8,7 @@ L5  fill-crypto quotes the symbol into the Yahoo URL and closes the
     response.
 I1  the [fx] extra's comment dates the Yahoo fallback like the code.
 
-(L6, TAXJSON_OFFLINE stopping `taxjson fetch`: test_fetch_dispatch.py.)
+(L6, TAXJSON_OFFLINE stopping `tjs fetch`: test_fetch_dispatch.py.)
 Synthetic data only; nothing here touches the network.
 """
 import io
@@ -283,7 +283,7 @@ def _rates(path: Path, home: Path):
 
 
 class TestRunInAPlantedProject(_Victims):
-    """`taxjson run` over a synthetic project whose work/ and reports/
+    """`tjs run` over a synthetic project whose work/ and reports/
     hold a symlink at EVERY temp name (and at the final names) pointing
     outside the project: nothing outside changes."""
 

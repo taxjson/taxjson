@@ -74,7 +74,7 @@ def read_json_doc(path, *, list_key: Optional[str] = "transactions",
         # 0 (issue #8): a non-finite number is refused wherever it is.
         raise InputFileError(
             f"{p}: holds a non-finite number ({e}) — the file is damaged "
-            f"or hand-edited: fix it or re-run `taxjson run`") from None
+            f"or hand-edited: fix it or re-run `tjs run`") from None
     except ValueError as e:
         raise InputFileError(f"{p}: not valid JSON ({e})") from None
     if isinstance(doc, list) and list_key:
@@ -143,7 +143,7 @@ def check_row_types(rows, path, key: str = "transactions") -> None:
                     f'{path}: "{key}" row {i} ({r.get("symbol") or "?"}): '
                     f"{f} is {v!r}, not a YYYY-MM-DD string — the file "
                     f"is damaged or hand-edited: fix it or re-run "
-                    f"`taxjson run`")
+                    f"`tjs run`")
         for f in _NUM_FIELDS:
             v = r.get(f)
             if v is not None and (isinstance(v, bool)
@@ -151,14 +151,14 @@ def check_row_types(rows, path, key: str = "transactions") -> None:
                 raise InputFileError(
                     f'{path}: "{key}" row {i} ({r.get("symbol") or "?"}): '
                     f"{f} is {v!r}, not a number — the file is damaged "
-                    f"or hand-edited: fix it or re-run `taxjson run`")
+                    f"or hand-edited: fix it or re-run `tjs run`")
             if v is not None and not math.isfinite(v):
                 # issue #8: a NaN gain reached a filing export.
                 raise InputFileError(
                     f'{path}: "{key}" row {i} ({r.get("symbol") or "?"}): '
                     f"{f} is {v!r}, a non-finite number — the file is "
                     f"damaged or hand-edited: fix it or re-run "
-                    f"`taxjson run`")
+                    f"`tjs run`")
 
 
 # The income rows a gains document carries beside its dispositions: the
@@ -231,7 +231,7 @@ def check_gains_rows(rows, path, key: str = "transactions") -> None:
                 f'{r.get("date") or r.get("date_settle") or "?"}): {what} without '
                 f"{', '.join(missing)} — it would be left out of the "
                 f"totals and forms. The file is damaged or hand-edited: "
-                f"fix it or re-run `taxjson run`")
+                f"fix it or re-run `tjs run`")
 
 
 def require_gains_doc(doc: Dict[str, Any], path) -> Dict[str, Any]:

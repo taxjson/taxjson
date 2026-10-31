@@ -1,14 +1,14 @@
 """v0.28.0 demo-project glitches.
 
-* `taxjson wash-sales --explain` traced the demo's one superficial loss
+* `tjs wash-sales --explain` traced the demo's one superficial loss
   and still said "no matching gains found" on stderr: the crypto book
   (traced on its own) had none. The note is now said once, only when no
   book had a denial.
-* `taxjson sum --other-income ...`: the estimate's "[X realized ...]"
+* `tjs sum --other-income ...`: the estimate's "[X realized ...]"
   was the unrounded engine total, a cent off the RETURN row's gain (the
   per-row cents the user files). It is now the RETURN figure.
 
-Synthetic data only (`taxjson init --demo`, tests/fixtures/style), the
+Synthetic data only (`tjs init --demo`, tests/fixtures/style), the
 hermetic HOME's made-up rates; offline.
 """
 import re

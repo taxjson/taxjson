@@ -78,7 +78,7 @@ Usage:
     taxjson-form-export --form schedule3 --country canada --year 2025 \
         --csv out.csv margin_gains_wash.json [...]
 
-Or through the project wrapper: `taxjson form-export` (form defaults from
+Or through the project wrapper: `tjs form-export` (form defaults from
 the project's country).
 """
 
@@ -265,7 +265,7 @@ def manual_section(rows: List[Dict[str, Any]], cur: str,
                  f"{_manual_counts(rows, cur)}: "
                  f"NOT in the rows or totals above. "
                  f"Report each by hand once its cost is known "
-                 f"(`taxjson find-missing-history`)."]
+                 f"(`tjs find-missing-history`)."]
         lines += _manual_table(rows)
         lines.append("")
     return lines + own_move_section(moved, cur, country)
@@ -277,7 +277,7 @@ def own_move_section(rows: List[Dict[str, Any]], cur: str,
     accounts that one account's own books hold at no cost (backlog
     TJ-0279): not in its rows or totals, and nothing to report by hand
     from it: the blended pass, the figures you file
-    (`<account>_wash.sum`, `taxjson sum`), has their cost."""
+    (`<account>_wash.sum`, `tjs sum`), has their cost."""
     if not rows:
         return []
     proceeds, _cover = manual_totals(rows)
@@ -296,7 +296,7 @@ def own_move_section(rows: List[Dict[str, Any]], cur: str,
              f"{proceeds:,.2f} {cur}: NOT in the rows or totals above, "
              f"and nothing to report by hand from here. This account's "
              f"own books have no cost for them; the figures you file "
-             f"have it: {wash} and `taxjson sum`{why}."]
+             f"have it: {wash} and `tjs sum`{why}."]
     lines += _manual_table(rows)
     lines.append("")
     return lines
@@ -1047,7 +1047,7 @@ def filing_lines(entries: List[Dict[str, Any]],
                  date_key: str = "date_settle") -> List[Dict[str, Any]]:
     """One dict per Schedule 3 line that has dispositions: the line
     number / codes / label plus PROCEEDS, ACB, OUTLAYS, GAIN, DENIED and
-    the disposition count — the rows of `taxjson sum`'s FOR THE RETURN
+    the disposition count — the rows of `tjs sum`'s FOR THE RETURN
     block, identical to form-export's line totals by construction."""
     return build_schedule3(entries, year, date_key)["lines"]
 
@@ -1083,7 +1083,7 @@ def filing_totals(entries: List[Dict[str, Any]],
 def filing_parts_8949(entries: List[Dict[str, Any]],
                       year: Optional[int] = None) -> List[Dict[str, Any]]:
     """Form 8949's own totals per part and checkbox group — (d)
-    proceeds, (e) cost, (g) adjustment, (h) gain — for `taxjson sum`'s
+    proceeds, (e) cost, (g) adjustment, (h) gain — for `tjs sum`'s
     US FOR THE RETURN block, so it shows exactly what the 8949 export
     carries to Schedule D. From 2025 the digital-asset boxes (G/H/I,
     J/K/L) are rows of their own (A2-0482)."""
@@ -1110,7 +1110,7 @@ def filing_parts_8949(entries: List[Dict[str, Any]],
 def filing_6781(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
     """The §1256 contracts `build_8949` keeps off Form 8949 (tax-logic
     US-FUT-02 / US-OPT-04): {"dispositions": n, "gain": net P/L} for
-    `taxjson sum`'s US FOR THE RETURN note (A2-0324)."""
+    `tjs sum`'s US FOR THE RETURN note (A2-0324)."""
     return dict(build_8949(entries)["section_1256_totals"])
 
 
@@ -1244,7 +1244,7 @@ def _manual_console(rows: List[Dict[str, Any]], cur: str,
                          f"for {cover:,.2f} {cur}, their proceeds unknown")
         lines += _para(f"{'; '.join(known)}: NOT in the rows or totals "
                        f"above. Report each by hand once its cost is known "
-                       f"(`taxjson find-missing-history`).")
+                       f"(`tjs find-missing-history`).")
     else:
         from taxjson.lib.out import act
         lines.append(act("Not in the rows or totals above: report each "
@@ -1255,7 +1255,7 @@ def _manual_console(rows: List[Dict[str, Any]], cur: str,
 
 
 def _rounding_note(rep: Dict[str, Any]) -> List[str]:
-    """The note `taxjson sum` prints beside FOR THE RETURN (R1-166),
+    """The note `tjs sum` prints beside FOR THE RETURN (R1-166),
     for the export too (A2-1108): rows are rounded to the cent as
     filed, so the totals can differ from the gains files' unrounded
     sums by a few cents."""
@@ -1295,7 +1295,7 @@ def _year_note(rep: Dict[str, Any]) -> List[str]:
 
 def _not_in_rows(rep: Dict[str, Any]) -> List[str]:
     """One `! ` line each for what the books leave out of these rows and
-    the gains files cannot tell (the wrapper counts them, as `taxjson
+    the gains files cannot tell (the wrapper counts them, as `tjs
     sum` does): an in-kind move with a registered account the run could
     not value, a sale with no purchase in the files (backlog TJ-0251)."""
     from taxjson.lib.out import act
@@ -1548,7 +1548,7 @@ def render_schedule3(rep: Dict[str, Any], year: Optional[int],
                    "sale's opening commission, stay netted in PROCEEDS); "
                    "the gain is unchanged.")
     lines += _rounding_note(rep)
-    lines += _item("FX gains on foreign cash (s.39(1.1), `taxjson "
+    lines += _item("FX gains on foreign cash (s.39(1.1), `tjs "
                    "fx-cash`) are not in these rows; T4037 puts them on "
                    "line 15300.")
     lines += _item("Capital gains paid out by funds and trusts are not "
@@ -1563,7 +1563,7 @@ def render_schedule3(rep: Dict[str, Any], year: Optional[int],
                    "dividends, so line 19700 is these rows plus the slip "
                    "lines.")
     lines += _item("Not tax advice; reconcile against your T5008 slips "
-                   "before filing (`taxjson reconcile-slips`).")
+                   "before filing (`tjs reconcile-slips`).")
     return "\n".join(lines)
 
 
@@ -1695,14 +1695,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "line 7 — 15200/15301 — from 2025, "
                              "15199/15300 before. Form 8949: from 2025 "
                              "the digital-asset boxes G/H/I and J/K/L. "
-                             "The `taxjson form-export` wrapper passes "
+                             "The `tjs form-export` wrapper passes "
                              "the crypto = true accounts here.")
     parser.add_argument("--form", required=True,
                         choices=["8949", "schedule3", "txf"])
     from taxjson.lib.country import add_country_argument
     add_country_argument(parser, help="Whose return the rows are for "
                          "(required): canada (--form schedule3) | usa "
-                         "(--form 8949 / txf). The `taxjson form-export` "
+                         "(--form 8949 / txf). The `tjs form-export` "
                          "wrapper passes the project's country.")
     parser.add_argument("--box", default="A", choices=["A", "B", "C"],
                         help="TXF only: 8949 checkbox pairing for "
@@ -1735,7 +1735,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--run-state-problem", action="append",
                         default=[], help=argparse.SUPPRESS)
     # ...and what the books leave out of the rows that the gains files
-    # cannot tell, counted as `taxjson sum` counts them (backlog TJ-0251).
+    # cannot tell, counted as `tjs sum` counts them (backlog TJ-0251).
     parser.add_argument("--in-kind-unbooked", type=int, default=0,
                         help=argparse.SUPPRESS)
     parser.add_argument("--no-purchase", type=int, default=0,
@@ -1749,14 +1749,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "convention (8949/txf trade, Schedule 3 "
                              "settle).")
     parser.add_argument("--brief", action="store_true",
-                        help="The essentials only (what `taxjson form-export` prints "
+                        help="The essentials only (what `tjs form-export` prints "
                              "without --details): the notes and each "
                              "message's detail are left out")
     parser.add_argument("--ticker-map", dest="ticker_map", metavar="FILE",
                         default=None,
                         help="The project's ticker.map: its market lines "
                              "(a SECFUT root stays on Form 8949, an "
-                             "INDEXOPT root is on Form 6781). `taxjson "
+                             "INDEXOPT root is on Form 6781). `tjs "
                              "form-export` reads the project's; without "
                              "this option the TAXJSON_TICKER_MAP variable, "
                              "else none")
@@ -1790,7 +1790,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         # A truncated gains file crashed with a raw JSONDecodeError
         # traceback (R1-277).
         print(f"taxjson-form-export: could not read the gains files: "
-              f"{e} — re-run `taxjson run` to rebuild them.",
+              f"{e} — re-run `tjs run` to rebuild them.",
               file=sys.stderr)
         return 2
 
@@ -1808,7 +1808,7 @@ def _files_date_basis(paths: List[Path]) -> Optional[str]:
     if len(seen) > 1:
         raise ValueError(f"the gains files were built on different date "
                          f"bases ({', '.join(sorted(seen))}) — rebuild "
-                         f"them with one `taxjson run`")
+                         f"them with one `tjs run`")
     return seen.pop() if seen else None
 
 
@@ -1895,7 +1895,7 @@ def _check_currency(paths: List[Path], base: str) -> None:
             print(f"taxjson-form-export: {p}: dispositions in another "
                   f"currency than {base} ({got} row(s)) — pass the "
                   f"converted <account>_gains(_wash).json, not the native "
-                  f"*_raw_gains.json (`taxjson form-export` does)",
+                  f"*_raw_gains.json (`tjs form-export` does)",
                   file=sys.stderr)
             raise SystemExit(2)
 
@@ -1945,7 +1945,7 @@ def _main(args) -> int:
               f"{args.base_currency} does not match the {args.country} "
               f"return's currency {_home} — the form is filed in {_home}: "
               f"pass the converted <account>_gains(_wash).json "
-              f"(`taxjson run` converts them; `taxjson form-export` "
+              f"(`tjs run` converts them; `tjs form-export` "
               f"passes them).", file=sys.stderr)
         raise SystemExit(2)
     _check_currency(list(args.files) + list(args.crypto), _home)
@@ -1959,7 +1959,7 @@ def _main(args) -> int:
             print(f"taxjson-form-export: the gains files are for more "
                   f"than one tax year ({_named}) — a return is one year: "
                   f"pass --year YEAR, or only that year's files "
-                  f"(`taxjson form-export` passes the project's year).",
+                  f"(`tjs form-export` passes the project's year).",
                   file=sys.stderr)
             raise SystemExit(2)
     entries, tainted = load_dispositions(
@@ -1986,7 +1986,7 @@ def _main(args) -> int:
         raise SystemExit(
             exit_text("taxjson-form-export: these gains files carry short/long-term "
                       "terms — they were computed by the US engine; Schedule 3 needs "
-                      "a country=canada gains file (re-run `taxjson run` in the "
+                      "a country=canada gains file (re-run `tjs run` in the "
                       "Canadian project)."))
     # Each file once: the wrapper passes a crypto account's gains file
     # positionally AND as --crypto, which listed every crypto unknown-
@@ -2031,7 +2031,7 @@ def _main(args) -> int:
               f"— {'; '.join(_known)}",
               details=[f"{_names}{_more}.",
                        "Report them by hand once their cost is known "
-                       "(`taxjson find-missing-history`); they are listed "
+                       "(`tjs find-missing-history`); they are listed "
                        "in the MANUAL REPORTING section."])
 
     rep_8949 = (build_8949(entries, form_year)

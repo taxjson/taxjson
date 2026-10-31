@@ -580,7 +580,7 @@ class TestTaxLogicWording(unittest.TestCase):
 
     def test_us_fx_rule_names_unrated_fx_cash_events(self):
         from taxjson.lib.tax_logic import catalog
-        self.assertIn('`taxjson fx-cash` counts a cash event with no rate',
+        self.assertIn('`tjs fx-cash` counts a cash event with no rate',
                       catalog('usa')['US-FX-02'].text)
 
 
@@ -594,7 +594,7 @@ class TestHelpAndNoteWording(unittest.TestCase):
 
     def test_fees_sum_help(self):
         self.assertIn('(default: tax year; trade dates); the totals '
-                      '`taxjson run` writes to reports/fees.rpt, by account '
+                      '`tjs run` writes to reports/fees.rpt, by account '
                       'by default', _tool_help('taxjson_run', 'fees-sum'))
 
     def test_missing_history_include_options_help(self):
@@ -616,12 +616,12 @@ class TestHelpAndNoteWording(unittest.TestCase):
 
     def test_generate_parser_privacy_notice(self):
         self.assertIn('PRIVACY: the first --sample-lines lines of the file '
-                      'are sent to the provider. Run `taxjson redact` on a '
+                      'are sent to the provider. Run `tjs redact` on a '
                       'real export first', _tool_help('taxjson_generate_parser'))
 
     def test_checklist_t5_t3_names_the_taxable_line(self):
         from taxjson.lib.checklist import DETECTORS
-        self.assertIn('the TAXABLE line of `taxjson divs-sum` / `roc-sum`',
+        self.assertIn('the TAXABLE line of `tjs divs-sum` / `roc-sum`',
                       DETECTORS['t5-t3'](None).detail)
 
 
@@ -663,7 +663,7 @@ class TestRunNoteWording(unittest.TestCase):
                  'div_foreign': 0.0, 'pil': 0.0}, 'USD',
                 other_income=50000.0, other_losses=0.0, province=None)
         self.assertIn('interest income and the §988 result on foreign '
-                      'currency (`taxjson fx-cash`) not included',
+                      'currency (`tjs fx-cash`) not included',
                       ' '.join(out.getvalue().split()))
 
     def test_init_force_names_the_numbered_backup(self):

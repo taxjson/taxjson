@@ -232,7 +232,7 @@ class TestCorpViews(unittest.TestCase):
         why = "\n".join(row["why"])
         self.assertIn("the saved fmv_per_share=0 is not used", why)
         self.assertIn("100.00 USD", why)
-        self.assertNotIn("taxjson elect", why)
+        self.assertNotIn("tjs elect", why)
         text = "\n".join(cv.render_spinoffs(doc))
         self.assertIn("the saved fmv_per_share=0 is not used", text)
         self.assertNotIn("HINT-UNUSED", text)

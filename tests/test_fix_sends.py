@@ -1,6 +1,6 @@
 """Crypto sends: classify every unmatched outgoing crypto transfer as
 self / gift / payment, price the dispositions, and generate the .tt
-BUYSELL lines (`taxjson crypto-sends`, the `taxjson run` prompt, the
+BUYSELL lines (`tjs crypto-sends`, the `tjs run` prompt, the
 checklist step). Stablecoin gifts/payments get the FX-gain calculation
 instead of a sale line.
 
@@ -142,7 +142,7 @@ def _home_rates(home: Path) -> None:
     test HOME's currency cache (~/.currency_price_cache.json, read by an
     offline rebuild of work/to_base.csv): a Bank of Canada USD->CAD
     series with SPECIAL_RATES, a Yahoo CAD->USD one, every day from
-    2025-01-01 to a week past today (made-up rates). `taxjson run`
+    2025-01-01 to a week past today (made-up rates). `tjs run`
     rebuilds to_base.csv when a taxjson source file is newer than it
     (stage_currency_rates, needs_rebuild); a file edited while the suite
     ran made the rebuild read an empty cache, replace the planted rates
@@ -247,7 +247,7 @@ class TestCryptoSendsProject(unittest.TestCase):
 
     def test_a_headless_run_points_at_the_command(self):
         err = self.first_run.stderr + self.first_run.stdout
-        self.assertIn("taxjson crypto-sends", err)
+        self.assertIn("tjs crypto-sends", err)
         self.assertIn("not yet classified", err)
 
     @rule("CA-CRYPTO-07")

@@ -6,7 +6,7 @@
 ##   diff ~/taxes/2023/taxjson.toml ~/taxes/2024/taxjson.toml
 ## Each key's description is on the `## ` lines above it, the values it takes after it. A
 ## commented-out key (`# key = value`) shows its default (or an example where it has none): delete
-## the `# ` to change it. `taxjson format` puts an edited file back into this layout, keeping your
+## the `# ` to change it. `tjs format` puts an edited file back into this layout, keeping your
 ## values and comments.
 [settings]
 
@@ -15,11 +15,11 @@ country                           = "canada"  # canada | ca | usa | us (required
 ## The zone crypto UTC times are dated in (an IANA name). No default: required with a crypto
 ## account.
 local_timezone                    = "America/Toronto"
-## Last year's close-year record (`taxjson handoff`). No default.
+## Last year's close-year record (`tjs handoff`). No default.
 # prior_year_record               = "../2023/filed/2023.json"
-## The province `taxjson estimate` taxes at. No default.
+## The province `tjs estimate` taxes at. No default.
 # province                        = "ON"      # ON | BC | AB
-## The oldest taxjson this project runs on: an older one refuses it. Written by `taxjson init`,
+## The oldest taxjson this project runs on: an older one refuses it. Written by `tjs init`,
 ## `new-year` and `migrate` for the layout they make; never lower it.
 # requires_taxjson                = ">=0.27.1"
 ## Default settle: CRA dates a sale by settlement.
@@ -30,7 +30,7 @@ year                              = 2024
 ## --- Folders ---
 ## Where the newest year's run copies its positions and wash radar for other tools. No default.
 # exports_dir                     = "../exports"
-## The year's broker positions snapshots `taxjson sanity` reads. Default: holdings/ here.
+## The year's broker positions snapshots `tjs sanity` reads. Default: holdings/ here.
 # holdings_dir                    = "holdings"
 ## The folder of the broker exports (inputs/<account>/), when the years share one beside the year
 ## folders. Default: inputs/ here.
@@ -65,7 +65,7 @@ source_currencies                 = ["USD"]
 ## written. Set it once and keep it in every later year (default: `year`).
 option_grant_timing_since         = 2024
 ## "grant" (the default): a written option's premium is a gain in the year WRITTEN (ITA s.49(1));
-## "close": it is netted at the closing transaction instead. See `taxjson option-boundary`.
+## "close": it is netted at the closing transaction instead. See `tjs option-boundary`.
 # option_premium_timing           = "grant"  # grant | close
 
 ## --- Income ---
@@ -91,21 +91,22 @@ option_grant_timing_since         = 2024
 ## --- Corporate actions ---
 ## A spin-off or merger in a sheltered account with no saved election: "zero" (the default) books it
 ## without asking (a spin-off's new shares at $0 cost, a merger's new shares at the old shares'
-## cost; no tax depends on it); "ask": asked like a taxable account's. `taxjson elect` wins either
-## way.
+## cost; no tax depends on it); "ask": asked like a taxable account's. `tjs elect` wins either way.
+## cost; no tax depends on it); "ask": asked like a taxable account's. `tjs elect` wins either
 # sheltered_elections             = "zero"  # zero | ask
+## The `tjs fetch` source of this account (a fetcher plugin's name; `tjs fetch --list` names
 
 ## One [accounts.NAME] table per folder under inputs/ (the folder name is the account name). Every
 ## key, with its default:
 # [accounts.NAME]
 # type                     = "taxable"  # taxable | sheltered (required)
-## The broker account id `taxjson fetch` downloads (if its source needs one).
+## The broker account id `tjs fetch` downloads (if its source needs one).
 # account                  = "ACCOUNT_ID"
 ## The broker account ids of this account's statements: a holdings/ snapshot whose [meta] account is
 ## one of them is this account's. Default: `account`.
 # broker_accounts          = ["ACCOUNT_ID"]
-## The `taxjson fetch` source of this account (a fetcher plugin's name; `taxjson fetch --list` names
-## the installed ones). No default.
+## The `tjs fetch` source of this account (a fetcher plugin's name; `tjs fetch --list` names the
+## installed ones). No default.
 # brokerage                = "SOURCE"
 ## true: every broker account in these statements is yours, taxable together.
 # combined_broker_accounts = false
@@ -116,12 +117,12 @@ option_grant_timing_since         = 2024
 ## Webull: the exercise/assignment charge on the stock leg. No default: without it no
 ## exercise/assignment is inferred (each candidate is named).
 # exercise_fee             = 1.00
-## Positions files `taxjson sanity` reconciles against. Default: none.
+## Positions files `tjs sanity` reconciles against. Default: none.
 # holdings                 = ["~/broker/NAME_holdings.toml"]
 ## The plan when the name doesn't say (default: from the name): tfsa | rrsp | rrif | lira | lif |
 ## lrif | fhsa | resp | rdsp | prpp.
 # plan                     = "rrsp"
-## The report (query) id `taxjson fetch` runs (if its source needs one).
+## The report (query) id `tjs fetch` runs (if its source needs one).
 # query_id                 = "QUERY_ID"
 # transfers                = false      # true: keep TRANSFER rows (contributions/withdrawals)
 ## RBC: the day next year by which year-end book-cost rows are posted. Default 06-30.
@@ -148,7 +149,7 @@ crypto = true
 ## More accounts: add an [accounts.NAME] table (keys above) and an inputs/NAME
 ## folder for it.
 
-## Estimate inputs (`taxjson estimate`, and the instalments current-year basis), used when the
+## Estimate inputs (`tjs estimate`, and the instalments current-year basis), used when the
 ## command-line flags aren't given:
 # [estimate]
 ## Minimum tax carryover by year of origin (T691). No default.
@@ -162,13 +163,13 @@ crypto = true
 ## Net capital losses of earlier years applied, in FULL dollars.
 # other_losses     = 0
 
-## Losses actually applied on filed returns (`taxjson carryover`), by year:
+## Losses actually applied on filed returns (`tjs carryover`), by year:
 # [carryover]
 ## Net capital losses applied on each filed return. No default.
 # claimed = { 2023 = 4000.00 }
 
 ## Non-cash fund distributions (a reinvested capital-gains distribution, a late return-of-capital
-## factor): `taxjson run` books each as a cost adjustment on the shares held on the record date. One
+## factor): `tjs run` books each as a cost adjustment on the shares held on the record date. One
 ## table each:
 # [[distributions]]
 ## Per share, in the base currency; negative = return of capital.
@@ -178,8 +179,9 @@ crypto = true
 ## The books' symbol.
 # symbol      = "XYZQ.TO"
 
-## T5 box 18 capital-gains dividends the books carry as dividends (`taxjson divs-sum`, the
-## estimate). One table per payment or year:
+## T5 box 18 capital-gains dividends the books carry as dividends (`tjs divs-sum`, the estimate).
+## One table per payment or year:
+## T5 box 18 capital-gains dividends the books carry as dividends (`tjs divs-sum`, the
 # [[capital_gains_dividends]]
 ## Default: the taxable accounts.
 # account = "margin"
@@ -191,8 +193,9 @@ crypto = true
 ## Every dividend of that tax year (instead of date).
 # year    = 2024
 
-## Tax instalments (`taxjson instalments`, and a summary inside `taxjson estimate`). Uncomment and
-## fill in YOUR figures.
+## Tax instalments (`tjs instalments`, and a summary inside `tjs estimate`). Uncomment and fill in
+## YOUR figures.
+## Tax instalments (`tjs instalments`, and a summary inside `tjs estimate`). Uncomment and
 # [instalments]
 # basis                = "current_year"  # current_year | prior_year | cra_reminder
 ## Instalments paid. No default.

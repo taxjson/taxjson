@@ -4,10 +4,10 @@ reverted. Each test names the finding and the mutant it kills.
 
   A2-0880 / A2-1585  fees-sum's per-brokerage 'non-option' line, its
                      $/UNIT header and 'Non-option vs option fees:'
-                     heading; `taxjson sum`'s NON-OPT column; the tx
+                     heading; `tjs sum`'s NON-OPT column; the tx
                      views' 'TOTAL STAKING (crypto, ordinary income):'
   A2-1555            fx-cash's per-currency ACQUIRED column sums
-  A2-0533            `taxjson sum`'s summarize_gains / summarize_income
+  A2-0533            `tjs sum`'s summarize_gains / summarize_income
                      accumulators (2+ rows per ticker and term, 2
                      withholding rows, an 'other' row, all-zero rows)
   A2-0861 / A2-0906 / A2-0907
@@ -98,7 +98,7 @@ def _cli(root, *args):
 
 
 class TestRunReportLabels(unittest.TestCase):
-    """A2-1585: `taxjson sum`'s NON-OPT column header and the staking
+    """A2-1585: `tjs sum`'s NON-OPT column header and the staking
     footer of the transaction views."""
 
     def test_staking_footer_names_ordinary_income(self):
@@ -378,12 +378,12 @@ class TestChecklistPins(unittest.TestCase):
 
     def test_t5_t3_names_the_taxable_line(self):
         # A2-0866 (S068-14). A US project compares the 1099-DIV by
-        # hand; a Canadian one runs `taxjson slip-audit`
+        # hand; a Canadian one runs `tjs slip-audit`
         # (tests/test_slip_audit.py).
         from taxjson.lib import checklist as cl
         with tempfile.TemporaryDirectory() as td:
             r = cl.DETECTORS["t5-t3"](_cl_ctx(Path(td), country="usa"))
-        self.assertIn("TAXABLE line of `taxjson divs-sum`", r.detail)
+        self.assertIn("TAXABLE line of `tjs divs-sum`", r.detail)
 
     @rule("US-RPT-09")
     def test_us_slip_and_margin_interest_words(self):

@@ -421,7 +421,7 @@ class TestFxCashOneLine(unittest.TestCase):
             r = self._fx(self._proj(td, [row]))
         self.assertEqual(r.returncode, 1, r.stderr)
         self.assertNotIn("Traceback", r.stderr)
-        self.assertIn("taxjson fx-cash: error:", r.stderr)
+        self.assertIn("tjs fx-cash: error:", r.stderr)
 
     def test_unreadable_rates_is_one_line(self):
         # A2-1434.

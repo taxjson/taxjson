@@ -118,7 +118,7 @@ _KL_H2 = ("txid,refid,time,type,subtype,aclass,asset,wallet,amount,fee,"
 
 
 class TestTJ1080RedactedCopyIsNoKrakenSibling(unittest.TestCase):
-    """TJ-1080: `taxjson redact FILE` beside a Kraken ledger: the copy's
+    """TJ-1080: `tjs redact FILE` beside a Kraken ledger: the copy's
     rows, the export's own times under new ids, read as another export's
     movements, so the opening CASHBAL of the export was dropped."""
 

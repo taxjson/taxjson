@@ -1,6 +1,6 @@
 """Planning-tool fixes (2026-09 audit): the wash radar and the tools
 built on it (wash-radar, watch, buy-check, sell-check, the run's
-reports/wash_radar_*) and `taxjson redact`.
+reports/wash_radar_*) and `tjs redact`.
 
   R1-225  trades made but not yet settled are in the books
   R1-226  loss detection comes from the engine's gains (s.47 blend,

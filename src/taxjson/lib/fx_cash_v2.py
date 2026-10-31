@@ -39,7 +39,7 @@ Dates: every event is walked on its SETTLEMENT date (the rate and the
 tax year, as the default ledger); statement balances are trade-date
 balances, so a check adds back what was traded but not yet settled.
 CASHOPEN is the SETTLED balance at the start of Jan 1. The cash each
-book holds day by day (`holdings`, for `taxjson t1135`) is given on the
+book holds day by day (`holdings`, for `tjs t1135`) is given on the
 project's tax_date basis: on trade dates (`holdings_basis="trade"`)
 each leg traded and not yet settled has moved (_on_trade_dates), as the
 securities it bought or sold have.
@@ -479,7 +479,7 @@ def _on_trade_dates(points: List[List[Any]], net: List[List[Any]],
     project whose tax_date is trade (tax-logic CA-RPT-20; backlog
     TJ-0627): at the end of each day, what had settled plus each leg
     traded and not yet settled (less one settled before its trade
-    date). The walk of `taxjson t1135` dates the securities on that
+    date). The walk of `tjs t1135` dates the securities on that
     basis: on settlement dates the cash that paid for shares was
     counted with them until it settled, and a sale's proceeds were in
     no row until then.
@@ -632,7 +632,7 @@ def _base_holdings(ops: List[Dict[str, Any]], checks: List[Dict[str, Any]],
                    year: int, basis: str = "settle"
                    ) -> List[Dict[str, Any]]:
     """Each book's balance of the base currency through `year`, for
-    `taxjson t1135` (tax-logic CA-RPT-20): [{"book", "ok", "why",
+    `tjs t1135` (tax-logic CA-RPT-20): [{"book", "ok", "why",
     "points": [[date, balance], ...]}] — the balance at the end of each
     day it changed, the first point the year's opening (dated the day
     before the year). A balance is given (`ok`) only where the books
@@ -801,7 +801,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     (_carry_openings). `inflow_spot`: [settings] fx_cash_inflow_cost
     = "spot" (an undeclared inflow costs the day's rate).
 
-    `holdings` (`taxjson t1135`, tax-logic CA-RPT-20) adds the doc's
+    `holdings` (`tjs t1135`, tax-logic CA-RPT-20) adds the doc's
     `holdings`: {"foreign": [{"book", "currency", "points": [[date,
     units, cost], ...]}] — each book's units of each foreign currency
     at the end of each day they or the pool's average cost changed,
@@ -819,7 +819,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     books do not keep: the income of that cash row (backlog TJ-0628)}.
     `holdings_basis` is the project's tax_date: "settle" (the
     walk's own dates) or "trade" (each leg traded and not yet settled
-    has moved: _on_trade_dates; backlog TJ-0627) — the dates `taxjson
+    has moved: _on_trade_dates; backlog TJ-0627) — the dates `tjs
     t1135` walks the securities on, so the cash that paid for shares is
     never counted with them, nor a sale's proceeds left out."""
     from taxjson.bin.taxjson_fx_cash import _cash_leg_dates
@@ -880,7 +880,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     stable_cash = bool(stable_cash)
     # `holdings`: the year's interest rows naming no symbol (interest an
     # account pays on its cash), each with the currency it was paid in:
-    # the base books carry it in the base currency only, and `taxjson
+    # the base books carry it in the base currency only, and `tjs
     # t1135` makes it the income of that currency's cash row (tax-logic
     # CA-RPT-14; backlog TJ-0628).
     interest: List[Dict[str, Any]] = []
@@ -970,7 +970,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                 != base:
             notes.append(ev["text"])
     # .tt CASHMOVE lines: a declaration of a broker's move when one
-    # matches, else a move of their own (lib/cash_events; `taxjson
+    # matches, else a move of their own (lib/cash_events; `tjs
     # cash` lists the same).
     from taxjson.lib.cash_events import apply_declarations
     apply_declarations(events, lines)
@@ -1913,7 +1913,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                          f"account they reached, and matched next year")
     for cur, d in sorted({(c, d) for c, d in unrated}):
         problems.append(_p("rate", f"no {cur} rate on file for {d} (or "
-                           f"the 5 days before) — run `taxjson run` to "
+                           f"the 5 days before) — run `tjs run` to "
                            f"refresh the rates", d, "", cur))
     # An own move that leaves in the year and arrives after it (both
     # legs in the books: the arrival settles after December 31) is
@@ -1929,7 +1929,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                                          min(first, o["sd"]))
     close_transit: Dict[str, Dict[str, float]] = {}
     # Where the units in transit at the close left and go
-    # (`holdings` "transit", taxjson t1135; backlog TJ-0946).
+    # (`holdings` "transit", tjs t1135; backlog TJ-0946).
     transit_where: List[Dict[str, Any]] = []
     for cur, t in sorted(transit.items()):
         later, when = pending_in.get(cur, (0.0, ""))

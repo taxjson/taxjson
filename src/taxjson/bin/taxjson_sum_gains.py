@@ -210,7 +210,7 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
         # only raw engine output still carries in-line tainted rows.
         # Count both homes so consumers can warn either way
         # (round-five audit: the in-line count was always 0 for
-        # pipeline files, silencing `taxjson sum`'s warning).
+        # pipeline files, silencing `tjs sum`'s warning).
         'tainted_count': sum(1 for t in transactions
                              if t.get('tainted') and 'gain' in t),
         # Pipeline files carry tainted rows OUT-of-line: excluded from
@@ -220,7 +220,7 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
             data.get('manual_reporting_required') or []),
         # The routed rows themselves, for the .sum's MANUAL REPORTING
         # section (R1-320: the .sum you file from dropped them without
-        # a word while `taxjson sum` pointed at a section nobody wrote).
+        # a word while `tjs sum` pointed at a section nobody wrote).
         'manual_rows': [
             # `direction`: a short covered with its short sale before
             # the data lists its cover cost, never as proceeds
@@ -417,7 +417,7 @@ def format_report(data: Dict[str, Any], sort_by: str = 'ticker', no_color: bool 
         # audit R1-208).
         lines.append("  (engine sign convention: shorts/written options "
                      f"negated — for {form} proceeds and {cost_word} use "
-                     "`taxjson form-export`)")
+                     "`tjs form-export`)")
         lines.append("-" * 54)
         # 'cap' is every NON-option disposition: shares and units, but
         # also plain futures and crypto (Schedule 3 lines 6/7) — the
@@ -425,12 +425,12 @@ def format_report(data: Dict[str, Any], sort_by: str = 'ticker', no_color: bool 
         # futures/crypto gains (audit R1-211, S051-01, S031-04).
         lines.append(f"TOTAL REALIZED NON-OPTION GAIN:{color_val(totals['cap'], '14,.2f')} {currency}")
         lines.append(f"  (shares, units, futures and crypto — {form} "
-                     "lines: `taxjson form-export`)")
+                     "lines: `tjs form-export`)")
         lines.append(f"TOTAL REALIZED OPTION GAIN: {color_val(totals['opt'], is_cost=False)} {currency}")
         lines.append(f"TOTAL REALIZED GAIN:        {color_val(totals['total'], is_cost=False)} {currency}")
         lines.append("-" * 54)
         if staking:
-            # `--staking` (a crypto account's books, passed by `taxjson
+            # `--staking` (a crypto account's books, passed by `tjs
             # run`): its DIVIDEND rows are staking rewards — ordinary
             # income, not dividends (S023-11).
             lines.append(f"TOTAL STAKING REWARDS:      {color_val(totals['div'], is_cost=False)} {currency}  (ordinary income, not dividends)")
@@ -443,7 +443,7 @@ def format_report(data: Dict[str, Any], sort_by: str = 'ticker', no_color: bool 
         lines.append("-" * 54)
         # Gain + dividends + PIL: an investment return, not a realized
         # gain (it overstated the capital gain by all income, S051-00).
-        # `taxjson sum`'s TOTAL leaves PIL out; this line keeps it.
+        # `tjs sum`'s TOTAL leaves PIL out; this line keeps it.
         lines.append(f"GRAND TOTAL (GAIN+DIV+PIL): {color_val(totals['all'], is_cost=False)} {currency}")
         
         total_fee = data['total_fees'].get(currency, 0.0)
@@ -556,7 +556,7 @@ def main():
                         metavar="{canada,ca,usa,us}",
                         help="Words the form and cost pointers (Schedule "
                              "3 / ACB or Form 8949 / basis; neutral "
-                             "without it). `taxjson run` passes it.")
+                             "without it). `tjs run` passes it.")
     parser.add_argument("files", nargs="*", metavar="FILE")
     args = parser.parse_args()
     

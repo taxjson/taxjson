@@ -1,4 +1,4 @@
-"""`taxjson check-tt` (lib/check_tt): every .tt line through the run's
+"""`tjs check-tt` (lib/check_tt): every .tt line through the run's
 readers, every problem named; the run stops at the first."""
 import contextlib
 import io

@@ -36,7 +36,7 @@ audit's whole claim is that these numbers agree, so a mismatch is a
 finding, not a formatting problem.
 
 This tool re-DERIVES and cross-checks; it never writes books. The
-project-level front door is `taxjson audit`, which resolves every
+project-level front door is `tjs audit`, which resolves every
 path below from the project.
 """
 
@@ -259,7 +259,7 @@ def money_lineage(rid: str, raw: Dict[str, Any], base_row: Dict[str, Any],
                 f"FX: no {cur}->{base_currency} rate for {rate_date} "
                 f"(nor in the {LOOKBACK_DAYS} days before) in the "
                 f"rates file — the conversion stops on this row; "
-                f"refresh the rates with `taxjson run`.")
+                f"refresh the rates with `tjs run`.")
             return fx, warnings, failures
         fx.update({"rate": float(rate), "rate_kind": kind,
                    "rate_date": rate_date, "rate_source_date": src_date})
@@ -450,7 +450,7 @@ def row_origin(row: Dict[str, Any], *,
         return (f"corporate action {row['corp_event_id']}"
                 + (f" ({el})" if el else "")
                 + ": no row of the corp-actions file has its id — re-run "
-                  "`taxjson run`")
+                  "`tjs run`")
     ev = str(row.get("event_source") or "")
     if ev:
         new = str(row.get("symbol_new") or "")
@@ -491,7 +491,7 @@ def row_origin(row: Dict[str, Any], *,
         return "a row of the crypto price stage (fill-crypto-prices)"
     if row.get("source"):
         return (f"a row of {row['source']} that no parsed file holds now "
-                f"— stale work/ files: re-run `taxjson run`")
+                f"— stale work/ files: re-run `tjs run`")
     return "made by the run (the row names no stage)"
 
 
@@ -1180,7 +1180,7 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
             ev["failures"].append(
                 f"PIPELINE TIE-OUT FAILED: engine re-run vs saved gains "
                 f"file: {differences_text(diffs)} — the books changed "
-                f"since the last `taxjson run`, or the audit was "
+                f"since the last `tjs run`, or the audit was "
                 f"invoked with different inputs.")
     else:
         tie["ties"] = None
@@ -1492,7 +1492,7 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
             out.append(paint(_ln, "bad"))
 
     if show_trace and ev.get("trace"):
-        # The engine's pool history in the report layout (as `taxjson
+        # The engine's pool history in the report layout (as `tjs
         # wash-sales --explain`), base currency; the trace files keep
         # render_gain_block's '#' lines.
         out += render_report_trace({**ev, "trace": ev["trace"]})
@@ -1721,7 +1721,7 @@ def _finite(v):
 def manual_reporting_totals(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     """The unknown-cost dispositions (`manual_reporting`), which no gain
     total counts: how many, their quantity and their proceeds — what is
-    reported by hand (the --json `manual_reporting`; `taxjson audit`
+    reported by hand (the --json `manual_reporting`; `tjs audit`
     merges its books' with the same function, backlog TJ-0302)."""
     man = [e for e in events if e.get("manual_reporting")]
     return {"events": len(man),
@@ -1804,7 +1804,7 @@ def parse_args(argv=None):
     p.add_argument("--locked-year", action="append", type=int,
                    default=None, metavar="YEAR",
                    help="USA: a filed (locked) tax year, repeatable, as "
-                        "in taxjson-gains (`taxjson audit` passes every "
+                        "in taxjson-gains (`tjs audit` passes every "
                         "filed/<year>.json): a wash-sale basis add to a "
                         "replacement sold in such a year is booked in the "
                         "loss's year (US-WASH-22).")
@@ -1857,7 +1857,7 @@ def parse_args(argv=None):
     p.add_argument("--account", help="Filter: account name.")
     p.add_argument("--summary", action="store_true",
                    help="One line per event instead of full blocks.")
-    # Wrapper plumbing (`taxjson audit` runs one invocation per book and
+    # Wrapper plumbing (`tjs audit` runs one invocation per book and
     # decides itself whether "nothing matched" is an error overall).
     p.add_argument("--no-match-rc", type=int, default=1,
                    help=argparse.SUPPRESS)
@@ -1869,7 +1869,7 @@ def parse_args(argv=None):
     p.add_argument("--json", action="store_true",
                    help="Emit the full audit as JSON.")
     p.add_argument("--brief", action="store_true",
-                   help="Leave out the notes (`taxjson audit` passes it "
+                   help="Leave out the notes (`tjs audit` passes it "
                         "unless --details; docs/output-style.md)")
     return p.parse_args(argv)
 
@@ -2147,7 +2147,7 @@ def main(argv=None) -> int:
                     f"MANUAL REPORTING TIE-OUT FAILED: engine re-run vs "
                     f"the saved MANUAL REPORTING REQUIRED row: "
                     f"{differences_text(_diffs)} — the books changed "
-                    f"since the last `taxjson run`.")
+                    f"since the last `tjs run`.")
         else:
             e["tie_out"] = {"records": 0, "ties": None}
             e["warnings"].append(
@@ -2371,7 +2371,7 @@ def main(argv=None) -> int:
         print(file=sys.stderr)
         for ln in _wrap("taxjson-audit: CHECKS FAILED — see FAILED lines "
                         "above. The usual cause is stale work/ artifacts; "
-                        "re-run `taxjson run` and audit again.", None, "",
+                        "re-run `tjs run` and audit again.", None, "",
                         "  ", stream=sys.stderr):
             print(ln, file=sys.stderr)
     return 1 if failed else 0

@@ -1,4 +1,4 @@
-"""close-year records the hand-off; `taxjson handoff` checks the next
+"""close-year records the hand-off; `tjs handoff` checks the next
 year's project against it (lib/handoff)."""
 import json
 import subprocess

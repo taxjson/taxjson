@@ -9,7 +9,7 @@ P1. synthesize_openings sizes the opening in OPENING-DATE units, so SPLITs
 P2. synthesize_openings counts TRANSFER rows (detect and the engine both do;
     excluding them mis-sized openings exactly on registered accounts).
 P3. stage_wash_pass passes --incomplete-history, so the wash-adjusted books
-    (preferred by `taxjson wash-sales`) match the main gains books.
+    (preferred by `tjs wash-sales`) match the main gains books.
 P4. Tainted (phantom-pool) losses never feed the superficial-loss solver —
     fabricated DISALLOW/ADJUST rows no longer land on clean pools.
 E5. OPENING_BALANCE counts in the ±30-day "still held" balance walks, so a

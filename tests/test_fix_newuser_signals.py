@@ -106,7 +106,7 @@ class TestTransitionQuestionRows(unittest.TestCase):
         self.assertIn("QUESTION: did your 2025 return report the 399.00 "
                       "premium", row["action"])
         self.assertIn("set option_grant_timing_since = 2025", row["action"])
-        self.assertIn("`taxjson checklist --done option-boundary`",
+        self.assertIn("`tjs checklist --done option-boundary`",
                       row["action"])
 
     @rule("CA-OPT-11")
@@ -171,7 +171,7 @@ class TestTransitionQuestionProject(unittest.TestCase):
         self.assertIn("Did your 2025 return report these premiums when the "
                       "contracts were written? If yes, set "
                       "option_grant_timing_since = 2025", text)
-        self.assertIn("`taxjson checklist --done option-boundary`", text)
+        self.assertIn("`tjs checklist --done option-boundary`", text)
         self.assertEqual(out.lint(self.r.stdout), [])
 
     def test_default_console_asks_in_one_line(self):
@@ -182,7 +182,7 @@ class TestTransitionQuestionProject(unittest.TestCase):
         r = tj(d, "run", "--no-input")
         self.assertIn("Warning: 1 option contract(s) written in 2025: is "
                       "400.00 of premium taxed in 2026 right? — "
-                      "`taxjson checklist --run`\n", r.stdout)
+                      "`tjs checklist --run`\n", r.stdout)
         self.assertNotIn("Did your 2025 return", r.stdout)
 
     @rule("CA-OPT-11")

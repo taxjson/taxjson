@@ -1,8 +1,8 @@
 """Decisions of 2026-10-26, group `cents`: the figures the return files
 (each sale's cents) shown where the engine's unrounded totals were.
 
-- TJ-0208 `taxjson carryover`'s NET GAIN(LOSS) for the project year is
-  the RETURN row of `taxjson sum`, so its carryforward balance is the one
+- TJ-0208 `tjs carryover`'s NET GAIN(LOSS) for the project year is
+  the RETURN row of `tjs sum`, so its carryforward balance is the one
   close-year's lock and the estimate carry forward; a prior year's lock
   gives the RETURN row close-year recorded;
 - TJ-0209 the default `sum` view says in one line that SUBTOTAL (TOTAL in
@@ -75,7 +75,7 @@ def _env(**extra):
 
 
 def _cli(root, *args, **env):
-    """`taxjson -C ROOT ARGS` as a child of THIS tree's code."""
+    """`tjs -C ROOT ARGS` as a child of THIS tree's code."""
     cmd = python_module_argv("taxjson.bin.taxjson_run",
                              ["-C", str(root), *map(str, args)])
     return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True,
@@ -175,7 +175,7 @@ class TestCarryover(_Project):
                          est["losses_carried_forward"])
         self.assertEqual(doc["final_carryforward"], 43.99)
         det = self.ok(_cli(self.y, "carryover", "--details")).stdout
-        self.assertIn("RETURN row of `taxjson sum`", " ".join(det.split()))
+        self.assertIn("RETURN row of `tjs sum`", " ".join(det.split()))
         self.assertIn("-94.00", det)
 
     @rule("CA-RPT-10")

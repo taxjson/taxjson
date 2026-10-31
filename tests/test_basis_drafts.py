@@ -1,5 +1,5 @@
 """Broker basis as an opt-in cost draft (owner-approved, 2026-10):
-`taxjson find-missing-history --write-purchases [FILE]` drafts `.tt`
+`tjs find-missing-history --write-purchases [FILE]` drafts `.tt`
 purchase lines from the broker's own cost evidence — IB's Trades Basis on
 a closing sale with no purchase in the files (one line per IB Closed Lot
 when the statement lists them), a Questrade transfer-in's TRANSFER BOOK

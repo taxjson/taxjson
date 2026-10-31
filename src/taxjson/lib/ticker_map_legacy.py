@@ -1,18 +1,18 @@
 """The comment text earlier taxjson versions wrote into ticker.map.
 
-`taxjson format-map` (lib/ticker_map_format) regenerates the header: a
+`tjs format-map` (lib/ticker_map_format) regenerates the header: a
 comment paragraph an earlier version wrote is template text, not the
 user's note, and is replaced by the current header. Every header and
 explanatory paragraph taxjson ever wrote into a ticker.map is recognised
 here, by hash:
 
-- the `taxjson init` templates (the commented `_TEMPLATE_TICKER_MAP` of
+- the `tjs init` templates (the commented `_TEMPLATE_TICKER_MAP` of
   every release before the grouped layout, and the first grouped
   layout's `## ` header and group text);
-- the header of the earliest projects (written before `taxjson init` had
+- the header of the earliest projects (written before `tjs init` had
   a template: "symbol rules for the taxjson pipeline", "Each line is:
   KEYWORD from [to]", "'#' starts a comment");
-- the one-line header `taxjson migrate` gave a ticker.map it created.
+- the one-line header `tjs migrate` gave a ticker.map it created.
 
 The texts themselves are in tests/fixtures/ticker_map/legacy_headers.txt
 (their symbols replaced by made-up ones; a listing symbol is masked
@@ -173,31 +173,32 @@ def corpus_tables(variants: Sequence[str]
 
 LINE_HASHES = frozenset("""
 00097763f6d55a26 00a3f0154037172c 03d9822f67b45783 07035d8c47efb7f8
-073bfe795ee08d6b 0e0f17b044b09c49 15ebd6f0aac94027 171de894c6864e48
-1c463f7f571c7ae2 1e87d4fbabe97a8f 1f5f63c611e5005b 208f8b138e273883
-283534607a882ad0 2b577ed893a8f4a0 2bfd6e98650a229d 2cc59cd628441c44
-3008aa4f952546d6 39b12c4b6d2c6d36 3ce39165443b6351 3e27a7f2ce6a3162
-418b2aaca345e818 43aa33fa691f26fe 455e9eb53cfffcf4 4863f0e62f2393a9
-4c137ae81e928fba 4cb6ec017c0c31a8 4da35551ef66acda 4de745aeab6694f3
-530d5b56790d7f0c 54098570a516ee12 55da8b9532665902 5766c4673142b2ab
-5968bb3244cae8a9 5da5373b81e28e86 5da5b5938ddde3e6 6257c02acdf8fd3b
-62d07ddcd4e8626f 6423d61bc021f2c5 68d4489ee559b472 6a312a9b59417681
-6cfbde668d339194 70d41a9edeb1ab62 71c0c7f7989301e0 72fb375a23c5c30d
-73e49ad1920b7247 74b5308380eceeb2 7582793a2046b476 7875072c83099e64
-794abc923ce8ae7b 7a70a201496dcf09 820fedc12f7c411d 8687fdeac707ef39
-878eb147753d9752 887d07bde37635cd 888b646125305f82 89d9f4de8cd83bc0
-8bbcfc5ef041b4d1 8d593d1e44882439 8d8eaadbea1e0e6b 8e28e7caa035bb2e
-8e410f2a6702f44b 90d7eca984085e4f 93d4a04b98063189 94038cb7dd941eb0
-9efa21d24a61f890 a175827dc46f5185 a38f3bd25218bf11 a3eba0f9d2d981d6
-a41ea6b50ab6077b a878e7d4638a9f57 a8d478b5ddd42491 a9b58705ca106c2a
-ac2dd6b64541323d b01f65c5eee57ccb ba4250e7b402ef87 ba5ad447551ade4a
-bb453a3a3c1de9df bd04ca4ba3f73aed bdd7713581cc79ed be6786485b6ea26b
+073bfe795ee08d6b 08e58559ee5d538c 0e0f17b044b09c49 15ebd6f0aac94027
+171de894c6864e48 1b5fbd5547fcb501 1c463f7f571c7ae2 1e87d4fbabe97a8f
+1f5f63c611e5005b 208f8b138e273883 283534607a882ad0 2b577ed893a8f4a0
+2bfd6e98650a229d 2cc59cd628441c44 3008aa4f952546d6 39b12c4b6d2c6d36
+3ce39165443b6351 3e27a7f2ce6a3162 418b2aaca345e818 43aa33fa691f26fe
+455e9eb53cfffcf4 4863f0e62f2393a9 4c137ae81e928fba 4cb6ec017c0c31a8
+4da35551ef66acda 4de745aeab6694f3 530d5b56790d7f0c 54098570a516ee12
+55da8b9532665902 5766c4673142b2ab 5968bb3244cae8a9 5da5373b81e28e86
+5da5b5938ddde3e6 6257c02acdf8fd3b 62d07ddcd4e8626f 6423d61bc021f2c5
+68d4489ee559b472 6a312a9b59417681 6cfbde668d339194 70d41a9edeb1ab62
+71c0c7f7989301e0 72fb375a23c5c30d 73e49ad1920b7247 74b5308380eceeb2
+7582793a2046b476 7875072c83099e64 794abc923ce8ae7b 7a70a201496dcf09
+820fedc12f7c411d 8687fdeac707ef39 878eb147753d9752 887d07bde37635cd
+888b646125305f82 89d9f4de8cd83bc0 8bbcfc5ef041b4d1 8d593d1e44882439
+8d8eaadbea1e0e6b 8e28e7caa035bb2e 8e410f2a6702f44b 90d7eca984085e4f
+93d4a04b98063189 94038cb7dd941eb0 9efa21d24a61f890 a175827dc46f5185
+a38f3bd25218bf11 a3eba0f9d2d981d6 a41ea6b50ab6077b a878e7d4638a9f57
+a8d478b5ddd42491 a9b58705ca106c2a ac2dd6b64541323d b01f65c5eee57ccb
+b7b7088102aca1f3 ba4250e7b402ef87 ba5ad447551ade4a bb453a3a3c1de9df
+bd04ca4ba3f73aed bdd7713581cc79ed be6786485b6ea26b c7c06537b78123de
 cb7472ebf86a801d cc4f90c34dc82b18 ccc2de5407f0b248 cf96752f3f331088
-d1431d860b9f4f9f d9eae8f569b22a0b db75db4da1cd53fd ddbd3349eb3a8e10
-e2b4c2cd06694258 e840a556b6d87a52 e8f2ed7569e503bd e969cf86553a4e64
-ec353e0459670f0b ecff9d4866de8089 ef2e9c67b244c499 f3cf7a16576d97c4
-f9d2e8bf0c3996e0 f9f4fb8408af37c9 fa5932b0b777a54f fb45c83e3a4dd8d8
-fc493d8d1d00b0b3 fd3d15db6d964346 fe502ff31abba977
+d1431d860b9f4f9f d24ff773cbf9f9ac d9eae8f569b22a0b db75db4da1cd53fd
+ddbd3349eb3a8e10 e2b4c2cd06694258 e840a556b6d87a52 e8f2ed7569e503bd
+e969cf86553a4e64 ec353e0459670f0b ecff9d4866de8089 ef2e9c67b244c499
+f3cf7a16576d97c4 f9d2e8bf0c3996e0 f9f4fb8408af37c9 fa5932b0b777a54f
+fb45c83e3a4dd8d8 fc493d8d1d00b0b3 fd3d15db6d964346 fe502ff31abba977
 """.split())
 
 PARAGRAPH_HASHES = frozenset("""
@@ -205,10 +206,10 @@ PARAGRAPH_HASHES = frozenset("""
 2bfd6e98650a229d 2fdf390bbc55d931 362151e15cefb3ea 40f1da94b891aa4d
 458402cd00d26e94 4628bb2f8749c651 48358f6aadaf7ab1 4badd630e88d5c2c
 52012cb05b437941 5637cc77166140bb 5c5696c6cffaabb0 5cbd2f5a46d29e5c
-71c0c7f7989301e0 823c045250cc96aa 98620343d65e37ae 9d998fbf44912290
-9fbe272735f1f23a a74cbe49a4b79fe3 a9f7e1dd8959c98f af83faf042e268a2
-bc6cbb0cae225603 c92c0449d187ca80 dfcdc86d0597c399 e663e1f3e7991c7e
-f3c107d8d96a6441 f83152913db0b519 fe8cf073a652b4e9
+71c0c7f7989301e0 7b65adbe51abf467 823c045250cc96aa 98620343d65e37ae
+9d998fbf44912290 9fbe272735f1f23a a74cbe49a4b79fe3 a9f7e1dd8959c98f
+af83faf042e268a2 bc6cbb0cae225603 c92c0449d187ca80 dfcdc86d0597c399
+e663e1f3e7991c7e f3c107d8d96a6441 f83152913db0b519 fe8cf073a652b4e9
 """.split())
 
 # (one per paragraph, a blank line between; wrapped)
@@ -302,6 +303,11 @@ c9049150b808dba3620155ef466efa51466ec76e38092835d3fbb76abe09d60f385c8e7f
 4e5ff905b8d3b9773928c6328e489ebbca97e671d9a7a5bab76aaff6b977a5ba0f31b481
 b9770fc4a1b7fa518810d6acb2e50d22ea32e0e4593559f5fb5a71757f9a10c23e1e6567
 702f572471b9
+
+c7a7b97778618d33663ea3b136c548293d6e308f1eb700d96201ca97c44b925188c7ca97
+38a98aca06955adb66a481f7a973a610966f51a47585663ee161482911468a4e8acab808
+acfe5ea48cf69a43a73e79f0f4bf1e114829021e5200b97760be2e32bec1fa51992a5724
+3d6eaeb2b97747a428391cc2
 
 e4d64c14bda0bf0b7175ce600d5e6983a3302affb977acbaab5a2006b427b76a15eaca97
 5c73923f8d3ca316f379b76abb29ca97a81bbd49d987254bf25423cc4813fc1cca9789b6

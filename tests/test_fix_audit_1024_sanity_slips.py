@@ -1,4 +1,4 @@
-"""Audit 2026-10-24, group sanity-slips: `taxjson sanity` (B17, B18,
+"""Audit 2026-10-24, group sanity-slips: `tjs sanity` (B17, B18,
 B19), IB's dividends report (B24, B25, B26, B31), the slip-key salt
 (A43) and reconcile-slips (B47). Synthetic data and fake ids only."""
 import csv
@@ -124,7 +124,7 @@ class TestSanity(unittest.TestCase):
             self.assertIsNone(doc, "no clean verdict on unreadable books")
             self.assertIn("work/margin_base.json", err)
             self.assertIn("cannot be read", err)
-            self.assertIn("taxjson run", err)
+            self.assertIn("tjs run", err)
         # The library call says why; the lenient read stays empty.
         with tempfile.TemporaryDirectory() as td:
             cache = Path(td)

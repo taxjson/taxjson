@@ -1,4 +1,4 @@
-"""`taxjson checklist`'s default view (docs/output-style.md): the list
+"""`tjs checklist`'s default view (docs/output-style.md): the list
 (every step with its state; an open step's commands; how and why for
 the next step and those needing attention), then the summary: the
 counts per section as a table, one `! ` line per item needing attention
@@ -126,7 +126,7 @@ class TestChecklistDefault(unittest.TestCase):
         self.assertTrue(line.endswith("... — tjs find-missing-history"))
         self.assertEqual(
             cl._act_line("27 check-dates", "1 impossible date(s) — "
-                         "`taxjson check-dates`", "tjs check-dates"),
+                         "`tjs check-dates`", "tjs check-dates"),
             "! 27 check-dates: 1 impossible date(s) — tjs check-dates")
 
 

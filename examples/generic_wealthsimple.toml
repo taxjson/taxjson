@@ -44,7 +44,7 @@ currency = "CAD"
 #                              # securities; coins go in a crypto = true
 #                              # account.
 
-# Optional: the real broker. `taxjson run` parses each named broker's
+# Optional: the real broker. `tjs run` parses each named broker's
 # generic files on their own and the fees report shows them as
 # generic:wealthsimple (instead of one "generic" row for every broker).
 [broker]

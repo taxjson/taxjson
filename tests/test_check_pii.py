@@ -352,8 +352,8 @@ class TestLowRoundGaps(_Sandbox):
         hits = [
             "TOKEN" + "=" + tok + "x" * 4,
             "Api_Key: " + tok + "x" * 4,
-            "taxjson fetch --refresh" + "-token " + tok,
-            "taxjson fetch --flex" + "-token=" + digits,
+            "tjs fetch --refresh" + "-token " + tok,
+            "tjs fetch --flex" + "-token=" + digits,
             "export QUESTRADE_REFRESH" + "_TOKEN=" + tok,
             "IBKR_FLEX" + "_TOKEN='" + digits + "'",
             "my_flex" + "_token = " + tok,
@@ -365,8 +365,8 @@ class TestLowRoundGaps(_Sandbox):
             self.assertNotIn(tok, r.stdout)
             self.assertNotIn(digits, r.stdout)
         misses = [
-            "taxjson fetch --refresh" + "-token YOUR_REFRESH_TOKEN",
-            "taxjson fetch --flex" + "-token \"$IBKR_FLEX_TOKEN\"",
+            "tjs fetch --refresh" + "-token YOUR_REFRESH_TOKEN",
+            "tjs fetch --flex" + "-token \"$IBKR_FLEX_TOKEN\"",
             "export QUESTRADE_REFRESH" + "_TOKEN=\"$(pass show qt)\"",
             "IBKR_FLEX" + "_TOKEN=<your token>",
             "--refresh" + "-token short",

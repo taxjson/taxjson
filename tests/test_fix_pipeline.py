@@ -106,7 +106,7 @@ class TestTtStemCollision(unittest.TestCase):
 
 
 class TestAccountTypeCheckedEverywhere(unittest.TestCase):
-    """R1-268: validate_config ran only in `taxjson run`. An account
+    """R1-268: validate_config ran only in `tjs run`. An account
     type edited after the run ("Taxable") matched neither partition, so
     estimate / instalments / sum / form-export / close-year / carryover
     dropped the account with rc 0 — close-year even locked the wrong

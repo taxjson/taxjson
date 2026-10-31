@@ -1,4 +1,4 @@
-"""Backlog fix round 6 of 2026-10-29, the `redact` group: `taxjson
+"""Backlog fix round 6 of 2026-10-29, the `redact` group: `tjs
 redact` of a year folder bundles the close-year record its estimate
 carries from (prior/<name>, backlog TJ-0581); the record's folder paths
 of this computer are redacted too, and `--check` of a copy names one
@@ -30,7 +30,7 @@ PERSON = "Casey Example"
 
 
 def tjs(root, *args):
-    """`taxjson -C root <args>`, captured at width 0, offline."""
+    """`tjs -C root <args>`, captured at width 0, offline."""
     env = dict(os.environ, TAXJSON_OFFLINE="1", TAXJSON_WIDTH="0")
     return subprocess.run(
         python_module_argv("taxjson.bin.taxjson_run",

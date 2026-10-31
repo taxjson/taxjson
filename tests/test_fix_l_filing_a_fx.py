@@ -1,4 +1,4 @@
-"""Low-round fixes and pins, `taxjson fx-cash` (bin/taxjson_fx_cash.py):
+"""Low-round fixes and pins, `tjs fx-cash` (bin/taxjson_fx_cash.py):
 S033-09 (a net-debit sale pays currency), S033-05 (same-day clock
 order), S033-06 (only the tax year's disposals count)."""
 import unittest

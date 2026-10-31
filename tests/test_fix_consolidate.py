@@ -8,7 +8,7 @@
   [carryover] claimed (claimed_losses.txt), [[capital_gains_dividends]]
   (capital_gains_dividends.map) and [[distributions]] (distributions.map),
   checked by every config reader.
-- `taxjson migrate` converts an old project (appending, never rewriting;
+- `tjs migrate` converts an old project (appending, never rewriting;
   old files renamed *.migrated); while an old file is present every other
   command stops (exit 2).
 
@@ -191,7 +191,7 @@ class TestTickerMapLookups(unittest.TestCase):
             (Path(td) / "yf_ticker.map").write_text("A.TO B\n")
             with self.assertRaises(LegacyMapFileError) as cm:
                 load_yf_map([td])
-            self.assertIn("taxjson migrate", str(cm.exception))
+            self.assertIn("tjs migrate", str(cm.exception))
             (Path(td) / "yf_ticker.map").unlink()
             (Path(td) / "crypto_ticker.map").write_text("FOO F1\n")
             with self.assertRaises(LegacyMapFileError):
@@ -286,7 +286,7 @@ class TestLegacyRefusal(unittest.TestCase):
                     r = cli(root, *args)
                     self.assertEqual(r.returncode, 2, (name, args, r.stderr))
                     self.assertIn(name, r.stderr)
-                    self.assertIn("taxjson migrate", r.stderr)
+                    self.assertIn("tjs migrate", r.stderr)
                 (root / name).unlink()
 
     def test_migrate_with_nothing_to_do(self):

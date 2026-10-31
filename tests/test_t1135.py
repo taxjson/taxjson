@@ -3,7 +3,7 @@
 Covers: domicile classification + ticker.map T1135 overrides, the cost walk
 (baseline state, simultaneous-total threshold test, splits/renames,
 phantom openings, shorts, ADJUST), the income/gain join, report assembly,
-and the CLI end-to-end (text + JSON) including the `taxjson t1135` wrapper.
+and the CLI end-to-end (text + JSON) including the `tjs t1135` wrapper.
 """
 
 import io

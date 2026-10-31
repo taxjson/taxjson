@@ -1,7 +1,7 @@
 """Backlog group `checklist`: the checklist's core, marks, JSON and
 wording (lib/checklist.py, taxjson_run.cmd_checklist). Each test cites
 its backlog id. Synthetic projects only (tests/test_checklist._project,
-`taxjson init --demo` / `--single`)."""
+`tjs init --demo` / `--single`)."""
 import json
 import subprocess
 import tempfile
@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _tjs(*a, cwd=None, width=0):
-    """`taxjson ...` as a child of THIS tree's code (`width`: as
+    """`tjs ...` as a child of THIS tree's code (`width`: as
     TAXJSON_WIDTH; 120 is a pipe's)."""
     cmd = python_module_argv("taxjson.bin.taxjson_run", list(a))
     return subprocess.run(cmd, cwd=cwd or REPO_ROOT, capture_output=True,
@@ -32,7 +32,7 @@ def _tjs(*a, cwd=None, width=0):
 class TestInitHintsRunTheChecks(unittest.TestCase):
     def test_tj0011_init_and_new_year_name_checklist_run(self):
         """TJ-0011: init --demo's Try block, init's NEXT STEPS and
-        new-year's said plain `taxjson checklist` runs the checks; it
+        new-year's said plain `tjs checklist` runs the checks; it
         only shows the kept verdicts (on a first project, every step
         unchecked). Each now names `checklist --run`."""
         with tempfile.TemporaryDirectory() as td:
@@ -40,20 +40,20 @@ class TestInitHintsRunTheChecks(unittest.TestCase):
             demo = _tjs("init", "--demo", str(top / "demo"), cwd=td)
             self.assertEqual(demo.returncode, 0, demo.stderr)
             self.assertRegex(demo.stdout,
-                             r"(?m)^  taxjson checklist --run +# every step")
-            self.assertNotRegex(demo.stdout, r"(?m)^  taxjson checklist +#")
+                             r"(?m)^  tjs checklist --run +# every step")
+            self.assertNotRegex(demo.stdout, r"(?m)^  tjs checklist +#")
             single = _tjs("init", "--single", "--country", "canada",
                           "--year", "2024", str(top / "single"), cwd=td)
             self.assertEqual(single.returncode, 0, single.stderr)
             self.assertRegex(single.stdout,
-                             r"(?m)^  4\. taxjson -C \S+ checklist --run$")
+                             r"(?m)^  4\. tjs -C \S+ checklist --run$")
             multi = _tjs("init", "--country", "canada", "--year", "2024",
                          str(top / "multi"), cwd=td)
             self.assertEqual(multi.returncode, 0, multi.stderr)
             ny = _tjs("-C", str(top / "multi"), "new-year", "2025", cwd=td)
             self.assertEqual(ny.returncode, 0, ny.stderr)
             self.assertRegex(ny.stdout,
-                             r"(?m)^  3\. taxjson -C \S+ checklist --run$")
+                             r"(?m)^  3\. tjs -C \S+ checklist --run$")
             for r in (single, ny):
                 self.assertNotRegex(r.stdout, r"(?m)checklist$")
         guide = (REPO_ROOT / "docs" / "getting-started.md").read_text()
@@ -89,12 +89,12 @@ class TestJsonSchemaVersions(unittest.TestCase):
             self.assertEqual(yrs["years"][0]["marks"],
                              {"done": 0, "forced": 1})
         settings = (REPO_ROOT / "docs" / "settings.md").read_text()
-        years = settings.split("## `taxjson years --json`", 1)[1]
+        years = settings.split("## `tjs years --json`", 1)[1]
         years = years.split("\n## ", 1)[0]
         self.assertIn('`marks` (`{"done", "forced"}`', years)
         self.assertNotIn('"skipped"', years)
         self.assertIn("while `schema_version` is 2", years)
-        ck = settings.split("## `taxjson checklist --json`", 1)[1]
+        ck = settings.split("## `tjs checklist --json`", 1)[1]
         self.assertIn("`schema_version` is 3", ck.split("\n## ", 1)[0])
         upgrading = (REPO_ROOT / "docs" / "upgrading.md").read_text()
         self.assertIn("`schema_version` 3", upgrading.split(
@@ -118,7 +118,7 @@ class TestSkipNamesItsReplacement(unittest.TestCase):
                 self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
                 self.assertNotIn("unrecognized arguments", r.stderr)
                 self.assertIn("--skip was replaced by --done --force: "
-                              "`taxjson checklist --done t5008,fx-cash "
+                              "`tjs checklist --done t5008,fx-cash "
                               "--force`", r.stderr)
                 self.assertFalse((where / cl.STATE_FILE).exists())
             h = _tjs("checklist", "--help", cwd=td)
@@ -130,7 +130,7 @@ class TestSkipNamesItsReplacement(unittest.TestCase):
 class TestMarkConfirmations(unittest.TestCase):
     def test_tj0174_confirmations_name_no_program(self):
         """TJ-0174 (the part left open): `--done` / `--undo` / `--reset`
-        confirmations started `taxjson checklist: ...` (output-style: a
+        confirmations started `tjs checklist: ...` (output-style: a
         line never starts with a program name). Now the step first, the
         later lines flush-left, within 120 columns piped."""
         from taxjson.lib import out
@@ -275,7 +275,7 @@ class TestNotAGitRepository(unittest.TestCase):
 class TestExportCoverageCount(unittest.TestCase):
     def test_tj0114_count_says_whose_rows_the_list_is_the_account(self):
         """TJ-0114: export-coverage said 'with 3 open position(s) —
-        `taxjson list margin 2025-06-02` lists them' and that list
+        `tjs list margin 2025-06-02` lists them' and that list
         showed 5 (the account's .tt OPENING positions too): the count is
         the broker's rows', the list every source's. The text now says
         which is which."""
@@ -285,7 +285,7 @@ class TestExportCoverageCount(unittest.TestCase):
                    positions=[("ZZJ.TO", 10.0), ("ZZK.TO", 5.0)])
         text = EC.detail([g])
         self.assertIn("Questrade exports for margin end 2025-06-02 with 2 "
-                      "open position(s) in Questrade's rows — `taxjson "
+                      "open position(s) in Questrade's rows — `tjs "
                       "list margin 2025-06-02` lists the account's "
                       "positions on that day (every source)", text)
         self.assertNotIn("lists them", text)
@@ -293,9 +293,9 @@ class TestExportCoverageCount(unittest.TestCase):
 
 class TestNoBooksBlockedLine(unittest.TestCase):
     def test_tj0178_fresh_project_one_blocked_line(self):
-        """TJ-0178: a fresh project's checklist (no `taxjson run` yet)
+        """TJ-0178: a fresh project's checklist (no `tjs run` yet)
         had eleven differently worded blocked lines that did not group,
-        several ending '— run `taxjson run` — tjs run'. Every check
+        several ending '— run `tjs run` — tjs run'. Every check
         blocked for the run now says 'no books yet' alike: one `! `
         line, the command said once."""
         with tempfile.TemporaryDirectory() as td:
@@ -311,7 +311,7 @@ class TestNoBooksBlockedLine(unittest.TestCase):
                              r"5 export-coverage \+\d+ more\): no books "
                              r"yet — tjs run$")
             for ln in acts:
-                self.assertNotIn("`taxjson run` — tjs run", ln)
+                self.assertNotIn("`tjs run` — tjs run", ln)
             doc = json.loads(_tjs("-C", str(top / "2024"), "checklist",
                                   "--json", cwd=td).stdout)
             details = {s["detail"] for s in doc["steps"]
@@ -319,21 +319,21 @@ class TestNoBooksBlockedLine(unittest.TestCase):
             self.assertEqual(details, {cl.NO_BOOKS})
 
     def test_tj0178_act_line_says_the_command_once(self):
-        """TJ-0178: a detail closing on "— run `taxjson run` (first)"
+        """TJ-0178: a detail closing on "— run `tjs run` (first)"
         naming the line's own command loses it, as one closing on a bare
         "— `taxjson X`" did; another command's pointer stays."""
         self.assertEqual(
             cl._act_line("16 crypto-sends (blocked)", "no crypto transfer "
-                         "evidence in work/ — run `taxjson run`", "tjs run"),
+                         "evidence in work/ — run `tjs run`", "tjs run"),
             "! 16 crypto-sends (blocked): no crypto transfer evidence in "
             "work/ — tjs run")
         self.assertEqual(
             cl._act_line("28 audit (blocked)", "no computed books in work/ "
-                         "— run `taxjson run` first.", "tjs run"),
+                         "— run `tjs run` first.", "tjs run"),
             "! 28 audit (blocked): no computed books in work/ — tjs run")
         self.assertEqual(
-            cl._act_line("9 x", "stale — run `taxjson sanity`", "tjs run"),
-            "! 9 x: stale — run `taxjson sanity` — tjs run")
+            cl._act_line("9 x", "stale — run `tjs sanity`", "tjs run"),
+            "! 9 x: stale — run `tjs sanity` — tjs run")
 
 
 class TestUsWording(unittest.TestCase):

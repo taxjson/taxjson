@@ -3,7 +3,7 @@
 A s. 85.1(5) rollover across currencies (QAU.TO [CAD] → QRG.US [USD])
 is modeled as a SPLIT rename, so the native-currency book would have a
 CAD pool receiving USD trades — taxjson-gains rightly refuses, but that
-refusal used to kill the WHOLE `taxjson run` with a traceback. The
+refusal used to kill the WHOLE `tjs run` with a traceback. The
 pipeline now detects the condition
 (rename-aware) and skips the raw stage for that account with a warning;
 the converted, tax-authoritative books build normally.

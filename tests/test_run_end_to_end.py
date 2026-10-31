@@ -1,4 +1,4 @@
-"""End-to-end `taxjson run` on a scaffolded project.
+"""End-to-end `tjs run` on a scaffolded project.
 
 The 2026-07b audit found cmd_run itself — config→stage wiring, stage
 ordering, cache markers, the wash second pass, artifact layout — was

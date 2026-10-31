@@ -313,7 +313,7 @@ _HOME = {"canada": ("TO", "CAD"), "usa": ("US", "USD")}
 
 
 class TestRenamesCommand(unittest.TestCase):
-    """`taxjson renames`, `run --strict` and the ticker.map declarations
+    """`tjs renames`, `run --strict` and the ticker.map declarations
     on a full run (both countries: the same rule in each)."""
 
     @rule("CA-ACB-RENAME")

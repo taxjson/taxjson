@@ -280,7 +280,7 @@ def set_ticker_map(path) -> None:
     """Load the ticker.map whose joins make a parser's identity hint
     moot (re-audit A2-1056): a ticker-change or listing hint for a pair
     the map already pools is not printed. None clears it. A map that
-    does not parse is ignored here (`taxjson run` refuses it up front)."""
+    does not parse is ignored here (`tjs run` refuses it up front)."""
     global _TICKER_JOINS, _TICKER_NAMED, _TICKER_MENTIONED, _TICKER_DISTINCT
     global _TICKER_PATH
     _TICKER_PATH = None if path is None else Path(path)
@@ -311,7 +311,7 @@ def ticker_map_distinct_pairs() -> frozenset:
 
 def ticker_map_file() -> Optional[Path]:
     """The ticker.map set_ticker_map loaded (the parser's --ticker-map,
-    which `taxjson run` passes), or None."""
+    which `tjs run` passes), or None."""
     return _TICKER_PATH
 
 
@@ -370,7 +370,7 @@ def ticker_map_joins(a: str, b: str) -> bool:
     return False
 
 
-# The ticker changes the project's .tt RENAME lines declare, as `taxjson
+# The ticker changes the project's .tt RENAME lines declare, as `tjs
 # run` passes them (taxjson-brokerage --declared-renames): {(OLD, NEW):
 # the line's place, inputs/<acct>/<file>.tt:<n>}. Empty = none given.
 _DECLARED_RENAMES: Dict[Tuple[str, str], str] = {}
@@ -378,7 +378,7 @@ _DECLARED_RENAMES: Dict[Tuple[str, str], str] = {}
 
 def set_declared_renames(path) -> None:
     """Load the declared ticker changes (one `OLD<TAB>NEW<TAB>WHERE` line
-    each, the file `taxjson run` writes: work/declared_renames.list)
+    each, the file `tjs run` writes: work/declared_renames.list)
     that answer a parser's look-alike rename hint. None clears them."""
     _DECLARED_RENAMES.clear()
     if path is None:
@@ -415,7 +415,7 @@ def answered_rename_note(where: str, broker: str, old: str, new: str,
                          declared_at: str) -> str:
     """The parse's note in place of the look-alike rename ATTENTION when
     a .tt RENAME line already declares the change (never the hint's
-    wording: `taxjson renames` reads that as an open hint)."""
+    wording: `tjs renames` reads that as an open hint)."""
     return (f"note: {where}: {broker} symbol {old} stops and {new} starts "
             f"with the same description — the ticker change is answered "
             f"by {declared_at}.")
@@ -866,7 +866,7 @@ class BaseBrokerage:
     # (backlog TJ-0613). Empty: every plan the broker names is a shelter.
     plans_taxed: frozenset = frozenset()
     # The caller keeps the TRANSFER rows aside and decides what an
-    # incoming one costs (`taxjson run`, lib/transfer_in: covered by a
+    # incoming one costs (`tjs run`, lib/transfer_in: covered by a
     # .tt line, the broker's stated book value, or no cost — one
     # ATTENTION there): a parser's own transfer-in caveat stays quiet.
     transfer_costs_checked_downstream: bool = False
@@ -1099,7 +1099,7 @@ class BaseBrokerage:
                       no_cash: str = '') -> Dict[str, Any]:
         """One shared shape for a return-of-capital row: an ADJUST that
         REDUCES ACB by the cash received (net_amount = -amount), tagged
-        type='roc' so `taxjson roc`/`roc-sum` can report it. `amount` is
+        type='roc' so `tjs roc`/`roc-sum` can report it. `amount` is
         signed cash received — positive for a normal ROC posting, negative
         for a broker reversal row (which then nets out as a positive
         ADJUST). ROC must NOT be booked as dividend income: that

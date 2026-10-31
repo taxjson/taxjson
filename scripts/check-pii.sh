@@ -14,7 +14,7 @@
 #   1. Generic, below: broker account-id shapes, home paths, e-mail
 #      addresses not on the allowlist, credential-looking strings.
 #   2. Private denylist ~/.config/taxjson/pii-denylist — one POSIX
-#      extended regex per line (also read by `taxjson redact`, so keep
+#      extended regex per line (also read by `tjs redact`, so keep
 #      to the common dialect: literals, [], (), |, +, *, {}), # comments —
 #      holding YOUR real account numbers, names and addresses. It lives
 #      outside every repository, so the strings it guards against are

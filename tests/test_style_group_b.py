@@ -119,7 +119,7 @@ class TestBothCountries(unittest.TestCase):
         r = project("canada").run("sum", "--details")
         block = r.stdout.split("FOR THE RETURN")[1]
         self.assertIn("RETURN ", block)
-        self.assertIn("- Per-security rows: `taxjson form-export`", block)
+        self.assertIn("- Per-security rows: `tjs form-export`", block)
         self.assertNotIn("NOTE:", r.stdout)
 
     def test_form_export_row_notes_under_the_table(self):
@@ -182,7 +182,7 @@ class TestBothCountries(unittest.TestCase):
                 d = p.run("check-filed", TAXJSON_WIDTH=0)
                 self.assertEqual([ln for ln in d.stderr.splitlines()
                                   if "filed 2024" in ln][0],
-                                 "taxjson check-filed: warning: "
+                                 "tjs check-filed: warning: "
                                  "filed 2024 DRIFTED vs 2024.json")
 
 

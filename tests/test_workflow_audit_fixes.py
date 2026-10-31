@@ -188,7 +188,7 @@ class TestChecklistHints(unittest.TestCase):
         r = tj(year, "checklist", "--run", "--only", "inputs-frozen", check=False)
         text = " ".join(r.stdout.split())
         self.assertIn("Next (step 4, inputs-frozen): no books yet — "
-                      "run `taxjson run`", text)
+                      "run `tjs run`", text)
         self.assertNotIn("download the exports", text)
         tj(year, "run", "--no-input")
         r = tj(year, "checklist", "--run", "--only", "inputs-frozen", check=False)

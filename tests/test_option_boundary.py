@@ -1,4 +1,4 @@
-"""`taxjson option-boundary` — written options across a year boundary and
+"""`tjs option-boundary` — written options across a year boundary and
 the amendment instruction (ITA s.49(1)-(4))."""
 import json
 import subprocess

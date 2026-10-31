@@ -10,7 +10,7 @@ JOURNAL line (fix/journal-books).
   JOURNAL line made them: an RBC gambit booked as a buy of one line and
   a sale of the other on one day, its TFR legs dated the settlement day,
   is no short with a TOBASE line or with no line at all.
-- The "NOT in `taxjson sum`" warning is said only for sales the gains
+- The "NOT in `tjs sum`" warning is said only for sales the gains
   files lack (lib/first_run.engine_booking).
 
 Every fixture is SYNTHETIC: invented QZ* / ZZ* names and symbols, fake
@@ -386,7 +386,7 @@ class TestJournalDetection(unittest.TestCase):
             self.assertFalse(js.on('m', '2025-05-08', 'QZD.TO'))
 
 
-# --------------------------------------------- 6. NOT in `taxjson sum`
+# --------------------------------------------- 6. NOT in `tjs sum`
 
 def _row(sales, sym='ZZQ.TO', acct='margin'):
     c = MH.MissingHistoryCandidate(symbol=sym, account=acct, currency='CAD',
@@ -448,9 +448,9 @@ class TestEngineBooking(unittest.TestCase):
                    {'symbol': 'ZZQ.TO', 'account': 'm',
                     'booked': FR.BOOKED_MATCHED}]}
         text = ' '.join(' '.join(FR.render(doc, width_=0)).split())
-        self.assertIn('ZZS.TO (m). Those sales are NOT in `taxjson sum`',
+        self.assertIn('ZZS.TO (m). Those sales are NOT in `tjs sum`',
                       text)
-        self.assertIn('ZZR.TO (m). `taxjson sum` books those sales as short '
+        self.assertIn('ZZR.TO (m). `tjs sum` books those sales as short '
                       'sales closed by a later purchase', text)
         self.assertIn('Info: 1 position read short in 2025', text)
         self.assertEqual(text.count('NOT in'), 1)
@@ -494,9 +494,9 @@ class TestNotInSumEndToEnd(unittest.TestCase):
     def test_run_summary(self):
         out = ' '.join((self.r.stdout + self.r.stderr).split())
         self.assertEqual(self.r.returncode, 0, out[-3000:])
-        self.assertIn('ZZO.TO (margin). Those sales are NOT in `taxjson '
+        self.assertIn('ZZO.TO (margin). Those sales are NOT in `tjs '
                       'sum`', out)
-        self.assertIn('ZZC.TO (margin). `taxjson sum` books those sales as '
+        self.assertIn('ZZC.TO (margin). `tjs sum` books those sales as '
                       'short sales closed by a later purchase', out)
         doc = json.loads((self.root / 'reports' /
                           FR.SUMMARY_FILE).read_text())

@@ -46,7 +46,7 @@ def python_module_argv(module: str, args: Sequence[str] = (), *,
     """The argv that runs `python -m <module> ARGS` in a child process
     WITHOUT the current directory on sys.path. A plain `python -m`
     imports from the cwd first, so a json.py or csv.py planted in a
-    project folder ran inside `taxjson run`'s child processes (2026-10
+    project folder ran inside `tjs run`'s child processes (2026-10
     security review H1). Python 3.11+: `-P`; older: the `-c` bootstrap
     above. Every taxjson child Python process is launched through here
     (`legacy` forces the bootstrap, for its test)."""

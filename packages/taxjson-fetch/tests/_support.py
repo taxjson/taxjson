@@ -3,7 +3,7 @@
 Imported FIRST by every test module. The tests run either against an
 installed plugin (`pip install --no-deps -e packages/taxjson-fetch`) or straight
 from a checkout (scripts/ci.sh: PYTHONPATH only). In the second case the
-core's `taxjson fetch` cannot see the plugin — it finds fetchers by
+core's `tjs fetch` cannot see the plugin — it finds fetchers by
 entry point, which only an installed distribution declares — so this
 module writes a throwaway `.dist-info` declaring the same entry point
 and puts it on sys.path and PYTHONPATH (the CLI tests spawn

@@ -1,4 +1,4 @@
-"""`taxjson tax-logic`: a short, plain statement of every rule taxjson
+"""`tjs tax-logic`: a short, plain statement of every rule taxjson
 applies for one country, with the project's own settings filled in.
 
 tax-logic is the SPEC the code is compared against. Each statement is a
@@ -141,7 +141,7 @@ PARTITION_RULES = frozenset({
     "CA-INC-DATE-ROC-TRUST",  # trust ROC on the record date (D4)
     "CA-INC-DATE-TRUST",      # trust distribution by record date (D5)
     "CA-INC-06",       # T5 box 18 capital-gains dividends (map; R1-62)
-    "CA-AMT-01",       # minimum tax (s.127.5) and `taxjson amt`
+    "CA-AMT-01",       # minimum tax (s.127.5) and `tjs amt`
     "CA-AMT-04",       # s.120.2 carryover recovered in the estimate
     "CA-CARRY-01",     # close-year records the net capital loss + AMT
     # United States
@@ -269,7 +269,7 @@ def _sheltered_corp_rule(rid: str, mode: str, plans: str, loss_rule: str,
                 "whole cost, a merger's new shares taking the old shares' "
                 "cost; one Info line per run names each, and it is never "
                 "pending. " + why + " " + units + " An election saved with "
-                "`taxjson elect` wins.", keys=("sheltered_elections",))
+                "`tjs elect` wins.", keys=("sheltered_elections",))
 
 
 def _ownership(country: str) -> List[Rule]:
@@ -321,7 +321,7 @@ def _ownership(country: str) -> List[Rule]:
              f"\"{country}\"); taxjson never assumes one, and a spelling "
              f"other than canada, ca, usa or us is refused. Books built "
              f"under the other country (the country was changed) are "
-             f"refused by every report until `taxjson run` rebuilds "
+             f"refused by every report until `tjs run` rebuilds "
              f"them.",
              keys=("country",)),
         Rule(f"{p}-CTRY-02",
@@ -391,7 +391,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  + (f", for contracts written from {start}" if start else "")
                  + (" (option_grant_timing_since" if since_set else
                     " (defaults to the project year; set "
-                    "option_grant_timing_since once — `taxjson new-year` "
+                    "option_grant_timing_since once — `tjs new-year` "
                     "writes the previous year's default into the new "
                     "project") + ").", keys=tk),
             Rule("CA-OPT-02", "Earlier contracts keep close timing.",
@@ -401,13 +401,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "(bought back, expired or cash-settled) has its premium "
                  "taxed in this year, which is right only if its write "
                  "year's return did not report it: with no filed-year "
-                 "lock recording how that year was filed, `taxjson run` "
-                 "warns with the premium at stake, `taxjson "
+                 "lock recording how that year was filed, `tjs run` "
+                 "warns with the premium at stake, `tjs "
                  "option-boundary` asks, and the checklist's "
                  "option-boundary step needs attention until "
                  "option_grant_timing_since is lowered to the write year "
                  "(the premium then stays there) or the step is marked "
-                 "done (`taxjson checklist --done option-boundary`: the "
+                 "done (`tjs checklist --done option-boundary`: the "
                  "transition is right).", keys=tk),
             Rule("CA-OPT-03",
                  "Buying it back: the cost is a capital loss in the "
@@ -551,7 +551,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "its same-day buy-back is a write and a buy-back, and a "
                  "sale listed before a same-day rebuy is made from the "
                  "shares held before it. A Questrade file written by "
-                 "`taxjson fetch` (the taxjson-fetch plugin) keeps the "
+                 "`tjs fetch` (the taxjson-fetch plugin) keeps the "
                  "API's row order within a day, "
                  "and a re-fetch merge keeps it too. A newest-first export "
                  "is read "
@@ -682,9 +682,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "row's date and currency pair — taxjson carries no "
                  "built-in rate (the stand-alone converters accept your "
                  "own rate with --default-rate). "
-                 "`taxjson fx-cash` counts a cash event with no rate "
+                 "`tjs fx-cash` counts a cash event with no rate "
                  "row in those 5 days as unrated (named in its report), "
-                 "and `taxjson crypto-sends` leaves a send (and a "
+                 "and `tjs crypto-sends` leaves a send (and a "
                  "stablecoin pool row) with none unpriced.",
                  cont=True),
             Rule("CA-FX-04",
@@ -706,7 +706,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  cont=True),
             Rule("CA-FX-07",
                  "Gains on holding foreign cash (s.39(1.1)) are NOT in the "
-                 "Schedule 3 totals; `taxjson fx-cash` applies one method: "
+                 "Schedule 3 totals; `tjs fx-cash` applies one method: "
                  "every spend of a foreign currency is a disposition, with "
                  "one pooled average cost per currency across the taxable "
                  "accounts; a conversion is at the Canadian-dollar amount "
@@ -787,7 +787,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "nets against that order. A refund that names no single "
                  "trade stays a separate fee, with a note.", cont=True),
             Rule("CA-ACB-03",
-                 "The single pool needs a full `taxjson run` (not "
+                 "The single pool needs a full `tjs run` (not "
                  "`--account`, and no elections pending).", cont=True),
             Rule("CA-ACB-04",
                  "Identical property is the same symbol with its listing "
@@ -854,7 +854,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "from its own descriptions only, a designator after "
                  "COMMON STOCK kept. "
                  "Inferred codes are listed in "
-                 "one note per account and by `taxjson transfers`; any "
+                 "one note per account and by `tjs transfers`; any "
                  "ticker.map rule naming the code (a rename, DELETE, "
                  "DISTINCT, a dated RENAME) wins and is recorded as such; "
                  "a code nothing identifies stays a security of its own "
@@ -875,7 +875,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "the date is a different security unless the declaration "
                  "says it is the renamed shares (`late=fold`, booked as "
                  "NEW); `late=separate` records another company reusing "
-                 "the ticker. Such trades are listed by `taxjson renames` "
+                 "the ticker. Such trades are listed by `tjs renames` "
                  "and stop `run --strict` until declared (a short one "
                  "makes is no purchase missing from the files: "
                  "`find-missing-history` names the declaration as its "
@@ -906,7 +906,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "A declaration no account's books carry (no account of "
                  "its kind holds OLD before the date: a typo of the "
                  "symbol, a late date) books nothing: a Warning names "
-                 "the line, `taxjson renames` lists it and `run "
+                 "the line, `tjs renames` lists it and `run "
                  "--strict` stops. "
                  "Declarations that cannot all be true stop the "
                  "run naming the lines: OLD renamed to two symbols, one "
@@ -1052,14 +1052,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "(a transfer-out paired with a transfer-in as one move "
                  "of your own, CA-ACB-TRANSFER-BV), or of coins between "
                  "two of your taxable crypto accounts (a send paired with "
-                 "its arrival by `taxjson crypto-sends`), is not a "
+                 "its arrival by `tjs crypto-sends`), is not a "
                  "disposition "
                  "and not an acquisition: the ACB stays one pool "
                  "(CA-ACB-01), so no figure you file changes, and neither "
                  "leg is a purchase for the superficial-loss window. Each "
                  "account's books still carry it — the units leave the "
                  "sending account and join the receiving one at the start "
-                 "of the earlier row's day — so `taxjson list`, `sanity`, "
+                 "of the earlier row's day — so `tjs list`, `sanity`, "
                  "`find-missing-history` and the checklist see the "
                  "receiving account hold them. In one account's own "
                  "baseline (<account>.sum) the units leave the sender at "
@@ -1117,7 +1117,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "TSX line and its NYSE line, a US-dollar and a "
                  "Canadian-dollar line) are identical property: one ACB "
                  "pool, one security for the superficial-loss rule. "
-                 "`taxjson run` joins them itself, as a ticker.map TOBASE "
+                 "`tjs run` joins them itself, as a ticker.map TOBASE "
                  "line would, when a transfer journal pairs them uniquely "
                  "(an out-leg of one and an in-leg of the other in your "
                  "accounts, the same quantity, within 5 business days, "
@@ -1192,7 +1192,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "security, arriving in another): a Warning naming both "
                  "legs and the line that books them as one, and `run "
                  "--strict` stops; anything less certain "
-                 "stays a suggestion (`taxjson ticker-map --suggest`) — "
+                 "stays a suggestion (`tjs ticker-map --suggest`) — "
                  "but two listings whose names name different companies "
                  "(no leading company word in common, nor the same "
                  "leading words once spaces and hyphens are set aside: "
@@ -1245,7 +1245,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "rename lines (GLOBAL / TOBASE / JOURNAL): it is the "
                  "listing the books hold it as. Every row of the symbol in that "
                  "broker's exports of the account takes the listing; "
-                 "each correction is a Warning, and `taxjson ticker-map "
+                 "each correction is a Warning, and `tjs ticker-map "
                  "--suggest` shows the equivalent explicit lines."),
             Rule("CA-XLIST-03",
                  "A broker's currency journal between the Canadian-dollar "
@@ -1254,7 +1254,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "JOURNAL POSITION FROM CAD BOOK VALUE: $X CNV@ r\", or "
                  "TO CAD / FROM USD: one account, one day, one name, the "
                  "same quantity) is not a disposition: the two lines are "
-                 "identical property. `taxjson run` joins them as a "
+                 "identical property. `tjs run` joins them as a "
                  "ticker.map TOBASE line would (whether the account "
                  "keeps its transfers in the books, `transfers = true`, "
                  "or aside) — one ACB pool, one "
@@ -1362,7 +1362,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "legs nor said as a restatement. The legacy "
                  "ticker.map `JOURNAL FROM TO` "
                  "line is read as `TOBASE FROM TO`, said once per run; "
-                 "`taxjson format-map --write` rewrites it."),
+                 "`tjs format-map --write` rewrites it."),
             Rule("CA-XLIST-05",
                  "Two listings are never joined on their names alone, but "
                  "a loss on one listing in a taxable account, in the tax "
@@ -1388,7 +1388,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "naming the ticker.map line that "
                  "makes them one security (`TOBASE FROM TO`, the loss "
                  "then denied) and the one that keeps them two "
-                 "(`DISTINCT A B`); `taxjson ticker-map --suggest` offers "
+                 "(`DISTINCT A B`); `tjs ticker-map --suggest` offers "
                  "the TOBASE line "
                  "and `run --strict` stops until the map has one of the "
                  "two. Nothing is denied until then; a listing with no "
@@ -1429,7 +1429,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "knows the ticker names another security today "
                  "(`reused_by=`), every row of it is a Warning, whatever "
                  "its date. A listing the master retracts (shipped in "
-                 "error) leaves the master for good, and `taxjson "
+                 "error) leaves the master for good, and `tjs "
                  "update-tobase-map` removes its line unless you edited "
                  "it. The effect of the home listing: a foreign issuer's "
                  "TSX-held units (booked under the US line) are foreign "
@@ -1448,7 +1448,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "a deliberate join being a ticker.map TOBASE line), and "
                  "neither `ticker-map --suggest`, a MAP-GAP nor the "
                  "cross-listing loss radar (CA-XLIST-05) pairs them. "
-                 "`taxjson update-tobase-map` retracts the DISTINCT lines "
+                 "`tjs update-tobase-map` retracts the DISTINCT lines "
                  "earlier versions wrote for them (unless you edited "
                  "one)."),
             Rule("CA-ACB-11",
@@ -1459,7 +1459,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "`find-missing-history --write-missing-history`; with "
                  "exports shared by every year, one record for every "
                  "year; the older missing_history.json is no longer "
-                 "read — `taxjson migrate` converts it). Sales that draw "
+                 "read — `tjs migrate` converts it). Sales that draw "
                  "on them have an unknown cost — they are listed for "
                  "manual reporting and left out of the totals, with no "
                  "superficial-loss test, until the position is fully "
@@ -1506,7 +1506,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "that date as a placeholder the run refuses until you "
                  "fill it in."),
             Rule("CA-OPEN-01",
-                 "An opening balance (`taxjson opening`, a .tt OPENING "
+                 "An opening balance (`tjs opening`, a .tt OPENING "
                  "line from a broker's positions report) sets a position "
                  "and its cost on the snapshot day: its shares and cost "
                  "join the s.47 pool (CA-ACB-01), but it is not a "
@@ -1519,7 +1519,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "(that purchase was real). The broker's book cost is "
                  "used as it is: it may leave out a superficial loss, a "
                  "return of capital or the same shares in another "
-                 "account (`taxjson sanity` compares costs)."),
+                 "account (`tjs sanity` compares costs)."),
             Rule("CA-OPEN-02",
                  "A cost the report states in another currency is "
                  "converted at the Bank of Canada rate of the snapshot day "
@@ -1650,7 +1650,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "So is a call on an adjusted option series (root + digit, "
                  "e.g. SAMPLE1) or a futures option on the loss's futures "
                  "contract, however it is spelled (never sized as 100 "
-                 "units). Nothing is denied for a flag, so `taxjson "
+                 "units). Nothing is denied for a flag, so `tjs "
                  "wash-sales` lists each one and the checklist's "
                  "wash-reviewed step stays open until you decide them.",
                  cont=True),
@@ -1755,7 +1755,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "two, or the same sale as another line (with and without "
                  "units, by trade and by settlement date), stops the run; "
                  "each position is a Warning on every run and listed with "
-                 "the denial the rule would make (`taxjson sum` FILING "
+                 "the denial the rule would make (`tjs sum` FILING "
                  "POSITIONS, `wash-sales` and its --explain trace, "
                  "`audit`, `carryover`, `handoff`, the checklist) and "
                  "noted on its Schedule 3 row in `form-export` (text, "
@@ -1775,7 +1775,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "with another bought within 30 days before or after it "
                  "(settle dates) in any of your accounts, taxable or "
                  "registered, and still held at the end of day 30 is a "
-                 "Warning of every `taxjson run` naming the pair, the "
+                 "Warning of every `tjs run` naming the pair, the "
                  "dates and the line (`--strict` never stops for it), "
                  "written to work/similar.state and listed by the "
                  "checklist's wash-reviewed step as a manual decision; "
@@ -1897,7 +1897,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "assignments' shares (marked, or at their strike) is "
                  "the leg of each, up to its quantity.", cont=True),
             Rule("CA-OPT-07",
-                 "If the premium's year was already filed, `taxjson "
+                 "If the premium's year was already filed, `tjs "
                  "option-boundary` flags the T1-ADJ, until that year's "
                  "lock (re-closed after the amendment) no longer reports "
                  "the premium. A contract this project keeps on close "
@@ -2082,11 +2082,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "or its pay date, amount or `all`) and divs-sum shows it "
                  "apart while "
                  "the estimate taxes it as a capital gain (50% inclusion, "
-                 "no gross-up or credit) and `taxjson carryover` adds it "
+                 "no gross-up or credit) and `tjs carryover` adds it "
                  "to its year's net capital gain or loss. ACB is "
                  "unchanged."),
             Rule("CA-SLIP-01",
-                 "`taxjson slip-audit` compares each T5 and T3 slip with "
+                 "`tjs slip-audit` compares each T5 and T3 slip with "
                  "the books' income of its account, box by box: T5 24/10 "
                  "and T3 49/23 with a Canadian issuer's dividends and "
                  "payments in lieu, T5 18 with [[capital_gains_dividends]] "
@@ -2291,7 +2291,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "CA-CRYPTO-02);",
                  cont=True),
             Rule("CA-CRYPTO-07",
-                 "for every other send, `taxjson crypto-sends` records "
+                 "for every other send, `tjs crypto-sends` records "
                  "whether it was your own wallet, a gift or a payment, and "
                  "writes a sale at fair value for each gift or payment to "
                  "crypto_sends.tt: the exchange's price when the row has "
@@ -2303,7 +2303,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "takes one too). A sale that cannot be priced is not "
                  "booked: it is warned about and `run --strict` stops. "
                  "When sends.json cannot be read, a crypto_sends.tt "
-                 "written from earlier decisions is not booked: `taxjson "
+                 "written from earlier decisions is not booked: `tjs "
                  "run` stops until it is fixed.",
                  cont=True),
             Rule("CA-CRYPTO-08",
@@ -2320,7 +2320,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
         ]),
         ("Reports", [
             Rule("CA-RPT-01",
-                 "`taxjson t1135`: Form T1135 is required when the total "
+                 "`tjs t1135`: Form T1135 is required when the total "
                  "cost of specified foreign property in taxable accounts "
                  "exceeds $100,000 at any time in the year. The holdings "
                  "are walked on the project's tax_date basis (settle "
@@ -2530,7 +2530,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "left out of the maximum, and the total stays settled, "
                  "as no year-end cost depends on it."),
             Rule("CA-RPT-16",
-                 "`taxjson stats` (and `taxjson win-rates`, the same "
+                 "`tjs stats` (and `tjs win-rates`, the same "
                  "trades per ticker, account or month) is a view, not a "
                  "filing number: its "
                  "win/lose statistics count each closed trade's economic "
@@ -2551,10 +2551,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "additions the ACB held first: a later sale no longer "
                  "carries them."),
             Rule("CA-RPT-03",
-                 "`taxjson estimate`: federal and provincial tax (ON, BC, "
+                 "`tjs estimate`: federal and provincial tax (ON, BC, "
                  "AB) with AMT on top of your other income, for planning "
                  "only. Its realized capital gain is the RETURN row's "
-                 "gain (`taxjson sum`), the per-disposition cents you "
+                 "gain (`tjs sum`), the per-disposition cents you "
                  "file.", keys=("province",)),
             Rule("CA-RPT-04",
                  "Canadian dividends (a Canadian issuer: its CA ISIN when "
@@ -2696,7 +2696,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "not apply then)."),
             *_ca_estimate_tables(),
             Rule("CA-AMT-01",
-                 "`taxjson amt [YEAR]`: the year's minimum tax line by "
+                 "`tjs amt [YEAR]`: the year's minimum tax line by "
                  "line (ITA s.127.5-127.55, form T691) — regular tax, the "
                  "adjusted taxable income (s.127.52) item by item, the "
                  "basic exemption (s.127.53), the rate (s.127.51), the "
@@ -2764,13 +2764,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "which.", keys=("[estimate] amt_carryover",
                                  "prior_year_record")),
             Rule("CA-RPT-10",
-                 "`taxjson carryover`: the net-capital-loss ledger in 100% "
+                 "`tjs carryover`: the net-capital-loss ledger in 100% "
                  "amounts (the inclusion rate is applied on the return); a "
                  "loss carries forward with no time limit and back up to 3 "
                  "years (form T1A). Every year is recomputed with the "
                  "project's own settings (option timing, tax_date, income "
                  "dating), the project year's net taken from the RETURN "
-                 "row of `taxjson sum` (each Schedule 3 row's cents, as "
+                 "row of `tjs sum` (each Schedule 3 row's cents, as "
                  "filed); a year before the project year that has a "
                  "close-year lock (filed/<year>.json or prior_year_record) "
                  "takes the lock's FILED gain instead — the total filed "
@@ -2780,13 +2780,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "the project year is partial: no carry-back is offered "
                  "and the carryforward stops at the project year."),
             Rule("CA-CARRY-01",
-                 "`taxjson close-year` records in filed/<year>.json the "
+                 "`tjs close-year` records in filed/<year>.json the "
                  "year's carry-forwards, from the same estimate: the net "
                  "capital loss carried in, created (the year's net loss), "
                  "applied (up to the year's gains), carried back (the "
                  "part [carryover] claimed under the 3 earlier years "
                  "takes from this year's loss, a T1A carry-back, as "
-                 "`taxjson carryover` folds it, at most the year's "
+                 "`tjs carryover` folds it, at most the year's "
                  "loss) and carried out (100% amounts); with "
                  "--filed-dispositions (Canada) the net capital loss is "
                  "the filed return's: the filed gain stands in for the "
@@ -2813,10 +2813,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "a lock older than last year (that year's changes are "
                  "missing). The unused losses it carries forward leave "
                  "out the part of the year's loss [carryover] claimed "
-                 "carries back (T1A), as `taxjson carryover` folds it.",
+                 "carries back (T1A), as `tjs carryover` folds it.",
                  cont=True),
             Rule("CA-CARRY-04",
-                 "`taxjson carryover` takes the balance a close-year lock "
+                 "`tjs carryover` takes the balance a close-year lock "
                  "recorded as carried out of its year as the running "
                  "balance at that year end (the lock is the record). Of "
                  "the claims under earlier years, that year takes only "
@@ -2831,7 +2831,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "too: only the rest is offered to apply.",
                  cont=True),
             Rule("CA-CARRY-05",
-                 "`taxjson handoff` flags a next-year input that differs "
+                 "`tjs handoff` flags a next-year input that differs "
                  "from what the closed year carried out: [estimate] "
                  "other_losses, [carryover] claimed's entry for that year "
                  "(vs the loss applied, less the part this project's own "
@@ -2840,7 +2840,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "origin.",
                  cont=True),
             Rule("CA-RPT-11",
-                 "`taxjson instalments`: CRA instalments (ITA s.156) when "
+                 "`tjs instalments`: CRA instalments (ITA s.156) when "
                  f"net tax owing exceeds {_usd(_inst().THRESHOLD)} this "
                  "year and in one of the "
                  "two previous years — due March, June, September and "
@@ -2873,7 +2873,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "nothing been paid.", cont=True),
             *_ca_instalment_tables(),
             Rule("CA-SCAN-01",
-                 "`taxjson tips`: a US-domiciled dividend payer held in "
+                 "`tjs tips`: a US-domiciled dividend payer held in "
                  "a TFSA is flagged — the 15% US withholding is "
                  "unrecoverable there, while an RRSP is exempt under the "
                  "Canada-US treaty (not checked) and a taxable account "
@@ -2907,7 +2907,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "a dividend in lieu paid (a short's charge), receive "
                  "none.", cont=True),
             Rule("CA-RPT-07",
-                 "`taxjson edge-cases`: every trade whose year or "
+                 "`tjs edge-cases`: every trade whose year or "
                  "superficial-loss verdict turns on a boundary — window "
                  "days counted on settlement dates as the engine counts "
                  "them, whatever tax_date says; income in the year its "
@@ -2919,14 +2919,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "trade dates a sale traded Dec 31 that settles in "
                  "January is this year's, its units gone)."),
             Rule("CA-RPT-08",
-                 "`taxjson close-year` records each closed year's sales, "
+                 "`tjs close-year` records each closed year's sales, "
                  "year-end positions and cost (each superficial-loss "
                  "addition where the engine lands it, so a January "
                  "replacement's share is not in the Dec 31 cost; the "
                  "deferral it records in that cost is what the sales "
                  "before Dec 31 left of each addition, released in "
                  "their share as the engine's pools release it), and "
-                 "trades settling in January; `taxjson handoff` checks the next year starts "
+                 "trades settling in January; `tjs handoff` checks the next year starts "
                  "from exactly that, so no sale is reported twice or "
                  "never. It also flags a written option carried out of "
                  "the closed year that this project puts on another "
@@ -3186,7 +3186,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "Questrade stamps midnight): a write listed before "
                  "its same-day buy-back is a short sale closed by the "
                  "buy-back, and FIFO takes same-moment lots in that order. "
-                 "A Questrade file written by `taxjson fetch` (the "
+                 "A Questrade file written by `tjs fetch` (the "
                  "taxjson-fetch plugin) keeps the "
                  "API's row order within a day, and a re-fetch merge keeps "
                  "it too. "
@@ -3257,14 +3257,14 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "rates at all, stops the run naming the row's date and "
                  "currency pair — taxjson carries no built-in rate (the "
                  "stand-alone converters accept your own rate with "
-                 "--default-rate). `taxjson fx-cash` counts a cash event with no rate row in those "
-                 "5 days as unrated (named in its report), and `taxjson "
+                 "--default-rate). `tjs fx-cash` counts a cash event with no rate row in those "
+                 "5 days as unrated (named in its report), and `tjs "
                  "crypto-sends` leaves a send (and a stablecoin pool row) "
                  "with none unpriced.", cont=True),
             Rule("US-FX-03",
                  "Gains on holding foreign cash (§988) are ordinary "
                  "income, not capital gains, and are NOT in the Form 8949 "
-                 "totals; `taxjson fx-cash` applies one method: every "
+                 "totals; `tjs fx-cash` applies one method: every "
                  "spend of a foreign currency is a disposition, with one "
                  "pooled average basis per currency across the taxable "
                  "accounts; a conversion is at the US-dollar amount "
@@ -3387,7 +3387,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "from its own descriptions only, a designator after "
                  "COMMON STOCK kept. "
                  "Inferred codes are listed in "
-                 "one note per account and by `taxjson transfers`; any "
+                 "one note per account and by `tjs transfers`; any "
                  "ticker.map rule naming the code (a rename, DELETE, "
                  "DISTINCT, a dated RENAME) wins and is recorded as such; "
                  "a code nothing identifies stays a security of its own "
@@ -3408,7 +3408,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "the date is a different security unless the declaration "
                  "says it is the renamed shares (`late=fold`, booked as "
                  "NEW); `late=separate` records another company reusing "
-                 "the ticker. Such trades are listed by `taxjson renames` "
+                 "the ticker. Such trades are listed by `tjs renames` "
                  "and stop `run --strict` until declared (a short one "
                  "makes is no purchase missing from the files: "
                  "`find-missing-history` names the declaration as its "
@@ -3436,7 +3436,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "A declaration no account's books carry (no account of "
                  "its kind holds OLD before the date: a typo of the "
                  "symbol, a late date) books nothing: a Warning names "
-                 "the line, `taxjson renames` lists it and `run "
+                 "the line, `tjs renames` lists it and `run "
                  "--strict` stops. "
                  "Declarations that cannot all be true stop the "
                  "run naming the lines: OLD renamed to two symbols, one "
@@ -3511,7 +3511,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "one share) are one security: one set of lots, "
                  "identical for the wash-sale rule. An ADR and the "
                  "ordinary shares it represents are never joined "
-                 "automatically. `taxjson run` joins two listings itself, "
+                 "automatically. `tjs run` joins two listings itself, "
                  "as a ticker.map TOBASE line would, when a transfer "
                  "journal pairs them uniquely (an out-leg of one and an "
                  "in-leg of the other in your accounts, the same "
@@ -3587,7 +3587,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "security, arriving in another): a Warning naming both "
                  "legs and the line that books them as one, and `run "
                  "--strict` stops; anything less certain "
-                 "stays a suggestion (`taxjson ticker-map --suggest`) — "
+                 "stays a suggestion (`tjs ticker-map --suggest`) — "
                  "but two listings whose names name different companies "
                  "(no leading company word in common, nor the same "
                  "leading words once spaces and hyphens are set aside: "
@@ -3644,7 +3644,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "rename lines (GLOBAL / TOBASE / JOURNAL): it is the "
                  "listing the books hold it as. Every row of the symbol in that "
                  "broker's exports of the account takes the listing; "
-                 "each correction is a Warning, and `taxjson ticker-map "
+                 "each correction is a Warning, and `tjs ticker-map "
                  "--suggest` shows the equivalent explicit lines."),
             Rule("US-XLIST-03",
                  "A journal you declare in an account's .tt file, `JOURNAL "
@@ -3708,7 +3708,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "own, booked in full (never settled against the "
                  "broker's legs, never said as a restatement). The legacy "
                  "ticker.map `JOURNAL FROM TO` line is read as `TOBASE "
-                 "FROM TO`, said once per run; `taxjson format-map "
+                 "FROM TO`, said once per run; `tjs format-map "
                  "--write` rewrites it."),
             Rule("US-XLIST-04",
                  "Two listings are never joined on their names alone, but "
@@ -3732,7 +3732,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "two companies): a Warning naming the "
                  "ticker.map line that makes them one security (`TOBASE "
                  "FROM TO`, the loss then disallowed) and the one that "
-                 "keeps them two (`DISTINCT A B`); `taxjson ticker-map "
+                 "keeps them two (`DISTINCT A B`); `tjs ticker-map "
                  "--suggest` offers the TOBASE line "
                  "and `run --strict` stops until the map "
                  "has one of the two. Nothing is disallowed until then; "
@@ -3747,7 +3747,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-XLIST-05",
                  "A US project does not read tobase.map, the interlisted "
                  "master's pairs (Canada only for now: CA-XLIST-06; "
-                 "`taxjson update-tobase-map` is refused): two listings "
+                 "`tjs update-tobase-map` is refused): two listings "
                  "of one share are joined only by your own ticker.map "
                  "lines, the transfer journal (US-XLIST-01) or a .tt "
                  "JOURNAL line, and X.V and X.TO stay two spellings. "
@@ -3907,7 +3907,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "`find-missing-history --write-missing-history`; with "
                  "exports shared by every year, one record for every "
                  "year; the older missing_history.json is no longer "
-                 "read — `taxjson migrate` converts it). Sales that draw "
+                 "read — `tjs migrate` converts it). Sales that draw "
                  "on them (FIFO: the opening lot first) have an unknown "
                  "basis — they are listed for manual reporting and left "
                  "out of the totals. The line opens its quantity on its "
@@ -3946,7 +3946,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "you keep (renamed to .tt) is your own statement of the "
                  "basis."),
             Rule("US-OPEN-01",
-                 "An opening balance (`taxjson opening`, a .tt OPENING "
+                 "An opening balance (`tjs opening`, a .tt OPENING "
                  "line from a broker's positions report) is one line per "
                  "lot with the lot's real purchase date: the lot's basis "
                  "is the report's cost, its holding period (US-HOLD-01) "
@@ -4078,7 +4078,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "listings of one security that the books keep apart are "
                  "flagged: US-XLIST-04).", cont=True),
             Rule("US-WASH-08",
-                 "Matching across accounts needs a full `taxjson run` "
+                 "Matching across accounts needs a full `tjs run` "
                  "(not `--account`)."),
             Rule("US-WASH-20",
                  "Replacements are matched in the order acquired (Reg. "
@@ -4151,7 +4151,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "e.g. SAMPLE1) or a futures option on the loss's futures "
                  "contract, however it is spelled (a commodity future is "
                  "usually outside §1091). Nothing is disallowed for a "
-                 "flag, so `taxjson wash-sales` lists each one and the "
+                 "flag, so `tjs wash-sales` lists each one and the "
                  "checklist's wash-reviewed step stays open until you "
                  "decide them.",
                  cont=True),
@@ -4202,7 +4202,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "or two, or the same sale as another line, stops the "
                  "run (the units, when given, are the sale's total); each "
                  "position is a Warning on every run and listed with the "
-                 "disallowance §1091 would make (`taxjson sum` FILING "
+                 "disallowance §1091 would make (`tjs sum` FILING "
                  "POSITIONS, `wash-sales` and its --explain trace, "
                  "`audit`, `wash-radar`, `carryover`, `handoff`, the "
                  "checklist). On Form 8949 (`form-export`, every format) "
@@ -4225,7 +4225,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "one in a taxable account, in the tax year, with another "
                  "bought within 30 days before or after it (trade dates; "
                  "no still-held test) in any of your accounts, IRAs "
-                 "included, is a Warning of every `taxjson run` naming "
+                 "included, is a Warning of every `tjs run` naming "
                  "the pair, the dates and the line (`--strict` never "
                  "stops for it), written to work/similar.state and listed "
                  "by the checklist's wash-reviewed step as a manual "
@@ -4560,17 +4560,17 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
         ]),
         ("Crypto sends", [
             Rule("US-SEND-01",
-                 "Paying with crypto is a sale at fair value; `taxjson "
+                 "Paying with crypto is a sale at fair value; `tjs "
                  "crypto-sends` records it (`payment`) and writes the sale "
                  "to crypto_sends.tt. When sends.json cannot be read, a "
                  "crypto_sends.tt written from earlier decisions is not "
-                 "booked: `taxjson run` stops until it is fixed."),
+                 "booked: `tjs run` stops until it is fixed."),
             Rule("US-SEND-02",
                  "A gift is not a sale for the donor, so `gift` is refused "
                  "in a US project: record it as `self`. A gift already "
                  "saved in sends.json (carried over, copied or edited) is "
                  "never written as a sale: `crypto-sends --write` and "
-                 "`taxjson run` stop until it is reclassified.",
+                 "`tjs run` stop until it is reclassified.",
                  cont=True),
         ]),
         ("Options", [
@@ -4666,7 +4666,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
         ]),
         ("Reports", [
             Rule("US-RPT-01",
-                 "`taxjson form-export --form 8949`: Form 8949 rows (Part "
+                 "`tjs form-export --form 8949`: Form 8949 rows (Part "
                  "I short-term, Part II long-term;"),
             Rule("US-RPT-02", "wash sales as code W).", cont=True),
             Rule("US-RPT-11",
@@ -4687,7 +4687,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "wash-sale adjustment shows as the allowed gain the other "
                  "reports print."),
             Rule("US-RPT-12",
-                 "`taxjson stats` (and `taxjson win-rates`, the same "
+                 "`tjs stats` (and `tjs win-rates`, the same "
                  "trades per ticker, account or month) is a view, not a "
                  "filing number: its "
                  "win/lose statistics count each closed trade's economic "
@@ -4709,7 +4709,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "no longer carries them. A sale with any lot of "
                  "unknown cost is left out whole, counted apart."),
             Rule("US-RPT-04",
-                 "`taxjson estimate`: federal tax only (single filer, "
+                 "`tjs estimate`: federal tax only (single filer, "
                  "standard deduction, NIIT), for planning."),
             Rule("US-RPT-07",
                  "It treats every dividend as qualified, payments in lieu "
@@ -4756,7 +4756,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "note say so).", cont=True),
             *_us_estimate_tables(),
             Rule("US-RPT-08",
-                 "`taxjson carryover`: the short- and long-term capital "
+                 "`tjs carryover`: the short- and long-term capital "
                  "loss carryover (Schedule D worksheet), assuming the "
                  f"{_usd(_te().US_ORDINARY_LOSS_CAP)} ordinary offset is "
                  "used each year unless "
@@ -4773,7 +4773,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "books, in a crypto account too) is in no year's net: "
                  "it is named and its year marked incomplete."),
             Rule("US-CARRY-01",
-                 "`taxjson close-year` records in filed/<year>.json the "
+                 "`tjs close-year` records in filed/<year>.json the "
                  "short- and long-term capital loss carryover carried in "
                  "and carried out, from the same estimate (the "
                  f"{_usd(_te().US_ORDINARY_LOSS_CAP)} "
@@ -4790,14 +4790,14 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "carried out — it prints where they came from.",
                  cont=True, keys=("prior_year_record",)),
             Rule("US-CARRY-03",
-                 "`taxjson handoff` flags [estimate] other_losses / "
+                 "`tjs handoff` flags [estimate] other_losses / "
                  "long_term_losses that differ from what the closed year "
                  "carried out, and a [carryover] claimed entry for the "
                  "closed year that differs from the deduction its record "
                  "counted as used (a record that names none: what its "
                  "balance implies).", cont=True),
             Rule("US-CARRY-04",
-                 "`taxjson carryover` takes the short- and long-term "
+                 "`tjs carryover` takes the short- and long-term "
                  "carryover a close-year lock recorded as the running "
                  "carryover at that year end, and that year's 3K OFFSET "
                  "is the deduction the lock counted as used.", cont=True),
@@ -4807,7 +4807,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "command and no minimum tax carryover in a US project.",
                  cont=True),
             Rule("US-RPT-05",
-                 "`taxjson edge-cases`: every trade whose tax year or "
+                 "`tjs edge-cases`: every trade whose tax year or "
                  "wash-sale verdict turns on a boundary, the window on "
                  "trade dates whatever tax_date says; with no still-held "
                  "test, a sale near day 30 decides nothing, a long call "
@@ -4831,12 +4831,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "sale, never in a held lot.", cont=True,
                  keys=("tax_date",)),
             Rule("US-RPT-10",
-                 "`taxjson checklist`'s slip step names Form 1099-B for "
+                 "`tjs checklist`'s slip step names Form 1099-B for "
                  "securities and, from tax year 2025, Form 1099-DA for a "
                  "broker's digital-asset (crypto) sales (gross proceeds "
                  "only for 2025; basis for covered assets from 2026)."),
             Rule("US-RPT-06",
-                 "`taxjson close-year` records each closed year's sales, "
+                 "`tjs close-year` records each closed year's sales, "
                  "year-end positions and basis (a disallowed loss "
                  "included in the replacement's basis, as `list` shows; "
                  "none in an account marked crypto, US-WASH-13), each "

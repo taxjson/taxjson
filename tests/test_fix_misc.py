@@ -358,7 +358,7 @@ DIVIDEND_IN_LIEU 2025-05-01 09:30:00 XEI.TO 0.00000000 CAD 0.00000000 70.00000
 
 
 class TestEstimateInputsEndToEnd(unittest.TestCase):
-    """G1-4: `taxjson estimate` gathers stock + option gains, Canadian and
+    """G1-4: `tjs estimate` gathers stock + option gains, Canadian and
     foreign dividends and PIL from the books, and taxes them exactly."""
 
     def test_estimate_from_a_run(self):

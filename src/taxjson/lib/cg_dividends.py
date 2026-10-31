@@ -44,7 +44,7 @@ refuses the table.
   (only they get a T5); name an account to restrict it.
 
 (Before, a project-root `capital_gains_dividends.map` held these as
-`SYMBOL WHEN AMOUNT [ACCOUNT]` lines; `taxjson migrate` converts it with
+`SYMBOL WHEN AMOUNT [ACCOUNT]` lines; `tjs migrate` converts it with
 parse_map below.)
 
 The ledger and ACB are never touched (a box-18 dividend does not change

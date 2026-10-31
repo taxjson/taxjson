@@ -1,4 +1,4 @@
-"""`taxjson audit --account X` on a crypto account (issue #79).
+"""`tjs audit --account X` on a crypto account (issue #79).
 
 Two taxable crypto accounts in a Canadian project: a buys 1 SYN at
 10,000, b buys 1 SYN at 20,000 (pooled ACB 15,000 across exchanges,

@@ -1,23 +1,27 @@
-"""`taxjson compare`: the current reports/ against a snapshot of an
+"""`tjs compare`: the current reports/ against a snapshot of an
 earlier run.
 
 A snapshot is a copy of reports/ with a record of what the books were
 built from: the inputs fingerprint (lib/checklist.input_fingerprint,
-name and SHA-256 of every file `taxjson run` reads) and each taxable
+name and SHA-256 of every file `tjs run` reads) and each taxable
 account's filing aggregates (taxjson_filed.aggregates_from_gains).
-Three kinds:
+Four kinds:
 
-- `prev` (work/compare/prev/): the run before. Every full `taxjson run`
+- `prev` (work/compare/prev/): the run before. Every full `tjs run`
   rotates the reports it is about to replace there (rotate_previous). A
-  `taxjson run --account` rebuilds one account's reports only: the first
+  `tjs run --account` rebuilds one account's reports only: the first
   one after a full run keeps that run's reports as `prev`, and the full
   run after it leaves them there, so `prev` is always a full run's
   (backlog TJ-0254).
-- a saved one (work/compare/<name>/, `taxjson compare --save NAME`): a
+- a saved one (work/compare/<name>/, `tjs compare --save NAME`): a
   baseline kept until `--delete NAME`, say before a batch of exports is
   replaced.
 - `filed` (filed/<year>/reports/ and the lock's `frozen` record, kept by
-  `taxjson close-year`): the reports as filed.
+  `tjs close-year`): the reports as filed.
+- a full one (`snapshot/<year>.<timestamp>/`, `tjs snapshot`,
+  take_full): the whole project copied with its layout, so a person can
+  `diff -r` it file by file or run taxjson in it, and a comparison reads
+  its reports like any other.
 
 The comparison names the account figures that moved (before, after,
 change), the report files that differ (lines that only say when a file
@@ -32,6 +36,7 @@ import errno
 import json
 import math
 import re
+import os
 import shutil
 import tempfile
 from datetime import datetime
@@ -43,9 +48,10 @@ PREV = "prev"
 FILED = "filed"
 VERSION = 1
 SNAPSHOT_FILE = "snapshot.json"
+FULL = "snapshot"               # a full snapshot's `kind`
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 RESERVED = (PREV, FILED)
-# reports/ mix a `taxjson run --account` into the last full run's: the
+# reports/ mix a `tjs run --account` into the last full run's: the
 # accounts it rebuilt, one per line, under work/compare/ (a leading dot
 # is no snapshot name). Written by rotate_previous for a single-account
 # run; removed when a full run completes (full_run_done).
@@ -55,6 +61,10 @@ PARTIAL_MARK = ".partial-run"
 # (`Generated:  2026-...` in a .rpt, `generated_at = ...` in a holdings
 # TOML, `"generated_at": ...` in a radar JSON): never a difference.
 _STAMP_RE = re.compile(r'^\s*("?generated(_at)?"?\s*[:=]|Generated:)', re.I)
+# A report written before the command's name became `tjs` everywhere has
+# the project's name before the command: the same text, or every older snapshot and filed report
+# would read as changed by the rename alone. Only the word, never a figure.
+_OLD_NAME_RE = re.compile(r"(?<![\w./-])taxjson(?=[ :])")
 
 # The per-account figures compared, in this order: (key, kind).
 FIGURES: Tuple[Tuple[str, str], ...] = (
@@ -75,6 +85,51 @@ def snapshots_dir(root: Path) -> Path:
 
 def snap_dir(root: Path, name: str) -> Path:
     return snapshots_dir(root) / name
+
+
+def _full_dir(root: Path, name: str) -> Optional[Path]:
+    """The full snapshot `name` (take_full), when there is one and no
+    snapshot of that name under work/, which a name looks up first."""
+    from taxjson.lib.project_layout import snapshots_folder
+    if (snap_dir(root, name) / SNAPSHOT_FILE).is_file():
+        return None
+    store = snapshots_folder(root)
+    d = store / name
+    if store.is_symlink() or not (d / SNAPSHOT_FILE).is_file():
+        return None
+    return d
+
+
+def _is_path(name: str) -> bool:
+    """A snapshot given by its folder (`../snapshot/2025.20261030-101000/`,
+    as a shell completes it), not by its name: no name holds a slash."""
+    return "/" in name or os.sep in name
+
+
+def _folder_given(root: Path, given: str) -> Path:
+    """The snapshot folder `given` leads to, a relative path from the
+    shell's folder, else the project's. CompareError when it is not one."""
+    p = Path(given).expanduser()
+    tried = [p] if p.is_absolute() else [Path.cwd() / p, Path(root) / p]
+    for d in tried:
+        if (d / SNAPSHOT_FILE).is_file():
+            return d.resolve()
+    if any(d.is_dir() for d in tried):
+        raise CompareError(f"{given} is not a snapshot: it has no "
+                           f"{SNAPSHOT_FILE}")
+    raise CompareError(f"no snapshot at {given} (`tjs compare --list` "
+                       f"names them)")
+
+
+def _shown_dir(root: Path, d: Path) -> str:
+    """A snapshot's folder as the user knows it, from the project."""
+    return Path(os.path.relpath(d, Path(root).resolve())).as_posix() + "/"
+
+
+def _snapshot_label(root: Path, name: str) -> str:
+    d = _full_dir(root, name)
+    return (_shown_dir(root, d) if d is not None
+            else f"work/{SNAP_ROOT}/{name}/")
 
 
 def check_name(name: str, *, saving: bool = False) -> str:
@@ -123,7 +178,8 @@ def report_files(reports: Path, label: str = "reports/"
 
 
 def normalized(data: bytes, *, display: bool = False) -> str:
-    """A report's text without the lines that only date it. A byte that
+    """A report's text without the lines that only date it, the
+    command's old name read as `tjs` (_OLD_NAME_RE). A byte that
     is not UTF-8 stays a character of its own (surrogateescape), so two
     damaged or binary reports that differ only there never compare as
     the same — `errors="replace"` made every such byte one U+FFFD (audit
@@ -131,8 +187,9 @@ def normalized(data: bytes, *, display: bool = False) -> str:
     escapes, for a diff that can be printed."""
     text = data.decode("utf-8", errors="backslashreplace" if display
                        else "surrogateescape")
-    return "".join(ln for ln in text.splitlines(keepends=True)
-                   if not _STAMP_RE.match(ln))
+    return _OLD_NAME_RE.sub("tjs", "".join(
+        ln for ln in text.splitlines(keepends=True)
+        if not _STAMP_RE.match(ln)))
 
 
 def aggregates(root: Path, cfg: Dict[str, Any], *, warn_stale: bool = True
@@ -168,17 +225,10 @@ def aggregates(root: Path, cfg: Dict[str, Any], *, warn_stale: bool = True
     return out
 
 
-def take(root: Path, cfg: Dict[str, Any], dest: Path, kind: str,
-         warn_stale: bool = True) -> Optional[Dict[str, Any]]:
-    """Snapshot reports/ into `dest` (replaced): dest/reports/<files>
-    and dest/snapshot.json. None (nothing written, an old snapshot
-    there kept) when reports/ holds no file; CompareError (nothing
-    written) when reports/ or a file in it cannot be read."""
+def _snapshot_doc(root: Path, cfg: Dict[str, Any], files: Dict[str, bytes],
+                  kind: str, warn_stale: bool = True) -> Dict[str, Any]:
+    """A snapshot's record of the reports in `files`."""
     from taxjson.lib.checklist import input_fingerprint, recorded_fingerprint
-    root = Path(root)
-    files = report_files(root / "reports")
-    if not files:
-        return None
     # What the reports were built from is what the last full run
     # recorded, not the inputs as they are now (an export dropped in
     # since belongs to the NEXT run's snapshot); its time is the run's.
@@ -198,6 +248,20 @@ def take(root: Path, cfg: Dict[str, Any], dest: Path, kind: str,
         # Reports a `run --account` partly rebuilt (`compare --save`
         # then): said, never passed off as one run's (backlog TJ-0254).
         doc["partial_accounts"] = partial
+    return doc
+
+
+def take(root: Path, cfg: Dict[str, Any], dest: Path, kind: str,
+         warn_stale: bool = True) -> Optional[Dict[str, Any]]:
+    """Snapshot reports/ into `dest` (replaced): dest/reports/<files>
+    and dest/snapshot.json. None (nothing written, an old snapshot
+    there kept) when reports/ holds no file; CompareError (nothing
+    written) when reports/ or a file in it cannot be read."""
+    root = Path(root)
+    files = report_files(root / "reports")
+    if not files:
+        return None
+    doc = _snapshot_doc(root, cfg, files, kind, warn_stale)
     from taxjson.lib.safe_write import write_atomic
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -264,8 +328,167 @@ def _publish(stage: Path, dest: Path) -> None:
         shutil.rmtree(aside.parent, ignore_errors=True)
 
 
+# Never copied by take_full: a repository, what a command or Python keeps
+# for itself, the copy `tjs redact` makes to share.
+_FULL_LEFT_OUT = (".git", "__pycache__", "inputs_redact")
+
+
+def _copy_tree(src: Path, dst: Path, store: Path) -> None:
+    """`src` copied to `dst`, its files' times and modes kept and its links
+    kept as links, so the copy is what was there and nothing outside the
+    project is read through a planted one. work/compare/ (the smaller
+    snapshots) and the snapshots folder itself stay out."""
+    def left_out(folder: str, names: List[str]) -> List[str]:
+        here = Path(folder)
+        return [n for n in names
+                if n in _FULL_LEFT_OUT
+                or (n.startswith(".") and n.endswith(".lock"))
+                or (n == SNAP_ROOT and here.name == "work")
+                or (here / n).absolute() == store]
+    shutil.copytree(src, dst, symlinks=True, ignore=left_out,
+                    dirs_exist_ok=True)
+
+
+def _full_sources(root: Path) -> List[Tuple[Path, Path]]:
+    """(what, where in the snapshot) for a full snapshot, every path
+    relative to the snapshot's top. A single project is its own folder.
+    A year folder also takes what it reads beside it, as far as its
+    settings name it (the shared folders, the shared tobase.map) and the
+    other years' locks; never the whole folder holding it, which may
+    hold anything (`~/2024`)."""
+    from taxjson.lib import project_layout as PL
+    if not PL.years_layout(root):
+        return [(root, Path("."))]
+    out = [(root, Path(root.name))]
+    top = root.parent
+    named = [PL.inputs_dir(root), PL.holdings_folder(root),
+             PL.exports_folder(root), PL.tobase_map_path(root)]
+    for p in named:
+        if p is None or not p.exists():
+            continue
+        real = p.resolve()
+        try:
+            real.relative_to(root)      # already in the year's own copy
+            continue
+        except ValueError:
+            pass
+        try:
+            out.append((real, real.relative_to(top)))
+        except ValueError:
+            continue
+    for y in sorted(PL._year_folders_beside(root)):     # noqa: SLF001
+        if y != root and (y / "filed").is_dir():
+            out.append((y / "filed", Path(y.name) / "filed"))
+    return out
+
+
+def _links_leaving(stage: Path) -> List[str]:
+    """The links in the finished copy that lead out of it."""
+    out = []
+    real = stage.resolve()
+    for folder, dirs, names in os.walk(stage):
+        for n in dirs + names:
+            p = Path(folder) / n
+            if p.is_symlink():
+                try:
+                    p.resolve().relative_to(real)
+                except (OSError, ValueError):
+                    out.append(p.relative_to(stage).as_posix())
+    return sorted(out)
+
+
+def take_full(root: Path, cfg: Dict[str, Any],
+              now: Optional[datetime] = None) -> Dict[str, Any]:
+    """`tjs snapshot`: the project copied to
+    snapshot/<year>.<timestamp>/, laid out as the project is (a year
+    folder's copy is under its own name, beside the shared folders it
+    reads, so `../inputs` still leads to them), with snapshot.json at the
+    top; `project` in it names the folder of the copy holding reports/
+    ("" for a single project). Never replaces a snapshot. CompareError
+    (nothing left behind) when it cannot be made."""
+    from taxjson.lib.channels import running_build
+    from taxjson.lib.project_layout import LayoutError, snapshots_folder, years_layout
+    from taxjson.lib.safe_write import write_atomic
+    root = Path(root).resolve()
+    year = (cfg.get("settings") or {}).get("year")
+    if not isinstance(year, int):
+        raise CompareError("[settings] year is required in taxjson.toml: a "
+                           "snapshot is named for its year")
+    files = report_files(root / "reports")
+    if not files:
+        raise CompareError("reports/ holds no file to snapshot — run "
+                           "`tjs run` first")
+    store = snapshots_folder(root)
+    shown = _shown_dir(root, store)
+    if store.is_symlink():
+        raise CompareError(f"{shown.rstrip('/')} is a link: a snapshot is "
+                           f"not written through one — make it a folder")
+    for src, _rel in _full_sources(root):
+        if src.resolve() == store.resolve():
+            raise CompareError(f"{shown} is a folder this project reads: "
+                               f"a snapshot needs that name for itself — "
+                               f"rename the folder and its setting")
+    doc = _snapshot_doc(root, cfg, files, FULL)
+    doc["project"] = root.name if years_layout(root) else ""
+    doc["taxjson"] = running_build()
+    stage: Optional[Path] = None
+    try:
+        store.mkdir(parents=True, exist_ok=True)
+        stage = Path(tempfile.mkdtemp(prefix=_HIDDEN + str(year) + ".",
+                                      suffix=".part", dir=str(store)))
+        for src, rel in _full_sources(root):
+            dst = stage / rel
+            if src.is_dir():
+                _copy_tree(src, dst, store)
+            else:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+        write_atomic(stage / SNAPSHOT_FILE,
+                     json.dumps(doc, indent=1, sort_keys=True) + "\n")
+        leaving = _links_leaving(stage)
+        size = count = 0
+        for folder, _dirs, names in os.walk(stage):
+            for n in names:
+                p = Path(folder) / n
+                if not p.is_symlink():
+                    count += 1
+                    size += p.stat().st_size
+        base = f"{year}.{(now or datetime.now()).strftime('%Y%m%d-%H%M%S')}"
+        name, n = base, 1
+        while True:
+            # A rename onto a folder holding files fails: two snapshots
+            # in one second never share a name.
+            if not (store / name).exists():
+                try:
+                    stage.rename(store / name)
+                    break
+                except OSError as e:
+                    if e.errno not in (errno.EEXIST, errno.ENOTEMPTY):
+                        raise
+            n += 1
+            name = f"{base}-{n}"
+    except (OSError, shutil.Error, LayoutError) as e:
+        if stage is not None:
+            shutil.rmtree(stage, ignore_errors=True)
+        why = (e.args[0][0][2] if isinstance(e, shutil.Error) and e.args
+               and isinstance(e.args[0], list) and e.args[0]
+               else _why(e) if isinstance(e, OSError) else str(e))
+        raise CompareError(f"the snapshot cannot be made in {shown}: "
+                           f"{why}") from None
+    except BaseException:
+        if stage is not None:
+            shutil.rmtree(stage, ignore_errors=True)
+        raise
+    return {"name": name, "folder": _shown_dir(root, store / name),
+            "reports_folder": _shown_dir(
+                root, store / name / doc["project"] / "reports"),
+            "reports": len(files), "files": count, "bytes": size,
+            "taken": doc["taken"], "links_leaving": leaving,
+            "partial_accounts": doc.get("partial_accounts") or []}
+
+
 def partial_accounts(root: Path) -> List[str]:
-    """The accounts a `taxjson run --account` rebuilt since the last
+    """The accounts a `tjs run --account` rebuilt since the last
     full run (PARTIAL_MARK); [] when reports/ are one full run's."""
     try:
         text = (snapshots_dir(root) / PARTIAL_MARK).read_text(
@@ -277,7 +500,7 @@ def partial_accounts(root: Path) -> List[str]:
 
 def rotate_previous(root: Path, cfg: Dict[str, Any],
                     account: Optional[str] = None) -> bool:
-    """Called by `taxjson run` before it writes: the reports a full run
+    """Called by `tjs run` before it writes: the reports a full run
     is about to replace become the `prev` snapshot. A single-account
     run (`account`) replaces part of them: the first one after a full
     run keeps that run's reports as `prev` and records the account
@@ -287,7 +510,7 @@ def rotate_previous(root: Path, cfg: Dict[str, Any],
     before; CompareError naming the path when reports/ cannot be read
     (the run warns that the previous reports were not kept). A wash
     file a `run --account` left stale is not warned about: this run
-    rebuilds it, and the warnings said `taxjson run` to the run doing
+    rebuilds it, and the warnings said `tjs run` to the run doing
     it (backlog TJ-0154)."""
     root = Path(root)
     partial = partial_accounts(root)
@@ -305,7 +528,7 @@ def rotate_previous(root: Path, cfg: Dict[str, Any],
 
 
 def full_run_done(root: Path) -> None:
-    """A full `taxjson run` completed: reports/ are one run's again."""
+    """A full `tjs run` completed: reports/ are one run's again."""
     try:
         (snapshots_dir(root) / PARTIAL_MARK).unlink()
     except OSError:
@@ -317,19 +540,21 @@ def save(root: Path, cfg: Dict[str, Any], name: str) -> Dict[str, Any]:
     doc = take(Path(root), cfg, snap_dir(root, name), "saved")
     if doc is None:
         raise CompareError("reports/ holds no file to save — run "
-                           "`taxjson run` first")
+                           "`tjs run` first")
     return doc
 
 
 def delete(root: Path, name: str) -> None:
     name = check_name(name)
     if name == FILED:
-        raise CompareError("the reports as filed are kept by `taxjson "
+        raise CompareError("the reports as filed are kept by `tjs "
                            "close-year` with the lock; they are not a "
                            "saved snapshot")
     d = snap_dir(root, name)
     if not d.is_dir():
-        raise CompareError(f"no snapshot named {name!r} (`taxjson compare "
+        d = _full_dir(root, name)
+    if d is None or not d.is_dir():
+        raise CompareError(f"no snapshot named {name!r} (`tjs compare "
                            f"--list` names them)")
     shutil.rmtree(d)
 
@@ -347,6 +572,16 @@ def list_snapshots(root: Path, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
                        if NAME_RE.match(p.name) and p.is_dir()
                        and (p / SNAPSHOT_FILE).is_file())
     names.sort(key=lambda n: (n != PREV, n))
+    # The full snapshots of this year: a folder every year shares.
+    from taxjson.lib.project_layout import snapshots_folder
+    store = snapshots_folder(root)
+    if store.is_dir() and not store.is_symlink():
+        year = (cfg.get("settings") or {}).get("year")
+        names += sorted(p.name for p in store.iterdir()
+                        if NAME_RE.match(p.name)
+                        and p.name.startswith(f"{year}.")
+                        and p.name not in names
+                        and (p / SNAPSHOT_FILE).is_file())
     for n in names:
         try:
             doc, _rep = load(root, cfg, n)
@@ -376,6 +611,9 @@ def load(root: Path, cfg: Dict[str, Any], name: str
     """(snapshot document, its reports folder). CompareError when
     there is none of that name."""
     root = Path(root)
+    if _is_path(name):
+        d = _folder_given(root, name)
+        return _read_snapshot(root, cfg, d, d.name, _shown_dir(root, d))
     name = check_name(name)
     if name == FILED:
         year = (cfg.get("settings") or {}).get("year")
@@ -389,7 +627,7 @@ def load(root: Path, cfg: Dict[str, Any], name: str
             raise CompareError(lock_missing_text(year))
         if not lock.is_file():
             raise CompareError(f"{year} is not closed (no filed/{year}.json)"
-                               f" — `taxjson close-year` keeps the reports "
+                               f" — `tjs close-year` keeps the reports "
                                f"as filed")
         from taxjson.bin.taxjson_filed import LockProblem, read_lock
         try:
@@ -406,7 +644,7 @@ def load(root: Path, cfg: Dict[str, Any], name: str
         if not isinstance(frozen, dict) or not rep.is_dir():
             raise CompareError(f"filed/{year}.json was closed before "
                                f"close-year kept the reports as filed — "
-                               f"`taxjson close-year --force` records them")
+                               f"`tjs close-year --force` records them")
         doc = {"version": VERSION, "kind": "filed",
                "taken": snap.get("closed_at") or "", "year": year,
                "files": frozen.get("inputs") or {},
@@ -417,21 +655,36 @@ def load(root: Path, cfg: Dict[str, Any], name: str
                "reports": sorted(report_files(
                    rep, f"filed/{year}/reports/"))}
         return doc, rep
-    d = snap_dir(root, name)
+    d = _full_dir(root, name) or snap_dir(root, name)
     p = d / SNAPSHOT_FILE
     if not p.is_file():
         if name == PREV:
             raise CompareError("no previous run kept yet — the next full "
-                               "`taxjson run` keeps the reports it "
+                               "`tjs run` keeps the reports it "
                                "replaces (work/compare/prev/)")
-        raise CompareError(f"no snapshot named {name!r} (`taxjson compare "
+        raise CompareError(f"no snapshot named {name!r} (`tjs compare "
                            f"--list` names them)")
+    return _read_snapshot(root, cfg, d, name, _snapshot_label(root, name))
+
+
+def _read_snapshot(root: Path, cfg: Dict[str, Any], d: Path, name: str,
+                   label: str) -> Tuple[Dict[str, Any], Path]:
+    """(the record in folder `d`, its reports folder), checked; `label`:
+    the folder as shown."""
     try:
-        doc = json.loads(p.read_text(encoding="utf-8"))
+        doc = json.loads((d / SNAPSHOT_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
-        raise CompareError(f"work/compare/{name}/{SNAPSHOT_FILE} cannot be "
-                           f"read: {e}")
-    _check_snapshot(doc, name)
+        raise CompareError(f"{label}{SNAPSHOT_FILE} cannot be read: {e}")
+    _check_snapshot(doc, name, label)
+    if d.resolve().parent != snapshots_dir(root).resolve():
+        year = (cfg.get("settings") or {}).get("year")
+        if doc.get("year") != year:
+            # Year folders share snapshot/: another year's reports are
+            # not a run before this year's.
+            raise CompareError(f"{label} is a snapshot of {doc.get('year')}, "
+                               f"this project is {year} — compare it from "
+                               f"that year's folder")
+        return doc, d / str(doc.get("project") or "") / "reports"
     return doc, d / "reports"
 
 
@@ -454,18 +707,20 @@ def _what(v: Any) -> str:
             type(v).__name__)
 
 
-def _check_snapshot(doc: Any, name: str) -> None:
+def _check_snapshot(doc: Any, name: str, label: Optional[str] = None) -> None:
     """CompareError naming the field when `doc` is not the shape
     `compare` and `list_snapshots` read: `files` a table, `accounts`
     (when present) a table of tables whose figures (FIGURES) are
     finite numbers, `reports` a list, `kind` and `taken` text. A
     snapshot whose `accounts` was a list passed and the comparison died
     on it (audit 2026-10-24 A48); a NaN figure compared as unchanged
-    with any amount (backlog TJ-0567)."""
+    with any amount (backlog TJ-0567). `label`: its folder as shown."""
+    label = label or f"work/{SNAP_ROOT}/{name}/"
+
     def bad(field: str, found: Any, want: str) -> CompareError:
         return CompareError(
-            f"work/compare/{name}/{SNAPSHOT_FILE} is not a snapshot "
-            f"({field} is {_what(found)}, not {want}) — `taxjson compare "
+            f"{label}{SNAPSHOT_FILE} is not a snapshot "
+            f"({field} is {_what(found)}, not {want}) — `tjs compare "
             f"--delete {name}` removes it")
     if not isinstance(doc, dict):
         raise bad("the document", doc, "a table")
@@ -488,6 +743,13 @@ def _check_snapshot(doc: Any, name: str) -> None:
     for k in ("kind", "taken"):
         if doc.get(k) is not None and not isinstance(doc.get(k), str):
             raise bad(k, doc.get(k), "text")
+    # A full snapshot's folder of reports, one name inside it (never a
+    # path a damaged record could lead elsewhere with).
+    project = doc.get("project")
+    if project is not None and (not isinstance(project, str)
+                                or project in (".", "..")
+                                or "/" in project or "\\" in project):
+        raise bad("project", project, "the name of a folder in it")
 
 
 # ------------------------------------------------------------ comparison
@@ -520,9 +782,12 @@ def compare(root: Path, cfg: Dict[str, Any], name: str = PREV, *,
                                        unrecorded_generated)
     root = Path(root)
     doc, rep = load(root, cfg, name)
+    if _is_path(name):
+        # Shown by its name, however the folder was reached.
+        name = Path(name.rstrip("/" + os.sep)).name or name
     before = report_files(rep, f"filed/{doc.get('year')}/reports/"
                           if name == FILED else
-                          f"work/{SNAP_ROOT}/{name}/reports/")
+                          _shown_dir(root, rep))
     after = report_files(root / "reports")
     changed, same = [], []
     for n in sorted(set(before) & set(after)):
@@ -584,6 +849,12 @@ def compare(root: Path, cfg: Dict[str, Any], name: str = PREV, *,
            "partial_now": partial_accounts(root),
            "partial_before": ([str(a) for a in _pb]
                               if isinstance(_pb, list) else [])}
+    # The taxjson a full snapshot was made with, when another one is
+    # running: an upgrade moves figures without any input changing.
+    from taxjson.lib.channels import build_label, running_build
+    _then = build_label(doc.get("taxjson"))
+    if _then and _then != build_label(running_build()):
+        out["taxjson_before"] = _then
     if details:
         diffs = {}
         for n in changed:
@@ -690,10 +961,13 @@ def render(doc: Dict[str, Any], *, details: bool = False) -> List[str]:
                      f"{_names(inp['removed'])}")
     kv.append(("Inputs", "; ".join(parts) if parts else
                f"unchanged ({inp['same']} files)"))
+    if doc.get("taxjson_before"):
+        kv.append(("Built with", f"{doc['taxjson_before']} then; another "
+                   f"taxjson now"))
     for _who, _accts in (("reports/", doc.get("partial_now") or []),
                          (_against(doc), doc.get("partial_before") or [])):
         if _accts:
-            kv.append(("Partial", f"{_who} hold a `taxjson run --account "
+            kv.append(("Partial", f"{_who} hold a `tjs run --account "
                        f"{', '.join(_accts)}` over the last full run's: "
                        f"the other accounts' and the combined reports are "
                        f"that full run's"))
@@ -712,9 +986,9 @@ def render(doc: Dict[str, Any], *, details: bool = False) -> List[str]:
 def render_list(items: List[Dict[str, Any]]) -> List[str]:
     from taxjson.lib import out as _out
     if not items:
-        return ["No snapshot yet: the next full `taxjson run` keeps the "
-                "run before as `prev`; `taxjson compare --save NAME` keeps "
-                "one by name."]
+        return ["No snapshot yet: the next full `tjs run` keeps the "
+                "run before as `prev`; `tjs compare --save NAME` keeps "
+                "one by name; `tjs snapshot` copies the whole project."]
     body = [[i["name"], i["kind"],
              str(i["taken"]).replace("T", " ")[:16], str(i["reports"])]
             for i in items]

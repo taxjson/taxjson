@@ -17,7 +17,7 @@ claimed. Three things break that when each year is its own project:
 every taxable disposition, the positions and cost at Dec 31, and the
 trades that settle after Dec 31. When the return was prepared with
 another tool, the dispositions it actually filed can be imported
-alongside (`filed_dispositions`). `taxjson handoff`, run in the next
+alongside (`filed_dispositions`). `tjs handoff`, run in the next
 year's project, compares that record with the new project's own books
 (`check`).
 
@@ -60,7 +60,7 @@ def _year_like(v: Any) -> bool:
 
 
 def record_problem(record: Any) -> Optional[str]:
-    """Why a prior-year record (filed/<year>.json, read by `taxjson
+    """Why a prior-year record (filed/<year>.json, read by `tjs
     handoff`) cannot be checked, or None. Its fields are read bare by
     `check` — a list for the record, a text quantity, a sale with no
     date or no gain, a non-numeric year — and each was a traceback
@@ -139,7 +139,7 @@ def _work_doc(path: Path) -> Dict[str, Any]:
         return read_work_doc(p)
     except ValueError as e:
         raise BooksError(f"could not read {_label(p)} ({e}) — re-run "
-                         f"`taxjson run` to rebuild it") from None
+                         f"`tjs run` to rebuild it") from None
 
 
 def _rows(path: Path) -> List[Dict[str, Any]]:
@@ -168,7 +168,7 @@ def _check_books(path: Path) -> None:
         load_transactions(p)
     except Exception as e:                          # noqa: BLE001
         raise BooksError(f"could not read {_label(p)} ({e}) — re-run "
-                         f"`taxjson run` to rebuild it")
+                         f"`tjs run` to rebuild it")
 
 
 def _d(s: Any) -> Optional[date]:
@@ -668,7 +668,7 @@ def validate_record(record: Any, path: Any = "the prior-year record"
     def bad(field: str, what: str) -> RecordError:
         return RecordError(f"{path}: {field} is not {what} — fix the "
                            f"lock or restore it from git (or re-close "
-                           f"that year with `taxjson close-year --force` "
+                           f"that year with `tjs close-year --force` "
                            f"in its project)")
 
     if not isinstance(record, dict):
@@ -717,7 +717,7 @@ def validate_record(record: Any, path: Any = "the prior-year record"
     if lp:
         raise RecordError(f"{path}: {lp} (fix the lock or restore it "
                           f"from git, or re-close that year with "
-                          f"`taxjson close-year --force` in its project)")
+                          f"`tjs close-year --force` in its project)")
     ot = record.get("option_timing")
     if ot is not None and not isinstance(ot, dict):
         raise bad("option_timing", "an object")
@@ -731,7 +731,7 @@ def validate_record(record: Any, path: Any = "the prior-year record"
     prob = lock_damage(record, file_year(Path(str(path))), str(path))
     if prob:
         raise RecordError(f"{prob} — fix the lock or restore it from git "
-                          f"(or re-close that year with `taxjson "
+                          f"(or re-close that year with `tjs "
                           f"close-year --force` in its project)")
     # A record whose filed dispositions hold another year's sales (an
     # older release wrote it): its filed totals and the loss it carried

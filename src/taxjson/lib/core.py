@@ -524,7 +524,7 @@ def equity_option_size(opt_tx) -> float:
 # is never checked against it (both engines' currency guards skip them:
 # income rows, a TRANSFER kept as evidence, a SPLIT that carries no
 # money). Every other action with a currency must match the pool's — the
-# raw (native-currency) pass in `taxjson run` tests the same set (audit
+# raw (native-currency) pass in `tjs run` tests the same set (audit
 # A2-0440).
 POOL_FREE_ACTIONS = ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST',
                      'FEE', 'TRANSFER', 'SPLIT')
@@ -1509,7 +1509,7 @@ def _disambiguate_duplicate_ids(*books) -> None:
     loss to its denial, and a replacement lot to its basis bump, by
     tx.id: two byte-identical rows shared one id, so only the first
     took its denial or bump and the rest vanished (audit R1-169, US;
-    S069-21, Canada). `taxjson run` never gets here with duplicates
+    S069-21, Canada). `tjs run` never gets here with duplicates
     (parsers tag repeated fills "[fill #N]" and merge2 --dedup drops
     same-id rows); hand-made JSON passed to taxjson-gains can."""
     seen: Dict[str, int] = {}
@@ -2117,11 +2117,11 @@ def _currency_mismatch_advice(tx, pool_cur: str) -> str:
         return (f"Enter the amount in the pool's currency ({pool_cur}) — a "
                 f"slip's CAD figure on a {pool_cur} listing is converted at "
                 f"the row's date — or convert the whole book first "
-                f"(taxjson-convert-currency --to <base>). `taxjson run` "
+                f"(taxjson-convert-currency --to <base>). `tjs run` "
                 f"does this itself.")
     return ("One pool holds one currency: convert the book first "
             "(taxjson-convert-currency --to <base>), or keep the listings "
-            "apart (.TO vs .US). `taxjson run` converts before the "
+            "apart (.TO vs .US). `tjs run` converts before the "
             "filing books.")
 
 
@@ -2134,7 +2134,7 @@ def _warn_ticker_reused_after_rename(txs, date_of, *, rule_text: str
     Right when another company reuses the ticker; wrong when the broker
     still books the renamed shares under the old ticker — ticker.map's
     `RENAME OLD NEW <date> late=fold` folds those rows into NEW (and
-    `late=separate` records the other case). `taxjson renames` lists
+    `late=separate` records the other case). `tjs renames` lists
     the rows and `run --strict` stops until each is declared. One line
     per (symbol, rename)."""
     renamed: Dict[str, Tuple[str, str]] = {}
@@ -2163,7 +2163,7 @@ def _warn_ticker_reused_after_rename(txs, date_of, *, rule_text: str
                   f"the renamed shares under {t.symbol}, declare it in "
                   f"ticker.map (RENAME {t.symbol} {new} {d_r} late=fold); "
                   f"if another company now uses the ticker, `late=separate`"
-                  f" (`taxjson renames`).")
+                  f" (`tjs renames`).")
 
 
 def disposition_groups(rows) -> Dict[int, int]:
@@ -3303,7 +3303,7 @@ def spin_entitlement(ex_date, parent_qty, before, held) -> str:
 
 # A custody move between two of your own TAXABLE accounts, as a pair of
 # TRANSFER rows (out of one account, into the other; same symbol,
-# moment, quantity and description) that `taxjson run` adds to a US
+# moment, quantity and description) that `tjs run` adds to a US
 # blended book: the US engine moves the sender's FIFO lots — basis and
 # purchase dates — to the receiver, with no disposition (US-BASIS-05).
 # Canada pools the ACB across the accounts (s.47): a book of several
@@ -3346,7 +3346,7 @@ def _own_move_view(transactions: List['TaxTransaction']
                if t.quantity < 0 else
                "their cost is unknown here and its sales of them are "
                "set apart in this account's own view")
-            + " — the blended pass of `taxjson run`, the figures you "
+            + " — the blended pass of `tjs run`, the figures you "
               "file, keeps one ACB across your taxable accounts "
               "(CA-ACB-OWN-MOVE).")
     return transactions
@@ -3455,7 +3455,7 @@ def _own_move_units(pools: Dict[Any, Dict[str, Any]], key: Any, tx) -> str:
 
 # A journal between two listings of one security inside one account (a
 # TSX line moved to its US line: lib/listing_journals, backlog TJ-0361):
-# two TRANSFER rows `taxjson run` writes into the NATIVE-currency books
+# two TRANSFER rows `tjs run` writes into the NATIVE-currency books
 # only (work/<account>_raw*.json, behind the holdings export), the
 # out-leg of the listing the units left and the in-leg of the one they
 # reached, sharing a `journal_pair` id. The engines move the units with
@@ -3600,7 +3600,7 @@ def _journal_units(pools: Dict[Any, Dict[str, Any]], out_leg, in_leg,
 
 REORG_356_TYPE = 'reorg_356'
 _LOT_EVENT_TYPES = (SPINOFF_355_TYPE, REORG_356_TYPE)
-# An opening balance (`taxjson opening`, a .tt OPENING line): a BUYSELL
+# An opening balance (`tjs opening`, a .tt OPENING line): a BUYSELL
 # that sets a position and its cost on a positions report's date but is
 # NOT a purchase — never a superficial-loss / wash-sale replacement and
 # never "acquired in the window" (CA-OPEN-01, US-OPEN-01). Its date is
@@ -3631,7 +3631,7 @@ TRANSFER_CUSTODY_TYPE = 'transfer_custody'
 
 
 # An in-kind move between a TAXABLE account and a REGISTERED account of
-# the same taxpayer (lib/in_kind, booked by `taxjson run` from the pair
+# the same taxpayer (lib/in_kind, booked by `tjs run` from the pair
 # of transfer rows or a .tt INKIND line):
 # * IN_KIND_CONTRIBUTION_TYPE: the taxable account's SALE at fair market
 #   value when its shares go into an RRSP/RRIF/TFSA/FHSA/RDSP/LIRA... —
@@ -4276,7 +4276,7 @@ class CanadaTaxRules(TaxRules):
         final_pool_snapshots: Dict[str, Dict[str, float]] = {}  # tx.id -> pool state after that tx
         # The pools at the end of `year_end` (YYYY-12-31, the project
         # year's last day, on this engine's settlement-date order), the
-        # converged pass's: `taxjson edge-cases` reads the denied losses
+        # converged pass's: `tjs edge-cases` reads the denied losses
         # still held at the year end from them, not from the pools after
         # every later row (backlog TJ-0282). None without a year_end.
         final_year_end_pools: Optional[Dict[str, Any]] = None
@@ -9129,7 +9129,7 @@ class USATaxRules(TaxRules):
 
         # The lots as they stand at the end of `year_end` (YYYY-12-31,
         # the project year's last day) on this engine's trade-date walk
-        # (tax-logic US-RPT-13): `taxjson edge-cases` reads the
+        # (tax-logic US-RPT-13): `tjs edge-cases` reads the
         # disallowed losses still in the basis of the lots held at the
         # year end from them, not from the lots after every later row
         # (backlog TJ-0284). The walk is not cut there: a January
@@ -9303,7 +9303,7 @@ class USATaxRules(TaxRules):
                           + ("the lots leave it with no sale"
                              if tx.quantity < 0 else
                              "their basis is unknown here")
-                          + " — the blended pass of `taxjson run` carries "
+                          + " — the blended pass of `tjs run` carries "
                             "the basis and purchase dates (US-BASIS-05).")
                     continue
                 _moves_done.update((tx.id, _other.id))

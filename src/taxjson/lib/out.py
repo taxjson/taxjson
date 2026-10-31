@@ -60,7 +60,7 @@ DETAIL_INDENT = "  "
 # > 0 while output is captured for a program rather than shown to a
 # person (unwrapped()): a stage's stdout written to a work/ or reports/
 # file, its stderr kept as the .diag the .sum DIAGNOSTICS fold in, the
-# output `taxjson checklist` reads. Those are never wrapped, so their
+# output `tjs checklist` reads. Those are never wrapped, so their
 # bytes do not depend on a terminal and every line a program greps stays
 # whole; whoever shows them to a person wraps them then.
 _UNWRAPPED = 0
@@ -203,7 +203,7 @@ def fill(text: str, width_: Optional[int] = None, indent: str = "",
 # The label of each message kind, in its two forms. This is the one place
 # the choice is made (docs/output-style.md, Messages):
 #   * captured for a program (width 0: a work/ or reports/ file, a .diag
-#     the .sum DIAGNOSTICS fold in, the text `taxjson checklist` and the
+#     the .sum DIAGNOSTICS fold in, the text `tjs checklist` and the
 #     run read back): the GNU `[<prog>: ]<kind>: ` form, lower case —
 #     those bytes never change;
 #   * shown to a person (width > 0): the capitalised label starts the
@@ -271,7 +271,7 @@ def label(kind: str, width_: Optional[int] = None, stream=None) -> str:
 
 
 # A captured message line: optional indentation, an optional program
-# name (`taxjson-gains`, `taxjson run`, `tjs sum`), then a kind word in
+# name (`taxjson-gains`, `tjs run`, `tjs sum`), then a kind word in
 # any of its old spellings (`note:`, `NOTE:`, `Note:`, `warning:`,
 # `WARNING:`, `error:`, `ERROR:`) — or an already person-shaped label.
 _CAPTURED_RE = re.compile(
@@ -612,7 +612,7 @@ _PROG_RE = re.compile(
 def exit_text(text: str, stream=None) -> str:
     """The text for `sys.exit(...)` of a refusal written the old way —
     `<prog>: <what>` or `<prog>: error: <what>`: as is when captured
-    (width 0 — `taxjson checklist` shows a failed command's last line,
+    (width 0 — `tjs checklist` shows a failed command's last line,
     the run relays a stage's), else as message() lays out an error for
     the person: `Error: <what>`, the program name dropped, wrapped."""
     text = str(text)
@@ -908,7 +908,7 @@ def lint(text: str, width_: int = WIDTH,
     return probs
 
 
-# A line of a console a person reads (`taxjson run`, a command's
+# A line of a console a person reads (`tjs run`, a command's
 # messages) that starts an entry: a step (`==> `) or a message label.
 # Any other non-blank line continues the entry above it, flush-left.
 CONSOLE_LINE_RE = re.compile(r"(?:==> |Info: |Warning: |Error: )")
@@ -1082,7 +1082,7 @@ def act_list(text: str, names: Sequence[str], cmd: Optional[str] = None,
 
 
 # ---------------------------------------------- one-line messages, folded
-# Set while a command's messages are shown one line each (taxjson run's
+# Set while a command's messages are shown one line each (tjs run's
 # console, and every --details command's default view: taxjson_run
 # _brief_messages): lib/stage_msg's say / emit_line and emit() here.
 CONCISE_ENV = "TAXJSON_RUN_CONCISE"

@@ -37,7 +37,7 @@ def main():
         "sources": []
     }
 
-    # Every input is required: `taxjson run` feeds this tool only books
+    # Every input is required: `tjs run` feeds this tool only books
     # it just built (crypto merge, blended base, sheltered_base, audit
     # tie-out). A missing or unreadable one used to be skipped at exit 0
     # — a truncated cached Coinbase book dropped half the crypto gains

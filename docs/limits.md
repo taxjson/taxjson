@@ -187,7 +187,7 @@ days apart and a departure after the arrival are an arrival and a departure of t
 said as ATTENTION, naming a departure nothing paired up to 45 days before it, while the sending account's
 books keep the departed shares (a transfer out never leaves the books), so a move of your own among them
 is held twice
-(`taxjson sanity` shows it against each broker's holdings). A listing journal with no pair id and no
+(`tjs sanity` shows it against each broker's holdings). A listing journal with no pair id and no
 ticker.map rule cancels only two listings of one root (`QZQ.TO` / `QZQ.US`); two tickers that differ need
 a `TOBASE` line. A stated book value of 0 is read as no cost, never a $0 lot. `.tt` purchases for part of
 an arrival's units cover nothing: the arrival is said as ATTENTION and not booked until the rest is

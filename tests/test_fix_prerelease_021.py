@@ -33,10 +33,10 @@ class TestRewordIsLinear(unittest.TestCase):
                          ["note: kr_l.csv: 251 tax objects"])
         self.assertEqual(
             reword("  a b.csv: 3 TRANSFER row(s) kept aside (custody "
-                   "evidence, not tax events — view with `taxjson "
+                   "evidence, not tax events — view with `tjs "
                    "transfers`)"),
             ["note: a b.csv: 3 transfer rows kept aside (not tax events; "
-             "`taxjson transfers` lists them)"])
+             "`tjs transfers` lists them)"])
 
 
 class TestOfflineRatesStep(unittest.TestCase):

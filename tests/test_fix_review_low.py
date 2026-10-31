@@ -28,7 +28,7 @@ from tax_rules import rule  # noqa: E402
 
 
 def _closed(fd, root, home, *a):
-    """`taxjson -C root *a` with file descriptor `fd` (1 or 2) closed,
+    """`tjs -C root *a` with file descriptor `fd` (1 or 2) closed,
     the other captured. -> (returncode, captured text)."""
     keep = 2 if fd == 1 else 1
     code = (f"import os, subprocess, sys; os.close({fd}); "

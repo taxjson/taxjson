@@ -148,7 +148,7 @@ def parse_line(line: str, source: str = "") -> Optional[Dict[str, Any]]:
                 or (len(parts) == 3 and parts[2] != COMPLETE)):
             raise CashLineError(f"{where}malformed CASHBOOK line — "
                                 f"expected `{FORMS[kw]}` (a book as "
-                                f"`taxjson fx-cash --ledger v2` prints "
+                                f"`tjs fx-cash --ledger v2` prints "
                                 f"it: ib, rbc:3f2a, webull ...): {shown!r}")
         return {"kind": kw, "book_name": parts[1], "line": shown,
                 "complete": len(parts) == 3,
@@ -179,7 +179,7 @@ def parse_line(line: str, source: str = "") -> Optional[Dict[str, Any]]:
     at = keys.pop("at", None)
     if at is not None and not _BOOK_RE.match(at):
         raise CashLineError(f"{where}{kw} at={at!r} is not a book name "
-                            f"(a word, or <broker>:<id> as `taxjson "
+                            f"(a word, or <broker>:<id> as `tjs "
                             f"fx-cash --ledger v2` prints it): {shown!r}")
     ev: Dict[str, Any] = {"kind": kw, "date": d, "settle": d, "at": at,
                           "line": shown, "where": source, "origin": "tt"}
@@ -392,7 +392,7 @@ def apply_declarations(events: List[Dict[str, Any]],
     or settlement date, and its book when it names one) declares it:
     the move takes the line's `decl` (and `decl_where`), the line is
     marked `matched`. A line matching none is a move of its own. In
-    place; the ledger (lib/fx_cash_v2.build) and `taxjson cash` read
+    place; the ledger (lib/fx_cash_v2.build) and `tjs cash` read
     the same declarations."""
     moves = [e for e in events if e["kind"] == "CASHMOVE"]
     for ln in [x for x in lines if x["kind"] == "CASHMOVE"]:
@@ -437,7 +437,7 @@ def tt_line(e: Dict[str, Any], base: Optional[str] = None,
             at: Optional[str] = None) -> Optional[str]:
     """A cash event as the .tt line that declares it (FORMS; `at`: the
     book's `at=` token, at_token, when a copy needs one to keep its
-    book; `taxjson cash` lists them): an FXCONV, a CASHMOVE (a broker's
+    book; `tjs cash` lists them): an FXCONV, a CASHMOVE (a broker's
     move nothing declared shows UNDECLARED where own / kept / spot /
     cost= / proceeds= goes, so the line is not copied as it is), a
     CASHOPEN; a FLOW (the fee a cash event charged) as a `#FEE` comment
@@ -824,7 +824,7 @@ def collect(root: Path, cfg: Dict[str, Any], country: str,
             try:
                 det = detect(p)
             except (AmbiguousBroker, OSError, ValueError):
-                continue        # `taxjson run` refuses it by name
+                continue        # `tjs run` refuses it by name
             if det.positions or not det.broker:
                 continue
             name = shown_name(p)

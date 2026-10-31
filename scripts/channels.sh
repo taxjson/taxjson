@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Where each release channel points, what this machine's production copy
-# runs, and the releases (the same page as `taxjson channels`).
+# runs, and the releases (the same page as `tjs channels`).
 #   scripts/channels.sh          # the newest 20 releases
 #   scripts/channels.sh all      # every release
 #   scripts/channels.sh --json   # as data

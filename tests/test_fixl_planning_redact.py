@@ -1,4 +1,4 @@
-"""Planning low round: `taxjson redact` findings.
+"""Planning low round: `tjs redact` findings.
 
 Redact
   R1-352  a line the csv module cannot split still has its account id
@@ -207,7 +207,7 @@ class TestRedactBatch(unittest.TestCase):
                 ro.chmod(0o755)
             self.assertEqual(r.returncode, 2)       # A2-0164
             self.assertNotIn("Traceback", r.stderr)
-            self.assertIn("taxjson redact:", r.stderr)
+            self.assertIn("tjs redact:", r.stderr)
 
 
 if __name__ == "__main__":

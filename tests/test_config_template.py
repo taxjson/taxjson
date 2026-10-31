@@ -1,5 +1,5 @@
-"""The taxjson.toml template (lib/config_template): `taxjson init` writes
-it, `taxjson format` re-lays an existing file into it.
+"""The taxjson.toml template (lib/config_template): `tjs init` writes
+it, `tjs format` re-lays an existing file into it.
 
 - Completeness: every key the validator accepts (lib/config_check key
   lists, lib/country.SETTING_COUNTRY) is documented in each country's
@@ -15,7 +15,7 @@ it, `taxjson format` re-lays an existing file into it.
   reference block documents every account key); the only end-of-line
   comment is a key's inline text (its values), aligned per group; no
   fetch-plugin broker named.
-- `taxjson format`: lossless (the parsed configuration is identical),
+- `tjs format`: lossless (the parsed configuration is identical),
   idempotent, keeps unknown keys (flagged) and the user's comments;
   --check / --write / --no-backup; the refusal paths.
 
@@ -171,7 +171,7 @@ class TestInitScaffold(unittest.TestCase):
                     "local_timezone": "Europe/Paris"}
             if country == "canada":
                 # option_grant_timing_since is left commented (a new
-                # user writes no options yet; `taxjson run` says when
+                # user writes no options yet; `tjs run` says when
                 # the books hold one and the key is not set).
                 self.assertRegex(text, r"(?m)^# option_grant_timing_since"
                                        r"\s+= 2025$")
@@ -1197,7 +1197,7 @@ def _single_hash(text):
 class TestProseMark(unittest.TestCase):
     """Prose comment lines start `## `, commented-out keys and tables a
     single `# ` (what you delete to switch one on); a value's end-of-line
-    comment keeps a single `#`. `taxjson format` writes the user's own
+    comment keeps a single `#`. `tjs format` writes the user's own
     lines the same way. Synthetic values."""
 
     _KEYISH = re.compile(r"^##+\s*[A-Za-z0-9_\"-]+\s*=")
@@ -1500,7 +1500,7 @@ class TestFormatCommand(unittest.TestCase):
             (root / "distributions.map").write_text("XYZQ.TO 2025-12-29 1\n")
             r = _cli(root, "format", "--write")
             self.assertEqual(r.returncode, 2)
-            self.assertIn("taxjson migrate", r.stderr)
+            self.assertIn("tjs migrate", r.stderr)
             self.assertEqual((root / "taxjson.toml").read_text(),
                              _MESSY_CA_VALID)
 

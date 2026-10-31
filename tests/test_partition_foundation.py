@@ -227,7 +227,7 @@ class TestSettingOwnership(unittest.TestCase):
                 self.assertEqual(r["canada"].returncode, 0,
                                  r["canada"].stderr)
                 self.assertNotIn("Canada-only", r["canada"].stderr)
-                # validate_config (taxjson run) says the same.
+                # validate_config (tjs run) says the same.
                 from taxjson.lib.tomlcompat import tomllib
                 cfg = tomllib.loads((p["usa"] / "taxjson.toml").read_text())
                 with self.assertRaises(SystemExit) as cm:
@@ -368,12 +368,12 @@ class TestCommandOwnership(unittest.TestCase):
     def test_canadian_commands_refused_in_a_us_project(self):
         with tempfile.TemporaryDirectory() as td:
             p = self._projects(td)
-            for cmd, shown in ((["t1135"], "`taxjson t1135`"),
-                               (["instalments"], "`taxjson instalments`"),
+            for cmd, shown in ((["t1135"], "`tjs t1135`"),
+                               (["instalments"], "`tjs instalments`"),
                                (["option-boundary"],
-                                "`taxjson option-boundary`"),
+                                "`tjs option-boundary`"),
                                (["form-export", "--form", "schedule3"],
-                                "`taxjson form-export --form schedule3`")):
+                                "`tjs form-export --form schedule3`")):
                 with self.subTest(cmd=cmd[0]):
                     r = cli_both(p, *cmd)
                     self.assertNotEqual(r["usa"].returncode, 0)

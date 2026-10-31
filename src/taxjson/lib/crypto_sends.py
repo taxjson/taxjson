@@ -22,7 +22,7 @@ was. This module:
     (`tt_path`): inputs/<acct>/crypto_sends.tt in a single-folder
     project, the year's work/crypto_sends/<acct>/crypto_sends.tt when
     the year shares one inputs folder (a run never writes it), so
-    `taxjson run` books them;
+    `tjs run` books them;
   * for USD stablecoins (USDC/USDT/DAI, PYUSD/GUSD) — which the crypto
     books treat as US-dollar cash, so there is no coin position to sell
     — reports the currency gain instead: average CAD cost of the
@@ -201,8 +201,8 @@ def load_transfer_rows(cache: Path, accounts: Iterable[str],
                 msg = str(e)
                 if msg.startswith(f"{p}: "):
                     msg = msg[len(f"{p}: "):]
-                if "taxjson run" not in msg:
-                    msg += " — re-run `taxjson run` to rebuild it."
+                if "tjs run" not in msg:
+                    msg += " — re-run `tjs run` to rebuild it."
                 raise ValueError(f"could not read {p.name}: {msg}") from None
             meta = doc.get("metadata")
             meta = meta if isinstance(meta, dict) else {}
@@ -906,7 +906,7 @@ def load_rates(path: Path, base: Optional[str] = None) -> RateTable:
     except (OSError, UnicodeDecodeError) as e:
         why = (e.strerror if isinstance(e, OSError) else None) or e
         raise ValueError(f"cannot read the rates file {path} ({why}) — "
-                         f"re-run `taxjson run` to rebuild it.") from None
+                         f"re-run `tjs run` to rebuild it.") from None
     bad: List[str] = []
     for n, line in enumerate(text.splitlines(), 1):
         parts = line.split()
@@ -922,7 +922,7 @@ def load_rates(path: Path, base: Optional[str] = None) -> RateTable:
                 f"rates file {path}, line {n}: rate {parts[4]!r} for "
                 f"{parts[2]}->{parts[3]} on {parts[0]} is not a positive "
                 f"finite number — refusing to value a send with it. Fix "
-                f"or regenerate the rates file (`taxjson run`).")
+                f"or regenerate the rates file (`tjs run`).")
         to = parts[3].upper()
         if out.target is None:
             out.target = to
@@ -933,7 +933,7 @@ def load_rates(path: Path, base: Optional[str] = None) -> RateTable:
                 + (f"this project's base currency is {out.target}"
                    if base else f"the file's rates are to {out.target}")
                 + " — refusing to value a send with it. Regenerate the "
-                  "rates file (`taxjson run`).")
+                  "rates file (`tjs run`).")
         day = out.setdefault(parts[2].upper(), {})
         if parts[0] not in day:
             day[parts[0]] = (rate, parts[5].lower() if len(parts) > 5
@@ -944,7 +944,7 @@ def load_rates(path: Path, base: Optional[str] = None) -> RateTable:
                 out.published.setdefault(parts[2].upper(), {})[
                     parts[0]] = parts[6]
     if bad:
-        emit_line(f"taxjson crypto-sends: warning: {path.name}: skipped "
+        emit_line(f"tjs crypto-sends: warning: {path.name}: skipped "
                   f"{len(bad)} line(s) with an unreadable rate (e.g. "
                   f"{bad[0]}).", file=sys.stderr)
     return out
@@ -970,7 +970,7 @@ class Rates:
                 f"the rates file's rates are to {target}, and this "
                 f"project's base currency is {self.base} — refusing to "
                 f"value a send with them. Regenerate the rates file "
-                f"(`taxjson run`).")
+                f"(`tjs run`).")
 
     def get(self, cur: str, on: str) -> Optional[Tuple[float, str, str]]:
         """(rate, rate date, label) of the latest rate on `on` or in the
@@ -1027,7 +1027,7 @@ def yahoo_usd_price(project_root: Path) -> Callable[[str, str],
     ids_seen_in_cache)."""
     from taxjson.bin import fill_crypto_prices as F
     from taxjson.lib.offline import offline_enabled
-    # The same folders, in the same order, as `taxjson run` gives
+    # The same folders, in the same order, as `tjs run` gives
     # fill-crypto: the project root, then the folder of its input file
     # (work/) — later wins (re-audit A2-0242).
     overrides = F.load_symbol_overrides([str(project_root),
@@ -1866,7 +1866,7 @@ def build_report(root: Path, cfg: Dict[str, Any],
                     f"project refuses: a gift is not a sale for a US donor "
                     f"(the recipient takes over your basis). It is NOT "
                     f"booked — record it as `self` (no tax event) or, if "
-                    f"you were paid, `payment`: `taxjson crypto-sends "
+                    f"you were paid, `payment`: `tjs crypto-sends "
                     f"{acct} --set {sid}=self`")
             if not stable and fv is not None:
                 entry["tt"] = tt_line(s, fv, base)
@@ -2092,7 +2092,7 @@ def render_tt(account: str, entries: List[Dict[str, Any]],
                 "paid in the coin is)."]
     out = [GENERATED_MARK,
            f"# Source: inputs/{account}/{MANIFEST_NAME} (your decisions) — "
-           f"`taxjson crypto-sends {account}` lists them.",
+           f"`tjs crypto-sends {account}` lists them.",
            *why,
            ""]
     for e in sorted(entries, key=lambda e: (e["date"], e["time"], e["id"])):
@@ -2161,7 +2161,7 @@ def write_tt(path: Path, text: Optional[str]) -> str:
         cur = read_tt(path)
         if not cur.startswith(GENERATED_MARK):
             raise ValueError(
-                f"{path} exists but was not generated by `taxjson "
+                f"{path} exists but was not generated by `tjs "
                 f"crypto-sends` — refusing to overwrite it. Rename it "
                 f"(any other .tt name works) and re-run.")
         if text == cur:
@@ -2335,7 +2335,7 @@ def prompt_undecided(sends: List[Dict[str, Any]], manifest: Path,
         + ("gift / payment = a disposition at fair value; " if allow_gift
            else "payment = a sale at fair value (a gift is not a sale "
                 "for a US donor: answer self); ")
-        + "skip = decide later (`taxjson crypto-sends`).")
+        + "skip = decide later (`tjs crypto-sends`).")
     done = 0
     for s in todo:
         say(f"  {s['id']}  {s['summary']}")

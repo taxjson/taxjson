@@ -103,7 +103,7 @@ def _parse_args():
         "--option-premium-timing", choices=["grant", "close"], default=None,
         help="Canada: recognise a written option's premium on the write "
              "date (grant — ITA s.49(1)) or at the closing transaction "
-             "(close). Default: close, with a note — `taxjson run` "
+             "(close). Default: close, with a note — `tjs run` "
              "defaults a Canada project to grant. Refused with "
              "--country usa.")
     parser.add_argument(
@@ -128,7 +128,7 @@ def _parse_args():
         "--spot-crypto", action="store_true",
         help="The book is a crypto account's spot coins: a position going "
              "short is missing history (a deposit or transfer-in), said "
-             "as an ATTENTION line (`taxjson run` passes it for crypto "
+             "as an ATTENTION line (`tjs run` passes it for crypto "
              "accounts).")
     # Retired (2026-09-29): long calls vs share losses are enforced by
     # the Canada engine and always warned by the US engine; nothing is
@@ -145,7 +145,7 @@ def _parse_args():
     parser.add_argument(
         "--locked-year", action="append", type=int, default=None,
         metavar="YEAR",
-        help="USA: a filed (locked) tax year, repeatable (`taxjson run` "
+        help="USA: a filed (locked) tax year, repeatable (`tjs run` "
              "passes every filed/<year>.json). A wash-sale loss whose "
              "replacement was sold in such an earlier year is not added "
              "to that sale's basis: the adjustment is booked in the "
@@ -153,7 +153,7 @@ def _parse_args():
     parser.add_argument(
         "--locked-record", action="append", default=None, metavar="PATH",
         help="USA: a filed year's lock file (filed/<year>.json), "
-             "repeatable (`taxjson run` passes each one with its "
+             "repeatable (`tjs run` passes each one with its "
              "--locked-year): a basis add its own row for that sale "
              "already has stays in that sale, as filed (US-WASH-22).")
     parser.add_argument(
@@ -196,8 +196,8 @@ def _parse_args():
             "Write the engine's cost timeline to FILE (JSON): each pool's "
             "quantity and cost after every row that changed it, dated on "
             "the --tax-date basis — Canada's pools across the book's "
-            "accounts, the US lots per account. `taxjson run` writes one "
-            "beside each gains pass for `taxjson list --date`. The gains "
+            "accounts, the US lots per account. `tjs run` writes one "
+            "beside each gains pass for `tjs list --date`. The gains "
             "JSON on stdout is unchanged."
         ),
     )
@@ -210,7 +210,7 @@ def _parse_args():
             "one by one in FIFO order (`lots_at` in the gains JSON: "
             "account, symbol, acquisition and holding-period dates, "
             "units, basis, wash-sale deferral), the day read on the "
-            "--tax-date basis. close-year records them and `taxjson "
+            "--tax-date basis. close-year records them and `tjs "
             "handoff` compares them."
         ),
     )
@@ -232,7 +232,7 @@ def _parse_args():
         help=(
             "The input is a native-currency view (merged without "
             "--to: ticker.map's TOBASE and JOURNAL renames not applied, "
-            "as `taxjson run`'s raw holdings books): the "
+            "as `tjs run`'s raw holdings books): the "
             "--incomplete-history lines' symbols go through GLOBAL "
             "renames only, as the rows did."
         ),
@@ -244,7 +244,7 @@ def _parse_args():
             "Detect (symbol, account) pairs whose running position goes "
             "negative (a sale with no purchase in the files) and write "
             "them to FILE as JSON candidates, each with the units the "
-            "run would open (`taxjson find-missing-history "
+            "run would open (`tjs find-missing-history "
             "--write-missing-history` turns them into .tt OPENING "
             "cost=unknown lines)."
         ),
@@ -398,7 +398,7 @@ def _suggest_missing_history_and_exit(args, transactions,
         f"missing from your files). "
         f"Review them; the units held before the data go in the "
         f"account's .tt files as `OPENING <date> <SYMBOL> <qty> "
-        f"cost=unknown` lines (`taxjson find-missing-history "
+        f"cost=unknown` lines (`tjs find-missing-history "
         f"--write-missing-history` writes them).",
         file=sys.stderr,
     )
@@ -406,12 +406,12 @@ def _suggest_missing_history_and_exit(args, transactions,
 
 def _timing_default_note(args, prog):
     """Standalone runs default to CLOSE timing, while a Canada project
-    (`taxjson run`) defaults to s.49(1) grant timing from the project
+    (`tjs run`) defaults to s.49(1) grant timing from the project
     year: say so instead of silently disagreeing with the .sum (audit
     R1-177)."""
     if args.option_premium_timing is None and args.country == 'canada':
         emit_line(f"{prog}: note: --option-premium-timing not given — using "
-                  f"close timing. `taxjson run` on a Canada project uses "
+                  f"close timing. `tjs run` on a Canada project uses "
                   f"grant timing from the project year; pass "
                   f"--option-premium-timing grant --option-grant-since YEAR "
                   f"to match it.", file=sys.stderr)
@@ -653,7 +653,7 @@ def _since_shown(g, shown):
     above did. `shown` maps each running trace to the last block of it
     written. Each block repeated the whole pool history before, so the
     file grew with the square of a symbol's sales (audit 2026-10-25
-    robustness#5); `taxjson audit` and taxjson-explain still show a
+    robustness#5); `tjs audit` and taxjson-explain still show a
     sale's whole history."""
     from taxjson.lib.trace_format import SharedTrace, continued_header
     t = g.get('trace')

@@ -265,7 +265,7 @@ class TestFxCashStyle(unittest.TestCase):
                     self.assertNotIn("WARNING:", r.stdout)
 
     def test_first_line_is_the_caveat(self):
-        # `taxjson fx-cash` says first, unwrapped, that the default
+        # `tjs fx-cash` says first, unwrapped, that the default
         # ledger's figure is not for filing (the checklist reads --json).
         for country in ("canada", "usa"):
             with self.subTest(country=country):

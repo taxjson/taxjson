@@ -4,7 +4,7 @@ reports.
 TJ-0279  <account>.sum asked for a `.tt OPENING cost=unknown` line
          (MANUAL REPORTING REQUIRED) for a sale of units moved in from
          another of your accounts: their cost is in the blended figures
-         (<account>_wash.sum, `taxjson sum`). They are a block of their
+         (<account>_wash.sum, `tjs sum`). They are a block of their
          own now, and its holdings table says "unknown", not 0.00.
 TJ-0598  reports/<account>_holdings.toml: units moved in from another
          of your accounts take the cost the run has after the passes
@@ -203,7 +203,7 @@ class TestOwnSumSaysTheCostIsBlended(unittest.TestCase):
     """TJ-0279: qb sells 40 of the 100 moved in from qa. Its own .sum
     asked for a `.tt OPENING cost=unknown` line and find-missing-history
     for them: they have no purchase missing, their cost is in the
-    blended figures (qb_wash.sum, `taxjson sum`)."""
+    blended figures (qb_wash.sum, `tjs sum`)."""
 
     def _check(self, country, why):
         cur = "CAD" if country == "canada" else "USD"
@@ -219,7 +219,7 @@ class TestOwnSumSaysTheCostIsBlended(unittest.TestCase):
                 f"moved in from qa, proceeds 120.00 {cur}: NOT in the rows "
                 f"or totals above, and nothing to report by hand from "
                 f"here. This account's own books have no cost for them; "
-                f"the figures you file have it: qb_wash.sum and `taxjson "
+                f"the figures you file have it: qb_wash.sum and `tjs "
                 f"sum` ({why}).", flat)
             self.assertIn(f"{sym} 2024-06-03 40 120.00 qb", flat)
             for gone in ("MANUAL REPORTING REQUIRED", "OPENING cost=unknown",
@@ -366,7 +366,7 @@ def _comments(text: str) -> str:
 class TestMovedInUnitsTakeTheBlendedCost(unittest.TestCase):
     """TJ-0598: round 3 wrote `cost_unknown = true` for units qb got by
     a move of its own from qa. The run has their cost after the passes
-    across accounts (qb_gains_wash.json, `taxjson list`): the holding
+    across accounts (qb_gains_wash.json, `tjs list`): the holding
     now carries it, `cost_source = "blended"`."""
 
     def _check(self, country, qb_rows, qty, cost, fig):
@@ -389,10 +389,10 @@ class TestMovedInUnitsTakeTheBlendedCost(unittest.TestCase):
                 "cost_source = blended: 100 moved in from qa (your own "
                 "account) on 2024-03-01, a cost this account's own books "
                 "do not have. total_cost and base_total_cost are " + fig
-                + " after the passes across accounts, as `taxjson list` "
+                + " after the passes across accounts, as `tjs list` "
                   "gives it, not this account's own books.",
                 _comments(text))
-            # The figure is `taxjson list`'s.
+            # The figure is `tjs list`'s.
             rows = json.loads(_cli(root, "list", "--json").stdout)["rows"]
             self.assertEqual([(x["account"], x["qty"], round(x["cost"], 2))
                               for x in rows], [("qb", qty, cost)])

@@ -346,7 +346,7 @@ class TestDeclaredContractSize(unittest.TestCase):
 
 class TestRawPassForeignCurrencyAdjust(unittest.TestCase):
     """A2-0055 / A2-0191 / A2-0204: a cost adjustment in another currency
-    than its pool no longer stops `taxjson run` at the native raw pass."""
+    than its pool no longer stops `tjs run` at the native raw pass."""
 
     def _write(self, td, txs, rates):
         import json

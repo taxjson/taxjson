@@ -1,4 +1,4 @@
-"""The `taxjson init --demo` project: a Canadian year folder for 2024
+"""The `tjs init --demo` project: a Canadian year folder for 2024
 built from made-up broker exports, ready to run (no network beyond the
 exchange rates, nothing to answer).
 
@@ -10,16 +10,16 @@ IB, with share trades, dividends and a call bought and sold at a loss —
 and one more IB statement with the getting-started scenarios:
 
   * missing history: a sale of SAMPG with no purchase in the files
-    (`taxjson find-missing-history`, getting-started step 5);
+    (`tjs find-missing-history`, getting-started step 5);
   * an election: PARNT spins off SPNCO; the election is saved in the
-    account's manifest.json (`taxjson spinoffs`);
+    account's manifest.json (`tjs spinoffs`);
   * a superficial loss: NVDA sold at a loss and bought back within 30
-    days (account ib, `taxjson wash-sales`);
+    days (account ib, `tjs wash-sales`);
   * a written option: a SAMPW call sold to open in November and still
     open at the year end, its premium a 2024 gain under grant timing
-    (`taxjson option-boundary`);
+    (`tjs option-boundary`);
   * a loss denied for good: INTC sold at a loss in margin and bought
-    back in the RRSP 14 days later (`taxjson wash-sales`): the
+    back in the RRSP 14 days later (`tjs wash-sales`): the
     replacement sits in a registered plan, so the denied loss never
     comes back.
 

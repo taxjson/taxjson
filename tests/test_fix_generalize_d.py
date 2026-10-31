@@ -1,4 +1,4 @@
-"""Law constants stated in `taxjson tax-logic`, rendered from the same
+"""Law constants stated in `tjs tax-logic`, rendered from the same
 constants the code computes with (owner, 2026-10-04: tax-law constants
 stay in code, stated in tax-logic). A changed constant changes the
 statement; the estimate's printed rates follow the constants too."""

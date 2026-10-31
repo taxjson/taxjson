@@ -1,7 +1,7 @@
 """Stale blended gains after another account's partial run (GitHub #15).
 
 A blended result (`<acct>_gains_wash.json`, written by the cross-account
-pass of a full `taxjson run`) depends on EVERY taxable account in the
+pass of a full `tjs run`) depends on EVERY taxable account in the
 blend: Canada pools the cost of identical property across accounts
 (s.47) and a buy in one account can make a loss in another superficial;
 the US matches wash sales across accounts. `run --account B` rebuilds

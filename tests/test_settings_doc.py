@@ -13,7 +13,7 @@ its documentation fails here:
   every .tt action (and the ACQUIRED shorthand), every generic-importer
   mapping section and key, every corporate-action election and hint, and every
   crypto-send decision is named in docs/settings.md;
-- every rule id `taxjson tax-logic` knows (lib/tax_logic.catalog) is named in
+- every rule id `tjs tax-logic` knows (lib/tax_logic.catalog) is named in
   docs/tax-rules.md — directly or inside a range `X-01` … `X-05` — no unknown
   id is named, and the Canada part names no US id and the reverse (the
   Canada/USA partition).

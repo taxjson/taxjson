@@ -1,4 +1,4 @@
-"""Moved from the core's tests/test_wash_checks.py with `taxjson fetch` (now the
+"""Moved from the core's tests/test_wash_checks.py with `tjs fetch` (now the
 taxjson-fetch plugin). Original module docstring:
 
 buy-check / sell-check / verify — the advice they give.

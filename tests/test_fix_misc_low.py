@@ -255,7 +255,7 @@ class TestGenerateParserPrivacy(unittest.TestCase):
             self.assertEqual(rc, 1)
             self.assertEqual(sent, [])
             self.assertIn("personal data", err)
-            self.assertIn("taxjson redact", err)
+            self.assertIn("tjs redact", err)
             self.assertNotIn("U5550001", err)  # pii-ok
 
     def test_override_sends_with_warning(self):

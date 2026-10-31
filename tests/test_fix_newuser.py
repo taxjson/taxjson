@@ -116,7 +116,7 @@ class TestInitInAYearFolder(unittest.TestCase):
         flat = " ".join(r.stderr.split())
         self.assertIn("is named like a tax year and is empty", flat)
         self.assertIn("this would build 2025/2025/ in it", flat)
-        self.assertIn(f"cd {top / 'taxes'} && taxjson init --country "
+        self.assertIn(f"cd {top / 'taxes'} && tjs init --country "
                       f"canada --year 2025 && cd 2025", flat)
         self.assertEqual(list(y.iterdir()), [])
         # --single is one folder for one year: fine there.
@@ -152,7 +152,7 @@ class TestFilingLastYearHint(unittest.TestCase):
                     out = _init(top)
                 self.assertTrue((top / "2026" / "taxjson.toml").is_file())
                 flat = " ".join(out.split())
-                hint = ("Filing 2025 now? Run `taxjson init --country "
+                hint = ("Filing 2025 now? Run `tjs init --country "
                         f"canada --year 2025` in {top} for its folder.")
                 self.assertEqual(hint in flat, shown, out)
 
@@ -348,10 +348,10 @@ class TestInitDemo(unittest.TestCase):
         out = self.init.stdout
         self.assertIn(f"cd {self.year}\n", out)
         for cmd in ("run", "sum", "checklist --run"):
-            self.assertRegex(out, rf"(?m)^  taxjson {cmd} +# ")
+            self.assertRegex(out, rf"(?m)^  tjs {cmd} +# ")
         for cmd in ("find-missing-history", "spinoffs", "wash-sales",
                     "option-boundary"):
-            self.assertIn(f"`taxjson {cmd}`", out)
+            self.assertIn(f"`tjs {cmd}`", out)
 
     def test_run_is_clean(self):
         r = self.ran
@@ -497,7 +497,7 @@ class TestBareTtSymbolOnTheConsole(unittest.TestCase):
                 r = _cli("-C", str(self._project(years)), "run",
                          "--no-input")
                 self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-                # (captured: `taxjson: warning: ...` on stderr)
+                # (captured: `tjs: warning: ...` on stderr)
                 self.assertIn(
                     "warning: inputs/qt/extra.tt:2: XEI has no market "
                     "suffix: a pool of its own, apart from XEI.TO in the "

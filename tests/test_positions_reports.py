@@ -4,7 +4,7 @@ Holdings Export and a [[holding]] TOML — symbols spelled as each
 broker's trade parser spells them, account ids masked, the cost and its
 KIND (average cost vs lot basis), market value never read as a cost.
 Detection by content: a positions-only file is never parsed as trades
-(and `taxjson run` skips one dropped into inputs/), and no trade export
+(and `tjs run` skips one dropped into inputs/), and no trade export
 is ever read as positions. All data here is synthetic."""
 import os
 import subprocess
@@ -139,7 +139,7 @@ class TestIbOpenPositions(unittest.TestCase):
             rep = P.read_positions(_write(td, "s.csv", _IB_CONSOLIDATED))
         self.assertEqual(rep.accounts, ["U5***"])
         # One position for all its accounts combined: no one account's
-        # key (taxjson opening does not count it as two accounts).
+        # key (tjs opening does not count it as two accounts).
         self.assertEqual({r.account_key for r in rep.rows}, {""})
         self.assertTrue(any("consolidated" in n and "combined" in n
                             for n in rep.notes))
@@ -419,7 +419,7 @@ class TestRunSkipsPositionsReports(unittest.TestCase):
                         "  inputs/margin/holdings_55500001.csv → "  # pii-ok
                         "positions report (RBC Holdings Export, as of "
                         "2026-01-05) — not activity; skipped (read it with "
-                        "`taxjson sanity` or `taxjson opening`)", r.stdout)
+                        "`tjs sanity` or `tjs opening`)", r.stdout)
                     diag = (root / "work" /
                             "margin_detect.diag").read_text()
                     self.assertIn("inputs/margin/holdings_55***.csv → "

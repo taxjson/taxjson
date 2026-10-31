@@ -88,7 +88,7 @@ _CORP_RE = re.compile(r"\b(?:CORP|CORPORATION|INC|LTD)\b", re.IGNORECASE)
 # plausible declaration (a typo or a stale field): the pay date is kept
 # and the row is warned about (audit A2-0229).
 MAX_RECORD_LEAD_DAYS = 92
-# Prefix of the warnings `taxjson run` echoes to the console (printed by
+# Prefix of the warnings `tjs run` echoes to the console (printed by
 # the gains stage as "warning: ATTENTION: income year: ...").
 ATTENTION_INCOME_YEAR = "ATTENTION: income year: "
 
@@ -590,7 +590,7 @@ class IncomeRules:
     def _ca_year_warnings(self, r: Any, pay: str, sym: Any, action: str,
                           year: Optional[int]) -> List[str]:
         """Canada ATTENTION lines (prefix ATTENTION_INCOME_YEAR, echoed
-        by `taxjson run`): income a record date moves across a year end,
+        by `tjs run`): income a record date moves across a year end,
         and a record date too far from the pay date to be used."""
         out: List[str] = []
         rec = _iso(_get(r, "record_date"))

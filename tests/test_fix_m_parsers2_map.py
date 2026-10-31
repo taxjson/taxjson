@@ -1,5 +1,5 @@
 """Medium-round fixes: ticker.map and taxjson-merge (parsers2-map; the
-`taxjson fetch` ones moved to packages/taxjson-fetch with the fetcher).
+`tjs fetch` ones moved to packages/taxjson-fetch with the fetcher).
 Synthetic data only."""
 
 import json

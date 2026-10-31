@@ -522,7 +522,7 @@ class TestChecklistWording(unittest.TestCase):
         self.assertNotIn("data subscriptions are deductible", why)
         self.assertIn("commission", why.lower())
         self.assertIn("interest", (title + why).lower())
-        self.assertNotEqual(cmd.strip(), "taxjson fees")
+        self.assertNotEqual(cmd.strip(), "tjs fees")
 
     def test_carryover_units(self):
         """R1-203 / S066-16."""

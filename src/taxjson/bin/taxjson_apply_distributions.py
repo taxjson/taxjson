@@ -121,7 +121,7 @@ def balance_on(transactions: List[dict], symbol: str, date: str,
 
     `date_basis` picks which date a row moves the balance on. Fund
     record dates go by the holder of record — the SETTLED position —
-    so under `settle` (what `taxjson run` uses in both countries: the
+    so under `settle` (what `tjs run` uses in both countries: the
     record date is a market fact, not the tax-year date basis —
     partition INPUTS-10) a sale traded 06-19 that settles 06-22 still
     holds on a 06-19 record date, and a buy traded ON the record date
@@ -615,27 +615,27 @@ def main(argv=None) -> int:
                     help="Which date a trade moves the record-date "
                          "balance on: settle (the holder of record is "
                          "the settled position — a market fact in both "
-                         "countries, and what `taxjson run` uses) or "
+                         "countries, and what `tjs run` uses) or "
                          "trade (a manual override).")
     ap.add_argument("--country", type=country_arg, default=None,
                     metavar="{canada,ca,usa,us}",
                     help="Only words the output: the book row's "
                          "description and the note (ACB and the T3/T5 "
                          "slip for canada, basis and Form 1099-DIV for "
-                         "usa, neutral 'cost' without it); `taxjson "
+                         "usa, neutral 'cost' without it); `tjs "
                          "run` passes it.")
     ap.add_argument("--ticker-map", type=Path, default=None,
                     metavar="TICKER_MAP",
                     help="ticker.map the base book went through: map "
                          "keys are renamed the same way (GLOBAL, TOBASE, "
-                         "JOURNAL) before the lookup (`taxjson run` "
+                         "JOURNAL) before the lookup (`tjs run` "
                          "passes it).")
     ap.add_argument("--incomplete-history", type=Path, default=None,
                     metavar="DIR",
                     help="the project folder (its .tt OPENING cost=unknown "
                          "lines): size each record-date "
                          "balance with the missing-history openings the "
-                         "gains stage will synthesize (`taxjson run` "
+                         "gains stage will synthesize (`tjs run` "
                          "passes it).")
     args = ap.parse_args(argv)
 
@@ -670,14 +670,14 @@ def main(argv=None) -> int:
                              f"carry {', '.join(map(repr, book_accounts))})")
         return 2
     if len(book_accounts) > 1:
-        # One book is one account's (`taxjson run` passes each taxable
+        # One book is one account's (`tjs run` passes each taxable
         # account's own): the record-date balance summed every account's
         # shares and put the whole ADJUST on one of them, and a rebuild
         # dropped the other accounts' rows (backlog TJ-0507).
         cli_diag.error(PROG, f"{args.base_json.name} holds the rows of "
                              f"{len(book_accounts)} accounts "
                              f"({', '.join(map(repr, book_accounts))}): "
-                             f"size each account's own book (`taxjson "
+                             f"size each account's own book (`tjs "
                              f"run` does), one file per account")
         return 2
     account = args.account or next(

@@ -8,7 +8,7 @@
 - FX: the first row per (currency, date) wins — today's appended intra-day
   spot row no longer overrides the noon rate (non-deterministic conversions).
 - .tt parser warns when total disagrees with qty*price±fee (silent typos).
-- Single-account `taxjson run` no longer overwrites combined reports (gated).
+- Single-account `tjs run` no longer overwrites combined reports (gated).
 - taxjson-explain handles TRANSFER-funded positions and --incomplete-history.
 - Tainted losses with an in-window acquisition surface a partial-taint
   superficial-loss warning.

@@ -1,6 +1,6 @@
-"""`taxjson checklist --run` / `-j`: the checks run only on --run, the
+"""`tjs checklist --run` / `-j`: the checks run only on --run, the
 slow ones in parallel, and their verdicts are kept in
-work/checklist_results.json; a plain `taxjson checklist` shows the kept
+work/checklist_results.json; a plain `tjs checklist` shows the kept
 verdicts (marks applied as they are now) with when they were made and
 what moved since (lib/checklist.save_results, load_results, RunInfo)."""
 import json
@@ -154,13 +154,13 @@ class TestStore(unittest.TestCase):
             _kept, info = cl.load_results(ctx)
             self.assertEqual(len(info.stale), 1, info.stale)
             self.assertIn("the inputs changed (m.csv)", info.stale[0])
-            cl.record_input_fingerprint(root, ctx.cfg)        # a `taxjson run`
+            cl.record_input_fingerprint(root, ctx.cfg)        # a `tjs run`
             _kept, info = cl.load_results(ctx)
             self.assertTrue(any("the books were rebuilt" in s
                                 for s in info.stale), info.stale)
             text = cl.render_summary(_kept, 2025, "canada", info=info)
             self.assertIn("Since then the inputs changed (m.csv); the books "
-                          "were rebuilt (`taxjson run`): `tjs checklist "
+                          "were rebuilt (`tjs run`): `tjs checklist "
                           "--run` re-checks.", text)
 
     def test_marks_apply_to_the_kept_verdicts_as_they_are_now(self):
@@ -204,7 +204,7 @@ class TestStore(unittest.TestCase):
             self.assertFalse(cl.has_books(ctx))
             r = cl.DETECTORS["renames"](ctx)
             self.assertEqual((r.status, r.detail),
-                             ("blocked", "no work/ — run `taxjson run`"))
+                             ("blocked", "no work/ — run `tjs run`"))
 
 
 class TestCommand(unittest.TestCase):

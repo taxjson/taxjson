@@ -278,7 +278,7 @@ class TestRateGapTolerance(unittest.TestCase):
     def test_lookback_is_five_days_in_the_converter_and_audit(self):
         """A2-1492: a row with no rate that day takes the latest rate of
         the 5 days before it; 6 days back is the placeholder — in the
-        converter and in `taxjson audit`'s twin of it."""
+        converter and in `tjs audit`'s twin of it."""
         from decimal import Decimal
         from taxjson.bin.taxjson_audit import rate_with_provenance
         hist = {"USD": {"2025-03-03": Decimal("1.44")}}

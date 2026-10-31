@@ -10,7 +10,7 @@ of the same description (questrade.QtAccountContext). A code nothing in
 the account resolves was a security of its own, with one ATTENTION line
 asking for a ticker.map GLOBAL line.
 
-`taxjson run` now infers the ticker from the rest of the project's books
+`tjs run` now infers the ticker from the rest of the project's books
 before the account is parsed, in this order, and records the evidence:
 
 0. the account's own rows (how "account"): a trade or transfer of a real
@@ -1396,7 +1396,7 @@ def read_state(path: Optional[Path]) -> Dict[str, Any]:
     """The recorded inference ({} when none). A record that is not one
     this module wrote (not JSON, nested too deep, a wrong shape, a
     symbol that is not a plain listing, a control character) is
-    ignored with ONE warning per file — never a traceback; `taxjson
+    ignored with ONE warning per file — never a traceback; `tjs
     run` writes it afresh."""
     if not path:
         return {}
@@ -1420,7 +1420,7 @@ def read_state(path: Optional[Path]) -> Dict[str, Any]:
         from taxjson.lib.stage_msg import emit_line
         emit_line(f"warning: {shown_name(p)}: ignored ({why}) — the "
                   f"Questrade internal codes it records are not applied; "
-                  f"`taxjson run` writes it afresh.")
+                  f"`tjs run` writes it afresh.")
     return {}
 
 
@@ -1434,7 +1434,7 @@ def codes_note(resolved: Dict[str, Dict[str, Any]]) -> str:
     items = [f"{c} → {r['symbol']} ({r['evidence']})"
              for c, r in sorted(resolved.items())]
     return (f"{NOTE_HEAD} ({len(items)}): " + "; ".join(items)
-            + " — inferred from the project's exports (`taxjson "
+            + " — inferred from the project's exports (`tjs "
               "transfers` lists them); a ticker.map GLOBAL line for the "
               "code overrides the inference.")
 

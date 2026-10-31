@@ -28,7 +28,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _cli(root, *a):
-    """`taxjson -C ROOT checklist ...` as a child of THIS tree's code
+    """`tjs -C ROOT checklist ...` as a child of THIS tree's code
     (PYTHONPATH names src/, as tests/test_fix_a2_checklist does)."""
     cmd = python_module_argv("taxjson.bin.taxjson_run",
                              ["-C", str(root), "checklist", *a])

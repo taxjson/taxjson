@@ -82,7 +82,7 @@ ul { padding-left:18pt; margin:0 }
   <div class="row">
     <div class="card"><h3>Year folders</h3><p>One <code>inputs/</code> every year shares, and a folder per year: <code>taxjson.toml</code> (year, country, accounts, the figures you enter by hand), <code>ticker.map</code> (your symbol rules), <code>holdings/</code>. In Canada one <code>tobase.map</code> beside them: the interlisted pairs every year reads. <code>tjs new-year</code> starts the next.</p></div>
     <div class="card"><h3>Row accounting</h3><p>Every parser accounts for every row it reads. Rows it recognises but does not translate are counted and named — never silently dropped.</p></div>
-    <div class="card"><h3>Traceable numbers</h3><p><code>taxjson audit</code> recomputes every disposition from the parsed broker row through FX, ACB and the wash determination, and ties it out against the reports.</p></div>
+    <div class="card"><h3>Traceable numbers</h3><p><code>tjs audit</code> recomputes every disposition from the parsed broker row through FX, ACB and the wash determination, and ties it out against the reports.</p></div>
   </div>
   <div class="foot"><span>taxjson.com</span><span>3</span></div>
 </section>
@@ -132,7 +132,7 @@ DEFERRED:  64.71 CAD in open positions' cost — tjs list</pre>
 <section class="slide">
   <p class="eyebrow">Verification</p>
   <h2>Checked against the one thing that cannot lie</h2>
-  <p class="lead">Internal reports can all agree and still be wrong. <code>taxjson sanity</code> compares the positions the books say you hold with the positions your broker's own export says you hold, account by account — every run ends with it once the snapshots are in <code>holdings/</code>, matched to their accounts without a setting. Any difference is a trade that has not reached the CSV yet, or a booking problem — there is no third kind.</p>
+  <p class="lead">Internal reports can all agree and still be wrong. <code>tjs sanity</code> compares the positions the books say you hold with the positions your broker's own export says you hold, account by account — every run ends with it once the snapshots are in <code>holdings/</code>, matched to their accounts without a setting. Any difference is a trade that has not reached the CSV yet, or a booking problem — there is no third kind.</p>
   <div class="row">
     <div class="card"><h3>12,500+ tests</h3><p>Every fix lands with a regression test that failed before it, tagged with the tax-logic rule it pins; the gate fails on a rule with no test.</p></div>
     <div class="card"><h3>Fuzzers and mutants</h3><p>Three property fuzzers run thousands of random ledgers per run; mutation testing of both engines finds the boundaries no test pins.</p></div>
@@ -149,7 +149,7 @@ DEFERRED:  64.71 CAD in open positions' cost — tjs list</pre>
   <!-- commands:begin -->
   <div class="row cmds">
     <div class="card"><h3>Set up</h3><p><code>checklist</code> <code>init</code> <code>years</code> <code>new-year</code> <code>align</code> <code>format</code> <code>format-map</code> <code>migrate</code> <code>fetch</code> <code>elect</code> <code>ticker-map</code> <code>update-tobase-map</code></p></div>
-    <div class="card"><h3>Build the books</h3><p><code>run</code> <code>compare</code> <code>crypto-sends</code> <code>find-missing-history</code> <code>opening</code></p></div>
+    <div class="card"><h3>Build the books</h3><p><code>run</code> <code>compare</code> <code>snapshot</code> <code>crypto-sends</code> <code>find-missing-history</code> <code>opening</code></p></div>
     <div class="card"><h3>Summaries</h3><p><code>amt</code> <code>div-estimate</code> <code>estimate</code> <code>fx-cash</code> <code>instalments</code> <code>option-yield</code> <code>plot-tax</code> <code>stats</code> <code>sum</code> <code>win-rates</code></p></div>
     <div class="card"><h3>Positions</h3><p><code>list</code> <code>shares</code></p></div>
     <div class="card"><h3>Row listings</h3><p><code>cash</code> <code>dil</code> <code>divs</code> <code>events</code> <code>fees</code> <code>gains</code> <code>leaps</code> <code>roc</code> <code>staking</code> <code>trades</code> <code>transfers</code></p></div>

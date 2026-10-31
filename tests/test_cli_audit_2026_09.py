@@ -81,7 +81,7 @@ class TestWrongYearLock(unittest.TestCase):          # B2
             root = _project(td, year=2025, gains_year="2024")
             code, _o, _e = _call(R.cmd_close_year, dir=str(root),
                                  year=None, force=False)
-            self.assertIn("rebuild with `taxjson run` first", str(code).lower())
+            self.assertIn("rebuild with `tjs run` first", str(code).lower())
             self.assertIn("margin: 2024", str(code))
             self.assertFalse((root / "filed").exists())
 
@@ -217,7 +217,7 @@ class TestInit(unittest.TestCase):                   # B8 + polish
         self.assertEqual(r.returncode, 0, r.stderr)
         # (one project for every year: the commands run in the year's
         # folder)
-        self.assertIn(f"taxjson -C '{target.resolve() / '2025'}' run",
+        self.assertIn(f"tjs -C '{target.resolve() / '2025'}' run",
                       r.stdout)
 
     def test_far_future_year_rejected(self):
@@ -357,8 +357,8 @@ class TestEstimateProvinceFirst(unittest.TestCase):  # B20
             root = Path(td)
             (root / "taxjson.toml").write_text(_TOML.format(year=2024))
             r = _tj(root, "estimate")
-        # docs/output-style.md: `taxjson <cmd>: error: <headline>`.
-        self.assertIn("taxjson estimate: error: no gains files", r.stderr)
+        # docs/output-style.md: `tjs <cmd>: error: <headline>`.
+        self.assertIn("tjs estimate: error: no gains files", r.stderr)
 
     def test_province_without_estimate_warns(self):
         with tempfile.TemporaryDirectory() as td:
@@ -381,7 +381,7 @@ class TestNoFalseCleanBeforeRun(unittest.TestCase):  # B22
         with tempfile.TemporaryDirectory() as td:
             r = _tj(self._root(td), "tips")
         self.assertEqual(r.returncode, 2)
-        self.assertIn("Run `taxjson run`", r.stderr)
+        self.assertIn("Run `tjs run`", r.stderr)
         self.assertNotIn("No tips", r.stdout)
 
     def test_leaps_without_books_exits_2(self):
@@ -391,7 +391,7 @@ class TestNoFalseCleanBeforeRun(unittest.TestCase):  # B22
             for sub in ("leaps", "leaps-sum"):
                 r = _tj(root, sub)
                 self.assertEqual(r.returncode, 2, sub)
-                self.assertIn(f"taxjson {sub}: error: no gains files", r.stderr)
+                self.assertIn(f"tjs {sub}: error: no gains files", r.stderr)
 
 
 if __name__ == "__main__":

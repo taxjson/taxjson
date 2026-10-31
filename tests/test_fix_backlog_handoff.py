@@ -452,7 +452,7 @@ class TestCarryBackChain(unittest.TestCase):
         balance owed on April 30."""
         text = _flat(_ok(cli(self.p24, "estimate")).stdout)
         self.assertIn("=> instalments behind 3,000.00 [due with the "
-                      "balance April 30; taxjson instalments]", text)
+                      "balance April 30; tjs instalments]", text)
         self.assertNotIn("=> balance due", text)
 
 

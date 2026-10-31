@@ -117,8 +117,8 @@ def load_symbol_overrides(dirs):
     found in each of `dirs` (later dirs win), as {SYMBOL: YAHOO_ID} —
     the only coin ids there are (no built-in table). A malformed line
     is skipped with a warning — a typo shouldn't kill a price-fill run
-    (`taxjson run` refuses the map up front). A folder still holding the
-    old crypto_ticker.map stops the run (`taxjson migrate` moves it into
+    (`tjs run` refuses the map up front). A folder still holding the
+    old crypto_ticker.map stops the run (`tjs migrate` moves it into
     ticker.map)."""
     from taxjson.lib.ticker_map import side_rules_in
     merged = {}
@@ -221,7 +221,7 @@ def main():
         "--project-root", metavar="DIR",
         help="Read the CRYPTO lines of ticker.map from this project root (then the "
              "input file's folder) instead of the current directory. "
-             "`taxjson run` always passes it, so the project's own map "
+             "`tjs run` always passes it, so the project's own map "
              "applies whatever the cwd and a map in the cwd never "
              "leaks into another project.")
     args = parser.parse_args()
@@ -232,7 +232,7 @@ def main():
     _dirs = [args.project_root or "."]
     if args.input:
         _dirs.append(os.path.dirname(os.path.abspath(args.input)) or ".")
-    # Applied for THIS run only: `taxjson run` dispatches the tool
+    # Applied for THIS run only: `tjs run` dispatches the tool
     # in-process, and a permanent update of the module-level table
     # carried one project's map into every later run in the process.
     _saved = dict(PROJECT_CRYPTO_IDS)
@@ -357,7 +357,7 @@ def _value_swaps_once(pairs, unpriced):
     return n
 
 
-# Echoed to the console by `taxjson run` (its ATTENTION channel) and
+# Echoed to the console by `tjs run` (its ATTENTION channel) and
 # kept in the account's .sum DIAGNOSTICS.
 ATTENTION_CRYPTO_ID = "warning: ATTENTION: crypto id:"
 # Fiat quotes a coin's broker price can be compared with a Yahoo USD
@@ -660,7 +660,7 @@ def _fill(args):
         # Never silently 0 (R1-105): these rows still carry price 0 —
         # $0 income, $0 cost basis, or $0 proceeds. The crypto path's
         # `taxjson-validate --require-prices` turns each into an ERROR
-        # (fatal under `taxjson run --strict`).
+        # (fatal under `tjs run --strict`).
         shown = ", ".join(f"{t.action} {t.symbol} {t.date}"
                           for t in unpriced[:10])
         more = (f" (+{len(unpriced) - 10} more)"

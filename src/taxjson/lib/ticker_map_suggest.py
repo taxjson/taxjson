@@ -1,5 +1,5 @@
-"""`taxjson ticker-map --suggest [--write]`: every ticker.map line the last
-`taxjson run` suggested, gathered in one place, each with its reason, and
+"""`tjs ticker-map --suggest [--write]`: every ticker.map line the last
+`tjs run` suggested, gathered in one place, each with its reason, and
 (with --write) appended to ticker.map.
 
 The run's stages name a ticker.map line wherever the books need the
@@ -7,7 +7,7 @@ user's judgment; they are spread over the account messages. Sources, all
 in work/ (nothing is recomputed but the cheap reads):
 
 * work/cross_listings.state — the transfer journals between two listings
-  that `taxjson run` did not join itself (lib/cross_listings: the names
+  that `tjs run` did not join itself (lib/cross_listings: the names
   are missing or disagree, the pairing is ambiguous): `TOBASE FROM TO`
   (never for two companies); and the symbol collisions (one symbol, two
   companies): `EXTRACT words | CURRENCY | SYMBOL` with its `TOBASE`, or
@@ -376,7 +376,7 @@ def from_symbol_codes(cache: Path) -> List[Suggestion]:
 
 
 def from_listing_suffix(cache: Path) -> List[Suggestion]:
-    """The explicit lines of the listings `taxjson run` read from the
+    """The explicit lines of the listings `tjs run` read from the
     evidence, not the row currency (lib/listing_suffix)."""
     from taxjson.lib import listing_suffix as LS
     out = []
@@ -693,7 +693,7 @@ def comment(s: Suggestion, today: Optional[str] = None) -> str:
     on one line."""
     day = today or _date.today().isoformat()
     why = " ".join(s.reason.replace("#", "").split())
-    return f"taxjson ticker-map --suggest {day}: {why}"
+    return f"tjs ticker-map --suggest {day}: {why}"
 
 
 def appended_text(current: str, chosen: Iterable[Suggestion],

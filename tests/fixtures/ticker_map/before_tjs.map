@@ -1,0 +1,40 @@
+## ticker.map: standing truths about the securities in your books, one rule per line, in groups: a
+## spelling to read as another symbol, two listings that are one security (or are not), a symbol to
+## drop, and lookups an export cannot give. A ticker change or a journal on a date is an event: a
+## .tt line of the account (docs/settings.md). Optional: a run needs no rule here. Symbols are
+## case-insensitive; a note goes after `#`; a line starting `# KEYWORD` is a rule switched off
+## (delete the `# ` to use it). `taxjson format-map` keeps this layout, and a comment directly above
+## a line moves with it. Every keyword: docs/settings.md, ticker.map.
+
+## --- Spellings ---
+## GLOBAL FROM TO  FROM is another spelling of TO, in every stage (an odd broker ticker, an internal
+##                 code, a coin alias)
+## RENAME FROM TO  the same (a RENAME without a date)
+
+GLOBAL ZZA.US ZZB.US
+
+## --- Listings of one security ---
+## TOBASE FROM TO  two listings of one security: one cost pool (in the base currency)
+## DISTINCT A B    two look-alike listings that are separate securities
+
+## --- Clean-up ---
+## DELETE SYMBOL  drop every row of a symbol that is no real security (a broker artifact)
+
+## --- Lookups ---
+## They change no symbol in the books.
+## QUOTE SYMBOL YAHOO_SYMBOL [RATIO]              the Yahoo spelling a price lookup uses
+## EXTRACT DESCRIPTION WORDS | CURRENCY | SYMBOL  the symbol of a broker row with these words
+## CRYPTO SYMBOL YAHOO_ID                         a coin's Yahoo id
+## T1135 SYMBOL COUNTRY [CAT]                     the T1135 domicile (and category) of a symbol
+##                                                (Canada)
+## SIMILAR A B [C ...]                            look-alike funds, kept as separate securities: a
+##                                                loss on one with another bought in the window is
+##                                                flagged
+## STABLE SYMBOL USD|NO                           a US-dollar stablecoin, or not one
+## SPLITSHARE ROOT [NO]                           a Canadian split-share corporation
+## INDEXOPT ROOT [NO]                             a broad-based index option root (US)
+## SECFUT ROOT [NO]                               a security future's root: not a §1256 contract
+##                                                (US)
+## EVENING ROOT [NO]                              an option root with a Cboe evening session
+## MULT SYMBOL N                                  an option's contract size
+## VENUE IBCODE SUFFIX|NO                         an IB listing exchange and its suffix

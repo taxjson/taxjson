@@ -48,7 +48,7 @@ class TestFiledYearHint(unittest.TestCase):
         (root / "filed" / "2024.json").write_text("{}")
         cfg = {"settings": {"year": 2024}}
         self.assertEqual(_filed_year_stale_hint(
-            root, cfg, ["the last `taxjson run` did not finish: ..."]), "")
+            root, cfg, ["the last `tjs run` did not finish: ..."]), "")
         self.assertIn("2024 is filed", _filed_year_stale_hint(
             root, cfg, ["inputs changed since the last full run "
                         "(added: inputs/margin/x.tt)"]))
@@ -129,8 +129,8 @@ class TestSharedInputsNote(unittest.TestCase):
         with contextlib.redirect_stderr(err), \
                 contextlib.redirect_stdout(err):
             R._SHOWN_THIS_RUN.clear()
-            R._shared_inputs_note(y, f, "taxjson opening")
-            R._shared_inputs_note(y, y / "ticker.map", "taxjson opening")
+            R._shared_inputs_note(y, f, "tjs opening")
+            R._shared_inputs_note(y, y / "ticker.map", "tjs opening")
         self.assertIn("../inputs/margin/opening_2025-01-01.tt is in the "
                       "exports folder every year's project shares: it "
                       "applies to every year", err.getvalue())

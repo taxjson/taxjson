@@ -20,7 +20,7 @@ without the unsafe leak of fabricated ACB into the gain calculation.
 
 The project file missing_history.json (formerly phantoms.json) that
 listed them until v0.27.0 is no longer read: a project that still has
-one is refused (lib/migrate.legacy_files) and `taxjson migrate` converts
+one is refused (lib/migrate.legacy_files) and `tjs migrate` converts
 it (plan_missing_history_migration). The module was called
 phantom_holdings until 2026-10; taxjson.lib.phantom_holdings is a shim
 for this module, and the old function and class names are aliases at
@@ -46,7 +46,7 @@ from taxjson.lib.corporate_timeline import (SplitTimeline, event_sort_key,
 # The project-root file that listed (symbol, account) pairs whose
 # purchase is not in the broker files until v0.27.0 (phantoms.json before
 # 2026-10). It is no longer read: every command refuses a project that
-# still has one (lib/migrate.legacy_files) and `taxjson migrate`
+# still has one (lib/migrate.legacy_files) and `tjs migrate`
 # converts it into .tt lines (plan_missing_history_migration).
 MISSING_HISTORY_FILE = "missing_history.json"
 LEGACY_MISSING_HISTORY_FILE = "phantoms.json"
@@ -65,7 +65,7 @@ class MissingHistoryPairs(set):
     """The (symbol, account) pairs of a project's missing history, with
     each pair's .tt line (`fixed`: its date and quantity are the
     opening). `quantities` gives a pair without a line the opening it
-    sets, exactly (`taxjson migrate` sizing a converted entry); a pair
+    sets, exactly (`tjs migrate` sizing a converted entry); a pair
     with neither is sized from the rows (synthesize_openings: the
     suggestions of find-missing-history)."""
     source_name = "missing_history.tt"
@@ -104,7 +104,7 @@ class MissingHistoryPairs(set):
 
 # The entry key a converted missing_history.json entry recorded the
 # units of its opening under (written by find-missing-history before
-# v0.27.0; `taxjson migrate` reads it).
+# v0.27.0; `tjs migrate` reads it).
 QUANTITY_KEY = "quantity"
 
 
@@ -138,12 +138,12 @@ def missing_history_conflict(root) -> Optional[str]:
             f"of {MISSING_HISTORY_FILE}, and which one is current cannot be "
             f"guessed. Keep one: merge any entries you need into "
             f"{MISSING_HISTORY_FILE} and delete (or move away) "
-            f"{LEGACY_MISSING_HISTORY_FILE}, then `taxjson migrate`.")
+            f"{LEGACY_MISSING_HISTORY_FILE}, then `tjs migrate`.")
 
 
 def legacy_missing_history_file(root) -> Optional[Path]:
     """The project's old missing-history file (missing_history.json, else
-    phantoms.json) — no longer read: `taxjson migrate` converts it —
+    phantoms.json) — no longer read: `tjs migrate` converts it —
     or None. Raises MissingHistoryFileConflict when both names exist."""
     root = Path(root)
     why = missing_history_conflict(root)
@@ -236,7 +236,7 @@ def _project_doc_near(path) -> Dict[str, Any]:
     for d in (p.parent, p.parent.parent):
         cfg = d / 'taxjson.toml'
         if cfg.is_file():
-            # A UTF-8 BOM (what Notepad saves) is dropped, as `taxjson
+            # A UTF-8 BOM (what Notepad saves) is dropped, as `tjs
             # run` drops it (S038-04); a file that exists but does not
             # parse stops the command — reading it as "no project" fell
             # back to Canada's settle basis and label-guessed account
@@ -247,7 +247,7 @@ def _project_doc_near(path) -> Dict[str, Any]:
                 return tomllib.loads(text.lstrip('\ufeff')) or {}
             except ValueError as e:
                 raise InputReadError(
-                    f"{cfg}: not valid TOML ({e}) — fix it (`taxjson "
+                    f"{cfg}: not valid TOML ({e}) — fix it (`tjs "
                     f"run` reports the same file)") from None
     return {}
 
@@ -580,7 +580,7 @@ def _journal_line_symbols(tm) -> Set[str]:
     """Both symbols of every legacy JOURNAL line of a parsed ticker map.
     A TOBASE line is no journal (second pre-release review, finding 1):
     it says two listings are one security, not that units moved between
-    them — `taxjson format-map` migrates a JOURNAL line to one, and the
+    them — `tjs format-map` migrates a JOURNAL line to one, and the
     journal's days then come from its evidence (the broker's legs, a .tt
     JOURNAL line: walk_journal_symbols)."""
     out: Set[str] = set()
@@ -1522,7 +1522,7 @@ def complete_entry_message(symbol: str, account: str,
     return (f"{file_name} lists {len(pairs)} entries whose rows never go "
             f"short any more ({shown}) — their purchases are in the books "
             f"now (an older export or a .tt line), so the entries do "
-            f"nothing. Remove them from {file_name} (`taxjson "
+            f"nothing. Remove them from {file_name} (`tjs "
             f"find-missing-history` lists them under STALE).")
 
 
@@ -1559,7 +1559,7 @@ class MissingHistoryRow:
     in_year_proceeds: float     # their summed proceeds (dollar-impact gauge)
     last_in_year_date: str
     # Any row of the pair (a trade, a transfer, income) dated in the year,
-    # whether or not it draws on the missing basis — `taxjson run` lists
+    # whether or not it draws on the missing basis — `tjs run` lists
     # such a pair on its console (year_listed).
     in_year_activity: bool = False
     # The position is still short in the books at the year's start (its
@@ -1581,7 +1581,7 @@ class MissingHistoryRow:
         """The pair bears on the year: a row of the year draws on the
         missing basis (affects_year), touches the pair at all, or (Canada)
         trades the symbol in another taxable account of its ACB pool.
-        What `taxjson run` lists one by one; the rest are the 'NOT
+        What `tjs run` lists one by one; the rest are the 'NOT
         relevant' pairs it counts in one line."""
         return bool(self.affects_year or self.in_year_activity
                     or self.pooled_with)
@@ -1632,7 +1632,7 @@ def assess_tax_year_relevance(
     (in_year_activity), whether the books hold the pair short at the
     year's start (short_at_year_start), and — `pool`, from pooled_with —
     which other accounts of its cost pool trade the symbol in the year:
-    MissingHistoryRow.year_listed, the one test `taxjson run`'s console
+    MissingHistoryRow.year_listed, the one test `tjs run`'s console
     and find-missing-history share.
 
     `year` may be int or str (matched against the date prefix); None means "no
@@ -1853,7 +1853,7 @@ def classify_year_shorts(transactions: Iterable[TaxTransaction], year: Any,
     short in a project's books (options and broker-marked shorts
     included), judged against `year` the way find-missing-history
     judges it (assess_tax_year_relevance with the project's pool):
-    `taxjson run` lists a pair whose row is `year_listed` and counts the
+    `tjs run` lists a pair whose row is `year_listed` and counts the
     rest in one line; `--write-missing-history --outside-year` writes
     only the rest."""
     txs = list(transactions)
@@ -1877,7 +1877,7 @@ def missing_history_suspect(c: MissingHistoryCandidate) -> bool:
     marker, and a share or coin (an option or a future sold to open is
     an ordinary short) unless the broker coded the sale CLOSING (IB code
     C) or the account is registered. The pairs find-missing-history
-    reports as TRUNCATED HISTORY, `taxjson run` warns about and `taxjson
+    reports as TRUNCATED HISTORY, `tjs run` warns about and `tjs
     list` marks `missing history?`."""
     if c.broker_marked_short:
         return False
@@ -2415,7 +2415,7 @@ def load_missing_history(path: Path, *, native: bool = False
     (GLOBAL, TOBASE, JOURNAL renames) for the base-currency books, GLOBAL
     renames only for the `native` views (and a crypto account's books);
     a line whose symbol ticker.map DELETEs opens nothing (`deleted`). A missing_history.json (or any .json
-    file) is refused: it is no longer read — `taxjson migrate` converts
+    file) is refused: it is no longer read — `tjs migrate` converts
     it (MissingHistoryNoLongerRead). Raises TtOpeningError on a line
     that cannot be used."""
     path = Path(path)
@@ -2470,7 +2470,7 @@ def load_missing_history(path: Path, *, native: bool = False
         raise MissingHistoryNoLongerRead(
             f"{path}: {path.name} is no longer read — missing history is "
             f"dated .tt lines (OPENING <date> <SYMBOL> <qty> cost=unknown "
-            f"in inputs/<account>/{MISSING_HISTORY_TT}); `taxjson migrate` "
+            f"in inputs/<account>/{MISSING_HISTORY_TT}); `tjs migrate` "
             f"converts the file")
     raise ValueError(f"{path}: not a project folder — the missing history "
                      f"is the project's accounts' .tt OPENING cost=unknown "
@@ -2480,7 +2480,7 @@ def load_missing_history(path: Path, *, native: bool = False
 def read_legacy_entries(path: Path) -> MissingHistoryPairs:
     """The (symbol, account) pairs of an old missing_history.json (or
     phantoms.json) with each entry's recorded `quantity` — read by
-    `taxjson migrate` only, to convert it. Underscore-prefixed fields are
+    `tjs migrate` only, to convert it. Underscore-prefixed fields are
     ignored; a leading BOM is dropped."""
     with open(path, 'r', encoding='utf-8-sig') as f:
         try:
@@ -2525,7 +2525,7 @@ def read_legacy_entries(path: Path) -> MissingHistoryPairs:
 # quantity the user's: never sized from the rows, no tax-year window. With exports
 # shared by every year (`inputs_dir`) the lines are shared too: one
 # record for every year. `find-missing-history --write-missing-history`
-# writes them into inputs/<account>/MISSING_HISTORY_TT; `taxjson
+# writes them into inputs/<account>/MISSING_HISTORY_TT; `tjs
 # migrate` converts a missing_history.json (merging the year folders').
 
 MISSING_HISTORY_TT = "missing_history.tt"
@@ -2603,7 +2603,7 @@ def map_symbol_through(symbol: str, mapping: Dict[str, str]) -> str:
 
 def declaration_maps(root: Any) -> DeclarationMaps:
     """The DeclarationMaps of project folder `root`: its ticker.map read
-    as `taxjson run` reads it (with the tobase.map beside it). A map the
+    as `tjs run` reads it (with the tobase.map beside it). A map the
     run refuses raises (the run names its problems first)."""
     from taxjson.lib import project_layout as _PL
     from taxjson.lib.country import HOME_CURRENCY, CountryError, \
@@ -2812,11 +2812,11 @@ class TtWritePlan:
 def _tt_header(shared: bool) -> List[str]:
     out = [
         "# Units held before the data starts, at a cost the files do not",
-        "# give (written by `taxjson find-missing-history",
-        "# --write-missing-history` or `taxjson migrate`; edit freely):",
+        "# give (written by `tjs find-missing-history",
+        "# --write-missing-history` or `tjs migrate`; edit freely):",
         "#   OPENING <date> <SYMBOL> <qty> cost=unknown [reason=\"...\"]",
         "# Sales that draw on these units are listed for manual reporting",
-        "# and left out of the totals (`taxjson tax-logic`: CA-ACB-11 /",
+        "# and left out of the totals (`tjs tax-logic`: CA-ACB-11 /",
         "# US-BASIS-04). Date a line before the first sale it covers.",
     ]
     if shared:
@@ -2922,7 +2922,7 @@ def tt_differ_lines(plan: TtWritePlan) -> List[str]:
 
 
 # --------------------------------------------------------------------
-# `taxjson migrate`: missing_history.json -> the .tt form.
+# `tjs migrate`: missing_history.json -> the .tt form.
 
 MIGRATED_SUFFIX = ".migrated"
 
@@ -2957,7 +2957,7 @@ class ProjectView:
 
 class MigrationNeedsRun(ValueError):
     """A project whose books are not built: its entries cannot be
-    sized (run `taxjson run` there first)."""
+    sized (run `tjs run` there first)."""
 
 
 def _project_year(root: Path) -> Optional[int]:
@@ -3053,8 +3053,8 @@ def project_view(root: Any) -> Optional[ProjectView]:
                 raise MigrationNeedsRun(
                     f"{root}: no work/{acct}_base.json — its {mh.name} "
                     f"entries are sized from its books: move the file "
-                    f"aside (`mv {mh.name} {mh.name}.hold`), `taxjson "
-                    f"run` there, move it back and run `taxjson migrate` "
+                    f"aside (`mv {mh.name} {mh.name}.hold`), `tjs "
+                    f"run` there, move it back and run `tjs migrate` "
                     f"again")
             txs = _gains_stage_rows(root, acct, load_transactions(base),
                                     mine)
@@ -3078,7 +3078,7 @@ def project_view(root: Any) -> Optional[ProjectView]:
 
 @dataclass
 class MissingHistoryMigration:
-    """`taxjson migrate`'s plan for missing_history.json: the views of
+    """`tjs migrate`'s plan for missing_history.json: the views of
     every project that has one (the year folders sharing the exports),
     the merged lines (each entry as the NEWEST project listing it sizes
     it), `agreed` (every project listing it the same), `differ` (lines
@@ -3098,7 +3098,7 @@ class MissingHistoryMigration:
 
 
 def migration_projects(root: Any) -> List[Path]:
-    """The projects whose missing_history.json `taxjson migrate` merges:
+    """The projects whose missing_history.json `tjs migrate` merges:
     with exports shared by every year (`inputs_dir`), every year folder
     beside `root` reading the same folder; else `root` alone."""
     from taxjson.lib import project_layout as _PL
@@ -3283,7 +3283,7 @@ def loss_warning_text(w: Dict[str, Any], country: str) -> str:
     """One gains-file `superficial_loss_warnings` entry as the sentence
     the run prints after its LOSS_CHECK_LABEL: a clean loss with an
     unknown-cost disposition in its window (its `message`), or an
-    unknown-cost loss with a purchase in its window. The run, `taxjson
+    unknown-cost loss with a purchase in its window. The run, `tjs
     wash-sales` and the checklist's wash-reviewed step read the same
     words (backlog TJ-0551)."""
     from taxjson.lib.country import canonical_country
@@ -3715,7 +3715,7 @@ def synthesize_openings(
     entry), raising or lowering it. A pair with a .tt OPENING
     cost=unknown line (pairs.fixed) opens the line's quantity on its
     date instead, never sized (tax-logic CA-ACB-11 / US-BASIS-04): the
-    sizing serves find-missing-history's suggestions and `taxjson
+    sizing serves find-missing-history's suggestions and `tjs
     migrate`. Returns (new_tx_list,
     applied) where `applied` is a per-entry log of what was inserted (or
     skipped, when the data didn't actually need an opening balance —
@@ -3855,7 +3855,7 @@ def synthesize_openings(
     # min_running: the deepest shortage of the rows dated up to `until`
     # (the tax year's end) — what the opening fills. min_all: over every
     # row (what it would be without the year end: a pair short only
-    # after it, `taxjson migrate` lists it). path: each row's running position, to find
+    # after it, `tjs migrate` lists it). path: each row's running position, to find
     # where the position goes short again once the opening is used up.
     min_running: Dict[Tuple[str, str], float] = {p: 0.0 for p in pairs}
     min_all: Dict[Tuple[str, str], float] = {p: 0.0 for p in pairs}
@@ -4139,7 +4139,7 @@ def synthesize_openings(
 # say, and renames the file to .tt — the kept line is then the user's
 # assertion (tax-logic CA-ACB-15 / US-BASIS-08).
 
-# The draft file: `.txt` is not an input suffix (`taxjson run` reads
+# The draft file: `.txt` is not an input suffix (`tjs run` reads
 # only *.csv and *.tt directly in inputs/<account>/), so an unreviewed
 # draft can never be booked; renaming it to `<name>.tt` makes it input.
 DRAFT_NAME = "purchases_draft.tt.txt"
@@ -4896,7 +4896,7 @@ def _draft_transfers(rows: List[Dict[str, Any]],
             # twice. Shares still held but missing show in `sanity`.
             gap.reason = ("your files already acquire it and no sale "
                           "goes short — a line would count it twice "
-                          "(`taxjson sanity` shows a position still "
+                          "(`tjs sanity` shows a position still "
                           "short of the broker's)")
             gaps.append(gap)
             continue
@@ -4948,7 +4948,7 @@ def format_purchase_drafts(drafts: List[PurchaseDraft],
     settle = (date_basis or default_tax_date(country)) == 'settle'
     head = [
         f"# {DRAFT_NAME} — DRAFT purchase lines for account {account},",
-        "# written by `taxjson find-missing-history --write-purchases`.",
+        "# written by `tjs find-missing-history --write-purchases`.",
         "#",
         "# taxjson does NOT read this file (its name ends in .txt). For "
         "each line:",
@@ -4961,7 +4961,7 @@ def format_purchase_drafts(drafts: List[PurchaseDraft],
         "qty x price + commission; price = total / qty);",
         "#   3. delete any line you cannot vouch for.",
         f"# Then rename the file to {final_name} (any name ending in .tt) "
-        "in this folder and run `taxjson run`.",
+        "in this folder and run `tjs run`.",
         f"# A line still holding {DATE_PLACEHOLDER} or {COST_PLACEHOLDER} "
         "is refused by the run.",
         "#",

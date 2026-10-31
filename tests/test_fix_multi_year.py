@@ -456,7 +456,7 @@ def _mh_open(txs, until, quantity=None, pair=("QZQ.TO", "margin")):
 
 class TestMissingHistoryYearWindow(unittest.TestCase):
     """A pair with no .tt line (a find-missing-history suggestion, an old
-    missing_history.json entry `taxjson migrate` converts) with no
+    missing_history.json entry `tjs migrate` converts) with no
     `quantity` fills the deepest shortage of the rows dated up to the
     project year's end — main's
     peak-short sizing within that window; rows after the year end
@@ -553,7 +553,7 @@ class TestMissingHistoryYearWindow(unittest.TestCase):
             + ('type = "sheltered"\n' if sheltered
                else 'type = "taxable"\n'))
         # (the .tt OPENING cost=unknown line the entry converts to, sized
-        # as `taxjson migrate` sizes it)
+        # as `tjs migrate` sizes it)
         from taxjson.bin.taxjson_convert_tt import parse_tt_line
         from _mh import tt_lines, write_lines
         rows = [r for r in (parse_tt_line(ln, acct)
@@ -629,7 +629,7 @@ class TestMissingHistoryYearWindow(unittest.TestCase):
 
 
 class TestRedactAYearFolder(unittest.TestCase):
-    """`taxjson redact` in a year folder: a single-folder project of that
+    """`tjs redact` in a year folder: a single-folder project of that
     year (the shared exports, the year's slips and holdings/, its
     taxjson.toml and ticker.map), written in the year folder only, with
     the broker ids pseudonymised everywhere, holdings/ included."""

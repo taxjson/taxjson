@@ -200,7 +200,7 @@ class TestTokenRefreshSerialized(unittest.TestCase):
 
 
 class TestProjectFetchLock(unittest.TestCase):
-    """#13: one `taxjson fetch` per project at a time — the existing
+    """#13: one `tjs fetch` per project at a time — the existing
     CSV is read, merged and written back under work/.fetch.lock."""
 
     def test_second_fetch_waits_for_the_first(self):
@@ -215,7 +215,7 @@ class TestProjectFetchLock(unittest.TestCase):
 
             def say(msg):
                 said.append(msg)
-                if "another `taxjson fetch`" in msg:
+                if "another `tjs fetch`" in msg:
                     waiting.set()
 
             req = SimpleNamespace(args=SimpleNamespace(), root=root,

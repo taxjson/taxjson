@@ -142,7 +142,7 @@ class TestRun(unittest.TestCase):
         r = tj(self.root, "run", "--no-input")
         lines = [ln for ln in r.stdout.splitlines() if "similar fund" in ln]
         self.assertEqual(len(lines), 2, r.stdout)
-        self.assertTrue(all(ln.endswith("`taxjson run --details`")
+        self.assertTrue(all(ln.endswith("`tjs run --details`")
                             for ln in lines), lines)
 
     @rule("CA-SL-20")

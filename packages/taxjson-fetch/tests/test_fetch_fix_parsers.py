@@ -1,4 +1,4 @@
-"""Moved from the core's tests/test_fix_parsers.py with `taxjson fetch` (now the
+"""Moved from the core's tests/test_fix_parsers.py with `tjs fetch` (now the
 taxjson-fetch plugin). Original module docstring:
 
 Regression tests for the broker-parser audit findings R1-51, R1-63,

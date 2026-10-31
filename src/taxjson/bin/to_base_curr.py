@@ -36,7 +36,7 @@ backwards too). A fill never reaches further back than 7 days.
 
 WINDOW: --start (default 2000-01-01) .. --end (default today). The
 window used to be "today minus 2000 days", so any transaction older than
-~5.5 years silently converted at the 1.35 default rate. `taxjson run`
+~5.5 years silently converted at the 1.35 default rate. `tjs run`
 passes --start: the earliest date written in the project's files, less
 a few days (lib/rates_window) — a 2024 project no longer asks for 2000
 onwards, nor Yahoo for the years before the Bank's series. A date the

@@ -1,4 +1,4 @@
-"""Low-round parsers2 fixes: taxjson-fill-crypto (the `taxjson fetch`
+"""Low-round parsers2 fixes: taxjson-fill-crypto (the `tjs fetch`
 half moved to packages/taxjson-fetch with the fetcher).
 
 S025-07 (FMV x |qty| pinned at quantities other than 1), S025-08

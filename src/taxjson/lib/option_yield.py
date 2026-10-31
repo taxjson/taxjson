@@ -1,4 +1,4 @@
-"""`taxjson option-yield`: how the option trades on an underlying did
+"""`tjs option-yield`: how the option trades on an underlying did
 over a window — premiums received and paid, the profit or loss on the
 contracts closed in the window and how they closed (expired, bought
 back, assigned, sold, exercised), what is still open, and the yield on
@@ -8,7 +8,7 @@ CA-PLAN-07 / US-PLAN-08): the tax treatment of a premium (ITA s.49
 timing, §1234) is in the gains, not here.
 
 Contracts are matched per account and option series, first in first
-out, from the native books (what `taxjson events` shows): a sale with
+out, from the native books (what `tjs events` shows): a sale with
 no long position WRITES a contract, a purchase with no short position
 BUYS one; the opposite trade closes the oldest open contract of that
 series. A close at price 0 with no money is an expiry; an ASSIGN row

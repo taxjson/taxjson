@@ -353,7 +353,7 @@ class TestCorpActionsNamesTheManifestShort(unittest.TestCase):
     """TJ-0216: the corp-actions stage named the elections manifest by
     its absolute path (captured in the .diag); the console turned it
     into inputs/margin/manifest.json in a year folder whose exports are
-    in ../inputs/. It is named as `taxjson elect` names it."""
+    in ../inputs/. It is named as `tjs elect` names it."""
 
     def test_pending_election_names_the_shared_manifest(self):
         with tempfile.TemporaryDirectory() as td:

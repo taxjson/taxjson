@@ -1,4 +1,4 @@
-"""Re-audit-2 privacy fixes for `taxjson redact` and the
+"""Re-audit-2 privacy fixes for `tjs redact` and the
 generate-parser identity gate (lists privacy-01 / privacy-02). Every
 id, name, address and number here is synthetic."""
 import os

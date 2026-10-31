@@ -11,7 +11,7 @@ have computed other figures without a word.
 FEATURES is the one list of layout features and the release that first
 reads each: a future layout change adds one line. The writers name what
 they write and raise the key to the newest feature's release (never
-lower it): `taxjson init` (the layout it makes), `new-year` (the copy
+lower it): `tjs init` (the layout it makes), `new-year` (the copy
 keeps the key, raised for its own layout), `migrate` (the layout it
 migrated to), `update-tobase-map --write`, `find-missing-history
 --write-missing-history` and `align --write`.
@@ -48,7 +48,7 @@ FEATURES: Tuple[Feature, ...] = (
 )
 _BY_NAME = {f.name: f for f in FEATURES}
 
-# What `taxjson init` writes into every new project: the form its
+# What `tjs init` writes into every new project: the form its
 # missing history takes (find-missing-history writes .tt lines).
 INIT_FEATURES: Tuple[str, ...] = ("missing_history_tt",)
 
@@ -89,7 +89,7 @@ def spec(v: Version) -> str:
 
 
 def running_version() -> Optional[str]:
-    """The installed taxjson's version (what `taxjson --version` says),
+    """The installed taxjson's version (what `tjs --version` says),
     or None when the package metadata cannot be read."""
     try:
         from importlib.metadata import version
@@ -201,7 +201,7 @@ def raise_requirement(root: Any, features: Iterable[str] = ()
 
 
 def lowers(key: str, here: Any, there: Any) -> bool:
-    """`taxjson align` bringing `key` = `there` over `here` would lower
+    """`tjs align` bringing `key` = `there` over `here` would lower
     or remove this project's requires_taxjson (never done)."""
     if key != f"settings.{KEY}" or here is None:
         return False

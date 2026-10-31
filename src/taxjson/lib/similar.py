@@ -10,7 +10,7 @@ for funds of different issuers. Whether such a pair should be treated
 as one is the user's call, so a SIMILAR line never changes a figure. It
 asks for the pair to be WATCHED:
 
-* `taxjson run`: a loss on one member in a taxable account, in the tax
+* `tjs run`: a loss on one member in a taxable account, in the tax
   year, with another member bought within 30 days before or after it
   (the rule's dates: settlement in Canada, trade in the US) in any of
   the project's accounts, taxable or registered, and in Canada still
@@ -30,7 +30,7 @@ TOBASE) is read under its booked symbol.
 
 The map is read leniently here (a line that cannot be parsed is
 skipped), so a reader that decides on the groups refuses a map with
-a problem line first, as `taxjson run` does (taxjson_run
+a problem line first, as `tjs run` does (taxjson_run
 `_strict_ticker_map`: buy-check, sell-check, rebuy, wash-radar,
 harvest); `open_findings` keeps the run's findings while the map has
 one (`map_problems`), backlog TJ-0352.
@@ -328,7 +328,7 @@ def message(f: Dict[str, Any], country: str) -> Tuple[str, List[str]]:
 def more_message(n: int, country: str) -> Tuple[str, List[str]]:
     return (f"{n} more loss(es) with a similar fund bought in the window, "
             f"not listed here",
-            ["`taxjson run --details` lists every one; the checklist's "
+            ["`tjs run --details` lists every one; the checklist's "
              "wash-reviewed step counts them."])
 
 
@@ -341,7 +341,7 @@ def checklist_note(findings: List[Dict[str, Any]]) -> str:
     return (f"{len(pairs)} loss(es) with a similar fund bought in the "
             f"window (ticker.map SIMILAR): {', '.join(pairs[:4])}"
             f"{' ...' if len(pairs) > 4 else ''} — decide each by hand "
-            f"(`taxjson run --details` lists them)")
+            f"(`tjs run --details` lists them)")
 
 
 def caveat(t: str, cat: str, q: str, mode: str, country: str,

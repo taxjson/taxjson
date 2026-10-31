@@ -17,7 +17,7 @@ and filed years.
 - TJ-0918 close-year's freeze refuses a read-only taxjson.toml before
   anything is copied, and writes through a taxjson.toml that is a link
   inside the project (the link kept);
-- TJ-0924 close-year holds the run lock: a `taxjson run` started while
+- TJ-0924 close-year holds the run lock: a `tjs run` started while
   it closes refuses, so the lock describes one set of books;
 - TJ-0929 an input edited while a full run reads the inputs leaves the
   books stale (the run's record holds the version it started with),
@@ -59,7 +59,7 @@ CFG = ('[settings]\nlocal_timezone = "America/Toronto"\nyear = {year}\n'
 
 
 def tjs(root, *args, env_extra=None):
-    """`taxjson -C root <args>`, captured at width 0, offline."""
+    """`tjs -C root <args>`, captured at width 0, offline."""
     env = dict(os.environ, TAXJSON_OFFLINE="1", TAXJSON_WIDTH="0",
                NO_COLOR="1",
                PYTHONPATH=str(REPO_ROOT / "src") + os.pathsep
@@ -224,7 +224,7 @@ def shared_year(top: Path) -> Path:
 
 def driver(tmp: Path, root: Path, body: str, *args: str) -> Path:
     """A script that patches taxjson_run (`body`, with `tr` the module)
-    and then runs `taxjson -C root <args>`."""
+    and then runs `tjs -C root <args>`."""
     d = tmp / "driver.py"
     d.write_text(
         "import sys, time\nfrom pathlib import Path\n"
@@ -270,7 +270,7 @@ class CloseYearPublication(unittest.TestCase):
                     "def boom(*a, **kw):\n"
                     "    from taxjson.lib.out import fail\n"
                     "    fail('cannot write filed/2025.json: disk full',\n"
-                    "         prog='taxjson close-year',\n"
+                    "         prog='tjs close-year',\n"
                     "         details=['Nothing was written.'])\n"
                     "tf.write_snapshot = boom\n")
             proc = run_driver(driver(Path(d), p, body, "close-year",
@@ -323,7 +323,7 @@ class CloseYearConfigWriter(unittest.TestCase):
             self.assertEqual(r.returncode, 0, out(r))
             self.assertTrue(cfg.is_symlink())
             self.assertNotIn('\ninputs_dir = "../inputs"', real.read_text())
-            self.assertIn("frozen by `taxjson close-year`", real.read_text())
+            self.assertIn("frozen by `tjs close-year`", real.read_text())
 
 
 class CloseYearRunLock(unittest.TestCase):
@@ -565,7 +565,7 @@ class FormatMapUnbuiltCrypto(unittest.TestCase):
             self.assertNotEqual(r.returncode, 0, out(r))
             text = " ".join(out(r).split())
             self.assertIn("account coins has no books yet", text)
-            self.assertIn("run `taxjson run`", text)
+            self.assertIn("run `tjs run`", text)
             self.assertEqual(tm.read_text(),
                              "RENAME COIN.KR NEWC.KR 2025-06-02\n")
             self.assertFalse((p / "inputs/margin/renames.tt").exists())

@@ -45,7 +45,7 @@ In each project you keep working in (each year folder):
 1. Run `tjs checklist`. Its set-up section says when the installed
    taxjson is newer than the project's last run, and names any step the
    upgrade opened (a migrate, a tobase.map update).
-2. `tjs run`. A command that stops with "run `taxjson migrate`" means an
+2. `tjs run`. A command that stops with "run `tjs migrate`" means an
    old file format: `tjs migrate --dry-run`, then `tjs migrate`.
 3. Canada: `tjs update-tobase-map` lists what a newer interlisted list
    changes; `--write` applies it.
@@ -58,6 +58,20 @@ In each project you keep working in (each year folder):
 
 Newest first. Each says what changed and what to do. Releases not listed
 needed nothing.
+
+- The command is `tjs` in every message, report and doc. `taxjson` still runs
+  the same program, so scripts and cron jobs keep working; `taxjson.toml`, the
+  `taxjson-*` tools and the `TAXJSON_*` variables are unchanged. No figure
+  moves. (a) `tjs format --check` and `tjs format-map --check` report your files
+  as not formatted until `tjs format --write` and `tjs format-map --write`
+  update their comments. Only comments change, but ticker.map counts as an
+  input: `tjs compare` names it as changed, and in a closed year `tjs check-filed`
+  notes a changed frozen input (the figures still match), so leave a closed year's
+  ticker.map as it is.
+  (b) `tjs compare` and `tjs compare filed` treat the old and new command name
+  in a report as the same, so nothing shows as changed; a plain `diff -r`
+  against an older snapshot or filed report does show those lines once. (c) A script reading a message's prefix or the `usage:` line now sees `tjs` there;
+  `tjs --version` still prints `taxjson X.Y.Z`.
 
 - Canada, Schedule 3 / superficial-loss figures can move on re-run
   (TJ-0828, TJ-0829, TJ-0654): (a) a loss whose replacement went in kind
@@ -481,7 +495,7 @@ needed nothing.
 - Futures (TJ-0745): only books converted twice with the stand-alone
   taxjson-convert-currency (USD to EUR, then EUR to CAD) are affected. For
   a contract held in two taxable accounts, the Canadian pooled gain moves
-  to what a direct conversion gives. Convert the books again. `taxjson
+  to what a direct conversion gives. Convert the books again. `tjs
   run` converts once and is not affected.
 - taxjson-audit (TJ-0773) takes a new optional `--effective-map PATH`, the
   run's work/ticker.map.effective. `tjs audit` passes it on its own; only
@@ -687,8 +701,8 @@ needed nothing.
   after you deleted it: delete it again, or comment it out to opt out for
   good. A pair wrongly recorded as '# removed:': delete that comment and
   update again (TJ-0945).
-- `taxjson run` while `taxjson close-year` is running now stops. The busy
-  message now reads 'another `taxjson run` (or `taxjson close-year`) is in
+- `tjs run` while `tjs close-year` is running now stops. The busy
+  message now reads 'another `tjs run` (or `tjs close-year`) is in
   progress in this project' (TJ-0924).
 - A project that a failed close on an older release left frozen ('Nothing
   was written', yet taxjson.toml's inputs_dir commented out and copies in
@@ -1043,7 +1057,7 @@ needed nothing.
   records `early_out` in `filed/<year>.json`.
 - `tjs crypto-sends`: a sends.json with same-second sends may have its
   keys moved once (a note names them) and become `schema_version` 2. The
-  `crypto_sends.tt` then shows OUT OF DATE until `taxjson crypto-sends
+  `crypto_sends.tt` then shows OUT OF DATE until `tjs crypto-sends
   <acct> --write` or `tjs run`. If an export was downloaded again in
   another order before upgrading, check those sends.
 - Rates: a Yahoo rate past the fill limit left in
@@ -1895,7 +1909,7 @@ needed nothing.
     work/<account>_base.json the capital-gains-dividends map reads), and
     `tjs amt` and `tjs instalments` pass the estimate's 2 through. `tjs
     wash-sales` exits 2 (was 1) when work/ has no gains files, and
-    `--explain` when it has no base files: run `taxjson run`.
+    `--explain` when it has no base files: run `tjs run`.
   - `tjs audit` may now exit 1 on books that passed before: a return of
     capital, split, corporate-action row, opening, dividend (gross) or
     withholding of an audited security that differs from its parsed
@@ -2422,11 +2436,11 @@ needed nothing.
 - **Report commands in a project whose last run had no input** (every
   account's folder empty) stop with "Error: the last run had no input:
   inputs/margin is empty, so it made no books", naming each empty
-  folder, instead of "Run `taxjson run` first" (the exit is 1, as
+  folder, instead of "Run `tjs run` first" (the exit is 1, as
   before).
 - **`tjs gains` in a project whose only books are crypto exits 0**
   after its "crypto account … is not shown" line (it exited 1 with
-  "run `taxjson run` first").
+  "run `tjs run` first").
 
 - **`tjs close-year` stops on uncommitted inputs in a git repository.**
   Inputs, `taxjson.toml` or the maps changed but not committed used to
@@ -2885,7 +2899,7 @@ needed nothing.
   alike get longer book names.** An `at=` naming the old 4-character book
   is refused, and the message lists the new names; point it at one of
   them. Books without such a clash keep their names.
-- **`.gitignore`: anchor the `reports/` line.** The file `taxjson init`
+- **`.gitignore`: anchor the `reports/` line.** The file `tjs init`
   wrote before this release ignores `reports/` at every depth, which
   also hides `filed/<year>/reports/`, the reports as filed that
   `close-year` keeps since v0.30.4+. In a project you keep in git,
@@ -3091,7 +3105,7 @@ needed nothing.
   v0.25.0 section of the CHANGELOG names both. Scripts that called them
   need the new commands.
 - `tjs checklist --json` is `schema_version` 2: a step's `stage` is now
-  `section` ([settings.md](settings.md#taxjson-checklist---json)).
+  `section` ([settings.md](settings.md#tjs-checklist---json)).
 - `tjs tips` exits 0 with or without tips (2 when the project cannot be
   read), and its `--json` is `schema_version` 2.
 
@@ -3116,7 +3130,7 @@ needed nothing.
   watchlist exports (`taxjson-export --seekingalpha`, `--fastgraph`,
   `--tradingview`, the `reports/exports/` files) were removed. A
   `TRADINGVIEW` line in ticker.map is ignored with a note: delete it.
-- `taxjson fetch` moved into the separate taxjson-fetch plugin (installed
+- `tjs fetch` moved into the separate taxjson-fetch plugin (installed
   by default since v0.19.0).
 - `taxjson` with no command prints the help page (exit 0, was 2).
 
@@ -3167,7 +3181,7 @@ if the fix is newer, upgrade first.
 - `tjs slip-audit --import-cra`: a Webull T5 "from CI INVESTMENT SERVICES INC./CI SERVICES D'INVESTISSEMENT INC" is not imported: "no broker in the books by the issuer's name" — fixed in v0.25.0
 
 #### Fixed in v0.24.2
-- "Warning: 1 position at a $0 cost (1 still held): SPNW.TO (margin). Run `taxjson find-missing-history`" for a spin-off you elected with `fmv_per_share=0` (now an Info: the $0 value you declared) — fixed in v0.24.2
+- "Warning: 1 position at a $0 cost (1 still held): SPNW.TO (margin). Run `tjs find-missing-history`" for a spin-off you elected with `fmv_per_share=0` (now an Info: the $0 value you declared) — fixed in v0.24.2
 - "Warning: ATTENTION: 99900001.csv: RBC symbol QZOLD (USD) looks renamed to QZNEW" (or the Questrade or Webull hint) while a `.tt` line `RENAME <date> QZOLD.US QZNEW.US` already declares the change — fixed in v0.24.2
 - `run --fast` keeps the old result after an update that changed only taxjson's market data (no "Rebuilding everything: taxjson's code changed" line) — fixed in v0.24.2; on an older release, run once without `--fast` after updating
 - `tjs elect` says "No elections recorded: lira" although the run booked a spin-off there ("sheltered account lira: spin-off … booked at $0 cost") — fixed in v0.24.2

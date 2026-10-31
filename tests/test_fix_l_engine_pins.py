@@ -40,7 +40,7 @@ def U(*a, **kw):
 
 
 def run(book, year, country='canada', sheltered=(), **kw):
-    """pipeline.run_gains (what `taxjson run` uses) on a taxable book."""
+    """pipeline.run_gains (what `tjs run` uses) on a taxable book."""
     req = GainsRequest(country=country, year=year, taxable=True, **kw)
     err = io.StringIO()
     with contextlib.redirect_stderr(err):

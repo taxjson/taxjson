@@ -280,7 +280,7 @@ def header_kind(cells) -> tuple:
 
 
 def _kraken_siblings(path: Path) -> List[Path]:
-    """The other CSVs in the folder `taxjson run` reads as Kraken
+    """The other CSVs in the folder `tjs run` reads as Kraken
     exports — by the same detection (content first, then the kr_/kraken
     name), not by file name alone."""
     from taxjson.lib.brokerages.detect import same_broker_siblings
@@ -1152,7 +1152,7 @@ class KrakenBrokerage(BaseBrokerage):
                 transactions.append(tx)
         if ignored_types:
             # A fill whose type is blank or not buy/sell has no booking:
-            # an UNBOOKED warning (echoed by `taxjson run`, fatal under
+            # an UNBOOKED warning (echoed by `tjs run`, fatal under
             # --strict) as on the ledger and Coinbase twins — it was a
             # quiet `note:` only the .sum showed (re-audit A2-0245).
             detail = ', '.join(f"{k} x{v}"
@@ -1345,7 +1345,7 @@ class KrakenBrokerage(BaseBrokerage):
                     # stay in the evidence branch.
                     # Custody EVIDENCE, not tax events: emitted as
                     # TRANSFER rows so the standard machinery keeps
-                    # them queryable (`taxjson transfers crypto` via
+                    # them queryable (`tjs transfers crypto` via
                     # the sidecar) instead of silently dropping them.
                     # An off-platform SEND that left your ownership
                     # (gift/payment) is a taxable disposition at FMV —
@@ -1358,7 +1358,7 @@ class KrakenBrokerage(BaseBrokerage):
                             else type_raw)
                     # The fee is in COINS (or feecurrency): it is named
                     # in the description, never put in the money `fee`
-                    # field of a row stamped USD — `taxjson fees` read
+                    # field of a row stamped USD — `tjs fees` read
                     # 25 XRP as 25 USD (audit S061-17). The coins
                     # themselves are disposed of below.
                     if fee:
@@ -1375,7 +1375,7 @@ class KrakenBrokerage(BaseBrokerage):
                         'description': desc,
                     }
                     if fee:
-                        # The coin fee as data for `taxjson transfers`
+                        # The coin fee as data for `tjs transfers`
                         # (its FEE column was empty, audit A2-0663).
                         tx['fee_qty'] = abs(fee)
                         tx['fee_currency'] = fee_ccy
@@ -1771,7 +1771,7 @@ class KrakenBrokerage(BaseBrokerage):
         that covers a shorter date range used to drop every sale in the
         gap behind the same note a complete run prints (R1-104). Now
         the gap is an UNBOOKED warning (echoed to the console by
-        `taxjson run`, fatal under `run --strict`) with counts, dates
+        `tjs run`, fatal under `run --strict`) with counts, dates
         and masked refids."""
         txids = self._sibling_trades_txids(path)
         missing = sorted((d, r) for r, d in trade_refids.items()
@@ -2616,7 +2616,7 @@ def kraken_cash_events(path, stable_cash: bool = True
     order the export lists the rows in.
 
     The account's other ledger exports (the folder's Kraken CSVs, as
-    `taxjson run` reads them) are read beside it, so the answer does not
+    `tjs run` reads them) are read beside it, so the answer does not
     depend on how the history was split across exports: a conversion
     whose legs two exports split is joined across them (each export
     holding a leg gives the same FXCONV, kept once by

@@ -10,7 +10,7 @@
 # it — builds a private virtualenv there with the [fx] extra (every
 # dependency from the release's hash-pinned lock, requirements/), links
 # the `taxjson` command (and its short name `tjs`) into ~/.local/bin.
-# Broker auto-fetch (`taxjson fetch` for Questrade / IBKR Flex) is the
+# Broker auto-fetch (`tjs fetch` for Questrade / IBKR Flex) is the
 # separate taxjson-fetch package from the same release; it is installed
 # into the same environment by default. --without-fetch (or
 # TAXJSON_WITH_FETCH=0) leaves it out, and removes it from an install
@@ -240,7 +240,7 @@ if [ "$TARGET" != main ]; then
   git -C "$DIR" merge-base --is-ancestor "refs/tags/$TARGET^{commit}" origin/main 2>/dev/null \
     || die "$TARGET is not on the main branch's history — refusing to install it."
   # A channel never takes an install backwards (this one may run ahead of
-  # it after `taxjson deploy` or a pin); naming a version goes back. Only
+  # it after `tjs deploy` or a pin); naming a version goes back. Only
   # a release counts: a newer tag here that is lightweight, or on a commit
   # main never had (a local tag), passed without the checks above, so the
   # install stayed on it (backlog TJ-0703); it moves to the channel's.
@@ -284,13 +284,13 @@ else
 fi
 # Remembered OUTSIDE the clone (a file inside would be a local change), so
 # re-running upgrades along the same channel. A pinned version is
-# remembered too. `taxjson deploy` keeps the remembered one
+# remembered too. `tjs deploy` keeps the remembered one
 # (TAXJSON_REMEMBER_CHANNEL=0).
 if [ "$REMEMBER_CHANNEL" != 0 ]; then
   remember "$CHANNEL_FILE" "$CHANNEL"
 fi
 # The fetch opt-out, remembered the same way (only when one was asked
-# for: a plain re-run, or `taxjson deploy`, keeps what is there).
+# for: a plain re-run, or `tjs deploy`, keeps what is there).
 if [ "$FETCH_ASKED" = 0 ]; then
   remember "$FETCH_FILE" off
 elif [ "$FETCH_ASKED" = 1 ] && { [ -f "$FETCH_FILE" ] || [ -L "$FETCH_FILE" ]; }; then
@@ -397,7 +397,7 @@ fi
 # (its own dependencies, an entry-point plugin) in the same repository
 # and release tag; the core never holds broker clients.
 if [ ! -d "$DIR/packages/taxjson-fetch" ]; then
-  echo "   NOTE: this release predates the taxjson-fetch split — its \`taxjson fetch\` is built in."
+  echo "   NOTE: this release predates the taxjson-fetch split — its \`tjs fetch\` is built in."
 elif [ "$WITH_FETCH" = 0 ]; then
   if "$DIR/venv/bin/python" -m pip show --quiet taxjson-fetch >/dev/null 2>&1; then
     "$DIR/venv/bin/python" -m pip uninstall --quiet --yes taxjson-fetch

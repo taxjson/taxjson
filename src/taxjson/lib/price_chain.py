@@ -195,7 +195,7 @@ def yf_symbol_for(symbol: str,
 def load_crypto_overrides(search_dirs) -> Dict[str, str]:
     """fill-crypto's coin spellings: the CRYPTO lines of the first
     ticker.map found in `search_dirs` (the project root's map is the one
-    `taxjson run` priced the books with). No built-in ids."""
+    `tjs run` priced the books with). No built-in ids."""
     from taxjson.lib.ticker_map import side_rules_in
     return dict(side_rules_in(search_dirs).crypto)
 
@@ -212,7 +212,7 @@ def load_yf_map(search_dirs) -> Dict[str, Tuple[str, float]]:
         QUOTE ABC.TO    SAMPLE    1.5
 
     A folder still holding the old yf_ticker.map is refused
-    (lib/ticker_map.LegacyMapFileError): `taxjson migrate` moves it."""
+    (lib/ticker_map.LegacyMapFileError): `tjs migrate` moves it."""
     from taxjson.lib.ticker_map import side_rules_in
     return dict(side_rules_in(search_dirs).quote)
 
@@ -270,7 +270,7 @@ def latest_rate(history: Dict[str, Dict], cur: str,
                 on: str, max_age_days: Optional[int] = None
                 ) -> Tuple[Optional[float], Optional[str]]:
     """(rate, date) of the most recent rate on/before `on` — rates end at
-    the last `taxjson run`, so 'today' usually isn't in the file; a
+    the last `tjs run`, so 'today' usually isn't in the file; a
     slightly aged rate labeled as such beats a silent fallback constant.
     (None, None) when the currency has no usable rate, or when
     `max_age_days` is given and the newest usable rate is older than
@@ -966,7 +966,7 @@ def fetch_prices(pairs: Dict[str, str], *,
             f"current price in the cache: "
             + ", ".join(_rem[:3]) + (f" +{len(_rem) - 3} more"
                                      if len(_rem) > 3 else ""),
-            prog="taxjson",
+            prog="tjs",
             details=["Unset TAXJSON_OFFLINE, or run once online to fill "
                      "the cache."])
     if remaining and verbose:

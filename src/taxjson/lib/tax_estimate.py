@@ -1,4 +1,4 @@
-"""Marginal tax ESTIMATION for `taxjson sum --other-income/--other-losses`.
+"""Marginal tax ESTIMATION for `tjs sum --other-income/--other-losses`.
 
 Incremental method: estimated tax attributable to the year's investment
 income = tax(other_income + investment income) - tax(other_income).
@@ -620,7 +620,7 @@ def _amt_canada(*, realized: float, eligible_div: float,
     provincial tax and foreign tax credit the minimum-tax year's are
     compared with (tax-logic CA-EST-AMT, CA-EST-FTC).
     `ati_lines` is the adjusted taxable income line by line (ITA
-    s.127.52), the breakdown `taxjson amt` prints — the SAME figures
+    s.127.52), the breakdown `tjs amt` prints — the SAME figures
     the total is built from (tax-logic CA-AMT-01)."""
     # Losses deduct at 50% in the AMT base — but only the CLAIMABLE
     # amount, exactly as the regular branch caps them at the year's
@@ -1211,7 +1211,7 @@ def _canada_notes(prov_key: str, prov: Dict[str, Any],
                      f"taxjson.toml's [estimate] amt_carryover = {{ YEAR "
                      f"= AMOUNT }} (by year of origin, from your notice "
                      f"of assessment or T691), "
-                     f"or close last year with `taxjson close-year` so "
+                     f"or close last year with `tjs close-year` so "
                      f"this year reads it from the lock.")
     if staking > 0.005:
         notes.append(f"Crypto staking rewards ({m(staking)}) are taxed "
@@ -1253,7 +1253,7 @@ CA_ASSUMPTIONS = (
     "INTEREST') and interest charged ('INTEREST PAID') per currency, "
     "so take interest income from there (or the T5) and the margin "
     "interest paid to line 22100 (--carrying-charges); "
-    "FX gains/losses on foreign cash (s.39(1.1), line 15300 — `taxjson "
+    "FX gains/losses on foreign cash (s.39(1.1), line 15300 — `tjs "
     "fx-cash`), T3 box 21 capital gains and T5 box 18 amounts not "
     "named in [[capital_gains_dividends]] are not included; "
     "deductions below line 15000 only as entered (--deductions, "

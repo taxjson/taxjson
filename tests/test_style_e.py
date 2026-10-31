@@ -1,7 +1,7 @@
 """House output style (docs/output-style.md) for audit, checklist,
 edge-cases, check-dates, sanity, find-missing-history, renames, spinoffs,
 splits, tax-logic, opening, redact, channels and help — the commands whose
-exit is not 0 on the synthetic style projects, and the lines `taxjson
+exit is not 0 on the synthetic style projects, and the lines `tjs
 checklist` reads from them (they must stay whole and unchanged when the
 output is captured, TAXJSON_WIDTH=0)."""
 import json
@@ -63,8 +63,8 @@ class TestStyledNonZeroExits(unittest.TestCase):
                     "canada": "Fewer shares in taxjson than at the broker "
                               "usually means missing history: purchases "
                               "from before your download starts, or shares "
-                              "transferred in. See `taxjson "
-                              "find-missing-history`, `taxjson transfers` "
+                              "transferred in. See `tjs "
+                              "find-missing-history`, `tjs transfers` "
                               "and docs/getting-started.md step 5. A trade "
                               "after your last export is the other usual "
                               "cause.",

@@ -808,7 +808,7 @@ class TestElectionWording(unittest.TestCase):
                         hints={'fmv_per_share': 0.0})
         self.assertIn('fmv_per_share=0)', err)
         self.assertNotIn('no fmv_per_share hint was given', err)
-        self.assertIn(f'taxjson elect margin --set {ev.event_id}=', err)
+        self.assertIn(f'tjs elect margin --set {ev.event_id}=', err)
         _, err = _quiet(resolve_event, ev, 'taxable_disposition', hints={})
         self.assertIn('no fmv_per_share hint was given', err)
 

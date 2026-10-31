@@ -1,6 +1,6 @@
 """resolve_gains_files — THE canonical gains-file discovery.
 
-Pins the 2026-07b audit fix: `taxjson sum`/`list` read the PRE-wash gains
+Pins the 2026-07b audit fix: `tjs sum`/`list` read the PRE-wash gains
 files while carryover/t1135/wash-sales preferred the wash-adjusted ones,
 so totals disagreed across commands whenever a cross-account wash
 disallowance fired. All six sites now resolve through
@@ -101,7 +101,7 @@ class TestResolveGainsFiles(unittest.TestCase):
 
 
 class TestSummaryUsesFilingBasis(unittest.TestCase):
-    """`taxjson sum` must report the same basis as carryover/t1135 —
+    """`tjs sum` must report the same basis as carryover/t1135 —
     the wash-adjusted numbers — and say so in the banner."""
 
     def _run(self, cmd, root, **kw):
@@ -143,7 +143,7 @@ class TestSummaryUsesFilingBasis(unittest.TestCase):
 
 
 class TestSummaryGroupedTables(unittest.TestCase):
-    """`taxjson sum` groups accounts into TAXABLE / SHELTERED /
+    """`tjs sum` groups accounts into TAXABLE / SHELTERED /
     ALL ACCOUNTS tables when the config declares both types, and keeps
     the single-table layout when it doesn't."""
 
@@ -269,7 +269,7 @@ class TestSummaryTotalColumn(unittest.TestCase):
 
 
 class TestListNegativeFilter(unittest.TestCase):
-    """`taxjson list --negative` — only qty < 0 rows (shorts, or missed
+    """`tjs list --negative` — only qty < 0 rows (shorts, or missed
     corporate actions in accounts that can't short, like a missed
     split-share stock dividend)."""
 

@@ -1,6 +1,6 @@
-"""`taxjson format-map`: lay ticker.map out in keyword groups.
+"""`tjs format-map`: lay ticker.map out in keyword groups.
 
-The ticker.map counterpart of `taxjson format` (lib/config_template): a
+The ticker.map counterpart of `tjs format` (lib/config_template): a
 short `## ` header saying what the file is, then the rules in groups in a
 fixed order, each under a `## --- <Group> ---` heading and a line or two
 naming its keywords:
@@ -17,7 +17,7 @@ naming its keywords:
 
 Dated events are not standing truths: a journal and a ticker change are
 .tt lines of an account, date first (lib/dated_events). `format_map(text,
-migrate=True)` — what `taxjson format-map` does — rewrites each `JOURNAL
+migrate=True)` — what `tjs format-map` does — rewrites each `JOURNAL
 A B` as `TOBASE A B` (what it means now) and moves each dated `RENAME OLD
 NEW YYYY-MM-DD [late=...]` out of the map (FormatResult.moved: the .tt
 line `RENAME YYYY-MM-DD OLD NEW [late=...]` with its comments, which the
@@ -49,7 +49,7 @@ Rules:
   own lines in the same block kept), are regenerated. A paragraph the
   user edited is kept whole (FormatResult.edited_headers), and so is a
   comment that still describes JOURNAL or a dated RENAME as a map rule
-  (FormatResult.dated_comments): `taxjson format-map` names each.
+  (FormatResult.dated_comments): `tjs format-map` names each.
 - A line whose rule is not in the map (no keyword, malformed, a second
   target or lookup value for one symbol) is kept exactly as written, with
   its comments, in the Unrecognized group at the end (after the line it
@@ -111,7 +111,7 @@ GROUPS: Tuple[Tuple[str, Tuple[str, ...], Doc], ...] = (
     (DATED, ("RENAME", "JOURNAL"), (
         "Legacy: dated events now go in a .tt file of an account, date "
         "first (`RENAME YYYY-MM-DD OLD NEW`, `JOURNAL YYYY-MM-DD FROM TO "
-        "QTY`); `taxjson format-map --write` moves these lines.", (
+        "QTY`); `tjs format-map --write` moves these lines.", (
             ("RENAME OLD NEW YYYY-MM-DD [late=fold|late=separate]",
              "a ticker change on that date"),
             ("JOURNAL FROM TO", "read as TOBASE FROM TO"),
@@ -144,8 +144,8 @@ GROUPS: Tuple[Tuple[str, Tuple[str, ...], Doc], ...] = (
          "ignores the line; delete it"),
     ))),
     (UNRECOGNIZED, (), (
-        "Lines taxjson cannot use, kept as written: `taxjson run` refuses "
-        "the map until each is fixed (`taxjson format-map` names the "
+        "Lines taxjson cannot use, kept as written: `tjs run` refuses "
+        "the map until each is fixed (`tjs format-map` names the "
         "problem of each).", ())),
 )
 GROUP_NAMES = tuple(g for g, _k, _d in GROUPS)
@@ -163,7 +163,7 @@ HEADER = (
     "is an event: a .tt line of the account (docs/settings.md). Optional: "
     "a run needs no rule here. Symbols are case-insensitive; a note goes "
     "after `#`; a line starting `# KEYWORD` is a rule switched off (delete "
-    "the `# ` to use it). `taxjson format-map` keeps this layout, and a "
+    "the `# ` to use it). `tjs format-map` keeps this layout, and a "
     "comment directly above a line moves with it. Every keyword: "
     "docs/settings.md, ticker.map.")
 
@@ -203,8 +203,8 @@ _OWN_LINES = frozenset(
     _prose(HEADER) + list(_HEADINGS)
     + [ln for _g, _k, doc in GROUPS for ln in _doc_lines(doc)])
 
-# Comment text earlier taxjson versions wrote (every `taxjson init`
-# template, the earliest projects' header, `taxjson migrate`'s): template
+# Comment text earlier taxjson versions wrote (every `tjs init`
+# template, the earliest projects' header, `tjs migrate`'s): template
 # text, regenerated as the current header instead of kept as the user's
 # note — lib/ticker_map_legacy, by hash. Their commented-out example rules
 # are not template text: those are kept like the user's own. A bare `#`
@@ -338,7 +338,7 @@ class FormatResult:
     text: str
     changed: bool
     counts: Dict[str, int]                 # live lines per group
-    problems: List[str]                    # what `taxjson run` refuses
+    problems: List[str]                    # what `tjs run` refuses
     duplicates: List[Tuple[int, str]]      # (line number, line) dropped
     retired: int                           # live lines in Retired
     preamble: int                          # free-standing blocks kept at the top
@@ -346,7 +346,7 @@ class FormatResult:
     # the JOURNAL lines rewritten as TOBASE (line numbers).
     moved: List[Moved] = field(default_factory=list)
     journals: List[int] = field(default_factory=list)
-    # A commented-out example an earlier `taxjson init` wrote (a dated
+    # A commented-out example an earlier `tjs init` wrote (a dated
     # RENAME), dropped by the migration.
     dropped_examples: List[str] = field(default_factory=list)
     # Comment lines of an earlier taxjson header replaced by the current
@@ -364,7 +364,7 @@ class FormatResult:
 
 
 def _problems(text: str) -> Tuple[List[str], Dict[int, str], set]:
-    """(every problem `taxjson run` refuses the map for, {line number:
+    """(every problem `tjs run` refuses the map for, {line number:
     the problem} of each line whose rule is not in the map, the line
     numbers a problem or a no-op note starts with)."""
     from taxjson.bin.taxjson_ticker_map import _parse_map_text
@@ -562,7 +562,7 @@ def _items(text: str) -> List[Item]:
             continue
         kw = st.split("#", 1)[0].split()
         kw = kw[0].upper() if kw else ""
-        # The examples `taxjson init` writes stay in their keyword's
+        # The examples `tjs init` writes stay in their keyword's
         # group: a line appended at the end of the map took the Lookups
         # examples above it along as its comment (backlog TJ-0047).
         ex = [i for i, c in enumerate(pending) if c.strip() in _INIT_EXAMPLES]
@@ -668,7 +668,7 @@ def _comment_lines(text: str) -> Counter:
     return out
 
 
-# Commented-out dated RENAME examples earlier `taxjson init` templates
+# Commented-out dated RENAME examples earlier `tjs init` templates
 # wrote (their own text, not the user's): the migration drops them.
 _OLD_EXAMPLES = frozenset({"# RENAME OLDQ.US NEWQ.US 2024-06-10"})
 
@@ -813,7 +813,7 @@ def format_map(text: str, migrate: bool = False) -> FormatResult:
     switched: List[str] = []
     if migrate:
         if _problems(text)[0]:
-            # A map `taxjson run` refuses has no single meaning to keep.
+            # A map `tjs run` refuses has no single meaning to keep.
             migrate = False
         else:
             items, moved, journals, examples, switched = \
@@ -845,7 +845,7 @@ def format_map(text: str, migrate: bool = False) -> FormatResult:
         raise FormatError(
             "laying the map out in groups would change what it means "
             "(two lines whose order matters are in different groups) — "
-            "fix the problems `taxjson run` reports, then format it again")
+            "fix the problems `tjs run` reports, then format it again")
     moved_comments: Counter = Counter()
     for mv in moved:
         for ln in mv.comments:
@@ -923,7 +923,7 @@ def _moved_meaning(moved: List[Moved]) -> tuple:
 
 # ------------------------------------------------------------ template
 
-# The commented-out examples `taxjson init` writes, one group after the
+# The commented-out examples `tjs init` writes, one group after the
 # other (format_map files each under its keyword's group).
 _INIT_EXAMPLES = (
     "# GLOBAL ABCX-B.US ABCX.B.US",
@@ -944,6 +944,6 @@ _INIT_EXAMPLES = (
 
 
 def init_template() -> str:
-    """The ticker.map `taxjson init` writes: the formatted layout with a
+    """The ticker.map `tjs init` writes: the formatted layout with a
     commented-out example in each group (format_map leaves it as is)."""
     return format_map("\n".join(_INIT_EXAMPLES) + "\n").text

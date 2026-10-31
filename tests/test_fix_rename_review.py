@@ -1,6 +1,6 @@
 """Pre-release review of the dated renames (v0.24 dated events).
 
-- H2: `taxjson format-map --write` never changes the books: it simulates
+- H2: `tjs format-map --write` never changes the books: it simulates
   the rename events the run books after the move (the project's .tt lines
   plus the moved map lines) and refuses, writing nothing, unless they are
   the ones it books now; a moved line that repeats a .tt line written

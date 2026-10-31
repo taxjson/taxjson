@@ -1,4 +1,4 @@
-"""`taxjson option-yield`: an underlying's option trades over a window
+"""`tjs option-yield`: an underlying's option trades over a window
 as money, and the yield on the strike notional (CA-PLAN-07 /
 US-PLAN-08). Planning numbers only. Synthetic books and projects only."""
 import json

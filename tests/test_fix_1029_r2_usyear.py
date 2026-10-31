@@ -60,7 +60,7 @@ def _env(**extra):
 
 
 def _cli(root, *args):
-    """`taxjson -C ROOT ARGS` as a child of THIS tree's code."""
+    """`tjs -C ROOT ARGS` as a child of THIS tree's code."""
     cmd = python_module_argv("taxjson.bin.taxjson_run",
                              ["-C", str(root), *map(str, args)])
     return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True,
@@ -438,7 +438,7 @@ class TestHandoffSkippedYear(unittest.TestCase):
         r = cl.d_handoff(ctx)
         self.assertEqual(r.status, "attention")
         self.assertEqual(r.detail, "the record is for 2024, not 2025 — "
-                                   "`taxjson handoff`")
+                                   "`tjs handoff`")
 
 
 # ------------------------------------------------------------- TJ-0466
@@ -600,8 +600,8 @@ class TestFilingDocUSVariant(unittest.TestCase):
                          "swapped", doc)
         us = doc[doc.index("\n## A US return\n"):]
         flat = " ".join(us.split())
-        for want in ("taxjson form-export --form 8949", "Form 6781 by hand",
-                     "Schedule D line 21", "taxjson reconcile-slips",
+        for want in ("tjs form-export --form 8949", "Form 6781 by hand",
+                     "Schedule D line 21", "tjs reconcile-slips",
                      "refuse a US project"):
             self.assertIn(want, flat)
         self.assertNotIn("25300", us)
@@ -610,9 +610,9 @@ class TestFilingDocUSVariant(unittest.TestCase):
         intro = " ".join(doc[:doc.index("## 1.")].split())
         for cmd, owner in COMMAND_COUNTRY.items():
             if owner == "canada" and ":" not in cmd \
-                    and f"`taxjson {cmd}`" in doc:
+                    and f"`tjs {cmd}`" in doc:
                 self.assertTrue(f"`{cmd}`" in intro
-                                or f"`taxjson {cmd}`" in intro, cmd)
+                                or f"`tjs {cmd}`" in intro, cmd)
 
 
 if __name__ == "__main__":

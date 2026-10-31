@@ -1,4 +1,4 @@
-"""`taxjson plot-tax`: the tax each month's investment income generated,
+"""`tjs plot-tax`: the tax each month's investment income generated,
 as a chart against the year's estimate (CA-PLAN-08 / US-PLAN-09).
 Planning numbers only. Synthetic books and projects only."""
 import json

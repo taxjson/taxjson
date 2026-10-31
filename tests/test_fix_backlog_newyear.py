@@ -1,4 +1,4 @@
-"""Backlog group `newyear`: `taxjson new-year`, `taxjson migrate` and a
+"""Backlog group `newyear`: `tjs new-year`, `tjs migrate` and a
 filed year's frozen settings. One test per finding, each named for its
 backlog id (TJ-NNNN). Synthetic data only (made-up tickers, .tt lines).
 """
@@ -84,7 +84,7 @@ class TestNewYearGap(unittest.TestCase):
             self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
             self.assertIn("2025 has no year folder: start it first",
                           r.stderr)
-            self.assertIn("`taxjson new-year 2025`", r.stderr)
+            self.assertIn("`tjs new-year 2025`", r.stderr)
             self.assertFalse((top / "2026").exists())
             # The year before, then the year: both made.
             r = _cli(top, "new-year", "2025")
@@ -151,7 +151,7 @@ class TestFrozenYearMigrated(unittest.TestCase):
     def test_tj0108_frozen_year_naming_the_shared_inputs_again_warns(self):
         """TJ-0108: a filed, frozen year whose [settings] names the
         shared inputs_dir again got an `Info:` and 'OK' (exit 0, also
-        under --strict) and `taxjson years` showed no problem. Now a
+        under --strict) and `tjs years` showed no problem. Now a
         `Warning:`, `run --strict` stops, and the year's row names it."""
         _ok(self, self.migrate)
         cfg = self.year / "taxjson.toml"
@@ -275,7 +275,7 @@ class TestNewYearText(unittest.TestCase):
             r = _ok(self, _cli(top, "new-year", "2025", width=None))
             self.assertIn("NEXT STEPS", r.stdout)
             long = [ln for ln in _long_lines(r.stdout)
-                    if "taxjson -C" not in ln]      # a command to copy
+                    if "tjs -C" not in ln]      # a command to copy
             self.assertEqual(long, [], r.stdout)
             self.assertIn("1. Save the 2025 exports in", r.stdout)
 
@@ -284,7 +284,7 @@ class TestNewYearText(unittest.TestCase):
         held last year's line above the template's example for every key
         (`# other_income = 90000`, `# other_income = 0`): uncommenting it
         gave duplicate keys. Now one line per key, aligned, in the
-        layout `taxjson format` keeps."""
+        layout `tjs format` keeps."""
         from taxjson.lib import config_template as CT
         from taxjson.lib.tomlcompat import tomllib
         with tempfile.TemporaryDirectory() as td:

@@ -22,7 +22,7 @@ L6  a sheltered account's election note: no tax in the account, its
     holdings still count for the superficial-loss (US: wash-sale) rule.
 L8  the same broker's proof in another account re-reads transferred and
     reinvested units, never a purchase on a USD trade row.
---  `taxjson list [ACCOUNT] [YYYY-MM-DD]`.
+--  `tjs list [ACCOUNT] [YYYY-MM-DD]`.
 
 Fake account ids only, pii-ok: 55500001, 55500002, U5550001.
 """
@@ -322,7 +322,7 @@ class TestExportCoverageMarkPerGap(unittest.TestCase):
                 "margin/margin_start.tt": OPENING_TT})
             text = flat(console(tj(root, "run", "--no-input", "--details")))
             self.assertIn("No RBC Direct Investing activity in margin after "
-                          "2026-04-28? Mark `taxjson checklist --done "
+                          "2026-04-28? Mark `tjs checklist --done "
                           "export-coverage`", text)
             ctx = ctx_of(root, 2026, date(2026, 10, 8))
             res = cl.d_export_coverage(ctx)
@@ -526,7 +526,7 @@ class TestBrokerProofScope(unittest.TestCase):
             self.assertTrue(LS.scan_questrade([p]).cands["QZAX.US"].bought)
 
 
-# ================================================ taxjson list YYYY-MM-DD
+# ================================================ tjs list YYYY-MM-DD
 class TestListPositionalDate(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

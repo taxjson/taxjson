@@ -103,7 +103,7 @@ def ticker_map_path() -> Optional[str]:
 
 def overrides() -> Overrides:
     """The current ticker.map's market lines (an empty set when there is
-    no map or it cannot be read — `taxjson run` refuses a bad map up
+    no map or it cannot be read — `tjs run` refuses a bad map up
     front and names the line)."""
     p = ticker_map_path()
     if not p:

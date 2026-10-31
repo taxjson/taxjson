@@ -77,7 +77,7 @@ def _demo(tmp):
 
 
 class TestElect(unittest.TestCase):
-    """TJ-0037 and TJ-0176: `taxjson elect` in the years layout."""
+    """TJ-0037 and TJ-0176: `tjs elect` in the years layout."""
 
     @classmethod
     def setUpClass(cls):
@@ -147,7 +147,7 @@ class TestReconcileSlipsNoSlipYet(unittest.TestCase):
             self.assertEqual(cm.exception.code, 2)
             text = " ".join(err.getvalue().split())
             self.assertIn("nothing to reconcile yet", text)
-            self.assertIn("`taxjson checklist --done t5008`", text)
+            self.assertIn("`tjs checklist --done t5008`", text)
             self.assertNotIn("--force", text)
             self.assertNotIn("skip", text)
 
@@ -223,7 +223,7 @@ class TestSlipAuditClosing(unittest.TestCase):
 
 class TestT1135Overrides(unittest.TestCase):
     """TJ-0083: the notes write the override with its keyword; a line
-    with none is refused naming what to write (`taxjson migrate` only
+    with none is refused naming what to write (`tjs migrate` only
     when a t1135.map is there); the checklist's blocked line names
     `tjs t1135`, not migrate, and shows the problem, not the path."""
 
@@ -254,7 +254,7 @@ class TestT1135Overrides(unittest.TestCase):
 
     def test_migrate_only_with_an_old_t1135_map(self):
         msg = self._refusal("ZZC CA\n", t1135_map=True)
-        self.assertIn("`taxjson migrate` converts the old t1135.map", msg)
+        self.assertIn("`tjs migrate` converts the old t1135.map", msg)
 
     def test_other_problems_keep_their_text(self):
         msg = self._refusal("T1135 ZZQ.US CDN\n")
@@ -286,7 +286,7 @@ class TestT1135Overrides(unittest.TestCase):
         err = ("taxjson-t1135: error: ticker.map:54: 'ZZC CA' has no "
                "ticker.map keyword — a T1135 override is a `T1135 SYMBOL "
                "COUNTRY` line (`T1135 ZZC CA`); another line: fix it or "
-               "delete it (`taxjson migrate` converts the old t1135.map)\n")
+               "delete it (`tjs migrate` converts the old t1135.map)\n")
         ctx = SimpleNamespace(settings={"country": "canada"},
                               sub=lambda *a: (2, "", err))
         r = CL.d_t1135(ctx)

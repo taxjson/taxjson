@@ -15,7 +15,7 @@ This module finds those cases after the gains are computed, from the
 run's work files (nothing is recomputed):
 
 * a loss: a share disposition at a loss in a taxable equity account,
-  in the tax year (the gains file `taxjson sum` reads,
+  in the tax year (the gains file `tjs sum` reads,
   report_model.resolve_gains_files);
 * another listing of the same root (cross_listings.listing_root:
   ZZX.TO, ZZX.U.TO and ZZX.US share ZZX; a share class's root is also
@@ -47,11 +47,11 @@ run's work files (nothing is recomputed):
   symbol in the books, so the engine already applies the rule.
 
 Each pair is a `Warning:` on the run's console (the first RADAR_SHOWN;
-then one line counting the rest, which `taxjson ticker-map --suggest`
+then one line counting the rest, which `tjs ticker-map --suggest`
 lists) naming the two lines of
 ticker.map that answer it (`TOBASE FROM TO` if they are one security,
 `DISTINCT A B` if not), and `run --strict` stops until one is in the map.
-`taxjson ticker-map --suggest` offers the TOBASE line (not a conditional
+`tjs ticker-map --suggest` offers the TOBASE line (not a conditional
 hint: the equal names, the shared root and the trades are the evidence
 that the books hold both symbols), its reason naming the DISTINCT line.
 Nothing is denied here: the user's line decides.
@@ -80,7 +80,7 @@ _EPS = 1e-9
 _POSITION_ACTIONS = ("BUYSELL", "ASSIGN", "TRANSFER", "OPENING_BALANCE",
                      "SPLIT")
 # The pairs the run's console lists one by one; the rest are counted in
-# one line (`taxjson ticker-map --suggest` lists every one).
+# one line (`tjs ticker-map --suggest` lists every one).
 RADAR_SHOWN = 20
 # A share-class designator at the end of a listing's root: one letter
 # after a dot or a hyphen (the market's spelling of a class, ZZX.B /
@@ -680,12 +680,12 @@ def more_message(n: int, country: str) -> Tuple[str, List[str]]:
     past the first RADAR_SHOWN."""
     return (f"{n} more possible {_kind(country, n)} across listings, not "
             f"listed here",
-            ["`taxjson ticker-map --suggest` lists every one with the "
+            ["`tjs ticker-map --suggest` lists every one with the "
              "TOBASE and DISTINCT lines that answer it."])
 
 
 def suggestion_reason(f: Dict[str, Any], country: str) -> str:
-    """The reason `taxjson ticker-map --suggest` gives the TOBASE line."""
+    """The reason `tjs ticker-map --suggest` gives the TOBASE line."""
     return (f"a loss on {f['loss_symbol']} and {f['other_symbol']} bought "
             f"within 30 days, {_named(f)}: a possible "
             f"{_kind(country)} across listings — add it if they are one "

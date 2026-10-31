@@ -325,7 +325,7 @@ class TestRangeCheckedFlagsAreUsageErrors(unittest.TestCase):
                 r = _tjs(root, *args)
                 self.assertEqual(r.returncode, 2, (args, r.stderr))
                 self.assertIn(said, r.stderr)
-                self.assertNotIn("run `taxjson run` first", r.stderr)
+                self.assertNotIn("run `tjs run` first", r.stderr)
 
 
 class TestRankedViewNamesTheAccount(unittest.TestCase):
@@ -380,7 +380,7 @@ class TestRankedViewNamesTheAccount(unittest.TestCase):
 class TestInProcessCommandNamesItself(unittest.TestCase):
     """TJ-0354: `_die` read the `_CURRENT_CMD` global, which only main's
     dispatch loop sets: a `cmd_*` function called in-process after
-    another command (tests, a GUI) named the earlier one ("taxjson
+    another command (tests, a GUI) named the earlier one ("tjs
     reconcile-slips: error" for a t1135 refusal)."""
 
     def _err_of(self, fn):

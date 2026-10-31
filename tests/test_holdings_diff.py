@@ -1,4 +1,4 @@
-"""Tests for the `taxjson run` per-account holdings diff.
+"""Tests for the `tjs run` per-account holdings diff.
 
 After regenerating `<account>_holdings.toml`, the wrapper compares the
 new file to the previous snapshot (kept in `work/`) and
@@ -157,7 +157,7 @@ class TestPrintHoldingsDiff(unittest.TestCase):
 
 class TestMaybePrintHoldingsDiffFirstRunSilent(unittest.TestCase):
     """`maybe_print_holdings_diff` is the wrapper-level gate that
-    makes the FIRST `taxjson run` silent (no `+ AAPL: 100 (new
+    makes the FIRST `tjs run` silent (no `+ AAPL: 100 (new
     position)` flood for every existing holding). It runs the diff
     only when a previous snapshot exists in the cache; otherwise
     the user sees just the normal `→ holdings.toml` line."""

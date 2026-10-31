@@ -1,4 +1,4 @@
-"""Moved from the core's tests/test_fix_l_runcore_b.py with `taxjson fetch` (now the
+"""Moved from the core's tests/test_fix_l_runcore_b.py with `tjs fetch` (now the
 taxjson-fetch plugin). Original module docstring:
 
 Regression pins for the run-core LOW findings, second half (2026-09

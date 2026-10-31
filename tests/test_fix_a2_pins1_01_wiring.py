@@ -354,7 +354,7 @@ class TestT1135SeesTheShelteredAccounts(unittest.TestCase):
 
 class TestInstalmentsUseTheEstimateDeductions(unittest.TestCase):
     def test_estimate_table_deductions_lower_the_instalment_base(self):
-        # instalments builds on `taxjson estimate`: [estimate] deductions
+        # instalments builds on `tjs estimate`: [estimate] deductions
         # and carrying_charges lower the current-year net tax, so the
         # schedule equals the estimate's (R1-213).
         cfg = ('[settings]\nyear = 2025\ncountry = "canada"\n'

@@ -1,6 +1,6 @@
 """Mutation pins for lib/option_boundary.py (audit G1-0).
 
-`taxjson option-boundary` (CA-OPT-07) and the expired-open check: each
+`tjs option-boundary` (CA-OPT-07) and the expired-open check: each
 test kills mutants that survived the whole suite in the 2026-09-30
 mutation round. Books are hand-built TaxTransaction lists; `today` is
 always passed so no result depends on the run date.

@@ -8,7 +8,7 @@ audit S028-08):
 
 * direction: the row's own `direction`; a legacy row without one is
   inferred from gain == ±(proceeds - cost), and a BREAK-EVEN row (which
-  satisfies both orientations) is LONG — the guard `taxjson ccd-sum` has
+  satisfies both orientations) is LONG — the guard `tjs ccd-sum` has
   used since the 2026-09 audit (S028-08);
 * per-unit columns are derived from the row (cost / |qty| ...): the gains
   JSON never carried cost_per_share & co., so every row printed 0.0000

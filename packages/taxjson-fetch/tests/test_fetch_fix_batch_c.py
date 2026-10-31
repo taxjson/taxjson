@@ -1,6 +1,6 @@
 """Batch C regression pin (finding 82): a token or API response that is
 valid JSON but not an object (an array, a string) is the one-line
-RuntimeError `taxjson fetch` catches, never an AttributeError traceback.
+RuntimeError `tjs fetch` catches, never an AttributeError traceback.
 Synthetic tokens and account numbers only; nothing touches the network.
 """
 # First: puts the plugin, the core and its test helpers on sys.path.

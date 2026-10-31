@@ -1,4 +1,4 @@
-"""`taxjson sum`, essentials first (docs/output-style.md): the legends
+"""`tjs sum`, essentials first (docs/output-style.md): the legends
 before the tables, at most six non-table lines, one `! ` line per
 warning, and --details printing every note the default leaves out."""
 import unittest
@@ -56,13 +56,13 @@ class TestSumConcise(unittest.TestCase):
                             "(box 18) slips",
                             "registered-account acquisition is lost for "
                             "good",
-                            "Per-security rows: `taxjson form-export`",
+                            "Per-security rows: `tjs form-export`",
                             "is STAKING rewards",
                             "FX on foreign cash: NOT RELIABLE for 2024",
                             "Totals include sheltered account(s)"],
                  "No .tt OPENING cost=unknown line"),
                 ("usa", ["Column (g) is the code-W wash-sale loss",
-                         "Per-sale rows: `taxjson form-export`"],
+                         "Per-sale rows: `tjs form-export`"],
                  "No .tt OPENING cost=unknown line")):
             with self.subTest(country=country):
                 d = self._sum(country, "--details")

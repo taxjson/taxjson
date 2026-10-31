@@ -5,13 +5,13 @@ The pipeline recomputes full history on every run — correct, but it
 means a code upgrade, a parser fix, or an input edit can silently change
 an ALREADY-FILED year's numbers. This module gives that a lock:
 
-  taxjson close-year          snapshot the current tax year's per-account
+  tjs close-year          snapshot the current tax year's per-account
                               filing aggregates to filed/<year>.json
                               (commit it with your records)
-  taxjson check-filed         recompute every filed year from the CURRENT
+  tjs check-filed         recompute every filed year from the CURRENT
                               books and report any drift vs the snapshots
 
-A full `taxjson run` auto-checks at the end (warn-only; fatal under
+A full `tjs run` auto-checks at the end (warn-only; fatal under
 --strict), so "did my filed 2025 numbers just move?" becomes a report
 line instead of archaeology. Drift is not automatically wrong — a
 legitimate fix can move a filed year — but it always deserves eyes, and
@@ -221,10 +221,10 @@ def aggregates_from_gains(doc: Dict[str, Any],
 
 
 def income_as_summed(lock: Dict[str, Any]) -> Optional[float]:
-    """A lock's income as `taxjson sum`'s taxable SUBTOTAL row adds it:
+    """A lock's income as `tjs sum`'s taxable SUBTOTAL row adds it:
     each account's DIVIDEND and PIL to the cent, summed. The lock's
     `totals` round the accounts' unrounded sum once (what check-filed
-    compares), a cent or so apart: close-year and `taxjson years` show
+    compares), a cent or so apart: close-year and `tjs years` show
     this (display only; backlog TJ-0212). None when the lock has no
     per-account figures."""
     accts = lock.get("accounts") if isinstance(lock, dict) else None
@@ -267,7 +267,7 @@ def write_snapshot(root: Path, year, country: str, basis: str,
     if path.exists() and not force:
         from taxjson.lib.out import fail
         fail(f"filed/{path.name} already exists — the lock protects a "
-             f"filed year", prog="taxjson close-year",
+             f"filed year", prog="tjs close-year",
              details=["Re-run with --force to replace it (only if you "
                       "re-filed/amended)."])
     _money = ("realized", "disallowed", "income", "dividend", "pil",
@@ -311,7 +311,7 @@ def write_snapshot(root: Path, year, country: str, basis: str,
         # traceback (S031-19). Nothing was written.
         from taxjson.lib.out import fail
         fail(f"cannot write filed/{path.name}: {e}",
-             prog="taxjson close-year", details=["Nothing was written."])
+             prog="tjs close-year", details=["Nothing was written."])
     return path
 
 
@@ -365,7 +365,7 @@ def lock_shape_problem(lock: Any, year) -> Optional[str]:
     """Why a filed/<year>.json document is not a close-year lock — not
     a JSON object, a per-account table that is not one, totals that are
     not a table, a `year` other than the file's — else None. The
-    readers that summarise a lock (`taxjson years`) call a damaged one
+    readers that summarise a lock (`tjs years`) call a damaged one
     a problem instead of a filed year (issue #49); check-filed refuses
     the same shapes."""
     if not isinstance(lock, dict):
@@ -398,9 +398,9 @@ def lock_shape_problem(lock: Any, year) -> Optional[str]:
         if k in _NUMERIC_KEYS and not _finite_num(v):
             return (f"records totals.{k} as {v!r}, not a finite number — "
                     f"the lock is damaged")
-    # The RETURN row close-year recorded (`taxjson sum`'s, each sale's
+    # The RETURN row close-year recorded (`tjs sum`'s, each sale's
     # cents): not recomputed by the drift check (display only there),
-    # but `taxjson years` shows it and the next year's carryover takes
+    # but `tjs years` shows it and the next year's carryover takes
     # it as the filed figure (Canada), so a damaged one is a damaged
     # lock, never passed over in silence (backlog TJ-0274).
     if "return_row" in lock:
@@ -433,7 +433,7 @@ def lock_shape_problem(lock: Any, year) -> Optional[str]:
 # ------------------------------------------- the one check of a lock
 #
 # Every reader of a close-year lock — check-filed and the run's filed-
-# year check, `taxjson years`, the next year's carryover, estimate, amt,
+# year check, `tjs years`, the next year's carryover, estimate, amt,
 # close-year and handoff — applies the same check (read_lock), so a
 # lock one of them refuses is never taken as sound by another: the
 # carryover ledger dropped a lock the estimate refused and printed a
@@ -447,7 +447,7 @@ class LockProblem(ValueError):
     and the fix."""
 
 
-LOCK_FIX = ("restore the lock from git or re-close that year (`taxjson "
+LOCK_FIX = ("restore the lock from git or re-close that year (`tjs "
             "close-year --force` in its project)")
 
 
@@ -511,7 +511,7 @@ def lock_damage(lock: Any, year: Any, label: str) -> Optional[str]:
     return None
 
 
-REFILE_DISPOSITIONS = ("taxjson close-year --force --filed-dispositions "
+REFILE_DISPOSITIONS = ("tjs close-year --force --filed-dispositions "
                        "<CSV>")
 
 
@@ -576,7 +576,7 @@ def missing_lock_problem(path: Path, label: Optional[str] = None
         return None
     return (f"{label or p}: the {y} close-year lock is missing, while "
             f"{why} (the year was closed) — restore filed/{y}.json from "
-            f"git or a backup, or run `taxjson close-year` in the {y} "
+            f"git or a backup, or run `tjs close-year` in the {y} "
             f"project again; until then what {y} carried forward is "
             f"unknown")
 
@@ -806,7 +806,7 @@ def _recompute_blended(cache: Path, accounts: List[str], year: int,
         if not b.exists():
             cli_diag.warn(PROG, f"{a}: no work/{b.name} — cannot "
                                 f"recompute",
-                          details=["Run `taxjson run` first."])
+                          details=["Run `tjs run` first."])
             out[a] = None
     present = [(a, b) for a, b in present if b.exists()]
     if not present:
@@ -872,7 +872,7 @@ def recompute_year(cache: Path, account: str, year: int,
     if not base.exists():
         cli_diag.warn(PROG, f"{account}: no work/{base.name} — cannot "
                             f"recompute",
-                      details=["Run `taxjson run` first."])
+                      details=["Run `tjs run` first."])
         return None
     # Canonical spelling: "Canada"/"CA" passed raw died in the engine's
     # argparse and disabled the drift guard (S031-24).
@@ -1003,7 +1003,7 @@ def diff_snapshot(snapshot: Dict[str, Any],
                         f"the 2024 Schedule 3 puts January 1 - June 24 on "
                         f"the Period 1 lines (10689/10690, 10693/10694) — "
                         f"compared on the Period 2 lines (same dollars; "
-                        f"see `taxjson form-export` for the split)")
+                        f"see `tjs form-export` for the split)")
             if not any("_da_" in k for k in fl_filed):
                 # Locked before the 8949 digital-asset boxes (A2-0482):
                 # the part totals still compare every row.
@@ -1046,7 +1046,7 @@ def prior_record_setting(root: Path, settings: Dict[str, Any]
     """The lock [settings] prior_year_record names (per-year project
     layout: "../2025/filed/2025.json"), resolved against the project
     root; None when the key is unset. A non-string value raises
-    PriorRecordError with the same text `taxjson run` refuses it with —
+    PriorRecordError with the same text `tjs run` refuses it with —
     handoff read 5 as the path <root>/5 (A2-1135)."""
     configured = (settings or {}).get("prior_year_record")
     if configured is None or configured == "":

@@ -1,4 +1,4 @@
-"""The 2026-10-29 fix round 7, migrate group: `taxjson migrate
+"""The 2026-10-29 fix round 7, migrate group: `tjs migrate
 --to-years`, `new-year`, `align` and the ticker-map hygiene advice.
 
 - TJ-0797 an account named `slips` (its exports in inputs/slips/, the
@@ -45,7 +45,7 @@ SNAP = ('[meta]\ngenerated_at = 2025-12-31T21:00:00Z\n[[holding]]\n'
 
 
 def tjs(root, *args):
-    """`taxjson -C root <args>`, captured at width 0, offline."""
+    """`tjs -C root <args>`, captured at width 0, offline."""
     env = dict(os.environ, TAXJSON_OFFLINE="1", TAXJSON_WIDTH="0",
                NO_COLOR="1",
                PYTHONPATH=str(REPO_ROOT / "src") + os.pathsep

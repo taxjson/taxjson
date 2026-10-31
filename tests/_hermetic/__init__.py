@@ -1,7 +1,7 @@
 """A synthetic HOME for every test process: no developer files, no network.
 
 The suite used to pass on the maintainer's machine and fail on every
-GitHub runner: `taxjson run` reads its exchange rates from
+GitHub runner: `tjs run` reads its exchange rates from
 ~/.currency_price_cache.json, and the maintainer's real cache (filled by
 years of online runs) answered every date a test project needed, while
 a fresh runner had no cache, no [fx] extra and a live Bank of Canada

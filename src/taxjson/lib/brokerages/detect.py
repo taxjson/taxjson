@@ -23,8 +23,8 @@ Order (`detect`):
    A positions-ONLY report (an RBC "Holdings Export": what is held on a
    date, not activity — lib/positions_reports) matches no trade
    detector: `detect` returns it with `positions` set and no parser,
-   and `taxjson run` skips it with a note (`taxjson sanity` and
-   `taxjson opening` read it).
+   and `tjs run` skips it with a note (`tjs sanity` and
+   `tjs opening` read it).
 3. The file name, only when no content signature matched: a `cb_` /
    `kr_` / `generic_` prefix, or the word coinbase / kraken in the name.
    When the content matched and the name suggests another broker, the
@@ -77,7 +77,7 @@ NAME_WORDS: Tuple[Tuple[str, str], ...] = (
 # has the section,Header/Data shape the IB parser reads — whether or not
 # a BrokerName row follows (audit R1-57: a Trades-first Flex download, a
 # statement without the BrokerName row, or a Title row before it all
-# parsed, but `taxjson run` stopped with "cannot detect broker").
+# parsed, but `tjs run` stopped with "cannot detect broker").
 IB_SECTIONS = frozenset({
     'Statement', 'Account Information', 'Trades', 'Dividends',
     'Withholding Tax', 'Interest', 'Fees', 'Transfers', 'Corporate Actions',
@@ -124,8 +124,8 @@ class Detection:
         where = shown if shown is not None else str(self.path)
         if self.positions:
             return (f"{where} → positions report ({self.reason}) — not "
-                    f"activity; skipped (read it with `taxjson sanity` "
-                    f"or `taxjson opening`)")
+                    f"activity; skipped (read it with `tjs sanity` "
+                    f"or `tjs opening`)")
         return f"{where} → {self.display} ({self.reason})"
 
 
@@ -180,7 +180,7 @@ def looks_like_ib_rows(rows) -> bool:
 
 
 def looks_like_ib_text(text: str) -> bool:
-    """looks_like_ib_rows over CSV text (`taxjson fetch` checks a Flex
+    """looks_like_ib_rows over CSV text (`tjs fetch` checks a Flex
     download with it, so fetch accepts exactly what detection routes)."""
     return looks_like_ib_rows(csv_rows(text))
 
@@ -399,7 +399,7 @@ def _file_matches(path: Path):
 
 
 def detect(path: Path) -> Detection:
-    """How `taxjson run` routes `path` (see the module docstring).
+    """How `tjs run` routes `path` (see the module docstring).
     Raises AmbiguousBroker when the content matches two exports."""
     path = Path(path)
     mapping = generic_mapping(path)
@@ -450,7 +450,7 @@ def detect(path: Path) -> Detection:
 
 
 def detect_broker(path: Path) -> Optional[str]:
-    """The parser id `taxjson run` uses for `path`, or None."""
+    """The parser id `tjs run` uses for `path`, or None."""
     return detect(path).broker
 
 
@@ -464,7 +464,7 @@ SIBLING_SCAN_LIMIT = 200
 def same_broker_siblings(path: Path, broker: str,
                          by_name: Optional[Callable[[str], bool]] = None
                          ) -> List[Path]:
-    """The other CSVs in `path`'s folder that `taxjson run` routes to
+    """The other CSVs in `path`'s folder that `tjs run` routes to
     the same parser (a Kraken trades export's ledger, a Webull export's
     other years) — by the same detection, not by file name. `by_name`
     (lower-cased name -> bool) is the parser's old name test, used only

@@ -43,7 +43,7 @@ SRC = REPO_ROOT / "src"
 
 
 def _cli(root: Path, *args: str) -> subprocess.CompletedProcess:
-    """`taxjson -C root args...` from this tree's sources, captured
+    """`tjs -C root args...` from this tree's sources, captured
     (width 0)."""
     env = dict(os.environ, PYTHONPATH=str(SRC), TAXJSON_OFFLINE="1",
                TAXJSON_WIDTH="0")
@@ -240,7 +240,7 @@ class TestCanadaViews(unittest.TestCase):
                 self.assertIn("not audited — corp-action elections pending "
                               "for margin2 (so margin too: no cross-account "
                               "pass)", both, args)
-                self.assertIn("taxjson elect --pending", both, args)
+                self.assertIn("tjs elect --pending", both, args)
                 for bad in ("MISMATCH", "stale work/", "no disposition "
                             "matches"):
                     self.assertNotIn(bad, both, args)

@@ -1,4 +1,4 @@
-"""`taxjson rebuy`: every ticker sold at a loss whose repurchase window is
+"""`tjs rebuy`: every ticker sold at a loss whose repurchase window is
 still open, and the first day it can be bought back without the loss
 being denied (tax-logic CA-PLAN-05 / US-PLAN-06).
 

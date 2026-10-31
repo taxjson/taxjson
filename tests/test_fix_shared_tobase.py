@@ -123,7 +123,7 @@ class TestSetting(unittest.TestCase):
             self.assertIn("two tobase.map files", why)
             self.assertIn("'../tobase.map'", why)
             self.assertIn("tobase.map of its own", why)
-            self.assertIn("taxjson migrate", why)
+            self.assertIn("tjs migrate", why)
             r = cli(d, "run", "--no-input")
             self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertIn("two tobase.map files", r.stderr)
@@ -270,7 +270,7 @@ class TestCommands(unittest.TestCase):
     def test_checklist_and_years_name_the_shared_file_that_changed(self):
         before = {"tobase.map": "h1", "ticker.map": "t"}
         # The year's own copy made the shared one, same content: no
-        # change (`taxjson migrate`).
+        # change (`tjs migrate`).
         self.assertEqual(CL._fingerprint_diff(
             before, {"../tobase.map": "h1", "ticker.map": "t"}), "")
         self.assertEqual(CL._fingerprint_diff(

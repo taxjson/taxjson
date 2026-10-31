@@ -167,12 +167,12 @@ class TestMovedInUnitsHaveNoCostOfZero(unittest.TestCase):
     @rule("CA-ACB-OWN-MOVE")
     def test_canada(self):
         self._check("canada", "The ACB is one pool across your taxable "
-                              "accounts: `taxjson list` gives this "
+                              "accounts: `tjs list` gives this "
                               "account's share.")
 
     @rule("US-BASIS-05")
     def test_usa(self):
-        self._check("usa", "The basis moved with the lots: `taxjson list` "
+        self._check("usa", "The basis moved with the lots: `tjs list` "
                            "gives it.")
 
 

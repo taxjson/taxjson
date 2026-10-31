@@ -1,4 +1,4 @@
-"""`taxjson fetch` in the core: the thin dispatcher over fetcher plugins.
+"""`tjs fetch` in the core: the thin dispatcher over fetcher plugins.
 
 The core holds no broker client and reads no broker credential; the
 Questrade / IBKR Flex fetcher is the separate taxjson-fetch package
@@ -309,7 +309,7 @@ class TestDispatch(_Patched):
 
     def test_offline_refuses_before_any_fetcher_runs(self):
         # Security review L6: TAXJSON_OFFLINE forbids taxjson's network
-        # egress, and `taxjson fetch` is egress — one line, no plugin
+        # egress, and `tjs fetch` is egress — one line, no plugin
         # call (dry runs too: a dry run still downloads).
         root = self.project(self.ACCOUNTS)
         for argv in ((), ("--dry-run",), ("b", "--json")):

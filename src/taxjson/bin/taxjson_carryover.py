@@ -34,7 +34,7 @@ less than line 21 when taxable income is negative). Claims fold into
 the running balance (a claim recorded before the loss exists — e.g. a
 carryback entered under the target year — is held pending and consumed
 when the loss arrives). In a project the claims are taxjson.toml's
-`[carryover] claimed = { 2023 = 4000.00 }`, which `taxjson carryover`
+`[carryover] claimed = { 2023 = 4000.00 }`, which `tjs carryover`
 passes as --claimed-year YEAR=AMOUNT.
 
 Usage:
@@ -43,7 +43,7 @@ Usage:
         [--incomplete-history PROJECT_DIR] [--claimed FILE | --claimed-year YEAR=AMOUNT ...]
         [--tax-date settle|trade] [--base-currency CAD] [--json]
 
-Or through the project wrapper: `taxjson carryover`.
+Or through the project wrapper: `tjs carryover`.
 """
 
 from taxjson.lib.stage_msg import emit_line
@@ -89,7 +89,7 @@ def _parse_amount(text: str) -> float:
 
 
 # A claim's YEAR must be a plausible return year — the range
-# `taxjson init` / [settings] year accept. A typo ('2205', '0') became a
+# `tjs init` / [settings] year accept. A typo ('2205', '0') became a
 # spurious ledger row that silently consumed the claim (S027-23).
 CLAIM_MIN_YEAR = 1900
 
@@ -767,9 +767,9 @@ def lock_figure(path: Path, country: str) -> Dict[str, Any]:
                     if unsplit:
                         out['section_1256_unsplit'] = True
         else:
-            # The RETURN row close-year recorded (`taxjson sum`'s, all
+            # The RETURN row close-year recorded (`tjs sum`'s, all
             # the taxable accounts' Schedule 3 rows together): what
-            # close-year and `taxjson years` show (TJ-0192, TJ-0208).
+            # close-year and `tjs years` show (TJ-0192, TJ-0208).
             # check-filed does not recompute it, but read_lock refuses
             # one that is not a finite number (lock_shape_problem,
             # backlog TJ-0274); the type check stays for a hand-built
@@ -834,10 +834,10 @@ def lock_figure(path: Path, country: str) -> Dict[str, Any]:
 SCOPE_NOTE = {
     'canada': ("NET GAIN(LOSS) counts the dispositions in these books "
                "(plus the T5 box 18 dividends [[capital_gains_dividends]] "
-               "names, when `taxjson carryover` passes them). Other "
+               "names, when `tjs carryover` passes them). Other "
                "capital gains reported on slips (T3 box 21, T5 "
                "box 18 -> lines 17400/17600) and the ITA s.39(1.1) FX "
-               "gain or loss on foreign cash (line 15300, `taxjson "
+               "gain or loss on foreign cash (line 15300, `tjs "
                "fx-cash`) are NOT included; in a loss year they change "
                "the net capital loss, so the carryforward and the "
                "carryback caps shown are off by that amount."),
@@ -855,7 +855,7 @@ def _authority(country: str) -> str:
             else "CRA's loss balance")
 
 
-# Essentials first (docs/output-style.md): with --brief (what `taxjson
+# Essentials first (docs/output-style.md): with --brief (what `tjs
 # carryover` passes unless --details) a message is its headline and the
 # ledger is render_brief; the standalone tool prints everything.
 _DETAILS = True
@@ -1001,7 +1001,7 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
     """The console ledger in the house style (docs/output-style.md): a
     table fitted to the width, each year's carry notes listed under it,
     then the notes. `--json` is the machine form. `in_project`: run by
-    `taxjson carryover`, whose claims are taxjson.toml's [carryover]
+    `tjs carryover`, whose claims are taxjson.toml's [carryover]
     claimed — it rejects --claimed FILE (backlog TJ-0145)."""
     from taxjson.lib import out as _out
     lines: List[str] = []
@@ -1079,7 +1079,7 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
                  f"in a year is at most its taxable capital gains (ITA "
                  f"s.111(1.1)). The ledger applies the claim as recorded, "
                  f"so its balance is up to {_money(_c['excess'])} below "
-                 f"`taxjson estimate`'s, which applies no more than the "
+                 f"`tjs estimate`'s, which applies no more than the "
                  f"gain. If {_y}'s return had other capital gains (slips, "
                  f"the FX gain on cash: not in the nets), the claim "
                  f"stands; else correct it.", "", "  ")
@@ -1093,7 +1093,7 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
                      f"closed again since (an amendment). No more than "
                      f"the balance carried in can be applied (ITA "
                      f"s.111(1)(b)): {r['year']}'s return needs a T1-ADJ "
-                     f"too, and its lock closed again (`taxjson "
+                     f"too, and its lock closed again (`tjs "
                      f"check-filed` in its project names it).", "", "  ")
     else:
         para(f"Carryover after {_final_year}: "
@@ -1123,7 +1123,7 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
                     and abs(r['net_gain'] - r.get('slip_gains', 0.0)
                             - r['engine_net_gain']) >= 0.005):
                 item(f"{r['year']}'s NET GAIN(LOSS) has the RETURN row "
-                     f"of `taxjson sum` (each Schedule 3 row's cents, as "
+                     f"of `tjs sum` (each Schedule 3 row's cents, as "
                      f"filed); the books' unrounded total is "
                      f"{_money(r['engine_net_gain'])}.")
     else:
@@ -1294,7 +1294,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "the next year's Capital Loss Carryover "
                              "Worksheet; 0 when taxable income was "
                              "negative) — not the line 6/14 carryover "
-                             "coming in. (`taxjson carryover` passes the "
+                             "coming in. (`tjs carryover` passes the "
                              "project's [carryover] claimed as "
                              "--claimed-year instead.)")
     parser.add_argument("--claimed-year", action="append", default=[],
@@ -1329,7 +1329,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--return-row", action="append", default=[],
                         metavar="YEAR=GAIN",
                         help="Canada: a year's gain as the return files "
-                             "it (`taxjson sum`'s RETURN row, each "
+                             "it (`tjs sum`'s RETURN row, each "
                              "Schedule 3 row's cents): that year's NET "
                              "GAIN(LOSS) instead of the engine's unrounded "
                              "total (the wrapper passes the project "
@@ -1363,7 +1363,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--json", action="store_true",
                         help="Emit the report as JSON instead of text")
     # The written-option premium timing the filing pipeline uses (the
-    # `taxjson carryover` wrapper passes the project's settings): without
+    # `tjs carryover` wrapper passes the project's settings): without
     # them the ledger computed every year on close timing while the
     # returns were filed on grant timing (2026-09 audit: filed 2025 -601
     # vs ledger -1,000 on the same book).
@@ -1385,12 +1385,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Canada, grant timing: buy-back loss of a "
                              "written option can be superficial.")
     # The wrapper's claims are taxjson.toml's [carryover] claimed: the
-    # notes name that, not --claimed FILE, which `taxjson carryover`
+    # notes name that, not --claimed FILE, which `tjs carryover`
     # rejects (backlog TJ-0145).
     parser.add_argument("--claims-in-project", action="store_true",
                         help=argparse.SUPPRESS)
     parser.add_argument("--brief", action="store_true",
-                        help="The essentials only (what `taxjson carryover` prints "
+                        help="The essentials only (what `tjs carryover` prints "
                              "without --details): the notes and each "
                              "message's detail are left out")
     args = parser.parse_args(argv)
@@ -1450,7 +1450,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"taxjson-carryover: --base-currency {base_cur} does not "
               f"match the {args.country} return's currency {_home} — "
               f"pass the {_home} books (work/<account>_base.json, or "
-              f"`taxjson carryover` in the project)", file=sys.stderr)
+              f"`tjs carryover` in the project)", file=sys.stderr)
         return 2
     args.base_currency = base_cur
 
@@ -1469,7 +1469,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             raise ValueError(
                 f"{p} is in {_tgt} (metadata.target_currency) but "
                 f"--base-currency is {base_cur} — pass the base-currency "
-                f"books (work/<account>_base.json, or `taxjson carryover` "
+                f"books (work/<account>_base.json, or `tjs carryover` "
                 f"in the project)")
         bad = sorted({str(t.currency).strip().upper() for t in txs
                       if str(t.currency or "").strip()
@@ -1478,7 +1478,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             raise ValueError(
                 f"{p} holds rows in {', '.join(bad)} but --base-currency "
                 f"is {base_cur} — pass the base-currency books "
-                f"(work/<account>_base.json, or `taxjson carryover` in "
+                f"(work/<account>_base.json, or `tjs carryover` in "
                 f"the project)")
         return txs
 
@@ -1546,7 +1546,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 # handoff and close-year refuse the same lock
                 # (2026-10-25 audit robustness#1, year-end#1). The
                 # estimate's own words, one message (its last line is
-                # what `taxjson checklist` shows).
+                # what `tjs checklist` shows).
                 from taxjson.lib.out import error as _error
                 _error(str(exc), prog="taxjson-carryover")
                 return 1
@@ -1555,12 +1555,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             from taxjson.lib.out import warn as _warn
             # A warning, not a refusal (backlog TJ-0069): the row is
             # this project's books either way — the lock gives it no
-            # figure — and check-filed, the run and `taxjson years`
+            # figure — and check-filed, the run and `tjs years`
             # report the damage itself.
             _warn(f"{y}: the filed-year lock {lp} could not be read or "
                   f"is damaged — the {y} row is not checked against the "
                   f"filed return",
-                  details=_dl([f"{exc}", "`taxjson check-filed` checks "
+                  details=_dl([f"{exc}", "`tjs check-filed` checks "
                                "the lock."]))
             continue
         if info.get('year') is not None and info['year'] != y:
@@ -1735,7 +1735,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 # project's inputs seldom hold that year's slips any
                 # more (backlog TJ-0898).
                 slip_by[y] = float(info['slip_gains'])
-    # A year's net as the return files it (`taxjson sum`'s RETURN row,
+    # A year's net as the return files it (`tjs sum`'s RETURN row,
     # each Schedule 3 row's cents), not the engine's unrounded total a
     # cent or two apart: the carryforward balance, and the carry-back
     # close-year records, are built on the return (backlog TJ-0208). A
@@ -1886,7 +1886,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                               "option_grant_timing_since, tax_date")
                            + "); the lock is what was filed and what "
                            + _authority(country) + " is built on — check "
-                           "the settings or use `taxjson check-filed`."]))
+                           "the settings or use `tjs check-filed`."]))
     if manual:
         # Machine-readable too (TJ-0323): each excluded disposition
         # (`excluded_unknown_cost`), and the years whose nets lack them

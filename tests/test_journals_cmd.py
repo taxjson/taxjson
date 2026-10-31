@@ -1,4 +1,4 @@
-"""`taxjson journals` and the `taxjson renames` additions (owner request,
+"""`tjs journals` and the `tjs renames` additions (owner request,
 feat/journals-cmd): every broker journal between two listings per
 account, how it was found and its state (joined / suggested / refused);
 each rename's source and the look-alike rename hints as suggestions;
@@ -36,7 +36,7 @@ def tearDownModule():
 
 
 def cli(root, *args, width="0"):
-    """`taxjson -C root args...`; width "120": as a pipe shows it."""
+    """`tjs -C root args...`; width "120": as a pipe shows it."""
     import os
     import subprocess
     import sys
@@ -364,7 +364,7 @@ def _rbc(gambits, distinct=False):
 
 
 class TestCommand(unittest.TestCase):
-    """`taxjson journals` on full runs (both countries)."""
+    """`tjs journals` on full runs (both countries)."""
 
     def test_no_run_is_an_error_naming_taxjson_run(self):
         with tempfile.TemporaryDirectory() as td:
@@ -372,7 +372,7 @@ class TestCommand(unittest.TestCase):
                 r = cli(root, "journals")
                 self.assertEqual(r.returncode, 1, r.stderr)
                 self.assertIn("error: no work/", r.stderr)
-                self.assertIn("run `taxjson run` first", r.stderr)
+                self.assertIn("run `tjs run` first", r.stderr)
                 r = cli(root, "journals", width="120")
                 self.assertTrue(r.stderr.startswith("Error: no work/"),
                                 r.stderr)
@@ -491,7 +491,7 @@ _WB_HINT = ("warning: ATTENTION: Webull wb.csv: QZW goes short with a SALE "
             "reorganization row. If so, add the dated change `RENAME QZV "
             "QZW 2025-05-02` (the first QZW row here; use the broker's "
             "change date if you know it) to ticker.map so both are one "
-            "position (`taxjson renames`).\n")
+            "position (`tjs renames`).\n")
 
 
 def _renames_project(td, tmap="", tt=""):
@@ -619,7 +619,7 @@ class TestChecklist(unittest.TestCase):
             root = _project(td, _state(legs))
             r = checklist.d_journals(self._ctx(root))
             self.assertEqual(r.status, "attention")
-            self.assertIn("taxjson journals --pending", r.detail)
+            self.assertIn("tjs journals --pending", r.detail)
         with tempfile.TemporaryDirectory() as td:
             root = _project(td, _state(legs[:1]))
             self.assertEqual(checklist.d_journals(self._ctx(root)).status,

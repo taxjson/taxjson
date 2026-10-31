@@ -176,12 +176,12 @@ def load_exchange_rates(rates_file: Path, target_curr: str = None) -> Dict[str, 
             raise InputReadError(
                 f"cannot read the rates file {rates_file}: not UTF-8 text "
                 f"(byte 0x{e.object[e.start]:02x} at offset {e.start}) — "
-                f"fix it, or re-run `taxjson run` to rebuild "
+                f"fix it, or re-run `tjs run` to rebuild "
                 f"work/to_base.csv") from None
         except OSError as e:
             raise InputReadError(
                 f"cannot read the rates file {rates_file}: "
-                f"{e.strerror or e} — fix it, or re-run `taxjson run` to "
+                f"{e.strerror or e} — fix it, or re-run `tjs run` to "
                 f"rebuild work/to_base.csv") from None
         for lineno, line in enumerate(text.splitlines(), 1):
             stripped = line.strip()
@@ -567,7 +567,7 @@ def missing_rate_message(rows: list) -> str:
     return (f"no exchange rate for {len(rows)} row(s): {shown}{more}. "
             f"taxjson uses the rate of the row's date, else the latest of "
             f"the {LOOKBACK_DAYS} days before it, and never a built-in "
-            f"rate. Refresh the rates (`taxjson run` online; a currency "
+            f"rate. Refresh the rates (`tjs run` online; a currency "
             f"you hold must be in [settings] source_currencies); if no "
             f"source has a rate for that date, enter the row in {tgt} at "
             f"its date's rate (a .tt row). The stand-alone tools take "
@@ -601,7 +601,7 @@ def abort_if_currency_uncovered(*, rates_given: bool,
     emit_line(
         f"error: the rates file has no rates at all for {detail}; refusing "
         f"to convert those rows at the implicit default rate. Add the "
-        f"currency to the rates file (in a `taxjson run` project: list it "
+        f"currency to the rates file (in a `tjs run` project: list it "
         f"in [settings] source_currencies in taxjson.toml), or pass "
         f"--default-rate explicitly to accept the fallback.",
         file=(stream or sys.stderr),
@@ -629,7 +629,7 @@ def fallback_validation_issues(target_curr: str,
     """{context: [message]} — one validation ERROR per row that fell
     back to the default rate, shaped like taxjson-validate's issues so
     merge2 folds them into its `validation: N error(s)` count (the
-    number the .sum DIAGNOSTICS, `taxjson checklist` and `run --strict`
+    number the .sum DIAGNOSTICS, `tjs checklist` and `run --strict`
     read). A default-rate conversion is a wrong number in the books,
     not a style warning: before, it was a stderr line and the run
     exited 0 with a clean checklist."""
@@ -639,14 +639,14 @@ def fallback_validation_issues(target_curr: str,
         ctx = f"TX {r['id']} ({r['action']} {r['symbol']} {r['date']})"
         if str(r['reason']).startswith("date predates rates file start"):
             # No source publishes rates that early, so "refresh" cannot
-            # help and `taxjson run` has no --default-rate (audit
+            # help and `tjs run` has no --default-rate (audit
             # S028-13): name the remedy that works in a project.
             fix = (f"No rate source reaches back that far, so refreshing "
                    f"cannot help: enter this row in {tgt} (the base "
                    f"currency) at its date's rate — e.g. a .tt row with "
                    f"currency {tgt} — and the conversion leaves it as is.")
         else:
-            fix = (f"Refresh the rates (`taxjson run` online); if no "
+            fix = (f"Refresh the rates (`tjs run` online); if no "
                    f"rate exists for that date, enter the row in {tgt} "
                    f"at its date's rate. (The standalone "
                    f"taxjson-convert-currency takes --default-rate to "

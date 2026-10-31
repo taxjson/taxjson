@@ -1,6 +1,6 @@
 """The taxjson.toml template: every key taxjson reads, documented, per country.
 
-`taxjson init` writes it with the scaffold's values; `taxjson format`
+`tjs init` writes it with the scaffold's values; `tjs format`
 re-renders an existing project's file into it with the user's values and
 comments. One renderer serves both, so a fresh scaffold is already
 formatted (formatting it is a no-op).
@@ -67,7 +67,7 @@ no entry here.
   place; a block that holds a commented-out key of your own (`# province
   = "BC"`) goes to that key; a block separated by a blank line from the next table goes
   to the end of the table it was in. Comment lines that are the
-  template's own text — or text an earlier `taxjson init` wrote,
+  template's own text — or text an earlier `tjs init` wrote,
   recognised by hash — are regenerated rather than kept; a bare `#` line
   carries nothing and is dropped. A multi-line value with comments inside
   it is kept verbatim. Anything that cannot be placed goes to a "Your
@@ -151,7 +151,7 @@ def _pick(v: Any, country: str) -> Any:
 
 # The example zone a commented-out local_timezone line shows. NOT a
 # default: there is none (a project with a crypto account must name its
-# zone; `taxjson init` writes this machine's zone when it can read one).
+# zone; `tjs init` writes this machine's zone when it can read one).
 _EXAMPLE_TZ = "America/New_York"
 
 
@@ -179,7 +179,7 @@ _FILE_HEADER = (
     "##   diff ~/taxes/{prev_year}/taxjson.toml ~/taxes/{year}/taxjson.toml",
     "## Each key's description is on the `## ` lines above it, the values it takes after it. A",
     "## commented-out key (`# key = value`) shows its default (or an example where it has none): delete",
-    "## the `# ` to change it. `taxjson format` puts an edited file back into this layout, keeping your",
+    "## the `# ` to change it. `tjs format` puts an edited file back into this layout, keeping your",
     "## values and comments.",
 )
 
@@ -192,7 +192,7 @@ SETTINGS_SPEC: Tuple[Key, ...] = (
     Key("country", '"{country}"', "",
         inline="canada | ca | usa | us (required)"),
     Key("province", '"ON"',
-        "The province `taxjson estimate` taxes at. No default.",
+        "The province `tjs estimate` taxes at. No default.",
         inline="{provinces}"),
     Key("base_currency", '"{home}"',
         {"canada": "Report currency: CAD (Bank of Canada rates).",
@@ -212,16 +212,16 @@ SETTINGS_SPEC: Tuple[Key, ...] = (
         "The zone crypto UTC times are dated in (an IANA name). No "
         "default: required with a crypto account."),
     Key("prior_year_record", '"../{prev_year}/filed/{prev_year}.json"',
-        "Last year's close-year record (`taxjson handoff`). No default."),
+        "Last year's close-year record (`tjs handoff`). No default."),
     Key("requires_taxjson", '">=0.27.1"',
         "The oldest taxjson this project runs on: an older one refuses it. "
-        "Written by `taxjson init`, `new-year` and `migrate` for the "
+        "Written by `tjs init`, `new-year` and `migrate` for the "
         "layout they make; never lower it."),
     Key("inputs_dir", '"../inputs"',
         "The folder of the broker exports (inputs/<account>/), when the "
         "years share one beside the year folders. Default: inputs/ here."),
     Key("holdings_dir", '"holdings"',
-        "The year's broker positions snapshots `taxjson sanity` reads. "
+        "The year's broker positions snapshots `tjs sanity` reads. "
         "Default: holdings/ here."),
     Key("exports_dir", '"../exports"',
         "Where the newest year's run copies its positions and wash radar "
@@ -269,7 +269,7 @@ SETTINGS_SPEC: Tuple[Key, ...] = (
     Key("option_premium_timing", '"grant"',
         "\"grant\" (the default): a written option's premium is a gain in "
         "the year WRITTEN (ITA s.49(1)); \"close\": it is netted at the "
-        "closing transaction instead. See `taxjson option-boundary`.",
+        "closing transaction instead. See `tjs option-boundary`.",
         inline="grant | close"),
     Key("option_grant_timing_since", "{year}",
         "Only if you write (sell to open) options: the first tax year you "
@@ -299,7 +299,7 @@ SETTINGS_SPEC: Tuple[Key, ...] = (
         "election: \"zero\" (the default) books it without asking (a "
         "spin-off's new shares at $0 cost, a merger's new shares at the "
         "old shares' cost; no tax depends on it); \"ask\": asked like a "
-        "taxable account's. `taxjson elect` wins either way.",
+        "taxable account's. `tjs elect` wins either way.",
         inline="zero | ask"),
 )
 
@@ -312,7 +312,7 @@ ACCOUNT_SPEC: Tuple[Key, ...] = (
     Key("transfers", "false", "",
         inline="true: keep TRANSFER rows (contributions/withdrawals)"),
     Key("holdings", '["~/broker/{name}_holdings.toml"]',
-        "Positions files `taxjson sanity` reconciles against. Default: "
+        "Positions files `tjs sanity` reconciles against. Default: "
         "none."),
     Key("broker_accounts", '["ACCOUNT_ID"]',
         "The broker account ids of this account's statements: a holdings/ "
@@ -333,14 +333,14 @@ ACCOUNT_SPEC: Tuple[Key, ...] = (
         "country (ISO alpha-3). The Canadian issuers' shares in it are "
         "T1135 property, category 6. Default: Canada."),
     Key("brokerage", '"SOURCE"',
-        "The `taxjson fetch` source of this account (a fetcher plugin's "
-        "name; `taxjson fetch --list` names the installed ones). No "
+        "The `tjs fetch` source of this account (a fetcher plugin's "
+        "name; `tjs fetch --list` names the installed ones). No "
         "default."),
     Key("account", '"ACCOUNT_ID"',
-        "The broker account id `taxjson fetch` downloads (if its source "
+        "The broker account id `tjs fetch` downloads (if its source "
         "needs one)."),
     Key("query_id", '"QUERY_ID"',
-        "The report (query) id `taxjson fetch` runs (if its source needs "
+        "The report (query) id `tjs fetch` runs (if its source needs "
         "one)."),
 )
 
@@ -399,10 +399,10 @@ class Table:
 # After [settings] and the accounts, in this order.
 TABLES: Tuple[Table, ...] = (
     Table("estimate", False, {
-        "canada": "Estimate inputs (`taxjson estimate`, and the instalments "
+        "canada": "Estimate inputs (`tjs estimate`, and the instalments "
                   "current-year basis), used when the command-line flags "
                   "aren't given:",
-        "usa": "Estimate inputs (`taxjson estimate`), used when the "
+        "usa": "Estimate inputs (`tjs estimate`), used when the "
                "command-line flags aren't given:"}, (
         Key("other_income", "0",
             "Income besides these books (employment, interest ...)."),
@@ -419,7 +419,7 @@ TABLES: Tuple[Table, ...] = (
             "The long-term capital loss carryover (Schedule D line 14)."),
     )),
     Table("carryover", False,
-          "Losses actually applied on filed returns (`taxjson carryover`), "
+          "Losses actually applied on filed returns (`tjs carryover`), "
           "by year:", (
               Key("claimed", "{{ {prev_year} = 4000.00 }}",
                   "Net capital losses applied on each filed return. No "
@@ -427,7 +427,7 @@ TABLES: Tuple[Table, ...] = (
           )),
     Table("distributions", True,
           "Non-cash fund distributions (a reinvested capital-gains "
-          "distribution, a late return-of-capital factor): `taxjson run` "
+          "distribution, a late return-of-capital factor): `tjs run` "
           "books each as a cost adjustment on the shares held on the "
           "record date. One table each:", (
               Key("symbol", {"canada": '"XYZQ.TO"', "usa": '"XYZQ.US"'},
@@ -439,7 +439,7 @@ TABLES: Tuple[Table, ...] = (
           )),
     Table("capital_gains_dividends", True,
           "T5 box 18 capital-gains dividends the books carry as dividends "
-          "(`taxjson divs-sum`, the estimate). One table per payment or "
+          "(`tjs divs-sum`, the estimate). One table per payment or "
           "year:", (
               Key("symbol", '"ABCX.TO"', "The books' symbol."),
               Key("year", "{year}",
@@ -451,8 +451,8 @@ TABLES: Tuple[Table, ...] = (
               Key("account", '"margin"', "Default: the taxable accounts."),
           )),
     Table("instalments", False,
-          "Tax instalments (`taxjson instalments`, and a summary inside "
-          "`taxjson estimate`). Uncomment and fill in YOUR figures.", (
+          "Tax instalments (`tjs instalments`, and a summary inside "
+          "`tjs estimate`). Uncomment and fill in YOUR figures.", (
               Key("basis", '"current_year"', "", inline="{bases}"),
               Key("withheld", "0", "Tax withheld at source this year."),
               Key("prior_year_net_tax", "55000",
@@ -668,14 +668,14 @@ def _hash(norm: str) -> str:
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
 
 
-# Comment lines (and trailing comments) earlier `taxjson init` versions
+# Comment lines (and trailing comments) earlier `tjs init` versions
 # wrote, as hashes of their _norm text (sha256, first 16 hex digits; the
 # text of every '#' onward of every line each earlier template rendered,
 # both countries). Blocks: the file header's lines before the `## ` prose
 # mark (_norm drops the leading '#'s, so every other single-'#' line of
 # that layout matches the current template's `## ` text as it is);
 # earlier layouts'; the grouped, end-of-line-comment layout before the
-# alphabetical one. `taxjson format` regenerates them as template text
+# alphabetical one. `tjs format` regenerates them as template text
 # instead of keeping them as the user's notes. Hashes, not text: the old
 # examples are not carried in the source.
 _LEGACY_TEMPLATE_HASHES = frozenset("""
@@ -763,6 +763,16 @@ ea7321a84bbc15e7 ef63ed5daa1137fd f0e9983114ddefcf f6be3e07a2788417
 # The alphabetical layout (before the grouped [settings] and compact
 # tables), per country: a line only the OTHER country's template wrote
 # (a Canadian `# tax_date = "trade"`) is the user's own.
+# The template's text before the command became `tjs` in its comments.
+_LEGACY_TEMPLATE_HASHES |= frozenset("""
+080033aa6f2d113d 1e3f4d8bf293452f 22dae78aadfa2b42 2cf54b40319b4e41
+2f69c6fecc9ab04b 36ca40ffe532bd39 4d165c35257cee4f 653189cd52f94bde
+75d2f6d0ef77e680 8d0199aa947b71ab 92f652d1b938d619 93c504c8e1c4872c
+9ffcd1e73817807c ba81b85aaf20a345 c594a154f4026375 dfc890790ee488e5
+e4d2072628822dc0 ee83e0f17e2fe758 f9e307b1bd85020a f9e5646a07e6763c
+ff6d3db1d7d38e54
+""".split())
+
 _LEGACY_TEMPLATE_HASHES_BY_COUNTRY = {
     C.CANADA: frozenset("""
 018a0bafa8c7de51 18a637d503929bc1 29205fde60149a2a 2a5d7d4cf458bfa6
@@ -830,7 +840,7 @@ f23db548a616307f f9e5646a07e6763c fc47e25e6fd818f4
 
 # The grouped layout's lines of two Canadian descriptions before their
 # text changed (option_grant_timing_since's "SET ONCE", and
-# corporate_distributions' "README" link): `taxjson format` kept them as
+# corporate_distributions' "README" link): `tjs format` kept them as
 # the user's notes, so the key's description showed twice
 # (tests/fixtures/style/canada/taxjson.toml carried them; backlog
 # TJ-0595).
@@ -1302,7 +1312,7 @@ class _Renderer:
 def scaffold_document(country: str, year: int,
                       tz: Optional[str] = None,
                       grant_since: Optional[int] = None) -> Dict[str, Any]:
-    """The parsed config `taxjson init` writes for `country`;
+    """The parsed config `tjs init` writes for `country`;
     `grant_since`: another year's option_grant_timing_since (Canada),
     written as set (else the key is left commented)."""
     country = C.canonical_country(country)
@@ -1321,7 +1331,7 @@ def scaffold_document(country: str, year: int,
         # s.49(1) grant timing from the first year filed under it: kept
         # from another year's project (a later project must keep the
         # first value). Otherwise left commented: a new user who writes
-        # no options needs none, and `taxjson run` says when the books
+        # no options needs none, and `tjs run` says when the books
         # hold a written option and the key is not set.
         s["option_grant_timing_since"] = int(grant_since)
     accounts: Dict[str, Any] = {}
@@ -1343,7 +1353,7 @@ def render_document(doc: Dict[str, Any], country: str,
     return _Renderer(doc, country, _year_of(doc, year)).render()
 
 
-# What to download, per broker — the inputs/<account>/README.txt `taxjson
+# What to download, per broker — the inputs/<account>/README.txt `tjs
 # init` writes (docs/getting-started.md step 3 says the same).
 _EQUITY_EXPORTS = (
     ("Interactive Brokers", "Activity Statement, CSV: the longest period "
@@ -1369,7 +1379,7 @@ _CRYPTO_EXPORTS = (
 def input_readme(country: str, name: str,
                  slips: str = "inputs/slips/",
                  kind: Optional[str] = None) -> str:
-    """The README.txt `taxjson init` writes in inputs/<name>/: which
+    """The README.txt `tjs init` writes in inputs/<name>/: which
     export to download from each broker (all the history there is, plus
     a positions report), for the scaffold account `name`. `slips`: where
     the year's slips go (`YYYY/inputs/slips/` in a year folder: slips
@@ -1389,7 +1399,7 @@ def input_readme(country: str, name: str,
                        f"[accounts.{name}] in taxjson.toml.", 72),
         "",
         "Put this account's broker exports here. Any file name works:",
-        "taxjson recognises each export by its header, and `taxjson run`",
+        "taxjson recognises each export by its header, and `tjs run`",
         "prints which broker it read each file as. Several files are fine;",
         "rows that overlap are read once.",
         "",
@@ -1411,10 +1421,10 @@ def input_readme(country: str, name: str,
         "starts and for the end of the tax year. An Interactive Brokers",
         "Activity Statement (CSV) or an RBC Holdings Export is read as it",
         "is; from another broker, type it into a [[holding]] .toml file.",
-        "The first becomes the opening balance (`taxjson opening",
+        "The first becomes the opening balance (`tjs opening",
         "ACCOUNT FILE` writes an opening_DATE.tt here); the second is",
-        "what `taxjson sanity` checks the books against (quantities and",
-        "costs). `taxjson run` skips a positions report left here.",
+        "what `tjs sanity` checks the books against (quantities and",
+        "costs). `tjs run` skips a positions report left here.",
         "",
         "Purchases the download does not reach go in a .tt file in this",
         "folder: docs/getting-started.md, step 5.",
@@ -1438,7 +1448,7 @@ def input_readme(country: str, name: str,
         lines += [
             "",
             f"Your broker's {slip} slips are checked against the books by",
-            *textwrap.wrap(f"`taxjson reconcile-slips` (keep each year's "
+            *textwrap.wrap(f"`tjs reconcile-slips` (keep each year's "
                            f"in {slips}).", 72),
         ]
     lines += [
@@ -1454,7 +1464,7 @@ def render_init(country: str, year: Optional[int] = None,
                 extra: Optional[Dict[str, Any]] = None,
                 grant_since: Optional[int] = None
                 ) -> Tuple[str, Tuple[str, ...]]:
-    """(taxjson.toml text, account names) for `taxjson init`; `extra`:
+    """(taxjson.toml text, account names) for `tjs init`; `extra`:
     [settings] values added (a year folder's inputs_dir ...);
     `grant_since`: scaffold_document's."""
     country = C.canonical_country(country)
@@ -1847,7 +1857,7 @@ def format_config(text: str) -> FormatResult:
     settings = doc.get("settings")
     if not isinstance(settings, dict):
         raise FormatError("taxjson.toml has no [settings] table — "
-                          "`taxjson format` needs [settings] country")
+                          "`tjs format` needs [settings] country")
     try:
         country = C.settings_country(settings)
     except C.CountryError as e:

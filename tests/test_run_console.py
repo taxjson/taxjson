@@ -1,4 +1,4 @@
-"""`taxjson run`'s console (docs/output-style.md, The run's console).
+"""`tjs run`'s console (docs/output-style.md, The run's console).
 
 Every non-blank line a person reads starts with `==> ` (a step),
 `Info: `, `Warning: `, `Error: `, or continues the entry above it,
@@ -72,7 +72,7 @@ class _Runs(unittest.TestCase):
 
 class TestEveryLine(_Runs):
     def _check(self, text, what):
-        assert_console(self, text, allow=("taxjson elect ",))
+        assert_console(self, text, allow=("tjs elect ",))
 
     def test_full_run(self):
         for country in ("canada", "usa"):
@@ -132,7 +132,7 @@ class TestEveryLine(_Runs):
                     timeout=900)
                 self.assertEqual(r.returncode, 3 if pending else 0,
                                  r.stdout)
-                assert_console(self, r.stdout, allow=("taxjson elect ",))
+                assert_console(self, r.stdout, allow=("tjs elect ",))
                 self.assertFalse(r.stdout.endswith("\n\n"))
 
 
@@ -194,16 +194,16 @@ class TestSteps(_Runs):
         lines = tail.splitlines()
         self.assertTrue(lines[1].startswith(
             "Warning: NOT in the totals: 2 sales with no purchase"), tail)
-        self.assertEqual(lines[-1], "Info: Then `taxjson checklist --run` "
+        self.assertEqual(lines[-1], "Info: Then `tjs checklist --run` "
                                     "(the next step); each message's "
-                                    "detail: `taxjson run --details`")
+                                    "detail: `tjs run --details`")
         # --details: the long form.
         _p, r = self.run_of("canada", details=True)
         tail = r.stdout[r.stdout.index("==> Before you trust"):]
         lines = tail.splitlines()
         self.assertTrue(lines[1].startswith(
             "Warning: 2 positions sold in 2024 with no purchase"), tail)
-        self.assertEqual(lines[-1], "Info: Then run `taxjson checklist --run`: "
+        self.assertEqual(lines[-1], "Info: Then run `tjs checklist --run`: "
                                     "it checks every step and names the "
                                     "next one.")
 
@@ -266,10 +266,10 @@ class TestHoldingsCheck(_Runs):
             "==> Checking positions against the broker's holdings files"):]
         body = tail[:tail.index("==> Before you trust")].splitlines()[1:]
         # Messages and their continuations only — the tables are
-        # `taxjson sanity`'s.
+        # `tjs sanity`'s.
         self.assertTrue(body and body[0].startswith(("Warning: ", "Info: ")),
                         tail)
-        self.assertIn("`taxjson sanity`", _flat(" ".join(body)))
+        self.assertIn("`tjs sanity`", _flat(" ".join(body)))
         self.assertNotIn("SANITY —", r.stdout)
         # Captured for a program (width 0): the sanity report as before.
         r0 = p.run("run", "--no-input", TAXJSON_WIDTH="0")
@@ -344,9 +344,9 @@ class TestReword(_Width):
                 ["Info: kr_l.csv: 3 rows skipped (not tax events)",
                  "Kraken Earn wallet move (allocation/deallocation): 3."],
             "  kr_l.csv: 2 TRANSFER row(s) kept aside (custody evidence, "
-            "not tax events — view with `taxjson transfers`)":
+            "not tax events — view with `tjs transfers`)":
                 ["Info: kr_l.csv: 2 transfer rows kept aside (not tax "
-                 "events; `taxjson transfers` lists them)"],
+                 "events; `tjs transfers` lists them)"],
             "  kr_l.csv: 251 tax objects":
                 ["Info: kr_l.csv: 251 tax objects"],
             "note: Kraken ledger refid DS*** (2026-10-01): dust sweep: "
@@ -381,13 +381,13 @@ class TestReword(_Width):
         for line, words in (
                 ("  NOTE: 2 crypto withdrawal/send(s) among them — if any "
                  "left your ownership (gift or payment), each is a taxable "
-                 "DISPOSITION at fair market value: `taxjson crypto-sends` "
+                 "DISPOSITION at fair market value: `tjs crypto-sends` "
                  "lists them with the fair value and writes the .tt sale "
                  "for each gift/payment (self-custody moves need nothing).",
                  "a gift or payment is a disposition at fair value"),
                 ("  NOTE: 1 crypto withdrawal/send(s) among them — if any "
                  "paid for something (payment), each is a taxable SALE at "
-                 "fair market value: `taxjson crypto-sends` lists them "
+                 "fair market value: `tjs crypto-sends` lists them "
                  "with the fair value and writes the .tt sale for each "
                  "payment (a gift is not a sale for a US donor; it and "
                  "self-custody moves need nothing).",
@@ -396,7 +396,7 @@ class TestReword(_Width):
                 lines = self._shown(line)
                 self.assertTrue(lines[0].startswith("Info: "), lines)
                 self.assertIn(words, lines[0])
-                self.assertIn("`taxjson crypto-sends` lists them",
+                self.assertIn("`tjs crypto-sends` lists them",
                               _flat(" ".join(lines)))
 
     def test_unmatched_line_is_unchanged_but_labelled(self):

@@ -284,12 +284,12 @@ class TestReadmeCommandLinks(unittest.TestCase):
         return out
 
     def test_each_command_row_links_to_its_section(self):
-        rows = re.findall(r"\[`taxjson ([^`]+)`\]\(docs/commands\.md#"
+        rows = re.findall(r"\[`tjs ([^`]+)`\]\(docs/commands\.md#"
                           r"([^)]+)\)", _read("README.md"))
         self.assertGreater(len(rows), 50)
         anchors = self._anchors("docs/commands.md")
         bad = [f"{cmd} -> #{a}" for cmd, a in rows
-               if a != "taxjson-" + cmd.replace(" ", "-") or a not in anchors]
+               if a != "tjs-" + cmd.replace(" ", "-") or a not in anchors]
         self.assertEqual(bad, [])
 
     def test_readme_doc_anchors_resolve(self):

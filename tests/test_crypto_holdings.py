@@ -1,6 +1,6 @@
 """A crypto account's reports/<account>_holdings.toml (backlog TJ-0287).
 
-`taxjson run` skipped the holdings handoff for crypto accounts: every
+`tjs run` skipped the holdings handoff for crypto accounts: every
 other account had one. It is now written from the account's own books
 (the run's crypto prices and rates), each holding asset_type "crypto",
 quantities and per-unit costs kept to significant digits. Synthetic

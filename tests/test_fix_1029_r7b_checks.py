@@ -258,7 +258,7 @@ class TestCostTimelineRows(unittest.TestCase):
             r = tj(root, "list", "--date", "2024-06-30", check=False)
             self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
             self.assertIn("has 5 values", r.stderr)
-            self.assertIn("Run `taxjson run` to rebuild it", r.stderr)
+            self.assertIn("Run `tjs run` to rebuild it", r.stderr)
 
 
 _PREMIUM_TT = (

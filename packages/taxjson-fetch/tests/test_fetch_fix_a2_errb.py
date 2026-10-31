@@ -1,13 +1,13 @@
-"""Moved from the core's tests/test_fix_a2_errb.py with `taxjson fetch` (now the
+"""Moved from the core's tests/test_fix_a2_errb.py with `tjs fetch` (now the
 taxjson-fetch plugin). Original module docstring:
 
 Regression pins for the re-audit-2 error-handling lists errors-02 and
 errors-05: one-line errors (never a traceback) and consistent exit codes
 in `taxjson` (bin/taxjson_run.py), the console-script trampoline
-(bin/_entry.py) and `taxjson watch`.
+(bin/_entry.py) and `tjs watch`.
 
 Exit-code rule (lib/cli_diag): 0 ok, 1 the command's finding (or a
-refusal such as 'run `taxjson run` first'), 2 a named input or output
+refusal such as 'run `tjs run` first'), 2 a named input or output
 that cannot be read or written, 130 Ctrl-C, 141 a closed stdout pipe.
 
 Synthetic projects only (account `m`, hand-written FX rates in work/,

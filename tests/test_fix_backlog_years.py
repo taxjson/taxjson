@@ -1,4 +1,4 @@
-"""Backlog group `years`: `taxjson years` (lib/project_layout
+"""Backlog group `years`: `tjs years` (lib/project_layout
 .years_report, taxjson_run cmd_years / _years_table), `align` in a
 filed year, and the checklist's year-end steps (inputs-frozen after
 close-year, lock-committed, next-year). One test per backlog id, each
@@ -22,7 +22,7 @@ from taxjson.lib.dispatch import python_module_argv
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-_NOTE = ("## frozen by `taxjson close-year`: this year reads its own copy "
+_NOTE = ("## frozen by `tjs close-year`: this year reads its own copy "
          "of the exports it was filed from")
 
 
@@ -287,7 +287,7 @@ class TestYearsView(unittest.TestCase):
         schema in docs/settings.md did not list. Every key of a year
         (and of its `marks`) is documented there."""
         text = (REPO_ROOT / "docs" / "settings.md").read_text()
-        sec = text.split("## `taxjson years --json`", 1)[1].split("\n## ", 1)[0]
+        sec = text.split("## `tjs years --json`", 1)[1].split("\n## ", 1)[0]
         # A key in backticks, or quoted in a `{"a", "b"}` set.
         documented = set(re.findall(r"`([a-z_]+)`", sec)) | set(
             re.findall(r'"([a-z_]+)"', sec))

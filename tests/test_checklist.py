@@ -1,4 +1,4 @@
-"""`taxjson checklist` — the filing checklist with auto-detected steps and
+"""`tjs checklist` — the filing checklist with auto-detected steps and
 manual marks (lib/checklist.py + the CLI wrapper)."""
 import json
 import subprocess

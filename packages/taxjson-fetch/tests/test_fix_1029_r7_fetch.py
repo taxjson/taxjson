@@ -60,7 +60,7 @@ def _flex_request(root, *, year=2025, **args):
 
 
 def _run_flex(root, download, **kw):
-    """`taxjson fetch` of one Flex account answering `download`.
+    """`tjs fetch` of one Flex account answering `download`.
     Returns (result or the SystemExit, said)."""
     req, said = _flex_request(root, **kw)
     with patch.object(api, "flex_fetch",

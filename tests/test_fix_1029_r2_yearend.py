@@ -57,7 +57,7 @@ def _env(**extra):
 
 
 def _cli(root, *args, cwd=None):
-    """`taxjson -C ROOT ARGS` as a child of THIS tree's code (`root`
+    """`tjs -C ROOT ARGS` as a child of THIS tree's code (`root`
     None: no -C, run in `cwd`)."""
     pre = [] if root is None else ["-C", str(root)]
     cmd = python_module_argv("taxjson.bin.taxjson_run",
@@ -624,7 +624,7 @@ class TestFirstYearLoss(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("carried into 2026: 0.00", r.stdout)
         self.assertIn("note: these books carry a net capital loss of "
-                      "100.00 into 2025 (`taxjson carryover`) that the lock "
+                      "100.00 into 2025 (`tjs carryover`) that the lock "
                       "does not take in", _said(r))
         self.assertIn("set [estimate] other_losses to it", _said(r))
 

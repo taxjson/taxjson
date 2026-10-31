@@ -1,4 +1,4 @@
-"""`taxjson div-estimate`: upcoming dividends projected from each held
+"""`tjs div-estimate`: upcoming dividends projected from each held
 position's own history in the books (CA-PLAN-06 / US-PLAN-07). Planning
 numbers only. Synthetic payers and projects only."""
 import json

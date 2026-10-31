@@ -1,5 +1,5 @@
-"""`taxjson check-tt`: every line of the .tt files read with the parsers
-`taxjson run` uses (bin/taxjson_convert_tt and the dated-event readers),
+"""`tjs check-tt`: every line of the .tt files read with the parsers
+`tjs run` uses (bin/taxjson_convert_tt and the dated-event readers),
 and every problem named with its file and line — the run and
 `taxjson-convert-tt` stop at the first malformed line; this goes on, so
 one pass shows them all.
@@ -174,7 +174,7 @@ def _sizes_unread(root: Path, names: Iterable[str]) -> bool:
 
 
 def _reads_inkind(acfg: Dict[str, Any]) -> bool:
-    """`taxjson run` reads this account's INKIND lines: a taxable equity
+    """`tjs run` reads this account's INKIND lines: a taxable equity
     account that keeps its transfer rows out of the books
     (taxjson_run._in_kind_plans, in_kind_state)."""
     return (acfg.get("type") == "taxable" and not acfg.get("transfers")
@@ -187,7 +187,7 @@ def parse_line(line: str, where: str, *, account: str, crypto: bool,
                sizes_unread: Optional[Callable[[], bool]] = None,
                inkind_read: bool = True
                ) -> Tuple[str, List[str]]:
-    """One line through the readers `taxjson run` applies, in the run's
+    """One line through the readers `tjs run` applies, in the run's
     order. Returns (kind, warnings); raises ValueError for a line the
     run would refuse, its message as the run prints it. `rows`, when
     given, receives the rows of the books the line reads as. `row_sizes`:
@@ -233,7 +233,7 @@ def parse_line(line: str, where: str, *, account: str, crypto: bool,
             # As tt_to_json says it: read under the v2 ledger only.
             raise ValueError(
                 f"{e} — a line of the FX-on-cash ledger v2 only (read "
-                f"with fx_cash_ledger = \"v2\" or `taxjson fx-cash "
+                f"with fx_cash_ledger = \"v2\" or `tjs fx-cash "
                 f"--ledger v2`; the default ledger ignores it): fix it "
                 f"to the form shown, or delete it") from e
         expanded = CT.expand_acquired(line)
@@ -518,7 +518,7 @@ def _not_own_accounts(reports: List[FileReport], root: Path, acct: str,
 def check_project(root: Path, accounts: Dict[str, Any],
                   only: Optional[Iterable[str]] = None) -> Dict[str, Any]:
     """The .tt files of the project's accounts (`only`: these accounts),
-    as `taxjson run` finds them (inputs/<account>/*.tt, the shared
+    as `tjs run` finds them (inputs/<account>/*.tt, the shared
     folder with `inputs_dir`), then the checks across lines the run
     makes up front: two declarations of one ticker change that disagree
     (lib/dated_events.read_declarations), a symbol opened twice at an
@@ -662,7 +662,7 @@ def project_accounts(path: Path) -> Optional[Dict[str, Any]]:
 
 
 def _reads(root: Path, acct: str, path: Path) -> bool:
-    """`path` is one of the .tt files `taxjson run` reads for account
+    """`path` is one of the .tt files `tjs run` reads for account
     `acct` of the project at `root` (inputs/<acct>/, or the shared
     folder `inputs_dir` names)."""
     from taxjson.lib import project_layout as _PL

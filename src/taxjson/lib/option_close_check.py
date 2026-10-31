@@ -158,7 +158,7 @@ def unbacked_option_close_messages(transactions: Iterable[Any]) -> List[str]:
                 f"with a ticker.map GLOBAL line.")
         else:
             msgs.append(
-                f"{head} until the missing {missing} is supplied (`taxjson "
+                f"{head} until the missing {missing} is supplied (`tjs "
                 f"find-missing-history`), or the opening position is in "
                 f"a .tt / earlier export under another symbol (map it "
                 f"with a ticker.map GLOBAL line).")

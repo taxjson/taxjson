@@ -1,4 +1,4 @@
-"""Fix round 7 of 2026-10-29, group "edgecases": `taxjson edge-cases`'s
+"""Fix round 7 of 2026-10-29, group "edgecases": `tjs edge-cases`'s
 year-boundary, expiry and long-call reviews (lib/edge_cases), on
 synthetic books the gains engine computes, as `taxjson run` writes
 them to work/.

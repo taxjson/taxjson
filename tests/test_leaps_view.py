@@ -1,4 +1,4 @@
-"""`taxjson leaps` / `leaps-sum`: closed LEAPS positions and their realized
+"""`tjs leaps` / `leaps-sum`: closed LEAPS positions and their realized
 gains. LEAPS = a LONG option BUY placed more than 3 calendar months before
 expiry; contracts qualify over FULL history, so in-window exits of older
 entries are included. Gains come from the wash-adjusted gains files —
@@ -160,7 +160,7 @@ class TestViews(unittest.TestCase):
                 self._run(cmd_leaps, dir=str(root), period="all")
         # A missing input: exit 2 (backlog TJ-0644).
         self.assertEqual(cm.exception.code, 2)
-        self.assertIn("taxjson run", err.getvalue())
+        self.assertIn("tjs run", err.getvalue())
 
     def test_no_leaps_message(self):
         from taxjson.bin.taxjson_run import cmd_leaps

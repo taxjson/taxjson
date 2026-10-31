@@ -223,7 +223,7 @@ def _tt(rows):
 
 @rule("CA-FX-04")
 class TestIssue76Pipeline(unittest.TestCase):
-    """The issue's reproduction through `taxjson run` + `form-export`."""
+    """The issue's reproduction through `tjs run` + `form-export`."""
 
     def _project(self, root, books):
         cfg = ('[settings]\nyear = 2025\ncountry = "canada"\n'

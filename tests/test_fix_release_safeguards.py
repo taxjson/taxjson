@@ -631,7 +631,7 @@ class TestTagGuard(_Sandbox):
 
     def test_annotated_fast_lane_tag_on_main_passes(self):
         self.git(self.repo, "tag", "-a", "channels-20261014T120000Z",
-                 "-m", "taxjson channels: stable → v1.2.3")
+                 "-m", "tjs channels: stable → v1.2.3")
         r = self.hook(self.tag_line("channels-20261014T120000Z"))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 

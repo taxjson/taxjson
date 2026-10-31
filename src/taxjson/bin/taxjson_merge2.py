@@ -69,7 +69,7 @@ def warn_duplicate_splits(txs, conflicts=None) -> int:
     DIFFERENT ratios are all applied and would scale the pool twice.
     Copies whose ratios differ only by rounding (2.333333 next to
     2.333333333), on the same date or within the split-date window, are
-    one event applied once — said as ATTENTION, which `taxjson run`
+    one event applied once — said as ATTENTION, which `tjs run`
     echoes to the console (A2-0070).
     Rows with ratios that really differ are a validation ERROR when the
     caller passes a `conflicts` list (one (context, message) per event):
@@ -110,7 +110,7 @@ def warn_duplicate_splits(txs, conflicts=None) -> int:
                    f"account {acct} has {len(rows)} SPLIT rows with "
                    f"different ratios {ratios} — EACH is applied "
                    f"(x{prod:g} in total); keep only the right one.")
-            # ATTENTION + "split: " — `taxjson run` echoes it.
+            # ATTENTION + "split: " — `tjs run` echoes it.
             emit_line(f"warning: ATTENTION: split: {msg}")
             if conflicts is not None:
                 conflicts.append((f"SPLIT {sym}{tgt} {date} ({acct})", msg))
@@ -522,7 +522,7 @@ def main():
              "has futures contracts (their settled P/L follows the "
              "country's lot rule: average cost in Canada, FIFO in the US), "
              "and when a dated RENAME's late rows depend on the "
-             "country's engine order (`taxjson run` always passes it).",
+             "country's engine order (`tjs run` always passes it).",
     )
     parser.add_argument(
         '--default-rate', type=positive_rate, default=None,
@@ -717,7 +717,7 @@ def main():
         # Post-conversion INVARIANT: after --to, every row must carry
         # the target currency. A field-conversion failure deliberately
         # leaves the row native (loud stderr) — but letting it flow on
-        # meant `taxjson sum` flattened a native amount into a
+        # meant `tjs sum` flattened a native amount into a
         # base-labeled total and t1135 tested the CAD threshold with a
         # USD number. Residual native rows now FAIL the stage under
         # --validate/--validate-strict (the pipeline passes
@@ -746,7 +746,7 @@ def main():
     # is unique and, with --to, in the target currency. Without --to (a
     # native-currency merge) a withholding in another currency than its
     # dividend has no rate here: it is left out of the dividend's net
-    # (`taxjson run` restates it with the run's rates; backlog TJ-0618).
+    # (`tjs run` restates it with the run's rates; backlog TJ-0618).
     _rec = reconcile_dividend_tax(txs)
     for _sym, _day, _tcur, _dcur in _rec["unconverted"]:
         emit_line(f"note: {_sym} {_day}: the {_tcur} withholding is left "

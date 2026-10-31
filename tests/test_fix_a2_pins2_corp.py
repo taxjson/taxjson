@@ -371,7 +371,7 @@ class TestRbcLegOptionStrike(unittest.TestCase):
 
 
 class TestCorpViewsPins(unittest.TestCase):
-    """A2-1534 (`taxjson splits` holdings across two splits) and A2-1538
+    """A2-1534 (`tjs splits` holdings across two splits) and A2-1538
     (corp views and the elect re-extraction combine one event held in
     two broker accounts)."""
 

@@ -395,7 +395,7 @@ class TestInstalmentPrepayment(unittest.TestCase):
 
 def _estimate_project(tmp, rows, base_rows=None, *, country="canada"):
     """A project with a hand-written gains file (and base book) for one
-    taxable account; `taxjson estimate --json` reads them."""
+    taxable account; `tjs estimate --json` reads them."""
     root = Path(tmp)
     (root / "work").mkdir()
     cur = "CAD" if country == "canada" else "USD"

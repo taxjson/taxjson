@@ -5,7 +5,7 @@ COUNTRY is an ISO 3166-1 alpha-3 code, or one of the "not foreign
 property" words CA / CAN / CANADA / EXCLUDE (S051-16): anything else
 (EXCLUDED, CDN, NOT-FOREIGN) used to become a bogus country and flip the
 verdict, so it is refused with a did-you-mean hint. Shared by the
-ticker.map reader (lib/ticker_map), taxjson-t1135 and `taxjson migrate`.
+ticker.map reader (lib/ticker_map), taxjson-t1135 and `tjs migrate`.
 """
 from typing import Optional
 

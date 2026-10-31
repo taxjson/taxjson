@@ -1,4 +1,4 @@
-"""`taxjson-gains --as-of` + `taxjson list --date`: the books as they
+"""`taxjson-gains --as-of` + `tjs list --date`: the books as they
 stood on a date (full ACB/deferred fidelity). `list --date` reads the
 cost timeline the run's gains passes write (backlog TJ-0417): the tests
 that write work/ books by hand run those passes first (_runbooks)."""

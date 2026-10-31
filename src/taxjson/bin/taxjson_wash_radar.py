@@ -209,11 +209,11 @@ def _us_engine_losses(taxable_rows, sheltered_rows, loss_overrides=()):
     is_option, replacements}}. It is lib/core USATaxRules itself — the
     same §1091 window (trade dates, ±30 days), replacement matching
     (every account, IRAs included; no still-held test; re-shorts) and
-    FIFO-per-account basis `taxjson run` uses — run on the radar's books
+    FIFO-per-account basis `tjs run` uses — run on the radar's books
     as of its date, so the radar can never state a second version of
     the rule (partition COMMANDS-01/02/05). `loss_overrides`: the
     project's .tt ALLOWLOSS filing positions (US-WASH-25), applied as
-    `taxjson run` applies them; a named sale's record carries
+    `tjs run` applies them; a named sale's record carries
     `position` (its loss_override) and is not disallowed."""
     import contextlib
     import copy
@@ -232,7 +232,7 @@ def _us_engine_losses(taxable_rows, sheltered_rows, loss_overrides=()):
     except Exception as e:                                # noqa: BLE001
         _out.fail(f"the US engine could not evaluate these books: {e}",
                  prog=_PROG,
-                 details=["Fix what it names (`taxjson run` stops on the "
+                 details=["Fix what it names (`tjs run` stops on the "
                           "same books) before trusting any wash-sale "
                           "advice."])
     out: Dict[str, dict] = {}
@@ -377,7 +377,7 @@ def _listings_booked_under(map_path, booked) -> Dict[str, List[str]]:
     chain followed to its end (`TOBASE ZZX.US ZZX.TO`: ZZX.TO ->
     [ZZX.US]). A TSX Venture listing's .TO spelling is the same listing
     and is not named. {} without a map. A map that cannot be read stops
-    the radar (exit 2), as `taxjson run` stops on it."""
+    the radar (exit 2), as `tjs run` stops on it."""
     if not map_path:
         return {}
     try:
@@ -469,7 +469,7 @@ def main():
                              "(each one also passed in --taxable): the "
                              "listings they traded or hold. Every book "
                              "still decides each status, as the engine "
-                             "pools them (`taxjson wash-radar ACCOUNT`; "
+                             "pools them (`tjs wash-radar ACCOUNT`; "
                              "default: every row)")
     parser.add_argument("--json", action="store_true",
                         help="Print the structured radar document (the "
@@ -509,7 +509,7 @@ def main():
                         help="The essentials (docs/output-style.md): one "
                              "STATUS table of the positions with an "
                              "advisory, a one-line action per status; no "
-                             "definitions (`taxjson wash-radar` passes "
+                             "definitions (`tjs wash-radar` passes "
                              "it unless --details)")
     parser.add_argument("--option-buyback-wash", action="store_true",
                         help="Canada: [settings] "
@@ -523,7 +523,7 @@ def main():
                         metavar="N",
                         help="Also list, in each row's `losses`, the "
                              "losses whose re-entry date passed in the "
-                             "last N days (marked cleared; `taxjson "
+                             "last N days (marked cleared; `tjs "
                              "rebuy` shows them as one line). Default 0")
     parser.add_argument("--similar", action="append", default=[],
                         metavar="\"A B [C ...]\"",
@@ -2734,7 +2734,7 @@ def main():
                 and _short_cover_note not in notes:
             notes.append(_short_cover_note)
 
-        # The class's losses as records (`taxjson rebuy`): every loss
+        # The class's losses as records (`tjs rebuy`): every loss
         # still in its window, plus (--cleared-days N) those whose
         # re-entry date passed in the last N days. `rebuy_at` is the
         # re-entry date of the latest loss a BUY can still deny: Canada
@@ -2876,7 +2876,7 @@ def main():
                 # for a look-alike in any category — backlog TJ-0449).
                 "recent_buy": recent_buy_j,
                 # The class's recent losses and the first day a buy no
-                # longer replaces any of them (`taxjson rebuy`; None
+                # longer replaces any of them (`tjs rebuy`; None
                 # when no in-window loss is one a buy can deny).
                 "losses": losses_j,
                 "rebuy_at": rebuy_at,

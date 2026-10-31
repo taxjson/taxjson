@@ -1,4 +1,4 @@
-"""`taxjson sanity` — cross-check of positions against external
+"""`tjs sanity` — cross-check of positions against external
 holdings TOML files ([[holding]] tables). Bare arguments (account names and
 .toml files) form one AGGREGATE group: combined positions vs combined
 holdings, per symbol — quick, but blind to a position sitting in the
@@ -466,7 +466,7 @@ class TestSanity(unittest.TestCase):
                 r = _run(root, "sanity", "margin", str(e / f))
                 self.assertNotEqual(r.returncode, 0, f)
                 self.assertNotIn("Traceback", r.stderr, f)
-                self.assertIn("taxjson sanity:", r.stderr, f)
+                self.assertIn("tjs sanity:", r.stderr, f)
 
     def test_plus_sign_in_a_config_holdings_path(self):
         with tempfile.TemporaryDirectory() as tmp:

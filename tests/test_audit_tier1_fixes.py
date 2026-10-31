@@ -2,7 +2,7 @@
 
 1. run_to_file: a failed stage must not leave a truncated output file that the
    mtime cache then treats as fresh (previous good output must survive).
-2. `taxjson fees` counts standalone FEE-action rows (amount in net_amount).
+2. `tjs fees` counts standalone FEE-action rows (amount in net_amount).
 3. IB dividend/withholding reversal rows keep their sign and net out instead
    of being abs()'d into extra income/tax.
 4. Wash radar: 30-day windows are DST-immune (UTC-noon epochs) — day 30

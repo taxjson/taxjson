@@ -174,7 +174,7 @@ class TestB40StatedZeroBookValue(unittest.TestCase):
                               concise=True)
         self.assertEqual(shown[0], "Warning: Transfer-in: margin: 1 with NO "
                                    "cost, kept out of the books (ZZQ.US) — "
-                                   "`taxjson transfers`")
+                                   "`tjs transfers`")
 
     def test_b40_a_row_stating_none_keeps_its_own_line(self):
         found = TI.arrivals([_leg("2026-01-03", 10, book_value=0),
@@ -219,7 +219,7 @@ class TestB41PartialCoverageIsNotBooked(unittest.TestCase):
                               concise=True)
         self.assertEqual(shown[0], "Warning: Transfer-in: margin: 1 only "
                                    "PARTLY covered by .tt purchases, NOT "
-                                   "booked (ZZQ.US) — `taxjson transfers`")
+                                   "booked (ZZQ.US) — `tjs transfers`")
         # The rest declared: covered, nothing booked, nothing said.
         TI.mark_covered(found, {"margin": [_tx("2026-01-01", 10),
                                            _tx("2026-01-02", 10)]})
@@ -238,7 +238,7 @@ class TestB41PartialCoverageIsNotBooked(unittest.TestCase):
         self.assertEqual(TI.booked_rows(found), [])
 
     def test_b41_the_run_says_it_and_books_nothing(self):
-        # End to end: `taxjson run` and `taxjson transfers` on a
+        # End to end: `tjs run` and `tjs transfers` on a
         # Questrade transfer row with a stated book value and a .tt
         # purchase of half the units.
         qh = ("Transaction Date,Settlement Date,Action,Symbol,Description,"

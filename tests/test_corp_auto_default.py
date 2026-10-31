@@ -1,6 +1,6 @@
 """RuleSpec.auto_default + the name_change rule: events with exactly one
 sane treatment are elected without prompting, with a full audit-trail
-manifest record that `taxjson elect --redo` can override."""
+manifest record that `tjs elect --redo` can override."""
 
 import unittest
 

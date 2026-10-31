@@ -1,4 +1,4 @@
-"""Tax-estimate math (`taxjson sum --other-income/--other-losses`).
+"""Tax-estimate math (`tjs sum --other-income/--other-losses`).
 
 Marginal checks are done in FLAT bracket regions so expected values are
 exact hand arithmetic, not re-derivations through the same code.
@@ -148,7 +148,7 @@ class TestUsaEstimate(unittest.TestCase):
 
 
 class TestSumEstimateCli(unittest.TestCase):
-    """`taxjson sum --other-income/--other-losses` wiring: taxable
+    """`tjs sum --other-income/--other-losses` wiring: taxable
     accounts only, eligible/foreign dividend split by listing suffix."""
 
     def _project(self, tmp):
@@ -372,7 +372,7 @@ class TestFtcFromActualWithholding(unittest.TestCase):
 
 
 class TestEstimateCommand(unittest.TestCase):
-    """`taxjson estimate` — sum --estimate's front door: the estimate
+    """`tjs estimate` — sum --estimate's front door: the estimate
     block without the account table."""
 
     def _project(self, td):
