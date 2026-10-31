@@ -332,11 +332,13 @@ class Box18OfRowsOfNoListing(unittest.TestCase):
         self.assertEqual(got, [("SYN.TO", 20.0), ("SYN.US", 5.0)])
 
     @rule("CA-SLIP-03")
-    def test_a_bare_row_beside_a_listed_one_stays_apart(self):
+    def test_a_bare_row_beside_a_canadian_listed_one_drafts_one_entry(self):
+        # TJ-1335: the bare entry also takes SYN.TO's row, so two entries
+        # stop `tjs run`'s readers.
         got = self._draft([_div("SYN.TO", "2025-06-02", 100.0),
                            _div("SYN", "2025-06-03", 100.0)],
                           ("SYN.TO", 20), ("SYN.US", 5))
-        self.assertEqual(got, [("SYN", 5.0), ("SYN.TO", 20.0)])
+        self.assertEqual(got, [("SYN", 25.0)])
 
     @rule("CA-SLIP-03")
     def test_the_draft_applies(self):

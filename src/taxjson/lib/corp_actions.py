@@ -135,8 +135,14 @@ class CorporateAction:
             self.event_id = self._compute_id()
 
     @property
+    def old_count(self) -> float:
+        """The old shares `ratio_new` was paid on: over every broker account
+        of a chain, as `ratio_new` is (TJ-1323)."""
+        return self.parent_qty_all_accounts or self.ratio_old
+
+    @property
     def ratio(self) -> float:
-        return self.ratio_new / self.ratio_old if self.ratio_old else 0.0
+        return self.ratio_new / self.old_count if self.old_count else 0.0
 
     def summary(self) -> str:
         if self.action_type == 'unsupported':
@@ -147,7 +153,7 @@ class CorporateAction:
         return (
             f"{self.date} {self.action_type}: "
             f"{self.source_symbol} → {self.target_symbol} "
-            f"({self.ratio_new}-for-{self.ratio_old}, ratio {self.ratio:.6g}, "
+            f"({self.ratio_new}-for-{self.old_count}, ratio {self.ratio:.6g}, "
             f"FMV {self.fmv:.2f} {self.currency})"
         )
 
@@ -1696,7 +1702,9 @@ def parse_questrade_corporate_actions(
         # the Questrade parser does (USD -> .US, CAD -> .TO) — a bare
         # target emitted book rows on 'QZDW' while the trades carry
         # 'QZDW.US', splitting one position across two symbols.
-        symbol = next((r['symbol'] for r in rows if r['symbol']), '')
+        first_symbol = next((r['symbol'] for r in rows if r['symbol']), '')
+        symbol = next((r['symbol'] for r in rows
+                       if r['symbol'] and r.get('survivor')), '') or first_symbol
         internal = bool(symbol and _INTERNAL_CODE_RE.match(symbol.upper()))
         if not symbol:
             emit_line(f"warning: Questrade spinoff chain on "
@@ -1768,6 +1776,7 @@ def parse_questrade_corporate_actions(
         # account's exports; else, a CAD DIS row under a US-listed
         # parent (bought from the CAD side, EXCHANGE RATE rows) is the
         # US listing too; else the DIS row's currency.
+        _as_written = symbol
         bare = re.sub(r'\.TO$', '', symbol.lstrip('.'), flags=re.IGNORECASE)
         _cur = (rows[0]['currency'] or 'USD').upper()
         listings = symbol_listing.get(bare.upper()) or set()
@@ -1782,6 +1791,18 @@ def parse_questrade_corporate_actions(
         # test left a dotted target bare), NEWCO.VN -> NEWCO.TO.
         symbol = _suffix(bare, listing)
         code_symbol = symbol
+        # The event id's hash stays on the chain's first symbol, so an
+        # election saved before a reversed posting named the survivor
+        # still finds its event (TJ-1300).
+        id_symbol = code_symbol
+        if first_symbol != _as_written:
+            _first = re.sub(r'\.TO$', '', first_symbol.lstrip('.'),
+                            flags=re.IGNORECASE)
+            _held = symbol_listing.get(_first.upper()) or set()
+            id_symbol = _suffix(_first, (
+                next(iter(_held)) if len(_held) == 1
+                else 'USD' if _cur == 'CAD' and parent_listing == 'USD'
+                else _cur))
         _hit = (_code_hits.get(bare.upper())
                 if internal and not _renamed(symbol, renames) else None)
         if _hit:
@@ -1827,7 +1848,7 @@ def parse_questrade_corporate_actions(
             action_type='spinoff',
             source_symbol=parent_symbol or parent_code or '(unknown parent)',
             source_isin=parent_code,
-            target_symbol=code_symbol, target_isin=code_symbol,
+            target_symbol=code_symbol, target_isin=id_symbol,
             ratio_new=net_qty,
             ratio_old=source_qty or 1.0,
             qty_disposed=0.0,
@@ -1987,6 +2008,12 @@ def _qt_split_chain(rows: List[dict], cil_rows=()) -> List[List[dict]]:
                   f"{taken_back[0][0]['description'][:90]}")
         return []
     if taken_back or len(live) < 2:
+        if not taken_back and live:
+            # One security kept units: the whole chain's net (and its cash
+            # in lieu) is its event, under ITS symbol, not the larger
+            # posting that was reversed (TJ-1300).
+            for r in live[0]:
+                r['survivor'] = True
         return [rows]
     rest = [r for rs in groups.values() if rs not in live for r in rs]
     if rest:
@@ -2906,6 +2933,17 @@ def parse_rbc_corporate_actions(
                                                    _signed_qty)
     _moves = set(_POSITION_CLASSES) | {'split'}
 
+    def _row_of(x, sym: str) -> bool:
+        """`x` moves `sym`'s shares: under the ticker, or a split under a
+        temporary code whose company trades as that one ticker (TJ-1137,
+        the build_rbc_account_context gap TJ-1089 closed)."""
+        if x.symbol == sym:
+            return True
+        if getattr(x, 'cls', '') != 'split' or not rbc_is_temp_symbol(x.symbol):
+            return False
+        name = _rbc_norm_company(rbc_row_company(x))
+        return set(name_listings.get(name) or ()) == {sym}
+
     def _position(sym: str, cur: str, date: str) -> float:
         """Shares of one listing held at the end of `date`: every row of
         the account's exports (an overlapping copy once) that moves that
@@ -2915,7 +2953,7 @@ def parse_rbc_corporate_actions(
         pre-split count the parent listing still held read as sold out,
         and the spin-off's parent was left unresolved (TJ-0764)."""
         return sum(_signed_qty(x) for x in _all_rows
-                   if x.symbol == sym and (x.currency or '').upper() == cur
+                   if _row_of(x, sym) and (x.currency or '').upper() == cur
                    and getattr(x, 'cls', '') in _moves
                    and x.date <= date)
 
@@ -3284,8 +3322,10 @@ def _summary_identifies(summary: str, ev: "CorporateAction",
         return False
     date, kind, src, tgt, rn, ro = m.groups()
     try:
+        # (A summary saved before TJ-1323 gives one account's count.)
         same_ratio = (abs(float(rn) - float(ev.ratio_new)) < 1e-9
-                      and abs(float(ro) - float(ev.ratio_old)) < 1e-9)
+                      and (abs(float(ro) - float(ev.ratio_old)) < 1e-9
+                           or abs(float(ro) - float(ev.old_count)) < 1e-9))
     except ValueError:
         return False
     if (date != ev._normalize_date(ev.date) or kind != ev.action_type
@@ -5152,7 +5192,9 @@ def _canada_spinoff_rollover_s_86_1(event: CorporateAction, option: str, hints: 
     if cad:
         rows = _allocation_in_listing_currency(event, hints, rows, 'CAD',
                                                's.86.1')
-    parent_qty = _spinoff_parent_qty(event)
+    # Every broker account's count: the walk back over sold shares covers
+    # all those the distribution was paid on (TJ-1321).
+    parent_qty = event.parent_qty_all_accounts or _spinoff_parent_qty(event)
     if parent_qty > 0:
         for r in rows:
             if r['action'] == 'ADJUST':
@@ -5806,8 +5848,12 @@ def combine_broker_copies(events: List[CorporateAction], *,
                         and m.target_currency == h.target_currency
                         and (m.target_fmv_currency or m.target_currency)
                         == (h.target_fmv_currency or h.target_currency)
-                        and (m.cash_in_lieu_currency or '')
-                        in ('', h.cash_in_lieu_currency or '')), None)
+                        # (A copy with no cash in lieu has no currency:
+                        # it joins either way round, TJ-1136.)
+                        and (not m.cash_in_lieu_currency
+                             or not h.cash_in_lieu_currency
+                             or m.cash_in_lieu_currency
+                             == h.cash_in_lieu_currency)), None)
             if tgt is None:
                 merged.append(h)
                 continue

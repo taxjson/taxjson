@@ -147,6 +147,38 @@ _RESTATEMENT_EVENT_MAX_SPAN_DAYS = 7
 _JOURNAL_CANDIDATE_PAD_DAYS = 7
 
 
+def _closed_by_sale(rows, sale_id) -> set:
+    """The purchases of `rows` (one symbol) that the sale `sale_id` leaves
+    nothing of, as id()s: only the shares still held after it, the latest
+    bought, can replace it (backlog TJ-1317). Empty when the count is not
+    known, so the warning stays: a sale of no id, or a move, a split or a
+    missing-history opening among the rows (those shares are in no
+    purchase, wherever the opening sits in the list)."""
+    if not sale_id or any(a.action not in ('BUYSELL', 'ASSIGN')
+                          and float(a.quantity or 0.0) for a in rows):
+        return set()
+    pos = 0.0
+    buys = []
+    for a in sorted(rows, key=lambda r: r.date or ''):
+        q = float(a.quantity or 0.0)
+        if a.action not in ('BUYSELL', 'ASSIGN'):
+            continue
+        pos += q
+        if q > 0:
+            buys.append(a)
+        if a.id == sale_id:
+            break
+    else:
+        return set()
+    closed = set()
+    for a in reversed(buys):
+        if pos > 1e-9:
+            pos -= float(a.quantity)
+        else:
+            closed.add(id(a))
+    return closed
+
+
 def _main_trade_dates(main_transactions):
     """Per-symbol datetimes of every main-book BUYSELL/ASSIGN — BOTH the
     trade date and the settle date (when present), regardless of the
@@ -2213,13 +2245,17 @@ def run_gains(transactions, sheltered_transactions=(),
             except ValueError:
                 continue
             from taxjson.lib.core import not_a_purchase as _is_open
+            _closed = _closed_by_sale(
+                [a for a in transactions if a.symbol == t.get('symbol')],
+                t.get('id'))
             for a in transactions:
                 # An opening balance is not a purchase (CA-OPEN-01 /
                 # US-OPEN-01).
                 if (a.symbol != t.get('symbol')
                         or a.action not in ('BUYSELL', 'ASSIGN')
                         or a.quantity <= 0 or _is_open(a)
-                        or (a.id and a.id == t.get('id'))):
+                        or (a.id and a.id == t.get('id'))
+                        or id(a) in _closed):
                     continue
                 try:
                     da = _dt.strptime(loss_window_date(

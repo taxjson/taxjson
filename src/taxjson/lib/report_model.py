@@ -723,7 +723,8 @@ def build_account_report(gains_data, account: str,
     # Deferred imports: bin tools import report_model, so a module-level
     # import here would be circular.
     from taxjson.bin.taxjson_sum_gains import summarize_gains
-    from taxjson.bin.taxjson_sum_income import summarize_income
+    from taxjson.bin.taxjson_sum_income import (capitalized_pil_shares,
+                                                summarize_income)
 
     year = (gains_data.get("summary") or {}).get("year")
     washes = gains_data.get("wash_sales") or []
@@ -759,7 +760,9 @@ def build_account_report(gains_data, account: str,
         "income": summarize_income(
             (base_transactions if base_transactions is not None
              else gains_data.get("transactions", [])),
-            target_year=year, rules=rules),
+            target_year=year, rules=rules,
+            capitalized=capitalized_pil_shares(
+                gains_data.get("transactions", []))),
         "wash": {"count": len(washes),
                  "total_disallowed": round(sum(_amt(w) for w in washes), 2)},
     }

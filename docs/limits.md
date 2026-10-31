@@ -349,6 +349,23 @@ takeovers are booked as sales and share-for-share mergers go through the merger 
 **Instead:** record the exchange by hand in a `.tt` file and elect the event `ignore`.
 **Code:** `src/taxjson/lib/corp_actions.py` — `_ib_unsupported_events`
 
+#### A partial share-for-share exchange moves the whole position
+
+A cost carry-over (Canada's s. 85.1 rollover, the US §368(a) reorganization, a sheltered account's merger)
+is booked as a rename of the whole position. It has no limit for the quantity exchanged, so when the broker
+exchanged only part of what the account held, the shares kept are booked as the new security too: both
+positions and the later gains are wrong. `tjs run` warns ("moves all 20 shares held, but only 10 were exchanged")
+and `tjs sanity` shows the two positions off. A merger of everything held is not affected.
+**Instead:** elect the event `ignore` and book the exchange by hand in a `.tt` file, at the cost of the
+shares exchanged (20 held at 200, 10 exchanged for 5 NEW):
+```
+BUYSELL 2025-06-02 10:00:00 OLD.TO -10 CAD 10 100 0
+BUYSELL 2025-06-02 10:01:00 NEW.TO 5 CAD 20 100 0
+```
+The sale shows on the gains report with no gain, and the shares kept keep their cost. In the US a purchase
+booked this way starts a new holding period: the old purchase dates are not carried over.
+**Code:** `src/taxjson/bin/taxjson_run.py` — `_warn_partial_carryovers`; `src/taxjson/lib/corp_actions.py` — `_emit_basis_carryover_rename`
+
 #### A merger's per-account ratios are blended
 
 When one merger shows a slightly different share ratio in each account, the ratios are folded into one
@@ -440,6 +457,21 @@ other default (such as highest cost) are not modelled, so a 1099-B computed unde
 match per lot; year totals agree only once every lot is sold.
 **Instead:** set the broker's lot method to FIFO, or reconcile by hand.
 
+#### US: a long and a short of one futures contract in one folder net together
+
+The US engine keeps one lot queue per symbol. Two broker accounts' exports in one account folder, one long and one
+short the same contract, net in the books, so a gain can land in the wrong year. The run warns.
+**Instead:** put each broker account's exports in a folder of its own (`[accounts.NAME]`).
+
+#### US: a crypto gift you gave cannot be booked
+
+A gift is not a sale for a US donor, but the coins and their basis do leave you. taxjson has no way to remove lots
+without a sale, so `tjs crypto-sends` refuses `gift` in a US project. Recording the send as `self` books nothing: the
+coins and their basis stay in your books, FIFO still takes that lot, and a later sale of the coin shows a basis that
+is not yours. `tjs checklist` asks about every send recorded as `self`.
+**Instead:** work out the later sales of that coin by hand, and check them with a tax professional. Do not record the
+gift as a `payment`: that puts a sale on Form 8949.
+
 #### §1256: year-end marking to market and the loss carryback are not implemented
 
 Futures and broad-based index options run through the ordinary FIFO engine: a contract still open on
@@ -494,7 +526,8 @@ bought is not matched (US-WASH-21): applying the rule there would chain through 
 #### Sub-micro quantity tolerance in the Canadian engine
 
 A share or option position under 1e-6 units is read as flat (broker exports round share counts). One that
-still carries a cost of a cent or more is a holding, bought that small or consolidated into it: it shows in
+still carries a cost of a cent or more is a holding, bought that small, consolidated into it or the rest of a
+larger position after a sale: it shows in
 the inventory and its cost counts for the T1135, and a sale of it closes it at its cost instead of opening a
 short (tax-logic CA-ACB-01). A coin's tolerance is relative to the quantities, far below that.
 

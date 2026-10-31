@@ -1081,6 +1081,8 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             elif holdings:
                 base_ops.append({"sd": ev["settle"], "td": ev["date"],
                                  "book": book,
+                                 "own": (ev.get("decl") or {}).get("how")
+                                 == "own",
                                  "amount": float(ev["amount"])})
         elif kind == "CASHBAL":
             if ev["currency"].upper() != base:
@@ -2078,6 +2080,8 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             "transit_spans": _transit_spans(
                 [o for o in ops if _own(o)], transit_in, early_in, favg,
                 y0, y1, prev_end, trade_basis) + transit_ends,
+            # The base currency's, which the balances do not show (TJ-1146).
+            "base_transit": _base_transit(base_ops, y0, y1, trade_basis),
             # Every [book, currency] with an opening or an event of the
             # year, walked or not: a book-less problem of a currency
             # reaches only these (t1135_cash.cash_doc; backlog TJ-1098).
@@ -2298,6 +2302,39 @@ def _transit_spans(moves: List[Dict[str, Any]],
                                 "from": q[2], "to": o["book"], "since": start,
                                 "until": end,
                                 "points": points(cur, start, end, take)})
+    return out
+
+
+def _base_transit(ops: List[Dict[str, Any]], y0: str, y1: str,
+                  trade_basis: bool) -> List[Dict[str, Any]]:
+    """The base currency's own moves with days of the year in transit, for
+    `holdings` (`ops`: the base-currency flows; those declared `own` carry
+    "own"): each book's balance holds them neither after they leave nor
+    before they arrive (backlog TJ-1146). Arrivals take what left first,
+    as the foreign walk does; a departure with no arrival in the books
+    (your own bank, outside them) has no days to name. [{"units", "from",
+    "to", "since", "until"}]."""
+    when = "td" if trade_basis else "sd"
+    queue: List[List[Any]] = []
+    out: List[Dict[str, Any]] = []
+    for o in sorted((o for o in ops if o.get("own")),
+                    key=lambda o: (o[when], o["amount"])):
+        amt = float(o["amount"])
+        if amt < 0:
+            queue.append([-amt, o[when], o["book"]])
+            continue
+        while amt > _EPS and queue:
+            q = queue[0]
+            take = min(q[0], amt)
+            q[0] -= take
+            amt -= take
+            if q[0] <= _EPS:
+                queue.pop(0)
+            if (take > TOL and q[1] < o[when] and q[1] <= y1
+                    and o[when] >= y0 and q[2] != o["book"]):
+                out.append({"units": round(take, 2), "from": q[2],
+                            "to": o["book"], "since": q[1],
+                            "until": o[when]})
     return out
 
 

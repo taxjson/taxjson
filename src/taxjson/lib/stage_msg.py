@@ -77,8 +77,7 @@ def say(kind: str, headline: str, details: Iterable[str] = (), *,
         # command's default view: one line, the third of a kind folded.
         w = out.width(file)
         text = out.label(kind, stream=file) + headline
-        out.concise_show(shorten_commands(concise_line(text, details, w),
-                                          w), file)
+        out.concise_show(concise_line(text, details, w), file)
         return
     out.show(message_lines(kind, headline, details, prog=prog,
                            indent=indent, stream=file), file)
@@ -201,8 +200,9 @@ _REWORD = [
                 r"them — if any paid for something \(payment\), .*"),
      lambda m: [f"note: {_plural(m['n'], 'crypto send')} among them: a "
                 f"payment is a sale at fair value",
-                "`tjs crypto-sends` lists them (a gift is not a sale "
-                "for a US donor; a move to your own wallet needs nothing)."]),
+                "`tjs crypto-sends` lists them (a move to your own wallet "
+                "needs nothing; a gift is not a sale for a US donor, and "
+                "taxjson cannot book it yet)."]),
     (re.compile(r"\s*NOTE: (?P<n>\d+) crypto withdrawal/send\(s\) among "
                 r"them — if any left your ownership \(gift or payment\), "
                 r".*?(?P<us>; with --country usa only a payment is a "
@@ -371,14 +371,6 @@ def env_concise() -> bool:
     return os.environ.get(CONCISE_ENV) == "1"
 
 
-def shorten_commands(line: str, width_: int) -> str:
-    """`taxjson X` spelled `tjs X` (the same program) when `line` is
-    over `width_`, so a one-line message stays one line."""
-    if 0 < width_ < len(line):
-        return line.replace("`taxjson ", "`tjs ")
-    return line
-
-
 # The one-line console form of frequent captured ATTENTION lines whose
 # headline alone would not say what to do: (pattern on the captured
 # line, builder of the shown line). Display only.
@@ -475,11 +467,10 @@ def console_lines(line: str, indent: str = "", stream=None,
             for rx, build in _CONCISE:
                 m = rx.fullmatch(p)
                 if m:
-                    return [indent + out.truncate(shorten_commands(
-                        build(m), w - len(indent)), w - len(indent))]
-        return [indent + out.truncate(shorten_commands(
+                    return [indent + out.truncate(build(m), w - len(indent))]
+        return [indent + out.truncate(
             concise_line(body, shown[1:], w - len(indent)),
-            w - len(indent)), w - len(indent))]
+            w - len(indent))]
     if shown[0][:1].isspace() and not _LABELLED.match(body):
         # The continuation of the message above.
         lines = out.wrap(body, w, indent, indent)

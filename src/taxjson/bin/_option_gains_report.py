@@ -45,6 +45,18 @@ def _direction(tx) -> str:
     return 'LONG'
 
 
+def _require_text_symbols(doc, path):
+    """``doc`` when each manual row's symbol is text: process_data reads
+    it as an option ticker (a list was a traceback, backlog TJ-1294). The
+    `transactions` rows have their own check (require_gains_doc's)."""
+    for row in doc.get('manual_reporting_required') or []:
+        symbol = row.get('symbol')
+        if symbol and not isinstance(symbol, str):
+            raise InputFileError(f'{path}: a "manual_reporting_required" '
+                                 f'row\'s "symbol" must be text')
+    return doc
+
+
 def process_data(data, groups, *, direction: str, calls_only: bool):
     """Add the matching rows of one gains document to `groups`
     ({underlying: {'lines': [...], 'total_gain': {CUR: x}}}; the tainted
@@ -162,7 +174,8 @@ def load_inputs(prog: str, files: List[str]):
             cli_diag.error(prog, "<stdin>: expected a JSON object")
             sys.exit(2)
         try:
-            require_row_lists(require_gains_doc(doc, "<stdin>"), "<stdin>")
+            _require_text_symbols(require_row_lists(
+                require_gains_doc(doc, "<stdin>"), "<stdin>"), "<stdin>")
         except InputFileError as e:
             cli_diag.error(prog, str(e))
             sys.exit(2)
@@ -172,8 +185,8 @@ def load_inputs(prog: str, files: List[str]):
         try:
             # A stage file or a non-gains JSON printed TOTAL 0.00
             # (S033-01).
-            docs.append(require_row_lists(
-                require_gains_doc(read_json_doc(path), path), path))
+            docs.append(_require_text_symbols(require_row_lists(
+                require_gains_doc(read_json_doc(path), path), path), path))
         except InputFileError as e:
             # A report missing an input is not a report: the old code
             # printed TOTAL 0.00 and exited 0 (audit R1-173).

@@ -429,14 +429,16 @@ def load_slip(path: Path, renames: Optional[Dict[str, str]] = None,
                 continue
             # A blank surplus cell, or none: the amount columns themselves
             # show the split, as `1` then `000` (no slip prints a figure
-            # with a leading zero) (backlog TJ-1213).
+            # with a leading zero) (backlog TJ-1213); with cents or a minus
+            # sign too (TJ-1307).
             _names = list(reader.fieldnames)
             _split = next(
                 (i for i in range(1, width)
                  if _names[i] in _amount_cols
-                 and re.fullmatch(r"0\d\d", (row.get(_names[i]) or "").strip())
+                 and re.fullmatch(r"0\d\d(\.\d*)?",
+                                  (row.get(_names[i]) or "").strip())
                  and _names[i - 1] != cols["symbol"]
-                 and re.fullmatch(r"\$?\d{1,3}",
+                 and re.fullmatch(r"-?\$?-?\d{1,3}",
                                   (row.get(_names[i - 1]) or "").strip())),
                 None)
             if _split is not None:

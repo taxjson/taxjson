@@ -32,10 +32,11 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from taxjson.lib.core import TaxTransaction, is_option_symbol, load_transactions
 from taxjson.lib.missing_history import (
-    MissingHistoryRow, ZeroBasisRow, _basis_date, _drop_duplicate_splits,
-    _walk_key, assess_tax_year_relevance, detect_corp_action_links,
-    detect_missing_history, detect_zero_basis_acquisitions,
-    is_registered_account)
+    MissingHistoryRow, UnbackedCover, ZeroBasisRow, _basis_date,
+    _drop_duplicate_splits, _walk_key, assess_tax_year_relevance,
+    detect_corp_action_links, detect_missing_history,
+    detect_unbacked_covers, detect_zero_basis_acquisitions,
+    drop_answered_covers, is_registered_account)
 from taxjson.lib.corporate_timeline import normalize_symbol_new
 from taxjson.lib import project_layout as _PL
 
@@ -113,7 +114,7 @@ def logged_openings(cache: Optional[Path]
             except (TypeError, ValueError):
                 continue
             day = str(e.get("anchor_date") or "")[:10]
-            if qty <= 0 or not day:
+            if not qty or not day:
                 continue
             sym = str(e.get("symbol") or "")
             out.setdefault((sym.upper(), str(acct).lower()), []).append(
@@ -150,7 +151,11 @@ def uncovered_short_sales(txs: Sequence[TaxTransaction], year: Any, *,
     cov = {(s.upper(), a.lower()) for s, a in covered}
     logged = {k: v for k, v in logged_openings(cache).items() if k in cov}
     if logged:
-        txs = txs + [r for rows in logged.values() for r in rows]
+        rows = [r for rows in logged.values() for r in rows]
+        # (A short line, TJ-0844, is no units a sale draws on: its cover
+        # leaves the walk instead.)
+        txs = drop_answered_covers(txs, rows) + [r for r in rows
+                                                 if r.quantity > 0]
         cov -= set(logged)
     linked_old = {(l.old_symbol, l.account)
                   for l in detect_corp_action_links(txs)}
@@ -168,6 +173,28 @@ def uncovered_short_sales(txs: Sequence[TaxTransaction], year: Any, *,
             and (r.candidate.symbol, r.candidate.account) not in linked_old
             and (str(r.candidate.symbol).upper(),
                  str(r.candidate.account).lower()) not in cov]
+
+
+def unanswered_covers(txs: Sequence[TaxTransaction], year: Any, *,
+                      sheltered: Dict[str, bool],
+                      date_basis: str = "settle",
+                      journal: Optional[Set[str]] = None,
+                      country: Optional[str] = None,
+                      cache: Optional[Path] = None) -> List[UnbackedCover]:
+    """Buys in taxable accounts, through the tax year, that the broker
+    codes as closing a short the data does not hold and no .tt short line
+    answers (TJ-0844). The books carry each as a new long, in the cost of
+    later sales, so a cover before the year still counts."""
+    ys = str(year) if year is not None else ""
+    shorts = [r for rows in logged_openings(cache).values() for r in rows
+              if r.quantity < 0]
+    return [c for c in detect_unbacked_covers(
+                drop_answered_covers(txs, shorts), date_basis=date_basis,
+                journal_symbols=journal or set(),
+                registered_accounts=sheltered or None, country=country)
+            if not is_registered_account(c.account, sheltered or None,
+                                         country)
+            and (not ys or c.date[:4] <= ys)]
 
 
 # How the gains engine booked the year's sales the missing-history walk
@@ -594,6 +621,9 @@ def collect(root: Path, cfg: Dict[str, Any], *,
                                    journal=journal, country=country,
                                    cache=cache)
     booked = engine_booking(cache, shorts, year, date_basis=basis)
+    covers = unanswered_covers(txs, year, sheltered=sheltered,
+                               date_basis=basis, journal=journal,
+                               country=country, cache=cache)
     from taxjson.lib.corp_actions import declared_zero_value_events
     _zrows = _zero_cost_rows(txs, year, sheltered=sheltered,
                              country=country, date_basis=basis,
@@ -637,6 +667,11 @@ def collect(root: Path, cfg: Dict[str, Any], *,
                                 "sales": r.in_year_dispositions,
                                 "booked": _how(r)}
                                for r in shorts if _how(r) != BOOKED_OPEN],
+        # Buys the broker codes as closing with no short held: the books
+        # carry them as new longs.
+        "unbacked_covers": [{"symbol": c.symbol, "account": c.account,
+                             "date": c.date, "quantity": c.unbacked_qty}
+                            for c in covers],
         "zero_cost_sold": [{"symbol": r.symbol, "account": r.account}
                            for r in zero_sold],
         "zero_cost_held": [{"symbol": r.symbol, "account": r.account,
@@ -678,7 +713,8 @@ def _names(items: Sequence[Dict[str, Any]], n: int = 3) -> str:
 
 def is_clean(doc: Dict[str, Any]) -> bool:
     return not any(doc.get(k) for k in (
-        "no_purchase", "no_purchase_in_sum", "zero_cost_sold",
+        "no_purchase", "no_purchase_in_sum", "unbacked_covers",
+        "zero_cost_sold",
         "zero_cost_held", "zero_cost_declared", "transfer_in_no_cost",
         "in_kind_not_booked", "unchecked_accounts", "income_not_held",
         "booked_twice"))
@@ -747,6 +783,11 @@ def concise_items(doc: Dict[str, Any]) -> List[Tuple[str, str]]:
         items.append(("Warning", f"{_n(len(cov), 'sale', 'sales')} with no "
                       f"purchase booked as shorts covered later "
                       f"({_syms(cov)}) — `tjs find-missing-history`"))
+    ub = doc.get("unbacked_covers") or []
+    if ub:
+        items.append(("Warning", f"{_n(len(ub), 'cover', 'covers')} of a "
+                      f"short opened before your files, booked as a new "
+                      f"long ({_syms(ub)}) — `tjs find-missing-history`"))
     zs, zh = doc.get("zero_cost_sold") or [], doc.get("zero_cost_held") or []
     if zs or zh:
         # A $0 lot part sold and part held is one position (backlog
@@ -829,8 +870,6 @@ def render_blocks(doc: Dict[str, Any], *,
 
         def _one(text: str) -> List[str]:
             if 0 < w < len(text):
-                text = text.replace("`taxjson ", "`tjs ")
-            if 0 < w < len(text):
                 # Still too long: the names go (the command lists them).
                 import re as _re
                 text = _re.sub(r" \([^()]*\)(?= — )", "", text, count=1)
@@ -851,7 +890,9 @@ def render_blocks(doc: Dict[str, Any], *,
         items.append(("Warning", f"{_n(len(np_), 'position', 'positions')} "
                      f"sold in {yr} with no purchase in your files, not in "
                      f"{mh_name}: {_names(np_)}. Those sales are NOT in "
-                     f"`tjs sum`; run `tjs find-missing-history`."))
+                     f"`tjs sum`; run `tjs find-missing-history`. A short "
+                     f"sale still open reads the same: it is in no total "
+                     f"until it is covered."))
     ins = doc.get("no_purchase_in_sum") or []
     cov = [i for i in ins if i.get("booked") == BOOKED_SHORT_COVER]
     mat = [i for i in ins if i.get("booked") != BOOKED_SHORT_COVER]
@@ -870,6 +911,15 @@ def render_blocks(doc: Dict[str, Any], *,
                      f"purchases in your files, so they are in `tjs "
                      f"sum`; the check reads that day's rows in another "
                      f"order: compare it with the broker's trades."))
+    ub = doc.get("unbacked_covers") or []
+    if ub:
+        items.append(("Warning", f"{_n(len(ub), 'buy', 'buys')} the broker "
+                     f"codes as closing a short your files do not hold: "
+                     f"{_names(ub)}. The books carry each as a new long, in "
+                     f"the cost of later sales, and the cover's gain or "
+                     f"loss is in no total. Add the short sale, or the `.tt` "
+                     f"line `tjs find-missing-history "
+                     f"--write-missing-history` drafts."))
     zs, zh = doc.get("zero_cost_sold") or [], doc.get("zero_cost_held") or []
     if zs or zh:
         parts = ([f"{len(zs)} sold in {yr}"] if zs else []) \

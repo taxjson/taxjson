@@ -212,7 +212,7 @@ class TestCorpViews(unittest.TestCase):
         from taxjson.lib import corp_views as cv
         ev = SimpleNamespace(action_type="spinoff", source_symbol="ZZQ.US",
                              target_symbol="ZZR.US", ratio=1, ratio_new=1,
-                             ratio_old=1, target_fmv=100, qty_received=10,
+                             ratio_old=1, old_count=1, target_fmv=100, qty_received=10,
                              currency="USD", date="2026-01-02")
         cfg = {"settings": {"country": "canada"},
                "accounts": {"margin": {"type": "taxable"}}}

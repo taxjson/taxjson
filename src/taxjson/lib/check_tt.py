@@ -112,17 +112,17 @@ def _refuse_inkind_total(ln: Dict[str, Any],
                          row_sizes: Optional[Dict[str, List[float]]],
                          unread: Optional[Callable[[], bool]] = None) -> None:
     """The run's stop on an option's INKIND line whose price and total
-    disagree (backlog TJ-1163): at the contract's size (a MULT line, else
-    100), or at a size the project's transfer rows state, which the run
-    values the line at. (Its "assumed 100" note is not this line's.)
+    disagree (backlog TJ-1163): at a size the project's transfer rows state,
+    which the run values the line at (it outranks 100, backlog TJ-1289), else
+    at the contract's size (a MULT line, else 100). (Its "assumed 100" note
+    is not this line's.)
     `unread` (_sizes_unread) true: a row the run has yet to read may state
     the size, so the line is a warning for now (backlog TJ-1288)."""
     from taxjson.lib import in_kind as IK
     with contextlib.redirect_stderr(io.StringIO()):
-        bad = IK.line_total_problem(ln)
-    if bad and not any(
-            not IK.line_total_problem(ln, size)
-            for size in (row_sizes or {}).get(str(ln.get("symbol")), [])):
+        bad = IK.line_total_problem(
+            ln, *(row_sizes or {}).get(str(ln.get("symbol")), []))
+    if bad:
         text = bad.replace(
             f"the INKIND line {ln.get('source') or ''}: ", "INKIND ", 1)
         if unread is not None and unread():
@@ -150,8 +150,9 @@ def _row_sizes(root: Path, names: Iterable[str]) -> Dict[str, List[float]]:
 
 def _sizes_unread(root: Path, names: Iterable[str]) -> bool:
     """An export of the accounts whose transfer rows can state a contract
-    size (IB's, a generic mapping's) has no parsed file in work/ yet: no
-    run has read it, so _row_sizes cannot know the size."""
+    size (IB's, a generic mapping's) has not been read by a run: no parsed
+    file in work/, not in the account's sources list, or newer than the
+    parsed files. _row_sizes cannot know the size (backlog TJ-1330)."""
     from taxjson.lib import project_layout as _PL
     from taxjson.lib.brokerages.detect import detect_broker
     work = Path(root) / "work"
@@ -159,6 +160,11 @@ def _sizes_unread(root: Path, names: Iterable[str]) -> bool:
         folder = _PL.inputs_dir(root) / acct
         if not folder.is_dir():
             continue
+        try:
+            listed = (work / f"{acct}_sources.list").read_text(
+                encoding="utf-8").splitlines()
+        except OSError:
+            listed = None
         for p in sorted(folder.iterdir()):
             if (not p.is_file() or p.suffix.lower() != ".csv"
                     or p.name.startswith((".", "~$"))):
@@ -167,8 +173,13 @@ def _sizes_unread(root: Path, names: Iterable[str]) -> bool:
                 b = detect_broker(p)
             except (OSError, ValueError):   # the run names a bad export
                 continue
-            if b in ("ib", "generic") and not any(
-                    work.glob(f"{acct}_{b}*.json")):
+            if b not in ("ib", "generic"):
+                continue
+            parsed = list(work.glob(f"{acct}_{b}*.json"))
+            if (not parsed
+                    or (listed is not None and f"{b}/{p.name}" not in listed)
+                    or p.stat().st_mtime > max(q.stat().st_mtime
+                                               for q in parsed)):
                 return True
     return False
 

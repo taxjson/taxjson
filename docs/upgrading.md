@@ -59,6 +59,103 @@ In each project you keep working in (each year folder):
 Newest first. Each says what changed and what to do. Releases not listed
 needed nothing.
 
+- `reports/<account>_holdings.toml`: no filed figure moves. `trades` now keeps the
+  purchases before a move in kind the engine netted, and lists a same-clock sale
+  and purchase of a flat symbol whole, so a chart built on it gains those markers.
+  A holding that came by transfer has a new `arrivals` list (`date`, `qty`, `kind`);
+  a reader that does not know the key is not affected.
+
+- IB: a statement with an execution-id column, holding fills alike in every
+  field where one has no id and two or more others have different ids, lost one
+  fill to dedup. All are booked now: that year's gains and holdings change on a
+  re-run. Other statements do not move (TJ-1269).
+- tjs crypto-sends (TJ-1145): if you decided a send in the hour the clocks
+  repeat before v0.39.0, that release moved its id, and the decision may now
+  be on another send of the same coin and quantity. The listing names those
+  ids; check each and re-decide if it is wrong. A wrong one moves a gain.
+- Kraken with several trades exports (TJ-1270): gains can change where a sale
+  and a rebuy of one coin share a second across two files (a fraction of a
+  second apart, or in the hour the clocks repeat): the sale now comes first.
+- An option exercised or assigned before an `OPENING` snapshot, its delivery's
+  row replaced by the snapshot, and the snapshot smaller than the delivery
+  because delivered shares were sold first: a later plain row at exactly the
+  strike no longer takes the premium a second time. Its cost falls, and its sale's
+  gain rises, by the premium, in that case only (backlog TJ-1332). New warning:
+  where the books cannot say whether a plain row at the strike just after a
+  snapshot is the delivery, the run says to write it as `ASSIGN` if it is
+  (backlog TJ-1325); do so and run again.
+- `tjs stats` and `tjs win-rates` only, after a return of capital took part of a
+  denied loss off the cost; nothing filed moves. A sale carrying a put's premium
+  delivered before a reversal of that return of capital falls by the part the
+  reversal hid (TJ-1333). A sale of a spin-off's new shares rises by their part of
+  a put's premium (TJ-1274). A US sale by an assigned written call falls by the
+  call's premium (TJ-1272). `tjs run`, then read them again.
+- A merger held in two broker accounts, with cash in lieu in only one of them,
+  is one event in either order. Where it was two, the new position's quantity
+  and cost, and the cash-in-lieu gain, move to the delivered share count. The
+  election stays; check the year with `tjs check-filed`.
+- RBC: a spin-off whose parent had a stock split under a temporary code, in an
+  account that traded two listings of the parent, may name another parent
+  listing than before (or none, with the warning, when both hold shares). Its
+  event id changes with it: elect it again (`tjs elect --pending`).
+- An `OPENING` of a new symbol in one account with the rename only in another:
+  the T1135 maximum cost (and the year-end cost columns) no longer count the old
+  purchase beside the snapshot's shares, so they can fall; `tjs handoff` reads
+  the same units. No gain moves. Compare a filed T1135.
+- A warrant exercise after a dated `RENAME`, in an account with rows left on the
+  old symbol, whose shares arrive under the new symbol: the warrants' cost moves
+  from the old symbol's position to the new one's, which moves those positions'
+  later gains. Check with `tjs check-filed`.
+- Canada, Questrade: an s.86.1 spin-off paid in two broker accounts after the
+  parent was sold now cuts the cost of the sales in both accounts, not only the
+  last one's. Each sale's cost moves; the year's total moves only when those
+  sales fall in two tax years. Check with `tjs check-filed`.
+- Questrade: a spin-off posted, reversed and reposted under another symbol now
+  books its units under the symbol that kept them, not the reversed one. A
+  saved election still applies.
+- US projects with crypto: an earlier message told you to record a gift you
+  gave as `self`, as though that booked it (TJ-0928). It does not: the coins
+  and their basis stay in your books and a later sale of that coin uses them.
+  taxjson cannot book a US gift yet (`docs/limits.md`). No figure moves. `tjs
+  checklist` now asks about each send recorded as `self`: if one was a gift,
+  work out later sales of that coin by hand; if none was, `tjs checklist --done
+  crypto-sends`.
+
+- US projects: Form 8949 figures can move on re-run where a rename (a split
+  to a new ticker) is stamped later in the day than a trade of the new ticker
+  (TJ-1126). That trade now comes after the rename, as though the rename took
+  effect at the day's open, so it can close the renamed position instead of
+  opening a new one. A plain split and a day with no such trade do not move;
+  Canadian figures do not move. A day on which both tickers traded before the
+  stamp keeps its figures and gets a `Warning:`.
+
+- A share position sold down to a rest under 1e-6 units that still carries half
+  a cent or more of cost is now held (TJ-1062, TJ-1141). It takes a share priced
+  in the thousands per unit. The stranded-basis warning goes, the rest shows in
+  `tjs list`, and its later sale is realized at its cost, so the gain of that
+  year moves; before, the sale opened a tiny short and its gain was in no total.
+  Re-run with `tjs run`; a year already filed keeps its lock until
+  `tjs close-year --force`. An ordinary share's rounding rest is unchanged.
+- A buy the broker codes as closing a short your files do not hold (IB code
+  `C`, RBC `COVER SHORT.`) is now flagged (TJ-0844): `tjs run`'s closing list
+  names it, and `tjs sum --json` and `tjs form-export --json` report
+  `complete: false` with an `unbacked-cover` issue where they said complete.
+  This includes a cover dated before the tax year, whose long is still in the
+  books' costs. No figure moves until you answer it. Add the older short sale,
+  or run `tjs find-missing-history --write-missing-history`, which drafts `.tt`
+  `OPENING <date> <SYMBOL> -<qty> cost=unknown`. With that line the cover goes
+  to manual reporting, no long is added, and the cost of later sales and the
+  year-end holdings change. Compare `tjs sum` before and after; in a closed year
+  `tjs check-filed` may report the change.
+- Transfer-ins with a stated book value, with a `.tt` purchase of the same
+  stock in the account (TJ-1326, TJ-1327, TJ-1340): a re-run can book a
+  transfer-in that was `.tt_covers`, and the gain and `tjs list` move, when
+  that purchase is replaced by an `OPENING` line dated on or after it, or a
+  broker sale really sold it because the units from an `OPENING` line or a
+  move of your own had already left. The phantom short goes. `tjs transfers`
+  shows the new status; a filed year's lock (`tjs check-filed`) may report
+  the change. A `.tt` purchase added on the arrival's date only to work
+  around this should be removed.
 - The command is `tjs` in every message, report and doc. `taxjson` still runs
   the same program, so scripts and cron jobs keep working; `taxjson.toml`, the
   `taxjson-*` tools and the `TAXJSON_*` variables are unchanged. No figure

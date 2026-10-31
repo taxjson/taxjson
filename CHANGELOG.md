@@ -3,6 +3,27 @@
 ## Unreleased
 
 
+## v0.41.0 (2026-10-31)
+
+### Fixed: fix round 8
+
+About 75 backlog items, mostly in slip-audit and slip-import, transfers, spin-offs,
+the planning checks and the T1135 cash series. Three independent reviews ran
+both trees before it landed. Figures move only in the shapes docs/upgrading.md
+names; on the demo project no filed figure moves.
+
+### New
+
+- `.tt OPENING DATE SYMBOL -QTY cost=unknown` declares a short held before your
+  files, and `tjs find-missing-history --write-missing-history` drafts it for a
+  cover with no short (TJ-0844). The cover is flagged until it is answered.
+- `tjs crypto-sends ACCOUNT --set in-ID=new|return` says what a stablecoin arrival
+  is (TJ-0652).
+- reports/<account>_holdings.toml: an `arrivals` list marks units that came by
+  transfer, and `trades` keeps the purchases of a holding moved in kind (TJ-1344,
+  TJ-1342).
+
+
 ## v0.40.0 (2026-10-30)
 
 ### Changed: the command is `tjs`, everywhere

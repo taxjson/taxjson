@@ -539,6 +539,21 @@ def underlying_matches(und: str, wanted: Iterable[str]) -> bool:
     return False
 
 
+def one_letter_listings(wanted: str, unds: Iterable[str]) -> List[str]:
+    """The listings among `unds` that are the bare ticker `wanted` plus a
+    one-letter last part: underlying_matches cannot tell a market (SYN.T)
+    from a class share (SYN.B), so the user is told to name it (backlog
+    TJ-1149)."""
+    w = str(wanted or "").strip().upper()
+    found = set()
+    for u in unds:
+        u = str(u or "").upper()
+        base, _, part = u.rpartition(".")
+        if base == w and len(part) == 1 and part.isalpha():
+            found.add(u)
+    return sorted(found)
+
+
 def _blank() -> Dict[str, Any]:
     return {"written_contracts": 0.0, "bought_contracts": 0.0,
             "received": 0.0, "paid": 0.0, "cash_flow": 0.0,

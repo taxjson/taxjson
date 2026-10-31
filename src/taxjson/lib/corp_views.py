@@ -262,7 +262,7 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                 if child == "?":
                     child = ev.target_symbol
             ratio = (f"{ev.ratio:.6g} new per share ({ev.ratio_new:g} for "
-                     f"{ev.ratio_old:g})" if ev else "")
+                     f"{ev.old_count:g})" if ev else "")
             frac = float(getattr(ev, "fraction_in_lieu", 0) or 0) \
                 if ev else 0.0
             cil = float(getattr(ev, "cash_in_lieu", 0) or 0) if ev else 0.0
@@ -272,8 +272,8 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                 # The row's ratio counts the delivered shares; the
                 # holding was entitled to the fraction too (TJ-0166).
                 ent = ev.ratio_new + frac
-                ratio = (f"{ent / ev.ratio_old:.6g} new per share "
-                         f"({ent:g} for {ev.ratio_old:g})")
+                ratio = (f"{ent / ev.old_count:.6g} new per share "
+                         f"({ent:g} for {ev.old_count:g})")
             cil_text = cash_in_lieu_line(
                 float(ev.qty_received or 0), frac, cil,
                 getattr(ev, "cash_in_lieu_currency", "") or

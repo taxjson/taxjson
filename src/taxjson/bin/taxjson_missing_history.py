@@ -927,6 +927,13 @@ def main(argv=None):
         # days are read from the books (books_journal_days).
         from taxjson.lib.missing_history import books_journal_days
         journal |= books_journal_days(txs, _lines)
+    # A short a .tt line declares (TJ-0844): its cover leaves the walks.
+    if args.missing_history:
+        from taxjson.lib.missing_history import (drop_answered_covers,
+                                                 short_opening_rows)
+        txs = drop_answered_covers(txs, short_opening_rows(
+            _opening_sizes(txs, args.missing_history, args.year,
+                           types or None).values()))
     if args.write_purchases is not None:
         return _write_purchases(args, txs, country=country, basis=basis,
                                 types=types, journal=journal,
@@ -989,6 +996,9 @@ def main(argv=None):
                 e.file_name = _fx.where
                 if e.reason == 'complete':
                     e.opens = float(_fx.quantity)
+        # (A short line is answered by its cover: never stale.)
+        stale = [e for e in stale if float(getattr(_fixed.get(
+            (e.symbol.upper(), e.account)), 'quantity', 1.0)) > 0]
     # Entries whose purchase is in the books now: the run still opens a
     # .tt line's units (never sized, CA-ACB-11), so they are work to do
     # too — listed apart from the REMOVE ones; the checklist counts both
@@ -1084,18 +1094,24 @@ def main(argv=None):
                    f"history: {len(covers)}")
         yr_c = str(args.year) if args.year else None
         aff = [c for c in covers if yr_c is None or c.date.startswith(yr_c)]
-        oth = [c for c in covers if c not in aff]
+        # (TJ-0844: the long an earlier cover left is in this year's costs.)
+        old = [c for c in covers if yr_c is not None and c.date[:4] < yr_c]
+        oth = [c for c in covers if c not in aff and c not in old]
         for title, rows in (
                 ((f"AFFECTS {yr_c} - covering the short is the disposition; "
                   f"its gain or loss is missing (the books carry the buy "
                   f"as a new long). Add the short sale that opened it "
-                  f"(date, proceeds) to a .tt file in this account:"
+                  f"(date, proceeds) to a .tt file in this account, or let "
+                  f"--write-missing-history draft a line with its proceeds "
+                  f"unknown:"
                   if DETAILS else
-                  f"AFFECTS {yr_c} - a cover's gain is missing; add the "
-                  f"short sale that opened it as a .tt line:")
+                  f"AFFECTS {yr_c} - a cover's gain is missing; add its "
+                  f"short sale as a .tt line, or --write-missing-history:")
                  if yr_c else
                  "Broker-marked covers with no short in the data:", aff),
-                (f"NOT relevant to {yr_c} - covers in other years:", oth)):
+                (f"AFFECTS {yr_c} - an earlier year's cover: the books still "
+                 f"carry it as a long, in this year's costs:", old),
+                (f"NOT relevant to {yr_c} - later covers:", oth)):
             if not rows:
                 continue
             _P.heading(title)
@@ -1442,6 +1458,9 @@ def main(argv=None):
                     "security); then `tjs run`.")
         if _short_open:
             _P.gap()
+            _P.line("A short sale you made and have not covered also shows "
+                    "here: no purchase is missing, and it is in no total "
+                    "until it is covered.")
             _P.line("To fix a sale with no purchase in your files, in this "
                     "order:")
             for item in (

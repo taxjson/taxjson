@@ -551,6 +551,9 @@ CLUSTER_DAYS = 5
 # A gap matches k payments of a period P when it is within
 # GAP_TOL * P (+ GAP_TOL_K * k * P for a long gap) of k * P.
 GAP_TOL, GAP_TOL_K = 0.25, 0.05
+# A payment on the payer's own day: within this share of a period of one
+# period after the one before (a posting's drift, not a special's week).
+DAY_TOL = 0.1
 
 
 def schedule(pays: List[Payment]) -> List[Payment]:
@@ -644,7 +647,8 @@ def detect_schedule(dates: List[str]) -> Tuple[Optional[str],
     coarser grid through the special won (backlog TJ-0900). Two or more
     payments after the winner's latest that fit a grid of their own are
     a change of schedule, not specials: the later regime wins, whatever
-    the older one's run of slots (backlog TJ-1078)."""
+    the older one's run of slots (backlog TJ-1078). The latest on the
+    grid is not a special that slot 0 also holds (_latest_regular)."""
     ds = [date.fromisoformat(d) for d in dates[-LOOKBACK:]]
     if len(ds) < 2:
         return None, None, None, None
@@ -694,9 +698,35 @@ def _best_grid(ds: List[date]) -> Optional[tuple]:
                 # The latest payment on the grid (slot 0 may hold a
                 # posting a few days after the anchor).
                 best = (key, name, months, float(median(adj)),
-                        max(slots[0]).isoformat() if 0 in slots
-                        else anchor.isoformat())
+                        _latest_regular(slots, months, period).isoformat()
+                        if 0 in slots else anchor.isoformat())
     return best
+
+
+def _latest_regular(slots: Dict[int, List[date]], months: int,
+                    period: float) -> date:
+    """The latest payment of a grid's slots. Two in slot 0 are a payment
+    and a special, though the grid's tolerance holds both (backlog
+    TJ-1155): the payment is the one on the payer's own day, a period
+    after slot 1's; with neither there, and slots 1 and 2 a period apart,
+    both are specials and slot 1's is the latest. A shape that says less
+    keeps the last of the slot."""
+    top = max(slots[0])
+    prev = slots.get(1) or []
+    if len(slots[0]) != 2 or not months or len(prev) != 1:
+        return top
+    tol = period * DAY_TOL
+
+    def _next(d: date) -> date:
+        return date.fromisoformat(add_months(d.isoformat(), months))
+    near = [d for d in slots[0] if abs((d - _next(prev[0])).days) <= tol]
+    if len(near) == 1:
+        return near[0]
+    older = slots.get(2) or []
+    if (not near and len(older) == 1
+            and abs((_next(older[0]) - prev[0]).days) <= tol):
+        return prev[0]
+    return top
 
 
 def ttm_per_share(sched: List[Payment], as_of: str) -> float:

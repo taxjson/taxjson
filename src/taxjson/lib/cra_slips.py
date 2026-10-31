@@ -875,15 +875,31 @@ def place(slips: List[CraSlip], groups: List[Group], year: int,
                     kinds = f"{kinds}, other income" if kinds \
                         else "other income"
                 kinds = kinds or "no amounts"
+                # The share-out's pick has none of it; another may (backlog
+                # TJ-1278): the slip stays unplaced, the words true.
+                elsewhere = (other >= 0.005 and any(
+                    o >= 0.005 for o in other_books)) or any(
+                    cad[k][j] >= 0.005 and bk[j] >= 0.005
+                    for bk in books for j in range(3))
                 if account:
                     pl.account = account
-                    pl.how = (f"account {account}, as asked (no {shown} "
-                              f"broker account in the books has its "
-                              f"{kinds}: no broker account written)")
+                    pl.how = (f"account {account}, as asked ("
+                              + (f"the {shown} broker account its amounts "
+                                 f"fit best has none of its {kinds}"
+                                 if elsewhere else
+                                 f"no {shown} broker account in the books "
+                                 f"has its {kinds}")
+                              + ": no broker account written)")
                 else:
-                    pl.how = (f"no {shown} broker account in the books has "
-                              f"its {kinds} in {year} — an export missing "
-                              f"from inputs/? Import it again naming its "
+                    pl.how = ((f"its {shown} broker account cannot be told: "
+                               f"the one its amounts fit best has none of "
+                               f"its {kinds} in {year}, another has some"
+                               if elsewhere else
+                               f"no {shown} broker account in the books has "
+                               f"its {kinds} in {year} — an export missing "
+                               f"from inputs/?")
+                              + (" — import" if elsewhere else " Import")
+                              + " it again naming its "
                               f"account (`tjs slip-audit ACCOUNT "
                               f"--import-cra FILE`), or type it into "
                               f"slips.toml with broker_account")
@@ -1180,6 +1196,25 @@ def plan_import(placed: List[Tuple[Placement, str]],
                     f"{pl.slip.shown}: already in slips.toml ([[slip]] "
                     f"#{dup[0].index}, the same boxes)")
             continue
+        # The same figures in a table of no broker account, and this slip
+        # now placed under one (its export added since): it may be that
+        # table's slip, or another broker account's. Added, one slip would
+        # count twice, so it is said (backlog TJ-1277).
+        loose = [e for e in existing if k and not e.keys
+                 and same_slip(e, pl, "") and same_issuer(e, pl)
+                 and e.currency == pl.slip.currency
+                 and e.status == pl.slip.status
+                 and _boxes_key(e.boxes) == sb and e.index not in taken]
+        if loose:
+            taken.add(loose[0].index)
+            plan.notes.append(
+                f"{pl.slip.shown}: the same figures as [[slip]] "
+                f"#{loose[0].index}, which names no broker account; not "
+                f"imported. If it is that slip, delete the table and import "
+                f"it again, to record its broker account; if it is another "
+                f"broker account's, delete the table and import both files "
+                f"together (`--import-cra FOLDER`)")
+            continue
         # A slip of no key is the slip of a keyed table only if they share
         # a box: no broker account has the income of a slip of no key, so
         # a table sharing none was placed by its own income, another
@@ -1187,6 +1222,27 @@ def plan_import(placed: List[Tuple[Placement, str]],
         twins = [e for e in existing if same_slip(e, pl, k)
                  and same_issuer(e, pl)
                  and (k or not e.keys or shares_box(e, pl))]
+        # A keyed table with a box this slip of no key lacks may be another
+        # broker account's that merely shares a box (a small box 13 beside
+        # its dividends): never moved under its key, nor "its amended slip"
+        # (backlog TJ-1336). Said, unless a table it fits is the one.
+        unsure = [e for e in twins if not k and e.keys and any(
+            abs(v) >= 0.005 and abs(pl.slip.boxes.get(b, 0.0)) < 0.005
+            for b, v in e.boxes.items())]
+        twins = [e for e in twins if not any(e is u for u in unsure)]
+        amended = pl.slip.status == "amended"
+        if not any(amended or e.status == "amended" for e in twins) and any(
+                amended or e.status == "amended" for e in unsure):
+            plan.notes.append(
+                f"{pl.slip.shown} ({pl.slip.status}): it shares a box with "
+                f"[[slip]] "
+                + ", ".join(f"#{e.index}" for e in unsure)
+                + " of a broker account, but has not all its boxes — whether "
+                  "it is that slip or another broker account's cannot be "
+                  "told; not imported: type it into slips.toml with "
+                  "broker_account, or, if it amends that table, delete the "
+                  "table and import it again")
+            continue
         if pl.slip.status == "amended":
             origs = [e for e in twins if e.status != "amended"]
             if not origs:

@@ -1311,6 +1311,11 @@ def _not_in_rows(rep: Dict[str, Any]) -> List[str]:
         out.append(act(f"{n} sale{'s' if n != 1 else ''} with no purchase "
                        f"in your files NOT in these rows",
                        "tjs find-missing-history"))
+    n = int(miss.get("unbacked_cover") or 0)
+    if n:
+        out.append(act(f"{n} cover{'s' if n != 1 else ''} of a short opened "
+                       f"before your files booked as a new long, NOT in "
+                       f"these rows", "tjs find-missing-history"))
     return out
 
 
@@ -1740,6 +1745,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help=argparse.SUPPRESS)
     parser.add_argument("--no-purchase", type=int, default=0,
                         help=argparse.SUPPRESS)
+    parser.add_argument("--unbacked-cover", type=int, default=0,
+                        help=argparse.SUPPRESS)
     parser.add_argument("--date-basis", choices=("settle", "trade"),
                         default=None,
                         help="Date the gains files were year-scoped on "
@@ -2107,10 +2114,12 @@ def _main(args) -> int:
     _ynote = year_not_ended_note(form_year or rep.get("year"))
     if _ynote:
         rep["year_not_ended"] = _ynote
-    if not args.json and (args.in_kind_unbooked or args.no_purchase):
+    if not args.json and (args.in_kind_unbooked or args.no_purchase
+                          or args.unbacked_cover):
         # The text view's `! ` lines (--json: the readiness record).
         rep["not_in_rows"] = {"in_kind_unbooked": args.in_kind_unbooked,
-                              "no_purchase": args.no_purchase}
+                              "no_purchase": args.no_purchase,
+                              "unbacked_cover": args.unbacked_cover}
     if args.form == "8949":
         text = render_8949(rep, form_year, rep["currency"],
                            not args.brief)
@@ -2141,6 +2150,7 @@ def _main(args) -> int:
                 run_state=args.run_state_problem,
                 unknown_cost=max(tainted, len(manual)),
                 no_purchase=args.no_purchase,
+                unbacked_cover=args.unbacked_cover,
                 conservation=_RD.conservation_lines(
                     list(args.files) + list(args.crypto)),
                 in_kind_unbooked=args.in_kind_unbooked,

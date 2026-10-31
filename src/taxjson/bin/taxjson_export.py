@@ -455,11 +455,18 @@ def process_data_report(data, args, agg: Dict[str, Dict[str, Any]],
         # deliberately merge cross-currency listings, and summing their
         # NATIVE costs into one number made total_cost currency salad.
         # The mixed-flag consumer blanks the flat figure downstream.
-        _c = item.get('currency') or '?'
-        bucket.setdefault('cost_by_currency', {})
-        bucket['cost_by_currency'][_c] = (
-            bucket['cost_by_currency'].get(_c, 0.0)
-            + float(item.get('total_cost', 0)))
+        # An input at quantity 0 and no cost holds nothing: its currency
+        # does not make the holding mixed (backlog TJ-1293). (A mixed
+        # snapshot's later items carry `holding_qty` and a cost.)
+        _holds = bool(float(item.get('qty', 0)) or item.get('holding_qty')
+                      or float(item.get('total_cost', 0))
+                      or item.get('unknown_cost'))
+        if _holds:
+            _c = item.get('currency') or '?'
+            bucket.setdefault('cost_by_currency', {})
+            bucket['cost_by_currency'][_c] = (
+                bucket['cost_by_currency'].get(_c, 0.0)
+                + float(item.get('total_cost', 0)))
         # Carry the EARLIEST position_start across all inputs that
         # contribute to this symbol's bucket (e.g. when aggregating
         # gains JSONs from multiple accounts via `taxjson-export`).
@@ -471,10 +478,10 @@ def process_data_report(data, args, agg: Dict[str, Dict[str, Any]],
         # kind for the whole bucket, or none written.
         bucket.setdefault('cost_kinds', set()).add(
             item.get('cost_kind') or '')
-        cur = item.get('currency') or ''
+        cur = (item.get('currency') or '') if _holds else ''
         # A cost in a currency other than the listing's (TJ-1109):
         # `currency` is the cost's, as the sums here need it.
-        _listing = item.get('listing_currency') or cur
+        _listing = (item.get('listing_currency') or cur) if _holds else ''
         if _listing:
             bucket.setdefault('listing_currencies', set()).add(_listing)
         if cur and bucket['currency'] and cur != bucket['currency']:
@@ -758,9 +765,27 @@ def _lag_split_factors(rows) -> Dict[int, float]:
     return out
 
 
+def _net_transfer_leg(legs: List[Tuple[str, float, str]], date: str,
+                      qty: float, kind: str) -> None:
+    """Add a TRANSFER row of (date, signed units, kind) to `legs`,
+    cancelling it against the latest legs of the other direction, in
+    either order (a broker can date the out-leg after the arrival), so
+    `legs` keeps only the units no other transfer took back."""
+    while legs and abs(qty) >= 1e-6 and (legs[-1][1] > 0) != (qty > 0):
+        d0, q0, k0 = legs.pop()
+        left = q0 + qty
+        if (left > 0) == (q0 > 0) and abs(left) >= 1e-6:
+            legs.append((d0, left, k0))
+            return
+        qty = left
+    if abs(qty) >= 1e-6:
+        legs.append((date, qty, kind))
+
+
 def _load_trade_events(paths, mapping=None, drops=None,
-                       current_position_only=True,
-                       country=None) -> Dict[str, List[Dict[str, Any]]]:
+                       current_position_only=True, country=None,
+                       position_starts=None, arrivals=None
+                       ) -> Dict[str, List[Dict[str, Any]]]:
     """Group BUYSELL/ASSIGN rows from pre-gains transaction file(s) into a
     per-symbol list of {date, action, qty, price} events, in native currency.
 
@@ -778,6 +803,8 @@ def _load_trade_events(paths, mapping=None, drops=None,
     sign. A trade that crosses zero (10 held, 20 sold) opens the new
     position with its leftover, and is kept as that part alone (a SELL of
     10 at its price); the old position's events go (audit 2026-10-24 B22).
+    Rows tied with the trade that opened the position are not such a
+    crossing: each is listed whole (backlog TJ-1345).
     Rows are replayed in the order `country`'s engine takes them
     (_replay_key; Canada's without a country) but each event keeps its
     trade `date` for charting; a rename merges the two symbols' events
@@ -786,10 +813,27 @@ def _load_trade_events(paths, mapping=None, drops=None,
     is not charted (backlog TJ-0887). Canada's engine books a trade
     whose settle lag holds a split in post-split units: so does the
     balance here, the event keeping the row's own quantity and price
-    (_lag_split_factors; backlog TJ-1072)."""
+    (_lag_split_factors; backlog TJ-1072).
+
+    `position_starts` ({symbol: the holding's position_start_date}): a
+    TRANSFER that takes the balance to zero after that date did not end
+    the position: the engine netted it with its arrival as a move and
+    kept the start, so the purchases before it stay listed (backlog
+    TJ-1342). With no start known for the symbol, or with one on or after
+    the TRANSFER's date (an out-leg with no matching arrival, a later
+    round), it ends the position.
+
+    `arrivals`, a dict to fill: {symbol: [{date, qty, kind}]}, the units
+    of the current position that came by TRANSFER and that no out-leg
+    took back, in the row's own units: they have no purchase here, as
+    no trade is listed for a TRANSFER (backlog TJ-1344). `kind` is
+    "own_move" for a move from another of your accounts (a lot-move
+    leg), else "transfer" (a contribution in kind, an account
+    transferred in)."""
     mapping = mapping or {}
     drops = drops or set()
-    from taxjson.lib.core import is_opening_row
+    position_starts = position_starts or {}
+    from taxjson.lib.core import LOT_MOVE_TYPE, is_opening_row
     from taxjson.lib.corporate_timeline import (account_tie,
                                                 normalize_symbol_new,
                                                 split_seen)
@@ -825,6 +869,11 @@ def _load_trade_events(paths, mapping=None, drops=None,
     # symbol's events into the new symbol's in sequence (B44).
     events: Dict[str, List[Any]] = {}
     balance: Dict[str, float] = {}
+    # Per symbol, the replay key of the trade that opened the current
+    # position (TJ-1345).
+    opened: Dict[str, Tuple] = {}
+    # Per symbol, the current position's transfers (_net_transfer_leg).
+    legs: Dict[str, List[Tuple[str, float, str]]] = {}
     seen: set = set()
     for order, (_key, _i, tx) in enumerate(rows):
         sym = mapping.get(tx["symbol"], tx["symbol"])
@@ -857,6 +906,8 @@ def _load_trade_events(paths, mapping=None, drops=None,
                     merged = events.get(new, []) + events.pop(sym)
                     merged.sort(key=lambda e: e[0])
                     events[new] = merged
+                if sym in legs:
+                    legs[new] = legs.get(new, []) + legs.pop(sym)
             continue
         try:
             qty = float(tx.get("quantity") or 0)
@@ -876,8 +927,23 @@ def _load_trade_events(paths, mapping=None, drops=None,
             # Units moved in or out, or held at an opening snapshot (no
             # trade to chart: an opening is no purchase on its snapshot
             # day, TJ-0887): the running balance only.
-            if current_position_only and (flat or crossed):
+            start = position_starts.get(sym)
+            moved = (flat and start and tx.get("action") == "TRANSFER"
+                     and str(tx.get("date") or "") > str(start))
+            ended = (current_position_only and (flat or crossed)
+                     and not moved)
+            if ended:
                 events[sym] = []
+                legs.pop(sym, None)
+            if tx.get("action") == "TRANSFER" and not (ended and flat):
+                # (A crossing keeps its leftover, as a trade's.)
+                _net_transfer_leg(
+                    legs.setdefault(sym, []), str(tx.get("date") or ""),
+                    after if ended else qty,
+                    "own_move" if tx.get("type") == LOT_MOVE_TYPE
+                    else "transfer")
+            if crossed or abs(before) < 1e-6:
+                opened.pop(sym, None)
             continue
         ev = {
             "date": tx.get("date"),
@@ -888,13 +954,32 @@ def _load_trade_events(paths, mapping=None, drops=None,
         if current_position_only and flat:
             # position flat -> the current round starts after this row
             events[sym] = []
+            legs.pop(sym, None)
+        elif current_position_only and crossed and opened.get(sym) == _key:
+            # The position it crosses was opened at this very moment
+            # (SELL 10, BUY 30 at one clock: a broker export with no
+            # times): which came first is only the file's order, and no
+            # older round is involved. Both rows are listed whole, the
+            # one that sets the position's side first (TJ-1345).
+            prior = events.get(sym, [])
+            events[sym] = [(prior[0][0] if prior else order, ev)] + prior
         elif current_position_only and crossed:
             # The part of this row that opens the new position (in the
             # row's own units, as its price is).
             ev["qty"] = abs(after) / factor
             events[sym] = [(order, ev)]
+            opened[sym] = _key
+            legs.pop(sym, None)
         else:
             events.setdefault(sym, []).append((order, ev))
+            if abs(before) < 1e-6:
+                opened[sym] = _key
+    if arrivals is not None:
+        for s, held in legs.items():
+            came = [{"date": d, "qty": q, "kind": k}
+                    for d, q, k in sorted(held, key=lambda g: g[0]) if q > 0]
+            if came:
+                arrivals[s] = came
     by_symbol = {s: [e for _o, e in evs] for s, evs in events.items()
                  if evs}
     return by_symbol
@@ -1103,7 +1188,15 @@ def _cost_unknown_note(sym: str, b: Dict[str, Any], country,
     import textwrap
     psd = str(b.get("position_start_date") or "")
     moved = [a for a in arrivals.get(sym) or [] if a[0] >= psd]
-    if b.get("blended_left_out"):
+    if isinstance(b.get("blended_left_out"), tuple):
+        # (TJ-1143)
+        _cur, _base = b["blended_left_out"]
+        text = ("cost_unknown: this holding's cost is the figure after the "
+                "passes across accounts (cost_source = \"blended\"), in "
+                f"{_cur}, and this snapshot's base currency is {_base}: no "
+                "cost of that kind in it, so total_cost and cost_per_share "
+                "are left out.")
+    elif b.get("blended_left_out"):
         # (TJ-1071)
         text = ("cost_unknown: an input's cost for these units is the "
                 "figure after the passes across accounts (cost_source = "
@@ -1136,7 +1229,8 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
                          trades_by_symbol: Dict[str, List[Dict[str, Any]]] = None,
                          arrivals: Dict[str, List[Tuple[str, float, str]]] = None,
                          blended: Dict[str, Dict[str, Any]] = None,
-                         move_currency: Dict[str, str] = None
+                         move_currency: Dict[str, str] = None,
+                         marked_arrivals: Dict[str, List[Dict[str, Any]]] = None
                          ) -> List[str]:
     """Render aggregated holdings as a TOML document: a [meta] table plus
     one [[holding]] array-of-tables entry per open position. Designed as a
@@ -1486,6 +1580,16 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
                 lines.append("]")
             else:
                 lines.append("trades = []")
+            # Units that came by transfer: not bought here (TJ-1344).
+            # Left out when none, so a holding's table reads as before.
+            marks = (marked_arrivals or {}).get(sym)
+            if marks:
+                lines.append("arrivals = [")
+                for m in marks:
+                    lines.append(
+                        f"  {{ date = {m['date']}, qty = {float(m['qty'])!r}, "
+                        f"kind = {_toml_str(m['kind'])} }},")
+                lines.append("]")
         lines.append("")
     return lines
 
@@ -1882,7 +1986,9 @@ def main():
              "downstream tool can annotate the live entries/exits on a chart. "
              "Events from a prior round that was fully closed out are excluded "
              "(trimmed to the last flat-to-now segment, matching "
-             "position_start_date). Prices are verbatim (never FX-converted).",
+             "position_start_date). Prices are verbatim (never FX-converted). "
+             "Units that came by transfer have no event: the holding lists "
+             "them in `arrivals` ({date, qty, kind}: own_move or transfer).",
     )
     parser.add_argument(
         "--blended-gains", action="append", default=[], metavar="FILE",
@@ -2061,9 +2167,14 @@ def main():
     # Per-symbol acquisition/sell events (optional), in native currency,
     # from the pre-gains transaction file(s). Mapped/dropped the same way
     # as the holdings so events attach to the right (netted) symbol key.
+    marked_arrivals: Dict[str, List[Dict[str, Any]]] = {}
     trades_by_symbol = (
         _load_trade_events(args.trades, holdings_map, holdings_drops,
-                           country=args.country)
+                           country=args.country,
+                           position_starts={
+                               s: b.get("position_start_date")
+                               for s, b in agg.items()},
+                           arrivals=marked_arrivals)
         if args.trades else None)
     # Evidence-driven depot flips (see _apply_transfer_evidence):
     # applied to BOTH inventories so symbol keys stay aligned.
@@ -2118,13 +2229,25 @@ def main():
             continue
         if (args.base_currency
                 and fill["currency"] != args.base_currency.upper()):
+            # Left out for real, and said (backlog TJ-1143): the figure
+            # was read as the holding's known cost as well.
+            _base_cur = args.base_currency.upper()
+            b["unknown_cost"] = True
+            b["blended_left_out"] = (fill["currency"], _base_cur)
+            emit_line(f"warning: {sym}: its cost after the passes across "
+                      f"accounts (cost_source = \"blended\") is in "
+                      f"{fill['currency']}, not the base currency "
+                      f"{_base_cur}, so it is left out: the holding is "
+                      f"written cost_unknown, with no total_cost or "
+                      f"base_total_cost", file=sys.stderr)
             continue
         blended = blended or {}
         blended[sym] = fill
         b["unknown_cost"] = True      # (its figure is the fill's)
     print("\n".join(render_holdings_toml(agg, args, base_agg,
                                          trades_by_symbol, arrivals,
-                                         blended, move_currency)))
+                                         blended, move_currency,
+                                         marked_arrivals)))
 
 
 if __name__ == "__main__":

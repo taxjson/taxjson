@@ -191,7 +191,9 @@ def _row_dates(t: TaxTransaction) -> Tuple[str, ...]:
 
 
 def write_lots(transactions: List[TaxTransaction],
-               tax_date: Optional[str] = None) -> List[WriteLot]:
+               tax_date: Optional[str] = None,
+               long_sales: Optional[Set[Tuple[str, str, int]]] = None
+               ) -> List[WriteLot]:
     """FIFO walk of the option rows, per account and symbol. Follows
     the engine (lib/core.py) on these points it used to miss (R1-179,
     S075-09, 2026-10-24 audit A23-A27, A47):
@@ -213,7 +215,10 @@ def write_lots(transactions: List[TaxTransaction],
         another's write (handoff hands several accounts' books in).
     Premiums and buy-back costs keep their sign (a write whose commission
     exceeds the premium nets a loss). Writes and closes are dated on
-    `tax_date` (settle, the default, or trade)."""
+    `tax_date` (settle, the default, or trade). `long_sales` (a set, when
+    given) receives (series, date, year) of each sale of long contracts:
+    a lock's figure holds its gain, and this walk keeps no long cost
+    (backlog TJ-1152)."""
     _date_of = date_basis_of(tax_date)
     # The engine's own pairing of an assignment with its share leg
     # (A2-0114, A2-0328): the option root is matched to the account's
@@ -291,6 +296,9 @@ def write_lots(transactions: List[TaxTransaction],
         net = 0.0 if transfer else float(t.net_amount or 0.0)
         if q < 0:
             opening = -q - min(-q, max(p, 0.0))
+            if long_sales is not None and not transfer and p > 1e-9:
+                long_sales.update((sym, _d, int(_date_of(t)[:4]))
+                                  for _d in _row_dates(t))
             if opening > 1e-9:
                 # Base books store net magnitudes with the direction on
                 # the quantity: a SELL's net is the premium received, and
@@ -540,7 +548,8 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
     _date_of = date_basis_of(tax_date)
     _expired = _expired_test(transactions, year, today, _date_of)
     rows: List[Dict[str, Any]] = []
-    _lots = write_lots(transactions, tax_date=tax_date)
+    _long_sales: Set[Tuple[str, str, int]] = set()
+    _lots = write_lots(transactions, tax_date=tax_date, long_sales=_long_sales)
     # A lock reports the premiums of one series written on one day as
     # one figure (reported_premiums: by symbol and date), so the
     # already-amended test compares it with the whole day's lots: what
@@ -709,8 +718,13 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
         # day's writes is at most the premium of the units not assigned
         # (TJ-0085; signed, and for the whole day, TJ-0679, TJ-0680).
         _retained, _assigned = _day.get(_rep_key + (wy,), (0.0, 0.0))
+        # A long of the series sold that day is in the lock's figure too,
+        # at a gain this walk cannot compute: said, not guessed (TJ-1152).
+        amend_unsure = (grant and wy in filed_years and _rep is not None
+                        and abs(_assigned) > 0.005
+                        and _rep_key + (wy,) in _long_sales)
         amended = (grant and wy in filed_years and _rep is not None
-                   and abs(_assigned) > 0.005
+                   and abs(_assigned) > 0.005 and not amend_unsure
                    and (_rep.get(_rep_key, 0.0) - _retained)
                    * (1.0 if _assigned > 0 else -1.0) <= 0.01)
 
@@ -778,6 +792,11 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                     where = f"folded into the share leg in {cy} ({_assignment_cite(lot.symbol)}); the books show no {wy} gain"
                     action = (f"no amendment — {_lk(wy)} no longer reports the {prem:,.2f} premium for {wy} "
                               f"(the amended return, s.49(4))")
+                elif grant and amend_unsure:
+                    where = f"folded into the share leg in {cy} ({_assignment_cite(lot.symbol)}); the books show no {wy} gain"
+                    action = (f"ATTENTION: {_lk(wy)}'s figure for {lot.written_as or lot.symbol} on {lot.write_date[:10]} also holds "
+                              f"a sale of long contracts of the series that day, so taxjson cannot tell whether the {wy} return still "
+                              f"reports the {prem:,.2f} premium. If it does, T1-ADJ {wy} to remove it (s.49(4)); if it was amended, nothing")
                 elif grant:
                     where = f"folded into the share leg in {cy} ({_assignment_cite(lot.symbol)}); the books show no {wy} gain"
                     action = (f"T1-ADJ {wy}: remove the {prem:,.2f} premium reported for {wy} (s.49(4)) — the {wy} return was filed with it"

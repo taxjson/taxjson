@@ -1192,6 +1192,9 @@ class KrakenBrokerage(BaseBrokerage):
                   f"are therefore NOT in the fee reports (fees.rpt, "
                   f"fees-sum, the .sum FEES line).")
         self._order_within_seconds(transactions, instant_of_line)
+        # Rows of one second across exports (taxjson_brokerage,
+        # order_across_exports; backlog TJ-1270).
+        self._instant_of_line = instant_of_line
         self._mark_idless_fills(transactions)
         self.emit_skip_summary(shown_name(path))
         return transactions

@@ -1353,9 +1353,11 @@ def _payer_issues_t5(b_slips, b_rows, bucket, rate, interest,
         # payers' income cannot hold it: taken off each payer's whole, a
         # second payer's income vanished (backlog TJ-1305). A net negative
         # payer holds none of it, and never makes it more than its own
-        # amount (backlog TJ-1334).
-        off = max(0.0, unnamed - max(0.0, income([r for r in b_rows
-                                                  if payer(r) != who])))
+        # amount (backlog TJ-1334), nor nets against another payer's
+        # (backlog TJ-1339).
+        off = max(0.0, unnamed - sum(
+            max(0.0, income([r for r in b_rows if payer(r) == o]))
+            for o in {payer(r) for r in b_rows} - {who}))
         if paid + max(0.0, income(mine) - off) >= least:
             return True
     return False
@@ -2370,6 +2372,7 @@ def _securities(acct, where, slips, rows, year, tol, sugg_cgd, sugg_tt,
     # dividend: backlog TJ-1016).
     listings: Dict[Tuple[str, str], set] = {}
     cg_listed: Dict[Tuple[str, str], Dict[str, float]] = {}
+    roc_by_listing: Dict[Tuple[str, str], Dict[str, float]] = {}
     for s in slips:
         if s.source == "ib":
             if s.type != "T5":
@@ -2434,18 +2437,17 @@ def _securities(acct, where, slips, rows, year, tol, sugg_cgd, sugg_tt,
         for (rt, c), v in per.items():
             d = sec_slip.setdefault((rt, s.currency), {})
             d[c] = d.get(c, 0.0) + v
-            if c != "cg_div":
-                continue
-            # This slip's box 18 by the one listing it names ("" for no
-            # one listing): each listing's slip drafts its own entry
-            # (backlog TJ-1215).
+            # This slip's box 18 or return of capital by the one listing it
+            # names ("" for no one listing): each listing's slip drafts its
+            # own lines (backlog TJ-1215, TJ-1276).
             own = {_listing(ln.symbol) or (
                 s.listing if ln.root == s.security else "")
                 for ln in s.lines if ln.root == rt and ln.category == c}
             if rt == s.security and not s.lines_only and s.amounts.get(c):
                 own.add(s.listing)
             one = next(iter(own)) if len(own) == 1 else ""
-            by = cg_listed.setdefault((rt, s.currency), {})
+            by = (cg_listed if c == "cg_div" else roc_by_listing).setdefault(
+                (rt, s.currency), {})
             by[one] = by.get(one, 0.0) + v
     for rt in bare - {k[0] for k in sec_slip}:
         sec_slip[(rt, "CAD")] = {}
@@ -2483,19 +2485,28 @@ def _securities(acct, where, slips, rows, year, tol, sugg_cgd, sugg_tt,
                 # Two listings' slips that meet one row (a row of no listing,
                 # one exchange's of two) are one draft: one entry per symbol
                 # and year (backlog TJ-1306).
+                lsym = next((r.symbol for r in same
+                             if r.category in ("ca_div", "foreign")),
+                            "") or f"{rt}.{sfx}"
+                # An entry of a bare root also takes that root's Canadian
+                # listing, so `tjs run` refuses it beside the listing's own
+                # entry: one draft too (backlog TJ-1335).
                 twin = next((i for i, p in enumerate(cg_parts)
-                             if any(r is q for r in same for q in p[3])), None)
+                             if any(r is q for r in same for q in p[3])
+                             or _entry_covers(lsym, p[0])
+                             or _entry_covers(p[0], lsym)), None)
                 if twin is not None:
                     p_sym, p_amt, _b, p_rows = cg_parts[twin]
                     same = p_rows + [r for r in same
                                      if not any(r is q for q in p_rows)]
+                    if _entry_covers(lsym, p_sym):
+                        p_sym = lsym
+                    # _suggest_cgd names its first row: the bare one.
+                    same.sort(key=lambda r: r.symbol != p_sym)
                     cg_parts[twin] = (p_sym, p_amt + amt,
                                       sum(r.cg_part for r in same
                                           if r.currency == cur), same)
                     continue
-                lsym = next((r.symbol for r in same
-                             if r.category in ("ca_div", "foreign")),
-                            "") or f"{rt}.{sfx}"
                 cg_parts.append((lsym, amt, sum(r.cg_part for r in same
                                                 if r.currency == cur), same))
         for p_sym, s_cg, b_cg, p_rows in cg_parts:
@@ -2507,19 +2518,52 @@ def _securities(acct, where, slips, rows, year, tol, sugg_cgd, sugg_tt,
                 notes.append(f"{where}: [[capital_gains_dividends]] names "
                              f"{fmt_money(b_cg)} {cur} of {p_sym} and the slip "
                              f"{fmt_money(s_cg)} — check the entry's amount")
-        # ROC.
-        s_roc = sl.get("roc", 0.0)
-        if s_roc - bk_roc > max(0.005, 0.0):
-            _suggest_roc(acct, rt, sym, cur, s_roc - bk_roc, rrows,
-                         dated_roc.get((rt, cur)), year, sugg_tt, notes,
-                         where, slips, acct_rows,
-                         sales=(sales or {}).get(rt, ()),
-                         typed_dated=typed_roc.get((rt, cur)))
-        elif bk_roc - s_roc > tol and s_roc:
-            notes.append(f"{where}: the books return {fmt_money(bk_roc)} "
-                         f"{cur} of {sym}'s capital and the slip "
-                         f"{fmt_money(s_roc)} — check the ADJUST rows "
-                         f"(`tjs roc-sum`)")
+        # ROC: as box 18, each listing's slip against its own rows when
+        # the books hold rows of each: merged, one T3's return of capital
+        # landed on the other listing (backlog TJ-1276). Dated lines stay
+        # with their whole-root path.
+        roc_listed = roc_by_listing.get((rt, cur)) or {}
+        roc_parts = [(sym, sl.get("roc", 0.0), bk_roc, rrows, slips)]
+        if (len(lst) > 1 and "" not in lst and roc_listed
+                and "" not in roc_listed
+                and not typed_roc.get((rt, cur))
+                and len({suffix_country(x) or x for x in lst}) > 1):
+            split: List[List[Any]] = []
+            for sfx, amt in sorted(roc_listed.items()):
+                same = [r for r in rrows if _same_market(r.symbol, sfx)]
+                same = [r for r in same if _listing(r.symbol) == sfx] or same
+                twin = next((e for e in split if any(
+                    r is q for r in same for q in e[3])), None)
+                if twin is not None:
+                    twin[1] += amt
+                    twin[3] += [r for r in same
+                                if not any(r is q for q in twin[3])]
+                    twin[4].add(sfx)
+                    continue
+                split.append([next((r.symbol for r in same if r.category
+                                    in ("ca_div", "foreign")), ""), amt, 0.0,
+                              same, {sfx}])
+            if all(e[0] for e in split):
+                roc_parts = [
+                    (e[0], e[1], sum(r.native for r in e[3]
+                                     if r.currency == cur
+                                     and r.category == "roc"), e[3],
+                     [x for x in slips if x.security != rt
+                      or x.listing in e[4]])
+                    for e in split]
+        for r_sym, s_roc, b_roc, r_rows, r_slips in roc_parts:
+            if s_roc - b_roc > max(0.005, 0.0):
+                _suggest_roc(acct, rt, r_sym, cur, s_roc - b_roc, r_rows,
+                             dated_roc.get((rt, cur)), year, sugg_tt, notes,
+                             where, r_slips, acct_rows,
+                             sales=(sales or {}).get(rt, ()),
+                             typed_dated=typed_roc.get((rt, cur)),
+                             root_rows=rrows)
+            elif b_roc - s_roc > tol and s_roc:
+                notes.append(f"{where}: the books return {fmt_money(b_roc)} "
+                             f"{cur} of {r_sym}'s capital and the slip "
+                             f"{fmt_money(s_roc)} — check the ADJUST rows "
+                             f"(`tjs roc-sum`)")
     # A T3's split, said once per security.
     for s in slips:
         if s.type == "T3" and s.security and s.source == "typed":
@@ -2546,12 +2590,25 @@ def _securities(acct, where, slips, rows, year, tol, sugg_cgd, sugg_tt,
     return out
 
 
+def _entry_covers(symbol: str, other: str) -> bool:
+    """Whether a [[capital_gains_dividends]] entry of `symbol` also takes
+    the dividends of `other`, another symbol."""
+    from taxjson.lib.cg_dividends import Entry
+    return symbol != other and Entry(0, symbol.upper(), "", None
+                                     ).matches_symbol(other)
+
+
 def _suggest_cgd(acct, rt, sym, cur, s_cg, bk_cg, rrows, dated, year,
                  sugg_cgd, notes, where) -> None:
     from taxjson.lib.report_model import fmt_money
     divs = [r for r in rrows if r.action == "DIVIDEND"
             and r.currency == cur]
     if dated:
+        # One book date's payments against that date's entry, as one total:
+        # one at a time, each 20 passed beside an entry of 20 for both, and
+        # with no entry the draft repeated one that `tjs run` refuses
+        # (backlog TJ-1151).
+        by_day: Dict[str, List[Any]] = {}
         for p, amt in dated:
             if p.pil:
                 notes.append(f"{where}: {p.symbol} {p.pay_date}: "
@@ -2566,7 +2623,9 @@ def _suggest_cgd(acct, rt, sym, cur, s_cg, bk_cg, rrows, dated, year,
             if not hit:
                 continue
             r0 = min(hit, key=lambda r: _days(r.pay_date, p.pay_date))
-            booked = sum(r.cg_part for r in hit if r.pay_date == r0.pay_date)
+            by_day.setdefault(r0.pay_date, [0.0, r0])[0] += amt
+        for amt, r0 in by_day.values():
+            booked = sum(r.cg_part for r in divs if r.pay_date == r0.pay_date)
             if amt - booked <= 0.005:
                 continue
             if booked > 0:
@@ -2623,6 +2682,10 @@ def _merge_same_day(dated, near, slips, rt, cur, ystr):
     for pay, _td in groups:
         parts[pay] = parts.get(pay, 0) + 1
     out_dated, out_near = [], []
+    # Pay dates whose payments all resolve to one dividend row are one line
+    # too, of their total: two made one text, and one was dropped (backlog
+    # TJ-1275).
+    on_row: Dict[int, Any] = {}
     for (pay, _td), (amt, r0, ps) in groups.items():
         gross = sum(p.gross for p in ps)
         if parts[pay] == 1:
@@ -2632,20 +2695,30 @@ def _merge_same_day(dated, near, slips, rt, cur, ystr):
                 if q.pay_date == pay and _proot(q) == rt and q.currency == cur
                 and not q.pil and all(q is not p for p in ps)
                 and any(slip_year(q, c) == ystr for c in q.components))
-        out_dated.append((SimpleNamespace(pay_date=pay, gross=gross), amt))
+        first = on_row.get(id(r0)) if r0 is not None and parts[pay] == 1 \
+            else None
+        if first is not None:
+            first[0].gross += gross
+            out_dated[first[1]] = (first[0], out_dated[first[1]][1] + amt)
+            continue
+        entry = SimpleNamespace(pay_date=pay, gross=gross)
+        if r0 is not None and parts[pay] == 1:
+            on_row[id(r0)] = (entry, len(out_dated))
+        out_dated.append((entry, amt))
         out_near.append(r0)
     return out_dated, out_near, parts
 
 
 def _suggest_roc(acct, rt, sym, cur, missing, rrows, dated, year, sugg_tt,
                  notes, where, slips, acct_rows=(), sales=(),
-                 typed_dated=None) -> None:
+                 typed_dated=None, root_rows=None) -> None:
     from taxjson.lib.report_model import fmt_money
     lines = sugg_tt.setdefault(acct, [])
     # Never a line the books already hold (in another broker account's
     # rows, another year by its record date, or not yet counted here):
-    # applying it would book the return of capital twice.
-    counted = {id(x) for x in rrows}
+    # applying it would book the return of capital twice. `root_rows`: the
+    # other listing's rows are counted against its own slip.
+    counted = {id(x) for x in (rrows if root_rows is None else root_rows)}
 
     def held_already(action: str, amt: float) -> Optional[BookRow]:
         for r in acct_rows:

@@ -630,14 +630,28 @@ def _follow_exercise_targets(rows: List[Any], dr: DatedRename,
     it), the engine found no such shares and read the exercise as settled
     in cash: a loss of the warrants' cost (TJ-1132). An account with rows
     still on OLD after the date (`late=separate`, or a broker's rename row
-    dated later) keeps its target: the rows name those shares."""
+    dated later) keeps its target, as the rows name those shares, unless
+    this exercise's own shares arrive under the new symbol."""
     still_old = {t.account for t in rows
                  if t.symbol in olds and (t.date or "") >= dr.date
                  and t.action in _POSITION_ACTIONS}
+
+    def _arrive_as_new(ex) -> bool:
+        # The exercise's share leg (a purchase within a few days of it) is
+        # on the new symbol and none on the old (TJ-1132).
+        legs = set()
+        for t in rows:
+            if (t.action == "BUYSELL" and t.account == ex.account
+                    and float(t.quantity or 0) > 0
+                    and (t.symbol == dr.new or t.symbol in olds)):
+                gap = _days(t.date, ex.date)
+                if gap is not None and gap <= WINDOW_DAYS:
+                    legs.add(t.symbol)
+        return legs == {dr.new}
     for t in rows:
         if (getattr(t, "exercise_of", "") in olds
                 and (t.date or "") >= dr.date
-                and t.account not in still_old):
+                and (t.account not in still_old or _arrive_as_new(t))):
             t.exercise_of = dr.new
 
 

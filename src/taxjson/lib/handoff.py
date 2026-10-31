@@ -95,6 +95,9 @@ def record_problem(record: Any) -> Optional[str]:
     lp = _lots_problem(record.get("year_end_lots"))
     if lp:
         return lp
+    sp = _shorts_problem(record.get("year_end_shorts"))
+    if sp:
+        return sp
     lists = {"settle_next_year": (("symbol", "date", "date_settle"),
                                   ("qty",)),
              "dispositions": (("symbol",), ("qty", "proceeds", "gain")),
@@ -155,6 +158,15 @@ def _rows(path: Path) -> List[Dict[str, Any]]:
     return list(_work_doc(p).get("transactions") or [])
 
 
+def _book(cache: Path, account: str) -> List[Dict[str, Any]]:
+    """The account's rows less those the pass across accounts cut at its
+    snapshot, so a walk through another account's rename holds the units
+    the merged books do (backlog TJ-1168, TJ-1268)."""
+    from taxjson.lib.positions_check import blended_pool_rows, without_pool_cut
+    return without_pool_cut(_rows(cache / f"{account}_base.json"),
+                            blended_pool_rows(cache, account), account)
+
+
 def _check_books(path: Path) -> None:
     """Validate one source book with the engine's own loader BEFORE it is
     merged into a temporary file: a damaged row was reported against
@@ -213,6 +225,24 @@ def _lots_problem(lots: Any) -> Optional[str]:
     return None
 
 
+def _shorts_problem(shorts: Any) -> Optional[str]:
+    """Why a record's `year_end_shorts` ({group: {symbol: {qty, acb}}}, a
+    Canadian record's shorts beside a long) is not that shape, or None."""
+    if shorts is None:
+        return None
+    if not isinstance(shorts, dict):
+        return '"year_end_shorts" must be an object of account groups'
+    for g, pos in shorts.items():
+        if not isinstance(pos, dict):
+            return f'"year_end_shorts" {g!r} must be an object of securities'
+        for sym, p in pos.items():
+            if not (isinstance(p, dict) and _num(p.get("qty"))
+                    and _num(p.get("acb"))):
+                return (f'"year_end_shorts" {g}/{sym} must have a number '
+                        f'qty and acb')
+    return None
+
+
 def groups(cfg: Dict[str, Any]) -> Dict[str, List[str]]:
     """Taxable accounts split into the pools the engine blends:
     equities together, crypto together — in taxjson.toml order, the
@@ -239,7 +269,8 @@ def _basis(settings: Dict[str, Any]) -> str:
 def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
              run_gains: RunGains, common_flags: List[str],
              phantoms: Optional[Path] = None,
-             lots_out: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+             lots_out: Optional[Dict[str, Any]] = None,
+             shorts_out: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """{group: {symbol: {qty, acb, deferred}}} for the taxable pools as
     of the end of `as_of` (the engine's date basis). `phantoms`: the
     project's missing-history path (lib/missing_history.
@@ -250,6 +281,10 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
     `lots_at`: each lot's account, acquisition and holding-period
     dates, units, basis and deferral in FIFO order; a FIFO sale's
     basis and term are a lot's, not the position's: backlog TJ-0554).
+    `shorts_out`: a Canadian project's shorts beside a long at `as_of`
+    are put in it, {group: {symbol: {qty, acb}}}: the main rows are
+    property held, so such a short has no row, while a short alone is
+    the pool's own (cost_timeline.short_rows_on; backlog TJ-1134).
 
     The pools are the engine's own: one run over each group's FULL
     history, as the return was computed, with its cost timeline
@@ -274,7 +309,7 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
             rows = []
             for n in names:
                 _check_books(cache / f"{n}_base.json")
-                rows += _rows(cache / f"{n}_base.json")
+                rows += _book(cache, n)
             if not rows:
                 continue
             full = tdp / f"{g}_full.json"
@@ -330,6 +365,14 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
                 p["acb"] = round(p["acb"], 2)
                 p["deferred"] = round(p["deferred"], 2)
             out[g] = pos
+            if shorts_out is not None and not us:
+                beside: Dict[str, Dict[str, float]] = {}
+                for h in CT.short_rows_on(tl, as_of):
+                    s = beside.setdefault(h["symbol"],
+                                          {"qty": 0.0, "acb": 0.0})
+                    s["qty"] = round(s["qty"] + float(h["qty"]), 8)
+                    s["acb"] = round(s["acb"] + float(h["total_cost"]), 2)
+                shorts_out[g] = beside
     return out
 
 
@@ -592,18 +635,23 @@ def record_fields(root: Path, cfg: Dict[str, Any], year: int,
     from taxjson.lib.missing_history import missing_history_arg
     mh_file = missing_history_arg(root)
     lots: Dict[str, Any] = {}
+    shorts: Dict[str, Any] = {}
     rec = {
         "record_version": RECORD_VERSION,
         "date_basis": _basis(cfg.get("settings", {}) or {}),
         "dispositions": dispositions(gains_files, year),
         "year_end": snapshot(cache, cfg, f"{year}-12-31", run_gains,
-                             common_flags, mh_file, lots_out=lots),
+                             common_flags, mh_file, lots_out=lots,
+                             shorts_out=shorts),
         "settle_next_year": straddlers(cache, cfg, year),
         "boundary_rows": boundary_rows(cache, cfg, year),
     }
     if lots:
         # US: each lot held at Dec 31 (backlog TJ-0554).
         rec["year_end_lots"] = lots
+    if shorts:
+        # Canada: each short beside a long at Dec 31 (backlog TJ-1134).
+        rec["year_end_shorts"] = shorts
     if filed_csv is not None:
         fd = load_filed_dispositions(filed_csv, year)
         rec["filed_dispositions"] = fd
@@ -713,7 +761,8 @@ def validate_record(record: Any, path: Any = "the prior-year record"
                 for f in ("qty", "acb", "deferred"):
                     if f in p and not _num(p[f]):
                         raise bad(f"year_end.{g}.{sym}.{f}", "a number")
-    lp = _lots_problem(record.get("year_end_lots"))
+    lp = (_lots_problem(record.get("year_end_lots"))
+          or _shorts_problem(record.get("year_end_shorts")))
     if lp:
         raise RecordError(f"{path}: {lp} (fix the lock or restore it "
                           f"from git, or re-close that year with "
@@ -1217,14 +1266,18 @@ def _boundary_issues(cache: Path, cfg: Dict[str, Any],
 def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
           opening: Dict[str, Any],
           carried_back_to: Optional[Dict[int, float]] = None,
-          opening_lots: Optional[Dict[str, Any]] = None
+          opening_lots: Optional[Dict[str, Any]] = None,
+          opening_shorts: Optional[Dict[str, Any]] = None
           ) -> Dict[str, Any]:
     """Compare a closed year's record with this project's books.
     `opening` is `snapshot(...)` of THIS project at the record's Dec 31.
     `carried_back_to`: {year: the part of this project's net capital
     loss carried back to it} (the carryover ledger's, Canada).
     `opening_lots`: a US project's lots then (snapshot's `lots_out`),
-    compared with the record's `year_end_lots` (backlog TJ-0554)."""
+    compared with the record's `year_end_lots` (backlog TJ-0554).
+    `opening_shorts`: a Canadian project's shorts beside a long then
+    (snapshot's `shorts_out`), compared with the record's
+    `year_end_shorts` where it has them (backlog TJ-1134)."""
     cache = Path(root) / "work"
     settings = cfg.get("settings", {}) or {}
     ry = int(record["year"])
@@ -1410,6 +1463,36 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
                 item["why"] = "; ".join(parts) + "."
             issues["positions"].append(item)
 
+    # 1a. A short beside a long: its own row, as a short alone is above
+    # (backlog TJ-1134). An older record has none to compare.
+    rec_shorts = record.get("year_end_shorts")
+    if rec_shorts is not None and opening_shorts is not None:
+        said = {(i["group"], i["symbol"]) for i in issues["positions"]}
+        for g in sorted(set(rec_shorts) | set(opening_shorts)):
+            prev = rec_shorts.get(g) or {}
+            now = opening_shorts.get(g) or {}
+            for sym in sorted(set(prev) | set(now)):
+                p = prev.get(sym, {"qty": 0.0, "acb": 0.0})
+                n = now.get(sym, {"qty": 0.0, "acb": 0.0})
+                if ((g, sym) in said or abs(basis_dq.get(sym, 0.0)) > QTY_TOL
+                        or (_qty_eq(n["qty"], p["qty"])
+                            and _acb_close(n["acb"], p["acb"]))):
+                    continue
+                issues["positions"].append({
+                    "group": g, "symbol": sym,
+                    "closed_qty": p["qty"], "closed_acb": p["acb"],
+                    "closed_deferred": 0.0,
+                    "opening_qty": n["qty"], "opening_acb": n["acb"],
+                    "qty_diff": round(n["qty"] - p["qty"], 8),
+                    "acb_diff": round(n["acb"] - p["acb"], 2),
+                    "filed_gain_diff": None,
+                    "why": (f"the short beside a long in another account: "
+                            f"{ry} books hold {p['qty']:g} at "
+                            f"{p['acb']:,.2f} on Dec 31; this project opens "
+                            f"with {n['qty']:g} at {n['acb']:,.2f}. Fix "
+                            f"whichever side is wrong; its cover's gain "
+                            f"depends on it.")})
+
     # 1b. An option row this year's export marks CLOSING whose position
     # the opening holds only under another root (a .tt written with the
     # closed year's ABC while the export closes ABC.B): the opening
@@ -1451,7 +1534,7 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
     here: List[Dict[str, Any]] = []
     for g, names in groups(cfg).items():
         for n in names:
-            for r in _rows(cache / f"{n}_base.json"):
+            for r in _book(cache, n):
                 if r.get("action") in ("BUYSELL", "ASSIGN"):
                     here.append(dict(r, _acct=n))
 
@@ -1545,7 +1628,7 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
     replay = list(here)
     for names in groups(cfg).values():
         for n in names:
-            for r in _rows(cache / f"{n}_base.json"):
+            for r in _book(cache, n):
                 if r.get("action") in ("SPLIT", "TRANSFER",
                                        "OPENING_BALANCE"):
                     replay.append(dict(r, _acct=n))

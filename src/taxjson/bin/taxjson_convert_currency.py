@@ -539,6 +539,7 @@ def process_transactions(
     CAD target: partition ENGINE-02). Raises ValueError on a futures row
     that cannot be put on that basis, or on futures with no country."""
     from taxjson.lib.futures import (has_plain_futures, method_for,
+                                     opposite_broker_positions,
                                      settle_futures)
     if has_plain_futures(transactions):
         if not country:
@@ -548,6 +549,15 @@ def process_transactions(
                 "country's lot rule (average cost / FIFO)")
         transactions, _stats = settle_futures(list(transactions),
                                               method_for(country))
+        if method_for(country) == "fifo":
+            for sym in opposite_broker_positions(transactions):
+                emit_line(
+                    f"warning: ATTENTION: futures: {sym} long in one broker "
+                    f"account, short in another: give each its own folder. "
+                    f"The US books net the two in one folder, so a gain can "
+                    f"land in the wrong year; [accounts.NAME] in taxjson.toml "
+                    f"makes the second.",
+                    file=sys.stderr)
     out = [convert_transaction(tx, target_curr, history, default_rate)
            for tx in transactions]
     missing = [r for r in _FALLBACK_ROWS if r.get("rate") is None]

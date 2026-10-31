@@ -347,22 +347,31 @@ def _emit_resolved(events: List[CorporateAction], manifest: Manifest,
     # idempotent; main() already applied it and printed its notes).
     import io
     events = combine_broker_copies(events, stream=io.StringIO())
+    # The shares each cost carry-over (a SPLIT that renames) was exchanged
+    # for: the run compares them with the position (TJ-0950).
+    carried = {}
     for ev in events:
         rec = manifest.get(ev.event_id)
         if rec is None and ev.event_id in sheltered_default:
             emitted_event_count += 1
-            transactions.extend(sheltered_default_rows(ev, country))
-            defaulted.append(ev.event_id)
-            continue
-        if rec is None:
-            raise RuntimeError(f"event {ev.event_id} unresolved at emit time")
-        rows = resolve_event(ev, rec.election, country=country,
-                             hints=rec.hints, fx=fx, tt_sales=tt_sales)
-        if rows:
-            emitted_event_count += 1
+            rows = sheltered_default_rows(ev, country)
             transactions.extend(rows)
+            defaulted.append(ev.event_id)
+        elif rec is None:
+            raise RuntimeError(f"event {ev.event_id} unresolved at emit time")
         else:
-            ignored += 1
+            rows = resolve_event(ev, rec.election, country=country,
+                                 hints=rec.hints, fx=fx, tt_sales=tt_sales)
+            if rows:
+                emitted_event_count += 1
+                transactions.extend(rows)
+            else:
+                ignored += 1
+        if ev.qty_disposed > 0 and any(
+                r.get('action') == 'SPLIT' and r.get('symbol_new')
+                and r['symbol_new'] != r.get('symbol') for r in rows):
+            carried[ev.event_id] = (carried.get(ev.event_id, 0.0)
+                                    + ev.qty_disposed)
     return {
         'transactions': transactions,
         'metadata': {
@@ -372,6 +381,7 @@ def _emit_resolved(events: List[CorporateAction], manifest: Manifest,
             'ignored_count': ignored,
             # A sheltered account's events booked without asking.
             'sheltered_defaults': sorted(set(defaulted)),
+            'carryover_exchanged': carried,
         },
     }
 

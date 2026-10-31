@@ -1396,6 +1396,66 @@ def detect_unbacked_covers(
     return out
 
 
+def short_opening_rows(log: Iterable[Dict[str, Any]]) -> List[TaxTransaction]:
+    """The rows of the short lines (a .tt OPENING cost=unknown with a
+    negative quantity) a synthesize_openings log says were opened."""
+    out = []
+    for e in log or ():
+        q = float(e.get('opening_qty') or 0.0)
+        if e.get('inserted') and q < 0:
+            d = str(e.get('anchor_date') or '')[:10]
+            out.append(TaxTransaction(
+                action='OPENING_BALANCE', date=d, date_settle=d,
+                time='00:00:00', quantity=q, net_amount=0.0,
+                symbol=e.get('anchor_symbol') or e.get('symbol'),
+                account=e.get('account')))
+    return out
+
+
+def drop_answered_covers(transactions: Iterable[TaxTransaction],
+                         shorts: Iterable[Any]) -> List[TaxTransaction]:
+    """`transactions` without the units the short lines `shorts` (rows
+    with a negative quantity: the short held before the data, TJ-0844)
+    answer: the first buys from each line's date, as the engines close
+    it, its splits and renames followed. The rows are what the walks
+    read, so an answered cover is no unbacked one and its units back no
+    later sale."""
+    out: List[Any] = list(transactions)
+    start = {(s.symbol, s.account): s for s in shorts
+             if float(s.quantity or 0.0) < 0}
+    if not start:
+        return out
+    left: Dict[Tuple[str, str], float] = {}
+    for i in sorted(range(len(out)), key=lambda j: _walk_key(out[j])):
+        tx = out[i]
+        key = (tx.symbol, tx.account)
+        s = start.get(key)
+        if s is not None and str(tx.date)[:10] >= str(s.date)[:10]:
+            left[key] = left.get(key, 0.0) - float(s.quantity)
+            del start[key]
+        if key not in left:
+            continue
+        if tx.action == 'SPLIT':
+            ratio = float(tx.quantity or 0.0)
+            new_sym = normalize_symbol_new(tx.symbol,
+                                           getattr(tx, 'symbol_new', ''))
+            if new_sym:
+                left[(new_sym, tx.account)] = left.pop(key) * ratio
+            else:
+                left[key] *= ratio
+            continue
+        q = float(tx.quantity or 0.0)
+        if tx.action != 'BUYSELL' or q <= 0 or left[key] <= 0:
+            continue
+        take = min(q, left[key])
+        left[key] -= take
+        rest = q - take
+        out[i] = None if rest <= 1e-9 else replace(
+            tx, quantity=rest,
+            net_amount=float(tx.net_amount or 0.0) * rest / q)
+    return [t for t in out if t is not None]
+
+
 @dataclass
 class StaleMissingHistoryEntry:
     """A missing-history line today's detection would NOT propose: the
@@ -2743,7 +2803,7 @@ def openings_from_log(doc: Dict[str, Any], account: str
         if not isinstance(e, dict):
             continue
         if (e.get("account") == account and e.get("inserted")
-                and float(e.get("opening_qty") or 0.0) > 0):
+                and float(e.get("opening_qty") or 0.0) != 0):
             d = e.get("anchor_date") or "1970-01-01"
             out.append({"action": "OPENING_BALANCE", "date": d,
                         "date_settle": d, "time": "00:00:00",
@@ -3652,13 +3712,16 @@ def _apply_fixed_openings(sorted_txs: Sequence[TaxTransaction],
             factor_at = factor
         qty = float(t.quantity)
         opening = qty / factor_at if factor_at else qty
-        for d, run, f in path:
-            if d < day:
-                if run < -1e-6 * max(1.0, abs(run)) - 1e-9:
-                    entry['short_before'] = {
-                        'date': d, 'qty': round(abs(run) * f, 10)}
-                    break
-        _short_again(entry, _long_side_path(trades, day, opening), opening)
+        if qty > 0:
+            # (A short line, TJ-0844: units no sale draws on.)
+            for d, run, f in path:
+                if d < day:
+                    if run < -1e-6 * max(1.0, abs(run)) - 1e-9:
+                        entry['short_before'] = {
+                            'date': d, 'qty': round(abs(run) * f, 10)}
+                        break
+            _short_again(entry, _long_side_path(trades, day, opening),
+                         opening)
         sym_on = _symbol_on(symbol, account, day, renames)
         currency = _opening_currency(t, sym_on, account, member_rows,
                                      sorted_txs, pairs_in)
@@ -3666,8 +3729,11 @@ def _apply_fixed_openings(sorted_txs: Sequence[TaxTransaction],
             action='OPENING_BALANCE', date=day, time='00:00:00',
             symbol=sym_on, quantity=qty, currency=currency, price=0.0,
             net_amount=0.0, account=account,
-            description=(f'MISSING-HISTORY opening ({t.where}) — bought '
-                         f'before the data, cost unknown (qty={qty:g})'))
+            description=(f'MISSING-HISTORY opening ({t.where}) — '
+                         + ('bought before the data, cost unknown '
+                            if qty > 0 else
+                            'sold short before the data, proceeds unknown ')
+                         + f'(qty={qty:g})'))
         entry.update({'opening_qty': qty, 'inserted': True,
                       'recorded_quantity': qty, 'anchor_date': day,
                       'anchor_symbol': sym_on})
@@ -4085,8 +4151,11 @@ def synthesize_openings(
                           + short_again_message(entry, label),
                           file=sys.stderr)
 
+    # (A short line, TJ-0844, is answered by its cover: rows that never go
+    # short, or a real short after it, do not make it stale.)
     inserted = {(e['symbol'], e['account']) for e in applied
-                if e.get('inserted')}
+                if e.get('inserted')
+                and float(e.get('opening_qty') or 0.0) > 0}
     if inserted:
         _members = set(member_to_pair)
         for fp in fixed:

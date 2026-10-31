@@ -2631,7 +2631,8 @@ def _ib_number_executions(parsed) -> None:
     each id gets one number across the statements (the ids in sorted
     order: the first unmarked, the next "[fill #2]" ...): one execution
     exported twice stays one row, two executions stay two. Rows without
-    an id keep their statement's own marks. Ids of two columns are two
+    an id keep their statement's own marks, unless numbered rows share
+    their statement (backlog TJ-1269). Ids of two columns are two
     namespaces (backlog TJ-1165), and two broker accounts are numbered
     apart unless one statement lists both (backlog TJ-1198)
     (_ib_number_group)."""
@@ -2685,12 +2686,26 @@ def _ib_number_group(rows: List[tuple]) -> None:
     rank = {x: n for n, x in enumerate(ids, 1)}
     alias = {(o, v): r[1][ns] for r in rows if ns in r[1]
              for o, v in r[1].items() if o != ns}
-    for t, xids, base, *_ in rows:
+    rest: List[tuple] = []
+    numbered = set()
+    for t, xids, base, _acct, n in rows:
         x = xids.get(ns) or next((alias[kv] for kv in xids.items()
                                   if kv in alias), '')
         if x:
+            numbered.add(n)
             t['description'] = (f"{base} [fill #{rank[x]}]".strip()
                                 if rank[x] > 1 else base)
+        else:
+            rest.append((t, base, n))
+    # A row with no id, in a statement whose other rows were just numbered,
+    # could share a number with one of them, and alike rows of one statement
+    # are separate fills: it takes the next number past the ids (backlog
+    # TJ-1269). Elsewhere it keeps its statement's own mark.
+    spare: Dict[int, int] = {}
+    for t, base, n in rest:
+        if n in numbered:
+            spare[n] = spare.get(n, len(ids)) + 1
+            t['description'] = f"{base} [fill #{spare[n]}]".strip()
 
 
 def _ib_trade_acct(ex, t: Dict[str, Any]) -> str:

@@ -142,6 +142,7 @@ def _transit(transit: Iterable[Dict[str, Any]], accounts: Dict[str, str],
     for (frm_s, to_s, cur), n in sorted(named.items()):
         out.append({
             "account": n["account"], "currency": cur, "unknown": True,
+            "year_end_transit": True,
             "why": (f"{n['units']:,.2f} {cur} in transit between your own "
                     f"accounts at the year end (from {frm_s or '?'} to "
                     f"{to_s or '?'}, arriving {n['arrives'] or '?'}; cost "
@@ -193,6 +194,35 @@ def _spans(spans: Iterable[Dict[str, Any]], accounts: Dict[str, str],
                     f"{n['since']}): the books do not tell whether it was "
                     f"held outside Canada, and it is not in the maximum")})
     return out
+
+
+def _base_spans(spans: Iterable[Dict[str, Any]], accounts: Dict[str, str],
+                base: str, year: int) -> List[Dict[str, Any]]:
+    """The base currency's own moves in transit (the ledger's holdings
+    `base_transit`). A base-currency row is its statement balance, which
+    holds them in neither account while they move (backlog TJ-1146), so
+    they are named, not counted: one entry per from and to, with its
+    largest amount. Its cost is its amount, so the total stays settled. A
+    move between accounts none of which is counted is no foreign
+    property; two books of one account hold it in the account's row."""
+    y1 = f"{year}-12-31"
+    named: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for sp in spans:
+        frm, to = _label(sp["from"]), _label(sp["to"])
+        if frm == to or not {frm, to} & set(accounts):
+            continue
+        n = named.setdefault((frm, to), {"units": 0.0, "since": sp["since"],
+                                         "over": False})
+        n["units"] = max(n["units"], float(sp["units"]))
+        n["over"] = n["over"] or sp["until"] > y1
+    return [{"account": frm if frm in accounts else to, "currency": base,
+             "unknown": False, "transit": True,
+             "why": (f"up to {n['units']:,.2f} {base} in transit between your "
+                     f"own accounts (from {frm} to {to}, first on "
+                     f"{n['since']}): it is in neither account's balance, so "
+                     f"it is not in the maximum"
+                     + (" or the year-end cost" if n["over"] else ""))}
+            for (frm, to), n in sorted(named.items())]
 
 
 def cash_doc(ledger: Optional[Dict[str, Any]], accounts: Dict[str, str],
@@ -301,6 +331,8 @@ def cash_doc(ledger: Optional[Dict[str, Any]], accounts: Dict[str, str],
                               "country": accounts[acct], "points": pts,
                               "unknown": False, "why": ""})
     doc["not_counted"] += transit_open
+    doc["not_counted"] += _base_spans(hold.get("base_transit") or [],
+                                      accounts, base, int(year))
     # A refusal that reached no row: the ledger stopped before it walked
     # a counted account's foreign cash (a file of several broker
     # accounts' rows with no CASHBOOK line: a problem naming no book or

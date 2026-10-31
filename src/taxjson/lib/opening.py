@@ -112,6 +112,34 @@ def _final_symbol(sym: str, renames: List[Tuple[str, str, str]],
     return sym
 
 
+def _note_cut_legs(dropped: Dict[str, List], rows: List) -> None:
+    """Name on each OPENING row of `rows` the share rows it replaced
+    (`opening_cut_legs`): the premium ledger reads whether an option's
+    delivery is among them (backlog TJ-1332)."""
+    legs: Dict[Tuple[str, str], List[str]] = {}
+    for acct, items in dropped.items():
+        for t, hit in items:
+            q = float(_get(t, 'quantity', 0.0) or 0.0)
+            if (not q or str(_get(t, 'symbol')) != hit
+                    or _get(t, 'action') not in ('BUYSELL', 'ASSIGN')):
+                continue
+            px = (float(_get(t, 'price', 0.0) or 0.0)
+                  or abs(float(_get(t, 'net_amount', 0.0) or 0.0) / q))
+            legs.setdefault((acct, hit), []).append(
+                f"{_get(t, 'date')} {q} {px} {_get(t, 'action')}")
+    for t in rows:
+        if not legs or not is_opening_row(t):
+            continue
+        new = legs.pop((str(_get(t, 'account')), str(_get(t, 'symbol'))), None)
+        if new:
+            text = ";".join(filter(None, [str(_get(t, 'opening_cut_legs'))]
+                                   + new))
+            if isinstance(t, dict):
+                t['opening_cut_legs'] = text
+            else:
+                t.opening_cut_legs = text
+
+
 def apply_opening_cutoff(txs: List, *, year: Optional[int] = None,
                          country: Optional[str] = None,
                          base_currency: Optional[str] = None,
@@ -197,6 +225,7 @@ def apply_opening_cutoff(txs: List, *, year: Optional[int] = None,
             raise OpeningError(_refusal(bad, by_acct, year, country))
     if cut is not None:
         cut.extend(t for rows in dropped.values() for t, _hit in rows)
+    _note_cut_legs(dropped, kept)
     for acct in sorted(dropped):
         rows = dropped[acct]
         syms = sorted({hit for _t, hit in rows})

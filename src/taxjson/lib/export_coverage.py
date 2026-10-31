@@ -221,6 +221,29 @@ def ib_statement_end(path: Path) -> Optional[date]:
     return None
 
 
+def ib_corporate_action_dates(path: Path) -> List[Dict[str, str]]:
+    """{date} of each row of an IB Activity Statement's Corporate Actions
+    section. The run merges the statements' rows of one action into a row
+    naming no file or account, so only the file says it holds one (backlog
+    TJ-1315). [] for any other file."""
+    text = _head_text(path, 10 ** 8)
+    if not text.lstrip().startswith("Statement,Header"):
+        return []
+    out: List[Dict[str, str]] = []
+    col: Optional[int] = None
+    try:
+        for row in csv.reader(text.splitlines()):
+            if len(row) < 3 or row[0] != "Corporate Actions":
+                continue
+            if row[1] == "Header":
+                col = row.index("Date/Time") if "Date/Time" in row else None
+            elif row[1] == "Data" and col is not None and len(row) > col:
+                out.append({"date": row[col][:10]})
+    except csv.Error:
+        return out
+    return out
+
+
 def _month_day_year(s: str) -> Optional[date]:
     s = " ".join(s.replace(",", " ").replace(".", " ").split())
     for fmt in ("%B %d %Y", "%b %d %Y"):
@@ -506,7 +529,8 @@ def _units(rows: List[Dict[str, Any]], paths: List[Path],
     broker's files when none names an account). Each unit: (its rows,
     its files, the rows that date how far its files reach — its own and
     every row of its files: one export of two accounts (a Questrade
-    file) reaches its last row for both, `path_of`: id(row) -> file).
+    file) reaches its last row for both, `path_of`: id(row) -> file; and
+    its statements' corporate-action rows, ib_corporate_action_dates).
     One broker account: [(rows, paths, rows)] as before."""
     names = ({str(r.get("source_account") or "") for r in rows}
              | {a for p in paths for a in accts_of.get(p, [])})
@@ -524,16 +548,17 @@ def _units(rows: List[Dict[str, Any]], paths: List[Path],
             mine = {id(r) for r in unit_rows}
             dated = unit_rows + [r for r in rows if id(r) not in mine
                                  and path_of.get(id(r)) in unit_paths]
+            for p in unit_paths if n else ():
+                dated = dated + ib_corporate_action_dates(p)
             out.append((unit_rows, unit_paths or paths, dated))
     return out
 
 
-def _merge(gaps: List[Gap], all_rows: List[Dict[str, Any]],
-           split_at_open: bool) -> List[Gap]:
+def _merge(gaps: List[Gap]) -> List[Gap]:
     """Gaps of one broker with one end (two of its accounts whose
     exports stop on the same day) as one: one question, one message, one
-    entry per symbol with the units added, at most what the account holds
-    (`all_rows`; backlog TJ-1313)."""
+    entry per symbol with the units added (backlog TJ-1313; at most what
+    the account held at that end: _unit_gap)."""
     out: List[Gap] = []
     merged: Dict[str, Gap] = {}
     seen: Dict[str, Gap] = {}
@@ -555,22 +580,7 @@ def _merge(gaps: List[Gap], all_rows: List[Dict[str, Any]],
         units: Dict[str, float] = {}
         for sym, q in m.positions:
             units[sym] = units.get(sym, 0.0) + q
-        # Each unit is capped alone (held_at_broker); their sum, on the
-        # account's holding at the cutoff, as `positions` are after later
-        # rows (a split past the end), or at the end when that is larger:
-        # a rename past the end leaves only a later buy, or nothing, at the
-        # cutoff (backlog TJ-1331). One no row leaves open (an option
-        # expired that day) keeps its sum.
-        acct = dict(open_positions(all_rows, date.fromisoformat(m.cutoff),
-                                   split_at_open))
-        for sym, q in open_positions(all_rows, date.fromisoformat(m.end),
-                                     split_at_open):
-            if abs(q) > abs(acct.get(sym, 0.0)):
-                acct[sym] = q
-        m.positions = [
-            (sym, acct[sym] if abs(acct.get(sym, 0.0)) < abs(q)
-             and acct.get(sym, 0.0) * q > 0 else q)
-            for sym, q in sorted(units.items())]
+        m.positions = sorted(units.items())
         expired: Dict[Tuple[str, str], float] = {}
         for sym, q, exp in m.expired:
             expired[(sym, exp)] = expired.get((sym, exp), 0.0) + q
@@ -661,25 +671,37 @@ def account_gaps(root: Path, acct: str, year: int, today: date,
         rows_by.get(b, []) + sidecars.get(b, []), inputs.get(b, []),
         accts_of, path_of)]
     if len(units) > 1:
+        # A .tt SPLIT or RENAME is no unit's row, and it is the security's
+        # event: each unit's walk needs it (backlog TJ-1286).
+        splits = [r for r in all_rows if str(r.get("action")) == "SPLIT"]
         for _b, (rows, _paths, _dated) in units:
-            _spend_own_units(rows, spent, split_at_open)
+            own = {id(r) for r in rows}
+            _spend_own_units(rows + [r for r in splits if id(r) not in own],
+                             spent, split_at_open)
+    # The account's holding at each end still to be shared among one
+    # broker's units with that end: {(broker, end): {symbol: units}}.
+    room: Dict[Tuple[str, date], Dict[str, float]] = {}
     for b, (rows, paths, dated) in units:
         g = _unit_gap(acct, b, rows, paths, dated, all_rows, year_start,
-                      cutoff, current, split_at_open, spent)
+                      cutoff, current, split_at_open, spent, room)
         if g is not None:
             gaps.append(g)
-    return _merge(gaps, all_rows, split_at_open)
+    return _merge(gaps)
 
 
 def _unit_gap(acct: str, b: str, rows: List[Dict[str, Any]],
               paths: List[Path], dated: List[Dict[str, Any]],
               all_rows: List[Dict[str, Any]],
               year_start: date, cutoff: date, current: bool,
-              split_at_open: bool, spent: Dict[int, float]
+              split_at_open: bool, spent: Dict[int, float],
+              room: Dict[Tuple[str, date], Dict[str, float]]
               ) -> Optional[Gap]:
     """The gap of one broker's exports (one of its accounts': _units) in
     an account, else None (account_gaps). `dated`: the rows whose last
-    date is how far its exports reach when they name no end."""
+    date is how far its exports reach when they name no end. `room`: what
+    the account held at an end and the broker's units with that end have
+    not taken yet, so their sum is at most that holding before later rows
+    scale it (backlog TJ-1313, TJ-1338)."""
     last: Optional[date] = None
     for r in dated:
         rd = _d(r.get("date"))
@@ -706,8 +728,12 @@ def _unit_gap(acct: str, b: str, rows: List[Dict[str, Any]],
         short = end < cutoff and not _quiet_days(end, cutoff)
     if not short:
         return None
+    left = room.setdefault((b, end), dict(
+        open_positions(all_rows, end, split_at_open)))
     held = held_at_broker(open_positions(rows, end, split_at_open),
-                          open_positions(all_rows, end, split_at_open))
+                          list(left.items()))
+    for sym, q in held:
+        left[sym] -= q
     if not held:
         return None
     # Only rows inside the gap the missing export would cover (after
@@ -879,6 +905,10 @@ def closed_later(held: List[Tuple[str, float]],
     by_other: List[str] = []
     for sym, q in held:
         left = q
+        # What is left of the units held at the end: a later purchase of
+        # the same side may be sold first, but it is no more of them
+        # (backlog TJ-1314).
+        kept = abs(q)
         cur = sym                       # the symbol after any rename
         closer = None
         for r in rows:
@@ -891,6 +921,7 @@ def closed_later(held: List[Tuple[str, float]],
             if str(r.get("action")) == "SPLIT":
                 new = str(r.get("symbol_new") or "").upper()
                 left *= rq if rq > _EPS else 1.0
+                kept *= rq if rq > _EPS else 1.0
                 if new:
                     cur = new
                 continue
@@ -901,11 +932,12 @@ def closed_later(held: List[Tuple[str, float]],
                 avail = -left           # closes this one; the rest stays
             spent[id(r)] = spent.get(id(r), 0.0) + avail
             left += avail
+            kept = min(kept, abs(left))
             if abs(left) <= 1e-6 or (left > 0) != (q > 0):
                 closer = r
                 break
         if closer is None:
-            still.append((sym, left if abs(left) > 1e-6 else q))
+            still.append((sym, kept if q > 0 else -kept))
         elif _is_tt(closer):
             by_tt.append(sym)
         else:

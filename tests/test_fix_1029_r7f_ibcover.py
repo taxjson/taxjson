@@ -145,14 +145,11 @@ class TestCoverageOneSymbolTwoAccounts(unittest.TestCase):
 
     def test_written_options_and_expired_entries_add_up(self):
         opt = "SYN250620C00010000"
-        rows = [{"action": "BUYSELL", "symbol": opt, "quantity": -3,
-                 "date": "2025-03-03"}]
-
         def gap(q):
             return EC.Gap("margin", "ib", "2025-03-03", "statement",
                           "2025-12-31", False, [(opt, q)], [],
                           [("SYN250321C00010000", q, "2025-03-21")])
-        got = EC._merge([gap(-1.0), gap(-2.0)], rows, False)
+        got = EC._merge([gap(-1.0), gap(-2.0)])
         self.assertEqual(len(got), 1)
         self.assertEqual(got[0].positions, [(opt, -3.0)])
         self.assertEqual(got[0].expired,
@@ -161,7 +158,7 @@ class TestCoverageOneSymbolTwoAccounts(unittest.TestCase):
     def test_one_gap_is_left_as_it_is(self):
         g = EC.Gap("margin", "ib", "2025-03-03", "statement", "2025-12-31",
                    False, [("ZQR.TO", 1.0), ("ZQP.TO", 2.0)])
-        self.assertEqual(EC._merge([g], [], False)[0].positions,
+        self.assertEqual(EC._merge([g])[0].positions,
                          [("ZQR.TO", 1.0), ("ZQP.TO", 2.0)])
 
 

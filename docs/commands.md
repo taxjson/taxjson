@@ -159,7 +159,9 @@ What a run writes:
   in `tjs ccd-sum`.
 - `reports/<account>_holdings.toml`: machine-readable positions, with
   native and base-currency cost and the per-position acquisition / sale
-  `trades` history. A cost adjustment paid in another currency than the
+  `trades` history; units that came by transfer are no trade, and are in
+  an `arrivals` list of their own on that holding (`date`, `qty`, `kind`:
+  `own_move` or `transfer`). A cost adjustment paid in another currency than the
   listing's (a USD return of capital on a `.TO` stock) is restated in the
   listing's currency at the row's date for the native view, with a note.
   `cost_per_share` is `total_cost / quantity`, so for an option it is
@@ -943,6 +945,12 @@ move. The decisions are `self` (your own wallet: no tax event), `gift`
 (Canada only: a disposition at fair market value, ITA s.69(1)(b)) or
 `payment` (a disposition at fair market value).
 
+A stablecoin arriving after a `self` send of that coin is taken as those
+coins coming back, and the listing names each one with its `in-` id. If
+one is new money, `--set in-ID=new` (`return` says it is those coins;
+`--unset` restores the default). See
+[sends.json](settings.md#inputscrypto-accountsendsjson-and-crypto_sendstt).
+
 For each send it shows the fair value per coin and in CAD with its
 source (the exchange's spot price when the row carries one, as Coinbase
 does; otherwise the Yahoo daily close at the send date, times the Bank of
@@ -979,7 +987,9 @@ only a check: never add it too.
 
 - `--set ID=self|gift|payment [--note TEXT] [--price P]` records a
   decision (repeatable; `--price` when the price lookup fails). A `-fee`
-  id takes `ID-fee=fee --price P`. A US project refuses `gift`.
+  id takes `ID-fee=fee --price P`. A US project refuses `gift`: taxjson
+  cannot book a US gift yet, and `self` keeps the coins and their basis
+  (`docs/limits.md`).
 - `--unset ID` removes one (the send is undecided again).
 - `--set ID=gift|payment --unpair` keeps a send the tool paired with an
   arrival unpaired (that arrival was unrelated). Without `--unpair` a
@@ -1573,7 +1583,7 @@ The estimate flags (`--other-income`, `--other-losses` ...) add the tax
 estimate block of [`tjs estimate`](#tjs-estimate) under the
 tables; `--verbose` adds its calculation trace.
 
-`--json` carries a `readiness` record: `complete` (true only when nothing below is open) and `issues`, each with its `kind`, what it is and the command that resolves it — `run-state` (the books are not the clean result of the current inputs), `unknown-cost` (sales left out of the totals), `no-purchase` (sales in no total), `conservation` (a cost or quantity the engine's conservation check found the books lost track of) `in-kind-not-booked` (an in-kind move to or from a registered account the run could not value: its sale or purchase is not in the books) `unconsumed-premium` (an option assignment whose premium found no stock leg to fold into: it is in no gain) and `compensation-not-settled` (US: dividend compensation paid on a short still open at the last row and inside its 45 days, so this year's income moves if it is covered in time). The figures themselves are the same either way. A conservation problem and an in-kind move not booked are also `! ` lines under the
+`--json` carries a `readiness` record: `complete` (true only when nothing below is open) and `issues`, each with its `kind`, what it is and the command that resolves it — `run-state` (the books are not the clean result of the current inputs), `unknown-cost` (sales left out of the totals), `no-purchase` (sales in no total), `unbacked-cover` (a buy the broker codes as closing a short your files do not hold: booked as a new long, its gain or loss in no total), `conservation` (a cost or quantity the engine's conservation check found the books lost track of) `in-kind-not-booked` (an in-kind move to or from a registered account the run could not value: its sale or purchase is not in the books) `unconsumed-premium` (an option assignment whose premium found no stock leg to fold into: it is in no gain) and `compensation-not-settled` (US: dividend compensation paid on a short still open at the last row and inside its 45 days, so this year's income moves if it is covered in time). The figures themselves are the same either way. A conservation problem and an in-kind move not booked are also `! ` lines under the
 tables (`--details`: the `INKIND` line that values the move).
 
 #### tjs win-rates

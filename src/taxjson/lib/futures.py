@@ -406,6 +406,36 @@ def _settle(transactions: List[TaxTransaction], method: str,
     return out_parts, stats
 
 
+def opposite_broker_positions(rows: List[TaxTransaction]) -> List[str]:
+    """The contracts of settled `rows` held long in one broker account
+    while short in another. The US engine keeps one lot queue per symbol,
+    so it nets the two (backlog TJ-1265); a folder per broker account
+    keeps them apart."""
+    long_: Dict[Tuple[str, str], float] = {}
+    short: Dict[Tuple[str, str], float] = {}
+    out: List[str] = []
+    for tx in rows:
+        if (tx.type or "") != FUTURES_SETTLEMENT:
+            continue
+        leg = (tx.settle_native or " ").split()[0]
+        key = (tx.symbol, str(tx.source_account or ""))
+        units = abs(float(tx.quantity or 0.0))
+        if leg in ("LO", "LC"):
+            long_[key] = long_.get(key, 0.0) + (units if leg == "LO"
+                                                else -units)
+        elif leg in ("SO", "SC"):
+            short[key] = short.get(key, 0.0) + (units if leg == "SO"
+                                                else -units)
+        held_long = {k[1] for k, v in long_.items()
+                     if k[0] == tx.symbol and v > 1e-9}
+        held_short = {k[1] for k, v in short.items()
+                      if k[0] == tx.symbol and v > 1e-9}
+        if (held_long and held_short and held_long != held_short
+                and tx.symbol not in out):
+            out.append(tx.symbol)
+    return out
+
+
 def settle_futures(transactions: List[TaxTransaction], method: str
                    ) -> Tuple[List[TaxTransaction], Dict[str, int]]:
     """Rewrite every plain-futures BUYSELL row of one book on the

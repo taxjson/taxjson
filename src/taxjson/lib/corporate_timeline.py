@@ -58,6 +58,10 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 #                                                  SPLIT-first. Deliberate
 #                                                  divergence, pinned in
 #                                                  tests.
+#                                                  A rename the target
+#                                                  trades ahead of is moved
+#                                                  to the open first
+#                                                  (renames_at_open).
 #   plain_walk   (date, time)                   — the missing-history walks'
 #                                                  bare ordering.
 #
@@ -312,6 +316,55 @@ def event_sort_key(tx: Any, *, profile: str,
     if profile == 'us_main':
         return (d, tx.time, _us_priority(tx))
     raise ValueError(f"unknown sort profile {profile!r}")
+
+
+def renames_at_open(lists: Iterable[List[Any]]) -> List[List[Any]]:
+    """The US engine's rename rule (US-DATE-13, backlog TJ-1126): a row of
+    a rename's target earlier in the day than the rename's stamp cannot
+    come before it, since the new ticker does not trade until the rename,
+    so that rename takes effect at the day's open. Returned as copies with
+    the time changed, ids kept.
+
+    A row of the OLD ticker earlier in the day is the evening stamp (IB
+    20:25) doing its job: it stays before the rename, and a day with no
+    earlier row of the target keeps the clock order, as a plain split
+    does. A day with earlier rows of both tickers cannot be told apart:
+    the stamp is kept and the person is told."""
+    from dataclasses import replace
+    lists = [list(rows) for rows in lists]
+    earliest: Dict[Tuple[str, str], str] = {}
+    for rows in lists:
+        for t in rows:
+            if t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER'):
+                k = (t.date, t.symbol)
+                earliest[k] = min(earliest.get(k, t.time), t.time)
+    for rows in lists:
+        for i, t in enumerate(rows):
+            if t.action != 'SPLIT':
+                continue
+            new = normalize_symbol_new(t.symbol, t.symbol_new)
+            target = earliest.get((t.date, new))
+            if not new or target is None or target >= t.time:
+                continue
+            if earliest.get((t.date, t.symbol), t.time) < t.time:
+                _note_rename_stamp_kept(t, new)
+                continue
+            rows[i] = replace(t, time='00:00:00')
+    return lists
+
+
+def _note_rename_stamp_kept(t: Any, new: str) -> None:
+    import sys
+    k = ('rename-stamp', t.symbol, new, t.date)
+    if k in _SPLIT_DATE_NOTES:
+        return
+    _SPLIT_DATE_NOTES.add(k)
+    emit_line(f"Warning: the rename {t.symbol} -> {new} on {t.date} is "
+              f"stamped {t.time}, and both tickers trade earlier that day. "
+              "It is taken at its stamp, so the earlier trades of "
+              f"{new} do not reach the renamed position. If they should, "
+              "put the rename's time before them in a .tt SPLIT line.",
+              file=sys.stderr)
 
 
 def normalize_symbol_new(symbol: str, symbol_new: Any) -> str:

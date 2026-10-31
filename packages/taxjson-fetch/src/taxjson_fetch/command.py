@@ -324,8 +324,9 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
             say(f"  note: {a}: {len(_amb_unbooked)} option(s) not in the "
                 f"books yet ({', '.join(_amb_unbooked[:4])}"
                 f"{', ...' if len(_amb_unbooked) > 4 else ''}) on a root "
-                f"the books hold Montreal-listed, and Questrade's symbol "
-                f"lookup "
+                f"with a Montreal (.TO) listing in the books or this "
+                f"account, and "
+                f"Questrade's symbol lookup "
                 + (f"failed ({_venue_err})" if _venue_err else
                    "did not say which listing it is")
                 + ": no currency is written for its cost. Run `tjs "
@@ -1074,7 +1075,8 @@ def _run_locked(request) -> Dict[str, Any]:
             # A fetched row the strict parser refuses replaces nothing:
             # trimmed against it, a manual export lost its usable rows
             # (backlog TJ-0868).
-            _unusable = (F.qt_unusable_activities(acts)
+            _ledger_only: List[str] = []
+            _unusable = (F.qt_unusable_activities(acts, _ledger_only)
                          if overlap and getattr(args, "trim_overlap", False)
                          else [])
             if _unusable:
@@ -1087,11 +1089,18 @@ def _run_locked(request) -> Dict[str, Any]:
                     results[a]["trimmed"].append(
                         {"file": sib.name, "rows": 0,
                          "refused": f"{sib.name}: not trimmed — {_why}"})
+                # (A cash row the parser reads: only the ledger loses it,
+                # backlog TJ-1324.)
+                _ledger_says = ("the FX-on-cash ledger "
+                                '(`fx_cash_ledger = "v2"`) cannot use')
+                _reader = (_ledger_says
+                           if len(_ledger_only) == len(_unusable) else
+                           f"`tjs run` refuses or {_ledger_says}"
+                           if _ledger_only else "`tjs run` refuses")
                 print(f"tjs fetch: WARNING: {a}: "
                       f"{', '.join(s.name for s, _n in overlap)} not "
                       f"trimmed — {_why}. {out.name} holds them with "
-                      f"blank or unreadable cells, which `tjs run` "
-                      f"refuses; the "
+                      f"blank or unreadable cells, which {_reader}; the "
                       f"manual rows are kept. Delete those rows from "
                       f"{out.name} (a later fetch adds them back once "
                       f"Questrade sends them whole), then fetch again "

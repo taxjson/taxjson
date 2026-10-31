@@ -538,7 +538,7 @@ COMMAND_WHY: Dict[str, str] = {
                        "uses Schedule 3 (--form schedule3)",
     "crypto-sends:gift": "a gift is a disposition at fair value only in "
                          "Canada (ITA s.69(1)(b)); for a US donor it is "
-                         "not a sale — record it as `self`",
+                         "not a sale, but taxjson cannot book it yet",
     "amt": "the Canadian minimum tax (ITA s.127.5-127.55, form T691) and "
            "its carryover (s.120.2); the US alternative minimum tax "
            "(Form 6251) is not modelled",

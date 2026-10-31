@@ -1109,9 +1109,9 @@ Examples:
                             f"SALE at fair market value: `tjs "
                             f"crypto-sends` lists them with the fair "
                             f"value and writes the .tt sale for each "
-                            f"payment (a gift is not a sale for a US "
-                            f"donor; it and self-custody moves need "
-                            f"nothing).")
+                            f"payment (self-custody moves need nothing; "
+                            f"a gift is not a sale for a US donor, and "
+                            f"taxjson cannot book it yet).")
                     elif _sends:
                         emit_line(f"  NOTE: {_sends} crypto withdrawal/"
                             f"send(s) among them — if any left your "

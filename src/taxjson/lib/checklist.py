@@ -225,9 +225,10 @@ US_STEPS: Dict[str, Any] = {
     "roc-entered": ("Nondividend distributions (1099-DIV box 3) entered before trusting any basis",
                     "ADJUST lines / [[distributions]] in taxjson.toml",
                     "Return of capital reduces basis; funds often reclassify after year end."),
-    "crypto-sends": ("Crypto sends classified (own wallet, gift or payment)",
+    "crypto-sends": ("Crypto sends classified (own wallet or payment)",
                      "tjs crypto-sends",
-                     "Paying with crypto is a sale at fair value; a gift is not a sale for the donor."),
+                     "Paying with crypto is a sale at fair value. taxjson cannot book a US gift yet: "
+                     "`self` keeps the coins and their basis (docs/limits.md)."),
     "wash-reviewed": ("Every wash-sale disallowance reviewed", "tjs wash-sales",
                       "A wash sale triggered by an IRA purchase is permanently disallowed."),
     "filing-positions": ("Every filing position against the wash-sale rule confirmed",
@@ -1943,6 +1944,15 @@ def d_elections(ctx: Ctx) -> Result:
     return Result("elections", "attention", _last_line(out))
 
 
+def _us_self_sends(rep: Dict[str, Any], country: Any) -> List[str]:
+    """The ids of a US project's sends recorded as `self` (the crypto-sends
+    step's question keys); none in Canada, where a gift can be booked."""
+    if not is_us(country):
+        return []
+    return sorted(e["id"] for a in rep["accounts"].values()
+                  for e in a["sends"] if e.get("decision") == "self")
+
+
 def d_crypto_sends(ctx: Ctx) -> Result:
     """Offline and fast: the sidecars + inputs/<acct>/sends.json + the
     ids recorded in the generated crypto_sends.tt — no price lookups."""
@@ -2012,9 +2022,10 @@ def d_crypto_sends(ctx: Ctx) -> Result:
     if refused:
         return Result("crypto-sends", "attention",
                       f"saved as `gift`, which a US project refuses (not "
-                      f"booked): {', '.join(refused)} — record each as "
-                      f"self or payment (`tjs crypto-sends ACCOUNT "
-                      f"--set ID=self`)")
+                      f"booked): {', '.join(refused)} — taxjson cannot book "
+                      f"a US gift yet: `self` keeps the coins and their "
+                      f"basis, `payment` if you were paid (`tjs "
+                      f"crypto-sends ACCOUNT --set ID=self`)")
     if overridden:
         # A saved gift/payment the pairing overrode is not booked
         # (re-audit A2-0004): never "every send arrived".
@@ -2031,6 +2042,18 @@ def d_crypto_sends(ctx: Ctx) -> Result:
         return Result("crypto-sends", "attention",
                       f"crypto_sends.tt out of date for {', '.join(stale)} — "
                       f"`tjs crypto-sends ACCOUNT --write`")
+    # A US gift has no way to leave the books (US-SEND-02, TJ-0928): a
+    # send recorded `self` may be one, and only the person can tell.
+    kept = _us_self_sends(rep, ctx.settings.get("country"))
+    if kept:
+        return Result("crypto-sends", "attention",
+                      f"{len(kept)} send(s) recorded as self: their coins "
+                      f"and basis stay in your books, because taxjson "
+                      f"cannot book a US gift yet (docs/limits.md). If one "
+                      f"was a gift, work out later sales of that coin by "
+                      f"hand; if none was, `tjs checklist --done "
+                      f"crypto-sends`",
+                      question=True, answers=kept)
     return Result("crypto-sends", "done",
                   f"{total} unmatched send(s), all decided" if total
                   else "every send arrived on another exchange")
@@ -2889,6 +2912,19 @@ def d_t1135(ctx: Ctx) -> Result:
         unk = list(rep.get("cash_unknown_cost") or []) or [
             n.get("account") for n in rep.get("cash_not_counted") or []
             if n.get("unknown")]
+        _open = [n for n in rep.get("cash_not_counted") or []
+                 if n.get("unknown")]
+        if _open and rep.get("cash_ledger_status") == "computed" \
+                and not rep.get("cash_unknown_cost") and all(
+                    n.get("year_end_transit") for n in _open):
+            # The ledger computed; where the cash was is what is open
+            # (backlog TJ-1271).
+            return Result("t1135", "attention",
+                          f"cash of {', '.join(map(str, unk[:2]))}"
+                          f"{' ...' if len(unk) > 2 else ''} was in transit "
+                          f"at the year end, and where it was held is open — "
+                          f"the T1135 total is not settled",
+                          cmd="tjs t1135 --details")
         return Result("t1135", "attention",
                       f"the cost of the cash in {', '.join(map(str, unk[:2]))}"
                       f"{' ...' if len(unk) > 2 else ''} is unknown (the "
@@ -3408,7 +3444,7 @@ def set_override(root: Path, year: int, step: str, mark: Optional[str],
 # The steps whose attention is a question a DONE mark answers — for the
 # questions asked when it was made (Result.answers).
 QUESTION_STEPS = ("export-coverage", "option-boundary", "t5-t3",
-                  "fx-cash")
+                  "fx-cash", "crypto-sends")
 
 
 def question_answers(root: Path, cfg: Dict[str, Any], step: str,
@@ -3420,6 +3456,17 @@ def question_answers(root: Path, cfg: Dict[str, Any], step: str,
         from taxjson.lib import export_coverage as EC
         return sorted({g.key for g in EC.find_gaps(root, cfg, today=today)
                        if not g.info})
+    if step == "crypto-sends":
+        country = (cfg.get("settings") or {}).get("country")
+        if not is_us(country):
+            return None
+        from taxjson.lib import crypto_sends as cs
+        try:
+            return _us_self_sends(
+                cs.build_report(root, cfg, None, None, with_pool=False),
+                country)
+        except ValueError:
+            return []
     if step == "option-boundary":
         from taxjson.lib import option_boundary as OB
         return option_keys(OB.project_question_rows(root, cfg, today=today))
@@ -3761,7 +3808,8 @@ def _spec(year: int, country: Optional[str]) -> List[Item]:
                      Cmd("tjs crypto-sends ACCOUNT --set ID=self",
                          "or payment, or gift", "canada"),
                      Cmd("tjs crypto-sends ACCOUNT --set ID=self",
-                         "or payment", "usa"))),
+                         "or payment; self keeps the coins and their "
+                         "basis (a US gift cannot be booked yet)", "usa"))),
         Item("tt-lines", "Fill the gaps",
              "Anything no export holds: .tt lines",
              "The run reads a .tt file like a broker file; `tjs run "

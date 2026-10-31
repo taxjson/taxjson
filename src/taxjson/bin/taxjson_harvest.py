@@ -398,12 +398,16 @@ def load_radar(paths: List[Path]) -> Dict[str, Dict[str, Any]]:
     return out
 
 
-def _locked_fraction(rec: Optional[Dict[str, Any]]) -> float:
+def _locked_fraction(rec: Optional[Dict[str, Any]],
+                     row_qty: Any = None) -> float:
     """Share of a LOCKED position's loss that a sale today would lose
-    (1.0 when the radar does not say — an older sidecar)."""
+    (1.0 when the radar does not say — an older sidecar). Each sale is
+    judged on its own (CA-SL-08), so the share is of `row_qty`, the units
+    of this account's row, not of every account's (backlog TJ-1279)."""
     try:
         risk = float((rec or {}).get("at_risk_qty"))
-        tq = abs(float((rec or {}).get("taxable_qty")))
+        tq = abs(float(row_qty if row_qty
+                       else (rec or {}).get("taxable_qty")))
     except (TypeError, ValueError):
         return 1.0
     if tq <= 1e-9:
@@ -466,7 +470,7 @@ def _recovery_schedule(rows: List[Dict[str, Any]],
             # the loss is claimable TODAY. Bucketing the whole loss at
             # the clear date deferred 96% claimable losses (2026-09
             # audit R1-232).
-            frac = _locked_fraction(rec)
+            frac = _locked_fraction(rec, r.get("qty"))
             out["now"] += loss * (1.0 - frac)
             loss *= frac
             if loss <= 1e-9:

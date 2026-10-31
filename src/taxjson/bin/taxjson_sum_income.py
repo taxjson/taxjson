@@ -144,13 +144,33 @@ def get_base_ticker(symbol: str) -> str:
     return symbol
 
 
+def capitalized_pil_shares(gains_rows: List[Dict[str, Any]]
+                           ) -> Dict[str, float]:
+    """{row id: the share of a dividend-compensation row the US engine put
+    into a cover's cost (§263(h); US-INC-04)}, from a gains file's rows:
+    the book's row keeps its whole amount (backlog TJ-1139, as the views'
+    TJ-1066)."""
+    out: Dict[str, float] = {}
+    for e in gains_rows:
+        cap = isinstance(e, dict) and e.get('capitalized_263h')
+        if not cap or e.get('action') != 'DIVIDEND_IN_LIEU':
+            continue
+        whole = float(cap) - float(e.get('pil') or 0.0)
+        if whole > 0:
+            out[str(e.get('id'))] = min(1.0, float(cap) / whole)
+    return out
+
+
 def summarize_income(transactions: List[Dict[str, Any]], target_year: int = None,
-                     rules=None) -> Dict[str, Any]:
+                     rules=None, capitalized: Dict[str, float] = None
+                     ) -> Dict[str, Any]:
     """Process income data and create summary. `rules` (a
     lib/income_dating.IncomeRules) dates each income row by its
     country's rule and (Canada) counts a s.260 payment in lieu as a
     dividend; without it every row is dated by its pay date and every
-    payment in lieu is kept in its own column."""
+    payment in lieu is kept in its own column. `capitalized`
+    (capitalized_pil_shares): the part of a payment in lieu that is in a
+    cover's cost is no income; `capitalized_263h` gives it by currency."""
     ticker_stats: Dict[str, Dict] = {}
     interest_totals: Dict[str, float] = {}
     # Interest charged (margin interest; IB and Questrade rows keep
@@ -162,6 +182,7 @@ def summarize_income(transactions: List[Dict[str, Any]], target_year: int = None
     # null) — booked as $0 without a word before (audit S051-14). The
     # CLI refuses them; library callers see the count.
     missing_amount: List[Dict[str, Any]] = []
+    capitalized_totals: Dict[str, float] = {}
 
     # The tax withheld on a payment follows its dividend's date (A2-0396).
     wh_dates = (rules.withholding_dates(transactions)
@@ -224,6 +245,11 @@ def summarize_income(transactions: List[Dict[str, Any]], target_year: int = None
             if currency not in ticker_stats[base_ticker]:
                 ticker_stats[base_ticker][currency] = {'div': 0.0, 'tax': 0.0, 'pil': 0.0}
             ticker_stats[base_ticker][currency].setdefault('pil', 0.0)
+            share = (capitalized or {}).get(str(tx.get('id')))
+            if share:
+                capitalized_totals[currency] = (
+                    capitalized_totals.get(currency, 0.0) + amount * share)
+                amount -= amount * share
             ticker_stats[base_ticker][currency]['pil'] += amount
             continue
 
@@ -268,6 +294,8 @@ def summarize_income(transactions: List[Dict[str, Any]], target_year: int = None
         'interest_paid_totals': interest_paid_totals,
         'total_year': target_year or 'all',
         'missing_amount': missing_amount,
+        **({'capitalized_263h': capitalized_totals}
+           if capitalized_totals else {}),
     }
 
 
@@ -388,6 +416,14 @@ def format_report(data: Dict[str, Any], sort_by: str = 'ticker') -> str:
                 "".rjust(17) +
                 f"{paid:17,.2f}"
             )
+        cap = (data.get('capitalized_263h') or {}).get(currency, 0)
+        if cap:
+            # In a cover's cost (§263(h)), not income: kept out of the
+            # total, as `tjs dil-sum` does (backlog TJ-1139).
+            lines.append(
+                "CAPITALIZED, §263(h) (not in total)".ljust(26) +
+                f"{cap:17,.2f}"
+            )
         lines.append("-" * 94)
         lines.append(
             "TOTAL NET INCOME".ljust(26) +
@@ -423,6 +459,11 @@ def main():
         default='ticker',
         help="Sort field (default: ticker)"
     )
+    parser.add_argument(
+        "--gains", metavar="FILE", default=None,
+        help="The book's gains file: dividend compensation it put into a "
+             "cover's cost (§263(h)) is left out of the PIL column and "
+             "shown on its own line")
     parser.add_argument(
         "files",
         nargs="*",
@@ -468,6 +509,10 @@ def main():
     try:
         for fp in (file_paths or [None]):
             all_txs.extend(load_income_data(fp))
+        capitalized = (capitalized_pil_shares(
+            read_json_doc(Path(args.gains),
+                          require_key="transactions")["transactions"])
+            if args.gains else None)
     except InputFileError as e:
         cli_diag.error(PROG, str(e))
         sys.exit(2)
@@ -479,7 +524,7 @@ def main():
             cli_diag.error(PROG, f"row {i}: expected an object with a "
                                  f"string 'date', got {tx!r:.80}")
             sys.exit(2)
-    report_data = summarize_income(all_txs, args.year, rules)
+    report_data = summarize_income(all_txs, args.year, rules, capitalized)
     if report_data['missing_amount']:
         bad = report_data['missing_amount']
         first = bad[0]

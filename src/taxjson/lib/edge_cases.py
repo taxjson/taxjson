@@ -114,7 +114,10 @@ def _expiry(sym: str) -> Optional[date]:
 def _walk(rows: Iterable[Dict[str, Any]], datef, until: Optional[date] = None,
           pre: Optional[Dict[int, float]] = None,
           pre_pooled: Optional[Dict[int, float]] = None,
-          pool_of=None) -> Dict[Tuple[str, str], float]:
+          pool_of=None,
+          pooled_out: Optional[Dict[Tuple[str, str], float]] = None,
+          routed: Optional[Dict[int, float]] = None
+          ) -> Dict[Tuple[str, str], float]:
     """Positions per (account, symbol) after the rows dated on or before
     `until` (by `datef`; every row when None): trades, transfers and
     openings add their quantity, a SPLIT scales the position by its
@@ -123,9 +126,12 @@ def _walk(rows: Iterable[Dict[str, Any]], datef, until: Optional[date] = None,
     the row's pool (`pool_of(account)`: the accounts the engine pools,
     Book.pool) before it (backlog TJ-0690). A SPLIT scales the whole
     pool once, whichever accounts report it, as the engine does (backlog
-    TJ-1205, TJ-0696)."""
+    TJ-1205, TJ-0696). `pooled_out` gets the pools' positions at the end,
+    per (pool, symbol), with each row's `routed` units (the broker-marked
+    short pool's, _marked_short_view) kept out of them."""
     pos: Dict[Tuple[str, str], float] = {}
-    pooled: Dict[Tuple[str, str], float] = {}
+    pooled: Dict[Tuple[str, str], float] = {} if pooled_out is None \
+        else pooled_out
     pool_of = pool_of or (lambda a: a)
 
     moving = [r for r in rows
@@ -162,18 +168,21 @@ def _walk(rows: Iterable[Dict[str, Any]], datef, until: Optional[date] = None,
         else:
             pos[k] = pos.get(k, 0.0) + q
             pk = (pool_of(k[0]), k[1])
-            pooled[pk] = pooled.get(pk, 0.0) + q
+            pooled[pk] = (pooled.get(pk, 0.0) + q
+                          - (routed or {}).get(id(r), 0.0))
     return pos
 
 
 def _marked_short_view(book: "Book") -> Tuple[Dict[int, float],
+                                              Dict[int, float],
                                               Dict[int, float]]:
     """Canada: ({id(row): the taxable long pool before it}, {id(row): the
-    units of a sale the broker's mark sends to the short pool}), as the
-    engine routes them (core _MarkedShortRouter: CA-DISP-04, backlog
-    TJ-0721), so a marked short is no sale of held units and does not net
-    against another account's long (backlog TJ-1204, TJ-1207). Both empty
-    when no taxable row carries a mark."""
+    units of a sale the broker's mark sends to the short pool}, {id(row):
+    the signed units of any row that pool takes}), as the engine routes
+    them (core _MarkedShortRouter: CA-DISP-04, backlog TJ-0721), so a
+    marked short is no sale of held units and does not net against another
+    account's long (backlog TJ-1204, TJ-1207, TJ-1282). All empty when no
+    taxable row carries a mark."""
     from taxjson.lib.core import (TaxTransaction, _MarkedShortRouter,
                                   _row_part)
     router = _MarkedShortRouter()
@@ -192,13 +201,14 @@ def _marked_short_view(book: "Book") -> Tuple[Dict[int, float],
     if not any(t.action == "BUYSELL"
                and (router._opens_short(t) or "O" in router._codes(t))
                for t in views.values()):
-        return {}, {}
+        return {}, {}, {}
     rows = [r for r in book.txs if book.kind.get(r["_acct"]) == "taxable"
             and (id(r) in views or r.get("action") == "SPLIT")]
     rows.sort(key=lambda r: (str(book.wdate(r) or ""), r.get("time") or ""))
     long_pool: Dict[str, float] = {}
     pre: Dict[int, float] = {}
     marked: Dict[int, float] = {}
+    routed: Dict[int, float] = {}
     for r in dedupe_split_events(rows):
         sym = r.get("symbol") or ""
         if r.get("action") == "SPLIT":
@@ -221,9 +231,11 @@ def _marked_short_view(book: "Book") -> Tuple[Dict[int, float],
             q = float(part.quantity or 0)
             if not router.walk(part):
                 long_pool[sym] = long_pool.get(sym, 0.0) + q
-            elif q < 0:
+                continue
+            routed[id(r)] = routed.get(id(r), 0.0) + q
+            if q < 0:
                 marked[id(r)] = marked.get(id(r), 0.0) - q
-    return pre, marked
+    return pre, marked, routed
 
 
 def _opening_qty(book: "Book", r: Dict[str, Any]) -> float:
@@ -303,8 +315,8 @@ class Book:
               pre_pooled=self.pool_pre_pos, pool_of=self.pool)
         # A broker-marked short has a pool of its own (Canada only:
         # _marked_short_view); a book without one reads pool_pre_pos.
-        self.long_pre_pos, self.marked_short = (
-            ({}, {}) if self.usa else _marked_short_view(self))
+        self.long_pre_pos, self.marked_short, self.short_routed = (
+            ({}, {}, {}) if self.usa else _marked_short_view(self))
         self.gains: List[Dict[str, Any]] = []
         # Covers traded this year, their loss the next's (US-DATE-01).
         self.covers_next_year: List[Dict[str, Any]] = []
@@ -544,9 +556,13 @@ def year_straddles(book: Book) -> List[Dict[str, Any]]:
         # write's own id): that write opens one (s.49(1), TJ-1067).
         grant_write = (opt and qty < 0 and bool(hits)
                        and all(h.get("direction") == "SHORT" for h in hits))
+        # A broker-marked short opening sells no units of the long pool,
+        # whichever account holds them (CA-DISP-04, backlog TJ-1281).
+        marked_open = (qty < 0 and book.marked_short.get(id(r), 0.0)
+                       >= -qty - 1e-9)
         closing = ((bool(hits) and not grant_write)
                    or (before < -1e-9 and qty > 0)
-                   or (before > 1e-9 and qty < 0))
+                   or (before > 1e-9 and qty < 0 and not marked_open))
         if closing and qty > 0:
             what = ("buy-to-close of a written option" if opt
                     else "short cover")
@@ -574,6 +590,9 @@ def year_straddles(book: Book) -> List[Dict[str, Any]]:
             why += (f"; under grant timing the premium is a gain in {lands}"
                     if book.timing == "grant" else
                     f"; the premium is realized when the option is closed")
+        elif qty < 0:
+            why += ("; it opens a short position, whose gain or loss comes "
+                    "when it is covered")
         else:
             why += f"; the cost joins the pool in {lands}"
         out.append({"account": r["_acct"], "symbol": sym, "qty": qty,
@@ -639,10 +658,8 @@ def _assign_settlement(book: Book, acct: str, opts: List[Dict[str, Any]]
     import contextlib
     import io
     from taxjson.lib.core import (TaxTransaction, _assign_delivery_shares,
-                                  _assign_direction,
                                   _make_assign_underlying_resolver,
-                                  _MARKED_LEG_MAX_LAG_DAYS,
-                                  _pair_assign_legs)
+                                  _pair_assign_legs, is_assign_premium_leg)
     from taxjson.lib.corporate_timeline import event_sort_key
     cache = book.__dict__.setdefault("_assign_books", {})
     if acct not in cache:
@@ -685,8 +702,22 @@ def _assign_settlement(book: Book, acct: str, opts: List[Dict[str, Any]]
                 took = min(need or 0.0, left.get(leg_id, 0.0))
                 left[leg_id] = left.get(leg_id, 0.0) - took
                 need = (need or 0.0) - took
-        cache[acct] = (txs, rows, resolve, pairs, left)
-    txs, rows, resolve, pairs, left = cache[acct]
+        # ...and the unpaired ones, in walk order, by proximity (step 2):
+        # a premium an earlier one's shares used up is not folded (backlog
+        # TJ-1302).
+        unpaired: Dict[str, Any] = {}
+        with contextlib.redirect_stderr(io.StringIO()):
+            for n, t in enumerate(txs):
+                if (t.id in pairs or not is_assign_premium_leg(t)
+                        or not resolve(t)):
+                    continue
+                leg = _first_free_leg(t, resolve(t), txs[n + 1:], left)
+                unpaired[t.id] = leg
+                if leg is not None:
+                    left[leg.id] -= min(_assign_delivery_shares(t) or 0.0,
+                                        left[leg.id])
+        cache[acct] = (txs, rows, resolve, pairs, unpaired)
+    txs, rows, resolve, pairs, unpaired = cache[acct]
     ids = {i for i, r in rows.items() if any(r is o for o in opts)}
     und: Optional[str] = None
     got: List[str] = []
@@ -702,31 +733,40 @@ def _assign_settlement(book: Book, acct: str, opts: List[Dict[str, Any]]
         if paired:
             got += [i for i in paired if i not in got]
             continue
-        d = _assign_direction(t)
-        leg = None
-        for x in txs[n + 1:]:
-            q = float(x.quantity or 0)
-            try:
-                gap = (datetime.strptime(x.date, "%Y-%m-%d")
-                       - datetime.strptime(t.date, "%Y-%m-%d")).days
-            except (TypeError, ValueError):
-                continue
-            if (x.symbol == u and x.action in ("BUYSELL", "ASSIGN")
-                    and abs(q) > 1e-12 and 0 <= gap
-                    <= _MARKED_LEG_MAX_LAG_DAYS):
-                free = left.get(x.id, 0.0) > 1e-9
-                if d is None or (1 if q > 0 else -1) == d:
-                    # A later leg of its own direction keeps the entry
-                    # from an opposite trade before it, even one with
-                    # no shares left to take it.
-                    leg = x if free else None
-                    if free:
-                        break
-                elif free:
-                    leg = leg or x
+        leg = unpaired.get(t.id)
         if leg is not None and leg.id not in got:
             got.append(leg.id)
     return und, [rows[i] for i in got]
+
+
+def _first_free_leg(opt: Any, und: str, after: List[Any],
+                    left: Dict[str, float]) -> Any:
+    """The trade of `und` among `after` that the unpaired assignment `opt`
+    folds into, among those with shares `left` (_assign_settlement)."""
+    from taxjson.lib.core import _assign_direction, _MARKED_LEG_MAX_LAG_DAYS
+    d = _assign_direction(opt)
+    leg = None
+    for x in after:
+        q = float(x.quantity or 0)
+        try:
+            gap = (datetime.strptime(x.date, "%Y-%m-%d")
+                   - datetime.strptime(opt.date, "%Y-%m-%d")).days
+        except (TypeError, ValueError):
+            continue
+        if (x.symbol == und and x.action in ("BUYSELL", "ASSIGN")
+                and abs(q) > 1e-12 and 0 <= gap
+                <= _MARKED_LEG_MAX_LAG_DAYS):
+            free = left.get(x.id, 0.0) > 1e-9
+            if d is None or (1 if q > 0 else -1) == d:
+                # A later leg of its own direction keeps the entry
+                # from an opposite trade before it, even one with
+                # no shares left to take it.
+                leg = x if free else None
+                if free:
+                    break
+            elif free:
+                leg = leg or x
+    return leg
 
 
 def option_expiries(book: Book) -> List[Dict[str, Any]]:
@@ -1325,10 +1365,18 @@ def _held_at(book: Book, sym: str, when: date,
     """Units of `sym` held across every account (or, with `holder`, the
     accounts of that Book.pool) at the end of `when` (a window date):
     openings and SPLIT ratios applied, and a position renamed into
-    `sym` by a SPLIT counted under it (A2-0388/0389)."""
+    `sym` by a SPLIT counted under it (A2-0388/0389). A holder's units are
+    its pool's, as the engine holds them: a SPLIT any of its accounts
+    reports scales them, and a broker-marked short is apart (backlog
+    TJ-1282)."""
     names = _names_of(book, sym)
     rows = [r for r in book.txs if (r.get("symbol") or "") in names
             and book.in_wash_scope(r["_acct"])]
+    if holder is not None:
+        pooled: Dict[Tuple[str, str], float] = {}
+        _walk(rows, book.wdate, until=when, pool_of=book.pool,
+              pooled_out=pooled, routed=book.short_routed)
+        return pooled.get((holder, sym), 0.0)
     pos = _walk(rows, book.wdate, until=when)
     return sum(v for (a, s_), v in pos.items() if s_ == sym
                and (holder is None or book.pool(a) == holder))

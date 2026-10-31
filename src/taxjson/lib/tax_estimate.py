@@ -1007,6 +1007,15 @@ def ca_foreign_deduction_text(not_credited: float, over_cap: float,
             f"deduction you claim goes in [estimate] deductions.")
 
 
+def shown_credits_reduced(carry: Dict[str, Any]) -> float:
+    """The foreign tax credit a recovered carryover limits, as a report
+    shows it: the claim is rounded up to the cent, so one cent here is that
+    rounding, and is not shown (the parts foot within a cent; backlog
+    TJ-1153)."""
+    red = float(carry.get("recovered_credits_reduced") or 0.0)
+    return red if abs(red) >= 0.015 else 0.0
+
+
 def _claim_kept_note(carry: Dict[str, Any]) -> str:
     """The sentence on a carryover the limit had room for and the claim
     leaves open (tax-logic CA-AMT-04); "" with none."""
@@ -1167,7 +1176,7 @@ def _canada_notes(prov_key: str, prov: Dict[str, Any],
             _sur = float(carry.get("recovered_provincial_surtax") or 0.0)
             _share = carry.get("recovered_provincial_credit",
                                carry["recovered_provincial"])
-            _red = float(carry.get("recovered_credits_reduced") or 0.0)
+            _red = shown_credits_reduced(carry)
             notes.append(
                 f"Minimum tax carryover applied (ITA s.120.2; T691 Part "
                 f"8, line 40427): {m(carry['recovered_federal'])} federal"

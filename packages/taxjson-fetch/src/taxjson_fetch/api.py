@@ -535,9 +535,9 @@ _QT_MONEY_FIELDS = (("grossAmount", "Gross Amount"),
 _QT_COUNT_FIELDS = (("quantity", "Quantity"), ("price", "Price"))
 
 
-def _qt_parser_refuses(activity: Dict[str, Any]) -> bool:
-    """Whether the strict Questrade parser refuses the row qt_to_csv
-    renders for `activity`. Which cells it reads depends on the row's
+def _qt_parser_refuses(*activities: Dict[str, Any]) -> bool:
+    """Whether the strict Questrade parser refuses the rows qt_to_csv
+    renders for `activities`. Which cells it reads depends on the row's
     kind (an FX conversion none, a dividend no Settlement Date), so it is
     asked (backlog TJ-1231). Whatever else stops it counts as a refusal;
     what it says on the way is not this run's to show."""
@@ -550,11 +550,25 @@ def _qt_parser_refuses(activity: Dict[str, Any]) -> bool:
                 contextlib.redirect_stdout(io.StringIO()), \
                 contextlib.redirect_stderr(io.StringIO()):
             path = Path(td) / "activity.csv"
-            path.write_text(qt_to_csv([activity], "0"), encoding="utf-8")
+            path.write_text(qt_to_csv(list(activities), "0"),
+                            encoding="utf-8")
             QuestradeBrokerage().parse_file(path)
     except (Exception, SystemExit):
         return True
     return False
+
+
+def _qt_read_beside_its_symbol(activity: Dict[str, Any],
+                               activities: List[Any]) -> bool:
+    """Whether a row refused alone is read among the download's rows of
+    its symbol: a reversal alone is refused for having no original, not
+    for its cells (backlog TJ-1292). A row that is refused alone itself
+    is left out, so it cannot speak for this one."""
+    sym = activity.get("symbol")
+    rows = [a for a in activities if isinstance(a, dict)
+            and a.get("symbol") == sym
+            and (a is activity or not _qt_parser_refuses(a))]
+    return len(rows) > 1 and not _qt_parser_refuses(*rows)
 
 
 def _qt_cash_reader_loses(activity: Dict[str, Any]) -> bool:
@@ -589,14 +603,17 @@ def _qt_cash_reader_loses(activity: Dict[str, Any]) -> bool:
         return True
 
 
-def qt_unusable_activities(activities: List[Dict[str, Any]]) -> List[str]:
+def qt_unusable_activities(activities: List[Dict[str, Any]],
+                           ledger_only: Optional[List[str]] = None
+                           ) -> List[str]:
     """One line per activity qt_to_csv renders as a row the strict
     Questrade parser refuses: no trade or transaction date or one it
     cannot read (a settlement date too), no currency, a money field
     missing, null, blank or not a number, or a quantity or price that is
     no number, when the parser reads that cell on such a row
     (_qt_parser_refuses), or as a cash row the FX-on-cash ledger cannot
-    use (_qt_cash_reader_loses). --trim-overlap retires a manual export's
+    use (_qt_cash_reader_loses; such a line, when the parser reads the row,
+    is also added to `ledger_only`). --trim-overlap retires a manual export's
     rows on the strength of the download, so it must not trust a download
     holding such a row: a null netAmount trimmed the manual purchase and
     left only a fetched row `tjs run` refuses (backlog TJ-0868), and
@@ -632,14 +649,19 @@ def qt_unusable_activities(activities: List[Dict[str, Any]]) -> List[str]:
             unread.append("Settlement Date")
         unread += [col for key, col in _QT_COUNT_FIELDS
                    if a.get(key) and _finite(a.get(key)) is None]
-        if (bad or unread) and (_qt_parser_refuses(a)
-                                or _qt_cash_reader_loses(a)):
+        if not (bad or unread):
+            continue
+        refused = (_qt_parser_refuses(a)
+                   and not _qt_read_beside_its_symbol(a, activities))
+        if refused or _qt_cash_reader_loses(a):
             what = " ".join(str(x) for x in (
                 day or "undated", a.get("type") or "activity",
                 a.get("symbol") or "") if x)
             said = ([f"no {', '.join(bad)}"] if bad else []) + (
                 [f"unreadable {', '.join(unread)}"] if unread else [])
             out.append(f"{what} ({'; '.join(said)})")
+            if not refused and ledger_only is not None:
+                ledger_only.append(out[-1])
     return out
 
 
@@ -1143,9 +1165,10 @@ def positions_to_holdings_toml(positions: List[Dict[str, Any]],
                 venue_unknown = True
             elif closed_listing:
                 venue_unknown = closed_unknown = True
-            elif (sym.endswith(".TO")
-                  and _qt_option_root(sym) not in live_to_roots):
-                # Only the books' other .TO options say Montreal.
+            elif sym.endswith(".TO"):
+                # Only another .TO listing of the root says Montreal: the
+                # books' options, or the account's own .TO position, which
+                # may be a CDR (backlog TJ-1144).
                 venue_unknown = unbooked_unknown = True
         lines += ["", "[[holding]]",
                   f"symbol = {q(sym)}",
@@ -1158,8 +1181,8 @@ def positions_to_holdings_toml(positions: List[Dict[str, Any]],
                 ambiguous_closed.append(sym)
         elif unbooked_unknown:
             lines.append("# listing AMBIGUOUS: this contract is not in the "
-                         "books yet, the books hold other options of its "
-                         "root Montreal-listed (.TO), and Questrade's symbol "
+                         "books yet, its root has another .TO listing (in "
+                         "the books or this account), and Questrade's symbol "
                          "lookup did not say which it is: no currency "
                          "written")
             if ambiguous_unbooked is not None:

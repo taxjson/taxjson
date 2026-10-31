@@ -480,7 +480,8 @@ def parse_tt_line(line: str, account_name: str = 'default',
                         # on the line (`x1000`).
                         and (not _is_fut or tx.get('multiplier'))
                         and abs(_total - _expected) >
-                        _tt_tolerance(_expected)):
+                        _tt_tolerance(_expected)
+                        and not _adjusted_series_total(tx, _total)):
                     emit_line(
                         f"warning: {_where(source)}.tt line total "
                         f"{_total:.2f} differs from "
@@ -728,7 +729,8 @@ def parse_unknown_opening_line(line: str, source: str = ''):
     """`OPENING <date> <SYMBOL> <qty> cost=unknown [reason="..."]` ->
     {date, symbol, quantity, reason, line}: <qty> units of SYMBOL held
     on <date>, bought before the data starts at a cost the files do not
-    give — missing history (tax-logic
+    give (a negative <qty>: a short sold before the data, its proceeds
+    unknown) — missing history (tax-logic
     CA-ACB-11 / US-BASIS-04). None when the line is not an OPENING line
     with a `cost=` word (a positions-report OPENING line has a currency
     and a total instead). `tjs run` reads it from the account's .tt
@@ -791,11 +793,18 @@ def parse_unknown_opening_line(line: str, source: str = ''):
             f"{where}malformed OPENING line — the quantity {qty!r} is not "
             f"a number ({e}; expected `{UNKNOWN_OPENING_FORM}`): "
             f"{shown!r}") from None
-    if not q > 0 or q > _MAX_EVENT_QTY:
+    # A negative quantity: a short held before the data (TJ-0844).
+    if not q or abs(q) > _MAX_EVENT_QTY:
         raise ValueError(
             f"{where}malformed OPENING line — the quantity must be a "
-            f"positive number of units held before the data (expected "
-            f"`{UNKNOWN_OPENING_FORM}`): {shown!r}")
+            f"number of units held before the data, negative for a short "
+            f"(expected `{UNKNOWN_OPENING_FORM}`): {shown!r}")
+    if q < 0 and _derivative_kind(sym):
+        raise ValueError(
+            f"{where}OPENING cost=unknown with a negative quantity is for "
+            f"a short of shares, not {_derivative_kind(sym)} ({sym}): "
+            f"`tjs find-missing-history --include-options` lists a "
+            f"contract written before the data: {shown!r}")
     _not_in_future(date, 'OPENING', where, shown)
     return {'date': date, 'symbol': sym, 'quantity': q, 'reason': reason,
             'line': shown}
@@ -1662,6 +1671,28 @@ def _tt_contract_size(tx: dict) -> float:
     if tx.get('multiplier'):
         return float(tx['multiplier'])
     return 100.0 if option else 1.0
+
+
+def _adjusted_series_total(tx: dict, total: float) -> bool:
+    """Whether `total` on an option line is qty x price x 100 +/- fee under
+    a ticker.map MULT line of an adjusted series: MULT sizes the
+    deliverable and the premium stays x100, the generic importer's rule
+    (backlog TJ-1034, TJ-1147). A mini's 10 is the premium's size too: its
+    x100 total stays a typo (TJ-0864)."""
+    from taxjson.lib import markets
+    from taxjson.lib.core import is_option_symbol, parse_option_underlying
+    sym = str(tx.get('symbol') or '')
+    if not is_option_symbol(sym) or sym.startswith(_FUTURES_PREFIXES):
+        return False
+    size = markets.option_contract_size(
+        sym, parse_option_underlying(sym) or '')
+    if not size or float(size) in (10.0, 100.0):
+        return False
+    from taxjson.lib.tt_totals import tolerance
+    q = tx['quantity']
+    fee = tx.get('fee', 0.0)
+    at_100 = abs(q) * tx['price'] * 100.0 + (fee if q > 0 else -fee)
+    return abs(total - at_100) <= tolerance(at_100)
 
 
 def _excess_commission_sale(tx: dict) -> bool:

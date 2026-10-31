@@ -75,7 +75,10 @@ class TestInKindOptionTotalRefused(unittest.TestCase):
                           r.stdout + r.stderr)
             r = tj(root, "checklist", "--run", "--only", "tt-lines", "--json",
                    check=False)
-            self.assertIn("attention", r.stdout)
+            # (TJ-1319: the counts always carry an "attention" key, so a
+            # substring match on stdout could not fail.)
+            self.assertEqual(json.loads(r.stdout)["counts"]["attention"], 1,
+                             r.stdout)
             r = tj(root, "run", "--no-input", check=False)
             self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
             self.assertIn("price and total disagree", r.stderr)
@@ -94,6 +97,10 @@ class TestInKindOptionTotalRefused(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = self._make(td, "2 200")
             tj(root, "check-tt")
+            r = tj(root, "checklist", "--run", "--only", "tt-lines", "--json",
+                   check=False)
+            self.assertEqual(json.loads(r.stdout)["counts"]["attention"], 0,
+                             r.stdout)
             tj(root, "run", "--no-input")
             fe = json.loads(tj(root, "form-export", "--json").stdout)
             self.assertEqual(len(fe["rows"]), 1)

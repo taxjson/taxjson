@@ -228,14 +228,20 @@ def render(doc: Dict[str, Any], details: bool = True) -> List[str]:
                           f"{m(c.get('recovered_provincial', 0.0))}]"))
         # The foreign tax credit the lower tax limits: the tax falls by
         # less than the credit (backlog TJ-0653).
-        _red = float(c.get("recovered_credits_reduced") or 0.0)
+        from taxjson.lib.tax_estimate import shown_credits_reduced
+        _red = shown_credits_reduced(c)
+        _falls = (f"federal {m(c.get('recovered_federal_tax', 0.0))}, "
+                  f"{prov} {m(c.get('recovered_provincial', 0.0))}]")
         if abs(_red) > 0.005:
             L.append(_row("  less: foreign tax credit it limits", -_red,
-                          f"[tax falls by "
-                          f"{m(c.get('recovered', 0.0))}: federal "
-                          f"{m(c.get('recovered_federal_tax', 0.0))}, "
-                          f"{prov} "
-                          f"{m(c.get('recovered_provincial', 0.0))}]"))
+                          f"[tax falls by {m(c.get('recovered', 0.0))}: "
+                          + _falls))
+        elif abs(float(c.get("recovered_federal") or 0.0)
+                 - float(c.get("recovered_federal_tax", 0.0) or 0.0)) > 0.005:
+            # The share and the credit foot to the drop, but it is not
+            # where line 40427 says: say where it falls.
+            L.append(_row("  tax falls by", c.get("recovered"),
+                          "[" + _falls))
         if abs(float(c.get("attributed", 0.0))
                - float(c.get("recovered", 0.0))) > 0.005:
             L.append(_row("  change due to the investment income",

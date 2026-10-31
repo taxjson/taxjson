@@ -150,6 +150,23 @@ def load_json(path: Path) -> Any:
     return read_work_doc(path)
 
 
+def _pool_cut_ids(path: Path, rows: List[Dict[str, Any]]) -> set:
+    """The ids of the rows of a work/<account>_base.json that the pass
+    across accounts cut at the account's snapshot: walked through another
+    account's rename they sat beside the snapshot's shares and raised the
+    year's maximum cost (backlog TJ-1168). Empty for any other file."""
+    from taxjson.lib.positions_check import blended_pool_rows, without_pool_cut
+    name = Path(path).name
+    if not name.endswith("_base.json"):
+        return set()
+    acct = name[:-len("_base.json")]
+    kept = without_pool_cut(rows, blended_pool_rows(Path(path).parent, acct),
+                            acct)
+    if len(kept) == len(rows):
+        return set()
+    return {r.get("id") for r in rows} - {r.get("id") for r in kept}
+
+
 def load_transactions(paths: List[Path],
                       phantoms: Optional[Path] = None) -> List[Dict[str, Any]]:
     """Every row of the base files. With `phantoms` (the project's
@@ -180,6 +197,8 @@ def load_transactions(paths: List[Path],
             raise SystemExit(2)
         rows = raw.get("transactions", []) if isinstance(raw, dict) else raw
         rows = [t for t in rows if isinstance(t, dict)]
+        cut = _pool_cut_ids(p, rows)
+        rows = [t for t in rows if not cut or t.get("id") not in cut]
         if ph:
             from taxjson.lib.core import coerce_transaction_row
             from taxjson.lib.missing_history import synthesize_openings
@@ -1427,7 +1446,10 @@ def full_history_pass(base_paths: List[Path],
     from taxjson.lib.pipeline import GainsRequest, run_gains
     txs: List[Any] = []
     for p in base_paths:
-        txs.extend(load_transactions_or_exit("taxjson-t1135", p))
+        rows = load_transactions_or_exit("taxjson-t1135", p)
+        cut = _pool_cut_ids(p, [{"id": t.id, "account": t.account}
+                                for t in rows])
+        txs.extend(t for t in rows if not cut or t.id not in cut)
     sheltered: List[Any] = []
     for p in sheltered_paths or ():
         sheltered.extend(load_transactions_or_exit("taxjson-t1135", p))
@@ -1918,6 +1940,15 @@ def _few(names: List[str], n: int = 2) -> str:
             + (f" +{len(names) - n} more" if len(names) > n else ""))
 
 
+def _only_transit_open(rep: Dict[str, Any]) -> bool:
+    """All that leaves the total open is cash in transit at the year end:
+    the ledger computed, no cost is missing (backlog TJ-1271)."""
+    open_ = [n for n in rep.get("cash_not_counted") or [] if n.get("unknown")]
+    return (bool(open_) and rep.get("cash_ledger_status") == "computed"
+            and not rep.get("cash_unknown_cost")
+            and all(n.get("year_end_transit") for n in open_))
+
+
 def _cash_acts(rep: Dict[str, Any]) -> List[Tuple[str, str]]:
     """The `! ` lines of the cash in the books (CA-RPT-20), each with
     the command that says more: the rows of unknown cost (below the
@@ -1929,7 +1960,13 @@ def _cash_acts(rep: Dict[str, Any]) -> List[Tuple[str, str]]:
         out.append((f"{_few(unk, 1)}: cost unknown (fx-cash v2 refuses)",
                     "tjs fx-cash --ledger v2"))
     for n in rep.get("cash_not_counted") or []:
-        if n.get("unknown"):
+        if n.get("year_end_transit"):
+            # The ledger computed: the cost is known, where the cash was
+            # is not (backlog TJ-1271).
+            out.append((f"{n['account']}: {n.get('currency') or ''} cash in "
+                        f"transit at the year end, where it was held is open",
+                        "tjs t1135 --details"))
+        elif n.get("unknown"):
             # The ledger could not run, or refused before it reached the
             # account's cash (backlog TJ-0657).
             out.append((f"{n['account']}: cash not counted (fx-cash v2 "
@@ -1988,8 +2025,12 @@ def render_brief(rep: Dict[str, Any]) -> str:
     elif not settled:
         # Cash of unknown cost (CA-RPT-20): no verdict below the line.
         lines.append(f"=> NOT SETTLED: below the {thr} threshold"
-                     f"{'' if complete else ' so far'}, but some cash's "
-                     f"cost is unknown — tjs fx-cash --ledger v2")
+                     f"{'' if complete else ' so far'}, but "
+                     + ("where cash in transit at the year end was held is "
+                        "open — tjs t1135 --details"
+                        if _only_transit_open(rep) else
+                        "some cash's cost is unknown — tjs fx-cash --ledger "
+                        "v2"))
     elif complete:
         lines.append(f"=> below the {thr} threshold on these books: "
                      f"no T1135 required")

@@ -1480,7 +1480,17 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "again once the opening is used up, or before the line's "
                  "date, is flagged, and so is a line whose rows never go "
                  "short without it (its purchase is in the books now: "
-                 "it still opens its units until it is deleted).",
+                 "it still opens its units until it is deleted). A "
+                 "negative <qty> declares a short sold before the data, "
+                 "its proceeds unknown: the short has its own pool, never "
+                 "netted against a long of the security, the buys that "
+                 "close it are listed for manual reporting and add no "
+                 "long. `--write-missing-history` drafts that line for a "
+                 "buy the broker codes as closing (IB code C, RBC COVER "
+                 "SHORT.) with no short held. Until the line or the short "
+                 "sale is added the buy stays booked as a new long, in the "
+                 "cost of later sales, and the run and the readiness record "
+                 "flag it (`unbacked-cover`).",
                  cont=True),
             Rule("CA-ACB-12",
                  "A loss within 30 days (settle dates) of such a sale, or "
@@ -2312,7 +2322,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "currency disposition: the value at the send date's Bank "
                  "of Canada rate minus the average cost of the US-dollar "
                  "and stablecoin pool (US dollars and stablecoins sent to "
-                 "your own wallet stay in it, with their cost). A loss is "
+                 "your own wallet stay in it, with their cost; a later "
+                 "arrival of the same coin is taken as those coins "
+                 "returning, unless you decide it new money). A loss is "
                  "treated as superficial "
                  "— the whole loss excluded, a conservative reading of "
                  "the pro-rata rule — when US dollars or stablecoins were "
@@ -2528,7 +2540,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "same way for those days, its cost in the at-any-time "
                  "maximum; when only some are counted it is named and "
                  "left out of the maximum, and the total stays settled, "
-                 "as no year-end cost depends on it."),
+                 "as no year-end cost depends on it. The base currency's "
+                 "own moves are in neither account's balance while they "
+                 "move: they are named and not counted, and the total "
+                 "stays settled, as their cost is their amount."),
             Rule("CA-RPT-16",
                  "`tjs stats` (and `tjs win-rates`, the same "
                  "trades per ticker, account or month) is a view, not a "
@@ -3201,7 +3216,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "opening "
                  "balance first, an assignment's option leg before its "
                  "stock leg, a split before the trades; basis adjustments "
-                 "last."),
+                 "last. A split takes effect at its clock stamp; a rename "
+                 "(a split to a new ticker) that its new ticker trades "
+                 "ahead of takes effect at the day's open, because the new "
+                 "ticker cannot trade before it, unless the old ticker "
+                 "also traded earlier that day: then the stamp stands and "
+                 "a warning says so."),
             Rule("US-DATE-17",
                  "Rows of ONE account at one moment that come from "
                  "different input files follow the files' name order "
@@ -3927,6 +3947,15 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "line's date, is flagged, and so is a line whose rows "
                  "never go short without it (its purchase is in the books "
                  "now: it still opens its units until it is deleted). A "
+                 "negative <qty> declares a short sold before the data, "
+                 "its proceeds unknown: the buys that close it (FIFO, the "
+                 "opening lot first) are listed for manual reporting and "
+                 "add no long. `--write-missing-history` drafts that line "
+                 "for a buy the broker codes as closing (IB code C, RBC "
+                 "COVER SHORT.) with no short held. Until the line or the "
+                 "short sale is added the buy stays booked as a new long, "
+                 "in the basis of later sales, and the run and the "
+                 "readiness record flag it (`unbacked-cover`). A "
                  "loss within 30 days "
                  "(trade dates) of such a sale, or such a sale at a loss "
                  "with a purchase in that window, is flagged for a manual "
@@ -4566,8 +4595,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "crypto_sends.tt written from earlier decisions is not "
                  "booked: `tjs run` stops until it is fixed."),
             Rule("US-SEND-02",
-                 "A gift is not a sale for the donor, so `gift` is refused "
-                 "in a US project: record it as `self`. A gift already "
+                 "A gift is not a sale for the donor, but taxjson cannot "
+                 "book a US gift yet, so `gift` is refused in a US project. "
+                 "`self` books nothing: it keeps the coins and their basis, "
+                 "and a later sale of that coin uses them "
+                 "(docs/limits.md). A gift already "
                  "saved in sends.json (carried over, copied or edited) is "
                  "never written as a sale: `crypto-sends --write` and "
                  "`tjs run` stop until it is reclassified.",

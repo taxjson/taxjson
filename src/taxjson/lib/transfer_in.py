@@ -956,13 +956,16 @@ def _tt_units_at(events: Sequence[Tuple[str, str, int, str, str, float,
     rename is a `split` of 1 that renames; `broker` an acquisition
     (sale) of the account's broker rows, its own pool; an in-kind
     move's taxable side `inkind`: a contribution takes its units out of
-    the account — the arrived units first, then the broker's, only then
-    the .tt purchases still unspent (a contributed .tt purchase covers
-    no later arrival; it never spends a purchase dated after it) —, a
+    the account — the units a broker sale can read first, only then the
+    .tt purchases still unspent (a contributed .tt purchase covers no
+    later arrival; it never spends a purchase dated after it) —, a
     withdrawal's units are in the account as an arrival's are. `other`
     (read by a broker sale alone; backlog TJ-1283): an opening balance's
-    units and a move of your own in; `broker_split`, a broker row's SPLIT,
-    adds what it makes of the units a broker sale can read."""
+    units and a move of your own in; `own_out`, a move of your own out
+    before the arrival's day, takes the units a broker sale can read and
+    no .tt purchase (backlog TJ-1327); `broker_split`, a broker row's
+    SPLIT, scales the units a broker sale can read, or moves them to the
+    symbol it renames to, and leaves the .tt purchases alone."""
     arrival_time = str(a.row.get("time") or "") if a.row else ""
 
     def before(d: str, tm: str) -> bool:
@@ -1021,21 +1024,24 @@ def _tt_units_at(events: Sequence[Tuple[str, str, int, str, str, float,
                 broker[k2] = broker.get(k2, 0.0) + v
         elif kind == "other":
             other[k2] = other.get(k2, 0.0) + v
+        elif kind == "own_out":
+            if d < a.date:
+                _take(broker, k2, _take(other, k2, _take(arrived, k2, v)))
         elif kind == "broker_split":
             if not before(d, tm):
                 continue
             tk = rk(nk)
-            units = sum(max(0.0, p.get(k2, 0.0))
-                        for p in (broker, arrived, other))
-            other[tk] = other.get(tk, 0.0) + max(
-                0.0, units * v - (units if tk == k2 else 0.0))
+            for pool in (broker, arrived, other):
+                units = pool.pop(k2, 0.0) * v
+                pool[tk] = pool.get(tk, 0.0) + units
         elif kind == "inkind":
             if not before(d, tm):
                 continue
             if v > 0:
                 arrived[k2] = arrived.get(k2, 0.0) + v
             else:
-                _take(held, k2, _take(broker, k2, _take(arrived, k2, -v)))
+                _take(held, k2, _take(broker, k2, _take(
+                    other, k2, _take(arrived, k2, -v))))
         elif kind == "split":
             if not before(d, tm):
                 continue
@@ -1058,6 +1064,8 @@ def mark_covered(found: List[Arrival],
                  in_kind: Optional[Dict[str, List[Tuple[str, str, float]]]]
                  = None,
                  own_in: Optional[Dict[str, List[Tuple[str, str, float]]]]
+                 = None,
+                 own_out: Optional[Dict[str, List[Tuple[str, str, float]]]]
                  = None) -> None:
     """Set `covered` on each arrival the receiving account's .tt rows
     already account for: the .tt acquisitions of the security dated on
@@ -1083,8 +1091,17 @@ def mark_covered(found: List[Arrival],
     cover is in the account from then on too, booked or not (backlog
     TJ-1055). `own_in`, account -> the moves of your own into it (date,
     symbol, units), and the account's opening balances: a broker sale of
-    those units spends no .tt purchase (backlog TJ-1283)."""
+    those units spends no .tt purchase (backlog TJ-1283). `own_out`, the
+    moves of your own out of it: units that left are not what a later
+    broker sale sold (backlog TJ-1327).
+
+    An opening balance replaces the account's earlier rows of its symbol
+    (CA-OPEN-03, US-OPEN-03, as lib/opening cuts the books): rows dated
+    on or before the snapshot day are not replayed, so the units count
+    once (backlog TJ-1326, TJ-1340)."""
     from taxjson.lib.core import is_opening_row
+    from taxjson.lib.corporate_timeline import split_copies
+    from taxjson.lib.opening import _final_symbol
     keyf = key or (lambda s: str(s or "").upper())
     extra: List[Tuple[str, str, int, str, str, float, str]] = []
     for n, (d, old, new) in enumerate(renames):
@@ -1109,8 +1126,14 @@ def mark_covered(found: List[Arrival],
                     and a.date <= snap.get(a.key, "")):
                 a.covered, a.covered_by = True, "tt"
         events = _tt_events(rows, keyf) + extra
+        # One split a .tt line and a broker row both report is one event
+        # (CA-CORP-12): the .tt line's, which also scales the purchases.
+        seen: set = set()
+        split_copies(rows, seen)
+        from_broker = (broker_rows or {}).get(acct) or []
+        dup = split_copies(from_broker, seen)
         for d, tm, _n, kind, k, v, nk in _tt_events(
-                (broker_rows or {}).get(acct) or [], keyf):
+                [t for t in from_broker if id(t) not in dup], keyf):
             if kind == "trade":
                 events.append((d, tm, 10 ** 6 + _n, "broker", k, v, k))
             elif kind == "split":
@@ -1119,6 +1142,21 @@ def mark_covered(found: List[Arrival],
             k = keyf(sym)
             events.append((str(d)[:10], "09:30:00", 10 ** 8 + n,
                            "inkind", k, float(q), k))
+        for n, (d, sym, q) in enumerate((own_in or {}).get(acct) or []):
+            k = keyf(sym)
+            events.append((str(d)[:10], "", -10 ** 5 + n, "other", k,
+                           float(q), k))
+        for n, (d, sym, q) in enumerate((own_out or {}).get(acct) or []):
+            k = keyf(sym)
+            events.append((str(d)[:10], "", -10 ** 4 + n, "own_out", k,
+                           float(q), k))
+        # The rows a snapshot replaces, as lib/opening cuts them from the
+        # books; the snapshot's own units follow.
+        moves = sorted((e[0], e[4], e[6]) for e in events
+                       if e[3] in ("split", "broker_split") and e[6] != e[4])
+        events = [e for e in events if not any(
+            e[0] <= day and _final_symbol(e[4], moves, day, since=e[0]) == s
+            for s, day in snap.items())]
         for n, t in enumerate(rows):
             if is_opening_row(t):
                 k = keyf(str(t.get("symbol") or ""))
@@ -1129,10 +1167,6 @@ def mark_covered(found: List[Arrival],
                 if q > 0:
                     events.append((str(t.get("date") or "")[:10], "",
                                    -10 ** 6 + n, "other", k, q, k))
-        for n, (d, sym, q) in enumerate((own_in or {}).get(acct) or []):
-            k = keyf(sym)
-            events.append((str(d)[:10], "", -10 ** 5 + n, "other", k,
-                           float(q), k))
         events.sort(key=lambda e: (e[0], e[1], e[2]))
         consumed: List[Tuple[str, str, str, float]] = []
         landed: List[Tuple[str, str, str, float]] = []

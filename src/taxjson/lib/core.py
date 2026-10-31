@@ -14,7 +14,8 @@ from datetime import datetime, timedelta
 from taxjson.lib.country import check_engine_allowed as _check_engine_allowed
 from taxjson.lib.corporate_timeline import (SplitTimeline, account_tie,
                                             event_sort_key,
-                                            normalize_symbol_new, split_seen,
+                                            normalize_symbol_new,
+                                            renames_at_open, split_seen,
                                             split_in_settle_lag,
                                             SPLIT_DATE_WINDOW_DAYS)
 from decimal import Decimal
@@ -204,6 +205,11 @@ class TaxTransaction:
     # description, so two lots that differ only by it keep two ids.
     # NOT part of compute_id, omitted from to_dict() when empty.
     lot_date: str = ''
+    # On an OPENING row: the share rows the snapshot replaced
+    # (lib/opening `_note_cut_legs`), "date qty price action" joined by
+    # ";": whether an option's delivery is among them (the premium ledger,
+    # backlog TJ-1332). NOT part of compute_id, omitted when empty.
+    opening_cut_legs: str = ''
     # The market value the broker states for a TRANSFER row (IB's
     # Transfers `Market Value`), in the row's currency: the fair market
     # value of an in-kind move between a taxable and a registered
@@ -328,7 +334,8 @@ EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
                    'commission_refunds', 'contract_size_basis',
                    'source', 'source_key',
                    'source_account', 'exercise_of', 'corp_cash', 'no_cash',
-                   'corp_parent_qty', 'lot_date', 'market_value', 'journal_pair',
+                   'corp_parent_qty', 'lot_date', 'opening_cut_legs',
+                   'market_value', 'journal_pair',
                    'event_source', 'listing_currency', 'settle_native',
                    'staking_reward', 'trade_currency', 'swap_fee')
 
@@ -1192,8 +1199,8 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
                  'security_name', 'open_close', 'broker_basis',
                  'broker_lots', 'exercise_of', 'corp_cash', 'no_cash',
                  'contract_size_basis',
-                 'lot_date', 'journal_pair', 'event_source',
-                 'listing_currency', 'settle_native',
+                 'lot_date', 'opening_cut_legs', 'journal_pair',
+                 'event_source', 'listing_currency', 'settle_native',
                  'commission_refunds', 'trade_currency', 'swap_fee'):
         if _fld not in clean_t:
             continue
@@ -2674,7 +2681,8 @@ class _AssignPremiumLedger:
     snapshot row nor a later purchase may take again (backlog
     TJ-0962) — unless its own leg dated after the snapshot is marked, or
     is a purchase at the strike the snapshot is too small to hold, which
-    then does not hold it (TJ-1167, TJ-1297)."""
+    then does not hold it, unless the snapshot replaced the delivery's
+    row (TJ-1167, TJ-1297, TJ-1332)."""
 
     def __init__(self, stream, is_leg, pairs=None):
         self._pos: Dict[int, int] = {}
@@ -2686,6 +2694,7 @@ class _AssignPremiumLedger:
         self._leg_px: Dict[int, float] = {}
         self._snap: Dict[Any, str] = {}
         self._snap_qty: Dict[Any, float] = {}
+        self._snap_cut: Dict[Any, list] = {}
         self._kept_days: Dict[Any, list] = {}
         # A stock row by its id (a paired leg dated after a snapshot,
         # _delivered_after_snapshot; TJ-1167).
@@ -2700,6 +2709,9 @@ class _AssignPremiumLedger:
                                     (t.date or '')[:10])
                 self._snap_qty[k] = (self._snap_qty.get(k, 0.0)
                                      + float(t.quantity or 0.0))
+                for leg in (t.opening_cut_legs or '').split(';'):
+                    if leg:
+                        self._snap_cut.setdefault(k, []).append(leg.split())
             elif (t.action in ('BUYSELL', 'ASSIGN')
                     and not is_option_symbol(t.symbol)):
                 self._kept_days.setdefault((t.account, t.symbol), []).append(
@@ -2773,23 +2785,58 @@ class _AssignPremiumLedger:
         shares, so the premium is theirs (TJ-1167). A marked ASSIGN leg
         is. A plain row at the option's strike is only when it is a
         purchase and the snapshot holds fewer shares than the assignment
-        delivers: a snapshot that can hold the delivery may have replaced
-        its row, and then an ordinary trade at the strike takes nothing
-        (TJ-0962, TJ-1297). Nor does a plain purchase just after it,
-        merely of the delivered size."""
+        delivers, and the snapshot did not replace the delivery's own row
+        (TJ-0962, TJ-1297, TJ-1332). Nor does a plain purchase just after
+        it, merely of the delivered size. Where the books cannot tell, a
+        plain row at the strike is an ordinary trade, and the run says
+        which row to mark (TJ-1325)."""
         snap = self._snap.get(key, '')
         size = _assign_delivery_shares(opt_tx)
-        strike = (None if (exercise_target(opt_tx) or size is None
-                           or self._direction(opt_tx) != 1
-                           or self._snap_qty.get(key, 0.0) >= size - 1e-6)
+        strike = (None if exercise_target(opt_tx) or size is None
                   else parse_option_strike(opt_tx.symbol))
+        plain = []
         for l in self._pairs.get(opt_tx.id, ()):
             leg = self._leg_row.get(l)
             if leg is None or (leg.date or '')[:10] <= snap:
                 continue
-            if leg.action == 'ASSIGN' or (
-                    strike and strike > 0
+            if leg.action == 'ASSIGN':
+                return True
+            if (strike and strike > 0
                     and abs(float(leg.price or 0.0) - strike)
+                    <= max(0.005, 1e-6 * strike)):
+                plain.append(leg)
+        if not plain or self._delivery_cut(opt_tx, key, strike):
+            return False
+        if (self._direction(opt_tx) == 1
+                and self._snap_qty.get(key, 0.0) < size - 1e-6):
+            return True
+        emit_line(
+            f"warning: ATTENTION: {opt_tx.symbol}: if the row of "
+            f"{(plain[0].date or '')[:10]} at the strike is its delivery, "
+            f"write it as ASSIGN. Exercised or assigned on "
+            f"{(opt_tx.date or '')[:10]}, on or before the opening snapshot "
+            f"of {key[1]} ({snap}): the snapshot's cost is taken to hold its "
+            f"premium, and that row to be an ordinary trade.")
+        return False
+
+    def _delivery_cut(self, opt_tx, key, strike) -> bool:
+        """Did the snapshot of `key` replace a share row of this
+        assignment: in its direction and pairing window, marked or at its
+        strike (lib/opening `_note_cut_legs`)?"""
+        day = (opt_tx.date or '')[:10]
+        d = self._direction(opt_tx)
+        size = _assign_delivery_shares(opt_tx)
+        for cday, qty, px, action in self._snap_cut.get(key, ()):
+            if size and abs(float(qty)) < size - 1e-6:
+                continue                # too few shares to be the delivery
+            gap = _day_gap(cday, day)
+            if gap is None or gap > (_ASSIGN_LEG_LEAD_DAYS if cday < day
+                                     else _MARKED_LEG_MAX_LAG_DAYS):
+                continue
+            if d is not None and (1 if float(qty) > 0 else -1) != d:
+                continue
+            if action == 'ASSIGN' or (
+                    strike and abs(float(px) - strike)
                     <= max(0.005, 1e-6 * strike)):
                 return True
         return False
@@ -3651,10 +3698,30 @@ IN_KIND_TYPES = (IN_KIND_CONTRIBUTION_TYPE, IN_KIND_DISPOSITION_TYPE,
                  IN_KIND_WITHDRAWAL_TYPE)
 
 
+def _account_premiums(p: Dict[str, Any]) -> Dict[str, Any]:
+    """A written option open in several accounts under close timing:
+    what each account's contracts hold, which a close takes
+    (_short_lot_close, CA-OPT-06), for the per-account views
+    (taxjson_split_gains._split_inventory, backlog TJ-1251). Not for a
+    recognised lot, or lots that are not the whole position."""
+    lots = p.get('grants') or []
+    if (p['qty'] >= 0 or any(l.get('rec') for l in lots)
+            or abs(sum(l['units'] for l in lots) - abs(p['qty'])) > 1e-6):
+        return {}
+    out: Dict[str, Dict[str, float]] = {}
+    for l in lots:
+        e = out.setdefault(str(l.get('account') or ''),
+                           {'units': 0.0, 'premium': 0.0})
+        e['units'] = round(e['units'] + l['units'], 10)
+        e['premium'] = round(e['premium'] + l['units'] * l['per_unit'], 6)
+    return ({'account_premiums': out}
+            if len(out) > 1 and '' not in out else {})
+
+
 def _pools_copy(pools: Dict[str, Any]) -> Dict[str, Any]:
     """The Canadian engine's pools as they stand (units, cost, currency,
-    deferred_wash), rename aliases still sharing one entry: the year-end
-    snapshot (backlog TJ-0282)."""
+    deferred_wash, each account's written premium), rename aliases still
+    sharing one entry: the year-end snapshot (backlog TJ-0282, TJ-1251)."""
     memo: Dict[int, Dict[str, Any]] = {}
     out: Dict[str, Any] = {}
     for k, p in pools.items():
@@ -3662,6 +3729,7 @@ def _pools_copy(pools: Dict[str, Any]) -> Dict[str, Any]:
         if c is None:
             c = memo[id(p)] = {f: p.get(f) for f in (
                 'qty', 'total_cost', 'currency', 'deferred_wash')}
+            c.update(_account_premiums(p))
         out[k] = c
     return out
 
@@ -3689,11 +3757,14 @@ def _ca_pool_state(pools: Dict[str, Any]):
         q = float(p['qty'])
         tc = float(p['total_cost'])
         lad = p.get('last_acq_date')
-        return (q, tc if q >= 0 else -tc,
-                float(p.get('deferred_wash', 0.0) or 0.0),
-                bool(p.get('tainted')), p.get('currency') or '',
-                p.get('position_start_date'),
-                None if lad in (None, '1970-01-01') else lad)
+        st = (q, tc if q >= 0 else -tc,
+              float(p.get('deferred_wash', 0.0) or 0.0),
+              bool(p.get('tainted')), p.get('currency') or '',
+              p.get('position_start_date'),
+              None if lad in (None, '1970-01-01') else lad)
+        # (each account's written premium: Recorder.finish, TJ-1251)
+        prem = _account_premiums(p).get('account_premiums')
+        return st + (prem,) if prem else st
     return state
 
 
@@ -3924,6 +3995,11 @@ class _MarkedShortRouter:
             # Units moved out never leave less than none: a later buy
             # is a long of the account's own (backlog TJ-1180).
             self.long[k] = max(self.long.get(k, 0.0) + q, 0.0)
+        elif t.action == 'OPENING_BALANCE' and q < 0:
+            # A short held before the data (a .tt short line, TJ-0844):
+            # never netted against the long the pool holds.
+            self.short[k] = self.short.get(k, 0.0) - q
+            return True
         elif (t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE')
                 or _is_lot_move(t) or _is_listing_journal(t)):
             # Held units that are no trade of this rule: they are the
@@ -3990,8 +4066,10 @@ def _split_crossing_marked_rows(transactions: List['TaxTransaction'],
     row's id, so its gain is the row's. `moves`: the legs of own moves
     the book no longer holds, for what each account holds (TJ-1180)."""
     router = _MarkedShortRouter()
-    if not any(t.action == 'BUYSELL'
-               and (router._opens_short(t) or 'O' in router._codes(t))
+    if not any((t.action == 'BUYSELL'
+                and (router._opens_short(t) or 'O' in router._codes(t)))
+               or (t.action == 'OPENING_BALANCE'
+                   and float(t.quantity or 0.0) < 0)
                for t in transactions):
         return transactions             # no marked short in these books
     parts: Dict[int, Tuple[Any, Any]] = {}
@@ -4767,6 +4845,7 @@ class CanadaTaxRules(TaxRules):
                           and _cev_adj_sym.get((t.account, t.corp_event_id))
                           not in (None, t.symbol)}
             _cev_stash: Dict[tuple, float] = {}
+            _cev_cut: Dict[tuple, list] = {}
             _cev_child: Dict[tuple, Dict[str, Any]] = {}
             # A native book's journals between listings (one leg books
             # the pair: _journal_units; backlog TJ-0361).
@@ -5276,16 +5355,25 @@ class CanadaTaxRules(TaxRules):
                             _mv = (pool['deferred_wash']
                                    * min(1.0, -_applied_adj / _tc_before))
                             pool['deferred_wash'] -= _mv
-                            if pool.get('wash_cut'):
-                                pool['wash_cut'] *= max(
-                                    0.0, 1.0 + _applied_adj / _tc_before)
+                            # What a return of capital took of the tally
+                            # goes along in the same share (TJ-1274).
+                            _cm = (pool.get('wash_cut', 0.0)
+                                   * min(1.0, -_applied_adj / _tc_before))
+                            if _cm:
+                                pool['wash_cut'] -= _cm
                             _cp = _cev_child.get(_ck)
                             if _cp is not None:
                                 _cp['deferred_wash'] = (
                                     _cp.get('deferred_wash', 0.0) + _mv)
+                                if _cm:
+                                    _add_wash_cut(_cp, _cm,
+                                                  pool.get('cut_late', 0.0))
                             else:
                                 _cev_stash[_ck] = (_cev_stash.get(_ck, 0.0)
                                                    + _mv)
+                                if _cm:
+                                    _cev_cut.setdefault(_ck, []).append(
+                                        (_cm, pool.get('cut_late', 0.0)))
                         if (_applied_adj < 0 and pool['qty'] > _aeps
                                 and not str(tx.id or '').startswith('WASH_')
                                 and pool.get('deferred_wash', 0.0) > 1e-9):
@@ -5319,7 +5407,14 @@ class CanadaTaxRules(TaxRules):
                             _back = min(pool['wash_cut'], max(
                                 0.0, float(pool['total_cost'])
                                 - pool.get('deferred_wash', 0.0)))
+                            # It returns none of a premium delivered since
+                            # the cut: cut_late is per unit of the cut, so
+                            # it keeps that premium's total (TJ-1333).
+                            _late = (pool.get('cut_late', 0.0)
+                                     * pool['wash_cut'])
                             pool['wash_cut'] -= _back
+                            if pool['wash_cut'] > 1e-9:
+                                pool['cut_late'] = _late / pool['wash_cut']
                             pool['deferred_wash'] = (
                                 pool.get('deferred_wash', 0.0) + _back)
                         # ITA s.40(3): return-of-capital that drives ACB
@@ -5620,6 +5715,8 @@ class CanadaTaxRules(TaxRules):
                                     pool['deferred_wash'] = (
                                         pool.get('deferred_wash', 0.0)
                                         + _mv)
+                                for _cm, _cl in _cev_cut.pop(_ck, ()):
+                                    _add_wash_cut(pool, _cm, _cl)
                             _pw = pool.pop('pending_wash', 0.0)
                             if _pw > 1e-9:
                                 # Deferred superficial-loss dollars
@@ -6040,25 +6137,16 @@ class CanadaTaxRules(TaxRules):
                     iteration_trace.append(trace_line)
 
                 # A residue under the tolerance is drained to zero — but
-                # not a position this trade OPENED that carries real
-                # cost: zeroed right after its buy, its sale found an
-                # empty pool and the cost was stranded (2026-10 audit
-                # #101; the cash-conservation fuzz). Nor one a row left
-                # as it was (a cost adjustment) or scaled whole (a
-                # consolidation into a fraction of a share: TJ-0649, the
-                # quantity was cleared, its cost stranded and the sale's
-                # gain lost), nor the rest after part of such a position
-                # is sold (TJ-1062): only a disposal of a position above
-                # the tolerance leaves a residue.
-                _opened_dust = (
-                    (abs(pool['qty']) >= abs(_pre_qty)
-                     or action == 'SPLIT'
-                     or (abs(_pre_qty) < pool_qty_eps(symbol, _pre_qty, qty)
-                         and abs(pool['qty']) > 1e-6 * abs(_pre_qty)))
-                    and not pool_is_flat(symbol, pool['qty'],
-                                         pool['total_cost']))
+                # not a position that carries real cost (MATERIAL_COST),
+                # whichever row left it: zeroed, the next sale found an
+                # empty pool, opened a short and lost the gain, its cost
+                # stranded (2026-10 audit #101; the cash-conservation
+                # fuzz; a consolidation, TJ-0649; the rest of a part
+                # sale, TJ-1062, TJ-1141).
                 if (abs(pool['qty']) < pool_qty_eps(symbol, _pre_qty, qty)
-                        and not _opened_dust):
+                        and (not pool['qty']
+                             or abs(float(pool['total_cost'] or 0.0))
+                             < MATERIAL_COST)):
                     pool['qty'] = 0.0
                     if _pre_qty > 0 and not is_other_scope:
                         # The long holding this sale closed: an s.86.1
@@ -7551,7 +7639,12 @@ class CanadaTaxRules(TaxRules):
         sum_raw = sum(g['gain'] for g in final_realized_gains)
         sum_disallowed_on_gains = sum(g['disallowed'] for g in final_realized_gains)
         sum_disallowed_on_washes = sum(w['amount'] for w in final_wash_sales)
-        if abs((sum_taxable - sum_raw) - sum_disallowed_on_gains) > 0.01:
+        # A loss denied for good by an in-kind contribution (s.40(2)(g)(iv))
+        # is in taxable_gain and is no wash sale (TJ-1316).
+        sum_denied_in_kind = sum(float(g.get('denied_contribution') or 0.0)
+                                 for g in final_realized_gains)
+        if abs((sum_taxable - sum_raw) - sum_disallowed_on_gains
+               - sum_denied_in_kind) > 0.01:
             emit_line(f"warning: gain disallowance invariant broken — "
                 f"taxable-raw={sum_taxable - sum_raw:.4f} vs gains-disallowed={sum_disallowed_on_gains:.4f}")
         if abs(sum_disallowed_on_gains - sum_disallowed_on_washes) > 0.01:
@@ -7627,28 +7720,6 @@ class CanadaTaxRules(TaxRules):
             # net debit) books a LOSS at the write; dropping it made
             # harvest charge it again in the buy-back (backlog TJ-1012).
             return {'recognised_premium': rp} if abs(rp) > 1e-9 else {}
-
-        def _account_premiums(p) -> Dict[str, Any]:
-            # A written option open in several accounts under close
-            # timing: what each account's contracts hold, which a close
-            # takes (_short_lot_close, CA-OPT-06), for the per-account
-            # views (taxjson_split_gains._split_inventory, backlog
-            # TJ-1251). Not for a recognised lot, or lots that are not
-            # the whole position.
-            lots = p.get('grants') or []
-            if (p['qty'] >= 0 or any(l.get('rec') for l in lots)
-                    or abs(sum(l['units'] for l in lots) - abs(p['qty']))
-                    > 1e-6):
-                return {}
-            out: Dict[str, Dict[str, float]] = {}
-            for l in lots:
-                e = out.setdefault(str(l.get('account') or ''),
-                                   {'units': 0.0, 'premium': 0.0})
-                e['units'] = round(e['units'] + l['units'], 10)
-                e['premium'] = round(e['premium']
-                                     + l['units'] * l['per_unit'], 6)
-            return ({'account_premiums': out}
-                    if len(out) > 1 and '' not in out else {})
 
         _ov_items = (_LO.summarize(_ov_plan, _ov_would, country='canada')
                      if _ov_plan else [])
@@ -7737,7 +7808,9 @@ class CanadaTaxRules(TaxRules):
                                 else -float(p['total_cost'])),
                  'currency': p.get('currency', ''),
                  'deferred_wash': round(
-                     float(p.get('deferred_wash', 0.0)), 4)}
+                     float(p.get('deferred_wash', 0.0)), 4),
+                 **({'account_premiums': p['account_premiums']}
+                    if p.get('account_premiums') and not _ac else {})}
                 for s, p, _ac in _pool_rows(final_year_end_pools,
                                             final_ye_short_units)
                 if not pool_is_flat(s, p['qty'], p['total_cost'])]}
@@ -7888,6 +7961,9 @@ class USATaxRules(TaxRules):
         transactions, sheltered_transactions, affiliated_transactions = \
             _by_account_name(transactions, sheltered_transactions,
                              affiliated_transactions)
+        transactions, sheltered_transactions, affiliated_transactions = \
+            renames_at_open((transactions, sheltered_transactions or [],
+                             affiliated_transactions or []))
         _disambiguate_duplicate_ids(transactions, sheltered_transactions,
                                     affiliated_transactions)
         # §1091 contemplates a narrower "related party" rule than CRA's
@@ -9880,12 +9956,39 @@ class USATaxRules(TaxRules):
                               f"bought on or after {_ent_d} are not entitled "
                               f"and keep their own basis.")
                     elif _how == 'due_bill':
-                        _note(tx.date,
-                              f"note: {_par}: the §355 spin-off on "
-                              f"{tx.date} was paid on {_n:g} shares, all "
-                              f"those held that day: the {_lq:g} bought on "
-                              f"or after its record date {_ent_d} came with "
-                              f"a due bill and share the basis.")
+                        # Older shares sold on or after the date: they may
+                        # be the ones paid on, and the books hold the same
+                        # count either way (TJ-1267, TJ-1337). Said, with
+                        # the figures of the due-bill reading.
+                        _sold = sum(
+                            e['qty'] for e in realized_gains
+                            if e.get('direction') == 'LONG' and e.get('qty')
+                            and e.get('symbol') == _par
+                            and _ikey(e.get('account'), _par) == _pkey
+                            and _ent_d <= (e.get('date') or '') <= tx.date
+                            and (e.get('acquired_date') or '') < _ent_d)
+                        if _sold > epsilon:
+                            _note(tx.date,
+                                  f"warning: ATTENTION: {_par}: the §355 "
+                                  f"spin-off on {tx.date} was paid on "
+                                  f"{_n:g} shares, as many as were held "
+                                  f"that day, but {_sold:g} held before its "
+                                  f"record date {_ent_d} were sold before "
+                                  f"it. Booked as a due bill: the {_lq:g} "
+                                  f"bought on or after the date share the "
+                                  f"basis. If the sold shares were the ones "
+                                  f"paid on, the later lot keeps its own and "
+                                  f"the basis belongs to those sales: check "
+                                  f"the company's Form 8937 and the broker's "
+                                  f"confirmation, and correct them by hand "
+                                  f"(.tt ADJUST rows).")
+                        else:
+                            _note(tx.date,
+                                  f"note: {_par}: the §355 spin-off on "
+                                  f"{tx.date} was paid on {_n:g} shares, all "
+                                  f"those held that day: the {_lq:g} bought "
+                                  f"on or after its record date {_ent_d} came "
+                                  f"with a due bill and share the basis.")
                     else:
                         _note(tx.date,
                               f"warning: ATTENTION: {_par}: the §355 "
@@ -10723,6 +10826,7 @@ class USATaxRules(TaxRules):
             option_adj_sell = _take_option_adj(tx)
             option_dw_sell = pending_option_adjustments.last_deferred
             option_tainted_sell = pending_option_adjustments.last_tainted
+            _call_said = False
             if not is_option_assign:
                 _plan_disposition(inventory_long, ikey, tx,
                                   'lot_ref', 'cost_basis')
@@ -11065,6 +11169,13 @@ class USATaxRules(TaxRules):
                     entry['own_move_from'] = [lot['moved_from']]
                 if chunk_wd_cut:
                     entry['deferred_loss_cut'] = float(chunk_wd_cut)
+                    if option_adj_sell < 0 and not _call_said:
+                        # A written call's premium in the proceeds was in
+                        # no basis: the cut does not cover it. The whole
+                        # sale's, on one row: the views add its rows up
+                        # (TJ-1272).
+                        entry['premium_after_cut'] = float(-option_adj_sell)
+                        _call_said = True
                 realized_gains.append(entry)
                 _record_sold_replacement(lot, entry, chunk_qty, tx)
 

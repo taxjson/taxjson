@@ -87,6 +87,7 @@ def build(*, run_state: Iterable[str] = (), unknown_cost: int = 0,
           no_purchase: int = 0,
           conservation: Iterable[str] = (),
           in_kind_unbooked: int = 0,
+          unbacked_cover: int = 0,
           unconsumed_premium: Iterable[str] = (),
           unsettled_compensation: Iterable[str] = ()) -> Dict[str, Any]:
     """{"complete": bool, "issues": [{"kind", "detail", "count"?}]}."""
@@ -107,6 +108,17 @@ def build(*, run_state: Iterable[str] = (), unknown_cost: int = 0,
             "detail": f"{int(no_purchase)} sale(s) with no purchase in "
                       f"the files are in no total",
             "fix": "tjs find-missing-history"})
+    if unbacked_cover:
+        # A broker-coded closing buy with no short held: the books carry
+        # it as a new long, in later costs (backlog TJ-0844).
+        issues.append({
+            "kind": "unbacked-cover", "count": int(unbacked_cover),
+            "detail": f"{int(unbacked_cover)} buy(s) the broker codes as "
+                      f"closing a short the files do not hold are booked "
+                      f"as new longs; each cover's gain or loss is in no "
+                      f"total",
+            "fix": "tjs find-missing-history --write-missing-history, "
+                   "then tjs run"})
     for ln in conservation:
         issues.append({"kind": "conservation", "detail": str(ln),
                        "fix": "tjs audit; check the account's rows "

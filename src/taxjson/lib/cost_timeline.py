@@ -25,6 +25,11 @@ A short pool beside a long (Canada: a future, or a share short the broker
 marks) is no property held, so it has no row here while the long is held.
 Its part `shorts`, a timeline of the same shape, has each account's part
 of it, per (account, symbol): `short_rows_on`.
+
+A written option open in several accounts under close timing (Canada):
+`account_premiums` has, by row number, each account's premium in the
+contracts then open, which `inventory_on` passes to the per-account views
+(backlog TJ-1251).
 """
 
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -45,7 +50,8 @@ FIELDS = ("seq", "date", "account", "symbol", "qty", "total_cost",
           "position_start_date", "last_acq_date", "renamed_to")
 
 # A pool's state: qty, total_cost, deferred_wash, unknown_cost,
-# currency, position_start_date, last_acq_date.
+# currency, position_start_date, last_acq_date (the Canadian engine may
+# add each account's written premium: `account_premiums`).
 State = Tuple[float, float, float, bool, str, Optional[str], Optional[str]]
 Label = Tuple[str, str]                 # (account, symbol)
 
@@ -124,6 +130,7 @@ class Recorder:
                 stamps[i] = cur
         from taxjson.lib.numeric import round_half_up
         rows = []
+        premiums: Dict[str, Any] = {}
         pool_last: Dict[Label, str] = {}
         for seq, lab, st, renamed in self._rows:
             if not 0 <= seq < n:
@@ -136,6 +143,8 @@ class Recorder:
             # Money to 4 places, as the gains file's inventory; the
             # quantity as the engine holds it (a coin's dust stays).
             qty, cost, dw, *rest = st
+            if len(rest) > 4:
+                premiums[str(len(rows))] = rest.pop()
             rows.append([seq, d, lab[0], lab[1], float(qty),
                          round_half_up(cost, 4), round_half_up(dw, 4),
                          *rest, renamed])
@@ -143,6 +152,8 @@ class Recorder:
                "fields": list(FIELDS), "rows": rows}
         if self.row_ids and len(self.row_ids) == n:
             doc["row_ids"] = list(self.row_ids)
+        if premiums:
+            doc["account_premiums"] = premiums
         return doc
 
 
@@ -153,6 +164,8 @@ def rows(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
     order."""
     fields = list(doc.get("fields") or FIELDS)
     out = [dict(zip(fields, r)) for r in doc.get("rows") or []]
+    for i, prem in (doc.get("account_premiums") or {}).items():
+        out[int(i)]["account_premiums"] = prem
     out.sort(key=lambda r: (str(r.get("date") or ""), int(r.get("seq")
                                                           or 0)))
     return out
@@ -235,6 +248,12 @@ def check(doc: Any) -> Optional[str]:
             ok = _FIELD_OK.get(f)
             if ok is not None and not ok(v):
                 return f"row {i}: {f} is {v!r}"
+    prem = doc.get("account_premiums")
+    if prem is not None and not (
+            isinstance(prem, dict)
+            and all(str(k).isdigit() and int(k) < len(doc["rows"])
+                    and isinstance(v, dict) for k, v in prem.items())):
+        return "its account_premiums are not by row number"
     if "shorts" in doc:
         problem = check(doc["shorts"])
         if problem:
@@ -289,7 +308,9 @@ def inventory_on(doc: Dict[str, Any], date: str,
                     "last_acq_date": r.get("last_acq_date"),
                     "deferred_wash": round(float(
                         r.get("deferred_wash") or 0.0), 4),
-                    "unknown_cost": bool(r.get("unknown_cost"))})
+                    "unknown_cost": bool(r.get("unknown_cost")),
+                    **({"account_premiums": r["account_premiums"]}
+                       if r.get("account_premiums") else {})})
     return out
 
 
