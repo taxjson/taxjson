@@ -7,11 +7,12 @@ import tempfile
 import unittest
 
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 from taxjson.lib import trade_stats as TS
 from _style import assert_legend_first, assert_styled
 from _style import project as style_project
-from test_cli_polish import _cli, _project
+from _support.cli_help_project import _cli, _project
 
 _W = {"TAXJSON_WIDTH": "100"}
 
@@ -86,7 +87,7 @@ class TestWinRatesCli(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         return json.loads(r.stdout)
 
-    @rule("CA-RPT-16")
+    @rule(R.CA_RPT_16)
     def test_same_trades_as_stats(self):
         st = json.loads(_cli("-C", str(self.root), "stats",
                              "--json").stdout)

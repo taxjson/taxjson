@@ -1,0 +1,246 @@
+{
+  "inventory": [
+    {
+      "account": "ib",
+      "blended_pool": true,
+      "currency": "CAD",
+      "deferred_wash": 117.45,
+      "last_acq_date": "2024-12-05",
+      "last_acq_settle": "2024-12-06",
+      "position_start_date": "2024-12-05",
+      "qty": 10.0,
+      "symbol": "NVDA.US",
+      "total_cost": 1941.3
+    }
+  ],
+  "inventory_year_end": [
+    {
+      "account": "ib",
+      "blended_pool": true,
+      "currency": "CAD",
+      "deferred_wash": 117.45,
+      "qty": 10.0,
+      "symbol": "NVDA.US",
+      "total_cost": 1941.3
+    }
+  ],
+  "manual_reporting_required": [],
+  "metadata": {
+    "account": "ib",
+    "blended": true,
+    "split_from": "blended taxable pass"
+  },
+  "summary": {
+    "option_buyback_loss_superficial": false,
+    "option_grant_since": 2024,
+    "option_premium_timing": "grant",
+    "tax_date_basis": "settle",
+    "total_disallowed": 117.45,
+    "total_fees_by_currency": {
+      "CAD": {
+        "options": 0.0,
+        "stocks": 6.75,
+        "total": 6.75
+      }
+    },
+    "total_gain": 132.3,
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 2,
+    "year": "2024"
+  },
+  "transactions": [
+    {
+      "account": "ib",
+      "commission": 0.0,
+      "cost": 27001.35,
+      "currency": "CAD",
+      "date": "2024-06-18",
+      "date_settle": "2024-06-20",
+      "days_held": 127,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 1.35,
+      "gain": 132.3,
+      "grant": false,
+      "id": "932d2d3e2d736e4e",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 27133.65,
+      "qty": 50.0,
+      "raw_gain": 132.3,
+      "replacement_lot_ids": [],
+      "symbol": "MSFT.US",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "ib",
+      "commission": 0.0,
+      "cost": 1999.35,
+      "currency": "CAD",
+      "date": "2024-11-20",
+      "date_settle": "2024-11-21",
+      "days_held": 133,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 117.45,
+      "fee": 1.35,
+      "gain": 0.0,
+      "grant": false,
+      "id": "e0e829d223069bc8",
+      "is_option": false,
+      "is_wash_sale": true,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 1881.9,
+      "qty": 10.0,
+      "raw_gain": -117.45,
+      "replacement_lot_ids": [
+        "4888e93357b88364"
+      ],
+      "symbol": "NVDA.US",
+      "term": null,
+      "wash_replacements": null,
+      "wash_trigger": {
+        "adjust_amount": 117.45,
+        "adjust_date": "2024-12-05",
+        "disallowed_amount": 117.45,
+        "is_full_disallowance": true,
+        "loss_raw_gain": -117.45,
+        "trigger_account": "ib",
+        "trigger_affiliated": false,
+        "trigger_date": "2024-12-05",
+        "trigger_price": 182.25,
+        "trigger_qty": 10.0,
+        "trigger_sheltered": false,
+        "trigger_tx_id": "4888e93357b88364"
+      },
+      "wash_window": {
+        "bal_at_end": 10.0,
+        "disallowed_qty": 10.0,
+        "loss_date": "2024-11-20",
+        "loss_direction": "LONG",
+        "loss_qty": 10.0,
+        "loss_settle": "2024-11-21",
+        "transactions": [
+          {
+            "acb_per_share_after": 0.0,
+            "account": "ib",
+            "action": "BUYSELL",
+            "affiliated": false,
+            "date": "2024-11-20",
+            "date_settle": "2024-11-21",
+            "days_from_loss": 0,
+            "pool_acb_after": 0.0,
+            "pool_qty_after": 0.0,
+            "price": 188.325,
+            "qty": -10.0,
+            "role": "loss_sale",
+            "running_bal": 0.0,
+            "sheltered": false,
+            "symbol": "NVDA.US",
+            "tx_id": "e0e829d223069bc8"
+          },
+          {
+            "acb_per_share_after": 194.13,
+            "account": "ib",
+            "action": "BUYSELL",
+            "affiliated": false,
+            "date": "2024-12-05",
+            "date_settle": "2024-12-06",
+            "days_from_loss": 15,
+            "pool_acb_after": 1941.3,
+            "pool_qty_after": 10.0,
+            "price": 182.25,
+            "qty": 10.0,
+            "role": "trigger",
+            "running_bal": 10.0,
+            "sheltered": false,
+            "symbol": "NVDA.US",
+            "tx_id": "4888e93357b88364"
+          }
+        ],
+        "window_end": "2024-12-21",
+        "window_start": "2024-10-22"
+      }
+    },
+    {
+      "account": "ib",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "CAD",
+      "date": "2024-03-14",
+      "date_settle": "2024-03-14",
+      "dividend": 50.625,
+      "gain": 0.0,
+      "id": "d38a45ca7cbd3e36",
+      "proceeds": 0.0,
+      "qty": 50.0,
+      "symbol": "MSFT.US",
+      "time": "09:30:00"
+    },
+    {
+      "account": "ib",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "CAD",
+      "date": "2024-06-13",
+      "date_settle": "2024-06-13",
+      "dividend": 50.625,
+      "gain": 0.0,
+      "id": "0dfa25403addbb10",
+      "proceeds": 0.0,
+      "qty": 50.0,
+      "symbol": "MSFT.US",
+      "time": "09:30:00"
+    }
+  ],
+  "wash_sales": [
+    {
+      "adjust_cmd": "ADJUST 2024-12-05 11:00:00 NVDA.US CAD 117.4500",
+      "adjusts": [
+        {
+          "account": "ib",
+          "after": "4888e93357b88364",
+          "amount": 117.45,
+          "date": "2024-12-05",
+          "date_settle": "2024-12-06",
+          "id": "WASH_e0e829d223069bc8__4888e93357b88364",
+          "symbol": "NVDA.US",
+          "time": "11:00:00"
+        }
+      ],
+      "amount": 117.45,
+      "disallow_cmd": "DISALLOW 2024-11-20 14:48:22 NVDA.US CAD 117.4500",
+      "disallowed_amount": 117.45,
+      "disallowed_qty": 10.0,
+      "loss_tx": {
+        "account": "PORTFOLIO",
+        "action": "DISALLOW",
+        "commission": 0.0,
+        "corp_election": "",
+        "corp_event_id": "",
+        "currency": "CAD",
+        "date": "2024-11-20",
+        "date_settle": "2024-11-21",
+        "description": "",
+        "fee": 0.0,
+        "gross_amount": 0.0,
+        "id": "e0e829d223069bc8",
+        "net_amount": 117.45,
+        "price": 0.0,
+        "proceeds": 0.0,
+        "quantity": 10.0,
+        "symbol": "NVDA.US",
+        "symbol_new": "",
+        "time": "14:48:22",
+        "type": ""
+      },
+      "loss_tx_id": "e0e829d223069bc8",
+      "trigger_lot_id": "4888e93357b88364"
+    }
+  ]
+}

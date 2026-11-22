@@ -1,0 +1,193 @@
+{
+  "accounts": [
+    "crypto",
+    "margin",
+    "qt"
+  ],
+  "basis": "economic P/L before any wash-sale denial",
+  "by": "symbol",
+  "currency": "USD",
+  "denied_count": 3,
+  "denied_total": 903.4,
+  "moved_in_kind": {
+    "count": 0,
+    "net_pl": 0
+  },
+  "rows": [
+    {
+      "avg_loss": -1.43,
+      "avg_win": 138.22,
+      "breakeven": 0,
+      "classes": {
+        "crypto": 3
+      },
+      "gross_losses": -1.43,
+      "gross_wins": 276.43,
+      "key": "ETH",
+      "largest_loss": -1.43,
+      "largest_win": 186.1,
+      "losses": 1,
+      "net_pl": 275.0,
+      "profit_factor": 193.3077,
+      "trades": 3,
+      "win_rate": 0.6667,
+      "wins": 2
+    },
+    {
+      "avg_loss": null,
+      "avg_win": null,
+      "breakeven": 3,
+      "classes": {
+        "crypto": 3
+      },
+      "gross_losses": 0.0,
+      "gross_wins": 0.0,
+      "key": "USDC",
+      "largest_loss": null,
+      "largest_win": null,
+      "losses": 0,
+      "net_pl": 0.0,
+      "profit_factor": null,
+      "trades": 3,
+      "win_rate": 0.0,
+      "wins": 0
+    },
+    {
+      "avg_loss": -353.0,
+      "avg_win": 199.0,
+      "breakeven": 0,
+      "classes": {
+        "long-options": 1,
+        "long-shares": 1,
+        "written-options": 1
+      },
+      "gross_losses": -706.0,
+      "gross_wins": 199.0,
+      "key": "QZQ.US",
+      "largest_loss": -402.0,
+      "largest_win": 199.0,
+      "losses": 2,
+      "net_pl": -507.0,
+      "profit_factor": 0.2819,
+      "trades": 3,
+      "win_rate": 0.3333,
+      "wins": 1
+    },
+    {
+      "avg_loss": null,
+      "avg_win": 99.0,
+      "breakeven": 0,
+      "classes": {
+        "crypto": 2
+      },
+      "gross_losses": 0.0,
+      "gross_wins": 198.0,
+      "key": "BTC",
+      "largest_loss": null,
+      "largest_win": 182.8,
+      "losses": 0,
+      "net_pl": 198.0,
+      "profit_factor": null,
+      "trades": 2,
+      "win_rate": 1.0,
+      "wins": 2
+    },
+    {
+      "avg_loss": null,
+      "avg_win": 98.0,
+      "breakeven": 0,
+      "classes": {
+        "long-shares": 1
+      },
+      "gross_losses": 0.0,
+      "gross_wins": 98.0,
+      "key": "MSFT.US",
+      "largest_loss": null,
+      "largest_win": 98.0,
+      "losses": 0,
+      "net_pl": 98.0,
+      "profit_factor": null,
+      "trades": 1,
+      "win_rate": 1.0,
+      "wins": 1
+    },
+    {
+      "avg_loss": -36.25,
+      "avg_win": null,
+      "breakeven": 0,
+      "classes": {
+        "long-options": 1
+      },
+      "gross_losses": -36.25,
+      "gross_wins": 0.0,
+      "key": "KELPQ.US",
+      "largest_loss": -36.25,
+      "largest_win": null,
+      "losses": 1,
+      "net_pl": -36.25,
+      "profit_factor": 0.0,
+      "trades": 1,
+      "win_rate": 0.0,
+      "wins": 0
+    },
+    {
+      "avg_loss": -82.0,
+      "avg_win": null,
+      "breakeven": 0,
+      "classes": {
+        "long-shares": 1
+      },
+      "gross_losses": -82.0,
+      "gross_wins": 0.0,
+      "key": "NVDA.US",
+      "largest_loss": -82.0,
+      "largest_win": null,
+      "losses": 1,
+      "net_pl": -82.0,
+      "profit_factor": 0.0,
+      "trades": 1,
+      "win_rate": 0.0,
+      "wins": 0
+    },
+    {
+      "avg_loss": -519.9,
+      "avg_win": null,
+      "breakeven": 0,
+      "classes": {
+        "long-shares": 1
+      },
+      "gross_losses": -519.9,
+      "gross_wins": 0.0,
+      "key": "SAMPA.US",
+      "largest_loss": -519.9,
+      "largest_win": null,
+      "losses": 1,
+      "net_pl": -519.9,
+      "profit_factor": 0.0,
+      "trades": 1,
+      "win_rate": 0.0,
+      "wins": 0
+    }
+  ],
+  "schema_version": 1,
+  "scope": "tax year 2024",
+  "sheltered": false,
+  "symbols": [],
+  "tainted_skipped": 0,
+  "total": {
+    "avg_loss": -224.26,
+    "avg_win": 128.57,
+    "breakeven": 3,
+    "gross_losses": -1345.58,
+    "gross_wins": 771.43,
+    "largest_loss": -519.9,
+    "largest_win": 199.0,
+    "losses": 6,
+    "net_pl": -574.15,
+    "profit_factor": 0.5733,
+    "trades": 15,
+    "win_rate": 0.4,
+    "wins": 6
+  },
+  "unmatched_symbols": []
+}

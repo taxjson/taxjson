@@ -32,8 +32,10 @@ import unittest
 from pathlib import Path
 
 from tax_rules import rule, rule_absent
-from tax_rules.dual import (SRC, cli, cli_both, gains_both, projects_both,
-                            tx)
+from tax_rules.dual import SRC, cli, cli_both, gains_both, projects_both
+from _support.filing_run_record import record_full_run
+from _support.partition_gains import _tx, _gains_doc
+from taxjson.rules import ids as R
 from _style import CapturedWidth
 
 
@@ -61,13 +63,6 @@ def _row(date_, symbol, qty, net, *, settle=None, account="margin",
     if rid:
         r["id"] = rid
     return r
-
-
-def _tx(r):
-    """The same row as a TaxTransaction (for gains_both)."""
-    return tx(r["action"], r["date"], r["symbol"], r["quantity"],
-              r["net_amount"], settle=r["date_settle"],
-              account=r["account"], currency=r["currency"])
 
 
 def _radar(taxable, as_of, country, sheltered=None):
@@ -118,10 +113,10 @@ class TestRadarRescue(unittest.TestCase):
     Canadian; a US loss with a replacement in the window is already a
     wash sale, and the radar says so without advising a sale."""
 
-    @rule("CA-PLAN-01")
-    @rule_absent("CA-PLAN-01", country="usa")
-    @rule("US-PLAN-01")
-    @rule_absent("US-PLAN-01", country="canada")
+    @rule(R.CA_PLAN_01)
+    @rule_absent(R.CA_PLAN_01, country="usa")
+    @rule(R.US_PLAN_01)
+    @rule_absent(R.US_PLAN_01, country="canada")
     def test_rescue_is_canadian_the_us_verdict_is_the_engines(self):
         r = _radar_both(RESCUE_BOOK, "2025-03-25")
         ca, us = r["canada"]["BND.US"], r["usa"]["BND.US"]
@@ -141,10 +136,10 @@ class TestRadarRescue(unittest.TestCase):
                                places=2)
         self.assertGreater(float(us_loss["disallowed_amount"]), 299.0)
 
-    @rule("CA-PLAN-01")
-    @rule_absent("CA-PLAN-01", country="usa")
-    @rule("US-PLAN-01")
-    @rule_absent("US-PLAN-01", country="canada")
+    @rule(R.CA_PLAN_01)
+    @rule_absent(R.CA_PLAN_01, country="usa")
+    @rule(R.US_PLAN_01)
+    @rule_absent(R.US_PLAN_01, country="canada")
     def test_an_ira_purchase_sold_before_day_30_still_washes(self):
         tax = [_row("2026-01-05", "XYZ.US", 100, 5000.0),
                _row("2026-09-01", "XYZ.US", -100, 4000.0)]
@@ -171,10 +166,10 @@ class TestRadarLongCall(unittest.TestCase):
 
     CALL = "XYZ261218C00050000.US"
 
-    @rule("CA-PLAN-02")
-    @rule_absent("CA-PLAN-02", country="usa")
-    @rule("US-PLAN-02")
-    @rule_absent("US-PLAN-02", country="canada")
+    @rule(R.CA_PLAN_02)
+    @rule_absent(R.CA_PLAN_02, country="usa")
+    @rule(R.US_PLAN_02)
+    @rule_absent(R.US_PLAN_02, country="canada")
     def test_long_call_country_split(self):
         book = [_row("2026-01-05", "XYZ.US", 100, 5000.0),
                 _row("2026-09-01", "XYZ.US", -100, 4000.0),
@@ -199,10 +194,10 @@ class TestRadarDateBasis(unittest.TestCase):
     """COMMANDS-05 / SPEC-07: the radar measures the window on the
     engine's own dates — settle in Canada, trade in the US."""
 
-    @rule("CA-PLAN-01")
-    @rule_absent("CA-PLAN-01", country="usa")
-    @rule("US-PLAN-01")
-    @rule_absent("US-PLAN-01", country="canada")
+    @rule(R.CA_PLAN_01)
+    @rule_absent(R.CA_PLAN_01, country="usa")
+    @rule(R.US_PLAN_01)
+    @rule_absent(R.US_PLAN_01, country="canada")
     def test_29_trade_days_31_settle_days(self):
         # Thu buy settles Fri; the Fri loss sale settles Mon.
         book = [_row("2025-01-02", "ABC.US", 100, 1000.0,
@@ -223,10 +218,10 @@ class TestRadarDateBasis(unittest.TestCase):
             g["canada"], "2025-03-07", "ABC.US")["disallowed_amount"]),
             0.0, places=2)
 
-    @rule("CA-PLAN-01")
-    @rule_absent("CA-PLAN-01", country="usa")
-    @rule("US-PLAN-01")
-    @rule_absent("US-PLAN-01", country="canada")
+    @rule(R.CA_PLAN_01)
+    @rule_absent(R.CA_PLAN_01, country="usa")
+    @rule(R.US_PLAN_01)
+    @rule_absent(R.US_PLAN_01, country="canada")
     def test_reentry_date_on_the_countrys_basis(self):
         book = [_row("2025-01-02", "ABC.US", 100, 1000.0,
                      settle="2025-01-03"),
@@ -254,10 +249,10 @@ class TestChecksFollowTheRadar(unittest.TestCase):
     ACTION (there is nothing to rescue), and buy-check names the
     country's rule."""
 
-    @rule("CA-PLAN-01")
-    @rule_absent("CA-PLAN-01", country="usa")
-    @rule("US-PLAN-01")
-    @rule_absent("US-PLAN-01", country="canada")
+    @rule(R.CA_PLAN_01)
+    @rule_absent(R.CA_PLAN_01, country="usa")
+    @rule(R.US_PLAN_01)
+    @rule_absent(R.US_PLAN_01, country="canada")
     def test_sell_check_and_buy_check(self):
         # sell-check judges against today's date: a loss sale 10 days ago
         # and a rebuy 3 days ago keep the 30-day window open whenever the
@@ -287,17 +282,13 @@ class TestChecksFollowTheRadar(unittest.TestCase):
         self.assertNotIn("superficial", buy["usa"].stdout)
 
 
-def _gains_doc(res, account="margin"):
-    return json.dumps(dict(res, metadata={"account": account}))
-
-
 class TestEdgeCases(unittest.TestCase):
     """COMMANDS-06 / SPEC-06: edge-cases explains a US project with
     §1091 — no still-held reasoning, no s.54, no Schedule 3, a long call
     as a warning only; Canada unchanged."""
 
-    @rule("CA-RPT-07")
-    @rule("US-RPT-05")
+    @rule(R.CA_RPT_07)
+    @rule(R.US_RPT_05)
     def test_edge_cases_speak_the_projects_law(self):
         call = "XYZ251219C00050000.US"
         rows = [_row("2025-01-06", "XYZ.US", 100, 5000.0),
@@ -357,8 +348,8 @@ class TestFiledLockCountry(unittest.TestCase):
     check-filed and handoff (named as the cause; no amend/refresh
     advice), and close-year records the country."""
 
-    @rule("CA-RPT-09")
-    @rule("US-RPT-06")
+    @rule(R.CA_RPT_09)
+    @rule(R.US_RPT_06)
     def test_other_countrys_lock_is_refused(self):
         other = {"canada": "usa", "usa": "canada"}
         with tempfile.TemporaryDirectory() as td:
@@ -369,6 +360,7 @@ class TestFiledLockCountry(unittest.TestCase):
                 (p[c] / "filed" / "2025.json").write_text(_lock(other[c]))
                 prior = p[c] / "prior.json"
                 prior.write_text(_lock(other[c]))
+                record_full_run(p[c])       # books a full run built (TJ-4309)
             chk = cli_both(p, "check-filed")
             ho = {c: cli(p[c], "handoff", "--prior", str(p[c] / "prior.json"))
                   for c in COUNTRIES}
@@ -384,10 +376,11 @@ class TestFiledLockCountry(unittest.TestCase):
                           ho[c].stderr)
             self.assertNotIn("problem", ho[c].stdout.lower())
 
-    @rule("CA-RPT-09")
-    @rule("US-RPT-06")
+    @rule(R.CA_RPT_09)
+    @rule(R.US_RPT_06)
     def test_close_year_records_the_country(self):
         from taxjson.bin import taxjson_filed as F
+        from taxjson.lib import filed_locks
         for c in COUNTRIES:
             with tempfile.TemporaryDirectory() as td:
                 path = F.write_snapshot(Path(td), 2025, c, "wash-adjusted",
@@ -396,8 +389,8 @@ class TestFiledLockCountry(unittest.TestCase):
                 lock = json.loads(path.read_text())
             self.assertEqual(lock["country"], c)
             settings = {"country": c}
-            self.assertIsNone(F.lock_country_problem(lock, settings, "x"))
-            self.assertIsNotNone(F.lock_country_problem(
+            self.assertIsNone(filed_locks.lock_country_problem(lock, settings, "x"))
+            self.assertIsNotNone(filed_locks.lock_country_problem(
                 dict(lock, country="usa" if c == "canada" else "canada"),
                 settings, "x"))
 
@@ -480,9 +473,9 @@ class TestFxCashRule(unittest.TestCase):
     """SPEC-16: fx-cash is s.39(1.1) (capital, $200 net exemption) in
     Canada and §988 (ordinary, no annual exemption) in the US."""
 
-    @rule("CA-FX-07")
-    @rule_absent("CA-FX-07", country="usa")
-    @rule("US-FX-03")
+    @rule(R.CA_FX_07)
+    @rule_absent(R.CA_FX_07, country="usa")
+    @rule(R.US_FX_03)
     def test_fx_cash_rule_by_country(self):
         from taxjson.bin.taxjson_fx_cash import apply_jurisdiction
         ca = apply_jurisdiction(500.0, "canada")
@@ -502,8 +495,8 @@ class TestUsEstimateAndCarryover(unittest.TestCase):
     """SPEC-17: the US estimate's assumptions and the carryover ledger,
     as tax-logic states them."""
 
-    @rule("US-RPT-04", "US-RPT-07")
-    @rule_absent("US-RPT-04", country="canada")
+    @rule(R.US_RPT_04, R.US_RPT_07)
+    @rule_absent(R.US_RPT_04, country="canada")
     def test_estimate_assumptions(self):
         with tempfile.TemporaryDirectory() as td:
             g = {"summary": {"year": "2025", "total_gain": 0.0},
@@ -521,6 +514,8 @@ class TestUsEstimateAndCarryover(unittest.TestCase):
             p = projects_both(td, year=2025, canada={"province": "ON"},
                               files={"work/margin_gains.json":
                                      json.dumps(g)})
+            for _root in p.values():
+                record_full_run(_root)
             # The assumptions in full: --details (Essentials first).
             r = cli_both(p, "estimate", "--other-income", "300000",
                          "--details")
@@ -538,7 +533,7 @@ class TestUsEstimateAndCarryover(unittest.TestCase):
                          year=2025)
         self.assertEqual(e["ordinary_offset"], 3000.0)
 
-    @rule("US-RPT-08")
+    @rule(R.US_RPT_08)
     def test_carryover_worksheet(self):
         from taxjson.bin.taxjson_carryover import build_usa_ledger
         led = build_usa_ledger({2024: {"net": -10000.0, "st": -10000.0,

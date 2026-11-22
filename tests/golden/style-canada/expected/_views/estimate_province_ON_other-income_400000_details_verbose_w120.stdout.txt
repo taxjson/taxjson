@@ -1,0 +1,160 @@
+REALIZED-GAINS SUMMARY — CAD, tax year 2024, basis: wash-adjusted
+REALIZED = NON-OPT (shares, units, futures, crypto) + OPTION; TOTAL = REALIZED + DIVIDEND + PIL.
+DIVIDEND of crypto is staking rewards: ordinary income, not dividends.
+Totals include sheltered account(s) rrsp, tfsa — not taxable events; carryover, t1135 and form-export exclude them.
+
+TAXABLE ACCOUNTS
+ACCOUNT   NON-OPT  OPTION  REALIZED  DIVIDEND   PIL    FEES     TOTAL
+---------------------------------------------------------------------
+crypto     519.97    0.00    519.97     23.56  0.00  133.87    543.53
+margin      30.38   59.40     89.78    542.75  0.00   61.40    632.53
+qt          84.65    0.00     84.65     24.30  0.00   31.68    108.95
+---------------------------------------------------------------------
+SUBTOTAL   635.00   59.40    694.40    590.61  0.00  226.95  1,285.01
+
+SHELTERED ACCOUNTS — not taxable
+ACCOUNT   NON-OPT  OPTION  REALIZED  DIVIDEND   PIL   FEES     TOTAL
+--------------------------------------------------------------------
+rrsp        94.57  175.84    270.41      0.00  0.00  38.30    270.41
+tfsa       643.45    0.00    643.45    528.00  0.00  46.48  1,171.45
+--------------------------------------------------------------------
+SUBTOTAL   738.02  175.84    913.86    528.00  0.00  84.78  1,441.86
+
+ALL ACCOUNTS — sheltered included
+ACCOUNT   NON-OPT  OPTION  REALIZED  DIVIDEND   PIL    FEES     TOTAL
+---------------------------------------------------------------------
+crypto     519.97    0.00    519.97     23.56  0.00  133.87    543.53
+margin      30.38   59.40     89.78    542.75  0.00   61.40    632.53
+qt          84.65    0.00     84.65     24.30  0.00   31.68    108.95
+rrsp        94.57  175.84    270.41      0.00  0.00   38.30    270.41
+tfsa       643.45    0.00    643.45    528.00  0.00   46.48  1,171.45
+---------------------------------------------------------------------
+TOTAL    1,373.02  235.24  1,608.26  1,118.61  0.00  311.73  2,726.87
+DIVIDEND for crypto account(s) crypto (23.56) is STAKING rewards — ordinary income, not dividends.
+
+FOR THE RETURN — taxable accounts (crypto, margin, qt), CAD (Schedule 3, tax year 2024)
+GAIN = PROCEEDS − COST(ACB) − OUTLAYS, the allowed gain; DENIED = superficial losses denied.
+The SUBTOTAL adds the account rows, RETURN each sale's cents: they can differ by a cent or two.
+SCHEDULE 3 LINE                                         PROCEEDS  COST(ACB)  OUTLAYS     GAIN  DENIED
+-----------------------------------------------------------------------------------------------------
+shares & fund units (P1) (10689/10690)                 45,461.25  45,233.03     8.03   220.19    0.00
+shares & fund units (P2) (13199/13200)                 31,313.38  31,399.22    19.33  -105.17  943.13
+options, crypto & other properties (P2) (15199/15300)  15,356.25  14,713.76    63.13   579.36    0.00
+-----------------------------------------------------------------------------------------------------
+RETURN                                                 92,130.88  91,346.01    90.49   694.38  943.13
+
+- PROCEEDS − COST(ACB) − OUTLAYS = GAIN, the allowed gain. A short sale shows what it brought in, net of its opening
+  commission, as PROCEEDS and the cover as ACB; the commissions of other sales are outlays, as on the form.
+- Where a superficial loss was DENIED (943.13 in all) the ACB is REDUCED by it, so the gain stays the allowed one; a
+  deferred denial is added to the ACB of the replacement property, but one caused by a registered-account acquisition is
+  lost for good, and one caused by an affiliated person's acquisition is permanent for this return (that person adds it
+  to their own ACB, s.53(1)(f)) — no ACB addition here (101.93 of the DENIED total).
+- Rows are rounded to the cent, as filed: the gains files' unrounded total gain is 694.39 (-0.01 on the RETURN row).
+- FX on foreign cash: NOT RELIABLE for 2024 — 8 in-year overdrafts (66,271.83 USD); conversions, deposits/withdrawals
+  and margin balances are not read; do not file this figure (line 15300; `tjs fx-cash` shows the raw ledger, and the
+  opt-in ledger v2 reads the missing cash events).
+- Capital gains on T3 (box 21) and T5/T5013 (box 18) slips are not in the rows above — Schedule 3 lines 17600 and 17400,
+  entered from the slips (the books carry those distributions as dividends).
+- Per-security rows: `tjs form-export`; per account: `tjs sum --json`.
+
+TAX ESTIMATE — canada/ON, rates vintage 2024
+ESTIMATE ONLY, not filing numbers; taxable accounts only.
+
+  Other income                      400,000.00
+  Capital gains (taxable)               347.19  [694.38 realized - 0.00 other losses, x50%]
+  Eligible dividends (grossed)           69.00  [50.00 x1.38, Canadian issuers, trust distributions included]
+  Foreign dividends                     517.05  [FTC 26.93 — TAX rows 23.28 + 3.65 assumed (15% of the foreign dividends
+                                                of accounts with no TAX row), capped at 15% of each security's foreign
+                                                divs]
+  Payments in lieu                        0.00
+  Crypto staking (ordinary)              23.56  [no withholding, no FTC]
+
+  Tax with investments              172,143.44  federal 105,870.82 + ON 66,272.62
+  Tax on other income alone         171,675.47
+  => ESTIMATED TAX ON INVESTMENT INCOME: 467.97 CAD  (36.4% of 1,284.99)
+  Net capital losses carried in: 0.00 — no close-year lock before 2024 and none entered: see `tjs carryover`
+
+  AMT CHECK — post-2024 minimum tax (20.5% over 173,205.00 exemption)
+  Adjusted taxable income           401,284.99
+  Federal minimum tax                45,667.76
+  Federal regular tax               105,870.82
+  => does not bind                   60,203.05  [headroom]
+  AMT recomputes with capital gains at 100% (vs 50%) and the dividend tax credit denied; on these numbers regular tax
+  still exceeds the minimum, so no top-up is owed.
+
+  CALCULATION TRACE — BASE (other income only) vs WITH investments
+  Taxable income: BASE 400,000.00 | WITH 400,956.80 = 400,023.56 ordinary (after deductions) + 347.19 taxable gains +
+    69.00 grossed dividends + 517.05 foreign
+  FEDERAL                                       BASE          WITH
+    0-55,867 @ 15.00%                       8,380.05      8,380.05
+    55,867-111,733 @ 20.50%                11,452.53     11,452.53
+    111,733-173,205 @ 26.00%               15,982.72     15,982.72
+    173,205-246,752 @ 29.00%               21,328.63     21,328.63
+    246,752-400,957 @ 33.00%               50,571.84     50,887.58
+    BPA credit (15,705 max @ 15%)          -2,123.40     -2,123.40
+    DTC 15.0198% x 69.00                        0.00        -10.36
+    FTC rows+assumed, max 15% x 517.05          0.00        -26.93
+    = FEDERAL                             105,592.37    105,870.82
+  ON
+    0-51,446 @ 5.05%                        2,598.02      2,598.02
+    51,446-102,894 @ 9.15%                  4,707.49      4,707.49
+    102,894-150,000 @ 11.16%                5,257.03      5,257.03
+    150,000-220,000 @ 12.16%                8,512.00      8,512.00
+    220,000-400,957 @ 13.16%               23,688.00     23,813.91
+    BPA credit (12,399 @ 5.05%)              -626.15       -626.15
+    = basic tax                            44,136.40     44,262.31
+    surtax 20% of basic over 5,554          7,716.48      7,741.66
+    surtax 36% of basic over 7,108         13,330.22     13,375.55
+    DTC 10.00% x 69.00                          0.00         -6.90
+    Ontario Health Premium                    900.00        900.00
+    = ON                                   66,083.10     66,272.62
+    TOTAL                                 171,675.47    172,143.44
+    => WITH - BASE = 467.97 estimated tax on investment income
+
+  INSTALMENTS — prior-year option (Mar/Jun/Sep/Dec 15)
+  Required this year                  5,200.00
+  Paid to date                        1,150.00
+  Net instalment interest               211.31
+  => instalments behind               4,050.00  [due with the balance April 30; tjs instalments]
+
+  - Included in the ON figure — ON surtax (20% over 5,554 + 36% over 7,108 of basic ON tax): 21,117.21 with investments,
+    21,046.70 on other income alone; Ontario Health Premium: 900.00 with investments, 900.00 on other income alone (max
+    900.00 over 200,600 taxable).
+  - Federal BPA phased down by net income: 14,156.00 with investments, 14,156.00 on other income alone (full 15,705 up
+    to 173,205, 14,156 from 246,752).
+  - Foreign tax not credited: the 0.01 withheld above 15% of each security's foreign dividends (MSFT.US 0.01; ITA
+    s.20(11)) may be deductible on line 23200 (form T2209); the estimate does not deduct it: a deduction you claim goes
+    in [estimate] deductions.
+  - If you paid minimum tax (AMT) in any of the 7 preceding years, its carryover (T691 Part 8, line 40427; ITA s.120.2)
+    can reduce federal tax by up to 60,203.05 (basic federal tax less the minimum amount, s.120.2(1)(b)), plus the ON
+    share — none is entered: put it in taxjson.toml's [estimate] amt_carryover = { YEAR = AMOUNT } (by year of origin,
+    from your notice of assessment or T691), or close last year with `tjs close-year` so this year reads it from the
+    lock.
+  - Crypto staking rewards (23.56) are taxed as ordinary income — no withholding, no foreign tax credit.
+  Assumes:
+  - Canadian issuers' dividends are all ELIGIBLE (non-eligible dividends would be taxed higher) — a Canadian trust's
+    distribution (ETF, REIT or fund units) is grossed up as an eligible dividend too (its T3 split into eligible
+    dividends, other income, capital gains and return of capital is not in the export; the T3 decides) — except the T5
+    box 18 capital-gains dividends named in [[capital_gains_dividends]] (taxed as capital gains)
+  - foreign withholding creditable up to 15% of each security's foreign dividends (its TAX rows paired with its
+    dividends by symbol, across the taxable accounts; a TAX row that names no security, or one with no foreign dividend
+    in the year, up to 15% of its account's foreign cash dividends that none of its TAX rows names, within each
+    security's 15% that its paired withholding leaves) and up to the Canadian tax on their share of net income (forms
+    T2209 and T2036, all foreign dividends as one country's and all foreign tax as non-business income tax)
+  - foreign tax that neither credit takes, and withholding above 15% of a security's dividends, is not deducted (either
+    may be deductible on line 23200, ITA s.20(12) and s.20(11), in a minimum-tax year too: a deduction you claim goes in
+    [estimate] deductions)
+  - crypto staking is ordinary income
+  - no QC abatement or low-income reductions
+  - interest income and interest paid are not included — each account's .sum shows interest earned ('CASH INTEREST') and
+    interest charged ('INTEREST PAID') per currency, so take interest income from there (or the T5) and the margin
+    interest paid to line 22100 (--carrying-charges)
+  - FX gains/losses on foreign cash (s.39(1.1), line 15300 — `tjs fx-cash`), T3 box 21 capital gains and T5 box 18
+    amounts not named in [[capital_gains_dividends]] are not included
+  - deductions below line 15000 only as entered (--deductions, --carrying-charges)
+  - a prior-year minimum tax carryover only as entered ([estimate] amt_carryover) or carried by last year's close-year
+    lock
+  - the basic personal amount is the only non-refundable credit (no CPP/EI, Canada employment, age, pension or donation
+    credits)
+  - no OAS recovery tax
+  - the AMT sees only these books and other income (no stock-option deduction add-back or donated securities)

@@ -12,8 +12,10 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+import _paths
+from _support.filing_positions_reports import _IB_STATEMENT, _RBC_HOLD, _write
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 EX = REPO_ROOT / "examples"
 FIX = REPO_ROOT / "tests" / "fixtures"
 
@@ -34,52 +36,10 @@ def setUpModule():
 def tearDownModule():
     _WIDTH.stop()
 
-_IB_HEAD = (
-    "Statement,Header,Field Name,Field Value\n"
-    "Statement,Data,BrokerName,Interactive Brokers Canada Inc.\n"
-    "Statement,Data,Title,Activity Statement\n"
-    'Statement,Data,Period,"January 1, 2025 - December 31, 2025"\n'
-    "Account Information,Header,Field Name,Field Value\n"
-    "Account Information,Data,Account,U5550001\n"  # pii-ok
-)
-_OP_H = ("Open Positions,Header,DataDiscriminator,Asset Category,Currency,"
-         "Symbol,Quantity,Mult,Cost Price,Cost Basis,Close Price,Value,"
-         "Unrealized P/L,Code\n")
-_IB_POS = (
-    _OP_H
-    + "Open Positions,Data,Summary,Stocks,CAD,ZZA,100,1,10.5,1050,12,"
-      "1200,150,\n"
-    + "Open Positions,Data,Summary,Stocks,USD,ZZB,-20,1,30,-600,25,"
-      "-500,100,\n"
-    + "Open Positions,Total,,Stocks,CAD,,,,,1050,,1200,150,\n"
-    + _OP_H
-    + "Open Positions,Data,Summary,Equity and Index Options,USD,"
-      '"ZZB 16JAN26 30 C",2,100,1.5,300,1,200,-100,\n'
-    + "Open Positions,Data,Lot,Stocks,CAD,ZZA,100,1,10.5,1050,12,1200,"
-      "150,\n"
-    + "Open Positions,Total,,Equity and Index Options,USD,,,,,300,,200,"
-      "-100,\n"
-)
-_IB_STATEMENT = _IB_HEAD + _IB_POS + (
-    "Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,"
-    "Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,"
-    "Realized P/L,MTM P/L,Code\n"
-    'Trades,Data,Order,Stocks,CAD,ZZA,"2025-02-12, 09:35:14",100,10.50,'
-    "10.50,-1050.00,0,1050.00,0,0,O\n")
 _IB_CONSOLIDATED = _IB_STATEMENT.replace(
     "Account Information,Data,Account,U5550001\n",  # pii-ok
     "Account Information,Data,Account,U5550001\n"  # pii-ok
     'Account Information,Data,Accounts Included,"U5550001, U5550002"\n'  # pii-ok
-)
-_RBC_HOLD = (
-    "Holdings Export as of Jan 5, 2026 at 9:00:28 am ET\n\n"
-    '"Account","Product","Symbol","Name","Quantity","Currency",'
-    '"Last Price","Total Book Cost","Total Market Value"\n'
-    '"55500001","Equities","ZZR","ZZR CORP","10","CAD","6.00",'  # pii-ok
-    '"$50.00","60.00"\n'
-    '"55500001","Equities","ZZU","ZZU INC","5","USD","20.00",'  # pii-ok
-    '"80.00","100.00"\n'
-    '"55500001","Cash","","CASH","","CAD","","",""\n'  # pii-ok
 )
 _RBC_HOLD_CAD_COST = _RBC_HOLD.replace('"Total Book Cost"',
                                        '"Book Value (CAD)"')
@@ -99,12 +59,6 @@ _TOML = (
     '[[holding]]\nsymbol = "ZZL.US"\nquantity = 2\ncurrency = "USD"\n'
     'total_cost = 40.0\nacquired = 2021-06-01\n\n'
     '[[holding]]\nsymbol = "CAD"\nquantity = 500\nasset_type = "cash"\n')
-
-
-def _write(td, name, text, encoding="utf-8"):
-    p = Path(td) / name
-    p.write_bytes(text.encode(encoding))
-    return p
 
 
 class TestIbOpenPositions(unittest.TestCase):
@@ -326,14 +280,19 @@ class TestDetectionMatrix(unittest.TestCase):
                     self.assertEqual(P.detect_positions(p), kind)
 
     def test_trade_exports_are_never_positions_only(self):
+        # An IB activity statement that carries an Open Positions section is
+        # a trade export AND a positions source (the test below): it is never
+        # positions-only, and its positions kind is that section's.
         for broker, label, text in _trade_samples():
             with tempfile.TemporaryDirectory() as td:
                 p = _write(td, "export.csv", text)
+                has_positions = "Open Positions,Header" in text
                 with self.subTest(sample=label):
                     self.assertIsNone(P.positions_only(p))
-                    self.assertIsNone(P.detect_positions(p))
+                    self.assertEqual(P.detect_positions(p),
+                                     "ib_open_positions" if has_positions else None)
                     self.assertEqual(D.detect(p).broker, broker)
-                    self.assertEqual(D.detect(p).positions, "")
+                    self.assertEqual(D.detect(p).positions, "")     # a trade export
 
     def test_ib_statement_with_positions_is_activity_and_positions(self):
         with tempfile.TemporaryDirectory() as td:
@@ -409,7 +368,7 @@ class TestRunSkipsPositionsReports(unittest.TestCase):
             (d / "a.tt").write_text(self._TT)
             (d / "holdings_55500001.csv").write_text(_RBC_HOLD)  # pii-ok
             for args in (("run", "--no-input"),
-                         ("run", "--fast", "--no-input")):
+                         ("run", "--no-input")):
                 r = _cli(*args, root=root)
                 with self.subTest(args=args):
                     self.assertEqual(r.returncode, 0, r.stderr[-2000:])

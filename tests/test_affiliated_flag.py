@@ -10,8 +10,12 @@ cases — but the basis bump lands on different property.
 
 import unittest
 
-from taxjson.lib.core import CanadaTaxRules, TaxTransaction, USATaxRules
+from taxjson.engine.ca.taxrules import CanadaTaxRules
+from taxjson.engine.us.taxrules import USATaxRules
+from taxjson.model.transaction import TaxTransaction
 from tax_rules import rule
+from taxjson.rules import ids as R
+from _support.engine_rules import assert_rule
 
 
 class TestAffiliatedFlagCanada(unittest.TestCase):
@@ -54,7 +58,7 @@ class TestAffiliatedFlagCanada(unittest.TestCase):
                                    "user's ACB — gain stays at qty × "
                                    "(price − own_avg_cost).")
 
-    @rule("CA-SL-04")
+    @rule(R.CA_SL_04, R.CA_SL_09)
     def test_spouse_buy_triggers_wash_sale(self):
         rules = CanadaTaxRules()
         taxable = [
@@ -75,6 +79,13 @@ class TestAffiliatedFlagCanada(unittest.TestCase):
         # Loss should be disallowed.
         loss = next(g for g in result['transactions'] if g.get('is_wash_sale'))
         self.assertAlmostEqual(loss['disallowed_amount'], 2000.0, places=2)
+        # The spouse's purchase takes the addition, the acquirer's
+        # (s.53(1)(f)): CA-SL-09's record, as a registered account's is;
+        # CA-SL-04 is the scope (their trades count when given) and names
+        # no record (the owner's ruling on TJ-4153, question 2).
+        sale, spouse = taxable[1].id, affiliated[0].id
+        assert_rule(self, result, sale, R.CA_SL_01, record=sale)
+        assert_rule(self, result, sale, R.CA_SL_09, record=f"WASH_{sale}__{spouse}")
 
     def test_wash_trigger_marks_trigger_affiliated(self):
         """The wash_trigger record carries trigger_affiliated=True so the
@@ -123,7 +134,7 @@ class TestAffiliatedFlagCanada(unittest.TestCase):
         self.assertTrue(spouse_row['affiliated'])
         self.assertFalse(spouse_row['sheltered'])
 
-    @rule("CA-SL-04")
+    @rule(R.CA_SL_04)
     def test_omitting_affiliated_is_no_op(self):
         """Confirm the flag is purely additive — omitting it changes
         nothing compared to baseline."""
@@ -181,6 +192,7 @@ class TestAffiliatedFlagUSA(unittest.TestCase):
     """US engine accepts affiliated_transactions too. Their buys/sells
     appear in the wash replacements list with is_affiliated=True."""
 
+    @rule(R.US_WASH_16)
     def test_us_long_wash_with_affiliated_replacement(self):
         rules = USATaxRules()
         taxable = [
@@ -203,6 +215,8 @@ class TestAffiliatedFlagUSA(unittest.TestCase):
         self.assertTrue(rep['is_affiliated'])
         self.assertFalse(rep['is_sheltered'])
         self.assertEqual(rep['account'], 'Spouse')
+        # Its record names the related person's rule (PLAN step 11).
+        assert_rule(self, result, loss['id'], R.US_WASH_16, record=affiliated[0].id)
 
 
 if __name__ == '__main__':

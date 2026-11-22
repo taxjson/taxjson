@@ -20,8 +20,8 @@ another country's command in a project is refused with the reason.
 
 Contents:
 
-- [Everyday workflow (`tjs run`)](#everyday-workflow-taxjson-run)
-- [The workflow, step by step (`tjs checklist`)](#the-workflow-step-by-step-taxjson-checklist)
+- [Everyday workflow (`tjs run`)](#everyday-workflow-tjs-run)
+- [The workflow, step by step (`tjs checklist`)](#the-workflow-step-by-step-tjs-checklist)
 - [Set up](#set-up)
 - [Build the books](#build-the-books)
 - [Summaries](#summaries)
@@ -80,7 +80,6 @@ Then, whenever you add new statements:
 
 ```bash
 tjs run             # full pipeline, full rebuild: never serves stale data
-tjs run --fast      # incremental: stages whose inputs are unchanged are skipped
 cat reports/margin.sum  # the per-account report
 ```
 
@@ -117,8 +116,22 @@ machines), resolve each with `tjs elect <account> --set
 | 141 | the reader of stdout went away (`tjs trades \| head`) |
 
 Every `taxjson` command and `taxjson-*` tool reports an unreadable input
-in one line, never a Python traceback. Only one `tjs run` runs in a
-project at a time (`work/.run.lock`); a second one refuses.
+in one line, never a Python traceback. Started with stdout or stderr
+closed (`>&-`, `2>&-`), it runs as with `>/dev/null`. With stdout a full
+disk or device (`>/dev/full`) it runs to its end, then says `cannot
+write the output: No space left on device` in one line: exit 2, or the
+command's own exit when that is not 0 (an error, a finding). With
+stderr full its messages are lost and it keeps its own exit. Only one
+`tjs run` runs in a project at a time (`work/.run.lock`); a second one
+refuses.
+
+**What a release keeps.** From 1.0.0 the commands and their flags, the
+`--json` shapes, these exit codes and the files listed in
+[upgrading.md](upgrading.md#what-100-keeps) ("What 1.0.0 keeps") are
+kept; one that has to change is listed there, with what to do. A
+command's text is for people and may change in any release
+([output-style.md](output-style.md#what-a-release-keeps)), and `work/`
+is internal: a script reads `--json` or those files.
 
 What a run writes:
 
@@ -632,6 +645,12 @@ with none installed it prints one install line, exit 2). The taxjson-fetch plugi
 REST API and the IBKR Flex Web Service. The installer installs it by
 default (`--without-fetch` leaves it out); from a checkout, `pip install
 --no-deps -e packages/taxjson-fetch` after the core; it is not on PyPI.
+It is released with the core and runs only at the core's own version:
+another version (one of the two upgraded alone) is never loaded. `tjs
+fetch --list` names it as not loaded, with why (`--json`: `not_loaded`),
+and a fetch it would have to serve (an account no loaded fetcher
+serves, `--fetcher` naming it) refuses in one line naming the upgrade,
+exit 2.
 Each account is configured with `brokerage` plus `account` / `query_id`
 under `[accounts.<name>]`. It writes files the existing parsers already
 read; hand-exported CSVs keep working side by side.
@@ -642,6 +661,17 @@ next, capped at today); `--year N` backfills a past year, `--from` /
 `--days` override the window. IBKR re-covers the Flex query's configured
 period. `--trim-overlap` drops rows your manual Questrade exports
 already cover (originals kept as `.bak`), `--dry-run` previews.
+A Questrade activity that comes back with its Symbol blank is the same
+activity as its named copy (equal in every other cell), not a new row:
+the named copy is kept. A file that holds both, written before this was
+so, is repaired by the next fetch that downloads the trade again: the
+download's count of the trade decides how many blank rows stay, a named
+row is never dropped, and the same download fetched again changes
+nothing. The fetch names the rows it dropped (the first three, then a
+count) and keeps the file as it was beside it as `<name>.bak` (`--json`:
+`dropped`; `symbol_filled` counts blank rows replaced by a named copy in
+a file that named no symbol for the trade). A trade the download does
+not hold is left as it is.
 Credentials: `--refresh-token` (Questrade) and `--flex-token` (IBKR, else
 `$IBKR_FLEX_TOKEN`). `--positions` also snapshots live Questrade holdings
 to the year's holdings folder as `holdings/<account>_live_holdings.toml`,
@@ -813,24 +843,15 @@ refused (Canada only for now). See [settings.md](settings.md#tobasemap).
 
 #### tjs run
 
-`tjs run [--fast] [--account NAME] [--strict] [--no-input] [--details]`
+`tjs run [--account NAME] [--strict] [--no-input] [--details]`
 
-Run the full pipeline, rebuilding every stage: the recommended everyday
-command, so results always reflect the current inputs, config and code.
+Run the full pipeline, rebuilding every stage, every run, so results always
+reflect the current inputs, config and code.
 What it does and writes is in
-[Everyday workflow](#everyday-workflow-taxjson-run) above. The run ends
+[Everyday workflow](#everyday-workflow-tjs-run) above. The run ends
 with the broker positions cross-check (`tjs sanity`) when the
 project has holdings files.
 
-- `--fast`: an incremental run. Cached stages whose inputs,
-  `taxjson.toml` and installed code are all unchanged are skipped. Input
-  files and the project-root map files are compared by content (size +
-  SHA-256), so a corrected export copied over with an older mtime
-  (`cp -p`, `rsync -a`, unzip) still rebuilds; taxjson's own code and its
-  shipped market data (`data/markets.toml`) are compared by content too
-  (a change since the last complete run rebuilds everything); the rest of
-  the cache is mtime-based. `--fast` trades that safety net's edge cases
-  for speed.
 - `--account NAME`: re-run a single account. It skips the cross-account
   wash-sale and cross-listing detection, which need a full run.
 - A full run ends with the checks a complete book allows, each a
@@ -848,7 +869,7 @@ project has holdings files.
   `taxjson.toml`, and filed-year drift. Recommended for CI and cron.
 - `--no-input`: never prompt. Unresolved elections are written to
   `work/pending_elections.json` and the run exits 3 (see
-  [Headless runs](#everyday-workflow-taxjson-run)).
+  [Headless runs](#everyday-workflow-tjs-run)).
 
 Commands chain in one invocation, each with its own flags: `tjs run
 sum`, `tjs run close-year check-filed`. A chained `--json` command's
@@ -1128,7 +1149,10 @@ last payments fall on; a special beside a regular payment or a stretch
 the position was not held does not break it; no grid, or a single
 payment, is flagged and estimated pro rata from its 12-month amount per
 share; a reversal posted later nets against the payment it cancels, and
-a row with no share count takes the account's nearest one; a payment
+a row with no share count takes the account's nearest one, except one
+the broker's statements show no count for (an Interactive Brokers row
+its accrual does not pay: `no_share_count` in `tjs divs --json`), which
+is left out of the per-share figures with a line saying so; a payment
 before a stock split is read in today's shares, whatever `--date`; a
 dividend on part of the shares beside a payment in lieu on the lent
 rest is one payment on all of them; a dividend charged on a short
@@ -1313,7 +1337,18 @@ capital loss three ways: `losses_unused`, the figure before any
 carry-back; `losses_carried_back`, the part `[carryover] claimed`
 under the 3 earlier years carries back (T1A, as `tjs carryover`
 folds it; 0 when none); and `losses_carried_forward`, `losses_unused`
-less it, the "Unused capital losses … (carry forward)" figure.
+less it, the "Unused capital losses … (carry forward)" figure. When a
+claim needs the carryover ledger and `tjs carryover` fails or left a
+taxable account's book out, the estimate warns, says the carry-forward
+is unknown and leaves those last two out, with `carry_back_unknown` saying
+why: `tjs close-year` then stops. When the year has a split and the ledger
+left sales with an unknown cost out after the last locked year, up to this
+one, the split can change: the line and a warning say so, the figures stay,
+`--json` adds `carry_back_incomplete` (`years`, `sales`, `undated` for a sale
+with no year), and `tjs close-year` stops unless `--force`. These figures are the
+books'. When the year's own lock records a return filed with another tool that
+differs, `Locked for YEAR` and `--json`'s `locked_split` (`carried_back`,
+`carried_forward`) say what the lock holds.
 
 Rate tables live in `src/taxjson/lib/tax_estimate.py` with a printed
 vintage: they need an annual refresh, and the output says so.
@@ -1348,6 +1383,21 @@ base currency. `--events` gives the per-disposal detail, `--json`
 the machine form. It changes NO other number. Set `fx_cash_gains = true`
 under `[settings]` to also print it (and write `reports/fx_cash.rpt`) at
 the end of every run; off by default.
+
+The ledger v2 reads the cash events the last `tjs run` recorded when it
+parsed the exports (`work/<account>_<broker>.cash`), not the exports
+themselves: after any input change it needs a full `tjs run` first. So
+that no figure comes from inputs newer than the books, every command
+that reads the cash events (`cash`, `fx-cash --ledger v2`, `t1135`,
+`sum` with the ledger v2, the checklist's ledger v2 line) refuses: a change to
+an export, a `.tt` file, taxjson.toml or ticker.map since the last full
+`tjs run` says "the books in work/ are older than the inputs (changed:
+...)" (books another taxjson built: "the books in work/ were built by
+another taxjson") and "Run `tjs run` first."; a parse with no record of
+the cash events says "no cash events recorded for the <broker> exports
+of taxable account '<account>' (work/<account>_<broker>.cash) — run
+`tjs run` first" (exit 1). No switch reads the exports instead
+([troubleshooting](troubleshooting.md#the-books-in-work-are-older-than-the-inputs-from-tjs-cash-or-fx-cash-no-cash-events-recorded-from-tjs-t1135-or-tjs-sum)).
 
 #### tjs instalments
 
@@ -1490,6 +1540,14 @@ A view, never a filing number.
 
 `tjs sum [ACCOUNT] [--other-income AMT] [--other-losses AMT] [--long-term-losses AMT] [--deductions AMT] [--carrying-charges AMT] [--province P] [--verbose] [--json] [--details]`
 
+`tjs sum` (and `tjs estimate`, which it feeds) refuses books a full `tjs
+run` did not build from the inputs as they are now, as the filing
+commands do (exit 1, nothing printed): an input changed since the last
+full run, a `tjs run --account`, a run that stopped or failed since,
+books another taxjson built, and, with the FX-on-cash ledger v2, the
+cash events of that run missing. Run `tjs run` first. `tjs amt` and `tjs
+instalments` build on the estimate and stop with it.
+
 Cross-account realized-gains tables for the tax year in the base
 currency, one row per account (NON-OPT / OPTION / REALIZED / DIVIDEND /
 PIL / FEES / TOTAL). It takes no period by design: it reports the tax
@@ -1550,7 +1608,9 @@ accounts:
   a denied loss REDUCES the ACB shown so proceeds − ACB − outlays is the
   allowed gain, the denial going onto the replacement's ACB. Plus the
   FX-on-cash line for line 15300 (NOT RELIABLE from the default ledger;
-  the opt-in ledger v2's figure, or why it did not compute).
+  the opt-in ledger v2's figure, or why it did not compute; with inputs
+  changed since the last `tjs run`, "FX-on-cash (line 15300) estimate
+  omitted" and the reason, until `tjs run`).
 - **USA**: Form 8949's own Part I / II (d) proceeds, (e) cost, (g)
   adjustment, (h) gain (from 2025 the crypto accounts' digital-asset
   boxes G/H/I and J/K/L on rows of their own).
@@ -1751,8 +1811,11 @@ ledger reconciles them. A line of a book other than the one a new
 `at=`, a file's `CASHBOOK` book, one of several broker books) ends with
 its `at=<book>`, so a copy stays in that book. The totals are per
 currency (deposits, withdrawals, fees paid, other credits) and per
-currency pair (converted). It needs a run
-(the account books name each file's broker account) and reads nothing
+currency pair (converted). It needs a run: it lists the cash events the
+last `tjs run` recorded when it parsed the exports
+(`work/<account>_<broker>.cash`; the account books name each file's
+broker account), and refuses when the inputs changed since, as
+`tjs fx-cash --ledger v2` does ([above](#tjs-fx-cash)). It reads nothing
 for a sheltered account. `--json`: `rows` (each event with its `tt`
 line), `totals` (`deposits`, `withdrawals`, `converted`, `fees`,
 `credits`), `problems`.
@@ -2565,7 +2628,10 @@ run` to rebuild them.
 `tjs form-export [--form 8949|schedule3|txf] [--box A|B|C] [--out FILE] [--csv FILE] [--json] [--details]`
 
 Renders the year's computed gains in the shape the forms want, so filing
-day is transcription rather than arithmetic. The form follows the
+day is transcription rather than arithmetic. Books older than the inputs
+(an input changed since the last full `tjs run`, or a `tjs run --account`
+since it that left the pass across your accounts behind) are refused,
+exit 1: run `tjs run` first. The form follows the
 project country (`--form 8949` in a US project, `--form schedule3` in a
 Canadian one; the other country's form is refused). `--csv FILE` also
 writes importable rows, `--json` the raw report. A US project can also
@@ -2664,6 +2730,15 @@ carries the same `readiness` record as `tjs sum --json`.
 
 `tjs t1135 [--json] [--details]` (Canada)
 
+The T1135 test is a filing figure: like `close-year`, `check-filed` and
+`form-export`, `tjs t1135` refuses books a full `tjs run` did not build
+from the inputs as they are now (exit 1, nothing printed): an input
+changed since the last full run ("the books in work/ are older than the
+inputs (changed: ...)"), a `tjs run --account`, a run that stopped or
+failed since ("no full `tjs run` recorded what the books in work/ were
+built from"), books another taxjson built, and, where it counts cash held
+outside Canada, the cash events of that run missing. Run `tjs run` first.
+
 A helper for CRA **Form T1135** (Foreign Income Verification Statement),
 for Canadian filers holding foreign securities. It answers the filing
 question first: it replays the full history of every **taxable** account
@@ -2750,7 +2825,10 @@ SETTLED` and names `tjs fx-cash --ledger v2` (`--json`:
 `total_settled` false, `cash_unknown_cost`), and the checklist's t1135
 step needs attention until that ledger computes (a `CASHOPEN` line for
 each currency at the
-start of the year is the usual fix). Where the books give no
+start of the year is the usual fix). The ledger reads the cash events of
+the last `tjs run`: an input changed since, or no record of them (a
+missing or stale `work/<account>_<broker>.cash`), refuses the whole
+command, as below ([tjs fx-cash](#tjs-fx-cash)). Where the books give no
 Canadian-dollar balance, a `! ` line says the account's cash is not
 counted, to add by hand (`cash_not_counted`).
 Cash at a broker in Canada is not foreign property and is not read.
@@ -2823,6 +2901,77 @@ as Canadian until a `T1135` line gives its country:
 T1135 SAMPLW.US   CA      # Canadian corp held on NYSE — not specified foreign property
 T1135 SAMPLV.TO   USA     # foreign corp listed on TSX — still specified foreign property
 ```
+
+While such a symbol has no line, the report's figures count it by its
+listing, and the test says whether that matters (tax-logic CA-RPT-02).
+`tjs t1135` works the maximum total cost out again as the `T1135` lines
+for the named holdings would give it, and never takes a country from the
+ISIN itself:
+
+- **the result could reverse** (below the threshold as counted, over it
+  with a foreign-ISIN holding counted, or that holding's cost unknown;
+  or over it only because of a Canadian-ISIN holding): the verdict line
+  reads `=> NOT RESOLVED: below the ... threshold as counted, but
+  SAMPLV.TO may be foreign property (a foreign ISIN on a Canadian
+  listing): with it the maximum is ...`, never "no T1135 required" or
+  "FILING REQUIRED", and the next line gives both lines that settle it
+  (`T1135 SAMPLV.TO AUS`, or `T1135 SAMPLV.TO CA` for a holding that is
+  not foreign property; the default view gives those of two symbols,
+  `--details` all). Add one to ticker.map, then `tjs run` and `tjs
+  t1135`. The checklist's t1135 step needs attention until then. A
+  figure in that line reads "at least" where a cost behind it is
+  unknown, and where cash of unknown cost leaves the total open the
+  line says NOT SETTLED as well;
+- **the result is the same either way**: the verdict stands, and a line
+  under it says so with the range of the maximum ("Counting SAMPLV.TO
+  the other way (ISIN and listing disagree) does not change this"). A
+  holding with no row in the year under either reading is left out of
+  it;
+- **a holding counted under one foreign country whose ISIN names
+  another** (an Irish issuer on a US exchange, counted under USA):
+  foreign property under either, so the total and the verdict do not
+  move; a warning and a `! ` line name it, since the country its row is
+  under may be the other one (`T1135 SYMBOL IRL`, or `T1135 SYMBOL USA`
+  to keep it where it is).
+
+A security is one through its ticker changes. A `T1135` line follows
+its symbol to the symbols it is renamed to, so a line written before a
+ticker change is not asked for again after it, and both lines named for
+a holding are for its first symbol (`T1135 OLD.TO AUS`, "OLD.TO: NEW.TO
+before its ticker change"): either decides the whole year. Where a
+ticker change crossed from a Canadian listing to a foreign one (or
+back), the holding as counted is foreign for part of the year only, so
+the report works the test out with it foreign all year and with it not
+foreign at all, and the result is open when those two differ across the
+threshold, whichever symbol carries the ISIN. An ISIN prefix that is no
+country's (`XS`, an international security) gives nothing to write: the
+text shows the line's shape, `T1135 SYMBOL COUNTRY`, and says the
+prefix names no country.
+
+A property counted at an unknown ACB (an `OPENING ... cost=unknown`
+line, shares bought before the files begin) understates the total.
+Below the threshold that is no verdict either: `=> NOT SETTLED: below
+the ... threshold, but the cost of SYMBOL is unknown`, with what gives
+it a cost (its purchase: an older export, or an OPENING line with its
+cost; `tjs find-missing-history` names them), and the checklist's
+t1135 step needs attention. Over the threshold the filing is required
+whatever the unknown cost is.
+
+`--json` says what the verdict line says:
+
+| Key | Meaning |
+|---|---|
+| `over_threshold_as_counted` | `max_total_cost` over `filing_threshold`: the plain comparison, always true or false |
+| `filing_required` | `true` where the text says FILING REQUIRED, `false` where it says "no T1135 required", `null` where it gives no verdict: NOT RESOLVED (either direction), and below the threshold with cash of unknown cost or in transit (`total_settled` false), with a property of unknown ACB (`unknown_acb_symbols`), or in a year still open (`year_complete` false). Over the threshold is `true` in an open year and with a cost unknown: the total only grows |
+| `simplified_method_available` | `null` unless `filing_required` is `true`. Then `true` (Part A) or `false` (Part B), and `null` while the part is open: under the detailed threshold in an open year or with a cost unknown, or when the holdings below could move the maximum across it |
+| `classification_status` | `"resolved"`: no holding of the year has an ISIN and a listing that disagree on its being foreign property. `"verdict_holds"`: some do, and the threshold test reads the same either way. `"unresolved"`: some do, and the test depends on them |
+| `classification_unresolved_symbols` | the symbols an `"unresolved"` status waits on (else empty) |
+| `classification_conflicts` | every security whose ISIN and listing disagree: `symbol` (the one whose rows carry the ISIN); `counted_as` (the country the report counts it under, `CAN` for not foreign); `issuer_country` (the ISIN's, ISO alpha-3, `CAN`, or `null` when its prefix is no country's); `isin_country_code` (the prefix as the rows carry it); `affects` (`"total"`: counted or not; `"country"`: foreign either way, only its country row); `held_in_year` (false: no row in the year even when counted as foreign, it decides nothing); `lines`, the ticker.map lines that settle it. With `affects` `"total"`: `foreign` and `not_foreign`, both on the security's first symbol (`foreign` is `null` when the prefix gives no country to write), and `symbols`, how each symbol the security had is counted. With `"country"`: `as_counted` and `other`, on the symbol |
+| `max_total_cost_low`, `max_total_cost_high` | the maximum total cost with every `not_foreign` line added, and with every `foreign` line added: `max_total_cost` lies between them (all three are equal with no conflict); `max_total_cost_high` is `null` when a holding the foreign reading adds has no known cost |
+| `max_total_cost_high_at_least`, `classification_unknown_cost_symbols` | what is known of the highest maximum, and the holdings of unknown cost it leaves out |
+| `review_symbols` | the rows to check: no country (`??`), crypto, and the holdings foreign under either country above |
+
+`total_settled` is about the cash alone.
 
 Options on a pooled Canadian issuer are a filing position taxjson takes
 (tax-logic CA-RPT-17): a US-listed option on a Canadian issuer whose US
@@ -2981,7 +3130,9 @@ included; a parity test guarantees each year's net matches the
 pipeline's own per-year run). In Canada the project year's net is the
 RETURN row of `tjs sum` (each Schedule 3 row's cents, as filed),
 not the books' unrounded total a cent or two apart (`--json`: `net_source`
-`"return_row"` and `engine_net_gain`). Per year with any disposition:
+`"return_row"` and `engine_net_gain`; `missing_books` names any taxable
+account with no base file, whose years are incomplete). Per year with any
+disposition:
 
 - **Canada**: net gain or loss, a running net-capital-loss carryforward
   (losses carry forward indefinitely), and for each loss year the
@@ -3025,7 +3176,12 @@ If the history's first year has dispositions, the ledger warns that
 pre-history balances are not reflected, and rows before the project
 year are flagged as rebuilt from this project's books (opening lots plus
 whatever prior-year exports are in `inputs/`) and possibly partial:
-check them against the filed returns. A year before the project year
+check them against the filed returns. Canada: where the project year's carry-back depends on
+what such a year carried back (T1A) and nothing on record settles it, the carryforward is
+"can't tell" (`--json`: `carry_back_cant_tell`, its years and both readings; answer it with
+`[carryover] carried_back`, docs/settings.md, or that year's lock); a figure a balance you
+typed settles is shown with its bounds (`carried_back_inferred`), and the part of that balance
+from before the books with `carried_in_before_books` ([troubleshooting](troubleshooting.md)). A year before the project year
 that has a close-year lock (the project's own `filed/<year>.json` or the
 `[settings] prior_year_record` of the per-year layout) takes the lock's
 **filed** figure instead (Canada: the total filed with another tool when
@@ -3098,7 +3254,9 @@ its expiry date with no expiry or assignment row in the export. How
 
 Snapshot the current tax year's filing aggregates to
 `filed/<year>.json`, the filed-year lock that `check-filed` (and every
-full run) guards. Commit it with your records. The lock records which
+full run) guards. Books older than the inputs (an input changed since the
+last full `tjs run`) are never locked, `--force` or not: exit 1, run
+`tjs run` first. Commit it with your records. The lock records which
 taxjson computed it (`taxjson`: the version, and for a git install the
 commit, the release tag it is at and whether a file was modified). It also records what the
 next year needs for `tjs handoff`: every sale, the positions and cost
@@ -3120,9 +3278,16 @@ counted, and with neither that entry nor `[estimate] other_income`
 close-year says how much of the deduction it left unused. The part of
 the net capital loss that
 `[carryover] claimed` carries back to an earlier year (T1A) is taken
-out of what it carries forward; with `--filed-dispositions` (Canada)
+out of what it carries forward. It stops when the carryover ledger that
+decides that part cannot be used, and, unless `--force` (or a yes to the
+question on a terminal), when the ledger left sales with an unknown
+cost out after the last locked year, naming them: their results can change
+the part carried back. Locked past that, the block records
+`carry_back_incomplete` (the years), and the next year's `tjs handoff` says
+so. With `--filed-dispositions` (Canada)
 the net capital loss is the filed return's, its gain standing in for
-the books' sales, and the summary shows both. The summary's realized
+the books' sales, the carry-back is the ledger's fold of that gain (`tjs
+carryover` folds the closed year on what the lock records as filed), and the summary shows both. The summary's realized
 and disallowed are the return's (`tjs sum`'s RETURN row: each sale's
 cents, recorded in the lock as `return_row`, which `tjs years` shows
 too), and its income is `tjs sum`'s taxable SUBTOTAL (each
@@ -3200,7 +3365,10 @@ before the year is closed.
 `tjs check-filed [--details]`
 
 Recompute every filed year from the current books and report drift
-against the locks; exit 1 on drift. A taxable account the books have but
+against the locks; exit 1 on drift. Books older than the inputs (an input
+changed since the last full `tjs run`, or a `tjs run --account` since it
+that left the pass across your accounts behind) are refused, exit 1,
+before anything is judged: run `tjs run` first. A taxable account the books have but
 the lock does not (with activity in that year), or a locked account the
 books no longer have, is drift too; a locked account that is no longer a
 taxable account in `taxjson.toml` is reported, never recomputed from its
@@ -3313,8 +3481,11 @@ row: a note gives both amounts. A cost difference is listed with the two
 consistent choices: keep last year as filed and open with the cost that
 return implied (the record's), or amend it and open with the corrected
 cost (this project's). A record closed under the
-other country is refused by name. Exit 1 on any problem; `checklist`
-runs it.
+other country is refused by name. Exit 1 on any problem; exit 2 when
+nothing else is wrong but a `[carryover] claimed` entry could not be
+compared because the carryover ledger could not be used (its section and
+a note say so; `--json`: `carry_unchecked`). A ledger that left sales with
+an unknown cost out adds a note and is still compared. `checklist` runs it.
 
 ### Explain and check
 
@@ -3346,7 +3517,11 @@ while an election is pending the run runs no cross-account pass, so
 their saved gains are not the figures the audit recomputes. An account
 left out (no books yet, or an election) is listed in `--json` under
 `not_audited` (`account`, `reason`: `no_books`, `elections_pending`,
-`no_cross_account_pass`), with its line in `coverage_failures`.
+`no_cross_account_pass`), with its line in `coverage_failures`. An
+error that stops a book's audit (an input it cannot read: exit 2) stops
+the audit there, as an input every book shares would only repeat its
+line: that book's accounts (`stopped`) and the later books' (`not_reached`)
+are listed the same way, and `--json` keeps what was audited before.
 `total_gain` is the computed dispositions' gain; an unknown-cost
 disposition (reported by hand) is counted in `manual_reporting`
 (`events`, `qty`, `proceeds`) only.
@@ -3729,7 +3904,18 @@ that has a date that is no calendar day: sanity stops with an Error
 naming the file (exit 2) and compares nothing. A cost field it cannot
 read only leaves that file's cost out (a note says so). Option rows
 whose root the file spells differently (`RCI…` vs taxjson's `RCI.B…`) are matched through
-the row's `underlying` field. A FILE may also be the broker's own
+the row's `underlying` field. In a Canadian project a crypto row
+(`asset_type = "crypto"`) of a USD stablecoin (`USDC.KR`; the
+`usd_stablecoins` list, as a ticker.map `STABLE` line changes it) is
+left out as a cash row is, with a note naming the coin: the books hold
+it as US-dollar cash, not as a position (the cash is `tjs fx-cash`'s;
+sanity does not compare it). Kraken's wallet codes (`USDC.F`,
+`USDC.HOLD`) name the coin. The row is left out of the cost section
+too. When the books of the accounts compared carry the coin as a
+position (a non-zero quantity in the inventory, or a row that buys,
+sells or moves it as property: a `.tt` BUYSELL line books one), the row
+is compared as any coin; a reward paid in the coin is an income row, not
+a position. A US project compares it as a coin. A FILE may also be the broker's own
 positions report (an IB Activity Statement with Open Positions, an RBC
 Holdings Export: the same readers as `tjs opening`); one dated
 before the books' last row is compared with the books' positions **on
@@ -3884,6 +4070,54 @@ this machine's production copy now, through the installer's upgrade
 path. The remembered channel is kept; a channel never moves an install
 backwards, so the copy stays there until its channel passes it. Refused
 (exit 2) where no development checkout is found.
+
+#### tjs parser-check
+
+`tjs parser-check <id>|all [--fixtures DIR] [--update-golden]`
+
+The conformance checks every parser passes on its synthetic fixture
+folder (`sample.csv` beside `expected.json`): the schema (no errors, no
+warnings), the golden (the output equals `expected.json` exactly; the
+cash events its parse builds equal `expected_cash.json`, which a folder
+whose parse builds none may leave out; they are read only for a folder
+that claims `cash_kinds` or holds `expected_cash.json`),
+determinism (two fresh instances agree), row accounting (every row
+consumed or counted as skipped), the account phase (`prepare_files`,
+`coverage_messages` and `reconcile_files` take what the parse passes
+them), detection (`tjs run`'s routing sends
+the fixture to the parser: a sample two brokers' detectors claim is
+refused there, so it is a finding here) and the countries (under each
+country's settings the fixture parses, passes the schema and leaves no
+row unaccounted; the golden is the default's; at one basis the rows and
+counts are the same under each country and under none, and the same
+under every basis but in the fields the parser names in its
+`BASIS_INPUTS`, the stablecoin model of Kraken and Coinbase) and the kinds
+(every row is of a kind, `taxjson.parsers.protocol.ROW_KINDS`, one its
+parser declares with `builds`, and every cash event its broker's parse
+builds of the fixture of one of `CASH_KINDS`; each kind the
+folder's `fixture.toml` claims, `kinds = "..."` and `cash_kinds = "..."`,
+has a row or an event; each kind the parser declares is claimed by one of
+its folders, a finding of the parser's, not asked with `--fixtures`). The folders are the
+development checkout's `tests/fixtures/<id>` and every folder there
+whose `fixture.toml` names the parser (`parser = "<id>"`: Kraken's
+ledgers fixture beside its trades), or `--fixtures DIR` for a shipped
+parser on a folder of your own; `--update-golden` writes `expected.json`
+from the parser's output first (a reviewed change; refused while the
+output has schema findings), and `expected_cash.json` from the parse's
+cash events. A folder's `fixture.toml` names the rows
+the parser must count as skipped (`expected_skips`) and the account
+settings every parse of its sample is told (`exercise_fee`, Webull's
+exercise/assignment charge). A crypto fixture's UTC stamps are
+dated in `TAXJSON_LOCAL_TZ`, America/Toronto unless set (the shipped
+goldens' zone; set it when you mint your own). Your own layouts are not
+read unless `TAXJSON_LAYOUTS` names them, so the verdict is the parser's.
+A finding the default parse has is not repeated per country. One line per folder:
+`ok` with the rows parsed, or the findings as `! ` lines with their
+detail under them; a folder that claims no kinds passes, with an `Info:`
+line saying so (`Info: generic: <folder> claims no row or cash kinds: none
+is asked for (kinds = "..." and cash_kinds = "..." in its fixture.toml)`). Exit 1 on a finding, 2 when the parser or a folder
+(its `sample.csv`) is not found. The same checks, per shipped parser, are
+`tests/test_parser_conformance.py`.
 
 #### tjs promote
 

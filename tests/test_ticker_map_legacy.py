@@ -22,9 +22,10 @@ from _style import CapturedWidth
 
 from taxjson.lib import ticker_map_format as F
 from taxjson.lib import ticker_map_legacy as L
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = (Path(__file__).resolve().parent / "fixtures" / "ticker_map"
+REPO_ROOT = _paths.REPO
+FIXTURE = (_paths.TESTS / "fixtures" / "ticker_map"
            / "legacy_headers.txt")
 
 _WIDTH = CapturedWidth()

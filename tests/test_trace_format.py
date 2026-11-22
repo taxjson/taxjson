@@ -13,6 +13,7 @@ from taxjson.lib.trace_format import (
     render_gain_block,
     render_summary_table,
 )
+from taxjson.rules import ids as R
 
 
 class TestAlignPipeLines(unittest.TestCase):
@@ -189,6 +190,35 @@ class TestRenderGainBlock(unittest.TestCase):
         self.assertIn('added to the ACB', joined)
         self.assertNotIn('PERMANENTLY', joined)
 
+    def test_the_trace_files_block_ends_with_the_rules_its_records_name(self):
+        # PLAN step 11: given the run's table (the trace file's blocks), a
+        # wash block's last line names its records' rules, the denial's
+        # first, each once; a US block only its own replacements'. Without
+        # the table (`tjs audit`, `tjs explain`) there is no such line.
+        gid = 'abc123def456'
+        ca = self._basic_gain(
+            gain=0.0, raw_gain=-201.50, disallowed_amount=201.50,
+            wash_trigger={'is_full_disallowance': True, 'trigger_date': '2025-07-20',
+                          'trigger_qty': 15.0, 'trigger_price': 71.0,
+                          'trigger_account': 'Margin', 'adjust_date': '2025-07-20'})
+        table = {gid: {f'WASH_{gid}__t1': R.CA_SL_09, gid: R.CA_SL_01,
+                       f'WASH_{gid}__t2': R.CA_SL_09}}
+        out = render_gain_block(ca, rules=table)
+        self.assertIn(f'#   rules: {R.CA_SL_01}, {R.CA_SL_09}', out)
+        self.assertFalse([ln for ln in render_gain_block(ca) if 'rules:' in ln])
+        self.assertFalse([ln for ln in render_gain_block(ca, rules={'other': {'other': R.CA_SL_01}})
+                          if 'rules:' in ln])
+        us = self._basic_gain(
+            gain=0.0, raw_gain=-1000.0, disallowed_amount=1000.0,
+            wash_replacements=[{
+                'tx_id': 'rep1', 'date': '2025-03-25', 'qty_total': 100.0,
+                'price': 100.0, 'account': 'Margin', 'match_qty': 100.0,
+                'basis_bump': 1000.0, 'is_sheltered': False,
+            }])
+        table = {gid: {'rep2': R.US_WASH_11, gid: R.US_WASH_01, 'rep1': R.US_WASH_09}}
+        out = render_gain_block(us, rules=table)
+        self.assertIn(f'#   rules: {R.US_WASH_01}, {R.US_WASH_09}', out)
+
 
 class TestRenderSummaryTable(unittest.TestCase):
     def test_basic_per_symbol_summary(self):
@@ -208,15 +238,20 @@ class TestRenderSummaryTable(unittest.TestCase):
         # Always has a TOTAL row.
         self.assertIn('TOTAL', joined)
 
-    def test_excludes_dividends(self):
+    def test_counts_each_row_it_is_given(self):
+        """The table counts the rows it is handed as sales: its caller
+        passes the dispositions alone (taxjson-gains write_traces_file;
+        tests/features/gains_run/test_trace_counts_dispositions_only.py holds a trace file to them,
+        income rows left out, TJ-2784, TJ-2793)."""
         gains = [
             {'symbol': 'AAPL.US', 'qty': 100, 'gain': 1000},
-            {'symbol': 'AAPL.US', 'action': 'DIVIDEND', 'dividend': 50},
+            {'symbol': 'AAPL.US', 'qty': 50, 'gain': 500},
+            {'symbol': 'SHOP.TO', 'qty': 10, 'gain': -200},
         ]
         out = render_summary_table(gains)
-        joined = "\n".join(out)
-        # AAPL row appears once (the dividend is filtered out).
-        self.assertEqual(joined.count('AAPL.US'), 1)
+        sales = {line.split()[1]: int(line.split()[2]) for line in out
+                 if line.startswith('# ') and len(line.split()) > 3 and line.split()[2].isdigit()}
+        self.assertEqual(sales, {'AAPL.US': 2, 'SHOP.TO': 1, 'TOTAL': 3})
 
     def test_empty_gains_returns_empty_table(self):
         self.assertEqual(render_summary_table([]), [])

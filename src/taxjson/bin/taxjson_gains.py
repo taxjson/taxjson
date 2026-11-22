@@ -22,9 +22,10 @@ import argparse
 import sys
 from pathlib import Path
 
+from taxjson.lib import out
 from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.lib.country import add_country_argument, refuse_foreign_flags
-from taxjson.lib.core import load_transactions
+from taxjson.lib.tx_load import load_transactions
 from taxjson.lib.missing_history import detect_missing_history, format_suggestions
 # Back-compat re-exports: tests and older callers import these from here.
 from taxjson.lib.pipeline import (            # noqa: F401
@@ -37,6 +38,7 @@ from taxjson.lib.pipeline import (            # noqa: F401
     load_stdin_transactions,
     run_gains,
 )
+from taxjson.lib.json_input import is_disposition
 from taxjson.lib.trace_format import (
     render_document_header,
     render_gain_block,
@@ -347,10 +349,10 @@ def _suggest_missing_history_and_exit(args, transactions,
         candidates = [c for c in candidates
                       if (c.symbol, c.account) in keep]
         if before > len(candidates):
-            print(
+            out.put(
                 f"Filtered {before - len(candidates)} candidate(s) outside tax year "
                 f"{year_str}. Use --all-history to include them.",
-                file=sys.stderr,
+                sys.stderr,
             )
     _out = Path(args.suggest_missing_history)
     # A reviewed file (real shorts pruned, pairs added by hand) is a
@@ -392,7 +394,7 @@ def _suggest_missing_history_and_exit(args, transactions,
                                                all_rows=_all,
                                                not_sized=_ns))
     n_reg = sum(1 for c in candidates if c.registered)
-    print(
+    out.put(
         f"Wrote {len(candidates)} candidate(s) to {args.suggest_missing_history} "
         f"({n_reg} in registered accounts — almost certainly a purchase "
         f"missing from your files). "
@@ -400,7 +402,7 @@ def _suggest_missing_history_and_exit(args, transactions,
         f"account's .tt files as `OPENING <date> <SYMBOL> <qty> "
         f"cost=unknown` lines (`tjs find-missing-history "
         f"--write-missing-history` writes them).",
-        file=sys.stderr,
+        sys.stderr,
     )
 
 
@@ -449,7 +451,7 @@ def _request(args) -> GainsRequest:
 
 @guard_main("taxjson-gains")
 def main():
-    from taxjson.lib.core import AmbiguousTransferDateError
+    from taxjson.engine.rows import AmbiguousTransferDateError
     try:
         _main()
     except (TransferValidationError, AmbiguousTransferDateError) as exc:
@@ -522,7 +524,7 @@ def _main():
         if args.affiliated:
             affiliated_transactions = load_transactions(
                 Path(args.affiliated))
-        from taxjson.lib.core import require_trade_fields
+        from taxjson.engine.rows import require_trade_fields
         require_trade_fields(transactions + sheltered_transactions
                              + affiliated_transactions)
     except ValueError as e:
@@ -587,7 +589,7 @@ def write_traces_file(results, file_path, *, country, input_path, year, tax_date
     """Dump tt-style ACB/FIFO traces (and wash-sale window traces) to a text
     file. Layout: document header, per-symbol summary, per-gain blocks
     (chronological), then any wash-sale window traces."""
-    all_disp = [g for g in results.get('transactions', []) if g.get('action') != 'DIVIDEND']
+    all_disp = [g for g in results.get('transactions', []) if is_disposition(g)]
     gains = [g for g in all_disp if g.get('trace')]
     gains.sort(key=lambda g: (g.get('date', ''), g.get('symbol', '')))
     wash_count = sum(1 for g in all_disp if g.get('is_wash_sale'))
@@ -623,9 +625,12 @@ def write_traces_file(results, file_path, *, country, input_path, year, tax_date
                 f.write(line + "\n")
 
         shown: dict = {}
+        # Each decision record's rule (the engine's `rules`): a wash
+        # block's `#   rules:` line.
+        rules = results.get('rules')
         for g in gains:
             f.write("\n")
-            f.write("\n".join(render_gain_block(_since_shown(g, shown))))
+            f.write("\n".join(render_gain_block(_since_shown(g, shown), rules=rules)))
             f.write("\n")
 
         # Unknown-cost dispositions (--incomplete-history): not in the
@@ -642,7 +647,7 @@ def write_traces_file(results, file_path, *, country, input_path, year, tax_date
                                                    g.get('symbol', ''))):
                 f.write("\n")
                 f.write("\n".join(render_gain_block(_since_shown(g, shown),
-                                                    manual=True)))
+                                                    manual=True, rules=rules)))
                 f.write("\n")
 
 

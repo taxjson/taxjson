@@ -14,7 +14,8 @@ from typing import Any
 
 from taxjson.lib import out
 from taxjson.lib.country import canonical_country
-from taxjson.lib.report_model import fmt_money, fmt_qty6
+from taxjson.lib.report_fmt import fmt_money, fmt_qty6
+from taxjson.rules import ids as R
 
 _MONEY = ("gross_amount", "commission_amount", "income_amount", "acquisition_cost")
 _QUANTITIES = ("gross_quantity", "net_quantity")
@@ -271,6 +272,8 @@ def build_report(rows: Iterable[tuple[str, dict]], *, currency: str,
     The caller selects crypto accounts, date window and any broker/symbol
     filters. Keep acquisition rows available for pairing. Unknown amounts
     are None; every monetary aggregate reports its known/unknown coverage.
+    Its `schema_version` is the writer's (`staking` or `staking-sum`,
+    lib/json_contract).
     """
     rows = list(rows)
     currency = currency.upper()
@@ -305,7 +308,7 @@ def build_report(rows: Iterable[tuple[str, dict]], *, currency: str,
                 "paired_acquisitions": sum(r["acquisition_cost"] is not None for r in rewards),
                 "acquisition_discrepancies": sum(abs(r["acquisition_difference"] or 0) > .01 for r in rewards),
                 "income_discrepancies": sum(abs(r["income_reconciliation_difference"] or 0) > .01 for r in rewards)}
-    rule = "US-INC-STAKING" if country == "usa" else "CA-INC-STAKING"
+    rule = R.US_INC_STAKING if country == "usa" else R.CA_INC_STAKING
     notes = [
         "Amounts disclose the existing books; this view does not change income, fees or acquisition cost.",
         "Totals cover booked reward events; fully consumed or omitted dust rewards have no entries here.",
@@ -317,7 +320,7 @@ def build_report(rows: Iterable[tuple[str, dict]], *, currency: str,
         "Display cents are allocated within each money column to foot to its aggregate; JSON retains unrounded book values.",
         f"Software treatment: {rule}; see tjs tax-logic --ids for assumptions and country-specific authorities.",
     ]
-    return {"schema_version": 1, "currency": currency, "scope": scope, "country": country,
+    return {"currency": currency, "scope": scope, "country": country,
             "local_timezone": local_timezone, "rule": rule, "rewards": rewards, "groups": groups,
             "totals": _aggregate(rewards), "totals_by_account_group": totals_by_account_group,
             "coverage": coverage, "notes": notes}

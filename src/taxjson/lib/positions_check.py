@@ -53,7 +53,8 @@ _QTY_ACTIONS = ('BUYSELL', 'ASSIGN', 'TRANSFER', 'OPENING_BALANCE')
 _COST_ACTIONS = _QTY_ACTIONS + ('SPLIT', 'ADJUST', 'DISALLOW')
 
 # The share count a dividend row's description states ("... ON 500
-# SHS", "ON 40 SHRS") — the parsers' own pattern (brokerages.base).
+# SHS", "ON 40 SHRS") — the parsers' own pattern (parsers/toolbox/
+# descriptions, which brokerages.base re-exports: lib reads no toolbox).
 from taxjson.lib.brokerages.base import _DIV_QTY_ON_SHS_RE  # noqa: E402
 
 
@@ -169,7 +170,7 @@ def without_pool_cut(rows: List[Dict[str, Any]],
             or r.get("account") != account]
 
 
-# The merged books of the blended passes (taxjson_run
+# The merged books of the blended passes (pipeline/stages
 # stage_blended_wash_pass): the taxable accounts', the crypto accounts'.
 BLEND_BASES = (".blend_base.json", ".cryptoblend_base.json")
 
@@ -328,7 +329,7 @@ def roc_symbols(rows: Iterable[Dict[str, Any]]) -> Set[str]:
     (an ADJUST that is one, income_dating.is_return_of_capital: type
     roc, or a negative amount). A spin-off's parent cost reduction is
     not one (spinoff_symbols; 2026-10-23 audit #11)."""
-    from taxjson.lib.income_dating import is_return_of_capital
+    from taxjson.characterize.income_dating import is_return_of_capital
     out: Set[str] = set()
     for r in rows:
         if not is_return_of_capital(r):

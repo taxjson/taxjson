@@ -31,7 +31,10 @@ from taxjson.lib.brokerages.rbc_direct import RbcBrokerage
 from taxjson.lib.brokerages.webull import WebullBrokerage
 from taxjson.lib.brokerages.coinbase import CoinbaseBrokerage
 from taxjson.lib.brokerages.kraken import KrakenBrokerage
+from taxjson.parsers.protocol import KNOWN_NONEVENT_PREFIX
 from tax_rules import rule
+from taxjson.rules import ids as R
+from _support.parser_csv import _parse_csv, QUESTRADE_HEADER
 
 
 def setUpModule():
@@ -39,17 +42,6 @@ def setUpModule():
     # generalisation): the parsers outside a project read
     # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
     os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
-
-
-def _parse_csv(parser_cls, content):
-    """Run a parser against an in-memory CSV string."""
-    f = private_tmpfile(mode='w', suffix='.csv', delete=False)
-    f.write(content)
-    f.close()
-    try:
-        return parser_cls().parse_file(Path(f.name))
-    finally:
-        os.remove(f.name)
 
 
 def _find(txs, **fields):
@@ -63,13 +55,6 @@ def _find(txs, **fields):
 # ============================================================================
 # Questrade
 # ============================================================================
-QUESTRADE_HEADER = (
-    'Transaction Date,Settlement Date,Action,Symbol,Description,'
-    'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,'
-    'Account #,Activity Type,Account Type\n'
-)
-
-
 class TestQuestradeActivities(unittest.TestCase):
     def test_buy_stock(self):
         csv = QUESTRADE_HEADER + (
@@ -484,8 +469,8 @@ class TestIbActivities(unittest.TestCase):
         # Currency on the record reflects the actual payment.
         self.assertEqual(divs[0]['currency'], 'USD')
 
-    @rule("US-INC-03")
-    @rule("CA-INC-05")
+    @rule(R.US_INC_03)
+    @rule(R.CA_INC_05)
     def test_withholding_tax_uses_isin_market(self):
         """Regression: the IB Withholding Tax row used to hardcode `.US`
         on the emitted TAX symbol, fragmenting it from the matching
@@ -526,9 +511,11 @@ class TestIbActivities(unittest.TestCase):
             # mis-classify this as ASSIGN.
             'Trades,Data,Order,Stocks,USD,AAPL,"2025-05-01, 09:30:00",'
             '100,0,0,0,0,0,0,0,Au\n'
-            # Bare `A` IS the real assignment marker.
-            'Trades,Data,Order,Stocks,USD,MSFT,"2025-05-02, 09:30:00",'
-            '50,0,0,0,0,0,0,0,A\n'
+            # Bare `A` IS the real assignment marker: on the option
+            # leg at 0 (a share leg at $0 is refused, TJ-4569 (2)).
+            'Trades,Data,Order,Equity and Index Options,USD,'
+            'MSFT 16MAY25 400 P,"2025-05-02, 09:30:00",'
+            '1,0,0,0,0,0,0,0,A\n'
         )
         from taxjson.lib.brokerages.ib_extractor import IbBrokerage
         import os
@@ -541,7 +528,7 @@ class TestIbActivities(unittest.TestCase):
         by_sym = {t['symbol']: t for t in txs}
         self.assertEqual(by_sym['AAPL.US']['action'], 'BUYSELL',
                          "Code='Au' must not match the 'A' ASSIGN token")
-        self.assertEqual(by_sym['MSFT.US']['action'], 'ASSIGN',
+        self.assertEqual(by_sym['MSFT250516P00400000.US']['action'], 'ASSIGN',
                          "Code='A' (bare) must classify as ASSIGN")
 
     def test_malformed_trade_cell_fails_the_parse_naming_the_cell(self):
@@ -629,8 +616,8 @@ class TestCoinbaseActivities(unittest.TestCase):
         t = _find(txs, symbol='ETH', action='BUYSELL')
         self.assertAlmostEqual(t['quantity'], -0.25)
 
-    @rule("CA-INC-04")
-    @rule("US-INC-02")
+    @rule(R.CA_INC_04)
+    @rule(R.US_INC_02)
     def test_staking_income(self):
         """Coinbase 'Staking Income' rows are the dominant source of
         crypto-asset dividend income for ADA/AVAX/DOT/ETH/SOL holders
@@ -794,8 +781,8 @@ class TestKrakenActivities(unittest.TestCase):
         t = txs[0]
         self.assertAlmostEqual(t['quantity'], -0.05)
 
-    @rule("CA-INC-04")
-    @rule("US-INC-02")
+    @rule(R.CA_INC_04)
+    @rule(R.US_INC_02)
     def test_ledgers_staking_reward(self):
         """Kraken ledger format: earn/reward rows produce a DIVIDEND
         plus a zero-cost BUYSELL pair (the rewarded shares become
@@ -881,7 +868,7 @@ class TestKrakenActivities(unittest.TestCase):
         self.assertNotIn("unhandled", err.getvalue())
         moves = {k: v for k, v in parser._skip_counts.items() if "Earn wallet move" in k}
         self.assertEqual(sum(moves.values()), 4)
-        self.assertTrue(all(k.startswith(KrakenBrokerage.KNOWN_NONEVENT_PREFIX) for k in moves))
+        self.assertTrue(all(k.startswith(KNOWN_NONEVENT_PREFIX) for k in moves))
 
     def test_ledgers_instant_trade(self):
         """spend + receive pair with same refid = one logical trade."""
@@ -921,8 +908,8 @@ class TestKrakenActivities(unittest.TestCase):
         self.assertEqual(t['symbol'], 'BTC')
         self.assertEqual(t['currency'], 'USD')  # DAI normalized to USD
 
-    @rule("CA-CRYPTO-01")
-    @rule("US-CRYPTO-01")
+    @rule(R.CA_CRYPTO_01)
+    @rule(R.US_CRYPTO_01)
     def test_ledgers_crypto_to_crypto_emits_two_legs(self):
         """A crypto-to-crypto swap is a taxable disposition of the spent
         crypto at FMV (CRA s. 40(1) / IRS Notice 2014-21). The parser
@@ -968,8 +955,8 @@ class TestKrakenActivities(unittest.TestCase):
         self.assertAlmostEqual(sell['fee'], 0.0)
         self.assertAlmostEqual(buy['fee'], 0.0)
 
-    @rule("CA-CRYPTO-01")
-    @rule("US-CRYPTO-01")
+    @rule(R.CA_CRYPTO_01)
+    @rule(R.US_CRYPTO_01)
     def test_trades_csv_crypto_to_crypto_two_legs(self):
         """A crypto-to-crypto trades-CSV fill emits the same two-leg
         SELL+BUY as the ledgers path (both USD-denominated, price=0
@@ -1082,4 +1069,3 @@ class TestQuestradeReinvestmentAndCashInLieu(unittest.TestCase):
         self.assertAlmostEqual(legs[1]['price'], 7.75)
         # Same-day, ordered: the acquisition precedes the sale.
         self.assertLess(legs[0]['time'], legs[1]['time'])
-

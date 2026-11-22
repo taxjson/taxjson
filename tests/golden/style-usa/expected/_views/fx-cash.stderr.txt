@@ -1,0 +1,1 @@
+note: USDC is treated as a US-dollar stablecoin by taxjson's built-in market list (taxjson/data/markets.toml); if that is wrong add `STABLE USDC NO` to ticker.map.

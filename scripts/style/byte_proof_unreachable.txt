@@ -1,0 +1,15 @@
+# The changed lines of src/taxjson the byte proof's recordings cannot run
+# or show as the reach gate asks (scripts/style/byte_proof.py `reach_gate`,
+# `read_unreachable`). One line each:
+#
+#   src/taxjson/PATH:LINE :: TEXT :: REASON         a line of HEAD
+#   BASE src/taxjson/PATH:LINE :: TEXT :: REASON    a line of BASE the diff
+#                                                   deletes or replaces
+#
+# LINE the line's number in that tree, TEXT the line (its indent aside),
+# REASON why no recorded command runs it, takes its branches both ways,
+# runs it in two iterations of a loop or shows its text. An entry excuses
+# that one line, every rule of it, and only while LINE still holds TEXT; an
+# entry that names another line or gives no reason refuses. Add a command
+# line that reaches the line first (EXTRA_COMMANDS, OPTION_LINES, `--argv`):
+# an entry here is a line whose bytes the proof never sees.

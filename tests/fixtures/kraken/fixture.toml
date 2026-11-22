@@ -1,0 +1,16 @@
+# The rows the parser must count as skipped (TJ-2328). A TRADES export; kr_ledgers.csv beside it is
+# the sibling ledger the fills are joined to (refid = trades txid), for TX3, TX9 and TX10 alone. The kinds:
+# a BTC/USD buy and sell (TX1, TX2: no ledger legs, the fee currency unverified);
+# an ETH/CAD buy (TX3: a non-USD fiat quote, the quote fee verified against the ledger);
+# a legacy concatenated crypto pair XETHXXBT sold (TX4: the ETH and BTC legs at price 0 for fill-crypto);
+# a SOL/USDC buy (TX5: the stablecoin quote a USD fill in a cash-mode book);
+# a margin fill (TX6: a nonzero margin cell, booked as a spot buy);
+# a fee taken in the coin (TX9: per the ledger, 0.26 ADA out of the quantity, no quote fee);
+# a fee paid with KFEE credits (TX10: per the ledger, booked with no fee);
+# skipped (3): non-events: a USD/CAD forex conversion (TX7), a DOT28.S/DOT relabel swap (TX8);
+#   reported: a fill whose type is blank (TX11, UNBOOKED).
+expected_skips = 3
+# The kinds its rows and its broker's cash events have (parsers.protocol ROW_KINDS and
+# CASH_KINDS): the conformance kit asks for a row, or an event, of each.
+kinds = "trade"
+cash_kinds = ""

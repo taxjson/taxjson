@@ -1,0 +1,51 @@
+REALIZED-GAINS SUMMARY — CAD, tax year 2024, basis: wash-adjusted
+REALIZED = NON-OPT (shares, units, futures, crypto) + OPTION; TOTAL = REALIZED + DIVIDEND + PIL.
+DIVIDEND of crypto is staking rewards: ordinary income, not dividends.
+
+TAXABLE ACCOUNTS
+ACCOUNT     NON-OPT  OPTION  REALIZED  DIVIDEND   PIL    FEES     TOTAL
+-----------------------------------------------------------------------
+crypto       670.53    0.00    670.53     23.56  0.00  133.87    694.09
+ib           132.30    0.00    132.30    101.25  0.00    6.75    233.55
+margin        66.15  201.08    267.23    675.00  0.00    8.17    942.23
+questrade     81.20    0.00     81.20     24.30  0.00   31.68    105.50
+webull        91.23  175.83    267.06      0.00  0.00   38.30    267.06
+-----------------------------------------------------------------------
+SUBTOTAL   1,041.41  376.91  1,418.32    824.11  0.00  218.77  2,242.43
+
+SHELTERED ACCOUNTS — not taxable
+ACCOUNT    NON-OPT   OPTION  REALIZED  DIVIDEND   PIL   FEES     TOTAL
+----------------------------------------------------------------------
+lira        235.15     0.00    235.15    420.00  0.00  19.80    655.15
+rrsp        321.30  -273.51     47.79    131.22  0.00   7.56    179.01
+tfsa        643.45     0.00    643.45    528.00  0.00  39.80  1,171.45
+----------------------------------------------------------------------
+SUBTOTAL  1,199.90  -273.51    926.39  1,079.22  0.00  67.16  2,005.61
+
+ALL ACCOUNTS — sheltered included
+ACCOUNT     NON-OPT   OPTION  REALIZED  DIVIDEND   PIL    FEES     TOTAL
+------------------------------------------------------------------------
+crypto       670.53     0.00    670.53     23.56  0.00  133.87    694.09
+ib           132.30     0.00    132.30    101.25  0.00    6.75    233.55
+lira         235.15     0.00    235.15    420.00  0.00   19.80    655.15
+margin        66.15   201.08    267.23    675.00  0.00    8.17    942.23
+questrade     81.20     0.00     81.20     24.30  0.00   31.68    105.50
+rrsp         321.30  -273.51     47.79    131.22  0.00    7.56    179.01
+tfsa         643.45     0.00    643.45    528.00  0.00   39.80  1,171.45
+webull        91.23   175.83    267.06      0.00  0.00   38.30    267.06
+------------------------------------------------------------------------
+TOTAL      2,241.31   103.40  2,344.71  1,903.33  0.00  285.93  4,248.04
+
+FOR THE RETURN — taxable accounts (crypto, ib, margin, questrade, webull), CAD (Schedule 3, tax year 2024)
+GAIN = PROCEEDS − COST(ACB) − OUTLAYS, the allowed gain; DENIED = superficial losses denied.
+The SUBTOTAL adds the account rows, RETURN each sale's cents: they can differ by a cent or two.
+SCHEDULE 3 LINE                                          PROCEEDS   COST(ACB)  OUTLAYS      GAIN  DENIED
+--------------------------------------------------------------------------------------------------------
+shares & fund units (P1) (10689/10690)                  63,787.50   63,458.03    14.72    314.75    0.00
+shares & fund units (P2) (13199/13200)                  21,404.25   21,337.39    10.73     56.13  511.65
+options, crypto & other properties (P2) (15199/15300)   16,638.75   15,518.65    72.65  1,047.45    0.00
+--------------------------------------------------------------------------------------------------------
+RETURN                                                 101,830.50  100,314.07    98.10  1,418.33  511.65
+
+! FX on foreign cash (line 15300): not in the rows; its estimate is NOT RELIABLE — tjs fx-cash
+Not in the rows: T3/T5 slip capital gains (lines 17600, 17400). More: tjs sum --details

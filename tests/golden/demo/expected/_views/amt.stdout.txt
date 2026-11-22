@@ -1,0 +1,33 @@
+MINIMUM TAX (AMT) — canada/ON, tax year 2024, CAD
+ESTIMATE ONLY, not filing numbers: rates vintage 2024; [ ] the law or the source.
+
+REGULAR TAX
+  Taxable income (line 26000)                        58,383.27
+  Federal tax after credits                           6,521.30  [BPA, dividend and foreign tax credits]
+  ON tax                                              3,206.63
+
+ADJUSTED TAXABLE INCOME — s.127.52
+  Capital gains at 100% (regular: 50%)                1,418.33  s.127.52(1)(d)
+  Foreign dividends                                     800.55
+  Payments in lieu and staking (ordinary)                23.56
+  Other income                                       61,000.00  [estimate] other_income
+  Deductions in full (RRSP, FHSA, RPP ...)           -4,000.00  lines 20700-23500
+  Carrying charges at 50%                               -75.00  s.127.52(1); line 22100
+  = Adjusted taxable income                          59,167.44
+  - Basic exemption (s.127.53)                     -173,205.00  [the start of the 29% bracket]
+  = Subject to minimum tax                                0.00
+  x 20.5% (s.127.51)                                      0.00
+  - Basic minimum tax credit (s.127.531)             -1,177.88  [basic personal amount 15,705.00: its credit at 50%]
+  - Special foreign tax credit (s.127.54)               -18.83  [the greater of the regular credit 18.83 and the lesser of 2/3 of the foreign tax (12.56) and 20.5% of the foreign income (164.11)]
+  = Federal minimum tax                                   0.00
+    Federal regular tax                               6,521.30
+  => AMT does not bind: regular tax over minimum      6,521.30  [a carryover can use 6,540.14]
+
+MINIMUM TAX CARRYOVER — s.120.2
+  From: nothing entered ([estimate] amt_carryover) and no earlier close-year record
+  Created this year (additional tax)                      0.00
+  Carried forward to 2025                                 0.00
+
+  Estimated tax on investment income                    435.78
+    with AMT and carryover                              435.78
+Not modelled: donations, the stock-option deduction; 1 note(s) — tjs amt --details

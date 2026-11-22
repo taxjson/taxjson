@@ -21,13 +21,17 @@ without the unsafe leak of fabricated ACB into the gain calculation.
 The project file missing_history.json (formerly phantoms.json) that
 listed them until v0.27.0 is no longer read: a project that still has
 one is refused (lib/migrate.legacy_files) and `tjs migrate` converts
-it (plan_missing_history_migration). The module was called
-phantom_holdings until 2026-10; taxjson.lib.phantom_holdings is a shim
-for this module, and the old function and class names are aliases at
-the end of this file.
+it (lib/history_migration). The drafts of the purchases the broker's
+cost evidence supports are lib/purchase_drafts. The module was called
+phantom_holdings until 2026-10 (its old name and the old function and
+class names were kept as aliases through v1.0.0).
 """
 from __future__ import annotations
 
+
+from taxjson.project.accounts import configured_accounts, sheltered_by_name, typed_accounts
+from taxjson.project.toml_io import parse_toml
+from taxjson.project.settings import Settings
 from taxjson.lib.stage_msg import emit_line
 import json
 import os
@@ -38,16 +42,23 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from taxjson.lib.core import TaxTransaction, is_stock_dividend
+from taxjson.model.transaction import TaxTransaction
+from taxjson.lib.row_types import is_stock_dividend, open_close_codes
+from taxjson.lib.unbacked_close import OrderStarts, unbacked_close
 from taxjson.lib.corporate_timeline import (SplitTimeline, event_sort_key,
                                              normalize_symbol_new)
+from taxjson.lib.privacy import mask_id
+from taxjson.lib.futures_prefixes import FUTURES_PREFIXES
+from taxjson.lib.cross_listings import (_opposite_trades, _same_units,
+                                         journal_leg_key, ref_group_journal)
+from taxjson.model import money as M
 
 
 # The project-root file that listed (symbol, account) pairs whose
 # purchase is not in the broker files until v0.27.0 (phantoms.json before
 # 2026-10). It is no longer read: every command refuses a project that
 # still has one (lib/migrate.legacy_files) and `tjs migrate`
-# converts it into .tt lines (plan_missing_history_migration).
+# converts it into .tt lines (lib/history_migration).
 MISSING_HISTORY_FILE = "missing_history.json"
 LEGACY_MISSING_HISTORY_FILE = "phantoms.json"
 MISSING_HISTORY_FILES = (MISSING_HISTORY_FILE, LEGACY_MISSING_HISTORY_FILE)
@@ -195,7 +206,7 @@ def _registered_label(upper: str, country: Optional[str]) -> bool:
 # defined its own unanchored substring check, which could mis-classify
 # any synthesized symbol whose mid-string digits happened to
 # match `\d{6}[CP]\d+`.
-from taxjson.lib.core import is_option_symbol  # noqa: F401 — re-exported
+from taxjson.lib.option_symbols import is_option_symbol  # noqa: F401 — re-exported
 
 
 def is_registered_account(account: str, registered_accounts=None,
@@ -219,13 +230,6 @@ def _project_doc_near(path) -> Dict[str, Any]:
     (<root>/work/<acct>_base.json) or one level up; {} when none.
     Raises InputReadError (an OSError: exit 2 through guard_main) when
     the file exists but is not UTF-8 or not valid TOML."""
-    try:
-        import tomllib
-    except ImportError:                      # Python < 3.11
-        try:
-            import tomli as tomllib          # type: ignore
-        except ImportError:
-            return {}
     from taxjson.lib.cli_diag import InputReadError, read_text_utf8
     try:
         p = Path(path).resolve()
@@ -244,7 +248,7 @@ def _project_doc_near(path) -> Dict[str, Any]:
             # A2-0429 / A2-0430 / A2-0438).
             text = read_text_utf8(cfg)
             try:
-                return tomllib.loads(text.lstrip('\ufeff')) or {}
+                return parse_toml(text) or {}
             except ValueError as e:
                 raise InputReadError(
                     f"{cfg}: not valid TOML ({e}) — fix it (`tjs "
@@ -256,10 +260,8 @@ def account_types_near(path) -> Dict[str, bool]:
     """{account: is_sheltered} from the project's configured types, so
     the standalone detectors use `type` instead of the label (audit
     S076-08). {} outside a project."""
-    accts = _project_doc_near(path).get('accounts') or {}
-    return {str(n): (a.get('type') == 'sheltered')
-            for n, a in accts.items() if isinstance(a, dict)
-            and a.get('type') in ('taxable', 'sheltered')}
+    return sheltered_by_name(configured_accounts(
+        _project_doc_near(path).get('accounts')))
 
 
 def tax_date_near(path) -> Optional[str]:
@@ -383,15 +385,6 @@ class MissingHistoryCandidate:
 _BROKER_SHORT_RE = re.compile(r'(?<![A-Z])SHORT\.(?=\s|$)')
 
 
-def open_close_codes(tx) -> Tuple[str, ...]:
-    """The broker's open/close marker on a row ('O', 'C' or both, in
-    the broker's order; () when the export has none) — IB's Trades
-    Code, carried as `open_close`."""
-    raw = str(getattr(tx, 'open_close', '') or '')
-    return tuple(c for c in re.split(r'[;,\s]+', raw.upper())
-                 if c in ('O', 'C'))
-
-
 def broker_short_marker(tx) -> str:
     """How the broker marks this sale as a short sale: 'SHORT.' (RBC's
     description) or 'IB code O' (an IB sale coded O or C;O — it opened
@@ -401,34 +394,6 @@ def broker_short_marker(tx) -> str:
     if float(tx.quantity or 0) < 0 and 'O' in open_close_codes(tx):
         return 'IB code O'
     return ''
-
-
-def unbacked_close(tx, prev: float, order_prev: Optional[float] = None
-                   ) -> bool:
-    """The broker codes this trade as (partly) CLOSING (IB code C) but
-    the position the data holds cannot back the close: a sale coded C
-    alone that sells more than is held (`prev`, the position before this
-    row), a sale coded C;O with no long held when its ORDER began
-    (`order_prev`: IB stamps the order's code on every fill of it, so
-    the second fill of a "C;O" order that closed 1 and opened 1 carries
-    C;O too) — and the mirror cases for a buy. What it closed was
-    opened before the data: missing history, never a new short or a new
-    long (audit S013-00)."""
-    codes = open_close_codes(tx)
-    if 'C' not in codes:
-        return False
-    if order_prev is None:
-        order_prev = prev
-    q = float(tx.quantity or 0)
-    if q < 0:
-        if 'O' in codes:
-            return order_prev <= 1e-9
-        return prev + q < -1e-9
-    if q > 0:
-        if 'O' in codes:
-            return order_prev >= -1e-9
-        return prev + q > 1e-9
-    return False
 
 
 class FutureBrokerBooks:
@@ -471,24 +436,6 @@ def _close_unbacked(tx, prev: float, order_prev: Optional[float],
             and (own is None or unbacked_close(tx, own)))
 
 
-class OrderStarts:
-    """The position each broker ORDER began from, for unbacked_close:
-    consecutive rows of one (symbol, account) with the same clock stamp,
-    direction and open/close code are fills of one order."""
-
-    def __init__(self):
-        self._last: Dict[Any, Tuple[Any, float]] = {}
-
-    def prev(self, key, tx, prev: float) -> float:
-        q = float(tx.quantity or 0)
-        sig = (tx.date, tx.time, q > 0, open_close_codes(tx))
-        last = self._last.get(key)
-        if last is not None and last[0] == sig:
-            return last[1]
-        self._last[key] = (sig, prev)
-        return prev
-
-
 def _is_marked_short(tx) -> bool:
     return bool(broker_short_marker(tx))
 
@@ -498,7 +445,7 @@ class JournalDays:
     (_walk_key: buys and in-legs before sales and out-legs): a set of
     (account, date, SYMBOL), each symbol as the walked books spell it
     and as the inputs do. `in` tests a symbol of any journal pair (the
-    symbols a caller re-checks: taxjson_run). A day that holds no
+    symbols a caller re-checks: the commands). A day that holds no
     journal keeps the clock — a sale and a rebuy of one listing, a sale
     of one listing with no purchase and a buy of the other the same day
     (a ticker.map TOBASE line says the two are one security, not that
@@ -632,24 +579,6 @@ def _day_trades(cache: Path, accounts: Iterable[str]
     return out
 
 
-def _opposite_trades(day: Dict[str, List[float]], a: str, b: str) -> bool:
-    """A journal's trades on one day: units of one listing bought and the
-    same number of units of the OTHER listing sold (a Norbert's gambit's
-    buy and sale, the broker's clock in any order). Never one listing's
-    own sale and rebuy (a == b)."""
-    if a == b:
-        return False
-    ta, tb = day.get(a), day.get(b)
-    if not ta or not tb:
-        return False
-
-    return _same_units(ta[0], tb[1]) or _same_units(tb[0], ta[1])
-
-
-def _same_units(x: float, y: float) -> bool:
-    return x > 1e-9 and abs(x - y) <= max(1e-6, 1e-6 * max(x, y))
-
-
 def _journal_trade_day(trades: Dict[Tuple[str, str], Dict[str, List[float]]],
                        account: str, legs: Iterable[str], frm: str, to: str,
                        units: float) -> Optional[str]:
@@ -702,100 +631,18 @@ def journal_targets(ticker_map) -> JournalDays:
     caller decides). A TOBASE line is no journal (_journal_line_symbols)."""
     if not ticker_map:
         return JournalDays()
-    from taxjson.bin.taxjson_ticker_map import load_map_file
+    from taxjson.lib.map_file import load_map_file
     return JournalDays(_journal_line_symbols(load_map_file(Path(ticker_map))))
 
 
-# RBC's reference on the two TFR legs of one journal between a
-# security's lines ("TFR - ... TRANSFER TO U$ J~1" / "... FROM C$ J~1"),
-# read only on a TFR row (any other text that happens to hold "J~" is no
-# journal reference).
-_JOURNAL_REF_RE = re.compile(r'^\s*TFR\b.*(?<!\S)J~(\w+)\b',
-                             re.IGNORECASE)
-# The broker whose J~ reference that is (lib/brokerages ids).
-_JOURNAL_REF_BROKER = 'rbc_direct'
 # The broker of a row whose file is not known (a row of the books):
 # journal_leg_key reads its `journal_pair` only.
 _NO_BROKER = '?'
 
 
-def journal_leg_key(t: Any, broker: Optional[str] = None
-                    ) -> Optional[Tuple[str, ...]]:
-    """What pairs a TRANSFER row with the other leg of its journal,
-    within one account: the row's `journal_pair` (a Questrade BRW
-    currency journal, brokerages/questrade; a .tt JOURNAL line's legs,
-    lib/dated_events), else RBC's J~ reference on a TFR row, with the
-    leg's date — and only on an RBC row when `broker` (the parser id of
-    the row's file) is known. None for any other row. `t` is a
-    TaxTransaction or a parsed row (dict)."""
-    get = t.get if isinstance(t, dict) else (
-        lambda k, d=None: getattr(t, k, d))
-    if str(get('action') or '').upper() != 'TRANSFER':
-        return None
-    pair = str(get('journal_pair') or '').strip()
-    if pair:
-        return ('pair', pair)
-    if broker and broker != _JOURNAL_REF_BROKER:
-        return None
-    m = _JOURNAL_REF_RE.search(' '.join(str(get('description') or '')
-                                        .split()))
-    if m:
-        return ('ref', str(get('date') or '')[:10], m.group(1).upper())
-    return None
-
-
 def _row_get(t: Any):
     return t.get if isinstance(t, dict) else (
         lambda f, d=None, _t=t: getattr(_t, f, d))
-
-
-def ref_group_journal(legs: Iterable[Tuple[str, float, str]]
-                      ) -> Optional[Tuple[str, str, float]]:
-    """THE rule for the legs one broker reference groups in one account
-    (journal_leg_key: a Questrade journal_pair, RBC's J~ reference, a
-    .tt JOURNAL line's pair id), shared by cross_listings.analyze (step
-    0b), transfer_in.own_journal_legs and _detected_journals (v0.24.1
-    leftovers, 4). `legs` are (symbol, signed quantity, date): the group
-    is ONE journal of (out symbol, in symbol, units) when its out-legs
-    all name one listing, its in-legs all name one listing (the same one
-    for a custody note), the two directions move the same units (a
-    journal the broker split over several rows — 600 + 400 into the
-    1000 out — is one journal) and every leg is dated within
-    cross_listings.PAIR_DAYS business days of the others; None
-    otherwise (one direction only, units that do not balance, a third
-    listing: not a journal the reference proves)."""
-    from taxjson.lib.cross_listings import PAIR_DAYS, business_days
-    eps = 1e-6
-    outs: List[Tuple[str, float, str]] = []
-    ins: List[Tuple[str, float, str]] = []
-    for sym, q, day in legs:
-        try:
-            q = float(q)
-        except (TypeError, ValueError):
-            return None
-        if q < -eps:
-            outs.append((str(sym).upper(), q, str(day or "")[:10]))
-        elif q > eps:
-            ins.append((str(sym).upper(), q, str(day or "")[:10]))
-    if not outs or not ins:
-        return None
-    o_syms = {x[0] for x in outs}
-    i_syms = {x[0] for x in ins}
-    if len(o_syms) != 1 or len(i_syms) != 1:
-        return None
-    qo = -sum(x[1] for x in outs)
-    qi = sum(x[1] for x in ins)
-    if abs(qo - qi) > max(eps, 1e-6 * max(qo, qi)):
-        return None
-    days = sorted(x[2] for x in outs + ins)
-    try:
-        lo, hi = (date.fromisoformat(days[0]),
-                  date.fromisoformat(days[-1]))
-    except ValueError:
-        return None
-    if business_days(lo, hi) > PAIR_DAYS:
-        return None
-    return next(iter(o_syms)), next(iter(i_syms)), qi
 
 
 def _detected_journals(rows: Iterable[Tuple[Any, ...]],
@@ -912,8 +759,10 @@ def walk_journal_symbols(cache, ticker_map=None) -> JournalDays:
     never is. Each day is recorded for the symbols as the inputs spell
     them and as the books do (the effective map's renames). Advisory: an
     unreadable piece is skipped."""
-    from taxjson.bin.taxjson_ticker_map import load_map_file, merge_renames
+    from taxjson.lib.ticker_map_rules import merge_renames
+    from taxjson.lib.map_file import load_map_file
     from taxjson.lib import cross_listings as XL
+    from taxjson.lib import project_layout as _PL
     from taxjson.lib.dated_events import SIDECAR_BROKER
     cache = Path(cache)
     out = JournalDays()
@@ -926,7 +775,7 @@ def walk_journal_symbols(cache, ticker_map=None) -> JournalDays:
         pass
     accounts |= {p.name[:-len('_base.json')] for p in cache.glob('*_base.json')
                  if not p.name.endswith('_raw_base.json')}
-    eff = cache / XL.EFFECTIVE_MAP
+    eff = cache / _PL.EFFECTIVE_MAP
     maps = [Path(ticker_map)] if ticker_map else []
     if eff.is_file():
         maps.append(eff)
@@ -1022,7 +871,7 @@ def undeclared_journal_days(cache, ticker_map=None,
     hint (second pre-release review, finding 1)."""
     if not ticker_map or not Path(ticker_map).is_file():
         return []
-    from taxjson.bin.taxjson_ticker_map import load_map_file
+    from taxjson.lib.map_file import load_map_file
     cache = Path(cache)
     try:
         tm = load_map_file(Path(ticker_map))
@@ -1176,7 +1025,7 @@ def detect_missing_history(
         # prefix): a short is an ordinary opening position (IB codes it
         # `O`), exactly like an option sell-to-open.
         derivative = (is_option_symbol(tx.symbol)
-                      or (tx.symbol or '').startswith(('F:', '/', '\\')))
+                      or (tx.symbol or '').startswith(FUTURES_PREFIXES))
         # One pool per (symbol, account) — NOT per currency: the engine
         # pools identical property regardless of the leg's native
         # currency (base conversion happens before pooling), so a CAD
@@ -1216,7 +1065,7 @@ def detect_missing_history(
                 if tgt is None:
                     tgt = state[(new_sym, tx.account, '')] = _new_state(
                         is_option_symbol(new_sym)
-                        or new_sym.startswith(('F:', '/', '\\')))
+                        or new_sym.startswith(FUTURES_PREFIXES))
                 if s['running'] < -1e-9:
                     # The short moves with its broker evidence: a short
                     # the broker marks (RBC SHORT.) stays a real short
@@ -1316,7 +1165,7 @@ class UnbackedCover:
 
 def _derivative_symbol(sym: str) -> bool:
     return (is_option_symbol(sym)
-            or (sym or '').startswith(('F:', '/', '\\')))
+            or (sym or '').startswith(FUTURES_PREFIXES))
 
 
 def detect_unbacked_covers(
@@ -1391,7 +1240,7 @@ def detect_unbacked_covers(
             symbol=tx.symbol, account=tx.account,
             date=_basis_date(tx, date_basis),
             unbacked_qty=unbacked, marker=marker,
-            proceeds=round(abs(float(tx.net_amount or 0.0)), 2)))
+            proceeds=M.shown(abs(float(tx.net_amount or 0.0)), 2)))
     out.sort(key=lambda c: (c.symbol, c.account, c.date))
     return out
 
@@ -1791,7 +1640,7 @@ def assess_tax_year_relevance(
             candidate=c,
             affects_year=(year_str is None or st['draws'] > 0),
             in_year_dispositions=st['n'],
-            in_year_proceeds=round(st['proceeds'], 2),
+            in_year_proceeds=M.shown(st['proceeds'], 2),
             last_in_year_date=st['last'],
             in_year_activity=(year_str is None
                               or (c.symbol, c.account) in active),
@@ -1876,7 +1725,6 @@ def rename_successors(transactions: Iterable[TaxTransaction]
             todo.extend(direct.get((n, acct), ()))
         out[(sym, acct)] = seen
     return out
-
 
 
 def year_pool(transactions: Iterable[TaxTransaction],
@@ -2210,14 +2058,14 @@ def detect_zero_basis_acquisitions(
             continue                                      # no $0 basis hit a sale
         out.append(ZeroBasisRow(
             symbol=symbol, account=account, currency=currency,
-            zero_cost_qty=round(s['zero_qty'], 4),
+            zero_cost_qty=M.units(s['zero_qty'], 4),
             acquisition_date=s['acq_date'], description=s['desc'][:80],
             looks_corp_action=s['corp'],
             affects_year=(s['any_disp'] > 0
                           and (year_str is None or s['in_year'] > 0)),
             in_year_dispositions=s['in_year'],
-            in_year_proceeds=round(s['in_year_proc'], 2),
-            still_held_qty=round(held, 4),
+            in_year_proceeds=M.shown(s['in_year_proc'], 2),
+            still_held_qty=M.units(held, 4),
             sold=s['any_disp'] > 0,
             declared=s['undeclared'] <= 1e-9,
             event_ids=tuple(s['events']),
@@ -2449,17 +2297,17 @@ def format_suggestions(candidates: List[MissingHistoryCandidate],
             **({"_not_sized": _ns} if _ns and not _q else {}),
             "symbol": c.symbol,
             "account": c.account,
-            **({QUANTITY_KEY: round(_q, 10)} if _q else {}),
+            **({QUANTITY_KEY: M.units(_q, 10)} if _q else {}),
             **({"_sized_through": sized_through}
                if _q and sized_through else {}),
-            **({"_quantity_all_rows": round(_qa, 10)}
+            **({"_quantity_all_rows": M.units(_qa, 10)}
                if _qa else {}),
             "_note": note,
             "_first_negative": c.first_negative_date,
             # Full precision (audit S074-22: a 3e-05 BTC short read
             # -0.0); 10 dp only trims float noise.
-            "_peak_short": round(c.peak_short, 10),
-            "_end_position": round(c.end_position, 10),
+            "_peak_short": M.units(c.peak_short, 10),
+            "_end_position": M.units(c.end_position, 10),
             "_disposition_count": c.disposition_count,
         })
     return json.dumps(entries, indent=2) + "\n"
@@ -2578,7 +2426,7 @@ def read_legacy_entries(path: Path) -> MissingHistoryPairs:
 # Dated openings in the accounts' .tt files.
 #
 # `OPENING <date> <SYMBOL> <qty> cost=unknown [reason="..."]` in any .tt
-# file of inputs/<account>/ (taxjson_convert_tt.parse_unknown_opening_
+# file of inputs/<account>/ (tt_format.parse_unknown_opening_
 # line): <qty> units of SYMBOL held on <date>, bought before the data at
 # a cost the files do not give: an OPENING_BALANCE row (sales drawing on
 # it go to manual reporting, CA-ACB-11 / US-BASIS-04), its date and
@@ -2623,7 +2471,7 @@ class DeclarationMaps:
     delete: frozenset = frozenset()
     crypto_accounts: frozenset = frozenset()
     base_currency: str = ''
-    # The dated renames (lib/renames.DatedRename: a .tt RENAME line, a
+    # The dated renames (lib/rename_decl.DatedRename: a .tt RENAME line, a
     # legacy map line) the merge stages book.
     dated: Tuple[Any, ...] = ()
 
@@ -2654,10 +2502,10 @@ class DeclarationMaps:
 
 def map_symbol_through(symbol: str, mapping: Dict[str, str]) -> str:
     """`symbol` as the merge stages spell it under `mapping`
-    (taxjson_ticker_map.map_symbol: an option through its underlying)."""
+    (ticker_map_rules.map_symbol: an option through its underlying)."""
     if not mapping:
         return symbol
-    from taxjson.bin.taxjson_ticker_map import map_symbol
+    from taxjson.lib.ticker_map_rules import map_symbol
     return map_symbol(symbol, mapping)
 
 
@@ -2671,10 +2519,10 @@ def declaration_maps(root: Any) -> DeclarationMaps:
     root = Path(root)
     out = DeclarationMaps()
     try:
-        settings = _PL._settings(root) or {}
+        settings = _PL._settings(root)
     except Exception:                               # noqa: BLE001
-        settings = {}
-    cur = str(settings.get("base_currency") or "").strip().upper()
+        settings = Settings()
+    cur = str(settings.base_currency or "").strip().upper()
     if not cur:
         try:
             cur = HOME_CURRENCY.get(settings_country(settings), '')
@@ -2686,27 +2534,61 @@ def declaration_maps(root: Any) -> DeclarationMaps:
     except Exception:                               # noqa: BLE001
         accts = {}
     out.crypto_accounts = frozenset(
-        str(n) for n, c in accts.items()
-        if isinstance(c, dict) and c.get("crypto"))
-    # The map the merge stages read: the run's effective map when it
-    # wrote one (ticker.map with its tobase.map, the joins the transfer
-    # evidence proves, the .tt RENAME events — lib/cross_listings.
-    # effective_map_text), else the project's ticker.map.
-    from taxjson.lib.cross_listings import EFFECTIVE_MAP
-    tm = root / "work" / EFFECTIVE_MAP
-    if not tm.is_file():
-        tm = _PL.ticker_map_path(root)
+        n for n, c in typed_accounts(accts).items() if c.crypto)
+    tm = _declaration_map(root)
     if not tm.is_file():
         return out
     # (Parsed quietly: the merge stage says the map's problems.)
-    from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
-                                                merge_renames)
+    from taxjson.lib.ticker_map_rules import merge_renames
+    from taxjson.lib.map_file import _parse_map_file
     tmap = _parse_map_file(tm)[0]
     out.base = merge_renames(tmap, to_base=True)
     out.native = merge_renames(tmap, to_base=False)
     out.delete = frozenset(tmap.delete or ())
     out.dated = tuple(tmap.dated or ())
     return out
+
+
+def _declaration_map(root: Path) -> Path:
+    """The map declaration_maps reads: the run's effective map when it
+    wrote one (ticker.map with its tobase.map, the joins the transfer
+    evidence proves, the .tt RENAME events — lib/cross_listings.
+    effective_map_text), else the project's ticker.map (absent or not)."""
+    from taxjson.lib import project_layout as _PL
+    tm = Path(root) / "work" / _PL.EFFECTIVE_MAP
+    return tm if tm.is_file() else _PL.ticker_map_path(root)
+
+
+def missing_history_reads(root: Any) -> Tuple[str, List[Path]]:
+    """What load_missing_history reads from project folder `root` beside
+    taxjson.toml, for the freshness records of the stages it feeds (the
+    folder has no content hash: backlog TJ-4128). (The text of the .tt
+    OPENING cost=unknown lines, one JSON line each as read_tt_openings
+    returns them, or the error naming the lines it refuses; the map files
+    declaration_maps reads: the effective map, else ticker.map and its
+    tobase.map.) Each line keeps its file and line number (`where`), so
+    an edit that moves one (a line inserted above it) rebuilds too; an
+    edit that leaves these lines where they are does not (backlog
+    TJ-4138)."""
+    from dataclasses import asdict
+    root = Path(root)
+    try:
+        text = "".join(json.dumps(asdict(t), sort_keys=True, default=str)
+                       + "\n" for t in read_tt_openings(root))
+    except TtOpeningError as e:
+        text = json.dumps({"error": str(e)}) + "\n"
+    return text, missing_history_maps(root)
+
+
+def missing_history_maps(root: Any) -> List[Path]:
+    """The map files the lines of project folder `root` are read through
+    (declaration_maps): the effective map, else ticker.map and its
+    tobase.map. A folder at a map's name reads as no map: it is not
+    declared (backlog TJ-4133)."""
+    tm = _declaration_map(Path(root))
+    from taxjson.lib.tobase_map import tobase_path
+    maps = [tm] if tm.name != "ticker.map" else [tm, tobase_path(tm.parent)]
+    return [p for p in maps if not p.is_dir()]
 
 
 def read_tt_openings(root: Any, accounts: Optional[Iterable[str]] = None
@@ -2717,8 +2599,7 @@ def read_tt_openings(root: Any, accounts: Optional[Iterable[str]] = None
     Raises TtOpeningError listing each malformed line and each symbol
     opened twice in one account (which line is the truth cannot be
     guessed)."""
-    from taxjson.bin.taxjson_convert_tt import (parse_unknown_opening_line,
-                                                tt_lines)
+    from taxjson.lib.tt_format import parse_unknown_opening_line, tt_lines
     from taxjson.lib import project_layout as _PL
     from taxjson.lib.cli_diag import read_text_utf8
     from taxjson.lib.dated_events import _project_accounts, _where, tt_files
@@ -2940,7 +2821,7 @@ def _project_accounts_of(root: Path) -> List[str]:
 def tt_plan_text(plan: TtWritePlan, account: str) -> str:
     """The new contents of `account`'s MISSING_HISTORY_TT: the file as
     it is (a new one gets the header), then the plan's new lines."""
-    from taxjson.bin.taxjson_convert_tt import unknown_opening_text
+    from taxjson.lib.tt_format import unknown_opening_text
     from taxjson.lib import project_layout as _PL
     path = plan.files[account]
     try:
@@ -2979,311 +2860,6 @@ def tt_differ_lines(plan: TtWritePlan) -> List[str]:
             f"{float(old.quantity):g}, the books size {float(ln.quantity):g}"
             f" — left as it is (edit the line to change it)"
             for ln, old in plan.differ]
-
-
-# --------------------------------------------------------------------
-# `tjs migrate`: missing_history.json -> the .tt form.
-
-MIGRATED_SUFFIX = ".migrated"
-
-
-@dataclass
-class ProjectView:
-    """What one project's missing_history.json opens, sized as its run
-    sizes it (the rows through its tax year's end; a recorded
-    `quantity` as it is): `sized` {pair: units}, `later` {pair: units}
-    for an entry short only after the year end (the deepest shortage of
-    every row), `anchor` {pair: the symbol the opening is booked on},
-    `stale` {pair: why it opens nothing}."""
-    root: Path
-    year: Optional[int]
-    file: Path
-    sized: Dict[Tuple[str, str], float] = field(default_factory=dict)
-    later: Dict[Tuple[str, str], float] = field(default_factory=dict)
-    stale: Dict[Tuple[str, str], str] = field(default_factory=dict)
-
-    @property
-    def label(self) -> str:
-        return str(self.year) if self.year else self.root.name
-
-    def view(self, pair: Tuple[str, str]) -> Optional[float]:
-        if pair in self.sized:
-            return self.sized[pair]
-        return self.later.get(pair)
-
-    def listed(self) -> Set[Tuple[str, str]]:
-        return set(self.sized) | set(self.later) | set(self.stale)
-
-
-class MigrationNeedsRun(ValueError):
-    """A project whose books are not built: its entries cannot be
-    sized (run `tjs run` there first)."""
-
-
-def _project_year(root: Path) -> Optional[int]:
-    from taxjson.lib import project_layout as _PL
-    st = (_PL.read_config_soft(root).get("settings") or {})
-    y = st.get("year")
-    return y if isinstance(y, int) and not isinstance(y, bool) else None
-
-
-def _log_of(cache: Path, account: str, mh_file: Path
-            ) -> Optional[List[Dict[str, Any]]]:
-    """The account's applied missing-history log from its last run
-    (work/<acct>_gains.json), None when there is none or it is older
-    than `mh_file` (the run did not apply this file)."""
-    g = Path(cache) / f"{account}_gains.json"
-    try:
-        if g.stat().st_mtime < mh_file.stat().st_mtime:
-            return None
-        doc = json.loads(g.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    log = doc.get("missing_history_log") if isinstance(doc, dict) else None
-    return log if isinstance(log, list) else None
-
-
-def _gains_stage_rows(root: Path, account: str,
-                      txs: List[TaxTransaction],
-                      listed: Set[Tuple[str, str]]) -> List[TaxTransaction]:
-    """The rows the account's gains stage sizes its openings on when the
-    books were built WITHOUT the file (a run with it moved aside): its
-    merged books less the transfer-in arrivals booked at the broker's
-    book value for a listed pair (with the file, the entry covers the
-    arrival and nothing is booked — transfer_in.mark_missing_history),
-    after the same transfer handling (pipeline.prepare_books), so a
-    converted entry opens what the run with the file opened."""
-    txs = [t for t in txs
-           if not (str(getattr(t, 'type', '') or '') == 'transfer_book_value'
-                   and (str(t.symbol), str(t.account)) in listed)]
-    import contextlib
-    import io
-    from taxjson.lib import project_layout as _PL
-    from taxjson.lib.pipeline import prepare_books
-    doc = _PL.read_config_soft(root)
-    acfg = (doc.get("accounts") or {}).get(account) or {}
-    st = doc.get("settings") or {}
-    try:
-        from taxjson.lib.country import settings_country
-        country = settings_country(st)
-    except Exception:                                   # noqa: BLE001
-        country = None
-    with contextlib.redirect_stderr(io.StringIO()):
-        out, _sh, _af, _log = prepare_books(
-            txs, [], [], taxable=acfg.get("type") == "taxable",
-            phantom_hint=False, country=country,
-            base_currency=st.get("base_currency"),
-            spot_crypto=bool(acfg.get("crypto")),
-            transfers_as_acquisitions=bool(
-                st.get("transfers_as_acquisitions")))
-    return out
-
-
-def project_view(root: Any) -> Optional[ProjectView]:
-    """The ProjectView of project `root`'s missing_history.json (None
-    without one). Each entry is sized as the project's run sized it: its
-    last run's applied log (work/<acct>_gains.json) when that run read
-    this file, else the same synthesize_openings call on the account's
-    merged books. Raises MigrationNeedsRun when an account's books are
-    not built; what load_missing_history raises."""
-    from taxjson.lib.core import load_transactions
-    root = Path(root)
-    mh = legacy_missing_history_file(root)
-    if mh is None:
-        return None
-    pairs = read_legacy_entries(mh)
-    year = _project_year(root)
-    until = sizing_until(year)
-    v = ProjectView(root, year, mh)
-    cache = root / "work"
-    for acct in sorted({a for _s, a in pairs}):
-        mine = MissingHistoryPairs({p for p in pairs if p[1] == acct})
-        mine.quantities = {k: q for k, q in pairs.quantities.items()
-                           if k[1] == acct}
-        log = _log_of(cache, acct, mh)
-        if log is not None and not mine <= {
-                (str(e.get('symbol') or ''), str(e.get('account') or ''))
-                for e in log if isinstance(e, dict)}:
-            # (that run did not apply this file — a run with it moved
-            # aside: sized from the books instead)
-            log = None
-        if log is None:
-            base = cache / f"{acct}_base.json"
-            if not base.is_file():
-                raise MigrationNeedsRun(
-                    f"{root}: no work/{acct}_base.json — its {mh.name} "
-                    f"entries are sized from its books: move the file "
-                    f"aside (`mv {mh.name} {mh.name}.hold`), `tjs "
-                    f"run` there, move it back and run `tjs migrate` "
-                    f"again")
-            txs = _gains_stage_rows(root, acct, load_transactions(base),
-                                    mine)
-            _o, log = synthesize_openings(txs, mine, flag_stale=False,
-                                          until=until)
-        for e in log:
-            pair = (str(e.get('symbol') or ''), str(e.get('account') or ''))
-            if pair not in mine:
-                continue
-            if e.get('inserted'):
-                v.sized[pair] = float(e.get('opening_qty') or 0.0)
-            elif float(e.get('opening_all_rows') or 0.0) > 0:
-                v.later[pair] = float(e['opening_all_rows'])
-            else:
-                v.stale[pair] = str(e.get('note') or 'opens nothing')
-        for pair in mine:
-            if pair not in v.listed():
-                v.stale[pair] = 'opens nothing'
-    return v
-
-
-@dataclass
-class MissingHistoryMigration:
-    """`tjs migrate`'s plan for missing_history.json: the views of
-    every project that has one (the year folders sharing the exports),
-    the merged lines (each entry as the NEWEST project listing it sizes
-    it), `agreed` (every project listing it the same), `differ` (lines
-    saying how the projects disagree: another quantity, or not listed
-    in some), `stale` (opens nothing in any project: dropped) and the
-    write plan."""
-    views: List[ProjectView]
-    lines: List[TtLine] = field(default_factory=list)
-    agreed: List[Tuple[str, str]] = field(default_factory=list)
-    differ: List[str] = field(default_factory=list)
-    stale: List[str] = field(default_factory=list)
-    plan: Optional[TtWritePlan] = None
-    nodate: List[str] = field(default_factory=list)
-    # The files listing an entry that cannot be converted (`nodate`):
-    # never archived (issue #25).
-    unconverted: Set[Path] = field(default_factory=set)
-
-
-def migration_projects(root: Any) -> List[Path]:
-    """The projects whose missing_history.json `tjs migrate` merges:
-    with exports shared by every year (`inputs_dir`), every year folder
-    beside `root` reading the same folder; else `root` alone."""
-    from taxjson.lib import project_layout as _PL
-    root = Path(root).resolve()
-    if not _PL.shared_inputs(root):
-        return [root]
-    mine = _PL.inputs_dir(root).resolve()
-    out = []
-    for _y, d in _PL.year_dirs(root.parent):
-        try:
-            if _PL.inputs_dir(d).resolve() == mine:
-                out.append(d.resolve())
-        except OSError:
-            continue
-    return out or [root]
-
-
-def _view_parts(views: List[ProjectView], pair: Tuple[str, str]) -> str:
-    """How each project's view sizes `pair` ("2024: 5, 2025: opens
-    nothing (...)")."""
-    parts = []
-    for v in views:
-        x = v.view(pair)
-        if pair not in v.listed():
-            parts.append(f"{v.label}: not listed")
-        elif x is None:
-            parts.append(f"{v.label}: opens nothing "
-                         f"({v.stale.get(pair, '')})")
-        else:
-            parts.append(f"{v.label}: {x:g}"
-                         + (" (short only after its year)"
-                            if pair in v.later else ""))
-    return ", ".join(parts)
-
-
-def plan_missing_history_migration(root: Any) -> Optional[
-        MissingHistoryMigration]:
-    """The plan (None when no project has a missing_history.json)."""
-    projects = migration_projects(root)
-    views = [v for v in (project_view(p) for p in projects) if v is not None]
-    if not views:
-        return None
-    views.sort(key=lambda v: (v.year or 0, str(v.root)))
-    m = MissingHistoryMigration(views)
-    newest = views[-1]
-    pairs = set()
-    for v in views:
-        pairs |= v.listed()
-    multi = len(views) > 1
-    for pair in sorted(pairs, key=lambda p: (p[1], p[0])):
-        sym, acct = pair
-        vals = [(v, v.view(pair)) for v in views if pair in v.listed()]
-        sized = [(v, q) for v, q in vals if q is not None]
-        # The NEWEST view listing the entry decides (issue #28), an
-        # explicit "opens nothing" (its books never go short) included:
-        # an older year's opening is not reinstated over it. A view whose
-        # books have no row of the pair (`no rows`: the account or the
-        # symbol is not in that year's books) cannot size it, and does
-        # not decide — as a year that does not list it.
-        decisive = [(v, q) for v, q in vals
-                    if q is not None or not v.stale.get(pair, '')
-                    .startswith('no rows')]
-        if not sized or not decisive or decisive[-1][1] is None:
-            if sized:
-                src = decisive[-1][0]
-                m.differ.append(
-                    f"{sym} / {acct}: " + _view_parts(views, pair)
-                    + f" — written: nothing ({src.label}'s view: "
-                    f"{src.stale.get(pair, 'opens nothing')})")
-                continue
-            why = "; ".join(f"{v.label}: {v.stale.get(pair, '')}"
-                            for v, _q in vals) if multi else \
-                vals[0][0].stale.get(pair, '')
-            m.stale.append(f"{sym} / {acct}: {why}")
-            continue
-        src, q = decisive[-1]
-        agree = (len(sized) == len(views)
-                 and all(abs(x - q) <= 1e-9 * max(1.0, q) for _v, x in sized))
-        if agree:
-            m.agreed.append(pair)
-        else:
-            m.differ.append(f"{sym} / {acct}: " + _view_parts(views, pair)
-                            + f" — written: {q:g} ({src.label}'s view)")
-        # The date: the day before the account's first row in the books
-        # of the view that sized it (issue #25: an account only an older
-        # year's books carry), else of another view listing it.
-        d = None
-        for v in [src] + [w for w, _q in reversed(vals) if w is not src]:
-            d = default_opening_date(v.root / "work", acct)
-            if d is not None:
-                break
-        if d is None:
-            m.nodate.append(f"{sym} / {acct}")
-            m.unconverted.update(v.file for v, _q in vals)
-            continue
-        where = (f"{src.label}/{src.file.name}" if multi else src.file.name)
-        m.lines.append(TtLine(acct, sym, q, d, f"migrated from {where}"))
-    m.plan = plan_tt_write(newest.root, m.lines)
-    return m
-
-
-def apply_missing_history_migration(m: MissingHistoryMigration
-                                    ) -> Tuple[List[Path], List[Path]]:
-    """Write the plan's lines, then rename each project's
-    missing_history.json to <name>.migrated (never deleted). Returns
-    (the .tt files written, the files renamed). A plan with an entry it
-    cannot convert (`nodate`) is refused, nothing written or renamed
-    (issue #25: a file is archived only once all of it is converted)."""
-    if m.nodate:
-        raise MigrationNeedsRun(
-            "cannot convert " + ", ".join(m.nodate) + " (no books for the "
-            "account in any year folder listing it) — nothing written, "
-            "nothing renamed: " + ", ".join(
-                str(p) for p in sorted(m.unconverted)))
-    written = apply_tt_plan(m.plan) if m.plan is not None else []
-    renamed = []
-    for v in m.views:
-        dst = v.file.with_name(v.file.name + MIGRATED_SUFFIX)
-        n = 1
-        while dst.exists() or dst.is_symlink():
-            n += 1
-            dst = v.file.with_name(f"{v.file.name}{MIGRATED_SUFFIX}{n}")
-        os.replace(v.file, dst)
-        renamed.append(dst)
-    return written, renamed
 
 
 def short_again_message(entry: Dict[str, Any],
@@ -3350,7 +2926,7 @@ def loss_warning_text(w: Dict[str, Any], country: str) -> str:
     if w.get('message'):
         return str(w['message'])
     return (f"{w.get('symbol')} loss with unknown cost (no purchase in "
-            f"your files) of {abs(float(w.get('raw_loss') or 0.0)):.2f} "
+            f"your files) of {M.shown(abs(float(w.get('raw_loss') or 0.0)), 2):.2f} "
             f"on {w.get('loss_date')} with a buy on "
             f"{w.get('acquisition_date')} inside the window — if you "
             f"report this loss by hand, apply "
@@ -3430,7 +3006,7 @@ def detect_superficial_loss_warnings(
                 'loss_amount': abs(loss.get('gain', 0.0)),
                 'tainted_dispositions': nearby,
                 'message': (
-                    f"Clean loss of {abs(loss.get('gain', 0.0)):.2f} on {loss.get('symbol')} "
+                    f"Clean loss of {M.shown(abs(loss.get('gain', 0.0)), 2):.2f} on {loss.get('symbol')} "
                     f"({loss.get('date')}) has {len(nearby)} unknown-cost disposition(s) within "
                     f"±{window_days} days ({LOSS_RULE[canonical_country(country)][1]} "
                     f"dates). {LOSS_RULE[canonical_country(country)][0][0].upper()}"
@@ -3450,7 +3026,7 @@ def _short_again(entry: Dict[str, Any],
     for d, run, factor in path:
         if run + opening_qty < -1e-6 * max(1.0, opening_qty):
             entry['short_again'] = {
-                'date': d, 'qty': round(abs(run + opening_qty) * factor,
+                'date': d, 'qty': M.units(abs(run + opening_qty) * factor,
                                         10)}
             return
 
@@ -3611,7 +3187,8 @@ def _opening_currency(t: Any, symbol: str, account: str,
     if view == "base" and getattr(pairs_in, "base_currency", ""):
         return pairs_in.base_currency
     if view == "native":
-        from taxjson.lib.markets import suffix_currency, suffix_of
+        from taxjson.lib.markets import suffix_currency
+        from taxjson.lib.markets_data import suffix_of
         cur = suffix_currency(suffix_of(symbol))
         if cur:
             return cur
@@ -3718,7 +3295,7 @@ def _apply_fixed_openings(sorted_txs: Sequence[TaxTransaction],
                 if d < day:
                     if run < -1e-6 * max(1.0, abs(run)) - 1e-9:
                         entry['short_before'] = {
-                            'date': d, 'qty': round(abs(run) * f, 10)}
+                            'date': d, 'qty': M.units(abs(run) * f, 10)}
                         break
             _short_again(entry, _long_side_path(trades, day, opening),
                          opening)
@@ -4202,11 +3779,13 @@ def synthesize_openings(
 # the files closed: IB's Trades `Basis` on a sale coded C (closing), with
 # the lots it closed when the statement lists Closed Lots; the "TRANSFER
 # BOOK VALUE" a Questrade or RBC transfer-in states. That figure is
-# EVIDENCE: the run never books it. These helpers draft `.tt` purchase
-# lines from it into a file the run does not read (DRAFT_NAME, suffix
-# .tt.txt); the user reviews each line, fills in what the broker does not
-# say, and renames the file to .tt — the kept line is then the user's
-# assertion (tax-logic CA-ACB-15 / US-BASIS-08).
+# EVIDENCE: the run never books it. lib/purchase_drafts drafts `.tt`
+# purchase lines from it into a file the run does not read (DRAFT_NAME,
+# suffix .tt.txt); this file keeps the drafts' records and the file's
+# text (PurchaseDraft, DraftGap, format_purchase_drafts). The user
+# reviews each line, fills in what the broker does not say, and renames
+# the file to .tt — the kept line is then the user's assertion
+# (tax-logic CA-ACB-15 / US-BASIS-08).
 
 # The draft file: `.txt` is not an input suffix (`tjs run` reads
 # only *.csv and *.tt directly in inputs/<account>/), so an unreviewed
@@ -4218,16 +3797,6 @@ DRAFT_NAME = "purchases_draft.tt.txt"
 DATE_PLACEHOLDER = "YYYY-MM-DD"
 COST_PLACEHOLDER = "COST"
 _DRAFT_TIME = "09:30:00"
-# A transfer-in row that states the delivering dealer's book value of
-# what was delivered: Questrade's "... TRANSFER BOOK VALUE <amount>"
-# (lib/brokerages/questrade.py reads it as the row's net amount), RBC's
-# "... ACCOUNT TRANSFER BOOK VALUE <amount> FROM ACCOUNT ...".
-_TRANSFER_BOOK_VALUE_RE = re.compile(
-    r'TRANSFER\s+BOOK\s+VALUE\s+([\d,]+(?:\.\d+)?)', re.IGNORECASE)
-# The `type` of a books row that acquires transferred-in shares at the
-# broker's stated book value on their arrival date: such a transfer is
-# already costed by the run, so it is not drafted again.
-from taxjson.lib.core import TRANSFER_BOOK_VALUE_TYPE  # noqa: E402
 
 
 @dataclass
@@ -4256,8 +3825,8 @@ class PurchaseDraft:
             price = total = COST_PLACEHOLDER
         else:
             unit = self.quantity * (self.multiplier or 1.0)
-            price = f"{(self.cost / unit if unit else 0.0):.6f}"
-            total = f"{self.cost:.2f}"
+            price = f"{(M.shown(self.cost / unit if unit else 0.0, 6)):.6f}"
+            total = f"{M.shown(self.cost, 2):.2f}"
         size = ''
         if is_option_symbol(self.symbol) and self.multiplier \
                 and abs(self.multiplier - 100.0) > 1e-9:
@@ -4280,729 +3849,7 @@ class DraftGap:
 
 def _mask_id(row_id: Any) -> str:
     """A row id shortened the way every id is shown: 2 chars + ***."""
-    s = str(row_id or '')
-    return f"{s[:2]}***" if s else '?'
-
-
-def parse_broker_basis(text: str) -> Optional[Tuple[float, str]]:
-    """'1,234.56 USD' -> (1234.56, 'USD'); None when it does not read."""
-    m = re.match(r'^\s*([\d,]+(?:\.\d+)?)\s+([A-Za-z]{3})\s*$',
-                 str(text or ''))
-    if not m:
-        return None
-    try:
-        return float(m.group(1).replace(',', '')), m.group(2).upper()
-    except ValueError:
-        return None
-
-
-def parse_broker_lots(text: str) -> Optional[List[Tuple[str, float, float]]]:
-    """broker_lots evidence -> [(open date, qty, cost)]; None when there
-    is none or a lot did not read (the export's lots are then not used)."""
-    text = str(text or '').strip()
-    if not text or text == 'invalid':
-        return None
-    out = []
-    for part in text.split(';'):
-        bits = part.split()
-        if len(bits) != 3:
-            return None
-        try:
-            d = date.fromisoformat(bits[0]).isoformat()
-            q, c = float(bits[1]), float(bits[2])
-        except ValueError:
-            return None
-        if q <= 0 or c < 0:
-            return None
-        out.append((d, q, c))
-    return out or None
-
-
-def _drafting_caveats(country: str, currency: str, *, lots: bool,
-                      is_transfer: bool = False,
-                      date_basis: str = 'settle') -> List[str]:
-    """The per-line notes that differ by country (CA-ACB-15 /
-    US-BASIS-08)."""
-    from taxjson.lib.country import home_currency, is_canada
-    out: List[str] = []
-    if is_canada(country):
-        if is_transfer:
-            out.append("check: the delivering broker's book value is its "
-                       "average cost, which is your ACB only if this was "
-                       "your only position in it (s.47 averages every "
-                       "identical share in all your taxable accounts).")
-        else:
-            out.append("check: IB's Basis is the cost of the lots IB "
-                       "closed (FIFO), not your ACB: the ACB averages "
-                       "every identical share in all your taxable "
-                       "accounts (s.47). If you held more of it bought "
-                       "before the data (still held, or at another "
-                       "broker), add those purchases too.")
-        if currency and currency != home_currency(country):
-            # A .tt line's one date is its settlement date under
-            # tax_date settle (settings.md, .tt files; backlog TJ-0419).
-            out.append(f"check: the run converts this {currency} cost "
-                       f"to CAD at the Bank of Canada rate of the line's "
-                       f"date, so the date must be the real purchase "
-                       f"date" + (", its settlement date (tax_date "
-                                  "settle: a .tt line's one date)."
-                                  if date_basis == 'settle' else "."))
-        out.append("check: a purchase within 30 days (settlement dates) "
-                   "of a loss sale of the same stock is a replacement "
-                   "for the superficial-loss rule.")
-    else:
-        if lots:
-            out.append("check: IB's lot date and cost are this lot's basis "
-                       "and the start of its holding period; if IB "
-                       "adjusted the lot for a wash sale, enter the "
-                       "original cost (taxjson applies §1091 itself).")
-        elif is_transfer:
-            out.append("check: the book value may sum several lots: write "
-                       "one line per lot with its own purchase date and "
-                       "cost — the date decides short- or long-term.")
-        else:
-            out.append("check: IB's Basis may sum several lots (FIFO): "
-                       "write one line per lot with its own purchase date "
-                       "and cost — the date decides short- or long-term.")
-    return out
-
-
-def _lot_line_date(trade_day: str, symbol: str, currency: str,
-                   date_basis: str) -> str:
-    """The .tt date of a lot IB lists: its Closed Lots date is the lot's
-    TRADE date, and a .tt line has one date, its settlement date under
-    tax_date settle (settings.md, .tt files) — the day the run converts
-    the cost on and dates the superficial-loss window from, as it does
-    for IB's own trade row (the listing market's cycle and calendar,
-    lib/dates.settlement_date; backlog TJ-0419). Under trade: the lot's
-    date as IB gives it."""
-    if date_basis != 'settle':
-        return trade_day
-    from taxjson.lib.dates import settlement_calendar, settlement_date
-    return settlement_date(trade_day,
-                           settlement_calendar(symbol, currency)
-                           or currency or 'USD',
-                           is_option_symbol(symbol))
-
-
-def _splits_after(events: List[Tuple[str, float, str]],
-                  when: Optional[str]) -> Tuple[float, str]:
-    """(unit factor, symbol in force) at `when` (None: before the data)
-    from a pair's split/rename history [(date, ratio, old symbol or '')],
-    walking back from the sale: every split or rename dated after
-    `when` re-denominates the units and renames back."""
-    factor = 1.0
-    symbol = ''
-    for d, ratio, old in reversed(events):
-        if when is not None and d <= when:
-            break
-        if ratio and abs(ratio) > 1e-12:
-            factor *= ratio
-        if old:
-            symbol = old
-    return factor, symbol
-
-
-def draft_purchases(
-    transactions: Iterable[TaxTransaction],
-    *,
-    country: str,
-    year: Any = None,
-    date_basis: Optional[str] = None,
-    transfer_rows: Iterable[Dict[str, Any]] = (),
-    registered_accounts=None,
-    journal_symbols: Optional[Set[str]] = None,
-    listed_pairs: Optional[Set[Tuple[str, str]]] = None,
-    rename_sources: Optional[Dict[str, List[str]]] = None,
-    accounts: Optional[Set[str]] = None,
-    symbol_key=None,
-    in_kind_legs: Optional[Set[Tuple[str, str, str, float]]] = None,
-    not_own: Optional[Sequence[Any]] = None,
-    in_kind_moves: Optional[Set[Tuple[str, str, str, float]]] = None,
-    own_moves: Optional[Sequence[Any]] = None,
-) -> Tuple[List[PurchaseDraft], List[DraftGap]]:
-    """Draft `.tt` purchase lines from the broker's own cost evidence.
-
-    1. An IB sale coded C (closing) that sells units the data never
-       bought, with IB's Basis: one line per lot when IB lists the lots
-       it closed (ClosedLot rows: open date, quantity, cost); else one
-       line with the purchase date left as DATE_PLACEHOLDER. When the
-       data held some of the units sold, IB's Basis covers those too:
-       the missing units get IB's lots dated before the account's first
-       row (when they add up), else a COST_PLACEHOLDER with the
-       arithmetic in the comment.
-    2. A transfer-in that states the delivering broker's book value
-       (Questrade's or RBC's "TRANSFER BOOK VALUE"; `transfer_rows` are the
-       transfer sidecars' rows, the run leaves them out of a taxable
-       account's books): one line with the date placeholder — the
-       transfer date is not the purchase date.
-
-    A pair is drafted whole (every one of its uncovered sales) when any
-    of its sales falls in `year` (on `date_basis`), or always when
-    `year` is None: a draft for one sale of a pair would otherwise be
-    consumed by an earlier one. Sheltered accounts are not drafted (no
-    gain is computed there). Quantities are in the units in force on
-    the purchase date (a split in the data after it is undone). Returns
-    (drafts, gaps); gaps are the sales and transfer-ins left undrafted,
-    with the reason. `accounts`: draft only these (every account's rows
-    still count for the Canadian cross-account check). `symbol_key`: a
-    transfer row's symbol as the books spell it (ticker.map's renames —
-    the sidecars keep the broker's spelling, which the draft line
-    uses); identity by default. `in_kind_legs`: the (account, symbol,
-    date, quantity) of the transfer rows an in-kind move to or from a
-    registered account names, booked or not (taxjson_run.
-    in_kind_taxable_legs every=True): never a slower move of your own,
-    as the run's arrivals read them; `in_kind_moves`: the moves' own
-    legs (every=True, legs_only=True): never a move of your own at all
-    (backlog TJ-0230). `not_own`: the project's .tt NOTOWN
-    lines (lib/transfer_in.read_not_own): a transfer-in whose pairing one
-    undoes is drafted as one from outside the books (backlog TJ-0075).
-    `own_moves`: the run's own pairing of the project's transfer rows
-    (taxjson_run.own_move_plan, [transfer_in.OwnMove]); given, a
-    transfer-in it pairs is a move of your own and `transfer_rows` are
-    not paired again — pairing them here took another set of rows than
-    the run (backlog TJ-0599). Without it (no project around the
-    books) every row of `transfer_rows` is paired, whatever `accounts`
-    drafts."""
-    from taxjson.lib.country import (canonical_country, default_tax_date,
-                                     is_canada)
-    country = canonical_country(country)
-    # The project's tax_date (the caller's); else the country's default.
-    date_basis = date_basis or default_tax_date(country)
-    year_str = str(year) if year is not None else None
-    listed = {(str(s).upper(), str(a)) for s, a in (listed_pairs or ())}
-    txs = list(transactions)
-    first_day: Dict[str, str] = {}
-    for t in txs:
-        d = str(t.date or '')[:10]
-        if d and (t.account not in first_day or d < first_day[t.account]):
-            first_day[t.account] = d
-    journal_symbols = _book_journals(txs, journal_symbols)
-    # A split another account of the book reports re-denominates this
-    # account's units too, as in the engines (backlog TJ-0832, TJ-1022).
-    sorted_txs = _drop_duplicate_splits(sorted(
-        _spread_global_splits(txs, registered_accounts, country),
-        key=lambda t: (_walk_key(t, journal_symbols),
-                       0 if float(t.quantity or 0) > 0 else 1)))
-
-    # 'virt': the units the drafts so far add before the data (the walk
-    # reads the pair as if they were in: _draft_sale's lines). 'low':
-    # the deepest the position goes WITHOUT them.
-    def _new():
-        return {'qty': 0.0, 'cost': 0.0, 'events': [], 'sales': [],
-                'in_year': False, 'tt_qty': 0.0, 'low': 0.0,
-                'bought': False, 'virt': 0.0}
-    state: Dict[Tuple[str, str], Dict[str, Any]] = {}
-    orders = OrderStarts()
-    books = FutureBrokerBooks(txs)
-    for tx in sorted_txs:
-        key = (tx.symbol, tx.account)
-        if tx.action == 'SPLIT':
-            ratio = float(tx.quantity or 0.0)
-            new_sym = normalize_symbol_new(tx.symbol,
-                                           getattr(tx, 'symbol_new', ''))
-            s = state.setdefault(key, _new())
-            if new_sym:
-                t = state.setdefault((new_sym, tx.account), _new())
-                t['qty'] += s['qty'] * ratio
-                t['virt'] += s['virt'] * ratio
-                t['cost'] += s['cost']
-                t['events'] = (s['events'] + [(str(tx.date)[:10], ratio,
-                                               tx.symbol)])
-                t['low'] = min(t['low'], s['low'] * ratio)
-                t['bought'] = t['bought'] or s['bought']
-                s['qty'] = s['cost'] = s['virt'] = 0.0
-            else:
-                s['qty'] *= ratio
-                s['virt'] *= ratio
-                s['events'].append((str(tx.date)[:10], ratio, ''))
-            continue
-        if tx.action not in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE',
-                             'TRANSFER'):
-            continue
-        s = state.setdefault(key, _new())
-        prev = s['qty']
-        q = float(tx.quantity or 0.0)
-        order_prev = orders.prev(key, tx, prev)
-        own = books.step(tx)
-        if q > 0:
-            if str(getattr(tx, 'type', '') or '') == \
-                    TRANSFER_BOOK_VALUE_TYPE:
-                s['booked_bv'] = s.get('booked_bv', 0.0) + q
-            s['qty'] = prev + q
-            s['bought'] = True
-            if prev >= 0:
-                s['cost'] += abs(float(tx.net_amount or 0.0))
-            else:
-                s['cost'] = (abs(float(tx.net_amount or 0.0))
-                             * max(0.0, prev + q) / q)
-            if (tx.action == 'BUYSELL'
-                    and str(getattr(tx, 'source', '') or '')
-                    .lower().endswith('.tt')):
-                s['tt_qty'] += q
-            continue
-        if q >= 0:
-            continue
-        held = max(prev, 0.0)
-        held_cost = s['cost'] if held > 1e-12 else 0.0
-        s['qty'] = prev + q
-        s['low'] = min(s['low'], s['qty'] - s['virt'])
-        if prev > 1e-12:
-            s['cost'] = (s['cost'] * max(0.0, prev + q) / prev
-                         if prev + q > 1e-12 else 0.0)
-        unbacked = abs(q) - held
-        if unbacked <= 1e-9:
-            continue
-        closing = _close_unbacked(tx, prev, order_prev, own)
-        if not closing and (broker_short_marker(tx)
-                            or _derivative_symbol(tx.symbol or '')):
-            # A short the broker declares (RBC SHORT., IB code O) or an
-            # option / future sold to open: a real position, not a
-            # missing purchase (R1-8, S013-00).
-            continue
-        if year_str is None or _basis_date(tx, date_basis).startswith(
-                year_str):
-            s['in_year'] = True
-        s['sales'].append({
-            'tx': tx, 'unbacked': unbacked, 'held': held,
-            'held_cost': held_cost, 'events': list(s['events']),
-        })
-        # The line drafted for these units is a purchase before the
-        # data: with it in, the position after this sale is not short,
-        # so a later sale of a purchase in the files sells that
-        # purchase, not another missing one. One line per sale that
-        # went short drafted more than the deepest short, and filling
-        # them in held shares never owned (backlog TJ-0018).
-        s['qty'] += unbacked
-        s['virt'] += unbacked
-
-    drafts: List[PurchaseDraft] = []
-    gaps: List[DraftGap] = []
-    # Canada pools identical shares across taxable accounts (s.47): the
-    # other taxable accounts that trade each symbol.
-    traded_in: Dict[str, Set[str]] = {}
-    for t in txs:
-        if (t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER')
-                and not is_registered_account(t.account,
-                                              registered_accounts,
-                                              country)):
-            traded_in.setdefault(t.symbol, set()).add(t.account)
-    for (symbol, account), s in sorted(state.items()):
-        if not s['sales'] or not s['in_year']:
-            continue
-        if accounts is not None and account not in accounts:
-            continue
-        if is_registered_account(account, registered_accounts, country):
-            for sale in s['sales']:
-                gaps.append(DraftGap(account, symbol,
-                                     str(sale['tx'].date), sale['unbacked'],
-                                     'sheltered account (no gain is '
-                                     'computed there)'))
-            continue
-        pair_drafts: List[PurchaseDraft] = []
-        pair_gaps: List[DraftGap] = []
-        for sale in s['sales']:
-            d, g = _draft_sale(sale, symbol, account, country,
-                               first_day.get(account, ''),
-                               rename_sources or {}, date_basis)
-            pair_drafts += d
-            pair_gaps += g
-        if pair_drafts and pair_gaps:
-            # The pair stays short until every gap is filled: say so on
-            # its drafts.
-            short = sum(g.quantity for g in pair_gaps)
-            for dr in pair_drafts:
-                dr.comments += (f"CHECK: {short:g} more unit(s) of "
-                                f"{symbol} were sold with no purchase in "
-                                f"your files and no broker cost — their "
-                                f"purchase is not drafted; without it the "
-                                f"sales still draw on missing history.",)
-                dr.warn = True
-        others = sorted(traded_in.get(symbol, set()) - {account})
-        if pair_drafts and others and is_canada(country):
-            for dr in pair_drafts:
-                dr.comments += (f"CHECK: you also hold or trade {symbol} "
-                                f"in {', '.join(others)}: the ACB pools "
-                                f"those shares with these (s.47), so "
-                                f"IB's lot cost is not this sale's ACB — "
-                                f"those accounts' history must be "
-                                f"complete too.",)
-                dr.warn = True
-        if pair_drafts and (str(symbol).upper(), account) in listed:
-            for dr in pair_drafts:
-                dr.comments += ("once these lines are in a .tt file, "
-                                "remove the OPENING cost=unknown line of "
-                                + f"{symbol} / {account}.",)
-        drafts += pair_drafts
-        gaps += pair_gaps
-
-    t_drafts, t_gaps = _draft_transfers(
-        list(transfer_rows), state, country, registered_accounts,
-        symbol_key or (lambda x: x), in_kind_legs or set(), not_own,
-        in_kind_moves or set(), moves=own_moves, accounts=accounts)
-    # A sale whose units a drafted transfer-in delivered is fixed by
-    # that line: not listed as undrafted.
-    delivered: Dict[Tuple[str, str], float] = {}
-    for dr in t_drafts:
-        k = ((symbol_key or (lambda x: x))(dr.symbol), dr.account)
-        delivered[k] = delivered.get(k, 0.0) + dr.quantity
-        if (str(k[0]).upper(), dr.account) in listed:
-            dr.comments += ("once this line is in a .tt file, remove "
-                            f"the OPENING cost=unknown line of {k[0]} / "
-                            f"{dr.account}.",)
-    kept: List[DraftGap] = []
-    for g in gaps:
-        left = delivered.get((g.symbol, g.account), 0.0)
-        if g.reason.startswith('no broker cost') and left > 1e-9:
-            used = min(left, g.quantity)
-            delivered[(g.symbol, g.account)] = left - used
-            if used >= g.quantity - 1e-9:
-                continue
-            g.quantity -= used
-            g.reason += (" (the rest of this sale is the drafted "
-                         "transfer-in's)")
-        kept.append(g)
-    return drafts + t_drafts, kept + t_gaps
-
-
-def _draft_sale(sale: Dict[str, Any], symbol: str, account: str,
-                country: str, first_day: str,
-                rename_sources: Dict[str, List[str]],
-                date_basis: str = 'settle'
-                ) -> Tuple[List[PurchaseDraft], List[DraftGap]]:
-    """The draft lines (or the gap) for one sale with unbacked units."""
-    tx = sale['tx']
-    u = sale['unbacked']
-    sale_date = str(tx.date or '')[:10]
-    gap = DraftGap(account, symbol, sale_date, u, '')
-    if (symbol or '').startswith(('F:', '/', '\\')):
-        gap.reason = ("a future: IB's Basis on a futures close is not a "
-                      "purchase cost")
-        return [], [gap]
-    basis = parse_broker_basis(getattr(tx, 'broker_basis', '') or '')
-    if basis is None:
-        gap.reason = ("no broker cost on the sale (only an IB sale coded "
-                      "C carries one, in a statement with the Basis "
-                      "column)")
-        return [], [gap]
-    amount, cur = basis
-    mult = float(getattr(tx, 'multiplier', 0.0) or 0.0) or (
-        100.0 if is_option_symbol(symbol) else 1.0)
-    sold = abs(float(tx.quantity or 0.0))
-    src = (f"IB sale {sale_date} of {sold:g} {symbol} (code C, row "
-           f"{_mask_id(tx.id)}"
-           + (f", {tx.source}" if getattr(tx, 'source', '') else '')
-           + ")")
-    ev = f"IB Basis {amount:,.2f} {cur} for the {sold:g} sold"
-    lots = parse_broker_lots(getattr(tx, 'broker_lots', '') or '')
-    lot_note = ''
-    if lots is not None and abs(sum(q for _, q, _ in lots) - sold) > 1e-6:
-        lot_note = ("IB's Closed Lots do not add up to the sale's "
-                    "quantity — not used")
-        lots = None
-    if lots is not None and sale['held'] > 1e-12:
-        # Only the lots bought before the data are missing.
-        pre = [lt for lt in lots if first_day and lt[0] < first_day]
-        if abs(sum(q for _, q, _ in pre) - u) <= 1e-6:
-            lots = pre
-        else:
-            lot_note = ("IB's Closed Lots dated before your data do not "
-                        "add up to the units missing — not used")
-            lots = None
-    # The line goes under the broker's own spelling when ticker.map
-    # renames it into the books' symbol (the run maps the .tt line the
-    # same way; the holdings hand-off keys on the broker's listing —
-    # S049-01): the rename source whose root is IB's raw symbol.
-    rename_note = ''
-    line_symbol = symbol
-    srcs = rename_sources.get(symbol) or []
-    raw = str(getattr(tx, 'description', '') or '').strip().upper() \
-        .replace(' ', '.')
-    mine = [x for x in srcs if x.upper().rsplit('.', 1)[0] == raw]
-    if len(mine) == 1:
-        line_symbol = mine[0]
-        rename_note = (f"{line_symbol} is the broker's symbol: ticker.map "
-                       f"maps it to {symbol}, as it maps the sale.")
-    elif srcs:
-        rename_note = (f"check: ticker.map renames {', '.join(srcs)} to "
-                       f"{symbol} — enter the purchase under the "
-                       f"broker's symbol and currency, as the account "
-                       f"labels it.")
-    out: List[PurchaseDraft] = []
-    if lots is not None:
-        for lot_date, lq, lc in lots:
-            line_date = _lot_line_date(lot_date, symbol, cur, date_basis)
-            factor, old = _splits_after(sale['events'], line_date)
-            comments = [src, f"{ev}; this lot: opened {lot_date}, "
-                             f"{lq:g} units, cost {lc:,.2f} {cur} "
-                             f"(IB Closed Lots)"]
-            if line_date != lot_date:
-                comments.append(
-                    f"dated {line_date}, the lot's settlement date: IB's "
-                    f"lot date is the trade date, and under tax_date "
-                    f"settle a .tt line's one date is its settlement "
-                    f"date.")
-            if abs(factor - 1.0) > 1e-12 or old:
-                comments.append(
-                    f"quantity in the units of {line_date}: a split or "
-                    f"rename in your data after it turns {lq / factor:g} "
-                    f"{old or symbol} into {lq:g} {symbol}.")
-            comments += _drafting_caveats(country, cur, lots=True,
-                                          date_basis=date_basis)
-            if rename_note:
-                comments.append(rename_note)
-            out.append(PurchaseDraft(
-                account=account, symbol=old or line_symbol,
-                quantity=lq / factor, currency=cur, cost=lc,
-                date=line_date, multiplier=mult, source='ib-lot',
-                sale_date=sale_date, comments=tuple(comments)))
-        return out, []
-    factor, old = _splits_after(sale['events'], None)
-    comments = [src, ev + (" (no lot detail in the export)"
-                           if not lot_note else f" ({lot_note})")]
-    warn = False
-    if sale['held'] > 1e-12:
-        rest = amount - sale['held_cost']
-        comments.append(
-            f"CHECK: your data held {sale['held']:g} of the units sold "
-            f"(cost {sale['held_cost']:,.2f} in the books' currency) and "
-            f"IB's Basis covers all {sold:g}: the {u:g} missing units' "
-            f"cost is not known. If this sale closed your whole position "
-            f"and the books' currency is {cur}, it is {amount:,.2f} - "
-            f"{sale['held_cost']:,.2f} = {rest:,.2f}; else use the "
-            f"purchase confirmation.")
-        cost = None
-        warn = True
-    else:
-        cost = amount
-    comments.append("fill in: the purchase date (the broker does not say "
-                    "when these units were bought)"
-                    + ("; its settlement date (tax_date settle)."
-                       if date_basis == 'settle' else "."))
-    if abs(factor - 1.0) > 1e-12 or old:
-        comments.append(
-            f"quantity in the units before your data: a split or rename "
-            f"in your data turns {u / factor:g} {old or symbol} into "
-            f"{u:g} {symbol}.")
-    comments += _drafting_caveats(country, cur, lots=False,
-                                  date_basis=date_basis)
-    if rename_note:
-        comments.append(rename_note)
-    out.append(PurchaseDraft(
-        account=account, symbol=old or line_symbol, quantity=u / factor,
-        currency=cur, cost=cost, date=None, multiplier=mult,
-        source='ib-basis', sale_date=sale_date, comments=tuple(comments),
-        warn=warn))
-    return out, []
-
-
-def _draft_transfers(rows: List[Dict[str, Any]],
-                     state: Dict[Tuple[str, str], Dict[str, Any]],
-                     country: str, registered_accounts, key,
-                     in_kind: Set[Tuple[str, str, str, float]] = frozenset(),
-                     not_own: Optional[Sequence[Any]] = None,
-                     in_kind_moves: Set[Tuple[str, str, str, float]]
-                     = frozenset(), *,
-                     moves: Optional[Sequence[Any]] = None,
-                     accounts: Optional[Set[str]] = None
-                     ) -> Tuple[List[PurchaseDraft], List[DraftGap]]:
-    """Drafts from transfer-ins that state the delivering broker's book
-    value (rows of the transfer sidecars), for the transfer-ins of
-    `accounts` (None: every account). A transfer-in the run's pairing
-    (`moves`: taxjson_run.own_move_plan, the arrival stage's call)
-    takes as a move of your own is not drafted, and names the account
-    it came from as the run paired it. Without `moves`, every row of
-    `rows` is paired here (lib/transfer_in.arrivals, as the run calls
-    it), whichever accounts are drafted (backlog TJ-0599)."""
-    drafts: List[PurchaseDraft] = []
-    gaps: List[DraftGap] = []
-    tt_left: Dict[Tuple[str, str], float] = {
-        k: s.get('tt_qty', 0.0) for k, s in state.items()}
-    bv_left: Dict[Tuple[str, str], float] = {
-        k: s.get('booked_bv', 0.0) for k, s in state.items()}
-    # The moves of your own the run's arrivals pair (lib/transfer_in.
-    # arrivals: within OWN_MOVE_DAYS the same quantity first, then the
-    # closest date; a slower one when neither leg has another candidate,
-    # audit 2026-10-25 diff-engine#4): not booked, so not drafted either.
-    # The drafts read that pairing rather than one of their own, which
-    # named another source than the run's (backlog TJ-0230). A leg an
-    # in-kind move names (to or from a registered account, booked or
-    # not) never pairs slowly (`in_kind`, backlog TJ-0074), the move's
-    # own leg never at all (`in_kind_moves`), as the run reads them.
-    from taxjson.lib import transfer_in as TI
-
-    def _in(idents):
-        if not idents:
-            return None
-
-        def _f(leg) -> bool:
-            acct, _b, t = leg
-            return TI.leg_ident(acct, t) in idents
-        return _f
-    moved: List[Any] = list(moves or ())
-    if moves is None:
-        TI.arrivals([(str(r.get('account') or ''), '', r) for r in rows
-                     if r.get('action', 'TRANSFER') == 'TRANSFER'
-                     and not is_registered_account(
-                         str(r.get('account') or ''), registered_accounts,
-                         country)],
-                    key=lambda s: str(key(s) or '').upper(), moves=moved,
-                    no_slow=_in(in_kind), no_move=_in(in_kind_moves),
-                    not_own=list(not_own or ()))
-    # Each transfer-in's moves of your own: (account, symbol, date) ->
-    # [OwnMove] (the pairing names the in leg so).
-    own_in: Dict[Tuple[str, str, str], List[Any]] = {}
-    for m in moved:
-        own_in.setdefault((m.in_account, m.in_symbol, m.in_date),
-                          []).append(m)
-    # The transfer-ins whose pairing a .tt NOTOWN line undoes (backlog
-    # TJ-0075): from outside the books, never "a move from your account".
-    not_own_in = {n.legs[1] for n in not_own or () if n.matched}
-    for r in sorted(rows, key=lambda r: (str(r.get('date') or ''),
-                                         str(r.get('symbol') or ''))):
-        q = float(r.get('quantity') or 0)
-        if q <= 1e-12 or r.get('action', 'TRANSFER') != 'TRANSFER':
-            continue
-        if accounts is not None and r.get('account') not in accounts:
-            continue        # paired above, drafted for its own account
-        m = _TRANSFER_BOOK_VALUE_RE.search(str(r.get('description') or ''))
-        if not m:
-            continue
-        symbol = str(r.get('symbol') or '')
-        account = str(r.get('account') or '')
-        d = str(r.get('date') or '')[:10]
-        gap = DraftGap(account, symbol, d, q, '')
-        if is_registered_account(account, registered_accounts, country):
-            gap.reason = 'sheltered account (no gain is computed there)'
-            gaps.append(gap)
-            continue
-        own = own_in.get((account, symbol, d)) or []
-        if (account, symbol, d, round(q, 8)) in not_own_in:
-            own = []        # a NOTOWN line undoes the pairing (TJ-0075)
-        took = sum(m.quantity for m in own)
-        if own and not any(m.slow for m in own):
-            src = ", ".join(sorted({m.out_account for m in own}))
-            part = (f" for {took:g} of the {q:g} units (the other "
-                    f"{q - took:g} are a transfer-in from outside, as the "
-                    f"run books it)" if took < q - 1e-9 else "")
-            gap.reason = (f"a move from your account {src}{part}"
-                          f" — its cost carries over, it is not a "
-                          f"purchase")
-            gaps.append(gap)
-            continue
-        book_key = (key(symbol), account)
-        if tt_left.get(book_key, 0.0) >= q - 1e-9:
-            tt_left[book_key] -= q
-            gap.reason = "your .tt purchase lines already cover it"
-            gaps.append(gap)
-            continue
-        if bv_left.get(book_key, 0.0) >= q - 1e-9:
-            bv_left[book_key] -= q
-            gap.reason = ("the run already books it at the stated book "
-                          "value")
-            gaps.append(gap)
-            continue
-        sm = next((m for m in own if m.slow), None)
-        if sm is not None:
-            gap.reason = (f"a move from your account {sm.out_account} "
-                          f"({sm.out_date}, {sm.slow} days before) — its "
-                          f"cost carries over, it is not a purchase")
-            gaps.append(gap)
-            continue
-        st = state.get(book_key) or {}
-        try:
-            amount = float(m.group(1).replace(',', ''))
-        except ValueError:
-            amount = None
-        cur = str(r.get('currency') or '').upper()
-        mult = float(r.get('multiplier') or 0.0) or (
-            100.0 if is_option_symbol(symbol) else 1.0)
-        # The row's id when the sidecar keeps one (a transfer row
-        # often has none: "(row ?)" said nothing — backlog TJ-0008).
-        where = ", ".join(x for x in (
-            f"row {_mask_id(r.get('id'))}" if r.get('id') else '',
-            str(r.get('source') or '')) if x)
-        head = (f"transfer-in {d} of {q:g} {symbol}"
-                + (f" ({where})" if where else ''))
-        stated = (f"the delivering broker's book value {amount or 0:,.2f} "
-                  f"{cur}, as printed on the row")
-        part = tt_left.get(book_key, 0.0)
-        if part > 1e-9 and amount is not None:
-            # Your .tt purchases account for PART of the units: the run
-            # books nothing for it (lib/transfer_in.mark_covered,
-            # partly_covered, B41) and asks for the other units'
-            # purchase. Drafted for those units, the cost left to fill
-            # in: the book value is for all of them, and a pro-rata
-            # share would guess which units the .tt lines are (backlog
-            # TJ-0009).
-            tt_left[book_key] = 0.0
-            rest = q - part
-            comments = [head,
-                        stated + f" — for all {q:g} units",
-                        f"CHECK: your .tt purchase lines already hold "
-                        f"{part:g} of these {q:g} units, so the run books "
-                        f"none of them: this line is for the other "
-                        f"{rest:g}. If your .tt lines are part of the "
-                        f"transferred units, these {rest:g} cost the book "
-                        f"value less what those lines paid (else use the "
-                        f"purchase confirmation); if they are another "
-                        f"holding of {symbol} in this account, make this "
-                        f"line all {q:g} units at the book value.",
-                        "fill in: the ORIGINAL purchase date at the other "
-                        "broker (the transfer date is not a purchase "
-                        "date) and the cost."]
-            comments += _drafting_caveats(country, cur, lots=False,
-                                          is_transfer=True)
-            drafts.append(PurchaseDraft(
-                account=account, symbol=symbol, quantity=rest,
-                currency=cur, cost=None, date=None, multiplier=mult,
-                source='transfer', comments=tuple(comments), warn=True))
-            continue
-        if st.get('bought') and st.get('low', 0.0) >= -1e-9:
-            # Your files acquire it and no sale of it goes short: the
-            # shares are in the books already (another export, a .tt
-            # line under another quantity) — a draft would count them
-            # twice. Shares still held but missing show in `sanity`.
-            gap.reason = ("your files already acquire it and no sale "
-                          "goes short — a line would count it twice "
-                          "(`tjs sanity` shows a position still "
-                          "short of the broker's)")
-            gaps.append(gap)
-            continue
-        if amount is None:
-            continue
-        # A stated 0 is the broker's placeholder for a cost it was not
-        # given, never a $0 lot (lib/transfer_in, B40): the line leaves
-        # the cost to fill in, so a draft renamed with only its date
-        # filled in is refused, not booked at 0 (backlog TJ-0008).
-        zero = abs(amount) <= 1e-6
-        comments = [head, stated]
-        if zero:
-            comments.append(
-                "the row states a book value of 0: usually the delivering "
-                "broker's placeholder for a cost it was not given, never "
-                "your cost, so the cost is left to fill in (0 only if "
-                "your cost really is nil).")
-        comments.append("fill in: the ORIGINAL purchase date at the other "
-                        "broker (the transfer date is not a purchase date)"
-                        + (" and the cost." if zero else "."))
-        warn = False
-        if st.get('bought') and -st.get('low', 0.0) < q - 1e-6:
-            comments.append(
-                f"CHECK: your files already acquire some {symbol} and "
-                f"its sales go at most {-st.get('low', 0.0):g} units "
-                f"short: part of these {q:g} may be in your files "
-                f"already — keep only the units that are not.")
-            warn = True
-        # (a stated 0 is no average cost: its note is left out)
-        comments += [c for c in _drafting_caveats(country, cur, lots=False,
-                                                  is_transfer=True)
-                     if not (zero and 'average cost' in c)]
-        drafts.append(PurchaseDraft(
-            account=account, symbol=symbol, quantity=q, currency=cur,
-            cost=None if zero else amount, date=None, multiplier=mult,
-            source='transfer', comments=tuple(comments), warn=warn))
-    return drafts, gaps
+    return mask_id(row_id, empty='?')
 
 
 def format_purchase_drafts(drafts: List[PurchaseDraft],
@@ -5064,13 +3911,3 @@ def format_purchase_drafts(drafts: List[PurchaseDraft],
             tail.append(f"#   {g.symbol} {g.date} {g.quantity:g} units: "
                         f"{g.reason}")
     return "\n".join(head + body + tail) + "\n"
-
-
-# The names this module had as lib/phantom_holdings (before 2026-10),
-# kept so external code importing them keeps working.
-PhantomCandidate = MissingHistoryCandidate
-StalePhantomEntry = StaleMissingHistoryEntry
-detect_phantoms = detect_missing_history
-stale_phantom_entries = stale_missing_history_entries
-report_phantom_log = report_missing_history_log
-load_phantoms = load_missing_history

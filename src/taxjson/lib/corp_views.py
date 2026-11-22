@@ -20,13 +20,16 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
+from taxjson.project.settings import settings_of
+from taxjson.project.accounts import accounts_of
 from taxjson.lib.corp_actions import (ALLOCATED_BASIS_HINT, SHELTERED_DEFAULT,
                                       declares_zero_value)
 from taxjson.lib.country import (CANADA, USA, display_name, home_currency,
                                  settings_country)
 from taxjson.lib import project_layout as _PL
+from taxjson.model import money as M
 
 _FMV_RE = re.compile(r"FMV\s+([\d,]+(?:\.\d+)?)\s+([A-Z]{3})")
 
@@ -46,7 +49,7 @@ def cash_in_lieu_line(received: float, fraction: float, cash: float,
     booking sells the fraction for the cash."""
     if cash < 0.005:
         return ""
-    money = f"{cash:,.2f} {currency}".rstrip() + (f" on {paid}" if paid
+    money = f"{M.shown(cash, 2):,.2f} {currency}".rstrip() + (f" on {paid}" if paid
                                                    else "")
     if fraction <= 1e-9:
         return f"{money}, for a fraction the export does not size"
@@ -63,15 +66,14 @@ def _rows(path: Path) -> List[Dict[str, Any]]:
     object, or a non-list `transactions`, is refused naming the file and
     the row — such rows were dropped and the view reported clean
     (backlog TJ-0320). A valid empty list is no rows."""
-    from taxjson.lib.json_input import InputFileError, read_work_doc
+    from taxjson.lib.json_input import InputFileError, read_work_doc, rerun_advice
     path = Path(path)
     if not path.exists() and not path.is_symlink():
         return []
     try:
         doc = read_work_doc(path)
     except InputFileError as e:
-        raise ViewError(f"{e} — re-run `tjs run` to rebuild it") \
-            from None
+        raise ViewError(rerun_advice(str(e), " — re-run `tjs run` to rebuild it")) from None
     return list(doc.get("transactions") or [])
 
 
@@ -103,15 +105,15 @@ def _held(rows: List[Dict[str, Any]], sym: str, until: str,
           inclusive: bool) -> float:
     """Shares of `sym` held at the end of trade date `until` (or just
     before it, `inclusive=False`), replayed by THE balance walk the
-    [[distributions]] stage uses (bin/taxjson_apply_distributions
-    .balance_on, trade-date basis): at one date an opening balance
+    [[distributions]] stage uses (lib/unit_balance.balance_on,
+    trade-date basis): at one date an opening balance
     first, then a split — effective at the open, whatever clock time
     its row carries — then the day's trades; a rename split carries the
     old symbol's shares to the new one; one split reported twice is ONE
     event per account (CA-CORP-12). The view used to replay by clock
     time, so a noon-stamped split doubled the morning's purchase (audit
     2026-10-24 B05)."""
-    from taxjson.bin.taxjson_apply_distributions import balance_on
+    from taxjson.lib.unit_balance import balance_on
     if not inclusive:
         rows = [r for r in rows if (r.get("date") or "") < until]
         until = "9999-12-31"
@@ -127,7 +129,7 @@ def _held_before_split(rows: List[Dict[str, Any]],
     link's shares and read 0 (backlog TJ-0853). The day's splits are
     taken in the walk's order (balance_on: by clock time, then as the
     books list them; the run lists a chain link by link)."""
-    from taxjson.bin.taxjson_apply_distributions import balance_on
+    from taxjson.lib.unit_balance import balance_on
     d = split.get("date") or ""
     day = sorted((r for r in rows if r.get("action") == "SPLIT"
                   and (r.get("date") or "") == d),
@@ -165,14 +167,17 @@ _SHELTER_WORD = {CANADA: "registered account",
                  USA: "tax-advantaged account (IRA)"}
 
 
-def _current_events(root: Path, acct: str) -> Dict[str, Any]:
+def _current_events(root: Path, acct: str,
+                    extractor_for: Callable[[str], Any]) -> Dict[str, Any]:
     """The corporate-action events the broker extractors find in this
     account's inputs NOW, by event id (the same events `tjs run`
-    books). Elections saved under ids no current event has are stale."""
+    books). Elections saved under ids no current event has are stale.
+    `extractor_for(label)`: a parser's extractor, or None (the caller's:
+    the table names the parsers, which lib may not reach; TJ-3517)."""
     import contextlib
     import io
-    from taxjson.bin.taxjson_corp_actions import (EXTRACTORS, extract_events,
-                                                  project_corp_renames)
+    from taxjson.lib.corp_extract import (extract_events, project_corp_case,
+                                          project_corp_renames)
     from taxjson.lib.corp_actions import combine_broker_copies
     out: Dict[str, Any] = {}
     try:
@@ -186,11 +191,12 @@ def _current_events(root: Path, acct: str) -> Dict[str, Any]:
     # The run's map: a parent named by a broker code takes its mapped
     # identity, as in the run's ids (backlog TJ-0849).
     renames = project_corp_renames(root)
+    case = project_corp_case(root)
     groups: Dict[str, List[Path]] = {}
     for ln in lines:
         kind, _, name = ln.partition("/")
         path = _PL.inputs_dir(root) / acct / name
-        if EXTRACTORS.get(kind) is None or not path.exists():
+        if extractor_for(kind) is None or not path.exists():
             continue
         groups.setdefault(kind, []).append(path)
     for kind, paths in groups.items():
@@ -199,8 +205,9 @@ def _current_events(root: Path, acct: str) -> Dict[str, Any]:
         try:
             with contextlib.redirect_stderr(io.StringIO()):
                 evs = combine_broker_copies(
-                    extract_events(EXTRACTORS[kind], paths, acct,
-                                   renames=renames, symbol_codes=_codes),
+                    extract_events(extractor_for(kind), paths, acct,
+                                   renames=renames, symbol_codes=_codes,
+                                   case=case),
                     stream=io.StringIO())
         except Exception:
             continue
@@ -209,14 +216,15 @@ def _current_events(root: Path, acct: str) -> Dict[str, Any]:
     return out
 
 
-def spinoffs(root: Path, cfg: Dict[str, Any],
-             account: Optional[str] = None) -> Dict[str, Any]:
+def spinoffs(root: Path, cfg: Dict[str, Any], account: Optional[str] = None, *,
+             extractor_for: Callable[[str], Any]) -> Dict[str, Any]:
     root = Path(root)
     cache = root / "work"
-    country = settings_country(cfg.get("settings"))
+    settings = settings_of(cfg)
+    country = settings_country(settings)
     # The country's currency when base_currency is unset, as run's
     # _base() reads it (re-audit A2-1275: a US view said CAD).
-    base_cur = (cfg.get("settings", {}) or {}).get("base_currency") \
+    base_cur = settings.base_currency \
         or home_currency(country)
     shelter_word = _SHELTER_WORD[country]
     from taxjson.lib.corp_actions import RULES_BY_COUNTRY, election_keys
@@ -224,15 +232,15 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
     spin_options = [k for k, _ in RULES_BY_COUNTRY[country]["spinoff"].options]
     out: List[Dict[str, Any]] = []
     stale: List[Dict[str, Any]] = []
-    for acct, acfg in sorted((cfg.get("accounts") or {}).items()):
+    for acct, acfg in sorted(accounts_of(cfg).items()):
         if account and acct != account:
             continue
-        if (acfg or {}).get("crypto"):
+        if acfg.crypto:
             continue
-        sheltered = (acfg or {}).get("type") != "taxable"
+        sheltered = not acfg.taxable
         rows = _rows(cache / f"{acct}_base.json")
         man = _manifest(root, acct)
-        events = {k: v for k, v in _current_events(root, acct).items()
+        events = {k: v for k, v in _current_events(root, acct, extractor_for).items()
                   if v.action_type == "spinoff"}
         by_ev: Dict[str, List[Dict[str, Any]]] = {}
         for r in rows:
@@ -350,7 +358,7 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                     # offered.
                     why.append("the saved fmv_per_share=0 is not used: "
                                "a 0 means no value was given, and the "
-                               f"broker reported {broker_fmv:,.2f} "
+                               f"broker reported {M.shown(broker_fmv, 2):,.2f} "
                                f"{broker_cur} for the new shares, which "
                                "is the value booked")
                 elif not fmv_ps and declares_zero_value(election, hints):
@@ -367,14 +375,14 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                            "for the new shares, so a later sale overstates "
                            "the gain by the same amount")
                     if broker_fmv:
-                        msg += (f"; the broker reported {broker_fmv:,.2f} "
+                        msg += (f"; the broker reported {M.shown(broker_fmv, 2):,.2f} "
                                 f"{broker_cur}")
                     why.append(msg + ". Set it with `tjs elect "
                                f"{acct} --set {eid}={election} "
                                "--hint fmv_per_share=<value>`.")
                 elif not fmv_ps:
                     why.append("booked at $0" + (
-                        f" (the broker reported {broker_fmv:,.2f} "
+                        f" (the broker reported {M.shown(broker_fmv, 2):,.2f} "
                         f"{broker_cur})" if broker_fmv else ""))
             elif election in _ALLOC_ELECTIONS:
                 why.append(_ALLOC_ELECTIONS[election])
@@ -408,9 +416,9 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                 "fmv_currency": fmv_cur,
                 "cash_in_lieu": cil_text,
                 "broker_fmv": broker_fmv,
-                "broker_currency": broker_cur, "income": round(income, 2),
-                "new_qty": new_qty, "new_cost": round(new_cost, 2),
-                "held_now": round(now, 6), "currency": base_cur,
+                "broker_currency": broker_cur, "income": M.shown(income, 2),
+                "new_qty": new_qty, "new_cost": M.shown(new_cost, 2),
+                "held_now": M.units(now, 6), "currency": base_cur,
                 "flags": flags, "why": why})
     out.sort(key=lambda x: (x["date"] or "", x["account"]))
     return {"spinoffs": out, "stale": stale}
@@ -423,7 +431,7 @@ def wrong_country_elections(root: Path, cfg: Dict[str, Any]
     to usa. `tjs run` stops on each; `tjs elect --pending` lists
     them so 'No pending elections' never hides one (re-audit A2-0725)."""
     from taxjson.lib.corp_actions import election_keys
-    country = settings_country(cfg.get("settings"))
+    country = settings_country(settings_of(cfg))
     keys = election_keys(country)
     out: List[Dict[str, str]] = []
     for acct in sorted(cfg.get("accounts") or {}):
@@ -476,7 +484,7 @@ def splits(root: Path, cfg: Dict[str, Any],
     root = Path(root)
     cache = root / "work"
     out = []
-    for acct, acfg in sorted((cfg.get("accounts") or {}).items()):
+    for acct, acfg in sorted(accounts_of(cfg).items()):
         if account and acct != account:
             continue
         rows = _rows(cache / f"{acct}_base.json")
@@ -506,7 +514,7 @@ def splits(root: Path, cfg: Dict[str, Any],
                 why.append("a zero ratio would erase the position")
             if abs(before) > 1e-9 and abs(after - round(after)) > 1e-6 \
                     and abs(before - round(before)) < 1e-9:
-                _frac = round(abs(after) - int(abs(after)), 9)
+                _frac = M.units(abs(after) - int(abs(after)), 9)
                 # A short holding's fraction is covered: bought back, its
                 # cash paid (backlog TJ-0678).
                 _short = after < 0
@@ -573,10 +581,10 @@ def splits(root: Path, cfg: Dict[str, Any],
                 why.append("nothing held just before: the split changes "
                            "nothing here")
             out.append({"account": acct,
-                        "sheltered": (acfg or {}).get("type") != "taxable",
+                        "sheltered": not acfg.taxable,
                         "date": d, "symbol": sym, "new_symbol": new,
-                        "ratio": ratio, "held_before": round(before, 6),
-                        "held_after": round(after, 6),
+                        "ratio": ratio, "held_before": M.units(before, 6),
+                        "held_after": M.units(after, 6),
                         "after_symbol": after_sym,
                         "description": (r.get("description") or "")[:160],
                         "flags": flags, "why": why})
@@ -609,15 +617,15 @@ def render_spinoffs(doc: Dict[str, Any],
         tag = f" [{', '.join(s['flags'])}]" if s["flags"] else ""
         _hang(d, f"{s['date']}  {s['account']}  {s['parent']} -> "
                f"{s['child']}  {s['ratio']}{tag}", "", "  ")
-        fmv = (f"{s['fmv_per_share']:,.2f} "
+        fmv = (f"{M.shown(s['fmv_per_share'], 2):,.2f} "
                f"{s.get('fmv_currency') or s['currency']}/share"
                + (" (the broker's value)" if s.get("value_from_broker")
                   else "")
                if s["fmv_per_share"] else "0")
         d.kv([("election", s["election"]), ("value used", fmv),
-              ("booked", f"income {s['income']:,.2f} {s['currency']}, "
+              ("booked", f"income {M.shown(s['income'], 2):,.2f} {s['currency']}, "
                          f"{s['new_qty']:g} new shares costing "
-                         f"{s['new_cost']:,.2f} {s['currency']}")]
+                         f"{M.shown(s['new_cost'], 2):,.2f} {s['currency']}")]
              + ([("cash in lieu", s["cash_in_lieu"])]
                 if s.get("cash_in_lieu") else [])
              + [("held now", f"{s['held_now']:g}")], "  ")

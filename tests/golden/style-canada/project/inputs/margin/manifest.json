@@ -1,0 +1,9 @@
+{
+  "elections": {
+    "20240603-parn-spnc-9187": {
+      "election": "taxable_deemed_dividend",
+      "notes": "set via elect --set",
+      "summary": "2024-06-03 spinoff: PARN.US \u2192 SPNC.US (1.0-for-10.0, ratio 0.1, FMV 250.00 USD)"
+    }
+  }
+}

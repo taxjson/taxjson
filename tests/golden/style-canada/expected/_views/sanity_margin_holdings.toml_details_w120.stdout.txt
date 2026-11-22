@@ -1,0 +1,29 @@
+SANITY — taxjson positions (basis: wash-adjusted) vs external holdings TOML (paired check)
+
+  accounts:  margin  (8 combined position(s))  [paired]
+  file:      holdings.toml
+  result:    1 discrepancy(ies)
+
+  - account crypto not included (2 position(s) unchecked)
+  - account qt not included (1 position(s) unchecked)
+  - account rrsp not included (2 position(s) unchecked)
+  - account tfsa not included (3 position(s) unchecked)
+
+ISSUE: MISSING_IN_HOLDINGS = not in the broker's file; MISSING_IN_TAXJSON = not in the books.
+ACCOUNTS  SYMBOL    ISSUE         TAXJSON  HOLDINGS  DIFF
+---------------------------------------------------------
+margin    SAMPA.TO  QTY_MISMATCH      100        90   +10
+
+1 discrepancy(ies).
+
+COST — books vs the reports' cost: 7 compared, 6 within tolerance, 1 differ (informational: a broker's book value is not
+  your ACB/basis; never changes the exit code).
+
+ACCOUNTS  SYMBOL   QTY  CUR  BROKER   BOOKS    DIFF  REASON
+----------------------------------------------------------------
+margin    SPNC.US   10  USD  240.00  250.00  +10.00  unexplained
+
+Reasons:
+  unexplained: none of the known differences closes it: a missing or mis-costed purchase, an opening line's cost, or the
+    broker's own error
+  BOOKS here is the native USD books (this account's own cost: no superficial-loss additions, no s.47 pooling).

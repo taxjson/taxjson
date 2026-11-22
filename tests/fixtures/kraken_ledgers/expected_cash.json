@@ -1,0 +1,110 @@
+[
+ {
+  "account": "",
+  "amount": 900.0,
+  "currency": "USD",
+  "date": "2025-01-10",
+  "decl": null,
+  "desc": "Kraken deposit USD",
+  "internal": "",
+  "kind": "CASHMOVE",
+  "line_where": "sample.csv:2",
+  "origin": "broker",
+  "settle": "2025-01-10",
+  "where": "sample.csv"
+ },
+ {
+  "account": "",
+  "amount": -61.37,
+  "currency": "USD",
+  "date": "2025-08-15",
+  "decl": null,
+  "desc": "Kraken withdrawal USD",
+  "internal": "",
+  "kind": "CASHMOVE",
+  "line_where": "sample.csv:29",
+  "origin": "broker",
+  "settle": "2025-08-15",
+  "where": "sample.csv"
+ },
+ {
+  "account": "",
+  "amount": -0.43,
+  "currency": "USD",
+  "date": "2025-08-15",
+  "desc": "Kraken withdrawal fee",
+  "kind": "FLOW",
+  "origin": "broker",
+  "settle": "2025-08-15",
+  "where": "sample.csv:29"
+ },
+ {
+  "account": "",
+  "date": "2025-06-15",
+  "desc": "Kraken USD->CAD",
+  "from_amt": 50.0,
+  "from_ccy": "USD",
+  "kind": "FXCONV",
+  "origin": "broker",
+  "settle": "2025-06-15",
+  "to_amt": 68.0,
+  "to_ccy": "CAD",
+  "value": null,
+  "where": "sample.csv:20"
+ },
+ {
+  "account": "",
+  "amount": -20.0,
+  "currency": "USD",
+  "date": "2025-07-01",
+  "desc": "Kraken USD spread",
+  "kind": "FLOW",
+  "origin": "broker",
+  "settle": "2025-07-01",
+  "where": "sample.csv:22"
+ },
+ {
+  "account": "",
+  "balance": 0.0,
+  "currency": "CAD",
+  "date": "2024-12-31",
+  "kind": "CASHBAL",
+  "origin": "broker",
+  "settle": "2024-12-31",
+  "statement": "sample.csv",
+  "where": "sample.csv: ledger balance"
+ },
+ {
+  "account": "",
+  "balance": 0.0,
+  "currency": "USD",
+  "date": "2024-12-31",
+  "kind": "CASHBAL",
+  "origin": "broker",
+  "settle": "2024-12-31",
+  "statement": "sample.csv",
+  "where": "sample.csv: ledger balance"
+ },
+ {
+  "account": "",
+  "balance": 68.0,
+  "currency": "CAD",
+  "date": "2025-09-01",
+  "kind": "CASHBAL",
+  "origin": "broker",
+  "settle": "2025-09-01",
+  "statement": "sample.csv",
+  "where": "sample.csv: ledger balance"
+ },
+ {
+  "account": "",
+  "balance": 370.6,
+  "currency": "USD",
+  "date": "2025-09-01",
+  "kind": "CASHBAL",
+  "origin": "broker",
+  "settle": "2025-09-01",
+  "statement": "sample.csv",
+  "where": "sample.csv: ledger balance"
+ }
+]

@@ -23,8 +23,11 @@ from taxjson.lib import tax_logic as TL
 from tax_rules import rule, rule_absent
 from tax_rules.dual import (SRC, cli, cli_both, gains_both, projects_both,
                             tx)
+from taxjson.rules import ids as R
+import _paths
+from _support.filing_run_record import record_full_run
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 _GAINS = {"summary": {"year": "2025", "total_gain": 100.0},
           "transactions": [
@@ -62,10 +65,11 @@ class TestOneCountryResolver(unittest.TestCase):
                  "germany": None, "": None}
 
     def _readers(self):
-        from taxjson.bin import taxjson_filed
+        from taxjson.lib import filed_locks
         from taxjson.bin.taxjson_audit import _norm_country
         from taxjson.lib import checklist
-        from taxjson.lib.core import CanadaTaxRules, get_tax_rules
+        from taxjson.engine.ca.taxrules import CanadaTaxRules
+        from taxjson.engine.by_country import get_tax_rules
         from taxjson.lib.corp_actions import options_for
         from taxjson.lib.pipeline import GainsRequest
         return {
@@ -80,14 +84,14 @@ class TestOneCountryResolver(unittest.TestCase):
                 "usa" if any(k == "reorg_368" for k, _ in
                              options_for(v, "merger")) else "canada"),
             "taxjson-audit": _norm_country,
-            "filed": lambda v: taxjson_filed._canonical_country(
+            "filed": lambda v: filed_locks._canonical_country(
                 {"country": v}),
             "checklist": lambda v: "usa" if checklist.is_us(v) else "canada",
             "settings_country": lambda v: C.settings_country({"country": v}),
         }
 
-    @rule("CA-CTRY-01")
-    @rule("US-CTRY-01")
+    @rule(R.CA_CTRY_01)
+    @rule(R.US_CTRY_01)
     def test_every_reader_agrees(self):
         for spelling, want in self.SPELLINGS.items():
             for name, read in self._readers().items():
@@ -102,12 +106,12 @@ class TestOneCountryResolver(unittest.TestCase):
                     else:
                         self.assertEqual(read(spelling), want)
 
-    @rule("CA-CTRY-01")
-    @rule("US-CTRY-01")
+    @rule(R.CA_CTRY_01)
+    @rule(R.US_CTRY_01)
     def test_project_readers_agree(self):
         """load_config (every `taxjson` command) and
         taxjson-missing-history read the same toml the same way."""
-        from taxjson.bin import taxjson_run as R
+        from taxjson.pipeline import config as pipeline_config
         from taxjson.lib.missing_history import tax_date_near
         for spelling, want in self.SPELLINGS.items():
             with self.subTest(spelling=spelling), \
@@ -124,17 +128,17 @@ class TestOneCountryResolver(unittest.TestCase):
                 if want is None:
                     with self.assertRaises(SystemExit):
                         with redirect_stderr(io.StringIO()):
-                            R.load_config(root)
+                            pipeline_config.load_config(root)
                     with self.assertRaises(ValueError):
                         tax_date_near(book)
                 else:
-                    self.assertEqual(R.load_config(root)["settings"]
-                                     ["country"], want)
+                    self.assertEqual(pipeline_config.load_config(root)["settings"].country,
+                                     want)
                     self.assertEqual(tax_date_near(book),
                                      C.default_tax_date(want))
 
-    @rule("CA-CTRY-01")
-    @rule("US-CTRY-01")
+    @rule(R.CA_CTRY_01)
+    @rule(R.US_CTRY_01)
     def test_missing_country_refused_by_every_command(self):
         """`run` used to refuse while every other command read the
         project as Canada (Schedule 3, T1135, s.39(1.1) over US books)."""
@@ -177,6 +181,8 @@ _CA_ONLY_TABLES = {
     "[estimate] deductions": "[estimate]\ndeductions = 1000\n",
     "[estimate] carrying_charges": "[estimate]\ncarrying_charges = 100\n",
     "[estimate] amt_carryover": "[estimate]\namt_carryover = { 2024 = 10 }\n",
+    # The answer to a T1A carry-back `tjs carryover` can't tell (TJ-4880).
+    "[carryover] carried_back": "[carryover]\ncarried_back = { 2024 = 10 }\n",
     # T5 box 18 (once capital_gains_dividends.map, a Canada-only file).
     "[capital_gains_dividends]": ('[[capital_gains_dividends]]\n'
                                   'symbol = "LFE.TO"\nyear = 2025\n'
@@ -194,21 +200,21 @@ class TestSettingOwnership(unittest.TestCase):
     honoured (foreign_return_of_capital = "dividend", ITA s.90(1))."""
 
     def test_table_names_every_known_key(self):
-        from taxjson.bin.taxjson_run import _SETTINGS_KEYS
+        from taxjson.pipeline.config import _SETTINGS_KEYS
         self.assertEqual(set(_SETTINGS_KEYS), set(C.SETTING_COUNTRY))
         self.assertEqual(set(C.owners(C.SETTING_COUNTRY, "canada")),
                          set(_CA_ONLY_SETTINGS))
         self.assertEqual(set(C.owners(C.CONFIG_COUNTRY, "canada")),
                          set(_CA_ONLY_TABLES))
         # The one US-only key: the §852(b)(7) January-dividend list
-        # (partition Phase C, D8; tests/test_fix_income.py).
+        # (partition Phase C, D8; tests/rules/ca/inc/test_income_character_and_dating.py).
         self.assertEqual(list(C.owners(C.SETTING_COUNTRY, "usa")),
                          ["ric_january_dividends"])
 
-    @rule("US-CTRY-02")
-    @rule_absent("US-CTRY-02", country="canada")
+    @rule(R.US_CTRY_02)
+    @rule_absent(R.US_CTRY_02, country="canada")
     def test_canada_only_settings_refused_in_a_us_project(self):
-        from taxjson.bin.taxjson_run import validate_config
+        from taxjson.pipeline.config import validate_config
         for key, val in list(_CA_ONLY_SETTINGS.items()) + [
                 (k, None) for k in _CA_ONLY_TABLES]:
             with self.subTest(key=key), tempfile.TemporaryDirectory() as td:
@@ -217,6 +223,7 @@ class TestSettingOwnership(unittest.TestCase):
                 tail = _CA_ONLY_TABLES.get(key, "")
                 p = projects_both(td, files=_GAINS_FILE, tail=tail,
                                   canada=extra, usa=extra)
+                record_full_run(p["canada"])    # (sum: books a full run recorded)
                 r = cli_both(p, "sum", "--json")
                 self.assertNotEqual(r["usa"].returncode, 0)
                 key = key.replace("[accounts]", "[accounts.margin]")
@@ -228,14 +235,14 @@ class TestSettingOwnership(unittest.TestCase):
                                  r["canada"].stderr)
                 self.assertNotIn("Canada-only", r["canada"].stderr)
                 # validate_config (tjs run) says the same.
-                from taxjson.lib.tomlcompat import tomllib
+                import tomllib
                 cfg = tomllib.loads((p["usa"] / "taxjson.toml").read_text())
                 with self.assertRaises(SystemExit) as cm:
                     validate_config(cfg)
                 self.assertIn(key, str(cm.exception.code))
 
     def test_tax_date_against_the_country_default_is_said(self):
-        from taxjson.bin.taxjson_run import validate_config
+        from taxjson.pipeline.config import validate_config
         for c, td, warned in (("canada", "settle", False),
                               ("canada", "trade", True),
                               ("usa", "trade", False),
@@ -247,12 +254,12 @@ class TestSettingOwnership(unittest.TestCase):
                     "accounts": {"m": {"type": "taxable"}}})
                 self.assertEqual(any("tax_date" in m for m in w), warned, w)
 
-    @rule("CA-ACB-08")
-    @rule_absent("CA-ACB-08", country="usa")
+    @rule(R.CA_ACB_08)
+    @rule_absent(R.CA_ACB_08, country="usa")
     def test_foreign_roc_rule_is_canadian(self):
         """ITA s.90(1) (IB foreign ROC as a dividend) is Canada's: the
         resolver returns "acb" for a US project whatever the table says."""
-        from taxjson.bin.taxjson_run import ib_foreign_roc_mode
+        from taxjson.pipeline.stages import ib_foreign_roc_mode
         self.assertEqual(ib_foreign_roc_mode({"country": "canada"}),
                          "dividend")
         self.assertEqual(ib_foreign_roc_mode(
@@ -277,8 +284,8 @@ class TestFlagOwnership(unittest.TestCase):
         p.write_text(json.dumps({"transactions": []}))
         return p
 
-    @rule("US-CTRY-02")
-    @rule_absent("US-CTRY-02", country="canada")
+    @rule(R.US_CTRY_02)
+    @rule_absent(R.US_CTRY_02, country="canada")
     def test_canada_flags_refused_with_country_usa(self):
         with tempfile.TemporaryDirectory() as td:
             b = self._book(td)
@@ -300,14 +307,15 @@ class TestFlagOwnership(unittest.TestCase):
             self.assertIn("--option-buyback-wash is Canada-only",
                           audit.stderr)
 
-    @rule("US-CTRY-02")
-    @rule_absent("US-CTRY-02", country="canada")
+    @rule(R.US_CTRY_02)
+    @rule_absent(R.US_CTRY_02, country="canada")
     def test_canadian_estimate_flags_refused_in_a_us_project(self):
         """`estimate --province XX` in a US project was silently ignored
         (COMMANDS-10 / SPEC-09); --deductions was refused only by the
         estimate itself."""
         with tempfile.TemporaryDirectory() as td:
             p = projects_both(td, files=_GAINS_FILE, canada={"province": "ON"})
+            record_full_run(p["canada"])        # (estimate: books a full run recorded)
             for flag in (["--province", "BC"], ["--deductions", "1000"],
                          ["--carrying-charges", "50"]):
                 with self.subTest(flag=flag[0]):
@@ -318,8 +326,8 @@ class TestFlagOwnership(unittest.TestCase):
                     self.assertEqual(r["canada"].returncode, 0,
                                      r["canada"].stderr)
 
-    @rule("CA-CTRY-02")
-    @rule_absent("CA-CTRY-02", country="usa")
+    @rule(R.CA_CTRY_02)
+    @rule_absent(R.CA_CTRY_02, country="usa")
     def test_per_account_basis_refused_with_country_canada(self):
         with tempfile.TemporaryDirectory() as td:
             b = self._book(td)
@@ -359,12 +367,14 @@ class TestCommandOwnership(unittest.TestCase):
              if k != "term"} for t in _GAINS["transactions"]])
         (p["canada"] / "work" / "margin_gains.json").write_text(
             json.dumps(gains))
+        for root in p.values():         # books a full run built (TJ-4309)
+            record_full_run(root)
         return p
 
-    @rule("US-CTRY-02")
-    @rule_absent("US-CTRY-02", country="canada")
-    @rule("CA-RPT-01")
-    @rule_absent("CA-RPT-01", country="usa")
+    @rule(R.US_CTRY_02)
+    @rule_absent(R.US_CTRY_02, country="canada")
+    @rule(R.CA_RPT_01)
+    @rule_absent(R.CA_RPT_01, country="usa")
     def test_canadian_commands_refused_in_a_us_project(self):
         with tempfile.TemporaryDirectory() as td:
             p = self._projects(td)
@@ -386,10 +396,10 @@ class TestCommandOwnership(unittest.TestCase):
             self.assertEqual(ca.returncode, 0, ca.stderr)
             self.assertIn("FILING REQUIRED", ca.stdout)
 
-    @rule("CA-CTRY-02")
-    @rule_absent("CA-CTRY-02", country="usa")
-    @rule("US-RPT-01")
-    @rule_absent("US-RPT-01", country="canada")
+    @rule(R.CA_CTRY_02)
+    @rule_absent(R.CA_CTRY_02, country="usa")
+    @rule(R.US_RPT_01)
+    @rule_absent(R.US_RPT_01, country="canada")
     def test_us_forms_refused_in_a_canada_project(self):
         with tempfile.TemporaryDirectory() as td:
             p = self._projects(td)
@@ -409,7 +419,7 @@ class TestCommandOwnership(unittest.TestCase):
             self.assertIn("AAA.US", us.stdout)
 
     def test_every_owned_command_is_a_real_command(self):
-        from taxjson.bin import taxjson_run as R
+        from taxjson.cli import main as cli_main
         import argparse
         seen = set()
         orig = argparse.ArgumentParser.parse_args
@@ -427,7 +437,7 @@ class TestCommandOwnership(unittest.TestCase):
             sys.argv = ["taxjson", "tax-logic"]
             with self.assertRaises(SystemExit):
                 with redirect_stderr(io.StringIO()):
-                    R.main()
+                    cli_main.main()
         finally:
             argparse.ArgumentParser.parse_args = orig
             argparse.ArgumentParser.parse_known_args = orig_known
@@ -442,13 +452,13 @@ class TestBaseCurrencyFollowsCountry(unittest.TestCase):
     country's currency — US + CAD ran silently (Form 8949 in CAD at Bank
     of Canada rates); Canada + USD only warned."""
 
-    @rule("US-CTRY-03")
-    @rule_absent("US-CTRY-03", country="canada")
-    @rule("CA-CTRY-03")
-    @rule_absent("CA-CTRY-03", country="usa")
-    @rule("US-FX-01")
+    @rule(R.US_CTRY_03)
+    @rule_absent(R.US_CTRY_03, country="canada")
+    @rule(R.CA_CTRY_03)
+    @rule_absent(R.CA_CTRY_03, country="usa")
+    @rule(R.US_FX_01)
     def test_base_currency_must_be_the_countrys(self):
-        from taxjson.bin.taxjson_run import validate_config
+        from taxjson.pipeline.config import validate_config
         for country, base, ok in (("usa", "USD", True), ("usa", "CAD", False),
                                   ("canada", "CAD", True),
                                   ("canada", "USD", False),
@@ -466,10 +476,10 @@ class TestBaseCurrencyFollowsCountry(unittest.TestCase):
                         f"filed in {C.home_currency(country)}",
                         " ".join(str(cm.exception.code).split()))
 
-    @rule("US-FX-01")
-    @rule("CA-FX-01")
+    @rule(R.US_FX_01)
+    @rule(R.CA_FX_01)
     def test_unset_base_currency_is_the_countrys(self):
-        from taxjson.bin.taxjson_run import _base_currency
+        from taxjson.cli.common import _base_currency
         with tempfile.TemporaryDirectory() as td:
             for c in C.COUNTRIES:
                 root = Path(td) / c
@@ -580,18 +590,19 @@ class TestRuleMarkers(unittest.TestCase):
             rule_absent("CA-SL-01", country="canada")
 
     def test_guard_blocks_the_other_engine(self):
-        from taxjson.lib.core import CanadaTaxRules, USATaxRules
+        from taxjson.engine.ca.taxrules import CanadaTaxRules
+        from taxjson.engine.us.taxrules import USATaxRules
 
-        @rule("CA-SL-01")
+        @rule(R.CA_SL_01)
         def ca_only():
             USATaxRules().compute_gains([])
 
-        @rule("CA-SL-01")
+        @rule(R.CA_SL_01)
         def ca_ok():
             CanadaTaxRules().compute_gains([])
 
-        @rule("CA-SL-01")
-        @rule_absent("CA-SL-01", country="usa")
+        @rule(R.CA_SL_01)
+        @rule_absent(R.CA_SL_01, country="usa")
         def dual():
             CanadaTaxRules().compute_gains([])
             USATaxRules().compute_gains([])
@@ -615,7 +626,7 @@ class TestIncomeDating(unittest.TestCase):
     the pay date wins under either country's tax_date basis. The
     record-date rules (Phase C: Canadian trusts, US January fund
     dividends) read the parsers' record_date / income_label facts and
-    are pinned here and in tests/test_fix_income.py."""
+    are pinned here and in tests/rules/ca/inc/test_income_character_and_dating.py."""
 
     @staticmethod
     def _years(res):
@@ -627,8 +638,8 @@ class TestIncomeDating(unittest.TestCase):
                 tx(action, pay, sym, 0, amount, settle=record,
                    description=f"record {record}")]
 
-    @rule("CA-INC-DATE-DIV")
-    @rule("US-INC-DATE-DIV")
+    @rule(R.CA_INC_DATE_DIV)
+    @rule(R.US_INC_DATE_DIV)
     def test_dividend_is_the_pay_years(self):
         book = self._book("XYZ.US", "DIVIDEND", "2026-01-15", "2025-12-31")
         for year, want in ((2025, set()), (2026, {("DIVIDEND", "2026")})):
@@ -637,8 +648,8 @@ class TestIncomeDating(unittest.TestCase):
                 with self.subTest(year=year, country=c):
                     self.assertEqual(self._years(r[c]), want)
 
-    @rule("CA-INC-DATE-PIL")
-    @rule("US-INC-DATE-DIV")
+    @rule(R.CA_INC_DATE_PIL)
+    @rule(R.US_INC_DATE_DIV)
     def test_payment_in_lieu_is_the_pay_years(self):
         book = self._book("XYZ.US", "DIVIDEND_IN_LIEU", "2026-01-10",
                           "2025-12-30")
@@ -665,8 +676,8 @@ class TestIncomeDating(unittest.TestCase):
     def _sale_gains(self, res):
         return [round(t["gain"], 2) for t in _gain_rows(res)]
 
-    @rule("CA-INC-DATE-ROC")
-    @rule("US-INC-DATE-ROC")
+    @rule(R.CA_INC_DATE_ROC)
+    @rule(R.US_INC_DATE_ROC)
     def test_return_of_capital_lowers_cost_on_its_pay_date(self):
         r = gains_both(self._roc_book("XYZ.US"), year=2026)
         for c in C.COUNTRIES:
@@ -676,8 +687,8 @@ class TestIncomeDating(unittest.TestCase):
                 # it would be 150 / 150.
                 self.assertEqual(self._sale_gains(r[c]), [100.0, 200.0])
 
-    @rule("CA-INC-DATE-ROC")
-    @rule("US-INC-DATE-ROC")
+    @rule(R.CA_INC_DATE_ROC)
+    @rule(R.US_INC_DATE_ROC)
     def test_parsers_stamp_roc_with_its_posting_date(self):
         """The date the engines place a ROC on comes from the parser: the
         broker's posting (pay) date, for trade and settle alike."""
@@ -700,9 +711,9 @@ class TestIncomeDating(unittest.TestCase):
         self.assertEqual(t["date"][:10], "2026-01-15")
         self.assertEqual(t["date_settle"][:10], "2026-01-15")
 
-    @rule("CA-INC-DATE-ROC-TRUST")
-    @rule_absent("CA-INC-DATE-ROC-TRUST", country="usa")
-    @rule("US-INC-DATE-ROC")
+    @rule(R.CA_INC_DATE_ROC_TRUST)
+    @rule_absent(R.CA_INC_DATE_ROC_TRUST, country="usa")
+    @rule(R.US_INC_DATE_ROC)
     def test_canadian_trust_roc_lowers_the_acb_when_payable(self):
         """A Canadian trust's ROC (T3 box 42) lowers the ACB on its record
         date in a Canada project (s.53(2)(h)); a US project keeps the pay
@@ -717,10 +728,10 @@ class TestIncomeDating(unittest.TestCase):
         self.assertEqual(self._sale_gains(r["canada"]), [150.0, 150.0])
         self.assertEqual(self._sale_gains(r["usa"]), [100.0, 200.0])
 
-    @rule("CA-INC-DATE-TRUST")
-    @rule_absent("CA-INC-DATE-TRUST", country="usa")
-    @rule("US-INC-DATE-RIC")
-    @rule_absent("US-INC-DATE-RIC", country="canada")
+    @rule(R.CA_INC_DATE_TRUST)
+    @rule_absent(R.CA_INC_DATE_TRUST, country="usa")
+    @rule(R.US_INC_DATE_RIC)
+    @rule_absent(R.US_INC_DATE_RIC, country="canada")
     def test_trust_or_fund_distribution_year(self):
         """A Canadian trust distribution payable in December and paid in
         January is the December year's income in Canada (s.104(13)); a
@@ -757,10 +768,10 @@ class TestIncomeDating(unittest.TestCase):
         else:
             self.assertEqual(self._years(ca["canada"]), set())
 
-    @rule("CA-DATE-11")
-    @rule("US-DATE-03")
+    @rule(R.CA_DATE_11)
+    @rule(R.US_DATE_03)
     def test_interest_is_the_pay_years(self):
-        from taxjson.bin.taxjson_sum_income import summarize_income
+        from taxjson.lib.income_summary import summarize_income
         rows = [{"action": "INTEREST", "date": "2026-01-02",
                  "date_settle": "2025-12-31", "net_amount": 5.0,
                  "currency": "USD"}]
@@ -776,10 +787,10 @@ class TestEnginePartition(unittest.TestCase):
     and not in the other (partition ENGINE-11, COMMANDS-16, INPUTS-15,
     SPEC-19)."""
 
-    @rule("CA-SL-02")
-    @rule_absent("CA-SL-02", country="usa")
-    @rule("US-WASH-06")
-    @rule_absent("US-WASH-06", country="canada")
+    @rule(R.CA_SL_02)
+    @rule_absent(R.CA_SL_02, country="usa")
+    @rule(R.US_WASH_06)
+    @rule_absent(R.US_WASH_06, country="canada")
     def test_still_held_at_day_30(self):
         book = [tx("BUYSELL", "2025-01-02", "AAA.US", 100, 1000,
                    settle="2025-01-03"),
@@ -796,10 +807,10 @@ class TestEnginePartition(unittest.TestCase):
         self.assertAlmostEqual(r["usa"]["summary"]["total_disallowed"],
                                200.0, places=2)
 
-    @rule("CA-SL-01")
-    @rule_absent("CA-SL-01", country="usa")
-    @rule("US-WASH-01")
-    @rule_absent("US-WASH-01", country="canada")
+    @rule(R.CA_SL_01)
+    @rule_absent(R.CA_SL_01, country="usa")
+    @rule(R.US_WASH_01)
+    @rule_absent(R.US_WASH_01, country="canada")
     def test_window_settle_dates_vs_trade_dates(self):
         # Settle gap 29 / trade gap 32: Canada denies, US allows.
         a = [tx("BUYSELL", "2025-01-02", "BBB.US", 100, 1000,
@@ -824,10 +835,10 @@ class TestEnginePartition(unittest.TestCase):
         self.assertAlmostEqual(r["usa"]["summary"]["total_disallowed"],
                                200.0, places=2)
 
-    @rule("CA-ACB-01")
-    @rule_absent("CA-ACB-01", country="usa")
-    @rule("US-BASIS-01")
-    @rule_absent("US-BASIS-01", country="canada")
+    @rule(R.CA_ACB_01)
+    @rule_absent(R.CA_ACB_01, country="usa")
+    @rule(R.US_BASIS_01)
+    @rule_absent(R.US_BASIS_01, country="canada")
     def test_average_cost_vs_fifo(self):
         book = [tx("BUYSELL", "2025-01-02", "CCC.US", 100, 1000),
                 tx("BUYSELL", "2025-01-03", "CCC.US", 100, 2000),
@@ -838,8 +849,8 @@ class TestEnginePartition(unittest.TestCase):
         self.assertAlmostEqual(r["usa"]["summary"]["total_gain"], 500.0,
                                places=2)
 
-    @rule("US-HOLD-01")
-    @rule_absent("US-HOLD-01", country="canada")
+    @rule(R.US_HOLD_01)
+    @rule_absent(R.US_HOLD_01, country="canada")
     def test_short_and_long_term(self):
         book = [tx("BUYSELL", "2023-01-03", "III.US", 100, 1000),
                 tx("BUYSELL", "2024-01-04", "III.US", 100, 1000),
@@ -851,10 +862,10 @@ class TestEnginePartition(unittest.TestCase):
         self.assertTrue(all(t.get("term") is None
                             for t in _gain_rows(r["canada"])))
 
-    @rule("CA-OPT-01")
-    @rule_absent("CA-OPT-01", country="usa")
-    @rule("US-OPT-01")
-    @rule_absent("US-OPT-01", country="canada")
+    @rule(R.CA_OPT_01)
+    @rule_absent(R.CA_OPT_01, country="usa")
+    @rule(R.US_OPT_01)
+    @rule_absent(R.US_OPT_01, country="canada")
     def test_grant_timing_vs_close_timing(self):
         book = [tx("BUYSELL", "2025-11-03", "EEE251219C00050000.US", -1,
                    300),
@@ -872,10 +883,10 @@ class TestEnginePartition(unittest.TestCase):
         self.assertEqual(by_year[("usa", 2025)], 0.0)
         self.assertEqual(by_year[("usa", 2026)], 200.0)
 
-    @rule("CA-SL-05")
-    @rule_absent("CA-SL-05", country="usa")
-    @rule("US-WASH-12")
-    @rule_absent("US-WASH-12", country="canada")
+    @rule(R.CA_SL_05)
+    @rule_absent(R.CA_SL_05, country="usa")
+    @rule(R.US_WASH_12)
+    @rule_absent(R.US_WASH_12, country="canada")
     def test_long_call_replacement(self):
         book = [tx("BUYSELL", "2025-01-02", "FFF.US", 100, 1000),
                 tx("BUYSELL", "2025-02-03", "FFF.US", -100, 800),
@@ -886,10 +897,10 @@ class TestEnginePartition(unittest.TestCase):
         self.assertEqual(r["usa"]["summary"]["total_disallowed"], 0)
         self.assertTrue(r["usa"].get("option_replacement_warnings"))
 
-    @rule("CA-ACB-07")
-    @rule_absent("CA-ACB-07", country="usa")
-    @rule("US-ROC-02", "US-ROC-03")
-    @rule_absent("US-ROC-03", country="canada")
+    @rule(R.CA_ACB_07)
+    @rule_absent(R.CA_ACB_07, country="usa")
+    @rule(R.US_ROC_02, R.US_ROC_03)
+    @rule_absent(R.US_ROC_03, country="canada")
     def test_roc_beyond_cost_and_after_exit(self):
         book = [tx("BUYSELL", "2025-01-02", "DDD.US", 100, 1000),
                 tx("ADJUST", "2025-03-01", "DDD.US", 0, -1500, type="roc"),
@@ -916,10 +927,10 @@ class TestEnginePartition(unittest.TestCase):
                                places=2)
         self.assertIn("no open long lots", r["usa"]["_stderr"])
 
-    @rule("US-WASH-05")
-    @rule_absent("US-WASH-05", country="canada")
-    @rule("CA-SL-07")
-    @rule_absent("CA-SL-07", country="usa")
+    @rule(R.US_WASH_05)
+    @rule_absent(R.US_WASH_05, country="canada")
+    @rule(R.CA_SL_07)
+    @rule_absent(R.CA_SL_07, country="usa")
     def test_reshort_after_short_cover_loss(self):
         book = [tx("BUYSELL", "2025-01-02", "JJJ.US", -100, 1000),
                 tx("BUYSELL", "2025-02-03", "JJJ.US", 100, 1200),
@@ -932,9 +943,9 @@ class TestEnginePartition(unittest.TestCase):
         self.assertAlmostEqual(r["usa"]["summary"]["total_disallowed"],
                                200.0, places=2)
 
-    @rule("US-WASH-11")
-    @rule_absent("US-WASH-11", country="canada")
-    @rule("CA-SL-02")
+    @rule(R.US_WASH_11)
+    @rule_absent(R.US_WASH_11, country="canada")
+    @rule(R.CA_SL_02)
     def test_sheltered_rebuy_sold_before_day_30(self):
         book = [tx("BUYSELL", "2025-01-02", "HHH.US", 100, 1000),
                 tx("BUYSELL", "2025-02-03", "HHH.US", -100, 800)]
@@ -952,8 +963,8 @@ class TestEnginePartition(unittest.TestCase):
         # US: an IRA replacement makes the loss permanent (no held test).
         self.assertAlmostEqual(perm["usa"], 200.0, places=2)
 
-    @rule("CA-DATE-02")
-    @rule("US-DATE-02")
+    @rule(R.CA_DATE_02)
+    @rule(R.US_DATE_02)
     def test_explicit_tax_date_overrides_the_country_default(self):
         book = [tx("BUYSELL", "2025-06-02", "GGG.US", 100, 1000),
                 tx("BUYSELL", "2025-12-31", "GGG.US", -100, 1500,
@@ -966,8 +977,8 @@ class TestEnginePartition(unittest.TestCase):
                     self.assertEqual(r[c]["summary"]["tax_date_basis"],
                                      basis)
 
-    @rule("CA-DATE-01")
-    @rule("US-DATE-01")
+    @rule(R.CA_DATE_01)
+    @rule(R.US_DATE_01)
     def test_us_ladder_defaults_to_trade_dates(self):
         """ENGINE-13: event_sort_key's default basis follows the ladder's
         country (the US one used Canada's settle-first date)."""
@@ -979,10 +990,10 @@ class TestEnginePartition(unittest.TestCase):
         self.assertEqual([t.date for t in us], ["2025-12-31", "2026-01-01"])
         self.assertEqual([t.date for t in ca], ["2026-01-01", "2025-12-31"])
 
-    @rule("CA-DATE-01")
-    @rule_absent("CA-DATE-01", country="usa")
-    @rule("US-DATE-01")
-    @rule_absent("US-DATE-01", country="canada")
+    @rule(R.CA_DATE_01)
+    @rule_absent(R.CA_DATE_01, country="usa")
+    @rule(R.US_DATE_01)
+    @rule_absent(R.US_DATE_01, country="canada")
     def test_year_end_sale_lands_in_the_countrys_year(self):
         book = [tx("BUYSELL", "2025-06-02", "GGG.US", 100, 1000),
                 tx("BUYSELL", "2025-12-31", "GGG.US", -100, 1500,

@@ -14,10 +14,13 @@ from pathlib import Path
 from taxjson.lib.tax_estimate import (_bracket_tax, estimate_canada,
                                       estimate_usa)
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 from taxjson.lib.out import WIDTH as PIPE_WIDTH
+import _paths
+from _support.filing_run_record import record_full_run
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 
@@ -55,7 +58,7 @@ class TestCanadaEstimate(unittest.TestCase):
         base.update(kw)
         return estimate_canada(**base)
 
-    @rule("CA-RPT-03")
+    @rule(R.CA_RPT_03)
     def test_capital_gain_marginal(self):
         # 1,000 gain -> 500 taxable. fed 500*.29 = 145
         #   + BPA phase-down 500*.0031592 = 1.58;
@@ -66,7 +69,7 @@ class TestCanadaEstimate(unittest.TestCase):
         self.assertAlmostEqual(r["estimated_tax"], 366.43, delta=0.02)
         self.assertAlmostEqual(r["avg_rate_pct"], 36.64, delta=0.01)
 
-    @rule("CA-RPT-04")
+    @rule(R.CA_RPT_04)
     def test_eligible_dividend_marginal(self):
         # 1,000 eligible -> grossed 1,380.
         # fed: 1380*.29 - 1380*.150198 = 192.93; BPA 1380*.0031592 = 4.36
@@ -77,7 +80,7 @@ class TestCanadaEstimate(unittest.TestCase):
         self.assertEqual(r["grossed_eligible"], 1380.0)
         self.assertAlmostEqual(r["estimated_tax"], 471.07, delta=0.02)
 
-    @rule("CA-RPT-05")
+    @rule(R.CA_RPT_05)
     def test_foreign_dividend_ftc(self):
         # 1,000 foreign: fed 290 - 150 FTC + BPA 1000*.0031592 = 3.16;
         # ON 121.6*1.56 = 189.70; OHP +150 (taxable 201,000)
@@ -123,12 +126,12 @@ class TestUsaEstimate(unittest.TestCase):
         self.assertAlmostEqual(st["estimated_tax"], 220.0, delta=0.5)
         self.assertAlmostEqual(lt["estimated_tax"], 150.0, delta=0.5)
 
-    @rule("US-RPT-04")
+    @rule(R.US_RPT_04)
     def test_qualified_dividend_stacks_with_lt(self):
         r = self._run(qualified_div=1000.0)
         self.assertAlmostEqual(r["estimated_tax"], 150.0, delta=0.5)
 
-    @rule("US-RPT-04")
+    @rule(R.US_RPT_04)
     def test_losses_net_st_first_then_lt_then_3000_ordinary(self):
         r = self._run(st=2000.0, lt=1000.0, other_losses=6000.0)
         self.assertEqual(r["st_net"], 0.0)
@@ -138,7 +141,7 @@ class TestUsaEstimate(unittest.TestCase):
         # The offset SAVES tax: 3,000 off the 22% bracket -> -660.
         self.assertAlmostEqual(r["estimated_tax"], -660.0, delta=0.5)
 
-    @rule("US-RPT-04")
+    @rule(R.US_RPT_04)
     def test_niit_over_threshold(self):
         # other 190k, LT 20k -> MAGI 210k: NIIT on 10k = 380.
         # ordinary taxable 175k; LT stacks 175k-195k at 15% = 3,000.
@@ -174,6 +177,7 @@ class TestSumEstimateCli(unittest.TestCase):
                 {"symbol": "BBB.TO", "qty": -1, "date": "2026-05-02",
                  "gain": 999999.0, "cost": 1.0,
                  "proceeds": 2.0, "currency": "CAD", "days_held": 10}]}))
+        record_full_run(root)     # (sum reads books a full run recorded: TJ-4347)
         return root
 
     def _sum(self, root, *args):
@@ -182,7 +186,7 @@ class TestSumEstimateCli(unittest.TestCase):
              str(root), "sum", *args],
             cwd=REPO_ROOT, capture_output=True, text=True)
 
-    @rule("CA-INC-01", "CA-RPT-04")
+    @rule(R.CA_INC_01, R.CA_RPT_04)
     def test_estimate_block_canada(self):
         with tempfile.TemporaryDirectory() as tmp:
             r = self._sum(self._project(tmp),
@@ -205,7 +209,7 @@ class TestSumEstimateCli(unittest.TestCase):
                               foreign_div=500.0, pil=0.0,
                               other_income=200000.0, other_losses=0.0,
                               province="ON")
-        from taxjson.lib.report_model import fmt_money
+        from taxjson.lib.report_fmt import fmt_money
         self.assertIn(f"ESTIMATED TAX ON INVESTMENT INCOME: "
                       f"{fmt_money(exp['estimated_tax'])} CAD", out)
 
@@ -251,6 +255,7 @@ class TestSumEstimateCli(unittest.TestCase):
                  "gain": 2000.0, "cost": 1.0,
                      "proceeds": 2.0, "currency": "USD",
                      "days_held": 400, "term": "LONG_TERM"}]}))
+            record_full_run(root)
             r = self._sum(root, "--other-income", "100000", "-v")
         self.assertEqual(r.returncode, 0, r.stderr)
         out = r.stdout
@@ -291,7 +296,7 @@ class TestSumEstimateCli(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("province", r.stderr)
 
-    @rule("US-RPT-04")
+    @rule(R.US_RPT_04)
     def test_usa_st_lt_split(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -310,6 +315,7 @@ class TestSumEstimateCli(unittest.TestCase):
                  "gain": 2000.0, "cost": 1.0,
                      "proceeds": 2.0, "currency": "USD", "days_held": 400,
                      "term": "LONG_TERM"}]}))
+            record_full_run(root)
             r = self._sum(root, "--other-income", "100000")
         self.assertEqual(r.returncode, 0, r.stderr)
         out = r.stdout
@@ -323,7 +329,7 @@ class TestSumEstimateCli(unittest.TestCase):
 
 
 class TestFtcFromActualWithholding(unittest.TestCase):
-    @rule("CA-RPT-05")
+    @rule(R.CA_RPT_05)
     def test_actual_withholding_capped_at_treaty_rate(self):
         from taxjson.lib.tax_estimate import estimate_canada
         kw = dict(realized=0.0, eligible_div=0.0, foreign_div=1000.0,
@@ -352,7 +358,7 @@ class TestFtcFromActualWithholding(unittest.TestCase):
         import json
         import tempfile
         from pathlib import Path
-        from taxjson.bin.taxjson_run import _actual_withholding
+        from taxjson.cli.summaries import _actual_withholding
         with tempfile.TemporaryDirectory() as td:
             cache = Path(td)
             (cache / "m_base.json").write_text(json.dumps(
@@ -393,16 +399,16 @@ class TestEstimateCommand(unittest.TestCase):
                   "cost": 10000.0, "gain": 10000.0, "days_held": 100,
                   "commission": 0.0, "fee": 0.0}],
              "inventory": [], "wash_sales": []}))
+        record_full_run(root)     # (sum reads books a full run recorded: TJ-4347)
         return root
 
     def _cli(self, root, *args, env=None):
         import subprocess
         import sys
-        from pathlib import Path
         return subprocess.run(
             [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
              str(root), *args],
-            cwd=Path(__file__).resolve().parent.parent,
+            cwd=_paths.REPO,
             capture_output=True, text=True, env=env)
 
     def test_estimate_prints_the_summary_then_the_estimate(self):
@@ -482,7 +488,7 @@ class TestCanadaAmt(unittest.TestCase):
         base.update(kw)
         return estimate_canada(**base)
 
-    @rule("CA-RPT-03")
+    @rule(R.CA_RPT_03)
     def test_gains_heavy_no_salary_binds(self):
         # The motivating profile: big gains, no employment income —
         # regular tax enjoys 50% inclusion, AMT includes 100%.
@@ -586,10 +592,11 @@ class TestAmtLossCapAndWidth(unittest.TestCase):
                       "gain": 900000.0, "days_held": 200,
                       "commission": 0.0, "fee": 0.0}],
                  "inventory": [], "wash_sales": []}))
+            record_full_run(root)
             r = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
                  str(root), "estimate"],
-                cwd=Path(__file__).resolve().parent.parent,
+                cwd=_paths.REPO,
                 capture_output=True, text=True, env=_wrapping_env())
         self.assertEqual(r.returncode, 0, r.stderr)
         block = r.stdout[r.stdout.index("AMT CHECK"):]

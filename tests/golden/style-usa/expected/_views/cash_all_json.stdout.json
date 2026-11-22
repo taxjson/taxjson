@@ -1,0 +1,55 @@
+{
+  "account": null,
+  "problems": [],
+  "rows": [
+    {
+      "account": "",
+      "amount": -183.6,
+      "book": "crypto/kraken",
+      "broker": "kraken",
+      "currency": "USD",
+      "date": "2024-09-10",
+      "decl": null,
+      "desc": "Kraken withdrawal USD",
+      "file": "kraken_ledgers_demo.csv",
+      "internal": "",
+      "kind": "CASHMOVE",
+      "label": "crypto",
+      "line_where": "kraken_ledgers_demo.csv:3",
+      "origin": "broker",
+      "settle": "2024-09-10",
+      "tt": "#CASHMOVE 2024-09-10 USD -183.60",
+      "where": "kraken_ledgers_demo.csv"
+    },
+    {
+      "account": "",
+      "amount": -94.1,
+      "book": "crypto/kraken",
+      "broker": "kraken",
+      "currency": "USD",
+      "date": "2024-10-01",
+      "decl": null,
+      "desc": "Kraken withdrawal USD",
+      "file": "kraken_ledgers_demo.csv",
+      "internal": "",
+      "kind": "CASHMOVE",
+      "label": "crypto",
+      "line_where": "kraken_ledgers_demo.csv:4",
+      "origin": "broker",
+      "settle": "2024-10-01",
+      "tt": "#CASHMOVE 2024-10-01 USD -94.10",
+      "where": "kraken_ledgers_demo.csv"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "all history",
+  "totals": {
+    "converted": {},
+    "credits": {},
+    "deposits": {},
+    "fees": {},
+    "withdrawals": {
+      "USD": 277.7
+    }
+  }
+}

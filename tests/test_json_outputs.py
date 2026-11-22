@@ -12,8 +12,10 @@ import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+import _paths
+from _support.filing_run_record import record_full_run
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 RECENT = (date.today() - timedelta(days=3)).isoformat()
 
 
@@ -68,6 +70,7 @@ def _project(tmp):
             {"symbol": "AAA.TO", "qty": 60, "total_cost": 600.0,
              "position_start_date": "2026-03-01",
              "last_acq_date": "2026-03-01"}]}))
+    record_full_run(root)
     return root
 
 

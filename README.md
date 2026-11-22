@@ -25,7 +25,9 @@ source in [REFERENCES.md](REFERENCES.md).
 - **United States: experimental.** FIFO basis, §1091 wash sales and Form
   8949 are implemented and unit-tested, but not validated on a real
   account. Treat its output as a draft.
-- **Pre-1.0.** A release can change a file format or a command;
+- **1.0.** The commands and their flags, the taxjson.toml keys, the
+  `--json` shapes and the exit codes are kept from release to release;
+  report text may change ([what 1.0.0 keeps](docs/upgrading.md#what-100-keeps)).
   [docs/upgrading.md](docs/upgrading.md) lists each change that asks
   something of you. What taxjson does not do: [docs/limits.md](docs/limits.md).
 
@@ -33,7 +35,7 @@ source in [REFERENCES.md](REFERENCES.md).
 
 One line, no clone — installs the `stable` release into
 `~/.local/share/taxjson` with its own virtualenv and puts `tjs` on
-your PATH (re-run it to upgrade):
+your PATH (re-run it to upgrade; it needs git and Python 3.12 or newer):
 
 ```bash
 bash -c "$(curl -fsSL https://taxjson.com/install.sh)"
@@ -43,9 +45,8 @@ bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --without-fetch   # wit
 taxjson is not published on PyPI: a `taxjson` or `taxjson-fetch` package
 there is not ours — use the installer or a checkout. Release channels (`stable`, `beta`, `latest`,
 `dev`, a pinned version): [docs/upgrading.md](docs/upgrading.md#how-to-upgrade).
-From a checkout: [CONTRIBUTING.md](CONTRIBUTING.md#setup). Python 3.10+;
-the core needs no third-party package (only `tomli` before Python 3.11,
-`tzdata` on Windows). The installer also adds the `fx` extra (yfinance
+From a checkout: [CONTRIBUTING.md](CONTRIBUTING.md#setup). Python 3.12+;
+the core needs no third-party package (only `tzdata` on Windows). The installer also adds the `fx` extra (yfinance
 and pandas: the Yahoo Finance rates the Bank of Canada does not
 publish) and the taxjson-fetch plugin. Every dependency it installs is
 pinned by hash in the release (`requirements/`; SECURITY.md).
@@ -211,7 +212,7 @@ country's commands (`tjs help --all` lists them). Every command takes
 
 | Command | Purpose |
 | --- | --- |
-| [`tjs run`](docs/commands.md#tjs-run) | Build the books and every report from your exports (`--fast`, `--strict`, `--account`) |
+| [`tjs run`](docs/commands.md#tjs-run) | Build the books and every report from your exports, every stage every run (`--strict`, `--account`) |
 | [`tjs compare`](docs/commands.md#tjs-compare) | What moved since the run before, a saved snapshot or the reports as filed |
 | [`tjs snapshot`](docs/commands.md#tjs-snapshot) | Copy the whole project to `snapshot/<year>.<timestamp>/`, to diff file by file or `compare` later |
 | [`tjs crypto-sends`](docs/commands.md#tjs-crypto-sends) | Decide each crypto send that did not arrive in another of your accounts (an arrival from 10 minutes before to 3 days after the send is yours) |
@@ -322,6 +323,7 @@ lists them only there (`tjs help --all` everywhere).
 | --- | --- |
 | [`tjs channels`](docs/commands.md#tjs-channels) | Where each release channel points; what this machine runs |
 | [`tjs deploy`](docs/commands.md#tjs-deploy) | Development machine: install a release here |
+| [`tjs parser-check`](docs/commands.md#tjs-parser-check) | Development machine: the conformance checks on a parser's fixtures |
 | [`tjs promote`](docs/commands.md#tjs-promote) | Development machine: point `stable` or `beta` at a release |
 
 #### Tools

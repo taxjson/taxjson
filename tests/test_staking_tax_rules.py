@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 from taxjson.lib.brokerages.coinbase import CoinbaseBrokerage
 from taxjson.lib.brokerages.kraken import KrakenBrokerage
@@ -45,7 +46,7 @@ def reward_legs(rows):
 
 
 class TestCanadianCustodialStaking(unittest.TestCase):
-    @rule("CA-INC-04", "CA-INC-STAKING", "CA-CRYPTO-03")
+    @rule(R.CA_INC_04, R.CA_INC_STAKING, R.CA_CRYPTO_03)
     def test_retained_commission_is_net_acquisition_without_second_sale(self):
         rows = kraken_reward(fee="0.05", fee_usd="10", fee_asset="ZZC",
                              balance="0.15")
@@ -59,7 +60,7 @@ class TestCanadianCustodialStaking(unittest.TestCase):
             self.assertEqual(row["date"], "2025-12-31")
         self.assertEqual(buys[0]["fee"], 0)
 
-    @rule("CA-INC-STAKING", "CA-CRYPTO-03")
+    @rule(R.CA_INC_STAKING, R.CA_CRYPTO_03)
     def test_different_coin_fee_keeps_full_reward_cost_and_disposes_fee(self):
         rows = kraken_reward(fee="0.02", fee_usd="4", fee_asset="ZZF",
                              balance="0.2")
@@ -72,7 +73,7 @@ class TestCanadianCustodialStaking(unittest.TestCase):
         self.assertAlmostEqual(sales[0]["quantity"], -0.02)
         self.assertAlmostEqual(sales[0]["net_amount"], 4)
 
-    @rule("CA-INC-STAKING")
+    @rule(R.CA_INC_STAKING)
     def test_fiat_fee_changes_income_without_disposing_reward_units(self):
         rows = kraken_reward(fee="2", fee_usd="2", fee_asset="ZUSD",
                              balance="0.2")
@@ -82,7 +83,7 @@ class TestCanadianCustodialStaking(unittest.TestCase):
         self.assertAlmostEqual(buys[0]["net_amount"], 40)
         self.assertEqual(sales, [])
 
-    @rule("CA-INC-04", "CA-INC-STAKING")
+    @rule(R.CA_INC_04, R.CA_INC_STAKING)
     def test_coinbase_cad_income_and_cost_use_received_subtotal(self):
         csv = (
             "Transactions\n"
@@ -105,7 +106,7 @@ class TestCanadianCustodialStaking(unittest.TestCase):
             self.assertAlmostEqual(row["quantity"], 0.2)
             self.assertAlmostEqual(row["net_amount"], 40)
 
-    @rule("CA-INC-STAKING")
+    @rule(R.CA_INC_STAKING)
     def test_rule_identifies_assumption_and_unmodeled_gross_alternative(self):
         text = catalog("canada")["CA-INC-STAKING"].text
         self.assertIn("Custodial staking assumption", text)
@@ -116,7 +117,7 @@ class TestCanadianCustodialStaking(unittest.TestCase):
 
 
 class TestUSCustodialStaking(unittest.TestCase):
-    @rule("US-INC-STAKING", "US-CRYPTO-03")
+    @rule(R.US_INC_STAKING, R.US_CRYPTO_03)
     def test_retained_commission_matches_shared_import_convention(self):
         income, buys, sales = reward_legs(kraken_reward(
             fee="0.05", fee_usd="10", fee_asset="ZZC", balance="0.15",
@@ -126,7 +127,7 @@ class TestUSCustodialStaking(unittest.TestCase):
         self.assertAlmostEqual(buys[0]["quantity"], 0.15)
         self.assertAlmostEqual(buys[0]["net_amount"], 30)
 
-    @rule("US-INC-STAKING", "US-CRYPTO-03")
+    @rule(R.US_INC_STAKING, R.US_CRYPTO_03)
     def test_separate_coin_fee_does_not_reduce_nonstablecoin_basis(self):
         income, buys, sales = reward_legs(kraken_reward(
             fee="0.02", fee_usd="4", fee_asset="ZZF", balance="0.2",
@@ -137,7 +138,7 @@ class TestUSCustodialStaking(unittest.TestCase):
         self.assertEqual(len(sales), 1)
         self.assertAlmostEqual(sales[0]["quantity"], -0.02)
 
-    @rule("US-INC-02", "US-INC-STAKING")
+    @rule(R.US_INC_02, R.US_INC_STAKING)
     def test_gross_income_dominion_and_fee_limitation_stay_us_specific(self):
         rules = catalog("usa")
         income = rules["US-INC-02"].text

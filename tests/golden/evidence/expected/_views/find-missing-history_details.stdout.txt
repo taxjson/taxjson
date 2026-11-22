@@ -1,0 +1,19 @@
+MISSING COST BASIS — tax year 2025
+
+TRUNCATED HISTORY — positions go short (missing a buy): 1 pair(s)
+1 affect tax year 2025; 0 are in registered accounts; 0 do not.
+PeakShort: the deepest short; FirstNeg: the day it went short; InYr: this year's sales from it.
+
+AFFECTS 2025 - missing basis distorts this year's gain; fix before filing:
+Symbol     Account  Cur  PeakShort  FirstNeg    InYrSales  InYrProceeds
+-----------------------------------------------------------------------
+SAMPLA.US  margin   CAD   -15.0000  2025-03-18          1        807.98
+  broker says closing (IB code C): the sale closed a position bought before the data (IB Basis 451.00 USD) — add the missing purchase; it is not a short sale. `--write-purchases` drafts the line from IB's figure for you to review.
+
+A short sale you made and have not covered also shows here: no purchase is missing, and it is in no total until it is covered.
+To fix a sale with no purchase in your files, in this order:
+  1. Add an older export that holds the purchase to inputs/<account>/.
+  2. Or enter the purchase as a .tt BUYSELL line with its real date and cost; `--write-purchases` drafts these from IB's Basis or a transfer's book value, to review.
+  3. Only when it cannot be recovered: `tjs find-missing-history --write-missing-history` in the project writes .tt OPENING cost=unknown lines into inputs/<account>/missing_history.tt — review them, then `tjs run` (it reads them); those sales leave the totals and are reported by hand.
+
+Walk-through: docs/getting-started.md, step 5 (https://github.com/taxjson/taxjson/blob/main/docs/getting-started.md).

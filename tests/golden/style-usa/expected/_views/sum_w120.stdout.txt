@@ -1,0 +1,40 @@
+REALIZED-GAINS SUMMARY — USD, tax year 2024, basis: wash-adjusted
+REALIZED = NON-OPT (shares, units, futures, crypto) + OPTION; TOTAL = REALIZED + DIVIDEND + PIL.
+DIVIDEND of crypto is staking rewards: ordinary income, not dividends.
+
+TAXABLE ACCOUNTS
+ACCOUNT   NON-OPT   OPTION  REALIZED  DIVIDEND   PIL    FEES   TOTAL
+--------------------------------------------------------------------
+crypto     473.00     0.00    473.00     37.29  0.00   96.06  510.29
+margin      -2.50  -105.00   -107.50    415.00  0.00   55.80  307.50
+qt           0.00   -36.25    -36.25      0.00  0.00    1.25  -36.25
+--------------------------------------------------------------------
+SUBTOTAL   470.50  -141.25    329.25    452.29  0.00  153.11  781.54
+
+SHELTERED ACCOUNTS — not taxable
+ACCOUNT   NON-OPT  OPTION  REALIZED  DIVIDEND   PIL  FEES  TOTAL
+----------------------------------------------------------------
+roth         0.00    0.00      0.00      0.00  0.00  4.95   0.00
+----------------------------------------------------------------
+SUBTOTAL     0.00    0.00      0.00      0.00  0.00  4.95   0.00
+
+ALL ACCOUNTS — sheltered included
+ACCOUNT  NON-OPT   OPTION  REALIZED  DIVIDEND   PIL    FEES   TOTAL
+-------------------------------------------------------------------
+crypto    473.00     0.00    473.00     37.29  0.00   96.06  510.29
+margin     -2.50  -105.00   -107.50    415.00  0.00   55.80  307.50
+qt          0.00   -36.25    -36.25      0.00  0.00    1.25  -36.25
+roth        0.00     0.00      0.00      0.00  0.00    4.95    0.00
+-------------------------------------------------------------------
+TOTAL     470.50  -141.25    329.25    452.29  0.00  158.06  781.54
+
+FOR THE RETURN — taxable accounts (crypto, margin, qt), USD (Form 8949 → Schedule D, tax year 2024)
+(h) = (d) − (e) + (g), the allowed gain; (g) = the code-W wash-sale loss disallowed, added back.
+FORM 8949                                (d) PROCEEDS   (e) COST  (g) ADJUSTMENT  (h) GAIN
+------------------------------------------------------------------------------------------
+Part I — short-term → Schedule D Part I     40,730.31  41,304.46          903.40    329.25
+------------------------------------------------------------------------------------------
+RETURN                                      40,730.31  41,304.46          903.40    329.25
+
+! 2 sales with no purchase NOT in these totals, or a short — tjs find-missing-history
+More: tjs sum --details (notes); per sale: tjs form-export

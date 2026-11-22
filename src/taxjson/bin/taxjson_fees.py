@@ -42,22 +42,25 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from taxjson.lib.report_model import fmt_money
+from taxjson.lib.report_fmt import fmt_money
 from taxjson.lib import cli_diag
+from taxjson.lib import out as _out
 from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.bin.taxjson_convert_currency import (MissingRateError,
                                                   default_rate_for,
                                                   missing_rate_message,
                                                   positive_rate)
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from taxjson.lib.core import convert_currency
-from taxjson.bin.taxjson_convert_currency import (
-    load_exchange_rates, get_rate_for_date, norm_currency,
-    reset_fallback_tally, emit_fallback_summary,
-)
+from taxjson.engine.rows import convert_currency
+from taxjson.lib.exchange_rates import load_exchange_rates, norm_currency
+from taxjson.bin.taxjson_convert_currency import (get_rate_for_date, reset_fallback_tally,
+                                                  emit_fallback_summary)
 from taxjson.lib.ticker_map import is_option_ticker
 from taxjson.lib.json_input import load_json_doc_or_exit
+from taxjson.lib.json_contract import versioned
+from taxjson.model import money as M
 
 PROG = "taxjson-fees-sum"
 
@@ -122,25 +125,40 @@ def new_stats() -> Dict[str, Any]:
         "fee_stocks": 0.0,
         "fee_options": 0.0,
         "fee_futures": 0.0,     # plain futures: not shares (S076-12)
+        # The same fees added exactly, for --json (json_metrics): the
+        # float sums above printed their binary error there (TJ-4930).
+        # The text keeps the floats.
+        "exact": {"fee": Decimal(0), "fees": [], "fee_stocks": Decimal(0),
+                  "fee_options": Decimal(0), "fee_futures": Decimal(0)},
     }
 
 
 def add_stat(s: Dict[str, Any], fee: float, qty: float,
-             is_opt: bool, notional: float, is_fut: bool = False) -> None:
+             is_opt: bool, notional: float, is_fut: bool = False,
+             exact: Optional[Decimal] = None) -> None:
+    """`exact`: the fee as taxjson holds it (Decimal); `fee`'s own
+    when not given."""
+    x = s["exact"]
+    fee_x = M.of(fee) if exact is None else exact
     s["trades"] += 1
     s["fee"] += fee
     s["fees"].append(fee)
+    x["fee"] += fee_x
+    x["fees"].append(fee_x)
     if notional > 0:
         s["notional"] += notional
         s["notional_fee"] += fee
     if is_opt:
         s["contracts"] += qty
         s["fee_options"] += fee
+        x["fee_options"] += fee_x
     elif is_fut:
         s["fee_futures"] = s.get("fee_futures", 0.0) + fee
+        x["fee_futures"] += fee_x
     else:
         s["shares"] += qty
         s["fee_stocks"] += fee
+        x["fee_stocks"] += fee_x
 
 
 def _num(v) -> float:
@@ -155,10 +173,10 @@ def _option_map_size(tx: Dict[str, Any]) -> float:
     of row `tx` (lib/markets.option_contract_size, as convert-tt's total
     check and the engine read it), 0.0 when none does."""
     from taxjson.lib import markets
-    from taxjson.lib.core import parse_option_underlying
-    from taxjson.lib.futures import _FUTURES_PREFIXES
+    from taxjson.lib.option_symbols import parse_option_underlying
+    from taxjson.lib.futures_prefixes import FUTURES_PREFIXES
     sym = str(tx.get("symbol") or "")
-    if sym.startswith(_FUTURES_PREFIXES):
+    if sym.startswith(FUTURES_PREFIXES):
         return 0.0
     return float(markets.option_contract_size(
         sym, parse_option_underlying(sym) or "") or 0.0)
@@ -210,10 +228,12 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
     files_read = 0
     converting = bool(to_curr)
 
-    def to_base(amount, curr, date):
+    def to_base(amount, curr, date, exact=None):
+        """`amount` in the base currency; with `exact` (its Decimal),
+        the pair (float, exact Decimal), one rate looked up for both."""
         if not converting or norm_currency(curr) == norm_currency(to_curr) \
                 or not amount:
-            return amount
+            return amount if exact is None else (amount, exact)
         # The fallback of this direction (audit A2-0148).
         _fb = default_rate_for(curr, to_curr, default_rate)
         rate = get_rate_for_date(curr, date, history, _fb)
@@ -224,8 +244,9 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
                 "currency": norm_currency(curr), "target": to_curr,
                 "date": date, "action": "fee", "symbol": "",
                 "reason": "no rate in the rates file"}]))
-        return convert_currency(amount, curr, to_curr,
+        conv = convert_currency(amount, curr, to_curr,
                                 {(curr, to_curr): rate}, float(rate))
+        return conv if exact is None else (conv, exact * rate)
 
     # Every parsed row first, then ONE dedup over all of them with the
     # books' own rule (taxjson_sort.plan_dedup): an id-only pass here
@@ -268,6 +289,7 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
         if str(tx.get("symbol") or "").upper() in deleted:
             continue
         fee = float(tx.get("commission") or 0) + float(tx.get("fee") or 0)
+        fee_x = M.exact_sum((tx.get("commission") or 0, tx.get("fee") or 0))
         if fee == 0:
             continue
         # TRADE-date basis, matching the per-trade `tjs fees`
@@ -301,27 +323,27 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
         is_fut = is_plain_future(tx.get("symbol") or "")
         qty = abs(float(tx.get("quantity") or 0))
         notional = trade_value(tx, is_opt, is_fut)
-        fee_base = to_base(fee, curr, date)
+        fee_base, fee_base_x = to_base(fee, curr, date, fee_x)
         notional_base = to_base(notional, curr, date)
 
         bucket = buckets.setdefault(key, {"base": new_stats(), "cur": {}})
         for B in (bucket, grand):
             add_stat(B["base"], fee_base, qty, is_opt, notional_base,
-                     is_fut)
+                     is_fut, fee_base_x)
             add_stat(B["cur"].setdefault(curr, new_stats()),
-                     fee, qty, is_opt, notional, is_fut)
+                     fee, qty, is_opt, notional, is_fut, fee_x)
 
     # A generic-imported file whose mapping names its broker is booked
     # as generic:<name>: that broker's fees ARE in the report, so it is
     # not 'fee-free' just because its own-parser exports had none
     # (audit S027-05).
-    from taxjson.bin.taxjson_brokerage import _CANONICAL_ID
+    from taxjson.parsers.registry import recorded_id
     _fee_brokers = {k.split("/")[0] for k in buckets}
-    _covered = {_CANONICAL_ID.get(b.split(":", 1)[1], b.split(":", 1)[1])
+    _covered = {recorded_id(b.split(":", 1)[1])
                 for b in _fee_brokers if b.startswith("generic:")}
     zero_fee = sorted(b for b in brokers_seen - _fee_brokers
                       - {MANUAL_TT, GENERIC}
-                      if _CANONICAL_ID.get(b, b) not in _covered)
+                      if recorded_id(b) not in _covered)
     # A hand-entered .tt file names no broker, so its fees cannot be
     # attributed: a broker whose period trades live only in a .tt is
     # not 'fee-free' (R1-101). Neither is one whose fees sit in a
@@ -356,6 +378,44 @@ def metrics(s: Dict[str, Any]) -> Dict[str, float]:
     }
 
 
+def json_metrics(s: Dict[str, Any]) -> Dict[str, Any]:
+    """metrics(s) as --json prints them (TJ-4930): the fees added
+    exactly (the stats' `exact` part; a bucket without one, its floats),
+    and the mean, the median and the fee per unit and per contract from
+    them, and the percent of notional, at model/money's DERIVED_PLACES:
+    a float sum or quotient printed its binary error (80.72999999999999
+    for 80.73). A figure not a number stays one (the writer's null)."""
+    x, n, p = s.get("exact") or {}, s["trades"], M.DERIVED_PLACES
+    fee, fees = x.get("fee", s["fee"]), x.get("fees", s["fees"])
+
+    def part(key: str) -> Decimal:
+        return M.of(x.get(key, s.get(key, 0.0)))
+
+    def cut(v: Any) -> Any:
+        return M.json_money(v, p)
+
+    def median(v: List[Any]) -> Any:
+        # A NaN Decimal cannot be sorted: the median of such fees is NaN.
+        if not all(M.of(f).is_finite() for f in v):
+            return float("nan")
+        return cut(statistics.median(v)) if v else 0.0
+    return {
+        "total": cut(fee),
+        "trades": n,
+        "mean": cut(M.of(fee) / n) if n else 0.0,
+        "median": median(fees),
+        "pct_notional": (M.units(s["notional_fee"] / s["notional"] * 100, p)
+                         if s["notional"] else 0.0),
+        "per_share": (cut(part("fee_stocks") / M.of(s["shares"]))
+                      if s["shares"] else 0.0),
+        "per_contract": (cut(part("fee_options") / M.of(s["contracts"]))
+                         if s["contracts"] else 0.0),
+        "stock_fee": cut(part("fee_stocks")),
+        "option_fee": cut(part("fee_options")),
+        "futures_fee": cut(part("fee_futures")),
+    }
+
+
 # ---------------------------------------------------------------- text render
 
 _money = fmt_money                  # shared report-layer formatter
@@ -374,8 +434,8 @@ def _cells(name: str, s: Dict[str, Any], cur: str = "") -> List[str]:
     return [name, cur, str(m["trades"]), _money(m["total"]),
             _money(m["mean"]), _money(m["median"]),
             f"{m['pct_notional']:.3f}%",
-            f"{m['per_share']:.4f}" if s["shares"] else "-",
-            f"{m['per_contract']:.4f}" if s["contracts"] else "-"]
+            f"{M.shown(m['per_share'], 4):.4f}" if s["shares"] else "-",
+            f"{M.shown(m['per_contract'], 4):.4f}" if s["contracts"] else "-"]
 
 
 # The column legend, one item per column (docs/output-style.md lists).
@@ -532,6 +592,9 @@ class _StdoutList:
 
 def render_json(buckets, grand, info, *, to_curr, by_account, year,
                 since=None, until=None) -> str:
+    """The --json document (`fees-sum` in lib/json_contract: its
+    schema_version first, the keys not sorted); a non-finite figure (a
+    NaN) is null, as `_json_out` writes it (lib/out.clean_json)."""
     def serialize(bucket):
         # The no-data path hands us a bare {"total": 0.0} placeholder —
         # indexing bucket["base"] raised KeyError and broke the FUZZ #H
@@ -541,15 +604,16 @@ def render_json(buckets, grand, info, *, to_curr, by_account, year,
                     "notional_fee": 0.0, "notional": 0.0,
                     "fee_stocks": 0.0, "shares": 0.0,
                     "fee_options": 0.0, "contracts": 0.0}
-            return {**metrics(zero), "by_currency": {}}
-        base_m = metrics(bucket["base"])
+            return {**json_metrics(zero), "by_currency": {}}
+        base_m = json_metrics(bucket["base"])
         if to_curr is None and len(bucket["cur"]) > 1:
             # Not converted: the "base" bucket adds USD to CAD. The text
             # report refuses that total; the JSON summed the units into
             # total/mean/%notional (S031-05). by_currency only.
             base_m = {k: None for k in base_m}
         d = {**base_m,
-             "by_currency": {cur: metrics(s) for cur, s in bucket["cur"].items()}}
+             "by_currency": {cur: json_metrics(s)
+                             for cur, s in bucket["cur"].items()}}
         return d
     doc = {
         "meta": {
@@ -568,7 +632,7 @@ def render_json(buckets, grand, info, *, to_curr, by_account, year,
         "brokerages": {name: serialize(b) for name, b in buckets.items()},
         "total": serialize(grand),
     }
-    return json.dumps(doc, indent=2)
+    return json.dumps(_out.clean_json(versioned(doc, "fees-sum")), indent=2)
 
 
 @guard_main("taxjson-fees-sum")
@@ -651,7 +715,7 @@ def main():
     from taxjson.lib.markets import use_ticker_map
     use_ticker_map(args.ticker_map)
     if args.ticker_map:
-        from taxjson.bin.taxjson_ticker_map import load_map_file
+        from taxjson.lib.map_file import load_map_file
         deleted = frozenset(str(x).upper() for x in
                             load_map_file(Path(args.ticker_map)).delete)
     named = {str(Path(p).resolve()) for p in args.files}
@@ -666,41 +730,45 @@ def main():
         scope = (f"{scope} through {args.until}" if scope
                  else f"through {args.until}")
 
+    # The report: a live exact Doc, each line written the moment it is
+    # added, as the print() it replaces wrote it; the notes on stderr
+    # through out.put, at their points.
+    d = _out.Doc(exact=True, width_=0, live=True)
     if not buckets:
         # No-data is SUCCESS (exit-code convention: 0 = success incl.
         # no-data). Returning 1 here crashed the whole `tjs run`
         # pipeline for anyone whose broker charges no commissions —
         # found independently by four fuzz agents (FUZZ-2026-07 #H).
         if args.json:
-            print(render_json({}, {"total": 0.0}, info,
-                              to_curr=args.to_curr,
-                              by_account=args.by_account, year=year,
-                              since=args.since, until=args.until))
+            d.line(render_json({}, {"total": 0.0}, info,
+                               to_curr=args.to_curr,
+                               by_account=args.by_account, year=year,
+                               since=args.since, until=args.until))
         else:
             scope_s = scope or (f"tax year {year}" if year else "all")
-            print(f"No trading fees found ({scope_s}).")
+            d.line(f"No trading fees found ({scope_s}).")
         if info["skipped"]:
-            print(f"({len(info['skipped'])} file(s) had no source_brokerage and "
-                  f"were skipped: {', '.join(info['skipped'])})", file=sys.stderr)
+            _out.put(f"({len(info['skipped'])} file(s) had no source_brokerage and "
+                     f"were skipped: {', '.join(info['skipped'])})", sys.stderr)
         return 0
 
     if args.json:
-        print(render_json(buckets, grand, info, to_curr=args.to_curr,
-                          by_account=args.by_account, year=year,
-                          since=args.since, until=args.until))
+        d.line(render_json(buckets, grand, info, to_curr=args.to_curr,
+                           by_account=args.by_account, year=year,
+                           since=args.since, until=args.until))
     else:
         for line in render_text(buckets, grand, info, to_curr=args.to_curr,
                                 by_account=args.by_account, year=year,
                                 default_rate=args.default_rate, scope=scope,
                                 brief=args.brief):
-            print(line)
+            d.line(line)
 
     # Also emit the fallback summary to stderr (the .diag path) so it's caught
     # whether or not the body was read.
     emit_fallback_summary(args.default_rate)
     if info["dups"]:
-        print(f"\n({info['dups']} duplicate row(s) collapsed: the same "
-              f"row in overlapping exports.)", file=sys.stderr)
+        _out.put(f"\n({info['dups']} duplicate row(s) collapsed: the same "
+                 f"row in overlapping exports.)", sys.stderr)
     for line in info.get("attention") or ():
         emit_line(f"warning: ATTENTION: {line}", file=sys.stderr)
     return 0

@@ -61,6 +61,9 @@ out of a project's list.
 """
 from __future__ import annotations
 
+import collections.abc as _cabc
+
+import functools
 import json
 import os
 import re
@@ -70,7 +73,16 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+
+from taxjson.project.accounts import AccountSettings, _transfers_accounts, configured_accounts, estimate_of, typed_accounts
+from taxjson.project.toml_io import decode_toml_bytes, parse_toml, read_toml
+from taxjson.project.settings import Settings, settings_of
 from taxjson.lib import project_layout as _PL
+from taxjson.lib.fingerprint_record import (FINGERPRINT_FILE, SET_ASIDE_FILE,
+                                            FingerprintUnreadable, _load_fingerprint_doc,
+                                            recorded_booked_twice, recorded_fingerprint)
+from taxjson.lib.json_contract import SCHEMAS
+from taxjson.model import money as M
 
 STATE_FILE = "checklist.json"
 # The last run's verdicts (save_results / load_results), in work/: the
@@ -79,7 +91,7 @@ STATE_FILE = "checklist.json"
 RESULTS_FILE = "checklist_results.json"
 RESULTS_FORMAT = "taxjson-checklist-results/1"
 NOT_CHECKED = "not checked yet: `tjs checklist --run`"
-# taxjson_run.UNBOOKED_PREFIX: a parser row that is a tax event the
+# pipeline/diagnostics.UNBOOKED_PREFIX: a parser row that is a tax event the
 # run could not book.
 UNBOOKED_PREFIX = "warning: UNBOOKED:"
 # The sub-commands whose TEXT a detector reads (sanity, find-missing-
@@ -124,7 +136,9 @@ STEPS: List[Tuple[str, str, str, str, str]] = [
      "Missing basis distorts the year either way: a sale with no earlier buy in the data "
      "(truncated history) is booked as a short and left out of the year, understating the "
      "proceeds and gain; shares acquired at $0 cost (an undeclared corporate action) "
-     "overstate the gain by the missing basis."),
+     "overstate the gain by the missing basis. A sale of units an `OPENING ... cost=unknown` "
+     "line opens is left out of the year too, until the line has the cost (or you report "
+     "the sale by hand and mark the step done)."),
     ("renames", "Fill the gaps", "Every ticker change dated; no undeclared trade in an old ticker after its rename",
      "tjs renames",
      "A rename carries the position and cost on its date; a later trade in the old ticker is "
@@ -437,6 +451,38 @@ class RunInfo:
         return self.checked is None
 
 
+@dataclass(frozen=True)
+class RunHelpers:
+    """The run's own readers three steps ask, built by cli
+    (cli/checklist_run.checklist_run_helpers): lib may not import the run's code,
+    the commands and the pipeline (step 8 of the architecture plan).
+    `double_roc(root, accounts, year)` the ROC rows entered both in the books
+    and in [[distributions]] (roc-entered); `crypto_broker_files(root, cfg)`
+    the crypto accounts' exports (crypto-sends: which are parsed);
+    `fx_cash_status(root, work)` the fx-cash figure a mark reviews
+    (question_answers)."""
+    double_roc: Callable[[Path, Any, str], List[str]]
+    crypto_broker_files: Callable[[Path, Dict[str, Any]], Any]
+    fx_cash_status: Callable[[Path, Path], Any]
+
+
+class RunHelpersMissing(TypeError):
+    """A Ctx (or a question_answers call) without the run's readers that a
+    step needs: a programming error, so it stops the command, never a
+    "blocked" verdict (_run_detectors re-raises it): close-year keeps only
+    the attention items and would have locked without the check (backlog
+    TJ-3532)."""
+
+
+def _run_helpers(ctx: "Ctx") -> RunHelpers:
+    """ctx.run, refused when the Ctx was built without it (a step would
+    otherwise judge the books without the run's own check)."""
+    if ctx.run is None:
+        raise RunHelpersMissing("checklist Ctx built without run=: pass "
+                                "cli/checklist_run.checklist_run_helpers()")
+    return ctx.run
+
+
 @dataclass
 class Ctx:
     root: Path
@@ -444,10 +490,12 @@ class Ctx:
     year: int
     today: date
     run_sub: Callable[..., Tuple[int, str, str]]
-    # Why the strict loader (taxjson_run.load_config) refuses this
+    # Why the strict loader (pipeline/config.load_config) refuses this
     # taxjson.toml, read leniently instead ("" = it loads): the
     # configure item says it and the checks are blocked until fixed.
     config_error: str = ""
+    # The run's readers three steps ask (RunHelpers; cli builds them).
+    run: Optional[RunHelpers] = None
     cache: Path = field(init=False)
     reports: Path = field(init=False)
 
@@ -455,17 +503,21 @@ class Ctx:
         self.cache = self.root / "work"
         self.reports = self.root / "reports"
 
-    @property
-    def settings(self) -> Dict[str, Any]:
-        return self.cfg.get("settings") or {}
+    @functools.cached_property
+    def settings(self) -> Settings:
+        """The [settings] table, typed: `tjs checklist` reads the file raw so a
+        broken project still gets its list, so the object is built here, once,
+        from whatever the table holds (no coercion; a missing key is None). Read
+        once, when first asked for: a later write into `cfg["settings"]` is not
+        seen (TJ-1630)."""
+        return settings_of(self.cfg)
 
-    @property
-    def accounts(self) -> Dict[str, Dict[str, Any]]:
+    @functools.cached_property
+    def accounts(self) -> Dict[str, AccountSettings]:
         # The tables only: a leniently read taxjson.toml (config_error)
         # can hold `margin = 42`, which every `a.get(...)` died on
         # (audit 2026-10-24 A16).
-        return {n: a for n, a in (self.cfg.get("accounts") or {}).items()
-                if isinstance(a, dict)}
+        return configured_accounts(self.cfg.get("accounts"))
 
     def sub(self, *argv: str, timeout: int = 900) -> Tuple[int, str, str]:
         return self.run_sub(list(argv), timeout=timeout)
@@ -476,29 +528,8 @@ def has_books(ctx: Ctx) -> bool:
     """work/ holds a run's files. A work/ holding only the checklist's
     own results file (RESULTS_FILE, written by `--run` before any
     `tjs run`) is no work/ for the detectors that ask."""
-    return ctx.cache.is_dir() and any(f.name != RESULTS_FILE
+    return ctx.cache.is_dir() and any(f.name != RESULTS_FILE and f.name != ".deps"
                                       for f in ctx.cache.iterdir())
-
-
-def default_run_sub(root: Path) -> Callable[..., Tuple[int, str, str]]:
-    """Run `taxjson <argv>` on this project as a subprocess (the sub-
-    commands sys.exit and print; a subprocess keeps that contained)."""
-    def run(argv: List[str], timeout: int = 900) -> Tuple[int, str, str]:
-        from taxjson.lib.dispatch import python_module_argv
-        # Never with the project folder on sys.path (security review H1).
-        cmd = python_module_argv("taxjson.bin.taxjson_run",
-                                 ["-C", str(root), *argv])
-        try:
-            p = subprocess.run(cmd, capture_output=True, text=True,
-                               stdin=subprocess.DEVNULL, timeout=timeout,
-                               # Read by the detectors below, never
-                               # shown as is: unwrapped (lib/out).
-                               env={**os.environ, "NO_COLOR": "1",
-                                    "TAXJSON_WIDTH": "0"})
-        except subprocess.TimeoutExpired:
-            return 124, "", f"timed out after {timeout}s"
-        return p.returncode, p.stdout or "", p.stderr or ""
-    return run
 
 
 def _data_files(folder: Path) -> List[Path]:
@@ -513,7 +544,7 @@ def _data_files(folder: Path) -> List[Path]:
 
 
 # Spreadsheet suffixes a broker export may arrive in; none is read by
-# `run` (taxjson_run.SPREADSHEET_SUFFIXES is the same list, A2-1156).
+# `run` (pipeline/config.SPREADSHEET_SUFFIXES is the same list, A2-1156).
 SPREADSHEET_SUFFIXES = (".xlsx", ".xls", ".xlsm", ".ods", ".numbers")
 
 
@@ -640,14 +671,25 @@ def _last_line(text: str) -> str:
     return _MSG_PREFIX.sub("", lines[-1]) if lines else ""
 
 
+_ERROR_LINE = re.compile(r"^(?:(?:taxjson|tjs)[\w -]*:\s+)?error:\s", re.I)
+
+
+def _error_line(text: str) -> str:
+    """A failed command's last error line, else its last line: `tjs
+    audit` names what it left unaudited after the error that stopped it,
+    and the error is what to fix (backlog TJ-3014)."""
+    errs = [ln for ln in text.splitlines() if _ERROR_LINE.match(ln.strip())]
+    return _last_line(errs[-1] if errs else text)
+
+
 def _accounts_of(ctx: Ctx, kind: str) -> List[str]:
     out = []
     for name, a in ctx.accounts.items():
-        if kind == "taxable" and a.get("type") == "taxable" and not a.get("crypto"):
+        if kind == "taxable" and a.taxable and not a.crypto:
             out.append(name)
-        elif kind == "sheltered" and a.get("type") == "sheltered":
+        elif kind == "sheltered" and a.sheltered:
             out.append(name)
-        elif kind == "crypto" and a.get("crypto"):
+        elif kind == "crypto" and a.crypto:
             out.append(name)
     return out
 
@@ -702,7 +744,7 @@ def _year_filed(root: Path, year: int) -> bool:
         doc = json.loads(lock.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return True
-    from taxjson.bin.taxjson_filed import partial_year_note
+    from taxjson.lib.filed_locks import partial_year_note
     return not partial_year_note(doc, year)
 
 
@@ -721,7 +763,7 @@ def d_inputs_frozen(ctx: Ctx) -> Result:
 def _inputs_reach(ctx: Ctx) -> Result:
     missing = [n for n in ctx.accounts
                if not _data_files(_PL.inputs_dir(ctx.root) / n)
-               and (ctx.accounts[n].get("type") == "taxable")]
+               and ctx.accounts[n].taxable]
     if missing:
         return Result("inputs-frozen", "todo",
                       f"no activity files in inputs/{', inputs/'.join(missing)}")
@@ -819,8 +861,7 @@ def d_export_coverage(ctx: Ctx) -> Result:
     positions in the account (lib/export_coverage). A question when the
     end is read from the last row only: a DONE mark answers it."""
     from taxjson.lib import export_coverage as EC
-    names = [n for n, a in ctx.accounts.items()
-             if isinstance(a, dict) and not a.get("crypto")]
+    names = [n for n, a in ctx.accounts.items() if not a.crypto]
     if not names:
         return Result("export-coverage", "n/a", "no broker account")
     if not any((ctx.cache / f"{n}_base.json").is_file() for n in names):
@@ -849,7 +890,7 @@ def d_sheltered_inputs(ctx: Ctx) -> Result:
         # US: an IRA's repurchase (Rev. Rul. 2008-5), never Canada's
         # affiliated persons (A2-1260).
         unseen = ("IRA/retirement-account purchases unseen"
-                  if is_us(ctx.settings.get("country"))
+                  if is_us(ctx.settings.country)
                   else "affiliated purchases unseen")
         return Result("sheltered-inputs", "attention",
                       f"empty: {', '.join(empty)} — {unseen}")
@@ -894,16 +935,14 @@ def d_roc_entered(ctx: Ctx) -> Result:
         # (A2-0361): roc-sum warned, this step said nothing.
         import contextlib
         import io
+        run = _run_helpers(ctx)
         try:
-            from taxjson.bin.taxjson_run import (_double_roc_warnings,
-                                                 _year_keep)
             # (A work/ file it cannot read stops it with exit 2, its
             # Error printed first: the step stays quiet, as it was when
             # that refusal was exit 1's message; backlog TJ-0596.)
             with contextlib.redirect_stderr(io.StringIO()):
-                dbl = _double_roc_warnings(
-                    ctx.root, _accounts_of(ctx, "taxable"),
-                    _year_keep(str(ctx.year)))
+                dbl = run.double_roc(
+                    ctx.root, _accounts_of(ctx, "taxable"), str(ctx.year))
         except SystemExit:
             dbl = []
         if dbl:
@@ -962,6 +1001,36 @@ def d_inputs_committed(ctx: Ctx) -> Result:
         return Result("inputs-committed", "todo",
                       f"{len(dirty)} uncommitted change(s) under inputs/config")
     return Result("inputs-committed", "done", "clean")
+
+
+def _run_clean_inputs(ctx: Ctx, oldest_report: float) -> Tuple[bool, List[str]]:
+    """(whether the books are stale, run-clean's problems saying why) by
+    what the last FULL run was built from (content, not mtimes): a
+    deleted input or a corrected export copied with its old mtime
+    (cp -p, rsync -a, unzip) left this step done over stale reports
+    (S067-07). After a run that set that record aside and did not finish
+    a full run, what changed since it and that (backlog TJ-4356: with no
+    record, the times called books a scoped run rewrote clean). Older
+    projects without the record fall back to mtimes, now including the
+    project-root inputs `run` reads (R1-249)."""
+    diff = inputs_changed(ctx.root, ctx.cfg)
+    if diff:
+        return True, ["inputs changed since the last full run (" + diff + ")"]
+    if diff is not None:
+        return False, []
+    why = _set_aside_changes(ctx.root, ctx.cfg)
+    if why is not None:
+        return True, ([f"inputs changed since the last full run ({why})"] if why else []) \
+            + [RUN_UNFINISHED]
+    newest_input = 0.0
+    for p in _input_paths(ctx.root, ctx.cfg):
+        try:
+            newest_input = max(newest_input, p.stat().st_mtime)
+        except OSError:
+            continue
+    if newest_input > oldest_report + 1:
+        return True, ["inputs changed since the last run"]
+    return False, []
 
 
 def d_run_clean(ctx: Ctx) -> Result:
@@ -1039,26 +1108,8 @@ def d_run_clean(ctx: Ctx) -> Result:
             f"{', '.join(orphans)} — every total counts them again; "
             f"delete work/<name>_* and reports/<name>* (a renamed "
             f"account) or restore the account")
-    # What the last FULL run was built from (content, not mtimes): a
-    # deleted input or a corrected export copied with its old mtime
-    # (cp -p, rsync -a, unzip) left this step done over stale reports
-    # (S067-07). Older projects without the record fall back to mtimes,
-    # now including the project-root inputs `run` reads (R1-249).
-    diff = inputs_changed(ctx.root, ctx.cfg)
-    stale = bool(diff)
-    if diff:
-        problems.append("inputs changed since the last full run ("
-                        + diff + ")")
-    elif diff is None:
-        newest_input = 0.0
-        for p in _input_paths(ctx.root, ctx.cfg):
-            try:
-                newest_input = max(newest_input, p.stat().st_mtime)
-            except OSError:
-                continue
-        if newest_input > oldest_report + 1:
-            stale = True
-            problems.append("inputs changed since the last run")
+    stale, changed = _run_clean_inputs(ctx, oldest_report)
+    problems += changed
     # One export (or broker account) in two accounts: every row of it is
     # booked in both, and every figure counts it twice. The run warned
     # and this step said done (backlog TJ-0478). First: it moves every
@@ -1105,7 +1156,7 @@ def d_run_clean(ctx: Ctx) -> Result:
         if unblended:
             # US basis is never blended: the missing pass is the
             # cross-account §1091 wash pass (A2-1262).
-            if is_us(ctx.settings.get("country")):
+            if is_us(ctx.settings.country):
                 _pass, _books = ("cross-account wash-sale (§1091) pass",
                                  "per-account books with no cross-account "
                                  "wash sales")
@@ -1169,13 +1220,12 @@ def d_run_clean(ctx: Ctx) -> Result:
     return Result("run-clean", "done", f"last run {stamp}, no validation errors")
 
 
-FINGERPRINT_FILE = ".inputs_fingerprint.json"     # in work/
 # The record's format: 2 = taxjson.toml by the settings `run` reads, the
 # root maps of PROJECT_ROOT_MAPS, manifest.json / sends.json. A record
 # without it (1) was written by an older taxjson and is compared the
 # old way until the next full run rewrites it.
 FINGERPRINT_VERSION = 2
-# Project-root maps `tjs run` reads (taxjson_run._PROJECT_ROOT_INPUTS
+# Project-root maps `tjs run` reads (pipeline/config._PROJECT_ROOT_INPUTS
 # is the same list; a test keeps the two equal — A2-0363, A2-1158).
 PROJECT_ROOT_MAPS = ("ticker.map", "tobase.map")
 # phantoms.json is the old name of missing_history.json (neither is read
@@ -1242,10 +1292,43 @@ def _input_paths(root: Path, cfg: Dict[str, Any]) -> List[Path]:
         folder = _PL.inputs_dir(root) / n
         if not folder.is_dir():
             continue
-        out += sorted(p for p in folder.iterdir()
-                      if p.is_file() and not _skipped_input(p)
-                      and (p.suffix.lower() in (".csv", ".tt", ".toml")
-                           or p.name in _ACCOUNT_SIDECARS))
+        files = sorted(p for p in folder.iterdir()
+                       if p.is_file() and not _skipped_input(p)
+                       and (p.suffix.lower() in (".csv", ".tt", ".toml")
+                            or p.name in _ACCOUNT_SIDECARS))
+        out += files
+        out += _layouts_read(root, files)
+    return out
+
+
+def _is_layout(root: Path, p: Path) -> bool:
+    """A generic-importer layout file: in one of the project's layout
+    folders (generic.layout_dirs_of: the project's own, the user's, the
+    shipped ones)."""
+    from taxjson.lib.brokerages.generic import layout_dirs_of
+    if p.suffix.lower() != ".toml":
+        return False
+    return any(p.parent == d or p.parent.resolve() == Path(d).resolve()
+               for d in layout_dirs_of(root))
+
+
+def _layouts_read(root: Path, files: List[Path]) -> List[Path]:
+    """The generic-importer layouts the folder's CSVs are read with (the
+    project's, the user's and the shipped ones;
+    generic.effective_mapping's deps beyond the sidecar and the folder's
+    generic.toml): a layout edit changes the
+    books as a mapping edit does, so a frozen year hashes them and the
+    freeze copies the user's into the project (TJ-2146)."""
+    from taxjson.lib.brokerages.generic import effective_mapping
+    out: List[Path] = []
+    for p in files:
+        if p.suffix.lower() != ".csv":
+            continue
+        try:
+            deps = effective_mapping(p, lenient=True, project=root).deps
+        except ValueError:
+            continue            # the run says why
+        out += [d for d in deps[2:] if d.is_file() and d not in out]
     return out
 
 
@@ -1268,8 +1351,7 @@ def _run_config_part(raw: bytes) -> Optional[Dict[str, Any]]:
     keys (what _run_config_digest hashes); None when it does not
     parse."""
     try:
-        from taxjson.lib.tomlcompat import tomllib
-        doc = tomllib.loads(raw.decode("utf-8-sig"))
+        doc = parse_toml(decode_toml_bytes(raw))
     except Exception:                                   # noqa: BLE001
         return None
     doc = {k: v for k, v in doc.items() if k not in _PLANNING_TABLES}
@@ -1330,20 +1412,34 @@ def _empty_manifest(p: Path) -> bool:
 LOCKED_YEARS_KEY = "filed/ (locked years)"
 
 
-def _locked_years_entry(root: Path, cfg: Dict[str, Any]) -> Optional[str]:
-    """The locked years a US gains run is given (`--locked-year`, one
-    per filed/<year>.json and the prior_year_record lock; US-WASH-22):
-    a new or removed lock moves a wash-sale basis add between years
-    with no input file changed (issue #32). What the engine reads of a
-    lock is its year, so the entry is the years. None for Canada (its
-    gains read no lock) and for a US project with no lock."""
+def _lock_paths(root: Path, cfg: Dict[str, Any]) -> Dict[int, Path]:
+    """{year: lock} of the locks a US gains run is given (`--locked-year Y
+    --locked-record PATH`, one per filed/<year>.json and the
+    prior_year_record lock; US-WASH-22); {} for Canada (its gains read no
+    lock)."""
     try:
-        from taxjson.bin.taxjson_filed import locked_year_flags
-        flags = locked_year_flags(root, cfg.get("settings") or {})
+        from taxjson.lib.filed_locks import locked_year_flags
+        flags = locked_year_flags(root, settings_of(cfg))
     except Exception:                                   # noqa: BLE001
-        return None
-    years = flags[1::2]
-    return "locked-years:" + ",".join(years) if years else None
+        return {}
+    return {int(y): Path(p) for y, p in zip(flags[1::4], flags[3::4])}
+
+
+def _locked_years_entry(root: Path, cfg: Dict[str, Any]) -> Optional[str]:
+    """The locks a US gains run is given (`_lock_paths`): a new, removed or
+    replaced lock moves a wash-sale basis add between years with no input
+    file changed (issue #32). The engine reads a lock's year and its rows (a
+    sale's own basis add, TJ-0463), so the entry is each year with its
+    lock's content hash (`locked-years:2023=<sha256>,2024=<sha256>`). None
+    for Canada and for a US project with no lock."""
+    import hashlib
+    ids = []
+    for y, p in sorted(_lock_paths(root, cfg).items()):
+        try:
+            ids.append(f"{y}={hashlib.sha256(p.read_bytes()).hexdigest()}")
+        except OSError:
+            ids.append(f"{y}=unreadable")
+    return "locked-years:" + ",".join(ids) if ids else None
 
 
 def input_fingerprint(root: Path, cfg: Dict[str, Any]) -> Dict[str, str]:
@@ -1376,6 +1472,8 @@ def _fp_key(root: Path, p: Path) -> str:
         return p.relative_to(root).as_posix()
     except ValueError:
         pass
+    if _is_layout(root, p):
+        return f"layouts/{p.name}"      # the user's layout: the freeze's copy
     if p == _PL.tobase_map_path(root):
         import os as _os
         return Path(_os.path.relpath(p, Path(root).resolve())).as_posix()
@@ -1395,7 +1493,7 @@ def _inputs_folder_name(root: Path, folder: Path) -> str:
     """The last part of `[settings] inputs_dir` as written (or the
     folder's own name)."""
     try:
-        v = _PL._settings(root).get(_PL.INPUTS_KEY)      # noqa: SLF001
+        v = _PL._settings(root).inputs_dir      # noqa: SLF001
     except Exception:                                   # noqa: BLE001
         v = None
     if isinstance(v, str) and v.strip():
@@ -1455,8 +1553,8 @@ def _edited_during_run(started: Dict[str, str], now: Dict[str, str]
 
 def record_input_fingerprint(root: Path, cfg: Dict[str, Any], *,
                              booked_twice: Sequence[str] = (),
-                             started: Optional[Dict[str, str]] = None
-                             ) -> List[str]:
+                             started: Optional[Dict[str, str]] = None,
+                             code: Optional[str] = None) -> List[str]:
     """Called by a successful FULL `tjs run`: what the reports were
     built from, for run-clean's staleness check. `booked_twice`: what
     the run found booked in two accounts (one export file in two
@@ -1467,7 +1565,10 @@ def record_input_fingerprint(root: Path, cfg: Dict[str, Any], *,
     them. An input edited (added, removed) while the run read them is
     recorded as it was at the start, so the books read as stale until
     the next run: the version read afterwards was never the one
-    calculated (backlog TJ-0929). Returns those inputs' keys."""
+    calculated (backlog TJ-0929). `code`: the package fingerprint of the
+    taxjson that built them (pipeline/freshness), so the filing commands
+    refuse books another taxjson built (fingerprint_record `books_code`).
+    Returns those inputs' keys."""
     work = root / "work"
     work.mkdir(parents=True, exist_ok=True)
     files = input_fingerprint(root, cfg)
@@ -1483,30 +1584,49 @@ def record_input_fingerprint(root: Path, cfg: Dict[str, Any], *,
                            "files": files}
     if booked_twice:
         doc["booked_twice"] = [str(x) for x in booked_twice]
+    if code:
+        doc["code"] = code
     # The country the books were built under: a report command on books
     # of the other country refuses (audit A2-0147).
     try:
         from taxjson.lib.country import settings_country
-        doc["country"] = settings_country(cfg.get("settings") or {})
+        doc["country"] = settings_country(settings_of(cfg))
     except ValueError:
         pass
-    from taxjson.lib.safe_write import write_atomic
-    write_atomic(work / FINGERPRINT_FILE,
-                 json.dumps(doc, indent=1, sort_keys=True) + "\n")
+    # (written when it changed: a run that changed nothing writes nothing)
+    from taxjson.lib.safe_write import write_changed
+    write_changed(work / FINGERPRINT_FILE,
+                  json.dumps(doc, indent=1, sort_keys=True) + "\n")
+    # The earlier record this run set aside (pipeline/run _drop_run_records)
+    # is no longer the last full run's.
+    try:
+        (work / SET_ASIDE_FILE).unlink()
+    except OSError:
+        pass
     return edited
 
 
-def recorded_booked_twice(root: Path) -> List[str]:
-    """What the last full run found booked in two accounts
-    (record_input_fingerprint's `booked_twice`): [] when nothing, or
-    when there is no readable record."""
+RUN_UNFINISHED = ("the last `tjs run` did not finish a full run (an --account "
+                  "run, or one stopped or failed): the books in work/ are not a "
+                  "full run's")
+
+
+def _set_aside_changes(root: Path, cfg: Dict[str, Any]) -> Optional[str]:
+    """What changed since the last full run, by its record a later run set
+    aside (fingerprint_record SET_ASIDE_FILE): a diff text, "" when nothing
+    did (or the record cannot be compared), None when none was set aside."""
     try:
-        doc = _load_fingerprint_doc(root)
+        doc = _load_fingerprint_doc(root, SET_ASIDE_FILE)
     except FingerprintUnreadable:
-        return []
-    got = (doc or {}).get("booked_twice")
-    return [str(x) for x in got if str(x).strip()] \
-        if isinstance(got, list) else []
+        return ""
+    if doc is None:
+        return None
+    if doc.get("version") != FINGERPRINT_VERSION:
+        return ""
+    try:
+        return _fingerprint_diff(doc["files"], input_fingerprint(root, cfg))
+    except (OSError, ValueError):
+        return ""
 
 
 BOOKED_TWICE_DO = ("keep each broker account's exports in one "
@@ -1514,74 +1634,15 @@ BOOKED_TWICE_DO = ("keep each broker account's exports in one "
                    "`tjs run`")
 
 
-def books_country(root: Path) -> Optional[str]:
-    """The country the last full run built work/ under (its fingerprint
-    record), or None when the record does not say."""
-    try:
-        doc = _load_fingerprint_doc(root)
-    except FingerprintUnreadable:
-        return None
-    c = (doc or {}).get("country")
-    return c if isinstance(c, str) and c else None
-
-
-class FingerprintUnreadable(ValueError):
-    """work/.inputs_fingerprint.json exists but is not a fingerprint."""
-
-
-def _load_fingerprint_doc(root: Path) -> Optional[Dict[str, Any]]:
-    """The recorded fingerprint document, None when there is none.
-    Raises FingerprintUnreadable for a file that exists but cannot be
-    read (truncated, files not a table): never "no record", which fell
-    back to mtimes and called stale books clean (A2-1155)."""
-    p = root / "work" / FINGERPRINT_FILE
-    if not p.exists() and not p.is_symlink():
-        return None
-    try:
-        doc = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as e:
-        raise FingerprintUnreadable(str(e)) from e
-    files = doc.get("files") if isinstance(doc, dict) else None
-    if not isinstance(files, dict) or not all(
-            isinstance(k, str) and isinstance(v, str)
-            for k, v in files.items()):
-        raise FingerprintUnreadable("no files table")
-    return doc
-
-
-def recorded_fingerprint(root: Path
-                         ) -> Optional[Tuple[Dict[str, str], "datetime"]]:
-    """What the last full run recorded the books were built from
-    (`work/.inputs_fingerprint.json`: {key: sha256}) and when it was
-    written, or None when there is no readable record."""
-    from datetime import datetime
-    try:
-        doc = _load_fingerprint_doc(root)
-    except FingerprintUnreadable:
-        return None
-    if not doc:
-        return None
-    try:
-        when = datetime.fromtimestamp(
-            (root / "work" / FINGERPRINT_FILE).stat().st_mtime)
-    except OSError:
-        when = datetime.now()
-    return dict(doc["files"]), when
-
-
-def _load_fingerprint(root: Path) -> Optional[Dict[str, str]]:
-    try:
-        doc = _load_fingerprint_doc(root)
-    except FingerprintUnreadable:
-        return None
-    return doc["files"] if doc else None
-
-
-def inputs_changed(root: Path, cfg: Dict[str, Any]) -> Optional[str]:
+def inputs_changed(root: Path, cfg: Dict[str, Any], *,
+                   read_upto: Optional[int] = None) -> Optional[str]:
     """Why the books are not the result of the current inputs according
     to the last full run's record: a diff text, "" when they are, None
     when no record exists (the caller falls back to mtimes). The one
-    rule for run-clean and the filing banners."""
+    rule for run-clean and the filing banners. `read_upto`: the latest
+    year the caller reads; a lock closed from these books since, of that
+    year or later, is no change (`_locks_from_these_books`: check-filed
+    after close-year, a re-close); a lock removed or replaced is."""
     try:
         doc = _load_fingerprint_doc(root)
     except FingerprintUnreadable as e:
@@ -1590,7 +1651,11 @@ def inputs_changed(root: Path, cfg: Dict[str, Any]) -> Optional[str]:
     if doc is None:
         return None
     if doc.get("version") == FINGERPRINT_VERSION:
-        return _fingerprint_diff(doc["files"], input_fingerprint(root, cfg))
+        before, now = doc["files"], input_fingerprint(root, cfg)
+        if read_upto is not None and _locks_from_these_books(
+                root, cfg, before, now, read_upto):
+            before, now = frozen_files(before), frozen_files(now)
+        return _fingerprint_diff(before, now)
     # An older record: the old comparison, plus the inputs it did not
     # cover, by mtime against the record itself.
     why = _fingerprint_diff(doc["files"], _legacy_input_fingerprint(root, cfg))
@@ -1613,6 +1678,79 @@ def inputs_changed(root: Path, cfg: Dict[str, Any]) -> Optional[str]:
         return "changed: " + ", ".join(newer[:3]) + (
             " ..." if len(newer) > 3 else "")
     return ""
+
+
+def _lock_ids(fp: Dict[str, str]) -> Dict[int, str]:
+    """{year: content hash} of a fingerprint's locks (LOCKED_YEARS_KEY; an
+    older record's `locked-years:2023,...` gives each year no hash)."""
+    out: Dict[int, str] = {}
+    for item in (fp.get(LOCKED_YEARS_KEY) or "").partition(":")[2].split(","):
+        y, _eq, h = item.strip().partition("=")
+        if y.isdigit():
+            out[int(y)] = h
+    return out
+
+
+def _locks_from_these_books(root: Path, cfg: Dict[str, Any], before: Dict[str, str],
+                            now: Dict[str, str], year: int) -> bool:
+    """Whether the locks that differ between the last full run's record
+    (`before`) and the project now leave the books of `year` and earlier
+    as a run would build them: none removed, and each added or written
+    again since is of `year` or later and was closed from these books as
+    they are now: its frozen record holds the inputs the last run read and
+    the hashes of the books in work/ now (`book_hashes`: check-filed after
+    close-year, a re-close). A lock removed, one of an earlier year, one
+    closed from other inputs or from other books (replaced, or put back
+    after a run without it: TJ-4311), or one with no record of its books
+    (an older close-year's) moves figures a run would change: its rows
+    decide where a basis add is booked (US-WASH-22, TJ-0463)."""
+    was, locks = _lock_ids(before), _lock_ids(now)
+    if set(was) - set(locks):
+        return False
+    files, paths = frozen_files(before), _lock_paths(root, cfg)
+    books: Optional[Dict[str, str]] = None
+    for y in sorted(y for y in locks if was.get(y) != locks[y]):
+        closed = _closed_from(paths.get(y))
+        if y < year or closed is None or _fingerprint_diff(files, frozen_files(closed[0])):
+            return False
+        books = book_hashes(root, cfg) if books is None else books
+        if closed[1] != books:
+            return False
+    return True
+
+
+def _closed_from(lock: Optional[Path]) -> Optional[Tuple[Dict[str, str], Dict[str, str]]]:
+    """What a lock was closed from, by its `frozen` record (cli/file
+    `cmd_close_year`): (the inputs' hashes, the books' hashes). None when
+    it holds no such pair or cannot be read."""
+    try:
+        doc = json.loads(Path(lock).read_text(encoding="utf-8")) if lock else None
+    except (OSError, ValueError):
+        return None
+    fz = (doc.get("frozen") or {}) if isinstance(doc, dict) else {}
+    got = (fz.get("inputs"), fz.get("books")) if isinstance(fz, dict) else (None, None)
+    return (got[0], got[1]) if all(isinstance(g, dict) and all(
+        isinstance(k, str) and isinstance(v, str) for k, v in g.items()) for g in got) else None
+
+
+def book_hashes(root: Path, cfg: Dict[str, Any]) -> Dict[str, str]:
+    """{work/<file>: sha256} of the books close-year locks and the filing
+    commands read: each taxable account's gains (report_model
+    resolve_gains_files: its wash-adjusted gains, else its plain ones).
+    close-year records them in the lock's frozen record (`books`), so a
+    lock put in place after a run tells the books it was closed from
+    (`_locks_from_these_books`, TJ-4311)."""
+    import hashlib
+    from taxjson.lib.report_model import resolve_gains_files
+    taxable = {n for n, a in typed_accounts(cfg.get("accounts")).items() if a.taxable}
+    out: Dict[str, str] = {}
+    for a, p in sorted(resolve_gains_files(Path(root) / "work", warn_stale=False).items()):
+        if a in taxable:
+            try:
+                out[f"work/{Path(p).name}"] = hashlib.sha256(Path(p).read_bytes()).hexdigest()
+            except OSError:
+                continue
+    return out
 
 
 def input_files(root: Path, cfg: Dict[str, Any]) -> List[Path]:
@@ -1768,7 +1906,7 @@ def _sanity_differences(out: str) -> str:
 def d_sanity(ctx: Ctx) -> Result:
     from taxjson.lib.holdings_dir import folder_for
     from taxjson.lib.report_model import resolve_gains_files
-    no_files = (not any(a.get("holdings") for a in ctx.accounts.values())
+    no_files = (not any(a.holdings for a in ctx.accounts.values())
                 and folder_for(ctx.root)[0] is None)
     if no_files:
         _hold = _PL.shown(_PL.holdings_folder(ctx.root), ctx.root)
@@ -1822,7 +1960,9 @@ def d_missing_history(ctx: Ctx) -> Result:
         return Result("missing-history", "blocked", _last_line(err) or _last_line(out) or f"exit {code}")
     syms: List[str] = []
     remove: List[str] = []
+    remove_keys: List[Tuple[str, str, str]] = []
     stale: List[str] = []
+    stale_keys: List[Tuple[str, str, str]] = []
     in_affects = False
     in_remove = False
     in_stale = False
@@ -1880,6 +2020,9 @@ def d_missing_history(ctx: Ctx) -> Result:
                      and len(parts) > 2 else "")
             (remove if in_remove else stale if in_stale else syms).append(
                 f"{parts[0]} ({parts[1]}{where})")
+            if in_remove or in_stale:
+                (remove_keys if in_remove else stale_keys).append(
+                    (parts[0], parts[1], parts[2] if len(parts) > 2 else ""))
 
     for i, w in why.items():
         syms[i] = syms[i][:-1] + f"; {w})"
@@ -1887,6 +2030,29 @@ def d_missing_history(ctx: Ctx) -> Result:
     def _shown(items: List[str]) -> str:
         return ", ".join(items[:4]) + (" ..." if len(items) > 4 else "")
     said: List[str] = []
+    # The year's sales at an unknown cost (units an OPENING cost=unknown
+    # line opens): the run routes each out of the totals to manual
+    # reporting (CA-ACB-11) and the step names it with the cost to add
+    # (backlog TJ-2770). A question when it is the only finding: the
+    # files cannot tell the cost, so a DONE mark (the sale is reported
+    # by hand) answers the sales it saw; a later one asks again.
+    unknown = _unknown_cost_rows(ctx)
+    if unknown:
+        said.append(_unknown_cost_said(unknown, ctx.year))
+        # A line whose units were sold at an unknown cost (the source
+        # of a row) is in use: never offered for removal (a REMOVE row,
+        # TJ-3237) nor for deletion (a STALE row: another account's sale
+        # drew on it through the shared pool, TJ-3249), whatever
+        # find-missing-history's heuristic made of its own account's
+        # rows — the step gives the one route and asks the question.
+        used = {(src.get("symbol"), src.get("account"), src.get("where"))
+                for r in unknown for src in r.get("sources") or []}
+
+        def _in_use(k: Tuple[str, str, str]) -> bool:
+            return any((k[0], k[1]) == (u[0], u[1]) or (k[2] and k[2] == u[2])
+                       for u in used)
+        remove = [t for t, k in zip(remove, remove_keys) if not _in_use(k)]
+        stale = [t for t, k in zip(stale, stale_keys) if not _in_use(k)]
     if remove:
         said.append(f"{len(remove)} {_mh_name(ctx)} entr"
                     f"{'y is' if len(remove) == 1 else 'ies are'} a real "
@@ -1897,15 +2063,110 @@ def d_missing_history(ctx: Ctx) -> Result:
                     f" units though the purchase is in the books now — "
                     f"delete: {_shown(stale)}")
     if said:
+        only = bool(unknown) and not (remove or stale or syms)
+        # The Next line follows the rows at an unknown cost (TJ-3213);
+        # beside other findings, those first.
+        do = ""
+        if unknown:
+            do = _unknown_cost_do(_first_run().unknown_cost_advice(unknown)[0],
+                                  len(unknown))
+            if not only:
+                do = ("fix what `tjs find-missing-history` lists, then: "
+                      + do)
         return Result("missing-history", "attention",
                       "; ".join(said)
                       + (f"; {len(syms)} position(s) with missing basis "
-                         f"affect {ctx.year}" if syms else ""))
+                         f"affect {ctx.year}" if syms else ""),
+                      question=only, answers=unknown_cost_keys(unknown),
+                      do=do)
     if syms:
         return Result("missing-history", "attention",
                       f"{len(syms)} position(s) with missing basis affect "
                       f"{ctx.year}: {_shown(syms)}")
     return Result("missing-history", "done", "nothing affects the year")
+
+
+def _first_run():
+    from taxjson.lib import first_run as fr
+    return fr
+
+
+def _unknown_cost_do(kind: str, n: int) -> str:
+    """The Next line for the rows at an unknown cost alone (Result.do),
+    by what unknown_cost_advice found: a cost to add, a short's sale to
+    add, or a report by hand (backlog TJ-3213)."""
+    row = "sale" if n == 1 else "sales"
+    if kind == "cost":
+        return ("give the OPENING cost=unknown line the cost (or `tjs "
+                "opening` from a positions report), then `tjs run`; or "
+                f"report the {row} by hand: `tjs checklist --done "
+                "missing-history`")
+    if kind == "short-sale":
+        return ("add the short's own sale as a .tt line in place of the "
+                "OPENING cost=unknown line, then `tjs run`; or report the "
+                f"{'buy' if n == 1 else 'buys'} by hand: `tjs checklist "
+                "--done missing-history`")
+    return (f"report {'it' if n == 1 else 'them'} by hand (`tjs "
+            f"form-export` lists {'it' if n == 1 else 'them'}), then `tjs "
+            f"checklist --done missing-history`; `tjs find-missing-history` "
+            f"names what opened the units")
+
+
+def stored_unknown_cost(root: Path, year: Any) -> List[Dict[str, Any]]:
+    """The year's rows at an unknown cost the last `tjs run` recorded in
+    reports/run_summary.json (lib/first_run.unknown_cost_sales: the one
+    list, read here rather than the gains files again; backlog
+    TJ-3216). [] without a summary for `year`."""
+    fr = _first_run()
+    doc = _load_json(Path(root) / "reports" / fr.SUMMARY_FILE)
+    if doc is None or str(doc.get("year")) != str(year):
+        return []
+    return [r for r in (doc.get("unknown_cost_sales") or [])
+            if isinstance(r, dict) and r.get("symbol") and r.get("date")]
+
+
+def _unknown_cost_rows(ctx: Any) -> List[Dict[str, Any]]:
+    """The stored rows for the checklist's context; [] for one with no
+    project folder (a test's stand-in that holds only the
+    find-missing-history text)."""
+    root = getattr(ctx, "root", None)
+    return stored_unknown_cost(Path(root), ctx.year) if root else []
+
+
+def unknown_cost_keys(rows: List[Dict[str, Any]]) -> List[str]:
+    """The question's keys, one per row: account, symbol, date, the
+    quantity (written whole) and the row's place among that day's rows
+    of the symbol in the account, so a sale added or changed later asks
+    again (backlog TJ-3215)."""
+    from taxjson.lib.report_fmt import qty_text
+    seen: Dict[Tuple[str, str, str], int] = {}
+    out = []
+    for r in rows:
+        k = (str(r.get("account") or ""), str(r.get("symbol") or ""),
+             str(r.get("date") or ""))
+        place = seen.get(k, 0)
+        seen[k] = place + 1
+        out.append(f"{k[0]}|{k[1]}|{k[2]}|{qty_text(float(r.get('qty') or 0.0))}"
+                   f"|{place}|{r.get('kind') or 'sale'}")
+    return sorted(set(out))
+
+
+def _unknown_cost_said(rows: List[Dict[str, Any]], year: int) -> str:
+    """The step's finding for the rows at an unknown cost: each row
+    (symbol, account, date) first — the summary's `! ` line cuts the
+    detail at 100 columns and keeps the row — then the advice
+    (lib/first_run.unknown_cost_advice: the OPENING cost=unknown line
+    the units came by and the cost to give it, a short's sale to add, or
+    a report by hand)."""
+    fr = _first_run()
+    n = len(rows)
+    # (the first row first, whatever the phrase's length: the summary's
+    # `! ` line cuts the detail at 100 columns and must keep it)
+    first = (f"{rows[0]['symbol']} {rows[0]['date']} ({rows[0]['account']})"
+             + (f" and {n - 1} more" if n > 1 else ""))
+    _kind, _fix, advice = fr.unknown_cost_advice(rows)
+    return (f"{first}: {fr.unknown_cost_phrase(rows)}, out of {year}'s "
+            f"totals — {advice}")
 
 
 def _zero_value_elections(ctx: Ctx) -> int:
@@ -1930,7 +2191,7 @@ def d_elections(ctx: Ctx) -> Result:
         # Only the project country's rollover (A2-1245): s.86.1 and
         # allocated_acb_cad in Canada, §355 and allocated_acb in the US.
         roll = ("a §355 spin-off's allocated_acb"
-                if is_us(ctx.settings.get("country"))
+                if is_us(ctx.settings.country)
                 else "an s.86.1 rollover's allocated_acb_cad")
         return Result("elections", "attention",
                       f"{zero} spin-off/merger(s) booked at $0 — set "
@@ -1979,11 +2240,10 @@ def d_crypto_sends(ctx: Ctx) -> Result:
     # A crypto account not parsed yet: a send to it reads as unmatched
     # and undecided (A2-0359) — the books are not ready to judge.
     # (The command's own guard, crypto_sends.stale_evidence.)
+    run = _run_helpers(ctx)
     try:
-        from taxjson.bin.taxjson_run import (_crypto_broker_files,
-                                             _transfers_accounts)
         unparsed = cs.stale_evidence(
-            ctx.cache, _crypto_broker_files(ctx.root, ctx.cfg),
+            ctx.cache, run.crypto_broker_files(ctx.root, ctx.cfg),
             skip=_transfers_accounts(ctx.cfg))
     except SystemExit:
         unparsed = []
@@ -2044,7 +2304,7 @@ def d_crypto_sends(ctx: Ctx) -> Result:
                       f"`tjs crypto-sends ACCOUNT --write`")
     # A US gift has no way to leave the books (US-SEND-02, TJ-0928): a
     # send recorded `self` may be one, and only the person can tell.
-    kept = _us_self_sends(rep, ctx.settings.get("country"))
+    kept = _us_self_sends(rep, ctx.settings.country)
     if kept:
         return Result("crypto-sends", "attention",
                       f"{len(kept)} send(s) recorded as self: their coins "
@@ -2067,8 +2327,7 @@ def _books_state(ctx: Ctx) -> Optional[Result]:
     say done over stale numbers (S067-12). None when the books are fine
     or cannot be judged (the command's own error is then reported)."""
     from taxjson.lib.report_model import resolve_gains_files, stale_wash_inputs
-    taxable = {n for n, a in ctx.accounts.items()
-               if a.get("type") == "taxable"}
+    taxable = {n for n, a in ctx.accounts.items() if a.taxable}
     try:
         files = {a: p for a, p in resolve_gains_files(ctx.cache).items()
                  if a in taxable}
@@ -2116,7 +2375,7 @@ def d_audit(ctx: Ctx) -> Result:
                       f"then `tjs run`")
     code, out, err = ctx.sub("audit", LONG_FORM)
     if not out:
-        return Result("audit", "blocked", _last_line(err) or f"exit {code}")
+        return Result("audit", "blocked", _error_line(err) or f"exit {code}")
     bad = 0
     notfound = 0
     events = 0
@@ -2137,7 +2396,7 @@ def d_audit(ctx: Ctx) -> Result:
                       f"{notfound} disposition(s) not found in the gains file "
                       f"— stale books? re-run `tjs run`")
     if code != 0:
-        return Result("audit", "attention", _last_line(err) or f"exit {code}")
+        return Result("audit", "attention", _error_line(err) or f"exit {code}")
     return Result("audit", "done", f"{events} disposition(s) tied"
                   + (f"; {manual} sale(s) with unknown cost (no purchase "
                      f"in your files) routed to manual "
@@ -2146,9 +2405,9 @@ def d_audit(ctx: Ctx) -> Result:
 
 def d_wash_reviewed(ctx: Ctx) -> Result:
     names = _accounts_of(ctx, "taxable") + _accounts_of(ctx, "crypto")
-    trade_basis = (str(ctx.settings.get("tax_date") or "").lower() == "trade"
-                   or (not ctx.settings.get("tax_date")
-                       and is_us(ctx.settings.get("country"))))
+    trade_basis = (str(ctx.settings.tax_date or "").lower() == "trade"
+                   or (not ctx.settings.tax_date
+                       and is_us(ctx.settings.country)))
     from taxjson.lib.report_model import stale_wash_inputs
     denied = perm = 0.0
     flags: set = set()
@@ -2234,7 +2493,7 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
                       f"older than their inputs (a `run --account` skipped "
                       f"the cross-account pass) — run `tjs run`")
     # US projects in §1091's words, never CRA's (S049-14).
-    _us = is_us(ctx.settings.get("country"))
+    _us = is_us(ctx.settings.country)
     # A loss on one listing with the other listing bought in its window,
     # the pair neither joined nor ruled DISTINCT (lib/xlist_loss_radar):
     # the books deny nothing until ticker.map answers it.
@@ -2264,18 +2523,18 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
     flag_note = "; ".join(n for n in (flag_note, sim_note) if n)
     if perm > 0.005:
         return Result("wash-reviewed", "manual",
-                      f"{perm:,.2f} permanently denied ("
+                      f"{M.shown(perm, 2):,.2f} permanently denied ("
                       f"{'IRA' if _us else 'registered-account or affiliated-person'}"
                       f" repurchase) "
                       f"— confirm each with `tjs wash-sales`"
                       + (f"; {flag_note}" if flag_note else ""))
     if flag_note:
         return Result("wash-reviewed", "manual",
-                      (f"{denied:,.2f} denied; " if denied > 0.005 else "")
+                      (f"{M.shown(denied, 2):,.2f} denied; " if denied > 0.005 else "")
                       + flag_note)
     if denied > 0.005:
         return Result("wash-reviewed", "done",
-                      f"{denied:,.2f} denied, all recoverable "
+                      f"{M.shown(denied, 2):,.2f} denied, all recoverable "
                       + ("(added to the replacement's basis)" if _us
                          else "(added to ACB)"))
     return Result("wash-reviewed", "done",
@@ -2287,10 +2546,11 @@ def d_filing_positions(ctx: Ctx) -> Result:
     position taken is listed for the user to confirm (manual); a line the
     final books did not resolve to one denied sale is attention."""
     from taxjson.lib import loss_overrides as LO
+    from taxjson.lib import loss_override_note as LON
     expected = LO.read_state(ctx.cache)
     if not expected:
         return Result("filing-positions", "n/a",
-                      f"no {LO.KEYWORD} line in the accounts' .tt files")
+                      f"no {LON.KEYWORD} line in the accounts' .tt files")
     files: Dict[str, Path] = {}
     for n in sorted({o["account"] for o in expected}):
         f = ctx.cache / f"{n}_gains_wash.json"
@@ -2302,18 +2562,18 @@ def d_filing_positions(ctx: Ctx) -> Result:
     probs = LO.problems(items, expected, spellings=LO.map_view(ctx.root))
     if probs:
         return Result("filing-positions", "attention",
-                      f"{len(probs)} {LO.KEYWORD} line(s) name no single "
+                      f"{len(probs)} {LON.KEYWORD} line(s) name no single "
                       f"denied loss — {probs[0]}"
                       + (" ..." if len(probs) > 1 else "")
                       + " (`tjs run` stops on it)",
-                      do=f"fix or delete the {LO.KEYWORD} line(s) named, "
+                      do=f"fix or delete the {LON.KEYWORD} line(s) named, "
                          f"then `tjs run`")
-    verb = "disallow" if is_us(ctx.settings.get("country")) else "deny"
+    verb = "disallow" if is_us(ctx.settings.country) else "deny"
     shown = []
     for it in items:
         for s in it.get("sales") or []:
             shown.append(f"{s['account']} {s['date']} {s['symbol']} "
-                         f"({s['would_disallow']:,.2f} the rule would "
+                         f"({M.shown(s['would_disallow'], 2):,.2f} the rule would "
                          f"{verb}; reason \"{it.get('reason')}\")")
     return Result("filing-positions", "manual",
                   f"{len(shown)} filing position(s) taken against the "
@@ -2326,7 +2586,7 @@ def _us_expired_options(ctx: Ctx) -> Result:
     """US projects (S066-15): option-boundary is a Canadian (s.49)
     command, but the missing-expiry-row check applies to both long and
     written contracts — run it on the taxable base books directly."""
-    from taxjson.lib.core import TaxTransaction
+    from taxjson.model.transaction import TaxTransaction
     from taxjson.lib.option_boundary import expired_open
     names = _accounts_of(ctx, "taxable")
     docs, bad = _base_docs_checked(ctx, names)
@@ -2397,7 +2657,7 @@ def d_option_boundary(ctx: Ctx) -> Result:
     if not _accounts_of(ctx, "taxable"):
         return Result("option-boundary", "n/a",
                       "no non-crypto taxable account — no written options")
-    if is_us(ctx.settings.get("country")):
+    if is_us(ctx.settings.country):
         return _us_expired_options(ctx)
     code, out, err = ctx.sub("option-boundary", "--json")
     try:
@@ -2526,7 +2786,7 @@ def _missing_prior_lock(ctx: Ctx) -> Optional[Tuple[int, Path]]:
     names when it is a closed year's deleted lock (backlog TJ-0272),
     else None."""
     try:
-        from taxjson.bin.taxjson_filed import missing_prior_lock
+        from taxjson.lib.filed_locks import missing_prior_lock
         gone = missing_prior_lock(ctx.root, ctx.settings)
     except Exception:                                   # noqa: BLE001
         return None
@@ -2541,7 +2801,7 @@ def _shell_arg(text: str) -> str:
 
 def d_handoff(ctx: Ctx) -> Result:
     y = ctx.year
-    configured = ctx.settings.get("prior_year_record")
+    configured = ctx.settings.prior_year_record
     local = ctx.root / "filed" / f"{y - 1}.json"
     if not configured and not local.exists():
         return Result("handoff", "manual",
@@ -2569,6 +2829,8 @@ def d_handoff(ctx: Ctx) -> Result:
                              f"or a backup, or close {yr} again: "
                              f"`{reclose}`")
         return Result("handoff", "blocked", detail)
+    unchecked = (f"[carryover] claimed {y - 1} could not be compared with "
+                 f"the {y - 1} record: the carryover ledger could not be used")
     if doc.get("problems"):
         parts = []
         for k, label in (("positions", "opening position(s) differ"),
@@ -2597,8 +2859,13 @@ def d_handoff(ctx: Ctx) -> Result:
                 continue
             if doc.get(k):
                 parts.append(f"{len(doc[k])} {label}")
+        if doc.get("carry_unchecked"):
+            parts.append(unchecked)
         return Result("handoff", "attention",
                       "; ".join(parts) + " — `tjs handoff`")
+    if doc.get("carry_unchecked"):
+        return Result("handoff", "attention",
+                      f"{unchecked} — `tjs carryover`")
     return Result("handoff", "done", f"{y - 1} carried forward once")
 
 
@@ -2673,7 +2940,7 @@ def _slip_names(ctx: Ctx) -> str:
     """The slips a project's dispositions come on: T5008 in Canada; in
     the US Form 1099-B for securities and, from tax year 2025, Form
     1099-DA for a broker's digital-asset sales (US-RPT-10, A2-1149)."""
-    if not is_us(ctx.settings.get("country")):
+    if not is_us(ctx.settings.country):
         return "T5008"
     names = []
     if _accounts_of(ctx, "taxable"):
@@ -2716,11 +2983,11 @@ def d_t5_t3(ctx: Optional[Ctx]) -> Result:
     the tolerance; a finding is a question answered per account by a
     DONE mark (QUESTION_STEPS); something not compared (the report's
     `not_compared`) is never done. US: compared by hand."""
-    if ctx is None or is_us(ctx.settings.get("country")):
+    if ctx is None or is_us(ctx.settings.country):
         return Result("t5-t3", "manual", "compare the slips with the TAXABLE "
                       "line of `tjs divs-sum` / `roc-sum`"
                       + ("" if ctx is not None and is_us(
-                          ctx.settings.get("country")) else
+                          ctx.settings.country) else
                          "; NR4 slips by hand"))
     from taxjson.lib import slip_audit as SA
     if not has_books(ctx):
@@ -2774,7 +3041,7 @@ def d_t5_t3(ctx: Optional[Ctx]) -> Result:
                       question=True, answers=SA.question_keys(rep))
     n = sum(len(g["slips"]) for a in rep["accounts"] for g in a["groups"])
     return Result("t5-t3", "done", f"{n} slip(s) agree with the books "
-                  f"within {rep['tolerance']:.2f}")
+                  f"within {M.shown(rep['tolerance'], 2):.2f}")
 
 
 def d_form_export(ctx: Ctx) -> Result:
@@ -2796,27 +3063,27 @@ def d_form_export(ctx: Ctx) -> Result:
         return Result("form-export", "blocked",
                       _last_line(serr) or _last_line(err) or "could not read the reports")
     if rep.get("form") == "8949":
-        t = {k: round(sum((rep.get(p) or {}).get(k, 0.0)
-                          for p in ("part_I_totals", "part_II_totals")), 2)
+        t = {k: M.shown(sum((rep.get(p) or {}).get(k, 0.0)
+                            for p in ("part_I_totals", "part_II_totals")), 2)
              for k in ("proceeds", "gain")}
         n = len(rep.get("part_I") or []) + len(rep.get("part_II") or [])
         label = "Form 8949"
     else:
         tot = rep.get("totals") or {}
-        t = {"proceeds": round(float(tot.get("proceeds_all", 0.0)), 2),
-             "gain": round(float(tot.get("gain_all", 0.0)), 2)}
+        t = {"proceeds": M.shown(float(tot.get("proceeds_all", 0.0)), 2),
+             "gain": M.shown(float(tot.get("gain_all", 0.0)), 2)}
         n = len(rep.get("rows") or [])
         label = "Schedule 3"
     filing = (summ.get("filing") or {}).get("totals") or {}
     problems = []
     for k in ("proceeds", "gain"):
-        want = round(float(filing.get(k, 0.0)), 2)
-        if abs(t[k] - want) > 0.01:
-            problems.append(f"{label} {k} {t[k]:,.2f} vs FOR THE RETURN {want:,.2f}")
-    taxable = {n_ for n_, a in ctx.accounts.items() if a.get("type") == "taxable"}
-    realized = round(sum(float(r.get("realized") or 0.0)
-                         for r in summ.get("accounts") or []
-                         if r.get("account") in taxable), 2)
+        want = M.shown(float(filing.get(k, 0.0)), 2)
+        if M.cents_apart(t[k], want) > 1:
+            problems.append(f"{label} {k} {M.shown(t[k], 2):,.2f} vs FOR THE RETURN {want:,.2f}")
+    taxable = {n_ for n_, a in ctx.accounts.items() if a.taxable}
+    realized = M.shown(sum(float(r.get("realized") or 0.0)
+                           for r in summ.get("accounts") or []
+                           if r.get("account") in taxable), 2)
     # The rows are rounded to the cent one by one while the .sum rounds
     # once per account, so the residual grows like a random walk: each
     # rounding is uniform on +-0.005 (sd 0.0029), and 5 standard
@@ -2840,7 +3107,7 @@ def d_form_export(ctx: Ctx) -> Result:
     if isinstance(s1256, dict):
         cmp_gain += float(s1256.get("gain") or 0.0)
     if abs(cmp_gain - realized) > tol:
-        problems.append(f"{label} gain {t['gain']:,.2f} vs realized {realized:,.2f} "
+        problems.append(f"{label} gain {M.shown(t['gain'], 2):,.2f} vs realized {realized:,.2f} "
                         f"in the taxable accounts' .sum")
     # Unknown-cost dispositions are not in the rows (their cost is
     # unknown) — the export is not complete until they are reported by
@@ -2850,7 +3117,7 @@ def d_form_export(ctx: Ctx) -> Result:
         problems.append(
             f"{len(manual)} sale(s) with no purchase in your files "
             f"(unknown cost; proceeds "
-            f"{float(rep.get('manual_proceeds') or 0.0):,.2f}) are not in "
+            f"{M.shown(float(rep.get('manual_proceeds') or 0.0), 2):,.2f}) are not in "
             f"the {label} rows — report them by hand (form-export's "
             f"MANUAL REPORTING section)")
     # An assignment's premium the engine says is in no gain: the two
@@ -2887,20 +3154,49 @@ def d_form_export(ctx: Ctx) -> Result:
     if problems:
         return Result("form-export", "attention", "; ".join(problems))
     return Result("form-export", "done",
-                  f"{n} row(s); gain {t['gain']:,.2f} equals FOR THE RETURN and the .sum")
+                  f"{n} row(s); gain {M.shown(t['gain'], 2):,.2f} equals FOR THE RETURN and the .sum")
+
+
+def _t1135_unresolved(rep: Dict[str, Any]) -> Result:
+    """The t1135 step while the ISIN and the listing of a holding
+    disagree on its being foreign property and the threshold test
+    depends on it (`tjs t1135 --json` `classification_status`
+    "unresolved"; backlog TJ-4956): neither "file it" nor done."""
+    syms = [str(s) for s in rep.get("classification_unresolved_symbols")
+            or []]
+    over = rep.get("over_threshold_as_counted")
+    named = (', '.join(syms[:2]) + (f" +{len(syms) - 2} more"
+                                    if len(syms) > 2 else "")
+             if syms else "a holding")
+    return Result("t1135", "attention",
+                  f"the T1135 test is not resolved: {named} may "
+                  f"{'not ' if over else ''}be foreign property (ISIN and "
+                  f"listing disagree), and the result "
+                  f"({'over' if over else 'below'} the threshold as "
+                  f"counted) depends on it — add the `T1135` "
+                  f"line{'s' if len(syms) > 1 else ''} `tjs t1135` names "
+                  f"to ticker.map, then `tjs run`",
+                  cmd="tjs t1135")
 
 
 def d_t1135(ctx: Ctx) -> Result:
-    if is_us(ctx.settings.get("country")):
+    if is_us(ctx.settings.country):
         return Result("t1135", "n/a", "US project")
     code, out, err = ctx.sub("t1135", "--json")
     try:
         rep = json.loads(out)
     except ValueError:
+        # Books a full run did not build from these inputs are refused
+        # (TJ-4347): the step says why, and names the run.
+        if "`tjs run`" in err:
+            return Result("t1135", "blocked", _error_line(err) or f"exit {code}",
+                          cmd="tjs run")
         # `tjs t1135` shows the whole refusal: the `! ` line named the
         # `tjs migrate` its detail mentioned (backlog TJ-0083).
         return Result("t1135", "blocked", _last_line(err) or f"exit {code}",
                       cmd="tjs t1135")
+    if rep.get("classification_status") == "unresolved":
+        return _t1135_unresolved(rep)
     if rep.get("filing_required"):
         return Result("t1135", "manual",
                       "cost of foreign property exceeded the threshold — file "
@@ -2931,6 +3227,20 @@ def d_t1135(ctx: Ctx) -> Result:
                       f"FX-on-cash ledger v2 refuses) — the T1135 total is "
                       f"not settled",
                       cmd="tjs fx-cash --ledger v2")
+    # A property counted at an unknown ACB: the total is understated, so
+    # below the line is no verdict (`filing_required` null; TJ-4956).
+    _acb = [str(r.get("symbol")) for r in rep.get("properties") or []
+            if isinstance(r, dict) and r.get("unknown_acb")
+            and not r.get("cash")]
+    if _acb and rep.get("filing_required") is None:
+        return Result("t1135", "attention",
+                      f"below the CAD 100,000 threshold as costed, but the "
+                      f"cost of {', '.join(_acb[:2])}"
+                      f"{f' +{len(_acb) - 2} more' if len(_acb) > 2 else ''}"
+                      f" is unknown — the T1135 total is not settled: add "
+                      f"its purchase (an older export, or an OPENING line "
+                      f"with its cost), then `tjs run`",
+                      cmd="tjs find-missing-history")
     if rep.get("year_complete") is False or ctx.today <= date(ctx.year, 12, 31):
         # ITA 233.3 counts cost at any time up to Dec 31: below the
         # threshold mid-year is not a verdict (S051-22, S052-15).
@@ -2972,8 +3282,8 @@ def d_carryover(ctx: Ctx) -> Result:
         doc = json.loads(out) if out.strip() else {}
     except ValueError:
         doc = {}
-    ignored = (doc.get("claimed_ignored") or []) if isinstance(doc, dict) \
-        else []
+    doc = doc if isinstance(doc, dict) else {}
+    ignored = doc.get("claimed_ignored") or []
     if ignored:
         # A claimed line the ledger could not read is not applied: the
         # carryforward is overstated by it (S001-04).
@@ -2982,7 +3292,30 @@ def d_carryover(ctx: Ctx) -> Result:
                       f"(not applied): {ignored[0]}"
                       + (" ..." if len(ignored) > 1 else "")
                       + " — fix the entry")
-    if is_us(ctx.settings.get("country")):
+    books = doc.get("missing_books")
+    if books:
+        # It exits 0 with figures: not the ledger of these books (TJ-1446).
+        names = ", ".join(map(str, books)) if isinstance(books, list) else books
+        return Result("carryover", "attention",
+                      f"no base file for {names}: the ledger leaves their "
+                      f"sales out — run `tjs run`")
+    # Sales with an unknown cost left out, under close-year's own rule
+    # (lib/carry_back.py). Where they can move the split it stops on, attention
+    # (TJ-1436, TJ-1457). Elsewhere no figure of the lock rests on them and they
+    # can be settled, so they are said and do not stop a plain close-year.
+    from taxjson.lib.carry_back import (SPLIT_ATTENTION, ledger_left_out,
+                                        left_out_text, split_left_out)
+    from taxjson.lib.project_tables import claims_back
+    us = is_us(ctx.settings.country)
+    year = getattr(ctx, "year", None)   # None: no [settings] year to read to
+    left = ledger_left_out(doc, year) if year is not None else None
+    left_out = (f"the ledger leaves out sales with an unknown cost "
+                f"({left_out_text(left)})" if left else "")
+    if left and not us and claims_back(_cfg, year) \
+            and split_left_out(doc, year):
+        return Result("carryover", "attention",
+                      f"{SPLIT_ATTENTION} {left_out} — `tjs carryover`")
+    if us:
         what = ("record each year's Schedule D line 21 deduction against "
                 "ordinary income as far as taxable income absorbed it "
                 "(Capital Loss Carryover Worksheet line 4), not the "
@@ -2993,7 +3326,7 @@ def d_carryover(ctx: Ctx) -> Result:
     return Result("carryover", "manual",
                   "[carryover] claimed " + ("present" if claimed
                                             else "absent")
-                  + " — " + what)
+                  + " — " + what + (f"; {left_out}" if left_out else ""))
 
 
 def d_fx_cash(ctx: Ctx) -> Result:
@@ -3006,7 +3339,10 @@ def d_fx_cash(ctx: Ctx) -> Result:
     figure asks again)."""
     code, out, err = ctx.sub("fx-cash", "--json")
     if code != 0 or not out.strip():
-        return Result("fx-cash", "blocked", _last_line(err) or f"exit {code}")
+        # The refusal's reason, not the last line of its advice; the advice's
+        # `tjs run` is the Next line's (review of commit 6).
+        return Result("fx-cash", "blocked", _error_line(err) or f"exit {code}",
+                      cmd="tjs run" if "`tjs run`" in err else "")
     try:
         doc = json.loads(out)
     except ValueError:
@@ -3035,11 +3371,11 @@ def fx_review_key(doc: Dict[str, Any]) -> str:
     if doc.get("ledger") != "v2" or doc.get("status") != "computed" \
             or rep is None:
         return ""
-    return f"v2|{doc.get('year')}|{float(rep):.2f}"
+    return f"v2|{doc.get('year')}|{M.units(float(rep), 2):.2f}"
 
 
 def d_fees(ctx: Ctx) -> Result:
-    if is_us(ctx.settings.get("country")):
+    if is_us(ctx.settings.country):
         return Result("fees", "manual",
                       "investment interest (Form 4952) is entered by hand "
                       "from the statements' margin interest (`tjs "
@@ -3052,11 +3388,11 @@ def d_fees(ctx: Ctx) -> Result:
 
 
 def d_estimate(ctx: Ctx) -> Result:
-    est = (ctx.cfg.get("estimate") or {}).get("other_income")
+    est = estimate_of(ctx.cfg).other_income
     first = f"[estimate] other_income {'set' if est is not None else 'unset'}"
     # [instalments] is Canada's table (CONFIG_COUNTRY; a US config
     # refuses it): a US project never hears of it (A2-0738).
-    if is_us(ctx.settings.get("country")):
+    if is_us(ctx.settings.country):
         return Result("estimate", "manual",
                       f"{first}; US estimated tax payments are not "
                       f"modelled — check them yourself")
@@ -3086,17 +3422,17 @@ def d_amt(ctx: Ctx) -> Result:
         _ex = float(a.get("excess_fed") or 0.0)
         _cf = float(c.get("created", a.get("carryforward", _ex)) or 0.0)
         if abs(_cf - _ex) <= 0.005:
-            first = (f"AMT binds: {_ex:,.2f} federal additional tax "
+            first = (f"AMT binds: {M.shown(_ex, 2):,.2f} federal additional tax "
                      f"carries forward 7 years")
         else:
-            first = (f"AMT binds: {_ex:,.2f} federal additional tax; "
-                     f"{_cf:,.2f} carries forward 7 years (s.120.2(3))")
+            first = (f"AMT binds: {M.shown(_ex, 2):,.2f} federal additional tax; "
+                     f"{M.shown(_cf, 2):,.2f} carries forward 7 years (s.120.2(3))")
     else:
         first = (f"AMT does not bind (regular tax over the minimum by "
-                 f"{a.get('headroom', 0.0):,.2f})")
+                 f"{M.shown(a.get('headroom', 0.0), 2):,.2f})")
     if src:
-        rest = (f"carryover {c.get('available', 0.0):,.2f} from {src}, "
-                f"{c.get('recovered_federal', 0.0):,.2f} recovered "
+        rest = (f"carryover {M.shown(c.get('available', 0.0), 2):,.2f} from {src}, "
+                f"{M.shown(c.get('recovered_federal', 0.0), 2):,.2f} recovered "
                 f"federally (line 40427)")
     else:
         rest = ("no minimum tax carryover entered — if you paid AMT in "
@@ -3127,7 +3463,7 @@ def _lock_state(ctx: Ctx, sid: str) -> Optional[Result]:
                       f"filed/{ctx.year}.json cannot be read ({why}) — "
                       f"restore the lock from git, or remove it and "
                       f"`tjs close-year` after filing")
-    from taxjson.bin.taxjson_filed import partial_year_note
+    from taxjson.lib.filed_locks import partial_year_note
     note = partial_year_note(doc, ctx.year)
     if note:
         return Result(sid, "attention", note)
@@ -3444,20 +3780,22 @@ def set_override(root: Path, year: int, step: str, mark: Optional[str],
 # The steps whose attention is a question a DONE mark answers — for the
 # questions asked when it was made (Result.answers).
 QUESTION_STEPS = ("export-coverage", "option-boundary", "t5-t3",
-                  "fx-cash", "crypto-sends")
+                  "fx-cash", "crypto-sends", "missing-history")
 
 
 def question_answers(root: Path, cfg: Dict[str, Any], step: str,
-                     today: Optional[date] = None) -> Optional[List[str]]:
+                     today: Optional[date] = None,
+                     run: Optional[RunHelpers] = None) -> Optional[List[str]]:
     """The keys of the questions `step` asks now (Result.answers), which
     a `--done` mark records as answered; None for a step that asks
-    none. Reads files only (the books of the last run)."""
+    none. Reads files only (the books of the last run). `run`: the run's
+    readers (RunHelpers), which fx-cash needs."""
     if step == "export-coverage":
         from taxjson.lib import export_coverage as EC
         return sorted({g.key for g in EC.find_gaps(root, cfg, today=today)
                        if not g.info})
     if step == "crypto-sends":
-        country = (cfg.get("settings") or {}).get("country")
+        country = settings_of(cfg).country
         if not is_us(country):
             return None
         from taxjson.lib import crypto_sends as cs
@@ -3472,7 +3810,7 @@ def question_answers(root: Path, cfg: Dict[str, Any], step: str,
         return option_keys(OB.project_question_rows(root, cfg, today=today))
     if step == "t5-t3":
         from taxjson.lib import slip_audit as SA
-        if is_us((cfg.get("settings") or {}).get("country")):
+        if is_us(settings_of(cfg).country):
             return None
         import contextlib
         import io
@@ -3481,12 +3819,23 @@ def question_answers(root: Path, cfg: Dict[str, Any], step: str,
                 return SA.question_keys(SA.audit(root, cfg))
         except Exception:                               # noqa: BLE001
             return []
+    if step == "missing-history":
+        # The rows at an unknown cost the mark says are reported by
+        # hand (backlog TJ-2770), from the last run's summary (no
+        # country needed: TJ-3211); the step's other findings are facts
+        # to fix, never answered by a mark.
+        year = settings_of(cfg).year
+        if year is None:
+            return []
+        return unknown_cost_keys(stored_unknown_cost(Path(root), year))
     if step == "fx-cash":
         # The v2 figure the mark reviews (none for the default ledger:
         # its NOT RELIABLE finding is never answered by a mark).
-        from taxjson.bin.taxjson_run import _fx_cash_status
+        if run is None:
+            raise RunHelpersMissing("question_answers('fx-cash') needs run=: pass "
+                                    "cli/checklist_run.checklist_run_helpers()")
         try:
-            st = _fx_cash_status(Path(root), Path(root) / "work")
+            st = run.fx_cash_status(Path(root), Path(root) / "work")
         except (SystemExit, Exception):                 # noqa: BLE001
             return []
         k = fx_review_key(st)
@@ -3522,6 +3871,12 @@ def key_text(sid: str, key: str) -> str:
     parts = key.split("|")
     if sid == "fx-cash" and len(parts) == 3:
         return f"the {parts[1]} ledger v2 figure {parts[2]}"
+    if sid == "missing-history" and len(parts) == 6:
+        # account|symbol|date|quantity|place|kind (unknown_cost_keys)
+        return (f"{parts[1]} {'sold' if parts[5] == 'sale' else 'bought'} "
+                f"{parts[2]} ({parts[0]}), {parts[3]} units"
+                + (f", no. {int(parts[4]) + 1} that day"
+                   if parts[4].isdigit() and int(parts[4]) > 0 else ""))
     return f"{parts[1]} written {parts[2]}" if len(parts) == 3 else key
 
 
@@ -3581,7 +3936,7 @@ def _set_override_locked(root: Path, year: int, step: str,
 # ------------------------------------------------------------------- items
 # 3: the `forced` status and mark, named `skipped` up to v0.34 (v0.35
 # renamed it under 2; backlog TJ-0030).
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = SCHEMAS["checklist"]
 GUIDE = "docs/getting-started.md"
 INSTALL = 'bash -c "$(curl -fsSL https://taxjson.com/install.sh)"'
 
@@ -3590,12 +3945,14 @@ SECTIONS = ("Set up", "Get your files", "Build the books", "Fill the gaps",
             "Share safely", "Year end")
 
 # Commands no item names, each with the reason (tests/test_checklist_items
-# reads this): every other command in taxjson_run._COMMAND_GROUPS must be
+# reads this): every other command in cli/parser._COMMAND_GROUPS must be
 # named by an item.
 EXCLUDED: Dict[str, str] = {
     "deploy": "development machine only: puts a release on this "
               "machine's production copy",
     "promote": "development machine only: moves a release channel",
+    "parser-check": "development machine only: the conformance checks on a "
+                    "parser's fixtures",
     "snapshot": "optional at any step: a copy of the project, a record "
                 "no step of the filing needs",
 }
@@ -4267,7 +4624,7 @@ def s_install(ctx: Ctx, f: _Facts) -> Result:
 
 
 def s_init(ctx: Ctx, f: _Facts) -> Result:
-    c = ctx.settings.get("country")
+    c = ctx.settings.country
     return Result("init", "done", f"taxjson.toml for {ctx.year}"
                   + (f" ({c})" if c else ""))
 
@@ -4278,13 +4635,12 @@ def s_configure(ctx: Ctx, f: _Facts) -> Result:
     legacy = legacy_files(ctx.root)
     if legacy:
         issues.append(legacy_message(legacy))
-    accounts = {n: a for n, a in ctx.accounts.items() if isinstance(a, dict)}
+    accounts = ctx.accounts
     if not accounts:
         issues.append("no [accounts.NAME] section")
-    crypto = sorted(n for n, a in accounts.items() if a.get("crypto") is True)
-    if crypto and not ctx.settings.get("local_timezone"):
-        from taxjson.lib.brokerages._crypto_common import (
-            timezone_typo_note)
+    crypto = sorted(n for n, a in accounts.items() if a.crypto is True)
+    if crypto and not ctx.settings.local_timezone:
+        from taxjson.lib.timezones import timezone_typo_note
         issues.append(f"[accounts.{crypto[0]}] is a crypto account but "
                       f"[settings] has no local_timezone"
                       f"{timezone_typo_note(ctx.settings)} — set it, or "
@@ -4297,7 +4653,7 @@ def s_configure(ctx: Ctx, f: _Facts) -> Result:
         return Result("configure", "attention", "; ".join(issues),
                       cmd="edit taxjson.toml")
     return Result("configure", "done", ", ".join(
-        f"{n} ({'crypto' if a.get('crypto') else a.get('type', '?')})"
+        f"{n} ({'crypto' if a.crypto else a.type or '?'})"
         for n, a in accounts.items()))
 
 
@@ -4311,7 +4667,7 @@ def s_transfers(ctx: Ctx, f: _Facts) -> Result:
     # An in-kind move with a registered account the run could not value
     # is NOT booked: its deemed sale is missing from the return, and the
     # step said done (backlog TJ-0095).
-    from taxjson.bin.taxjson_run import in_kind_unbooked
+    from taxjson.lib.in_kind import in_kind_unbooked
     ik = in_kind_unbooked(ctx.cache, ctx.year)
     if ik:
         syms = sorted({str(m.get("symbol")) for m in ik})
@@ -4359,7 +4715,7 @@ def s_tobase_map(ctx: Ctx, f: _Facts) -> Result:
     """Canada: tobase.map (lib/tobase_map) made from the installed
     interlisted master — older is attention; none is a step to take."""
     from taxjson.lib import tobase_map as TB
-    if is_us(ctx.settings.get("country")):
+    if is_us(ctx.settings.country):
         return Result("tobase-map", "n/a", "Canada only for now (the "
                       "interlisted pairs: tax-logic US-XLIST-05)")
     try:
@@ -4467,7 +4823,7 @@ def s_format(ctx: Ctx, f: _Facts) -> Result:
                              migrate=True)
             # The map the run reads: ticker.map with its tobase.map (a
             # line there the run refuses was "laid out", backlog TJ-0250).
-            from taxjson.bin.taxjson_ticker_map import map_file_problems
+            from taxjson.lib.map_file import map_file_problems
             probs = list(map_file_problems(tm))
         except Exception as e:                          # noqa: BLE001
             return Result("format", "attention", f"ticker.map: {e}",
@@ -4630,9 +4986,8 @@ def _not_applicable(sid: str, us: bool, has_taxable: bool
 
 
 def _project_shape(ctx: Ctx) -> Tuple[Optional[str], bool, bool]:
-    country = ctx.settings.get("country")
-    has_taxable = any(isinstance(a, dict) and a.get("type") == "taxable"
-                      for a in ctx.accounts.values())
+    country = ctx.settings.country
+    has_taxable = any(a.taxable for a in ctx.accounts.values())
     return country, is_us(country), has_taxable
 
 
@@ -4665,6 +5020,8 @@ def evaluate(ctx: Ctx, only: Optional[List[str]] = None,
         if sid in STEP_RULES:
             try:
                 r = STEP_RULES[sid](ctx, facts)
+            except RunHelpersMissing:   # the caller's bug: never a verdict
+                raise
             except Exception as e:      # an item must never take the list down
                 r = Result(sid, "blocked", f"could not check: {e}")
             slots.append((sid, r, True))
@@ -4707,10 +5064,13 @@ def _run_detectors(ctx: Ctx, sids: List[str], country: Optional[str],
     """The detectors of `sids`: the fast ones in order, then the slow
     ones `jobs` at a time (threads: each spends its time in a
     sub-command reading the books, so they overlap). A detector that
-    raises is a blocked result, never the end of the list."""
+    raises is a blocked result, never the end of the list, but for a Ctx
+    built without the run's readers (RunHelpersMissing: the caller's bug)."""
     def one(sid: str) -> Result:
         try:
             return DETECTORS[sid](ctx)
+        except RunHelpersMissing:
+            raise
         except Exception as e:      # a detector must never take the list down
             return Result(sid, "blocked", f"detector failed: {e}")
 
@@ -4728,16 +5088,38 @@ def _run_detectors(ctx: Ctx, sids: List[str], country: Optional[str],
             out[sid] = one(sid)
         return out
     import threading
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
     say = threading.Lock()
+    # Set in the stopping check's own thread before its worker can take
+    # the next one, so no queued check starts after a stop (the cancel
+    # below comes too late for that worker).
+    stop = threading.Event()
 
-    def started(sid: str) -> Result:
+    def started(sid: str) -> Optional[Result]:
+        if stop.is_set():
+            return None
         if progress:
             with say:
                 progress(sid, step_meta(sid, country)[3])
-        return one(sid)
+        try:
+            return one(sid)
+        except BaseException:
+            stop.set()
+            raise
     with ThreadPoolExecutor(max_workers=min(jobs, len(slow))) as pool:
         futures = [(sid, pool.submit(started, sid)) for sid in slow]
+        try:
+            wait([f for _, f in futures], return_when=FIRST_EXCEPTION)
+            for _, f in futures:
+                if f.done() and f.exception() is not None:
+                    raise f.exception()
+        except BaseException:
+            # A stop (Ctrl-C, or a check that raised past its own
+            # error: TJ-3205), as soon as one check stops: none still
+            # queued starts; the running ones end before it goes on.
+            stop.set()
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
         for sid, f in futures:
             out[sid] = f.result()
     return out
@@ -4818,8 +5200,7 @@ def _planning_config_digest(path: Path) -> Optional[str]:
     own digest already names it changed)."""
     import hashlib
     try:
-        from taxjson.lib.tomlcompat import tomllib
-        doc = tomllib.loads(Path(path).read_bytes().decode("utf-8-sig"))
+        doc = read_toml(path)
     except Exception:                                   # noqa: BLE001
         return None
     part: Dict[str, Any] = {k: v for k, v in doc.items()
@@ -4832,7 +5213,7 @@ def _planning_config_digest(path: Path) -> Optional[str]:
     if isinstance(accts, dict):
         part["accounts"] = {
             n: {k: v for k, v in a.items() if k in _PLANNING_ACCOUNT_KEYS}
-            for n, a in accts.items() if isinstance(a, dict)}
+            for n, a in accts.items() if isinstance(a, _cabc.Mapping)}
     blob = json.dumps(part, sort_keys=True, default=str).encode("utf-8")
     return "planning-settings:" + hashlib.sha256(blob).hexdigest()
 
@@ -5277,8 +5658,6 @@ def once_progress() -> Callable[[str, str], None]:
     return progress
 
 
-
-
 # ------------------------------------------------------------------ output
 def _project_cmds(it: Item, root: Optional[Path], year: int) -> Item:
     """Item `it` as it applies in the project at `root`. The configure
@@ -5350,30 +5729,25 @@ HANDOFF_SET_HOW = ("`tjs handoff` compares this year's opening with the "
 def _prior_record_set(root: Path) -> bool:
     """taxjson.toml at `root` sets [settings] prior_year_record."""
     try:
-        from taxjson.lib.tomlcompat import tomllib
-        doc = tomllib.loads((Path(root) / _PL.CONFIG).read_bytes()
-                            .decode("utf-8-sig"))
+        doc = read_toml((Path(root) / _PL.CONFIG))
     except Exception:                                   # noqa: BLE001
         return False
-    settings = doc.get("settings") if isinstance(doc, dict) else None
-    return isinstance(settings, dict) \
-        and bool(settings.get("prior_year_record"))
+    table = doc.get("settings") if isinstance(doc, dict) else None
+    return isinstance(table, dict)\
+        and bool(table.get("prior_year_record"))
 
 
 def _crypto_configured(root: Path) -> Optional[bool]:
     """Whether taxjson.toml at `root` configures a crypto account (None:
     it cannot be read)."""
     try:
-        from taxjson.lib.tomlcompat import tomllib
-        doc = tomllib.loads((Path(root) / _PL.CONFIG).read_bytes()
-                            .decode("utf-8-sig"))
+        doc = read_toml((Path(root) / _PL.CONFIG))
     except Exception:                                   # noqa: BLE001
         return None
     accounts = doc.get("accounts") if isinstance(doc, dict) else None
     if not isinstance(accounts, dict):
         return None
-    return any(isinstance(a, dict) and a.get("crypto")
-               for a in accounts.values())
+    return any(a.crypto for a in typed_accounts(accounts).values())
 
 
 def _cmd_lines(it: Item, w: int, lead: str, country: Optional[str]

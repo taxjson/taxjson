@@ -10,14 +10,17 @@ from pathlib import Path
 from unittest import mock
 
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 from taxjson.lib import out
 
 from taxjson.bin.taxjson_instalments import (build, due_dates,
                                              interest_and_penalty,
                                              required_schedule)
+import _paths
+from _support.filing_run_record import record_full_run
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 def _render100(doc, cur):
@@ -29,7 +32,7 @@ def _render100(doc, cur):
 
 
 class TestDueDates(unittest.TestCase):
-    @rule("CA-RPT-11")
+    @rule(R.CA_RPT_11)
     def test_four_dates_with_weekend_rollover(self):
         # 2026: Mar 15 = Sunday -> Mar 16; Jun 15 = Monday;
         # Sep 15 = Tuesday; Dec 15 = Tuesday.
@@ -42,20 +45,20 @@ class TestDueDates(unittest.TestCase):
 
 
 class TestSchedule(unittest.TestCase):
-    @rule("CA-RPT-11")
+    @rule(R.CA_RPT_11)
     def test_current_year_splits_in_four(self):
         rows = required_schedule(year=2026, basis="current_year",
                                  current_net_tax=80000.0)
         self.assertEqual([r["amount"] for r in rows], [20000.0] * 4)
 
-    @rule("CA-RPT-11")
+    @rule(R.CA_RPT_11)
     def test_prior_year_uses_last_years_tax(self):
         rows = required_schedule(year=2026, basis="prior_year",
                                  current_net_tax=80000.0,
                                  prior_net_tax=40000.0)
         self.assertEqual([r["amount"] for r in rows], [10000.0] * 4)
 
-    @rule("CA-RPT-11")
+    @rule(R.CA_RPT_11)
     def test_cra_reminder_front_loads_the_second_prior_year(self):
         # First two: 1/4 of the second preceding year (40,000 -> 10,000
         # each). Last two: the rest of the prior year (60,000 - 20,000
@@ -146,7 +149,7 @@ class TestInterest(unittest.TestCase):
 
 
 class TestBuild(unittest.TestCase):
-    @rule("CA-RPT-11")
+    @rule(R.CA_RPT_11)
     def test_below_threshold_needs_no_instalments(self):
         doc = build(year=2026, basis="current_year",
                     current_net_tax=2500.0, payments=[],
@@ -207,6 +210,7 @@ class TestInstalmentsCli(unittest.TestCase):
                   "cost": 100000.0, "gain": 300000.0,
                   "days_held": 200, "commission": 0.0, "fee": 0.0}],
              "inventory": [], "wash_sales": []}))
+        record_full_run(root)     # (sum and estimate refuse books no full run recorded)
         return root
 
     def test_schedule_interest_and_json(self):
@@ -479,6 +483,7 @@ class TestEstimateAndInstalmentsAgree(unittest.TestCase):
                   "cost": 100000.0, "gain": 200000.0,
                   "days_held": 200, "commission": 0.0, "fee": 0.0}],
              "inventory": [], "wash_sales": []}))
+        record_full_run(root)     # (sum and estimate refuse books no full run recorded)
         return root
 
     def _required(self, out):
@@ -523,6 +528,8 @@ class TestEstimateAndInstalmentsAgree(unittest.TestCase):
             for t in gdoc["transactions"]:
                 t["term"] = "SHORT_TERM"
             g.write_text(json.dumps(gdoc))
+            (root / "work" / "margin_gains_wash.json").unlink()
+            record_full_run(root)
             # [instalments] is Canada-only (lib/country CONFIG_COUNTRY):
             # every command refuses the config, naming the table.
             for cmd in (["instalments"],
@@ -534,6 +541,7 @@ class TestEstimateAndInstalmentsAgree(unittest.TestCase):
             # (COMMAND_COUNTRY), and `sum` carries no instalment doc.
             (root / "taxjson.toml").write_text(
                 us_toml.split("[instalments]")[0])
+            record_full_run(root)
             r = _cli(root, "instalments")
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("`tjs instalments` is Canada-only", r.stderr)
@@ -601,7 +609,7 @@ class TestConfigAbuse(unittest.TestCase):
         self.assertIn("negative", r.stderr)
 
     def test_unknown_key_warns_with_a_suggestion(self):
-        from taxjson.bin.taxjson_run import validate_config
+        from taxjson.pipeline.config import validate_config
         w = validate_config(
             {"settings": {"year": 2026, "country": "canada"},
              "accounts": {"m": {"type": "taxable"}},

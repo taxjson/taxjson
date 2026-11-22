@@ -15,8 +15,12 @@ It builds on the two older helpers instead of replacing them:
 
   * lib/cli_diag — the GNU `<prog>: warning: ...` convention, exit codes,
     input/output errors. `message()` is the same convention, wrapped.
-  * lib/report_model — `render_table` (structured cells), `fmt_money`,
+  * lib/report_fmt — `render_table` (structured cells), `fmt_money`,
     `fmt_qty`. `fit_table()` is `render_table` made to fit the width.
+
+A message as one line (`concise_line`, `split_message`, `detail_command`)
+is here too, below lib/stage_msg, which captures and rewords the stage
+messages (step 8 of the architecture plan: lib's import cycle).
 
 Nothing here touches machine output: `--json`, the files under work/ and
 reports/ that stages and users parse, and the run's marker lines keep
@@ -24,14 +28,17 @@ their exact shapes (the doc lists them).
 """
 
 import contextlib
+import json
+import math
 import os
 import re
 import shutil
 import sys
 import textwrap
-from typing import Iterable, List, Optional, Sequence, Tuple
+from bisect import bisect_left
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from taxjson.lib.report_model import fmt_money, fmt_qty, render_table
+from taxjson.lib.report_fmt import fmt_money, fmt_qty, render_table
 
 __all__ = [
     "WIDTH", "width", "wrap", "fill", "message", "emit", "note", "warn",
@@ -42,6 +49,8 @@ __all__ = [
     "join_blocks", "settle", "settling_streams", "real_stream",
     "ACT", "act", "act_list", "details_hint", "CONCISE_ENV", "concise_on",
     "concise_show", "fold_summary", "truncate", "classify", "prose_lines", "act_lines",
+    "split_message", "detail_command", "concise_line",
+    "render", "put", "clean_json", "JSON_SPEC",
 ]
 
 # Prose wraps here when stdout is not a terminal (a pipe, a file, a test).
@@ -236,6 +245,7 @@ ATTENTION_TOPICS = {
     "crypto id": "Crypto id",
     "split": "Split",
     "own-account move": "Move between your accounts",
+    "more assignments than writes": "More assignments than writes",
     "generic importer": "Generic importer",
     "schema": "Row check",
     "dedup": "Duplicates",
@@ -245,6 +255,23 @@ ATTENTION_TOPICS = {
 }
 _TOPIC_RE = re.compile(r"(?P<topic>[a-z][a-z -]*?): ")
 
+# A parser's warning marked for `tjs run`'s end-of-run list, after its
+# `warning: ATTENTION: `: the run reads it back from the parser's .diag
+# (lib/first_run.parser_warnings). In the captured bytes only: a person
+# is shown the warning without it (shown_topic). Only the owner's SAY
+# rulings carry it (backlog TJ-4559 (1), TJ-4569 (3); the others: TJ-4730),
+# a generic mapping never run on a real export (TJ-2573), and a
+# Questrade file's rows that differ only by a blank Symbol (TJ-4955).
+END_OF_RUN_MARK = "[end of run] "
+
+
+def unmarked(line: str) -> str:
+    """A captured line without END_OF_RUN_MARK: what the console (any
+    width) and a report (the .sum DIAGNOSTICS) copy of a .diag line —
+    the mark is for lib/first_run alone (review round 1: it reached the
+    .sum and the width-0 console)."""
+    return line.replace("ATTENTION: " + END_OF_RUN_MARK, "ATTENTION: ", 1)
+
 
 def shown_topic(text: str) -> str:
     """An ATTENTION message's text as a person is shown it, after its
@@ -252,6 +279,7 @@ def shown_topic(text: str) -> str:
     capitalised (ATTENTION_TOPICS). Display only."""
     if text.startswith("ATTENTION: "):
         text = text[len("ATTENTION: "):]
+    text = text.removeprefix(END_OF_RUN_MARK)   # (unmarked)
     m = _TOPIC_RE.match(text)
     if m and m.group("topic") in ATTENTION_TOPICS:
         text = ATTENTION_TOPICS[m.group("topic")] + text[m.end() - 2:]
@@ -416,8 +444,13 @@ _OWED: dict = {}
 
 
 def real_stream(stream):
-    """The stream a settling_streams() proxy writes to (else `stream`)."""
-    return getattr(stream, "_tj_inner", stream)
+    """The stream a settling_streams() proxy writes to (else `stream`),
+    through lib/cli_diag's guard beneath it (`_RoomGuard`, which names
+    its stream the same way)."""
+    s = getattr(stream, "_tj_inner", stream)
+    while "_tj_inner" in getattr(s, "__dict__", ()):
+        s = s.__dict__["_tj_inner"]
+    return s
 
 
 def _dest(stream):
@@ -472,6 +505,28 @@ def settle(stream=None) -> None:
             pass
 
 
+def _emit(chunks: Iterable[Tuple[Any, str, bool]], file) -> None:
+    """The one print() of this module: each (text, end, flush) printed as
+    print(text, end=end, flush=flush) prints it, to `file`."""
+    for text, end, flush in chunks:
+        print(text, end=end, file=file, flush=flush)
+
+
+def _print_lines(lines: Iterable[Any], file) -> None:
+    """Each line printed as print(line) prints it."""
+    _emit(((ln, "\n", False) for ln in lines), file)
+
+
+def put(lines, file=None) -> None:
+    """Lines printed as print() prints each one, to `file` (stdout by
+    default); a str is one print. Nothing is settled, wrapped, escaped or
+    owed: the plain line writer of an action log or a message whose bytes
+    are kept (show() owes a blank line after an entry of more than one
+    line, which a raw print never did)."""
+    file = sys.stdout if file is None else file
+    _print_lines([lines] if isinstance(lines, str) else lines, file)
+
+
 def join_blocks(blocks: Iterable[Sequence[str]]) -> List[str]:
     """Entries (each a list of lines: a message, a step) as one list of
     lines, one blank line after every entry of more than one line —
@@ -503,17 +558,30 @@ def show(lines: Sequence[str], file=None, *, cont: bool = False) -> None:
     if not lines:
         return
     if width(file) <= 0:
-        for ln in lines:
-            print(ln, file=file)
+        _print_lines(lines, file)
         return
-    if cont:
+    # One item may hold several lines (exit_text, labelled join theirs).
+    lines = [x for ln in lines for x in str(ln).split("\n")]
+    if cont or not lines[0].strip():
+        # A continuation, or an entry with its own blank line first.
         _unowe(file)
     else:
         settle(file)
-    for ln in lines:
-        print(ln, file=file)
+    _print_lines(lines, file)
     if cont or _entry_len(lines) > 1:
         _owe(file)
+
+
+def show_listed(text: str, file=None, indent: str = "  ",
+                hang: str = "    ") -> None:
+    """One line of a listing, to `file` (stdout by default): wrapped under
+    `indent`, or, labelled and shown to a person, a message of its own,
+    flush-left. Captured (width 0) it keeps its indent."""
+    file = sys.stdout if file is None else file
+    shown = labelled(text, file)
+    if shown != text and width(file) > 0:
+        indent = hang = ""
+    show(wrap(shown, None, indent, hang, stream=file), file)
 
 
 def show_blocks(blocks: Iterable[Sequence[str]], file=None) -> None:
@@ -524,15 +592,16 @@ def show_blocks(blocks: Iterable[Sequence[str]], file=None) -> None:
 
 class _Settling:
     """A text stream that writes the blank line its destination owes
-    (show()) before the next text written to it. A write that is itself
-    only newlines (a program's own blank line) pays the debt instead."""
+    (show()) before the next text written to it. A write that starts with
+    a newline (a program's own blank line, `print("\\nNext:")`) pays the
+    debt instead: never two blank lines in a row."""
 
     def __init__(self, inner):
         self._tj_inner = inner
 
     def write(self, s):
         if _OWED and s and _take_owed(self._tj_inner):
-            if s.strip("\n"):
+            if not s.startswith("\n"):
                 self._tj_inner.write("\n")
         return self._tj_inner.write(s)
 
@@ -548,7 +617,8 @@ def settling_streams():
     The top of a process only (lib/cli_diag.run_top_level). A stream
     the process started without (`>&-`, `2>&-`: None) stays None —
     print() to it is a no-op, as it was before the proxies; wrapped,
-    every write raised AttributeError."""
+    every write raised AttributeError. (run_top_level makes such a
+    stream /dev/null before it: lib/cli_diag `_closed_streams_to_devnull`.)"""
     saved = sys.stdout, sys.stderr
     if sys.stdout is not None and not isinstance(sys.stdout, _Settling):
         sys.stdout = _Settling(sys.stdout)
@@ -563,15 +633,16 @@ def settling_streams():
 
 
 def emit(kind: str, text: str, *, prog: Optional[str] = None,
-         details: Iterable[str] = (), file=None) -> None:
+         details: Iterable[str] = (), file=None, whole: bool = False) -> None:
     """Print message(...) to `file` (stderr by default), show()n: one
     blank line after it when it spans more than one line. With the
     one-line switch on (concise_on: a default view, Essentials first)
     a note or warning is its headline and the command its detail
-    names, one line (concise_show); an error keeps its fix lines."""
+    names, one line (concise_show); an error keeps its fix lines, and
+    so does `whole`: a message whose cut would lose what the person
+    must know (a report is incomplete, a paper must be filed)."""
     file = sys.stderr if file is None else file
-    if kind != "error" and concise_on(file):
-        from taxjson.lib.stage_msg import concise_line
+    if kind != "error" and not whole and concise_on(file):
         text = str(text).strip().split("\n")[0]
         if kind == "attention":
             text = shown_topic(text)
@@ -584,18 +655,21 @@ def emit(kind: str, text: str, *, prog: Optional[str] = None,
 
 
 def note(text: str, *, prog: Optional[str] = None,
-         details: Iterable[str] = (), file=None) -> None:
-    emit("note", text, prog=prog, details=details, file=file)
+         details: Iterable[str] = (), file=None,
+         whole: bool = False) -> None:
+    emit("note", text, prog=prog, details=details, file=file, whole=whole)
 
 
 def warn(text: str, *, prog: Optional[str] = None,
-         details: Iterable[str] = (), file=None) -> None:
-    emit("warning", text, prog=prog, details=details, file=file)
+         details: Iterable[str] = (), file=None,
+         whole: bool = False) -> None:
+    emit("warning", text, prog=prog, details=details, file=file, whole=whole)
 
 
 def attention(text: str, *, prog: Optional[str] = None,
-              details: Iterable[str] = (), file=None) -> None:
-    emit("attention", text, prog=prog, details=details, file=file)
+              details: Iterable[str] = (), file=None,
+              whole: bool = False) -> None:
+    emit("attention", text, prog=prog, details=details, file=file, whole=whole)
 
 
 def error(text: str, *, prog: Optional[str] = None,
@@ -647,7 +721,7 @@ def fail(text: str, *, prog: Optional[str] = None,
 
 
 # -------------------------------------------------------------- tables
-from taxjson.lib.report_model import auto_aligns as _auto_aligns  # noqa: E402
+from taxjson.lib.report_fmt import auto_aligns as _auto_aligns  # noqa: E402
 
 
 def records(headers: Sequence[str], body: Sequence[Sequence[str]],
@@ -680,7 +754,7 @@ def fit_table(headers: Sequence[str], body: Sequence[Sequence[str]], *,
               drop: Sequence[int] = (), width_: Optional[int] = None,
               indent: str = "", gap: str = "  ",
               per_record: bool = True, key=0) -> List[str]:
-    """A table (report_model.render_table: header, `---` rule, rows, an
+    """A table (report_fmt.render_table: header, `---` rule, rows, an
     optional ruled-off foot) that fits the width. Numeric columns
     right-align unless `aligns` says otherwise. Too wide: the columns in
     `drop` (indexes, least important first) are dropped one at a time;
@@ -760,6 +834,29 @@ def relpath(path, root=None) -> str:
 
 
 # ------------------------------------------------------------- builder
+# What `--json` prints by default: pipeline/sanity._json_out's json.dumps
+# keywords, and `clean` (no json.dumps keyword): every non-finite float
+# as null (clean_json). A site's own spec says `clean` too, True or False
+# (render() refuses any other): the wash radar's keywords leave NaN as
+# json.dumps writes it, and a forgotten key must not change that.
+JSON_SPEC: Dict[str, Any] = {"indent": 2, "sort_keys": True, "default": str, "clean": True}
+
+
+def clean_json(v):
+    """`v` with every non-finite float (NaN, an infinity) as None, in
+    dicts, lists and tuples at any depth (a tuple becomes a list, as
+    json.dumps writes it). STRICT JSON: json.dumps' default allow_nan
+    wrote bare NaN / Infinity tokens, which are invalid JSON (node's
+    JSON.parse throws, jq corrupts them: REVIEW #41)."""
+    if isinstance(v, float) and not math.isfinite(v):
+        return None
+    if isinstance(v, dict):
+        return {k: clean_json(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [clean_json(x) for x in v]
+    return v
+
+
 class Doc:
     """A report built section by section, printed in the house layout:
     a title line, sections separated by exactly one blank line, each
@@ -771,73 +868,195 @@ class Doc:
         d.section("Manual check")
         d.item("ABC loss on 2025-03-01: ...")
         d.print()
+
+    Recorded: each call adds an op, its lines made by that call at the
+    Doc's width (fixed when the Doc is made: a builder that reuses a list
+    it passed, or passes a generator, changes nothing already added);
+    lines() and print() put the ops together. The parts of a report have
+    their own calls: legend() (one or two lines above a table), act()
+    (an `! ` line after the data), hint() (the closing `More:` line).
+    Ops added inside `with d.details():` belong to the long form only:
+    lines(details=True) and print(details=True) show them (`--details`
+    as data, not a global). `json` (with `json_spec`, JSON_SPEC by
+    default; a site's own says `clean`) is what `--json` prints of the
+    same report (render()).
+
+    `exact=True` (PLAN step 15: a report whose raw print() calls become a
+    Doc keeps their bytes): each op's lines as its call made them — no
+    trailing space stripped, no blank line folded or trimmed, the title
+    (an empty one too: a blank line) and line() and section() text
+    printed as print() prints it (no control character escaped, nothing
+    wrapped), no blank line added after a message, and nothing settled
+    before it (a raw print never settled: the top of a process's
+    settling_streams() does, as it did); raw(*objects, sep=, end=,
+    flush=) is one print() call. para(),
+    item(), kv(), table() and message() make the same lines in either
+    mode (wrap(), kv_lines(), fit_table(), message()).
+
+    `live=True` (an exact Doc only): each op is also printed the moment
+    it is added, as the print() calls it replaces printed it then: to
+    `stream`, or to sys.stdout as it is at that moment. A report that
+    stops part-way (an error, a reader gone from a pipe) has printed what
+    the raw prints had, and nothing it had not. It keeps no line, so a
+    long report streams as its raw prints did (TJ-4873: `tjs audit`'s
+    blocks, TJ-0334): lines(), text(), print() and details() refuse; the
+    long form is the builder's `if details:`, as it was.
     """
 
     def __init__(self, title: Optional[str] = None, *,
-                 width_: Optional[int] = None, stream=None):
+                 width_: Optional[int] = None, stream=None,
+                 exact: bool = False, live: bool = False):
+        if live and not exact:
+            raise ValueError("Doc: live is for an exact Doc only (exact=True)")
         self.stream = stream
         self.w = width(stream) if width_ is None else width_
-        self._lines: List[str] = []
-        if title:
-            self._lines.extend(wrap(title, self.w))
+        self.exact = exact
+        self.live = live
+        self.json: Any = None
+        self.json_spec: Dict[str, Any] = dict(JSON_SPEC)
+        # (kind, [(text, end, flush)], in the long form only)
+        self._ops: List[Tuple[str, List[Tuple[Any, str, bool]], bool]] = []
+        self._in_details = False
+        if exact:
+            # print("") printed a blank line: so does an empty title.
+            if title is not None:
+                self._raw("title", str(title))
+        elif title:
+            self._add("title", wrap(title, self.w))
+
+    def _push(self, kind: str, chunks: List[Tuple[Any, str, bool]]) -> "Doc":
+        if self.live:
+            # Printed now and not kept: a live Doc's report streams.
+            _emit(chunks, sys.stdout if self.stream is None else self.stream)
+            return self
+        self._ops.append((kind, chunks, self._in_details))
+        return self
+
+    def _add(self, kind: str, lines: Iterable[Any]) -> "Doc":
+        return self._push(kind, [(ln, "\n", False) for ln in lines])
+
+    def _raw(self, kind: str, text: str, end: str = "\n",
+             flush: bool = False) -> "Doc":
+        return self._push(kind, [(text, end, flush)])
+
+    def _verbatim(self, kind: str, text) -> "Doc":
+        if self.exact:
+            return self._raw(kind, str(text))
+        text = printable(text) if self.w > 0 else str(text)
+        return self._add(kind, text.split("\n"))
+
+    @contextlib.contextmanager
+    def details(self):
+        """Within it, every op added is part of the long form only
+        (shown by lines(details=True), print(details=True)). A live Doc
+        refuses: it has printed each op already."""
+        if self.live:
+            raise ValueError("Doc.details: a live Doc prints each op as it is added")
+        was, self._in_details = self._in_details, True
+        try:
+            yield self
+        finally:
+            self._in_details = was
 
     # Each call appends lines; a section() opens with one blank line.
     def blank(self) -> "Doc":
-        self._lines.append("")
-        return self
+        return self._add("blank", [""])
 
     def line(self, text: str = "") -> "Doc":
         """A verbatim line (a command to copy, a pre-formatted row);
-        control characters escaped when shown to a person."""
-        text = printable(text) if self.w > 0 else str(text)
-        self._lines.extend(text.split("\n"))
+        control characters escaped when shown to a person (exact: as
+        print(text) prints it)."""
+        return self._verbatim("line", text)
+
+    def rows(self, lines: Iterable[str]) -> "Doc":
+        """Lines another function laid out (a report table's), each as
+        line() adds it."""
+        for ln in list(lines):
+            self._verbatim("rows", ln)
         return self
+
+    def raw(self, *objects, sep: Optional[str] = " ",
+            end: Optional[str] = "\n", flush: bool = False) -> "Doc":
+        """One print(*objects, sep=sep, end=end, flush=flush), its bytes
+        as print() writes them: an exact Doc only."""
+        if not self.exact:
+            raise ValueError("Doc.raw: an exact Doc only (exact=True)")
+        return self._raw("raw", (" " if sep is None else sep).join(map(str, objects)),
+                         "\n" if end is None else end, flush)
 
     def section(self, heading: str) -> "Doc":
         self.blank()
-        self._lines.append(printable(heading) if self.w > 0 else heading)
-        return self
+        if self.exact:
+            return self._raw("heading", str(heading))
+        return self._add("heading", [printable(heading) if self.w > 0 else heading])
 
-    def para(self, text: str, indent: str = "") -> "Doc":
-        self._lines.extend(wrap(text, self.w, indent, indent))
-        return self
+    def para(self, text: str, indent: str = "",
+             hang: Optional[str] = None) -> "Doc":
+        """Prose wrapped to the width, the first line at `indent`, the
+        rest at `hang` (default: `indent`)."""
+        return self._add("para", wrap(text, self.w, indent,
+                                      indent if hang is None else hang))
 
     def item(self, text: str, indent: str = "", bullet: str = "- ") -> "Doc":
-        self._lines.extend(wrap(text, self.w, indent + bullet,
-                                indent + " " * len(bullet)))
-        return self
+        return self._add("item", wrap(text, self.w, indent + bullet,
+                                      indent + " " * len(bullet)))
 
     def items(self, texts: Iterable[str], indent: str = "") -> "Doc":
-        for t in texts:
+        for t in list(texts):
             self.item(t, indent)
         return self
 
     def kv(self, pairs: Iterable[Tuple[str, str]],
            indent: str = "") -> "Doc":
-        self._lines.extend(kv_lines(pairs, indent, self.w))
-        return self
+        return self._add("kv", kv_lines(pairs, indent, self.w))
 
     def table(self, headers, body, **kw) -> "Doc":
         kw.setdefault("width_", self.w)
-        self._lines.extend(fit_table(headers, body, **kw))
-        return self
+        return self._add("table", fit_table(headers, body, **kw))
+
+    def legend(self, text: str) -> "Doc":
+        """The one or two lines that explain the table below them
+        (docs/output-style.md, Essentials first): verbatim, as line()."""
+        return self._verbatim("legend", text)
+
+    def act(self, text: str, cmd: Optional[str] = None) -> "Doc":
+        """An act-on line after the data: act(text, cmd)."""
+        return self._add("act", [act(text, cmd)])
+
+    def hint(self, cmd: str, what: str = "notes") -> "Doc":
+        """The closing pointer to the long form: details_hint(cmd, what)."""
+        return self._add("hint", [details_hint(cmd, what)])
 
     def message(self, kind: str, text: str, details=(),
                 prog: Optional[str] = None) -> "Doc":
         lines = message(kind, text, prog=prog, details=details,
                         width_=self.w)
-        self._lines.extend(lines)
-        if self.w > 0 and _entry_len(lines) > 1:
+        self._add("message", lines)
+        if self.w > 0 and _entry_len(lines) > 1 and not self.exact:
             # Shown: one blank line after a message of more than one
             # line (lines() drops it at the end, never doubles it).
-            self._lines.append("")
+            self._add("blank", [""])
         return self
 
-    def lines(self) -> List[str]:
-        """The lines: no leading or trailing blank line, never two blank
-        lines in a row, no trailing spaces."""
+    def _chunks(self, details: bool = False) -> List[Tuple[Any, str, bool]]:
+        return [c for _kind, chunks, long_form in self._ops
+                if details or not long_form for c in chunks]
+
+    def lines(self, details: bool = False) -> List[str]:
+        """The lines (`details`: the long form's too): no leading or
+        trailing blank line, never two blank lines in a row, no trailing
+        spaces. Exact: the lines as printed, as they are. A live Doc
+        refuses: it printed each op when it was added and kept none."""
+        if self.live:
+            raise ValueError("Doc.lines: a live Doc printed its lines and kept none")
+        if self.exact:
+            printed = "".join(str(t) + e for t, e, _f in self._chunks(details))
+            parts = printed.split("\n")
+            if parts[-1] == "":
+                parts.pop()
+            return parts
         out: List[str] = []
-        for ln in self._lines:
+        for ln, _end, _flush in self._chunks(details):
             ln = ln.rstrip()
             if not ln and (not out or not out[-1]):
                 continue
@@ -846,15 +1065,45 @@ class Doc:
             out.pop()
         return out
 
-    def text(self) -> str:
-        return "\n".join(self.lines())
+    def text(self, details: bool = False) -> str:
+        return "\n".join(self.lines(details))
 
-    def print(self, file=None) -> None:
+    def print(self, file=None, details: bool = False) -> None:
+        """The text to `file` (stdout by default): the blank line the
+        destination owes first when shown to a person (settle), then the
+        lines. Exact: each op's print() as it was, nothing settled. A
+        live Doc refuses: it printed each op when it was added."""
+        if self.live:
+            raise ValueError("Doc.print: a live Doc has printed its lines already")
         file = sys.stdout if file is None else file
+        if self.exact:
+            _emit(self._chunks(details), file)
+            return
         if self.w > 0:
             settle(file)
-        for ln in self.lines():
-            print(ln, file=file)
+        _print_lines(self.lines(details), file)
+
+
+def render(doc: Doc, *, as_json: bool = False, details: bool = False,
+           file=None) -> None:
+    """Print a report to `file` (stdout by default): `as_json`, its
+    `json` as `--json` prints it (json.dumps with `json_spec`'s keywords,
+    non-finite floats null when its `clean` is true, and a newline); else
+    its text (Doc.print; `details`: the long form). A `json_spec` whose
+    `clean` is not True or False (left out, None, 1) is refused
+    (ValueError), as no default would be safe: True turns a site's NaN
+    into null, False a `_json_out` site's null into NaN."""
+    file = sys.stdout if file is None else file
+    if as_json:
+        spec = dict(doc.json_spec)
+        if not isinstance(spec.get("clean"), bool):
+            raise ValueError("Doc.json_spec: `clean` must be True "
+                             "(non-finite floats as null) or False (as "
+                             "json.dumps writes them)")
+        payload = clean_json(doc.json) if spec.pop("clean") else doc.json
+        _print_lines([json.dumps(payload, **spec)], file)
+        return
+    doc.print(file, details=details)
 
 
 # ---------------------------------------------------------------- lint
@@ -1083,7 +1332,7 @@ def act_list(text: str, names: Sequence[str], cmd: Optional[str] = None,
 
 # ---------------------------------------------- one-line messages, folded
 # Set while a command's messages are shown one line each (tjs run's
-# console, and every --details command's default view: taxjson_run
+# console, and every --details command's default view: cli/main
 # _brief_messages): lib/stage_msg's say / emit_line and emit() here.
 CONCISE_ENV = "TAXJSON_RUN_CONCISE"
 # A message of one kind is shown this many times; the rest are counted
@@ -1150,3 +1399,97 @@ def fold_summary(file=None) -> None:
         room = max(20, w - len(head) - len(tail))
         quote = first if len(first) <= room else first[:room - 3] + "..."
         show([head + quote + tail], file)
+
+
+# Where a long captured one-liner splits into headline + detail: the
+# earliest clause break (an em-dash, a sentence end, a semicolon, or the
+# colon after a parenthesised subject) past the first _MIN_HEAD columns.
+_BREAKS = (" — ", ". ", "; ", "): ")
+# A headline shorter than this is not worth a split (the marker and the
+# topic alone).
+_MIN_HEAD = 40
+
+
+def split_message(text: str):
+    """(headline, rest) of a captured one-line message, or (text, '')."""
+    best = None
+    # A break inside a `code span` is no break: one past an odd number of
+    # backticks. Their positions, once (linear in the text, however many
+    # breaks an unclosed span holds).
+    ticks = [j for j, c in enumerate(text) if c == "`"]
+    # Nor is one inside parentheses (`(a trust's, s.104(13); the T3)`):
+    # the paren depth before each position, once.
+    depth, d = [], 0
+    for c in text:
+        depth.append(d)
+        d += (c == "(") - (c == ")")
+    depth.append(d)
+
+    def _inside(i: int) -> bool:
+        # (the `): ` break closes its group: judged after the paren)
+        j = i + 1 if text.startswith("): ", i) else i
+        return bool(bisect_left(ticks, i) % 2) or depth[j] > 0
+
+    for brk in _BREAKS:
+        i = text.find(brk, _MIN_HEAD)
+        while i >= 0 and _inside(i):
+            i = text.find(brk, i + 1)
+        if i >= 0 and (best is None or i < best[0]):
+            best = (i, brk)
+    if best is None:
+        return text, ""
+    i, brk = best
+    keep = 1 if brk in (". ", "): ") else 0
+    head = text[:i + keep]
+    rest = text[i + len(brk):].strip()
+    if not rest:
+        return text, ""
+    # The detail is a sentence of its own: capitalised — after a `; `
+    # only when it starts with a plain word (never an id or a `code`).
+    if rest[0].islower() and (brk != "; " or re.match(r"[a-z]+ ", rest)):
+        rest = rest[0].upper() + rest[1:]
+    return head, rest
+
+
+# Essentials first (docs/output-style.md): the run's console shows each
+# message as ONE line, its headline naming the command with the detail;
+# `tjs run --details` (and the captured .diag) keep the rest.
+_CMD_RE = re.compile(r"`((?:tjs|taxjson) [^`]+)`")
+
+
+def detail_command(texts: Iterable[str]) -> Optional[str]:
+    """The first `tjs ...` command a message's detail names (the
+    command that lists or fixes it), or None."""
+    for t in texts:
+        m = _CMD_RE.search(t or "")
+        if m:
+            return m.group(1)
+    return None
+
+
+def concise_line(text: str, details: Iterable[str] = (),
+                 width_: int = 0, cmd: Optional[str] = None) -> str:
+    """A message as one line: its headline (split_message) and, when the
+    headline names no command, ` — `<the command its detail names>``
+    (just `tjs <command>`, then `tjs <command>`, when the whole one
+    would not fit `width_`; the headline alone when none fits). `cmd`:
+    the command to name instead. `text` carries its label."""
+    if width_ > 0 and len(text) <= width_:
+        # It fits: the whole text is its one line.
+        head, rest = text, ""
+    else:
+        head, rest = split_message(text)
+    if "`taxjson " in head or "`tjs " in head:
+        return head
+    cmd = cmd or detail_command(([rest] if rest else []) + list(details))
+    if not cmd:
+        return head
+    full = f"{head} — `{cmd}`"
+    if width_ <= 0 or len(full) <= width_:
+        return full
+    for cand in (f"{head} — `{' '.join(cmd.split()[:2])}`",
+                 f"{head} — `tjs {' '.join(cmd.split()[1:2])}`"):
+        if len(cand) <= width_:
+            return cand
+    # The headline alone fits: one line (the command is in --details).
+    return head if len(head) <= width_ else cand

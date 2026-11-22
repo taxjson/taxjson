@@ -13,7 +13,7 @@ from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
-from taxjson.bin.taxjson_run import _raw_mixed_currency_symbols
+from taxjson.pipeline.inputs import _raw_mixed_currency_symbols
 
 
 def _tx(action, sym, cur, **kw):

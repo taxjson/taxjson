@@ -1,0 +1,202 @@
+{
+  "as_of": "2024-12-31",
+  "base_currency": "CAD",
+  "by_country": {
+    "CRYPTO": {
+      "gain": 519.96,
+      "income": 23.56,
+      "max_cost": 20349.7,
+      "year_end_cost": 6448.64
+    },
+    "USA": {
+      "gain": -295.38,
+      "income": 517.05,
+      "max_cost": 81466.97,
+      "year_end_cost": 12475.35
+    }
+  },
+  "canadian_issuer_symbols": [],
+  "cash_accounts": {
+    "crypto": "CRYPTO"
+  },
+  "cash_ledger_status": "not_computed",
+  "cash_not_counted": [],
+  "cash_unknown_cost": [
+    "USD cash (crypto)"
+  ],
+  "category_review_symbols": [],
+  "classification_conflicts": [],
+  "classification_status": "resolved",
+  "classification_unknown_cost_symbols": [],
+  "classification_unresolved_symbols": [],
+  "crypto_symbols": [
+    "BTC",
+    "ETH",
+    "USD cash"
+  ],
+  "custodians": {},
+  "deferred_wash_not_in_cost": {},
+  "detailed_threshold": 250000.0,
+  "expired_options_held": [],
+  "filing_required": null,
+  "filing_threshold": 100000.0,
+  "foreign_issuer_countries": {},
+  "foreign_issuer_symbols": [],
+  "full_history_wash": true,
+  "futures_symbols": [],
+  "gains_not_given": [],
+  "max_total_cost": 90333.5,
+  "max_total_cost_high": 90333.5,
+  "max_total_cost_high_at_least": 90333.5,
+  "max_total_cost_low": 90333.5,
+  "max_total_date": "2024-05-02",
+  "missing_history_applied": false,
+  "over_threshold_as_counted": false,
+  "properties": [
+    {
+      "category": 2,
+      "category_from": "listing",
+      "country": "USA",
+      "futures": false,
+      "gain": 84.65,
+      "income": 24.3,
+      "max_cost": 36463.37,
+      "symbol": "AAPL.US",
+      "unknown_acb": false,
+      "year_end_cost": 0.0
+    },
+    {
+      "category": 6,
+      "category_from": "crypto",
+      "country": "CRYPTO",
+      "futures": false,
+      "gain": 197.67,
+      "income": 0.0,
+      "max_cost": 13003.34,
+      "symbol": "BTC",
+      "unknown_acb": false,
+      "year_end_cost": 3250.83
+    },
+    {
+      "category": 6,
+      "category_from": "crypto",
+      "country": "CRYPTO",
+      "futures": false,
+      "gain": 322.29,
+      "income": 23.56,
+      "max_cost": 7346.36,
+      "symbol": "ETH",
+      "unknown_acb": false,
+      "year_end_cost": 3197.81
+    },
+    {
+      "category": 2,
+      "category_from": "listing",
+      "country": "USA",
+      "futures": false,
+      "gain": 132.3,
+      "income": 101.25,
+      "max_cost": 27001.35,
+      "symbol": "MSFT.US",
+      "unknown_acb": false,
+      "year_end_cost": 0.0
+    },
+    {
+      "category": 2,
+      "category_from": "listing",
+      "country": "USA",
+      "futures": false,
+      "gain": 0.0,
+      "income": 0.0,
+      "max_cost": 1999.35,
+      "symbol": "NVDA.US",
+      "unknown_acb": false,
+      "year_end_cost": 1941.3
+    },
+    {
+      "category": 2,
+      "category_from": "listing",
+      "country": "USA",
+      "futures": false,
+      "gain": 0.0,
+      "income": 337.5,
+      "max_cost": 6751.35,
+      "symbol": "PARN.US",
+      "unknown_acb": false,
+      "year_end_cost": 6751.35
+    },
+    {
+      "category": 2,
+      "category_from": "listing",
+      "country": "USA",
+      "futures": false,
+      "gain": -101.93,
+      "income": 54.0,
+      "max_cost": 8101.35,
+      "symbol": "QZQ.US",
+      "unknown_acb": false,
+      "year_end_cost": 3445.2
+    },
+    {
+      "category": 6,
+      "category_from": "derivative",
+      "country": "USA",
+      "futures": false,
+      "gain": -410.4,
+      "income": 0.0,
+      "max_cost": 812.7,
+      "symbol": "QZQ240920C00030000.US",
+      "unknown_acb": false,
+      "year_end_cost": 0.0
+    },
+    {
+      "category": 2,
+      "category_from": "listing",
+      "country": "USA",
+      "futures": false,
+      "gain": 0.0,
+      "income": 0.0,
+      "max_cost": 337.5,
+      "symbol": "SPNC.US",
+      "unknown_acb": false,
+      "year_end_cost": 337.5
+    },
+    {
+      "cash": true,
+      "cash_account": "crypto",
+      "cash_why": "no opening pool for crypto/coinbase USD \u2014 add `CASHOPEN 2024-01-01 USD <settled units> <cost in CAD> at=coinbase` (0 0 when it held none) to a .tt of crypto, or close 2023 with this ledger",
+      "category": 1,
+      "category_from": "cash",
+      "country": "CRYPTO",
+      "currency": "USD",
+      "futures": false,
+      "gain": 0.0,
+      "income": 0.0,
+      "max_cost": 0.0,
+      "symbol": "USD cash",
+      "unknown_acb": true,
+      "year_end_cost": 0.0
+    }
+  ],
+  "review_symbols": [
+    "BTC",
+    "ETH",
+    "USD cash"
+  ],
+  "schema_version": 1,
+  "scope": "books_only",
+  "scope_note": "on these books only: specified foreign property held outside them (a foreign bank account or cash held elsewhere, certificate shares, a foreign rental) is not counted and adds to the same threshold",
+  "short_only_symbols": [
+    "QZQ241220C00035000.US",
+    "QZQ250117C00040000.US"
+  ],
+  "simplified_method_available": null,
+  "tax_date_basis": "settle",
+  "total_settled": false,
+  "unknown_acb_symbols": [
+    "USD cash"
+  ],
+  "unused_overrides": [],
+  "year": 2024,
+  "year_complete": true
+}

@@ -38,7 +38,7 @@ def _pairs(entries: Iterable[Entry]):
 
 
 def _as_txs(txs: Iterable[Any]):
-    from taxjson.lib.core import TaxTransaction
+    from taxjson.model.transaction import TaxTransaction
     fields = TaxTransaction.__dataclass_fields__
     out = []
     for t in txs:
@@ -53,7 +53,7 @@ def tt_lines(txs: Iterable[Any], entries: Iterable[Entry], *,
     """{account: [OPENING ... cost=unknown lines]} the entries open on
     `txs` (TaxTransaction or row dicts). An entry that opens nothing (no
     rows, never short) gives no line."""
-    from taxjson.bin.taxjson_convert_tt import unknown_opening_text
+    from taxjson.lib.tt_format import unknown_opening_text
     from taxjson.lib.missing_history import synthesize_openings
     _o, log = synthesize_openings(_as_txs(txs), _pairs(entries),
                                   flag_stale=False, until=until)

@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 from _qa_project import project, tj
-from test_workflow_audit_fixes import QT_HEAD, QT_ROWS
+from _support.qt_trades import QT_HEAD, QT_ROWS
 
 from taxjson.lib import readiness as RD
 
@@ -74,10 +74,13 @@ class TestCli(unittest.TestCase):
                          + "2024-06-03,2024-06-05,Buy,ZZQ,ZZQ CORP,10,50.00,"
                            "-500.00,0,-500.00,USD,Trades,55500001,"
                            "Margin\n")                           # pii-ok
-            for cmd in ("sum", "form-export"):
-                r = _readiness(root, cmd)
-                self.assertFalse(r["complete"], cmd)
-                self.assertIn("run-state", {i["kind"] for i in r["issues"]})
+            # form-export refuses books older than the inputs (TJ-4305),
+            # and sum (TJ-4347: its readiness said run-state)
+            for cmd in ("form-export", "sum"):
+                r = tj(root, cmd, "--json", check=False)
+                self.assertEqual(r.returncode, 1, cmd)
+                self.assertEqual(r.stdout, "", cmd)
+                self.assertIn("older than the inputs", r.stderr, cmd)
 
     def test_money_the_us_engine_leaves_out(self):
         """The US twin of audit #101: rows under 1e-8 units carrying

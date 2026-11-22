@@ -47,7 +47,14 @@ import re
 from datetime import date as _date
 from typing import Any, Dict, List, Tuple
 
-from taxjson.lib.core import is_option_symbol, validate_staking_reward
+from taxjson.lib.tx_load import validate_staking_reward
+from taxjson.lib.option_symbols import is_option_symbol
+from taxjson.parsers.toolbox.masking import mask_id
+# The books' zero for a traded quantity (`taxjson.parsers.toolbox.assets`,
+# PLAN step 14), re-exported here.
+from taxjson.parsers.toolbox.assets import QTY_ZERO as QTY_ZERO
+from taxjson.lib.futures_prefixes import FUTURES_PREFIXES
+from taxjson.model import money as M
 
 # Actions a parser may emit. (DISALLOW is engine-internal and OPENING_BALANCE
 # comes from .tt starting-position files, but both are legal in a transaction
@@ -122,21 +129,16 @@ def _bad_number(v: Any) -> str:
         return 'not a number'
     return '' if math.isfinite(f) else 'not finite'
 # Market suffixes the toolkit understands: the market data's one venue
-# table (lib/markets; .VN was Canadian to the parsers but "unknown" here
+# table (lib/markets_data; .VN was Canadian to the parsers but "unknown" here
 # — audit A2-1077). Bare symbols (no dot) are legitimate crypto assets
 # and are not suffix-checked.
-from taxjson.lib.markets import known_suffixes as _known_sfx  # noqa: E402
+from taxjson.lib.markets_data import known_suffixes as _known_sfx  # noqa: E402
 KNOWN_SUFFIXES = _known_sfx()
 
-# The books' zero for a traded quantity: a BUYSELL under it has no
-# direction (the sign is the direction) and is refused. Parsers that can
-# meet a sub-zero quantity (a Kraken dust-sweep leg of a few
-# ten-billionths of a coin) leave the row out against this same value
-# (tax-logic CA-CRYPTO-11 / US-CRYPTO-07).
-QTY_ZERO = 1e-9
+# The books' zero for a traded quantity (QTY_ZERO, the toolbox's since PLAN
+# step 14, imported above): a BUYSELL under it has no direction and is
+# refused.
 _QTY_EPS = QTY_ZERO
-# Futures symbol prefixes (lib/futures.py).
-_FUTURES_PREFIXES = ('F:', '/', '\\')
 _MONEY_EPS = 0.005
 
 
@@ -151,8 +153,7 @@ ATTENTION_TAG = "ATTENTION: "
 
 
 def _masked_id(raw: Any) -> str:
-    s = str(raw or '').strip()
-    return f"{s[:2]}***" if s else ''
+    return mask_id(raw)
 
 
 def _who(tx: Dict[str, Any], i: int) -> str:
@@ -253,11 +254,11 @@ def validate_transactions(txs: List[Dict[str, Any]],
                     f"it: the parser should not emit it).")
             # A SELL may net negative: closing an option at 0.01 with a
             # 1.00+ commission brings in less than nothing, and the
-            # engine books those negative proceeds (core._trade_money).
+            # engine books those negative proceeds (engine _ca_trade_money).
             # Refusing them failed every `tjs run` on a routine
             # penny close (audit S017-00). A negative BUY is still wrong.
             _sym = str(tx.get('symbol') or '')
-            _fut = _sym.startswith(_FUTURES_PREFIXES)
+            _fut = _sym.startswith(FUTURES_PREFIXES)
             # A plain-futures BUY at a negative price RECEIVES cash: its
             # signed (negative) cost is the right money, and the
             # magnitude this rule used to force booked the loss as a
@@ -319,10 +320,10 @@ def validate_transactions(txs: List[Dict[str, Any]],
                         + abs(float(tx.get('fee') or 0.0)))
                 gap = abs(expected - abs(net))
                 if gap > fees + max(5.0, 0.02 * expected):
-                    msg = (f"{_who(tx, i)}: net_amount {net:,.2f} is far "
+                    msg = (f"{_who(tx, i)}: net_amount {M.shown(net, 2):,.2f} is far "
                            f"from qty*price"
                            f"{f'*{mult:g}' if mult != 1 else ''} = "
-                           f"{expected:,.2f} (±fees {fees:,.2f})")
+                           f"{M.shown(expected, 2):,.2f} (±fees {M.shown(fees, 2):,.2f})")
                     if declared > 0:
                         errors.append(f"{msg} — possible data typo; "
                                       f"silent wrong money if real")
@@ -352,7 +353,7 @@ def validate_transactions(txs: List[Dict[str, Any]],
         # (a Dec-31 sale then lands in the next year — S065-13).
         _bare = tx.get('symbol') or ''
         if (action == 'BUYSELL' and _bare and '.' not in _bare
-                and not _bare.startswith('F:')
+                and not _bare.startswith(FUTURES_PREFIXES)
                 and not is_option_symbol(_bare)
                 and tx.get('date_settle') and tx.get('date')
                 and tx['date_settle'] != tx['date']):
@@ -368,7 +369,7 @@ def validate_transactions(txs: List[Dict[str, Any]],
         if action == 'BUYSELL' and tx.get('date_settle') \
                 and abs(price) < _MONEY_EPS and abs(net) < _MONEY_EPS \
                 and is_option_symbol(_bare):
-            from taxjson.lib.core import parse_option_expiry
+            from taxjson.lib.option_symbols import parse_option_expiry
             _exp = parse_option_expiry(_bare)
             if _exp and str(tx['date_settle']) > _exp:
                 warnings.append(f"{_who(tx, i)}: the option expiry "
@@ -448,7 +449,8 @@ def render_schema_prompt() -> str:
         "symbols are OCC format (BASE + yymmdd + C/P + 8-digit strike) "
         "via format_occ_symbol.",
         "  - Rows you do not handle must be COUNTED, not silently "
-        "dropped: call self.count_skip('<category>') and let "
-        "emit_skip_summary report them.",
+        "dropped: classify answers Outcome.skip('<category>') (the "
+        "template counts it; never call count_skip for a row you "
+        "answer) and emit_skip_summary reports them.",
     ]
     return "\n".join(lines)

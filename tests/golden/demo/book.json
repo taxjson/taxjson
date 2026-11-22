@@ -1,0 +1,89 @@
+{
+ "kind": "project",
+ "run_dir": "2024",
+ "source": "tjs init --demo, frozen at v0.41.0; one NVDA sale price changed from the demo's, and the AAPL, MSFT, ABCD, RY and BTC sales lowered so no gain in a trace's # lines reaches 1,000 (the push gate reads them as comments); for its views (tests/_golden.py), [estimate] and [instalments] tables added; and (TJ-4920, the --json contract) --json views of update-tobase-map and, in 2025, years, years --diff, align, amt 2024 and align --write, last",
+ "views": [
+  "sum",
+  "sum --json",
+  "estimate",
+  "estimate --json",
+  "carryover",
+  "carryover --json",
+  "form-export",
+  "form-export --json",
+  "wash-sales",
+  "wash-sales --json",
+  "fx-cash",
+  "fx-cash --json",
+  "cash all --json",
+  "fx-cash --ledger v2 --events --json",
+  "divs-sum",
+  "divs-sum --json",
+  "trades-sum",
+  "trades-sum --json",
+  "option-yield",
+  "option-yield --json",
+  "stats",
+  "stats --json",
+  "list",
+  "list --json",
+  "edge-cases",
+  "edge-cases --json",
+  "ccd-sum",
+  "ccd-sum --json",
+  "leaps-sum",
+  "leaps-sum --json",
+  "fees-sum",
+  "fees-sum --json",
+  "spinoffs",
+  "spinoffs --json",
+  "amt",
+  "amt --json",
+  "slip-audit",
+  "slip-audit --json",
+  "t1135",
+  "t1135 --json",
+  "instalments",
+  "instalments --json",
+  "option-boundary",
+  "option-boundary --json",
+  "form-export --csv schedule3.csv",
+  "close-year --yes",
+  "check-filed",
+  "new-year 2025",
+  {
+   "cwd": "../2025",
+   "argv": "run --no-input",
+   "record": "output"
+  },
+  {
+   "cwd": "../2025",
+   "argv": "handoff"
+  },
+  {
+   "cwd": "../2025",
+   "argv": "handoff --json"
+  },
+  "update-tobase-map --json",
+  {
+   "cwd": "../2025",
+   "argv": "years --json"
+  },
+  {
+   "cwd": "../2025",
+   "argv": "years --diff 2024 2025 --json"
+  },
+  {
+   "cwd": "../2025",
+   "argv": "align --from 2024 --json"
+  },
+  {
+   "cwd": "../2025",
+   "argv": "amt 2024 --json"
+  },
+  {
+   "cwd": "../2025",
+   "argv": "align --from 2024 --write --all --json"
+  }
+ ]
+}

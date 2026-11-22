@@ -1,0 +1,20 @@
+{
+  "accounts_only_here": [],
+  "accounts_only_there": [],
+  "filed_year": null,
+  "files": [],
+  "here": "2025",
+  "keys": [],
+  "keys_not_changed": [],
+  "keys_set": [],
+  "map_lines_added": [],
+  "map_lines_skipped": [],
+  "map_only_here": [],
+  "map_only_there": [],
+  "schema_version": 1,
+  "there": "2024",
+  "tobase_only_here": [],
+  "tobase_only_there": [],
+  "warnings": [],
+  "written": false
+}

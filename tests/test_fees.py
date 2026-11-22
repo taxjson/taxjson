@@ -11,8 +11,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 def _write(dirp, name, brokerage, txs):
@@ -74,12 +75,13 @@ class TestFees(unittest.TestCase):
         self.assertAlmostEqual(b["median"], 6.0)         # median(-1, 6, 10)
         self.assertAlmostEqual(b["stock_fee"], 9.0)      # 10 + (-1)
         self.assertAlmostEqual(b["option_fee"], 6.0)
-        # per-share = stock fee / stock shares = 9 / 110
-        self.assertAlmostEqual(b["per_share"], 9.0 / 110.0)
+        # per-share = stock fee / stock shares = 9 / 110, printed at 6
+        # places (TJ-4930: a quotient's binary digits are no figure)
+        self.assertEqual(b["per_share"], 0.081818)
         # per-contract = option fee / contracts = 6 / 2
         self.assertAlmostEqual(b["per_contract"], 3.0)
         # %notional = all fees (all rows have notional>0) / total notional
-        self.assertAlmostEqual(b["pct_notional"], 15.0 / 3500.0 * 100)
+        self.assertEqual(b["pct_notional"], 0.428571)    # 15 / 3500 x 100
 
     def test_zero_notional_excluded_from_pct(self):
         with tempfile.TemporaryDirectory() as d:
@@ -214,6 +216,40 @@ class TestFees(unittest.TestCase):
         # (FUZZ-2026-07 #H).
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("No trading fees", r.stdout)
+
+
+def _no_token(token):
+    raise AssertionError(f"{token} is no JSON value")
+
+
+class TestFeesJsonContract(unittest.TestCase):
+    """`fees-sum --json` (= taxjson-fees-sum --json): the contract's
+    schema_version (lib/json_contract), and a NaN figure written as
+    null, as `_json_out` writes it: json.dumps' bare NaN is not JSON."""
+
+    def test_schema_version_and_a_nan_fee_as_null(self):
+        from taxjson.bin.taxjson_fees import render_json
+        from taxjson.lib.json_contract import SCHEMAS
+        nan = float("nan")
+        # A made-up bucket whose fee is not a number.
+        stats = {"trades": 1, "fee": nan, "fees": [nan], "notional_fee": 0.0,
+                 "notional": 0.0, "fee_stocks": nan, "shares": 10.0,
+                 "fee_options": 0.0, "contracts": 0.0}
+        bucket = {"base": stats, "cur": {"CAD": stats}}
+        info = {"files_read": 1, "rows": 1, "dups": 0, "no_id": 0,
+                "skipped": [], "zero_fee": []}
+        text = render_json({"ib": bucket}, bucket, info, to_curr="CAD",
+                           by_account=False, year=2026)
+        doc = json.loads(text, parse_constant=_no_token)
+        self.assertEqual(doc["schema_version"], SCHEMAS["fees-sum"])
+        self.assertIsNone(doc["total"]["total"])
+        self.assertIsNone(doc["total"]["by_currency"]["CAD"]["per_share"])
+        self.assertIsNone(doc["brokerages"]["ib"]["mean"])
+        self.assertEqual(doc["total"]["trades"], 1)
+        # The no-data document carries the number too.
+        empty = json.loads(render_json({}, {"total": 0.0}, info, to_curr=None,
+                                       by_account=False, year=2026))
+        self.assertEqual(empty["schema_version"], SCHEMAS["fees-sum"])
 
 
 if __name__ == "__main__":

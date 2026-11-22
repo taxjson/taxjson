@@ -1,0 +1,27 @@
+OPTION YIELD — planning numbers, tax year 2024 (2024-01-01 to 2024-12-31, 366 days)
+Planning numbers, not filing. WIN% = closed at a profit; YIELD = P/L / share cost (* strike notional), annualized.
+CLOSED      SERIES                   ACCOUNT  CUR  SIDE          QTY  HOW      DAYS  PREMIUM   CLOSE      P/L
+-------------------------------------------------------------------------------------------------------------
+2024-06-21  KELPQ240621C00008000.US  qt       USD  bought call     1  expired    18   -36.25    0.00   -36.25
+2024-08-01  QZQ240920C00030000.US    margin   USD  bought call     2  sold       92  -602.00  298.00  -304.00
+2024-12-20  QZQ241220C00035000.US    margin   USD  written call    1  expired    80   199.00    0.00   199.00
+
+OPEN AT 2024-12-31
+OPENED      SERIES                 ACCOUNT  CUR  SIDE          QTY  EXPIRY      DAYS  PREMIUM
+---------------------------------------------------------------------------------------------
+2024-11-15  QZQ250117C00040000.US  margin   USD  written call    1  2025-01-17    47   149.00
+
+SUMMARY
+UNDERLYING  CUR  WRITTEN  BOUGHT  RECEIVED    PAID  REALIZED  WIN%  OPEN  SHARES  SHARE COST     YIELD    ANNUAL
+----------------------------------------------------------------------------------------------------------------
+KELPQ.US    USD        0       1      0.00   36.25    -36.25    0%     0       0        0.00  -92.14%*  -91.88%*
+QZQ.US      USD        2       2    646.00  602.00   -105.00   33%     1     100    2,401.00    -4.37%    -4.36%
+
+UNDERLYING  ACCOUNT  SIDE          OPENED  NET CASH  REALIZED  WIN%    ANNUAL  CLOSED HOW
+-----------------------------------------------------------------------------------------
+KELPQ.US    qt       bought call        1    -36.25    -36.25    0%  -91.88%*  1 expired
+QZQ.US      margin   bought call        2   -304.00   -304.00    0%   -12.63%  2 sold
+QZQ.US      margin   written call       2    348.00    199.00  100%     8.27%  1 expired
+
+Realized, USD:  -141.25 on 4 contract(s) closed (1 at a profit: win rate 25%); net cash 7.75
+Yield, USD:     -5.79% on 2,440.34 of capital (the 2,401.00 cost of 100 share(s) held, and an average strike notional of 39.34 where none are), -5.77% annualized

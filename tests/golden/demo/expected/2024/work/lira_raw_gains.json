@@ -1,0 +1,204 @@
+{
+  "by_ticker": {
+    "TD.TO": {
+      "hold_days": [
+        245
+      ],
+      "total_cost": 8204.95,
+      "total_div": 204.0,
+      "total_gain": -309.9,
+      "total_pil": 0.0,
+      "total_proceeds": 7895.05,
+      "trade_count": 1
+    },
+    "XIU.TO": {
+      "hold_days": [
+        316
+      ],
+      "total_cost": 3200.0,
+      "total_div": 216.0,
+      "total_gain": 545.05,
+      "total_pil": 0.0,
+      "total_proceeds": 3745.05,
+      "trade_count": 1
+    }
+  },
+  "inventory": [
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-01-09",
+      "last_acq_settle": "2024-01-11",
+      "position_start_date": "2024-01-09",
+      "qty": 200.0,
+      "symbol": "XIU.TO",
+      "total_cost": 6400.0
+    },
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-10-15",
+      "last_acq_settle": "2024-10-16",
+      "position_start_date": "2024-10-15",
+      "qty": 150.0,
+      "symbol": "BCE.TO",
+      "total_cost": 7054.95
+    },
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-12-17",
+      "last_acq_settle": "2024-12-18",
+      "position_start_date": "2024-12-17",
+      "qty": 200.0,
+      "symbol": "ZAG.TO",
+      "total_cost": 2760.0
+    }
+  ],
+  "option_replacement_warnings": [],
+  "summary": {
+    "total_disallowed": 0,
+    "total_fees_by_currency": {
+      "CAD": {
+        "options": 0.0,
+        "stocks": 19.8,
+        "total": 19.8
+      }
+    },
+    "total_gain": 235.15,
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1
+  },
+  "transactions": [
+    {
+      "account": "lira",
+      "commission": 4.95,
+      "cost": 8204.95,
+      "currency": "CAD",
+      "date": "2024-09-10",
+      "date_settle": "2024-09-11",
+      "days_held": 245,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 0.0,
+      "gain": -309.9,
+      "grant": false,
+      "id": "1b24e6efb9df6ac7",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 7895.05,
+      "qty": 100.0,
+      "raw_gain": -309.9,
+      "replacement_lot_ids": [],
+      "symbol": "TD.TO",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "lira",
+      "commission": 4.95,
+      "cost": 3200.0,
+      "currency": "CAD",
+      "date": "2024-11-20",
+      "date_settle": "2024-11-21",
+      "days_held": 316,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 0.0,
+      "gain": 545.05,
+      "grant": false,
+      "id": "cd8e8b405f2caaa8",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 3745.05,
+      "qty": 100.0,
+      "raw_gain": 545.05,
+      "replacement_lot_ids": [],
+      "symbol": "XIU.TO",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "lira",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "CAD",
+      "date": "2024-04-02",
+      "date_settle": "2024-04-02",
+      "dividend": 69.0,
+      "gain": 0.0,
+      "id": "d8b754f8b8274164",
+      "proceeds": 0.0,
+      "qty": 300.0,
+      "symbol": "XIU.TO",
+      "time": "00:00:00"
+    },
+    {
+      "account": "lira",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "CAD",
+      "date": "2024-04-30",
+      "date_settle": "2024-04-30",
+      "dividend": 102.0,
+      "gain": 0.0,
+      "id": "73339788688a4038",
+      "proceeds": 0.0,
+      "qty": 100.0,
+      "symbol": "TD.TO",
+      "time": "00:00:00"
+    },
+    {
+      "account": "lira",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "CAD",
+      "date": "2024-07-03",
+      "date_settle": "2024-07-03",
+      "dividend": 72.0,
+      "gain": 0.0,
+      "id": "36bb7f4ef06b8f65",
+      "proceeds": 0.0,
+      "qty": 300.0,
+      "symbol": "XIU.TO",
+      "time": "00:00:00"
+    },
+    {
+      "account": "lira",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "CAD",
+      "date": "2024-07-31",
+      "date_settle": "2024-07-31",
+      "dividend": 102.0,
+      "gain": 0.0,
+      "id": "c2fa0488fced34b6",
+      "proceeds": 0.0,
+      "qty": 100.0,
+      "symbol": "TD.TO",
+      "time": "00:00:00"
+    },
+    {
+      "account": "lira",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "CAD",
+      "date": "2024-10-02",
+      "date_settle": "2024-10-02",
+      "dividend": 75.0,
+      "gain": 0.0,
+      "id": "e938a549d7a7b82d",
+      "proceeds": 0.0,
+      "qty": 300.0,
+      "symbol": "XIU.TO",
+      "time": "00:00:00"
+    }
+  ],
+  "wash_sales": []
+}

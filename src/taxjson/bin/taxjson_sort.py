@@ -20,7 +20,10 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from taxjson.lib.brokerages.base import source_identity
 from taxjson.lib.cli_diag import guard_main
-from taxjson.lib.core import TaxTransaction, load_transactions
+from taxjson.lib import out as _out
+from taxjson.model.transaction import TaxTransaction
+from taxjson.lib.tx_load import load_transactions
+from taxjson.model import money as M
 
 PROG = "taxjson-sort"
 
@@ -393,7 +396,7 @@ def _fill_income_facts(plan: DedupPlan, rows, k: int, i: int,
     sorted first decided them, and a known Canadian dealer was lost
     when the plainer statement came first (backlog TJ-0980). A fact the
     two copies state differently keeps k's, with a note."""
-    from taxjson.lib.core import INCOME_FACT_FIELDS
+    from taxjson.model.transaction import INCOME_FACT_FIELDS
     have = plan.fill.setdefault(k, {})
     for f in INCOME_FACT_FIELDS:
         new = _row_get(rows[i], f, "") or ""
@@ -434,7 +437,7 @@ def _tt_near_duplicates(rows, srcs, keep, is_tt) -> List[str]:
         key = (str(_row_get(rows[i], "action", "") or "").upper(),
                str(_row_get(rows[i], "symbol", "") or "").upper(),
                str(_row_get(rows[i], "currency", "") or "").upper(),
-               round(_num(_row_get(rows[i], "quantity", 0)), 6))
+               M.units(_num(_row_get(rows[i], "quantity", 0)), 6))
         if is_tt(s):
             tts.append((i, key))
         else:
@@ -458,8 +461,8 @@ def _tt_near_duplicates(rows, srcs, keep, is_tt) -> List[str]:
                 continue
             out.append(
                 f"dedup: {srcs[i]} line ({_row_brief(t)}, "
-                f"{t_net:,.2f}) repeats the exported row in {srcs[j]} "
-                f"({_row_brief(e)}, {e_net:,.2f}) — same symbol, "
+                f"{M.shown(t_net, 2):,.2f}) repeats the exported row in {srcs[j]} "
+                f"({_row_brief(e)}, {M.shown(e_net, 2):,.2f}) — same symbol, "
                 f"quantity and money on the same trade/settle date, but "
                 f"not the same id, so BOTH are booked. If the .tt line "
                 f"is that trade, delete it.")
@@ -540,7 +543,7 @@ def _doc_metadata_blocks(text: str) -> List[Any]:
     """The metadata of a stage document and of every source it merged
     (metadata.sources[].original_metadata); [] when absent or
     unreadable."""
-    from taxjson.lib.core import strip_json_comments
+    from taxjson.lib.tx_load import strip_json_comments
     try:
         doc = json.loads(strip_json_comments(text))
     except ValueError:
@@ -572,7 +575,7 @@ def main():
     parser.add_argument("--no-validation", action="store_true", help="Skip validation")
     args = parser.parse_args()
 
-    # Load input through the shared loader funnel (file: core.load_
+    # Load input through the shared loader funnel (file: tx_load.load_
     # transactions; stdin: the pipeline's stdin loader) — `#` comments,
     # qty alias, type guards; a malformed row is a clean error.
     # The per-file broker accounts are read whether or not this pass
@@ -643,7 +646,7 @@ def main():
             ("source_brokers", meta_brokers)) if v}
 
     json.dump(output_data, sys.stdout, indent=2, sort_keys=True)
-    print()  # Add final newline
+    _out.put("")  # Add final newline
 
 
 if __name__ == "__main__":

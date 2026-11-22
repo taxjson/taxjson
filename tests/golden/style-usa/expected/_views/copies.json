@@ -1,0 +1,23 @@
+{
+ "filed/2024/reports/ccd.rpt": "reports/ccd.rpt",
+ "filed/2024/reports/crosslistings.rpt": "reports/crosslistings.rpt",
+ "filed/2024/reports/crypto.sum": "reports/crypto.sum",
+ "filed/2024/reports/crypto_holdings.toml": "reports/crypto_holdings.toml",
+ "filed/2024/reports/fees.rpt": "reports/fees.rpt",
+ "filed/2024/reports/leaps.rpt": "reports/leaps.rpt",
+ "filed/2024/reports/margin.sum": "reports/margin.sum",
+ "filed/2024/reports/margin_holdings.toml": "reports/margin_holdings.toml",
+ "filed/2024/reports/margin_wash.sum": "reports/margin_wash.sum",
+ "filed/2024/reports/qt.sum": "reports/qt.sum",
+ "filed/2024/reports/qt_holdings.toml": "reports/qt_holdings.toml",
+ "filed/2024/reports/qt_wash.sum": "reports/qt_wash.sum",
+ "filed/2024/reports/roth.sum": "reports/roth.sum",
+ "filed/2024/reports/roth_holdings.toml": "reports/roth_holdings.toml",
+ "filed/2024/reports/run_summary.json": "reports/run_summary.json",
+ "filed/2024/reports/wash_radar_COMBINED.json": "reports/wash_radar_COMBINED.json",
+ "filed/2024/reports/wash_radar_COMBINED.rpt": "reports/wash_radar_COMBINED.rpt",
+ "filed/2024/reports/wash_radar_margin.json": "reports/wash_radar_margin.json",
+ "filed/2024/reports/wash_radar_margin.rpt": "reports/wash_radar_margin.rpt",
+ "filed/2024/reports/wash_radar_qt.json": "reports/wash_radar_qt.json",
+ "filed/2024/reports/wash_radar_qt.rpt": "reports/wash_radar_qt.rpt"
+}

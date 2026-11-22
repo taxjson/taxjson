@@ -1,0 +1,25 @@
+OPEN POSITIONS — CAD, as of the latest data in the books (2024-12-31)
+COST: book cost in CAD after ticker.map, basis: wash-adjusted; DEFERRED: denied losses in it.
+ACCOUNT  SYMBOL                    QTY       COST    COST/SH  DEFERRED  SINCE       NOTE
+----------------------------------------------------------------------------------------------------
+crypto   BTC                      0.05   3,250.83  65,016.68         -  2024-01-18  -
+crypto   ETH                    0.6552   3,197.81   4,880.66         -  2024-03-05  -
+margin   GHOSTQ.TO                 -40    -590.05      14.75         -  2024-04-15  missing history?
+margin   NVDA.US                    10   1,941.30     194.13    117.45  2024-12-05  -
+margin   OLDCO.US                  -50  -1,348.65      26.97         -  2024-04-01  missing history?
+margin   PARN.US                   100   6,751.35      67.51         -  2024-02-01  -
+margin   QZQ.US                    100   3,445.20      34.45    203.85  2024-09-20  -
+margin   QZQ250117C00040000.US      -1    -201.15       2.01         -  2024-11-15  -
+margin   SAMPA.TO                  100   3,929.85      39.30    519.90  2024-11-20  -
+margin   SPNC.US                    10     337.50      33.75         -  2024-06-03  -
+qt       SHOP.TO                    30   2,854.95      95.16         -  2024-12-10  -
+rrsp     AAPL.US                    75  18,225.00     243.00         -  2024-01-10  -
+rrsp     SHOP.TO                    30   2,854.95      95.16         -  2024-12-11  -
+tfsa     ENB.TO                    200  11,009.95      55.05         -  2024-11-05  -
+tfsa     QZQ.US                     50   1,660.43      33.21         -  2024-09-25  -
+tfsa     RY.TO                      50   6,673.30     133.47         -  2024-01-12  -
+
+16 position(s), total book cost 63,992.57 CAD
+! 2 short position(s) with no purchase in your files (missing history?) — tjs list --negative
+DEFERRED in the cost:  841.20 CAD of denied superficial losses (s.54)
+More: tjs list --details (notes)

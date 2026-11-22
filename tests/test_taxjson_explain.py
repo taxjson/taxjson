@@ -44,6 +44,11 @@ class TestGainMatches(unittest.TestCase):
     def test_skips_dividends(self):
         self.assertFalse(gain_matches(self._gain(action='DIVIDEND'), _args()))
 
+    def test_skips_payments_in_lieu(self):
+        """TJ-2784: a payment in lieu is an income row, no gain to explain."""
+        self.assertFalse(gain_matches(self._gain(action='DIVIDEND_IN_LIEU'), _args()))
+        self.assertTrue(gain_matches(self._gain(action=None), _args()))
+
     def test_symbol_prefix_match(self):
         self.assertTrue(gain_matches(self._gain(), _args(symbol='AAPL')))
         self.assertTrue(gain_matches(self._gain(), _args(symbol='AAPL.US')))

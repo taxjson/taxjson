@@ -1,0 +1,22 @@
+hand    BUYSELL          2023-06-05 10:00:00 SAMPQ241231C00005000.US 1    CAD    0.5         50.00 0.00
+rbc     BUYSELL          2024-11-04 09:30:00 SAMPR.US                12   USD    10         120.00 0.00
+hand    ASSIGN           2024-12-27 16:00:00 SAMPQ241231C00005000.US -1   CAD    0            0.00 0.00
+hand    OPENING          2024-12-31 SAMPQ.US 50                      CAD  275.00 2023-06-05
+hand    BUYSELL          2025-01-03 10:00:00 SAMPQ.US                100  CAD    5          500.00 0.00
+margin2 BUYSELL          2025-01-15 10:00:00 SAMPLD.US               10   USD    20         201.00 1.00
+margin  BUYSELL          2025-02-03 10:00:00 F:SAMPLMH6.US           1    USD    20         101.00 1.00 x5
+hand    BUYSELL          2025-02-10 10:00:00 SAMPQ.US                -150 CAD    6          900.00 0.00
+margin2 BUYSELL          2025-02-10 10:00:00 F:SAMPLMH6.US           1    USD    24         121.00 1.00 x5
+margin  BUYSELL          2025-03-03 10:00:00 F:SAMPLMH6.US           -1   USD    26         129.00 1.00 x5
+margin2 BUYSELL          2025-03-10 10:00:00 F:SAMPLMH6.US           -1   USD    25         124.00 1.00 x5
+rbc     BUYSELL          2025-03-17 09:30:00 SAMPR.US                -12  USD    10.5       126.00 0.00 corp=20250317-sampr-sampt-1b4d election=taxable_disposition cash=6:USD:@2025-03-20
+rbc     BUYSELL          2025-03-17 09:30:01 SAMPT.US                12   USD    10         120.00 0.00 corp=20250317-sampr-sampt-1b4d election=taxable_disposition
+margin  BUYSELL          2025-03-18 10:00:00 SAMPLA.US               -15  USD    40         598.50 1.50
+margin2 ADJUST           2025-06-30 09:30:00 SAMPLD.US               USD  -3.00                         issuer=CA type=roc
+margin2 DIVIDEND_IN_LIEU 2025-09-30 09:30:00 SAMPLD.US               0    USD    0            2.00      issuer=CA
+rbc     BUYSELL          2025-11-03 09:30:00 SAMPT.US                -12  USD    11         132.00 0.00
+margin2 BUYSELL          2025-11-14 10:00:00 SAMPLD.US               -10  USD    21         209.00 1.00
+
+TOTAL BUY:              825.00 CAD, 663.00 USD
+TOTAL SELL:             900.00 CAD, 1,318.50 USD
+TOTAL DIVIDEND IN LIEU: 2.00 USD

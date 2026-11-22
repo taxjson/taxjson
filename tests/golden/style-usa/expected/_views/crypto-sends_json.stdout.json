@@ -1,0 +1,49 @@
+{
+  "accounts": {
+    "crypto": {
+      "arrival_ids": [],
+      "arrival_orphans": [],
+      "arrivals": [],
+      "cross_account_moves": [],
+      "manifest": "<project>/inputs/crypto/sends.json",
+      "matched": 0,
+      "network_fees": [],
+      "orphans": [],
+      "overridden": [],
+      "repeated_hour": [],
+      "sends": [
+        {
+          "account": "crypto",
+          "auto": false,
+          "date": "2024-09-01",
+          "decision": null,
+          "exchange": "coinbase",
+          "fair_value": {
+            "currency": "USD",
+            "price": 2500.0,
+            "source": "Coinbase spot price on the send row (USD)",
+            "value": 250.0
+          },
+          "fee_booked": 0.0,
+          "fx": null,
+          "id": "cb-20240901T080000-ETH-0.1",
+          "kind": "Send",
+          "note": "",
+          "quantity": 0.1,
+          "ref": "CB***",
+          "stable": false,
+          "summary": "Coinbase Send 2024-09-01 08:00:00 0.1 ETH",
+          "symbol": "ETH",
+          "time": "08:00:00",
+          "tt": "BUYSELL 2024-09-01 08:00:00 ETH -0.1 USD 2500 250.00 0",
+          "unpaired": false
+        }
+      ],
+      "tt_file": "<project>/inputs/crypto/crypto_sends.tt",
+      "undecided": 1
+    }
+  },
+  "base_currency": "USD",
+  "country": "usa",
+  "schema_version": 1
+}

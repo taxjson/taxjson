@@ -1,0 +1,18 @@
+{
+  "basis": "settle",
+  "boundary": [],
+  "carry": [],
+  "double": [],
+  "missed": [],
+  "notes": [
+    "The 2024 record holds taxjson's own dispositions. If that return was prepared with another tool, re-close 2024 with --filed-dispositions so doubles are checked against what was actually filed."
+  ],
+  "partial": [],
+  "positions": [],
+  "problems": 0,
+  "record": "<project>/2025/../2024/filed/2024.json",
+  "record_basis": "settle",
+  "schema_version": 1,
+  "timing": [],
+  "year": 2024
+}

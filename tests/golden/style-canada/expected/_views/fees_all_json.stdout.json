@@ -1,0 +1,347 @@
+{
+  "rows": [
+    {
+      "account": "margin",
+      "action": "BUYSELL",
+      "currency": "CAD",
+      "date": "2024-01-10",
+      "fee": 9.95,
+      "symbol": "SAMPA.TO"
+    },
+    {
+      "account": "tfsa",
+      "action": "BUYSELL",
+      "currency": "CAD",
+      "date": "2024-01-12",
+      "fee": 9.95,
+      "symbol": "RY.TO"
+    },
+    {
+      "account": "qt",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-01-15",
+      "fee": 4.95,
+      "symbol": "AAPL.US"
+    },
+    {
+      "account": "crypto",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-01-18",
+      "fee": 17.2,
+      "symbol": "BTC"
+    },
+    {
+      "account": "margin",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-02-01",
+      "fee": 1.0,
+      "symbol": "PARN.US"
+    },
+    {
+      "account": "crypto",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-02-10",
+      "fee": 8.4,
+      "symbol": "BTC"
+    },
+    {
+      "account": "margin",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-02-12",
+      "fee": 1.0,
+      "symbol": "MSFT.US"
+    },
+    {
+      "account": "margin",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-03-01",
+      "fee": 1.0,
+      "symbol": "QZQ.US"
+    },
+    {
+      "account": "crypto",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-03-05",
+      "fee": 15.2,
+      "symbol": "ETH"
+    },
+    {
+      "account": "qt",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-03-20",
+      "fee": 4.95,
+      "symbol": "AAPL.US"
+    },
+    {
+      "account": "margin",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-04-01",
+      "fee": 1.0,
+      "symbol": "OLDCO.US"
+    },
+    {
+      "account": "margin",
+      "action": "BUYSELL",
+      "currency": "CAD",
+      "date": "2024-04-15",
+      "fee": 9.95,
+      "symbol": "GHOSTQ.TO"
+    },
+    {
+      "account": "tfsa",
+      "action": "BUYSELL",
+      "currency": "CAD",
+      "date": "2024-04-22",
+      "fee": 9.95,
+      "symbol": "RY.TO"
+    },
+    {
+      "account": "margin",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-05-01",
+      "fee": 2.0,
+      "symbol": "QZQ240920C00030000.US"
+    },
+    {
+      "account": "rrsp",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-05-08",
+      "fee": 4.95,
+      "symbol": "AAPL.US"
+    },
+    {
+      "account": "qt",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-05-10",
+      "fee": 4.95,
+      "symbol": "AAPL.US"
+    },
+    {
+      "account": "crypto",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-05-22",
+      "fee": 6.5,
+      "symbol": "BTC"
+    },
+    {
+      "account": "crypto",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-06-15",
+      "fee": 9.1,
+      "symbol": "ETH"
+    },
+    {
+      "account": "margin",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-06-18",
+      "fee": 1.0,
+      "symbol": "MSFT.US"
+    },
+    {
+      "account": "margin",
+      "action": "FEE",
+      "currency": "USD",
+      "date": "2024-06-30",
+      "fee": 10.0,
+      "symbol": "CASH"
+    },
+    {
+      "account": "margin",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-07-10",
+      "fee": 1.0,
+      "symbol": "NVDA.US"
+    },
+    {
+      "account": "margin",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-08-01",
+      "fee": 2.0,
+      "symbol": "QZQ240920C00030000.US"
+    },
+    {
+      "account": "margin",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-09-10",
+      "fee": 1.0,
+      "symbol": "QZQ.US"
+    },
+    {
+      "account": "tfsa",
+      "action": "BUYSELL",
+      "currency": "CAD",
+      "date": "2024-09-10",
+      "fee": 9.95,
+      "symbol": "RY.TO"
+    },
+    {
+      "account": "margin",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-09-20",
+      "fee": 1.0,
+      "symbol": "QZQ.US"
+    },
+    {
+      "account": "tfsa",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-09-25",
+      "fee": 4.95,
+      "symbol": "QZQ.US"
+    },
+    {
+      "account": "margin",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-10-01",
+      "fee": 1.0,
+      "symbol": "QZQ241220C00035000.US"
+    },
+    {
+      "account": "crypto",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-10-08",
+      "fee": 19.6,
+      "symbol": "BTC"
+    },
+    {
+      "account": "margin",
+      "action": "BUYSELL",
+      "currency": "CAD",
+      "date": "2024-11-01",
+      "fee": 9.95,
+      "symbol": "SAMPA.TO"
+    },
+    {
+      "account": "qt",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-11-05",
+      "fee": 4.95,
+      "symbol": "AAPL.US"
+    },
+    {
+      "account": "tfsa",
+      "action": "BUYSELL",
+      "currency": "CAD",
+      "date": "2024-11-05",
+      "fee": 9.95,
+      "symbol": "ENB.TO"
+    },
+    {
+      "account": "crypto",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-11-08",
+      "fee": 9.9,
+      "symbol": "BTC"
+    },
+    {
+      "account": "margin",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-11-15",
+      "fee": 1.0,
+      "symbol": "QZQ250117C00040000.US"
+    },
+    {
+      "account": "margin",
+      "action": "BUYSELL",
+      "currency": "CAD",
+      "date": "2024-11-20",
+      "fee": 9.95,
+      "symbol": "SAMPA.TO"
+    },
+    {
+      "account": "margin",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-11-20",
+      "fee": 1.0,
+      "symbol": "NVDA.US"
+    },
+    {
+      "account": "rrsp",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-11-21",
+      "fee": 9.75,
+      "symbol": "ABCD270219C00045000.US"
+    },
+    {
+      "account": "crypto",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-12-03",
+      "fee": 5.46,
+      "symbol": "ETH"
+    },
+    {
+      "account": "margin",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-12-05",
+      "fee": 1.0,
+      "symbol": "NVDA.US"
+    },
+    {
+      "account": "qt",
+      "action": "BUYSELL",
+      "currency": "CAD",
+      "date": "2024-12-10",
+      "fee": 4.95,
+      "symbol": "SHOP.TO"
+    },
+    {
+      "account": "rrsp",
+      "action": "BUYSELL",
+      "currency": "CAD",
+      "date": "2024-12-11",
+      "fee": 4.95,
+      "symbol": "SHOP.TO"
+    },
+    {
+      "account": "rrsp",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-12-12",
+      "fee": 10.0,
+      "symbol": "ABCD270219C00045000.US"
+    },
+    {
+      "account": "crypto",
+      "action": "BUYSELL",
+      "currency": "USD",
+      "date": "2024-12-15",
+      "fee": 7.8,
+      "symbol": "ETH"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "all history",
+  "totals": {
+    "CAD": 89.5,
+    "USD": 174.61
+  },
+  "unlisted_small_fees": 0
+}

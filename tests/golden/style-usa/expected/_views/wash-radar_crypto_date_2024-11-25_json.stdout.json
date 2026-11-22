@@ -1,0 +1,13 @@
+{
+  "account": "crypto",
+  "as_of_date": "<stamp>",
+  "country": "usa",
+  "generated_at": "<stamp>",
+  "include_all": false,
+  "not_applicable": "crypto is a crypto account of a US project \u2014 the wash-sale rule (\u00a71091) does not apply to it, so there is nothing to check.",
+  "rows_scoped": true,
+  "schema_version": 1,
+  "scope_note": "Scope: these verdicts cover this project's accounts only. A purchase by your spouse or by a corporation you control within 30 days before or after a loss sale also makes it a wash sale (\u00a71091; IRS Pub. 550) \u2014 those accounts are not in the project, so check them yourself.",
+  "sections": [],
+  "similar": []
+}

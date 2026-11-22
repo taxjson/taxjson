@@ -26,6 +26,7 @@ from taxjson.lib.corp_actions import (
     _snap_qty_to_whole_shares,
 )
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 
 def _event(**kwargs):
@@ -92,7 +93,7 @@ class TestSnapHelper(unittest.TestCase):
         self.assertEqual(frac, 0.0)
 
 
-@rule("CA-CORP-05")
+@rule(R.CA_CORP_05)
 class TestMergerTaxableSnap(unittest.TestCase):
     def test_fractional_residue_snapped(self):
         """The motivating case: ABG.TO 1-for-16 merger leaving

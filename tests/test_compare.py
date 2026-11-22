@@ -22,8 +22,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 _TOML = ('[settings]\nyear = 2024\ncountry = "canada"\n'
          'base_currency = "CAD"\nsource_currencies = []\n'

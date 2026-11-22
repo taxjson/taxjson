@@ -1,0 +1,10 @@
+CUSTODY TRANSFERS — evidence, not tax events
+WHERE: sidecar = kept out of the books, book = kept in; IN_BOOKS: how a transfer-in is booked.
+DATE        ACCOUNT  SYMBOL    QTY  TYPE      VALUE  FEE  CUR  WHERE    IN_BOOKS
+--------------------------------------------------------------------------------
+2024-05-01  margin   XYZQ.US    30  ACATS  1,500.00    -  USD  sidecar  NO_COST
+2024-09-01  crypto   ETH      -0.1  Send     250.00    -  USD  sidecar  -
+
+2 transfer row(s).
+! 1 transfer-in(s) with no cost (XYZQ.US) — tjs transfers --details
+More: tjs transfers --details (what each IN_BOOKS value means)

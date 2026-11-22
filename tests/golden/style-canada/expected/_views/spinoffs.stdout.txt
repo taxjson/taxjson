@@ -1,0 +1,10 @@
+SPIN-OFFS (1)
+
+2024-06-03  margin  PARN.US -> SPNC.US  0.1 new per share (1 for 10)
+  election:    taxable_deemed_dividend
+  value used:  25.00 USD/share (the broker's value)
+  booked:      income 337.50 CAD, 10 new shares costing 337.50 CAD
+  held now:    10
+  - default treatment: a dividend equal to the new shares' fair market value, which is also their cost
+
+Every taxable spin-off is booked with a value.

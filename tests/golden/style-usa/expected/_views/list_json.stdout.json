@@ -1,0 +1,171 @@
+{
+  "as_of": "2024-12-31",
+  "basis": "wash-adjusted",
+  "currency": "USD",
+  "rows": [
+    {
+      "account": "crypto",
+      "cost": 3256.5,
+      "cost_per_share": 65130.0,
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-05-22",
+      "missing_history_suspect": false,
+      "qty": 0.05,
+      "since": "2024-05-22",
+      "symbol": "BTC",
+      "unknown_cost": false
+    },
+    {
+      "account": "crypto",
+      "cost": 2655.3,
+      "cost_per_share": 3507.1943,
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-10-15",
+      "missing_history_suspect": false,
+      "qty": 0.7571000000000001,
+      "since": "2024-06-15",
+      "symbol": "ETH",
+      "unknown_cost": false
+    },
+    {
+      "account": "crypto",
+      "cost": 8.9,
+      "cost_per_share": 1.0,
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-11-04",
+      "missing_history_suspect": false,
+      "qty": 8.9,
+      "since": "2024-08-01",
+      "symbol": "USDC",
+      "unknown_cost": false
+    },
+    {
+      "account": "margin",
+      "cost": -590.05,
+      "cost_per_share": 14.7512,
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-04-15",
+      "missing_history_suspect": true,
+      "qty": -40.0,
+      "since": "2024-04-15",
+      "symbol": "GHOSTQ.US",
+      "unknown_cost": false
+    },
+    {
+      "account": "margin",
+      "cost": 1433.0,
+      "cost_per_share": 143.3,
+      "deferred_wash": 82.0,
+      "last_acq_date": "2024-12-05",
+      "missing_history_suspect": false,
+      "qty": 10.0,
+      "since": "2024-12-05",
+      "symbol": "NVDA.US",
+      "unknown_cost": false
+    },
+    {
+      "account": "margin",
+      "cost": -999.0,
+      "cost_per_share": 19.98,
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-04-01",
+      "missing_history_suspect": true,
+      "qty": -50.0,
+      "since": "2024-04-01",
+      "symbol": "OLDCO.US",
+      "unknown_cost": false
+    },
+    {
+      "account": "margin",
+      "cost": 5001.0,
+      "cost_per_share": 50.01,
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-02-01",
+      "missing_history_suspect": false,
+      "qty": 100.0,
+      "since": "2024-02-01",
+      "symbol": "PARN.US",
+      "unknown_cost": false
+    },
+    {
+      "account": "margin",
+      "cost": 2602.0,
+      "cost_per_share": 26.02,
+      "deferred_wash": 201.0,
+      "last_acq_date": "2024-09-20",
+      "missing_history_suspect": false,
+      "qty": 100.0,
+      "since": "2024-09-20",
+      "symbol": "QZQ.US",
+      "unknown_cost": false
+    },
+    {
+      "account": "margin",
+      "cost": -149.0,
+      "cost_per_share": 1.49,
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-11-15",
+      "missing_history_suspect": false,
+      "qty": -1.0,
+      "since": "2024-11-15",
+      "symbol": "QZQ250117C00040000.US",
+      "unknown_cost": false
+    },
+    {
+      "account": "margin",
+      "cost": 3929.85,
+      "cost_per_share": 39.2985,
+      "deferred_wash": 519.9,
+      "last_acq_date": "2024-11-20",
+      "missing_history_suspect": false,
+      "qty": 100.0,
+      "since": "2024-11-20",
+      "symbol": "SAMPA.US",
+      "unknown_cost": false
+    },
+    {
+      "account": "margin",
+      "cost": 250.0,
+      "cost_per_share": 25.0,
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-06-03",
+      "missing_history_suspect": false,
+      "qty": 10.0,
+      "since": "2024-06-03",
+      "symbol": "SPNC.US",
+      "unknown_cost": false
+    },
+    {
+      "account": "roth",
+      "cost": 1229.95,
+      "cost_per_share": 24.599,
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-09-25",
+      "missing_history_suspect": false,
+      "qty": 50.0,
+      "since": "2024-09-25",
+      "symbol": "QZQ.US",
+      "unknown_cost": false
+    },
+    {
+      "account": "roth",
+      "cost": 0.0,
+      "cost_per_share": 0.0,
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-02-15",
+      "missing_history_suspect": false,
+      "qty": 20.0,
+      "since": "2024-02-15",
+      "symbol": "SAMPB.US",
+      "unknown_cost": false
+    }
+  ],
+  "schema_version": 1,
+  "totals": {
+    "book_cost": 18628.45,
+    "deferred_wash": 802.9,
+    "positions": 13,
+    "unknown_cost_positions": 0
+  },
+  "year": "2024"
+}

@@ -1,0 +1,11 @@
+line,proceeds_line,gain_line,property,units,symbol,acq_year,proceeds,acb,outlays,gain,denied,notes
+,10689,10690,shares,150.0,AAPL.US,2024,36652.5,36456.68,13.37,182.45,0.0,
+,10689,10690,shares,50.0,MSFT.US,2024,27135.0,27001.35,1.35,132.3,0.0,
+,13199,13200,shares,75.0,AAPL.US,2024,18225.0,18228.34,6.68,-10.02,0.0,
+,13199,13200,shares,20.0,INTC.US,2024,553.5,552.15,1.35,0.0,394.2,superficial loss 394.20 PERMANENTLY denied (replacement in a registered account or bought by an affiliated person — no ACB addition on this return; an affiliated person adds it to their own ACB)
+,13199,13200,shares,10.0,NVDA.US,2024,1883.25,1881.9,1.35,0.0,117.45,superficial loss 117.45 denied: ACB shown reduced by it; add it to the ACB of the replacement property
+,13199,13200,shares,25.0,SPNCO.US,2024,742.5,675.0,1.35,66.15,0.0,
+,15199,15300,option,10.0,ABCD270219C00045000.US,2024,2295.0,2105.66,13.5,175.84,0.0,
+,15199,15300,crypto,0.15,BTC,2024,9990.0,9752.5,39.83,197.67,0.0,
+,15199,15300,crypto,0.75,ETH,2024,4151.25,3660.49,17.9,472.86,0.0,
+,15199,15300,option,1.0,SAMPW250117C00030000.US,2024,202.5,0.0,1.42,201.08,0.0,"includes short position(s) — PROCEEDS is the short sale or write, ACB the cover"

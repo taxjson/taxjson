@@ -7,7 +7,8 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from taxjson.bin.taxjson_run import cmd_init, load_config
+from taxjson.cli.setup import cmd_init
+from taxjson.pipeline.config import load_config
 
 
 _CA_ACCOUNTS = ["crypto", "margin", "rrsp", "tfsa"]
@@ -17,10 +18,10 @@ _US_ACCOUNTS = ["401k", "crypto", "margin", "roth"]
 def _init(path, force=False, country="canada", year=None):
     # A machine whose zone can be read: the scaffold names it, so its
     # crypto account loads (there is no default zone; a UTC machine's
-    # scaffold leaves the key commented — test_fix_generalize_a).
+    # scaffold leaves the key commented — rules.ca.date.test_no_owner_defaults_zone_leaps_and_province).
     from unittest import mock
     with redirect_stdout(io.StringIO()), \
-            mock.patch("taxjson.lib.config_template.system_timezone",
+            mock.patch("taxjson.lib.timezones.system_timezone",
                        return_value="America/Toronto"):
         cmd_init(argparse.Namespace(path=str(path), dir=".", force=force,
                                     country=country, year=year,
@@ -48,7 +49,7 @@ class TestInit(unittest.TestCase):
             cfg = load_config(root)
             self.assertIn("settings", cfg)
             for key in ("year", "country", "base_currency"):
-                self.assertIn(key, cfg["settings"])
+                self.assertTrue(cfg["settings"].has(key), key)
             self.assertEqual(sorted(cfg["accounts"]), _CA_ACCOUNTS)
 
     def test_canada_scaffold_values(self):
@@ -56,10 +57,10 @@ class TestInit(unittest.TestCase):
             root = Path(tmp)
             _init(root, country="canada")
             s = load_config(root)["settings"]
-            self.assertEqual(s["country"], "canada")
-            self.assertEqual(s["base_currency"], "CAD")
-            self.assertEqual(s["tax_date"], "settle")
-            self.assertEqual(s["source_currencies"], ["USD"])
+            self.assertEqual(s.country, "canada")
+            self.assertEqual(s.base_currency, "CAD")
+            self.assertEqual(s.tax_date, "settle")
+            self.assertEqual(s.source_currencies, ["USD"])
 
     def test_usa_scaffold_values_and_accounts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -67,12 +68,12 @@ class TestInit(unittest.TestCase):
             _init(root, country="usa")
             cfg = load_config(root)
             s = cfg["settings"]
-            self.assertEqual(s["country"], "usa")
-            self.assertEqual(s["base_currency"], "USD")
-            self.assertEqual(s["tax_date"], "trade")
+            self.assertEqual(s.country, "usa")
+            self.assertEqual(s.base_currency, "USD")
+            self.assertEqual(s.tax_date, "trade")
             # No CAD rates fetched for an all-USD user: the key is
             # left commented, with a note on when to set it.
-            self.assertNotIn("source_currencies", s)
+            self.assertFalse(s.has("source_currencies"))
             self.assertRegex((root / "taxjson.toml").read_text(),
                              r"(?m)^# source_currencies\s+= \[\"CAD\"\]")
             self.assertEqual(sorted(cfg["accounts"]), _US_ACCOUNTS)
@@ -93,16 +94,16 @@ class TestInit(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _init(root)
-            self.assertEqual(load_config(root)["settings"]["year"],
+            self.assertEqual(load_config(root)["settings"].year,
                              date.today().year)
             _init(root, force=True, year=2027)
-            self.assertEqual(load_config(root)["settings"]["year"], 2027)
+            self.assertEqual(load_config(root)["settings"].year, 2027)
 
     def test_country_alias_normalized(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _init(root, country="us")
-            self.assertEqual(load_config(root)["settings"]["country"], "usa")
+            self.assertEqual(load_config(root)["settings"].country, "usa")
 
     def test_unknown_country_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -183,7 +184,7 @@ class TestScaffoldCoversCurrentFeatures(unittest.TestCase):
     def test_scaffold_activates_nothing_new(self):
         # Every addition is a COMMENT: the parsed config is unchanged,
         # so a fresh project behaves exactly as before.
-        from taxjson.lib.tomlcompat import tomllib
+        import tomllib
         for country in ("canada", "usa"):
             doc = tomllib.loads(self._toml(country))
             self.assertEqual(sorted(doc), ["accounts", "settings"])
@@ -207,7 +208,7 @@ class TestScaffoldCommentsAreValidToml(unittest.TestCase):
     headline feature was unreachable from the tool's own scaffold."""
 
     def test_uncommenting_the_instalments_block_parses(self):
-        from taxjson.lib.tomlcompat import tomllib
+        import tomllib
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "proj"
             _init(root, country="canada")

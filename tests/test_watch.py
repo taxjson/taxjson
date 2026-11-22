@@ -10,8 +10,10 @@ from pathlib import Path
 from taxjson.bin.taxjson_watch import (diff_harvest, diff_radar,
                                        flatten_radar, load_state,
                                        save_state)
+from taxjson.lib.json_contract import SCHEMAS
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 def _rec(cat, advisory="advice", clears=None):
@@ -175,6 +177,10 @@ class TestWatchEndToEnd(unittest.TestCase):
             doc2 = json.loads(r2.stdout)
             self.assertFalse(doc2["baseline"])
             self.assertEqual(doc2["changes"], [])
+            # The --json contract's number, the baseline's document and
+            # the comparison's alike (lib/json_contract).
+            for doc in (doc1, doc2):
+                self.assertEqual(doc["schema_version"], SCHEMAS["watch"])
 
 
 

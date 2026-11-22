@@ -137,7 +137,8 @@ class TestContractSizeNoteRollUp(unittest.TestCase):
         import os
         import sys
         from unittest import mock
-        from taxjson.lib import core, markets
+        from taxjson.lib import markets
+        from taxjson.lib import contract_size as CS
 
         class _Opt:
             multiplier = 0.0
@@ -154,7 +155,7 @@ class TestContractSizeNoteRollUp(unittest.TestCase):
             markets.reset_notes()
             for sym in ("QZB250117C00040000.US", "QZA250117C00040000.US",
                         "QZB250117P00030000.US"):
-                core.equity_option_size(_Opt(sym))
+                CS.equity_option_size(_Opt(sym))
             markets.flush_notes()
             markets.reset_notes()
         return err.getvalue()
@@ -185,7 +186,8 @@ class TestContractSizeNoteRollUp(unittest.TestCase):
         import io
         import os
         from unittest import mock
-        from taxjson.lib import core, markets
+        from taxjson.lib import markets
+        from taxjson.lib import contract_size as CS
 
         class _Opt:
             multiplier = 0.0
@@ -199,7 +201,7 @@ class TestContractSizeNoteRollUp(unittest.TestCase):
             markets.reset_notes()
             with contextlib.redirect_stderr(buf):
                 for sym in ("QZB250117C00040000.US", "QZA250117C00040000.US"):
-                    core.equity_option_size(_Opt(sym))
+                    CS.equity_option_size(_Opt(sym))
             self.assertEqual(markets._ROLLED, {})
             reg.assert_not_called()
             markets.reset_notes()
@@ -213,7 +215,8 @@ class TestContractSizeNoteRollUp(unittest.TestCase):
         import os
         import sys
         from unittest import mock
-        from taxjson.lib import core, markets
+        from taxjson.lib import markets
+        from taxjson.lib import contract_size as CS
 
         class _Opt:
             multiplier = 0.0
@@ -232,7 +235,7 @@ class TestContractSizeNoteRollUp(unittest.TestCase):
                 before = err.getvalue()
                 for sym in ("QZB250117C00040000.US",
                             "QZA250117C00040000.US"):
-                    core.equity_option_size(_Opt(sym))
+                    CS.equity_option_size(_Opt(sym))
                 self.assertEqual(err.getvalue(), before, "held until exit")
                 markets.flush_notes()
             markets.reset_notes()

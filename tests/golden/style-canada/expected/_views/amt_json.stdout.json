@@ -1,0 +1,129 @@
+{
+  "amt": {
+    "additional_tax_s120_2": 0.0,
+    "additional_tax_sftc_part": 0.0,
+    "adjusted_income": 59284.99,
+    "ati_lines": [
+      {
+        "amount": 694.38,
+        "label": "Capital gains at 100% (regular: 50%)",
+        "ref": "s.127.52(1)(d)"
+      },
+      {
+        "amount": 0.0,
+        "label": "Net capital losses of other years at 50%",
+        "ref": "s.127.52(1); regular line 25300"
+      },
+      {
+        "amount": 50.0,
+        "label": "Eligible dividends, actual amount (no gross-up)",
+        "ref": "s.127.52(1)"
+      },
+      {
+        "amount": 517.05,
+        "label": "Foreign dividends",
+        "ref": ""
+      },
+      {
+        "amount": 23.56,
+        "label": "Payments in lieu and staking (ordinary)",
+        "ref": ""
+      },
+      {
+        "amount": 58000.0,
+        "label": "Other income",
+        "ref": "[estimate] other_income"
+      },
+      {
+        "amount": 0.0,
+        "label": "Deductions in full (RRSP, FHSA, RPP ...)",
+        "ref": "lines 20700-23500"
+      },
+      {
+        "amount": 0.0,
+        "label": "Carrying charges at 50%",
+        "ref": "s.127.52(1); line 22100"
+      }
+    ],
+    "base_topup": 0.0,
+    "basic_fed": 6647.34,
+    "binding": false,
+    "bpa_amount": 15705.0,
+    "bpa_credit": 1177.88,
+    "carryforward": 0.0,
+    "carryover": {
+      "attributed": 0.0,
+      "available": 0.0,
+      "available_by_year": {},
+      "base_recovered": 0.0,
+      "closing": 0.0,
+      "closing_by_year": {},
+      "created": 0.0,
+      "entered": false,
+      "expired_by_year": {},
+      "lapsing_by_year": {},
+      "last_year_by_origin": {},
+      "limit": 6647.34,
+      "recovered": 0.0,
+      "recovered_by_year": {},
+      "recovered_credits_reduced": 0.0,
+      "recovered_federal": 0.0,
+      "recovered_federal_tax": 0.0,
+      "recovered_provincial": 0.0,
+      "recovered_provincial_credit": 0.0,
+      "recovered_provincial_surtax": 0.0,
+      "remaining_by_year": {},
+      "source": null,
+      "year": 2024
+    },
+    "excess_fed": 0.0,
+    "exemption": 173205.0,
+    "foreign_tax_not_credited": 0.0,
+    "ftc": 26.93,
+    "ftc_foreign_taxes": 17.96,
+    "ftc_income_limit": 106.0,
+    "ftc_regular": 26.93,
+    "gross_minimum": 0.0,
+    "headroom": 6620.41,
+    "minimum_amount": 0.0,
+    "minimum_fed": 0.0,
+    "provincial_amt": 0.0,
+    "provincial_amt_base": 0.0,
+    "provincial_amt_base_kind": "s120_2",
+    "provincial_amt_basic": 0.0,
+    "provincial_amt_surtax": 0.0,
+    "provincial_factor": 0.337,
+    "provincial_factor_assumed": false,
+    "provincial_ftc_change": 0.0,
+    "provincial_ftc_min_tax": 0.0,
+    "provincial_ftc_regular": 0.0,
+    "rate": 0.205,
+    "recovery_limit": 6647.34,
+    "regular_fed": 6620.41,
+    "subject": 0.0,
+    "topup": 0.0,
+    "topup_attributed": 0.0
+  },
+  "carry_sources": {
+    "amt_carryover": null,
+    "long_term_losses": null,
+    "other_losses": null
+  },
+  "currency": "CAD",
+  "estimated_tax": 224.24,
+  "estimated_tax_with_amt": 224.24,
+  "law": "ITA s.127.5-127.55 (form T691); carryover s.120.2 (T691 Part 8, federal Schedule 1 line 40427)",
+  "notes": [
+    "If you paid minimum tax (AMT) in any of the 7 preceding years, its carryover (T691 Part 8, line 40427; ITA s.120.2) can reduce federal tax by up to 6,647.34 (basic federal tax less the minimum amount, s.120.2(1)(b)), plus the BC share \u2014 none is entered: put it in taxjson.toml's [estimate] amt_carryover = { YEAR = AMOUNT } (by year of origin, from your notice of assessment or T691), or close last year with `tjs close-year` so this year reads it from the lock."
+  ],
+  "province": "BC",
+  "schema_version": 1,
+  "tax_regular": {
+    "federal": 6620.41,
+    "provincial": 2629.31,
+    "total": 9249.72
+  },
+  "taxable_income": 58956.8,
+  "vintage": "2024",
+  "year": 2024
+}

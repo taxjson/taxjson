@@ -1,0 +1,106 @@
+# The engine table (PLAN.md step 10): scripts/move_defs.py moves each row's
+# names from SOURCE into TARGET whole, SOURCE left re-exporting them, and
+# `move_defs.py --check` (BASE's copy) proves each batch. A batch adds rows:
+# B1 the country resolver, B2 the shared engine, B3 and B4 the US engine,
+# B5 and B6 the Canadian one.
+src/taxjson/lib/country.py src/taxjson/rules/country.py The country resolver, a leaf
+    CANADA USA COUNTRIES ALIASES DISPLAY_NAME ENGINE_GUARD_ENV CountryError _SPELLINGS
+    canonical_country PLANS_TAXED_AS_ORDINARY stablecoin_model NEUTRAL_BASIS parse_basis
+    plans_taxed_as_ordinary check_engine_allowed
+src/taxjson/lib/core.py src/taxjson/engine/__init__.py The gains engines: the modules both countries share here, the Canadian engine in ca/, the US one in us/
+src/taxjson/lib/core.py src/taxjson/engine/assign.py Option assignments: each ASSIGN paired with its own stock legs and placed beside them
+    _MARKED_LEG_MAX_LAG_DAYS _ASSIGN_LEG_LEAD_DAYS _assign_delivery_shares _assign_direction _signed_day_gap _AssignPairs
+    _series_rank _pro_rata _AssignCand _compete _run_passes _fill_ties
+    _allocate_assign_legs _pair_assign_legs _assign_candidates _place_assign_options _assign_trade_rows _day_gap
+    _split_underlying _class_root_matches class_root_aliases _make_assign_underlying_resolver
+src/taxjson/lib/core.py src/taxjson/engine/consts.py The engines' money constants, and how a trace shows a figure
+    _ZERO _ONE _HALF _FIFTY _TWO_CENTS _TWO_PERCENT
+    _CENT _HALF_CENT _MILLI _MICRO _NANO _MINUS_HALF_CENT
+    _MINUS_MILLI _shown_if_float
+src/taxjson/lib/core.py src/taxjson/engine/journal.py Listing journals and opening rows: a journal's two legs and currency factor, an opening's source
+    _MOVE_DESC_RE _opening_source _is_listing_journal _journal_legs _journal_factor
+src/taxjson/lib/core.py src/taxjson/engine/premium_ledger.py The premiums an option assignment stages for its own stock legs
+    _AssignPremiumLedger
+src/taxjson/lib/core.py src/taxjson/engine/rows.py The engines' input rows: the one input contract, their ids, currencies and dates, and the warnings on them
+    AmbiguousTransferDateError _is_iso_date SYMBOL_REQUIRED_ACTIONS _describe_row require_computable_rows carry_row_marks
+    require_trade_fields convert_currency _by_account_name _disambiguate_duplicate_ids _warn_undrained_adjustments _currency_mismatch_advice
+    _warn_ticker_reused_after_rename _iso_ordinal _verify_share_conservation not_a_purchase
+src/taxjson/lib/core.py src/taxjson/engine/splits.py Corporate splits and renames: repeated splits dropped, per-account rename ratios folded into one event
+    _dedupe_corporate_splits _rename_ratio_groups _multi_ratio_rename_groups _fold_per_account_rename_ratios
+src/taxjson/lib/core.py src/taxjson/engine/replacement.py The warn-only replacement checks beside a loss: rights, unresolved options, opening lots
+    receives_on_buy _opening_option_buys _RIGHT_RE right_underlying detect_right_replacement_matches detect_unresolved_option_replacement_matches
+    replacement_flags detect_opening_lot_matches _LOSS_TERM _emit_option_replacement_stderr format_option_replacement_warning
+src/taxjson/lib/core.py src/taxjson/engine/taxrules.py The base class both countries' engines build on
+    TaxRules
+src/taxjson/lib/core.py src/taxjson/engine/us/__init__.py The US engine (experimental): FIFO lots per account, the wash-sale rule on longs and shorts
+src/taxjson/lib/core.py src/taxjson/engine/us/lot_store.py The US engine's lots: a lot's wash-sale add, the denial's per-chunk record, the inventories' keys and copies
+    _lot_wash_held _us_ov_take _us_ov_share _us_ov_loss _us_take_option_adj _us_real_stamp
+    _us_ikey_on _us_ikey _us_insert_lots _us_inv_keys_for _us_lots_copy
+src/taxjson/lib/core.py src/taxjson/engine/us/run.py What the US engine binds before its walk, and its replacement index
+    _RepIndex _USRun
+src/taxjson/lib/core.py src/taxjson/engine/us/terms.py US terms both the scan and the walk read: the holding period, section 1256 contracts, share precision, spin-off entitlement
+    held_more_than_one_year outside_1091 _SHARE_QTY_PLACES share_qty _per_account_rename_ratios spin_entitlement
+    REORG_356_TYPE _LOT_EVENT_TYPES _US_EPSILON _US_MONEY_EPSILON
+src/taxjson/lib/core.py src/taxjson/engine/us/option_scan.py The warn-only scan of calls bought as replacements of a share loss
+    detect_option_replacement_matches
+src/taxjson/lib/core.py src/taxjson/engine/us/wash.py The wash-sale rule: a loss's replacements in the window, the add to their basis, the retests a booked sale queues
+    _us_split_covers _us_get_sort_date _us_non_capital _us_dust_noise _us_note _us_rkey_on
+    _us_rep_key _us_nkey _us_rep_units_factor _us_ix _us_set_ref _us_grow_rep_capacity
+    _us_allot_sold_shares _us_apply_other_stkdivs _us_split_rep_refs _us_find_replacements_in_window _us_taxable_rep_of _us_record_sold_replacement
+    _us_record_left_shares _us_sold_replacements_in_window _us_apply_held_long _us_apply_held_short _us_split_matched_short _us_with_sold_replacements
+    _us_match_sold_replacement _us_split_gain_entry _us_tacked_date _us_left_lots_held _us_restate_boot _us_name_delivered_lots
+    _us_apply_left_replacement _us_apply_sold_replacement _us_add_to_row _us_lock_row _us_would_wash _us_queue_retest
+    _us_say_retests _us_run_retests _us_retest_row _us_outside_1091 _us_flag_futures_loss
+src/taxjson/lib/core.py src/taxjson/engine/us/lots.py FIFO draws from a pool, and the lot timeline the trace shows
+    _us_plan_draw _us_plan_disposition _us_delivered_long _us_move_long_lots _us_draw_long_lots _us_row_after
+    _us_tl_label _us_tl_state _us_tl_held
+src/taxjson/lib/core.py src/taxjson/engine/us/prepare.py The US engine's preamble: the replacement scan over the book's events, the payment-in-lieu plan, the dividend entries
+    _us_plan_paid_pil _us_paid_pil_treatment _us_open_qty _us_lot_rows _us_inventory_rows _us_scan_events
+    _us_symbol_currencies _us_disposition_groups _us_pil_row _us_paid_in_lieu _us_plan_payments _us_dividend_entries
+src/taxjson/lib/core.py src/taxjson/engine/us/trades.py A buy or sell row against the lots, and one realized-gain entry
+    _us_walk_buy _us_walk_sell _us_gain_entry _us_deliver_to_short
+src/taxjson/lib/core.py src/taxjson/engine/us/walk.py The US engine's row loop and its per-action blocks: lot moves, splits, adjusts, stock dividends, spin-offs, reorganizations, journals
+    _us_walk_lot_move _us_move_cover_line _us_walk_split _us_walk_adjust _us_walk_stock_dividend _us_walk_spinoff
+    _us_walk_reorg _us_walk_rows _us_carry_lots _us_book_journal
+src/taxjson/lib/core.py src/taxjson/engine/us/taxrules.py The US engine's TaxRules: its three stages, prepare, walk and finish
+    USATaxRules
+src/taxjson/lib/core.py src/taxjson/engine/ca/__init__.py The Canadian engine: ACB pools, the superficial-loss rule's fixed-point loop
+src/taxjson/lib/core.py src/taxjson/engine/ca/fold.py The forward denial pass: the fixed point as a re-fold of the walk's affected suffix
+    _fold_same _WalkFold
+src/taxjson/lib/core.py src/taxjson/engine/ca/pools.py The ACB pools: their state and copies, flat pools, short and futures pools, the lots per account
+    _MATERIAL pool_is_flat _warn_stranded_basis _account_premiums _pools_copy _pool_waits
+    _ca_pool_state _ca_touched _fold_short_futures_pools _short_shares _account_lots _short_account_part
+    _pool_rows _with_shorts _ca_short_state
+src/taxjson/lib/core.py src/taxjson/engine/ca/run_helpers.py The run's module helpers: a row's holder, pool key, sort date and year, the split targets
+    _sl_holder _sl_holder_rank _sl_call_und _sl_pkey _sl_symbol_asof _sl_opening_qty
+    _sl_wpos _futures_names _ca_ev_key _ca_write_year _ca_grant_applies _ca_short_lot_open
+    _ca_open_short_option _ca_split_targets _ca_opt_root _opt_root_in _ca_row_pool_key _ca_walk_date
+    _ca_stock_short_key _ca_tl_after _ca_sort_date _ca_trade_money _ca_short_lot_close
+src/taxjson/lib/core.py src/taxjson/engine/ca/indexes.py The denial pass's row indexes: rows by date window, a class's balance rows, the ADJUST rows by loss
+    _SL_WASH_AFTER_ACTIONS _DatedRows _own_move_held _ClassBalances _WashAdjustIndex _add_wash_cut
+src/taxjson/lib/core.py src/taxjson/engine/ca/own_moves.py Own-account moves: a move's sign and units, the sources and taint its legs carry
+    _MOVE_SIGN_RE _move_sign _is_lot_move _own_move_view _add_sources _taint
+    _taint_from _unknown_sources _untaint _own_move_only _retag_written_lots _own_move_written
+    _own_move_units _journal_units
+src/taxjson/lib/core.py src/taxjson/engine/ca/router.py The marked-short router: which rows go to a symbol's marked-short pool, and a move's legs placed
+    _MarkedShortRouter _row_part _router_move_key _drain_move_legs _move_note _place_own_move_legs
+    _option_crossing_possible _split_crossing_marked_rows
+src/taxjson/lib/core.py src/taxjson/engine/ca/holders.py What the fixed-point loop reads, keeps per iteration and leaves for the report; a loss's and a holding's records
+    _SL_BOOKKEEPING_ACTIONS _SLIndexes _CanadaRun _CanadaIteration _CanadaBooks _SLLoss
+    _SLHeld _SLPass
+src/taxjson/lib/core.py src/taxjson/engine/ca/denial.py The superficial-loss denial pass: a loss's window and triggers, the day-30 walk, the allocation and ADJUST rows
+    _sl_same_fn _sl_trigger_scan _sl_pre_exists _sl_row_loss_units _sl_call_units _sl_avail_native
+    _sl_gone_by_end _sl_identical_units _sl_window_walk _sl_window_trace _sl_trigger_holder _sl_pool_rows
+    _sl_sold_out _sl_sale_alloc _sl_landing_row _sl_mk_adjust _sl_allocate _sl_class_balances
+    _superficial_loss_pass
+src/taxjson/lib/core.py src/taxjson/engine/ca/walk.py The walk over one iteration's rows: pools, gains, losses, traces, the cost timeline
+    _effective_fee_for_trace _per_share is_assign_premium_leg _s861_prior_sales _s861_holding_moved _ca_deemed_gain
+    _ca_acb_trace _has_trace _trace_name _walk_adjust _walk_split _merge_renamed_pool
+    _split_short_pool _take_pending_wash _ca_assign_close_units _walk_trade _conserved_rows _walk_year_end_legs
+    _walk_move_legs _walk_rows
+src/taxjson/lib/core.py src/taxjson/engine/ca/solve.py The fixed-point loop: the denials placed among the rows, the walk and the denial pass until nothing changes
+    _assign_moved_legs _place_wash_adjusts _ca_solve
+src/taxjson/lib/core.py src/taxjson/engine/ca/taxrules.py The Canadian engine's TaxRules: prepare, solve, finish
+    SplitStraddlesSettlementError CanadaTaxRules
+src/taxjson/lib/core.py src/taxjson/engine/by_country.py The engine for a country: the one module importing both engines
+    get_tax_rules

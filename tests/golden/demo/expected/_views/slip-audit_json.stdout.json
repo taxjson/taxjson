@@ -1,0 +1,78 @@
+{
+  "accounts": [],
+  "annual_average": {
+    "USD": {
+      "observations": 262,
+      "rate": 1.35,
+      "source": "the mean of the 262 Bank of Canada daily rates of 2024 in the FX cache"
+    }
+  },
+  "country": "canada",
+  "coverage": {
+    "no_slip": [
+      {
+        "account": "ib",
+        "income": {
+          "foreign": 101.25,
+          "foreign_tax": 15.2
+        },
+        "small_interest_only": false,
+        "sources": [
+          "ib_demo.csv"
+        ]
+      },
+      {
+        "account": "margin",
+        "income": {
+          "foreign": 675.0
+        },
+        "small_interest_only": false,
+        "sources": [
+          "(corporate action: no export row)"
+        ]
+      },
+      {
+        "account": "questrade",
+        "income": {
+          "foreign": 24.3
+        },
+        "small_interest_only": false,
+        "sources": [
+          "questrade_demo.csv"
+        ]
+      }
+    ],
+    "slips_without_books": []
+  },
+  "fx_band": 0.005,
+  "issues": [
+    {
+      "account": "ib",
+      "kind": "no-slip",
+      "text": "ib: income in the books (foreign income 101.25 CAD, foreign tax withheld 15.20 CAD) and no T5/T3 slip for it"
+    },
+    {
+      "account": "margin",
+      "kind": "no-slip",
+      "text": "margin: income in the books (foreign income 675.00 CAD) and no T5/T3 slip for it"
+    },
+    {
+      "account": "questrade",
+      "kind": "no-slip",
+      "text": "questrade: income in the books (foreign income 24.30 CAD) and no T5/T3 slip for it"
+    }
+  ],
+  "not_compared": [],
+  "problems": [],
+  "schema_version": 1,
+  "sources": [],
+  "status": "no-slips",
+  "suggestions": {
+    "capital_gains_dividends": [],
+    "notes": [],
+    "tt_lines": []
+  },
+  "t5008": [],
+  "tolerance": 1.0,
+  "year": 2024
+}

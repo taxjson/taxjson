@@ -33,15 +33,19 @@ Two findings are ATTENTION rather than information (`attention: True`):
 """
 from __future__ import annotations
 
+
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from taxjson.lib.core import (TaxTransaction,
-                              _make_assign_underlying_resolver,
-                              is_option_symbol, parse_option_expiry)
+from taxjson.project.accounts import typed_accounts
+from taxjson.project.settings import as_settings, settings_of
+from taxjson.engine.assign import _make_assign_underlying_resolver
+from taxjson.model.transaction import TaxTransaction
+from taxjson.lib.option_symbols import is_option_symbol, parse_option_expiry
 from taxjson.lib.corporate_timeline import dedupe_split_events, event_sort_key
-from taxjson.lib.missing_history import OrderStarts, unbacked_close
+from taxjson.lib.unbacked_close import OrderStarts, unbacked_close
+from taxjson.model import money as M
 
 
 def _sort_date(t: TaxTransaction) -> str:
@@ -67,7 +71,7 @@ def _assignment_cite(symbol: str) -> str:
     proceeds), s.49(3.1) for an exercised put (premium out of the
     writer's cost) — R1-39/R1-180: s.49(2) is the expiry rule for a
     corporation's options on its own shares."""
-    from taxjson.lib.core import parse_option_right
+    from taxjson.lib.option_symbols import parse_option_right
     right = parse_option_right(symbol)
     if right == "P":
         return "s.49(3.1)"
@@ -79,7 +83,7 @@ def _assignment_cite(symbol: str) -> str:
 def _buyback_cite(symbol: str) -> str:
     """IT-479R para 29 (calls) / para 32 (puts): the writer's grant-year
     gain and the later closing purchase's loss."""
-    from taxjson.lib.core import parse_option_right
+    from taxjson.lib.option_symbols import parse_option_right
     right = parse_option_right(symbol)
     return {"C": "IT-479R para 29", "P": "IT-479R para 32"}.get(
         right, "IT-479R paras 29/32")
@@ -195,8 +199,8 @@ def write_lots(transactions: List[TaxTransaction],
                long_sales: Optional[Set[Tuple[str, str, int]]] = None
                ) -> List[WriteLot]:
     """FIFO walk of the option rows, per account and symbol. Follows
-    the engine (lib/core.py) on these points it used to miss (R1-179,
-    S075-09, 2026-10-24 audit A23-A27, A47):
+    the engine (src/taxjson/engine/) on these points it used to miss
+    (R1-179, S075-09, 2026-10-24 audit A23-A27, A47):
       * a SPLIT on an option symbol re-denominates the open position
         (quantity = ratio) and, with `symbol_new`, renames it — a lot
         written under the old symbol is closed by the buy-back under the
@@ -379,7 +383,7 @@ def reported_premiums(doc: Any) -> Optional[Dict[Tuple[str, str], float]]:
 def filed_locks(root, settings: Optional[Dict[str, Any]] = None,
                 warn=None, premiums: Optional[Dict[int, Any]] = None,
                 labels: Optional[Dict[int, str]] = None):
-    """Every filed-year lock this project can see — taxjson_filed.
+    """Every filed-year lock this project can see — filed_locks.
     project_locks: its own ``filed/<year>.json`` files plus the previous
     year's record named by ``[settings] prior_year_record`` — as
     ``(years, timing)``: the locked years, and for each lock that
@@ -390,23 +394,24 @@ def filed_locks(root, settings: Optional[Dict[str, Any]] = None,
     is then unknown). ``premiums`` (a dict, when given) receives each
     lock's ``reported_premiums``, what `straddling` takes as
     ``filed_premiums``; ``labels`` (a dict, when given) each lock's name
-    in messages (taxjson_filed.lock_label: ``filed/<year>.json``, or the
+    in messages (filed_locks.lock_label: ``filed/<year>.json``, or the
     path a ``prior_year_record`` gives), what `straddling` takes as
     ``filed_labels`` (backlog TJ-0225). A ``prior_year_record`` that is not a path string
     is skipped here (every config reader refuses it). Shared by
     option-boundary's twin edge-cases, so the two give one verdict on
     the same contract (audit A2-0390, A2-1205, A2-0360)."""
     from pathlib import Path as _Path
-    from taxjson.bin import taxjson_filed as _tfl
+    from taxjson.lib import filed_locks as _tfl
     from taxjson.lib.country import CountryError, settings_country
     root = _Path(root)
+    settings = as_settings(settings)
     try:
-        locks = _tfl.project_locks(root, settings or {})
+        locks = _tfl.project_locks(root, settings)
     except _tfl.PriorRecordError:
         locks = [(y, p, "local") for y, p in _tfl.list_snapshots(root)]
     # The lock's country is judged against a project that has one.
     try:
-        settings_country(settings or {})
+        settings_country(settings)
         _judge = settings
     except CountryError:
         _judge = None
@@ -484,7 +489,7 @@ def _unknown_rows(lot: WriteLot, later: List[Close], still_open: bool,
         return {"symbol": lot.symbol, "account": lot.account,
                 "written": lot.write_date, "write_year": wy,
                 "units": units, "premium": None, "closed": closed,
-                "close_kind": kind, "close_year": cy, "paid": round(paid, 2),
+                "close_kind": kind, "close_year": cy, "paid": M.shown(paid, 2),
                 "timing": "grant" if grant else "close",
                 "where": where, "action": action, "attention": True,
                 "question": False}
@@ -607,7 +612,7 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
             rows.append({
                 "symbol": lot.symbol, "account": lot.account,
                 "written": lot.write_date, "write_year": lot.write_year,
-                "units": lot.units, "premium": round(lot.premium, 2),
+                "units": lot.units, "premium": M.shown(lot.premium, 2),
                 "closed": "", "close_kind": "broker-closing",
                 "close_year": None, "paid": 0.0, "timing": "",
                 "broker_closing": True,
@@ -759,7 +764,7 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                 # The contracts left the account with their premium:
                 # nothing closed here (2026-10-24 audit A27).
                 if grant:
-                    where = (f"premium {prem:,.2f} recognised in {wy}; "
+                    where = (f"premium {M.shown(prem, 2):,.2f} recognised in {wy}; "
                              f"transferred out in {cy}: the close is in "
                              f"the receiving account's books")
                     action = ("no amendment here; the receiving account's "
@@ -769,13 +774,13 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                              f"(close timing), and the close is not in "
                              f"this account's books")
                     action = (f"ATTENTION: close timing taxes the "
-                              f"{prem:,.2f} premium when the contract "
+                              f"{M.shown(prem, 2):,.2f} premium when the contract "
                               f"closes, and the close is in the receiving "
                               f"account's books — check they carry the "
                               f"contract with its premium")
                 rows.append({"symbol": lot.symbol, "account": lot.account,
                              "written": lot.write_date, "write_year": wy,
-                             "units": c.units, "premium": round(prem, 2),
+                             "units": c.units, "premium": M.shown(prem, 2),
                              "closed": c.date, "close_kind": c.kind,
                              "close_year": cy, "paid": 0.0,
                              "timing": "grant" if grant else "close",
@@ -787,43 +792,43 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                 if grant and missed:
                     where = f"folded into the share leg in {cy} ({_assignment_cite(lot.symbol)}); the books show no {wy} gain"
                     action = (f"no amendment — {_lk(wy)} records close timing, so the {wy} "
-                              f"return never reported the {prem:,.2f} premium; the fold in {cy} is right")
+                              f"return never reported the {M.shown(prem, 2):,.2f} premium; the fold in {cy} is right")
                 elif grant and amended:
                     where = f"folded into the share leg in {cy} ({_assignment_cite(lot.symbol)}); the books show no {wy} gain"
-                    action = (f"no amendment — {_lk(wy)} no longer reports the {prem:,.2f} premium for {wy} "
+                    action = (f"no amendment — {_lk(wy)} no longer reports the {M.shown(prem, 2):,.2f} premium for {wy} "
                               f"(the amended return, s.49(4))")
                 elif grant and amend_unsure:
                     where = f"folded into the share leg in {cy} ({_assignment_cite(lot.symbol)}); the books show no {wy} gain"
                     action = (f"ATTENTION: {_lk(wy)}'s figure for {lot.written_as or lot.symbol} on {lot.write_date[:10]} also holds "
                               f"a sale of long contracts of the series that day, so taxjson cannot tell whether the {wy} return still "
-                              f"reports the {prem:,.2f} premium. If it does, T1-ADJ {wy} to remove it (s.49(4)); if it was amended, nothing")
+                              f"reports the {M.shown(prem, 2):,.2f} premium. If it does, T1-ADJ {wy} to remove it (s.49(4)); if it was amended, nothing")
                 elif grant:
                     where = f"folded into the share leg in {cy} ({_assignment_cite(lot.symbol)}); the books show no {wy} gain"
-                    action = (f"T1-ADJ {wy}: remove the {prem:,.2f} premium reported for {wy} (s.49(4)) — the {wy} return was filed with it"
+                    action = (f"T1-ADJ {wy}: remove the {M.shown(prem, 2):,.2f} premium reported for {wy} (s.49(4)) — the {wy} return was filed with it"
                               if wy in filed_years else
-                              f"if {wy} was filed with the {prem:,.2f} premium as a gain, amend {wy} to remove it (s.49(4)); otherwise nothing")
+                              f"if {wy} was filed with the {M.shown(prem, 2):,.2f} premium as a gain, amend {wy} to remove it (s.49(4)); otherwise nothing")
                 else:
                     where = f"folded into the share leg in {cy}; nothing in {wy} (close timing)"
                     action = f"same as the Act's post-amendment state; if {wy} was filed with the premium as a gain, amend {wy} (s.49(4))"
                     if close_double:
                         # The lock says the wy return reported it: the
                         # amendment is a fact, not a condition (TJ-0396).
-                        action = (f"T1-ADJ {wy}: remove the {prem:,.2f} premium reported for {wy} (s.49(4)) — "
+                        action = (f"T1-ADJ {wy}: remove the {M.shown(prem, 2):,.2f} premium reported for {wy} (s.49(4)) — "
                                   f"{_lk(wy)} " + ("records grant timing" if filed_close is False
                                                    else "reports it as a gain"))
                     elif double:
                         action = (f"ATTENTION: {wy} is locked ({_lk(wy)}); if it was filed under grant timing "
-                                  f"with the {prem:,.2f} premium as a gain, T1-ADJ {wy} to remove it (s.49(4))")
+                                  f"with the {M.shown(prem, 2):,.2f} premium as a gain, T1-ADJ {wy} to remove it (s.49(4))")
             elif c.kind == "expiry":
                 if grant:
-                    where = f"premium {prem:,.2f} recognised in {wy}; nothing in {cy}"
-                    action = _missed_text(f"{prem:,.2f}") if missed else "no amendment"
+                    where = f"premium {M.shown(prem, 2):,.2f} recognised in {wy}; nothing in {cy}"
+                    action = _missed_text(f"{M.shown(prem, 2):,.2f}") if missed else "no amendment"
                 else:
-                    where = f"premium {prem:,.2f} recognised in {cy} (close timing)"
-                    action = (_double_text(f"{prem:,.2f}", cy) if double else
-                              f"the Act puts it in {wy} (s.49(1)) — " + _switch(f"{prem:,.2f}") + (f"; {wy} was filed: T1-ADJ {wy}" if wy in filed_years and not transition else ""))
+                    where = f"premium {M.shown(prem, 2):,.2f} recognised in {cy} (close timing)"
+                    action = (_double_text(f"{M.shown(prem, 2):,.2f}", cy) if double else
+                              f"the Act puts it in {wy} (s.49(1)) — " + _switch(f"{M.shown(prem, 2):,.2f}") + (f"; {wy} was filed: T1-ADJ {wy}" if wy in filed_years and not transition else ""))
                     if ask and cy == year:
-                        action += "; " + _question(f"{prem:,.2f}")
+                        action += "; " + _question(f"{M.shown(prem, 2):,.2f}")
             else:
                 # A buy-back, or a cash-settled assignment (S075-09: an
                 # index option — the underlying never trades as stock, so
@@ -832,19 +837,19 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                 what = ("cash settlement" if c.kind == "cash-settled"
                         else "buy-back")
                 if grant:
-                    where = f"premium {prem:,.2f} in {wy}; {what} loss {c.paid:,.2f} in {cy}"
-                    action = (_missed_text(f"{prem:,.2f}") if missed
+                    where = f"premium {M.shown(prem, 2):,.2f} in {wy}; {what} loss {M.shown(c.paid, 2):,.2f} in {cy}"
+                    action = (_missed_text(f"{M.shown(prem, 2):,.2f}") if missed
                               else f"no amendment ({_buyback_cite(lot.symbol)})")
                 else:
-                    where = f"net {prem - c.paid:,.2f} in {cy} (close timing)"
-                    action = (_double_text(f"{prem:,.2f}", cy) if double else
-                              f"the Act puts +{prem:,.2f} in {wy} and -{c.paid:,.2f} in {cy} — " + _switch(f"{prem:,.2f}")
+                    where = f"net {M.shown(prem - c.paid, 2):,.2f} in {cy} (close timing)"
+                    action = (_double_text(f"{M.shown(prem, 2):,.2f}", cy) if double else
+                              f"the Act puts +{M.shown(prem, 2):,.2f} in {wy} and -{M.shown(c.paid, 2):,.2f} in {cy} — " + _switch(f"{M.shown(prem, 2):,.2f}")
                               + (f"; {wy} was filed: T1-ADJ {wy}" if wy in filed_years and not transition else ""))
                     if ask and cy == year:
-                        action += "; " + _question(f"{prem:,.2f}")
+                        action += "; " + _question(f"{M.shown(prem, 2):,.2f}")
             rows.append({"symbol": lot.symbol, "account": lot.account, "written": lot.write_date, "write_year": wy,
-                         "units": c.units, "premium": round(prem, 2), "closed": c.date, "close_kind": c.kind,
-                         "close_year": cy, "paid": round(c.paid, 2), "timing": "grant" if grant else "close",
+                         "units": c.units, "premium": M.shown(prem, 2), "closed": c.date, "close_kind": c.kind,
+                         "close_year": cy, "paid": M.shown(c.paid, 2), "timing": "grant" if grant else "close",
                          "where": where, "action": action,
                          "attention": action.startswith("ATTENTION"),
                          "question": "QUESTION:" in action})
@@ -856,25 +861,25 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                 # never closed in the books: the export dropped the
                 # expiry / assignment row. Not "open" — unknown.
                 rows.append({"symbol": lot.symbol, "account": lot.account, "written": lot.write_date,
-                             "write_year": wy, "units": lot.open_units, "premium": round(prem, 2),
+                             "write_year": wy, "units": lot.open_units, "premium": M.shown(prem, 2),
                              "closed": "", "close_kind": "expired?", "close_year": None, "paid": 0.0,
                              "timing": "grant" if grant else "close",
                              "where": f"expired {expiry} but no expiry/assignment row — check the export",
                              "action": (f"ATTENTION: import the expiry, assignment or buy-back row for "
                                         f"{lot.open_units:g} unit(s) (the broker export is missing it); "
-                                        f"until then the {prem:,.2f} premium's year is unknown"),
+                                        f"until then the {M.shown(prem, 2):,.2f} premium's year is unknown"),
                              "attention": True, "question": False})
                 continue
             if grant:
-                where = f"premium {prem:,.2f} recognised in {wy}; open"
-                action = (_missed_text(f"{prem:,.2f}") if missed else
+                where = f"premium {M.shown(prem, 2):,.2f} recognised in {wy}; open"
+                action = (_missed_text(f"{M.shown(prem, 2):,.2f}") if missed else
                           f"if assigned in a later year after {wy} is filed: T1-ADJ {wy} to remove it (s.49(4)); if bought back: loss in that year; if it expires: nothing")
             else:
                 where = f"nothing in {wy} while open (close timing)"
-                action = (_double_text(f"{prem:,.2f}", None) if double else
-                          f"the Act puts {prem:,.2f} in {wy} (s.49(1)) — " + _switch(f"{prem:,.2f}"))
+                action = (_double_text(f"{M.shown(prem, 2):,.2f}", None) if double else
+                          f"the Act puts {M.shown(prem, 2):,.2f} in {wy} (s.49(1)) — " + _switch(f"{M.shown(prem, 2):,.2f}"))
             rows.append({"symbol": lot.symbol, "account": lot.account, "written": lot.write_date, "write_year": wy,
-                         "units": lot.open_units, "premium": round(prem, 2), "closed": "", "close_kind": "open",
+                         "units": lot.open_units, "premium": M.shown(prem, 2), "closed": "", "close_kind": "open",
                          "close_year": None, "paid": 0.0, "timing": "grant" if grant else "close",
                          "where": where, "action": action,
                          "attention": action.startswith("ATTENTION"),
@@ -967,13 +972,13 @@ def project_question_rows(root, cfg: Dict[str, Any],
     from taxjson.lib.country import CountryError, is_usa, settings_tax_date
     from taxjson.lib.pipeline import option_timing_from_settings
     root = _Path(root)
-    settings = (cfg or {}).get("settings") or {}
+    settings = settings_of(cfg)
     accounts = (cfg or {}).get("accounts") or {}
-    year = settings.get("year")
+    year = settings.year
     if not isinstance(year, int) or isinstance(year, bool):
         return []
     try:
-        if is_usa(settings.get("country")):
+        if is_usa(settings.country):
             return []
         kw = option_timing_from_settings(settings)
         tax_date = settings_tax_date(settings)
@@ -997,9 +1002,8 @@ def project_question_rows(root, cfg: Dict[str, Any],
         mh_pairs = None
     fields = TaxTransaction.__dataclass_fields__
     out: List[Dict[str, Any]] = []
-    for name, acfg in sorted(accounts.items()):
-        if not isinstance(acfg, dict) or acfg.get("type") != "taxable" \
-                or acfg.get("crypto"):
+    for name, acfg in sorted(typed_accounts(accounts).items()):
+        if not acfg.taxable or acfg.crypto:
             continue
         base = root / "work" / f"{name}_base.json"
         try:
@@ -1048,7 +1052,7 @@ def question_message(rows: List[Dict[str, Any]], year: int,
     yrs = " and ".join(str(y) for y in wys)
     head = (f"{n} option contract{'s' if n != 1 else ''} you wrote in "
             f"{yrs} and closed in {year} {'are' if n != 1 else 'is'} on "
-            f"transition close timing: {total:,.2f} of premium is taxed "
+            f"transition close timing: {M.shown(total, 2):,.2f} of premium is taxed "
             f"in {year}")
     if len(wys) == 1:
         wy = wys[0]
@@ -1082,7 +1086,7 @@ def question_detail(rows: List[Dict[str, Any]], year: int) -> str:
     n = len(rows)
     first = wys[0]
     return (f"{n} contract{'s' if n != 1 else ''} written in {yrs} and "
-            f"closed in {year} on transition close timing ({total:,.2f} "
+            f"closed in {year} on transition close timing ({M.shown(total, 2):,.2f} "
             f"of premium taxed in {year}): did your {yrs} return report "
             f"these premiums when written? If yes set "
             f"option_grant_timing_since = {first}; if not, `tjs "

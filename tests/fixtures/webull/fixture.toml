@@ -1,0 +1,22 @@
+# The rows the parser must count as skipped (TJ-2328). The preamble above the first
+# header is read (its Account Number stamps broker_account), not a row. The kinds:
+# stock BUY and SELL (a positive SELL quantity), STK and SHS Type Codes;
+# option BUY, a continuation fill (blank Symbol, Description, Type Code carried over);
+# option SELL (a negative quantity), closing both contracts;
+# a written put closed at $0 before expiry plus 100 shares at the strike: its 1.00 fee is
+#   not the account's exercise_fee, so not inferred as ASSIGN (an expiry plus a trade, warned);
+# a written QZWP put closed at $0 on its expiry plus 100 shares at the strike with the
+#   account's 5.00 exercise_fee: both legs ASSIGN (inferred, noted);
+# a long put expiring at $0 on its expiry date (kept on that date, at 16:00);
+# a CAD share row (the .TO suffix, the Canadian settlement cycle);
+# skipped (6): a blank-action separator row (non-event), two repeated page headers and a
+#   totals footer (non-events), a pasted download's Account Number line (a segment
+#   boundary, the same account: a short-line non-event), a DIV row (reported UNBOOKED).
+expected_skips = 6
+# The account's exercise/assignment charge ([accounts.<name>] exercise_fee), which every
+# parse of the fixture is told.
+exercise_fee = 5.00
+# The kinds its rows and its broker's cash events have (parsers.protocol ROW_KINDS and
+# CASH_KINDS): the conformance kit asks for a row, or an event, of each.
+kinds = "trade, expiry, assign"
+cash_kinds = ""

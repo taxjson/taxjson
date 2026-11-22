@@ -1,0 +1,19 @@
+TAX INSTALMENTS — 2024, CAD
+ESTIMATE ONLY (CRA computes the real figures); basis: prior-year.
+
+DUE           AMOUNT  CUM. REQUIRED  CUM. PAID  STATUS
+------------------------------------------------------
+2024-03-15  1,300.00       1,300.00     400.00  MISSED
+2024-06-17  1,300.00       2,600.00     800.00  MISSED
+2024-09-16  1,300.00       3,900.00     800.00  MISSED
+2024-12-16  1,300.00       5,200.00   1,150.00  MISSED
+------------------------------------------------------
+TOTAL       5,200.00                  1,150.00
+
+INTEREST — offset method, to 2025-04-30
+  Charge interest                       285.50
+  Credit interest (offset)               74.19
+  Net instalment interest               211.31
+
+! Behind by 4,050.00: the balance is due April 30 — tjs instalments --details
+Not modelled: self-employed CPP/EI, FX on cash, slip gains — tjs instalments --details

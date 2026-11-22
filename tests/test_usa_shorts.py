@@ -14,8 +14,10 @@ Covers the comprehensive short-side fixes:
 
 import unittest
 
-from taxjson.lib.core import TaxTransaction, USATaxRules
+from taxjson.engine.us.taxrules import USATaxRules
+from taxjson.model.transaction import TaxTransaction
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 
 class TestShortBasic(unittest.TestCase):
@@ -46,7 +48,7 @@ class TestShortBasic(unittest.TestCase):
         self.assertLess(g['cost'], 0)
         self.assertLess(g['proceeds'], 0)
 
-    @rule("US-HOLD-03")
+    @rule(R.US_HOLD_03)
     def test_short_loss(self):
         """Sell-to-open at $100, buy-to-close at $120 → loss = -$20."""
         rules = USATaxRules()
@@ -70,7 +72,7 @@ class TestShortBasic(unittest.TestCase):
 class TestShortWashSale(unittest.TestCase):
     """§1091 extended to shorts per Reg §1.1091-1."""
 
-    @rule("US-WASH-02", "US-WASH-05")
+    @rule(R.US_WASH_02, R.US_WASH_05)
     def test_wash_sale_basic(self):
         """Short loss followed by another short-open within 30 days disallows
         the loss; the replacement short's effective opening proceeds are
@@ -269,7 +271,7 @@ class TestPositionFlips(unittest.TestCase):
 class TestShortHoldingPeriod(unittest.TestCase):
     """Stand-alone shorts are always SHORT_TERM (no §1233(b)(1) detection)."""
 
-    @rule("US-HOLD-03")
+    @rule(R.US_HOLD_03)
     def test_short_held_over_one_year_still_short_term(self):
         """A short held > 1 year still produces SHORT_TERM gain since there's
         no offsetting long for §1233(b)(1) to apply. (Detection of offsetting

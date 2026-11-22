@@ -135,7 +135,7 @@ class TestLongFormSubcommands(unittest.TestCase):
     form (--details), whatever its default view leaves out."""
 
     def test_text_readers_pass_details(self):
-        from taxjson.bin.taxjson_run import _DETAILS_CMDS
+        from taxjson.cli.parser import _DETAILS_CMDS
         import inspect
         src = inspect.getsource(cl)
         for cmd in ("sanity", "find-missing-history", "audit",

@@ -1,295 +1,26 @@
-"""Strict helpers shared by the Kraken and Coinbase parsers.
+"""Strict helpers shared by the Kraken and Coinbase parsers, about
+refusing to produce a quietly-wrong number or date. `strict_money` (a CSV
+amount in the currency-prefixed forms exchanges ship, RAISING on anything
+else: `BaseBrokerage.clean_number` returns 0.0 for what it can't read, so
+`CA$4.00` became a $0 basis row without a word) is the toolbox's since step
+5a (`taxjson.parsers.toolbox.numbers`), re-exported here, as are the fiat
+currencies and the USD stablecoins (`taxjson.parsers.toolbox.assets`, PLAN
+step 14).
 
-Two jobs, both about refusing to produce a quietly-wrong number:
-
-* `strict_money` — parse a CSV amount, accepting the currency-prefixed
-  forms exchanges actually ship (`$1,234.50`, `CA$4.00`, `US$-3`,
-  `(12.00)`), and RAISING on anything else. `BaseBrokerage.clean_number`
-  returns 0.0 for anything it can't read, so `CA$4.00` became a $0
-  basis/proceeds row without a word.
-
-* `utc_to_local` — Kraken and Coinbase stamp every row in UTC. A
-  Canadian taxpayer's trade/income DATE is the local calendar date, so
-  a fill at 2026-01-01 03:00 UTC belongs to 2025-12-31 in Toronto (and
-  to the 2025 return). Rows are converted to the user's local time:
-  the IANA zone in the `TAXJSON_LOCAL_TZ` environment variable, which
-  `taxjson` sets from the project's [settings] local_timezone. There is
-  no default zone: a crypto row with none named is refused
-  (LocalTimezoneMissing) rather than dated in someone else's time.
+Kraken and Coinbase stamp every row in UTC; lib/timezones' `utc_to_local`
+dates it in the user's zone.
 """
 
+from taxjson.parsers.toolbox.masking import mask_id
+from taxjson.parsers.toolbox.numbers import strict_money as strict_money
+# The fiat currencies and the USD stablecoins (live), the toolbox's since
+# PLAN step 14 (`taxjson.parsers.toolbox.assets`), re-exported here.
+from taxjson.parsers.toolbox.assets import FIAT_CURRENCIES as FIAT_CURRENCIES
+from taxjson.parsers.toolbox.assets import USD_STABLECOINS as USD_STABLECOINS
+from taxjson.lib.once import said_set
 from taxjson.lib.stage_msg import emit_line
-import os
-import re
-from collections.abc import Set as AbstractSet
-from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional
-
-ENV_LOCAL_TZ = 'TAXJSON_LOCAL_TZ'
-
-class _LiveStablecoins(AbstractSet):
-    """The USD-pegged stablecoins, ONE list for every crypto consumer
-    (the Coinbase and Kraken parsers, crypto-sends, fx-cash,
-    fill-crypto): taxjson's shipped market data (lib/markets) with the
-    project's ticker.map STABLE lines, read at each use — never a copy
-    frozen at import (copies drifted apart: PYUSD/GUSD missing in some,
-    audit S060-24 / re-audit A2-0589). In a Canada project they are
-    US-dollar cash (tax-logic CA-CRYPTO-02); a US project books them as
-    property valued at par. A membership test the BUILT-IN list
-    answered yes is noted once per coin (the line to add if it is
-    wrong)."""
-
-    def __contains__(self, item) -> bool:
-        if not isinstance(item, str) or not item:
-            return False
-        from taxjson.lib.markets import is_usd_stablecoin
-        return is_usd_stablecoin(item.strip().upper(), note=True)
-
-    def __iter__(self):
-        from taxjson.lib.markets import usd_stablecoins
-        return iter(sorted(usd_stablecoins()))
-
-    def __len__(self) -> int:
-        from taxjson.lib.markets import usd_stablecoins
-        return len(usd_stablecoins())
-
-    @classmethod
-    def _from_iterable(cls, it):
-        return frozenset(it)
-
-    def __repr__(self) -> str:
-        return f"USD_STABLECOINS({sorted(self)!r})"
-
-
-USD_STABLECOINS = _LiveStablecoins()
-
-# Fiat currencies an exchange row can be priced or quoted in, ONE list
-# (lib/markets: taxjson/data/markets.toml) for the Coinbase and Kraken
-# parsers, the IB currency tags and the price chain. Anything else is a
-# crypto-asset: erring toward "crypto" books a visible phantom position,
-# while a coin wrongly taken for cash would drop a disposition silently.
-from taxjson.lib.markets import fiat_currencies as _fiat  # noqa: E402
-FIAT_CURRENCIES = _fiat()
-
-# Currency markers an exchange may glue to an amount. Longest first so
-# `CA$` is not half-eaten by `A$`/`$`.
-_MONEY_PREFIXES = ('CA$', 'US$', 'C$', 'A$', '$', '€', '£')
-# A first group of 0 is a decimal comma ('0,125'), never thousands
-# (audit S055-08).
-_THOUSANDS_OK = re.compile(r'^[1-9]\d{0,2}(,\d{3})+(\.\d*)?$')
-# What is left once sign, currency and thousands commas are stripped:
-# ASCII digits with at most one decimal point, and an optional exponent
-# (tiny crypto quantities: 1e-8). float() also took '1_000' and
-# non-ASCII digits (R1-114).
-_PLAIN_NUMBER = re.compile(r'^(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$', re.ASCII)
-
-
-def strict_money(raw, what: str = 'amount', context: str = '') -> float:
-    """Parse one numeric CSV cell. Empty -> 0.0. `(x)` is negative.
-    Commas must be thousands separators (a European `1.234,56` is
-    refused, never read as 1.23456). Raises ValueError, naming the
-    field and `context`, on anything unparseable."""
-    if raw is None:
-        return 0.0
-    s = str(raw).strip()
-    if not s:
-        return 0.0
-    orig = s
-    neg = False
-    signs = 0          # at most ONE of (x), a leading -/+, a -/+ after $
-    if s.startswith('(') and s.endswith(')'):
-        neg = True
-        signs += 1
-        s = s[1:-1].strip()
-    if s.startswith('-'):
-        neg = not neg
-        signs += 1
-        s = s[1:].strip()
-    elif s.startswith('+'):
-        signs += 1
-        s = s[1:].strip()
-    for p in _MONEY_PREFIXES:
-        if s.upper().startswith(p):
-            s = s[len(p):].strip()
-            break
-    # A sign AFTER the currency marker (`CA$-4.00`, `$-4.00`).
-    if s[:1] in ('-', '+'):
-        neg = neg != (s[0] == '-')
-        signs += 1
-        s = s[1:].strip()
-    if signs > 1:
-        # '--5', '(-5)', '-$-5' used to cancel into +5 (R1-114).
-        raise ValueError(
-            f"unparseable {what} {orig!r}{_ctx(context)}: more than one "
-            f"sign marker — refusing to guess the sign.")
-    if ',' in s:
-        if not _THOUSANDS_OK.match(s):
-            raise ValueError(
-                f"unparseable {what} {orig!r}{_ctx(context)}: commas are "
-                f"only accepted as thousands separators (1,234.56).")
-        s = s.replace(',', '')
-    if not _PLAIN_NUMBER.match(s):
-        # float() also takes '1_000', non-ASCII digits and 'nan'.
-        raise ValueError(
-            f"unparseable {what} {orig!r}{_ctx(context)} — refusing to "
-            f"book it as 0. Fix the cell or report the new export "
-            f"format.")
-    try:
-        v = float(s)
-    except ValueError:
-        raise ValueError(
-            f"unparseable {what} {orig!r}{_ctx(context)} — refusing to "
-            f"book it as 0. Fix the cell or report the new export "
-            f"format.") from None
-    if v != v or v in (float('inf'), float('-inf')):
-        raise ValueError(f"non-finite {what} {orig!r}{_ctx(context)}")
-    return -v if neg else v
-
-
-def _ctx(context: str) -> str:
-    return f" ({context})" if context else ''
-
-
-class LocalTimezoneMissing(ValueError):
-    """No local time zone is named for crypto UTC stamps."""
-
-
-def missing_timezone_message(where: str = "project") -> str:
-    """The one message for a crypto row (or a crypto project) with no
-    local time zone named: the key to set and this machine's zone as a
-    suggestion when it can be read (not UTC)."""
-    try:
-        from taxjson.lib.config_template import system_timezone
-        sys_tz = system_timezone()
-    except Exception:   # noqa: BLE001 — a suggestion only
-        sys_tz = None
-    if sys_tz:
-        hint = (f"this machine's zone is {sys_tz} — if that is where you "
-                f"live, set local_timezone = \"{sys_tz}\"")
-    else:
-        hint = ("this machine's zone cannot be read or is UTC (a server "
-                "default), so name yours: an IANA zone such as "
-                "\"America/Vancouver\" or \"Europe/London\"")
-    lead = ("crypto exchanges stamp every row in UTC and taxjson dates "
-            "it in YOUR local time zone, which has no default")
-    if where == "project":
-        return (f"{lead}: add local_timezone to [settings] in taxjson.toml "
-                f"({hint}).")
-    return (f"{lead}: set the {ENV_LOCAL_TZ} environment variable to an "
-            f"IANA zone name, or run inside a project with [settings] "
-            f"local_timezone ({hint}).")
-
-
-def timezone_typo(settings) -> Optional[str]:
-    """The [settings] key that looks like a misspelled local_timezone
-    (`local_timezoen`, `Local_Timezone`), else None: the run's and the
-    checklist's 'has no local_timezone' name it, as the unknown-key
-    warning they stop before would have (backlog TJ-0034)."""
-    import difflib
-    keys = {str(k).lower(): str(k) for k in (settings or {})
-            if k != "local_timezone"}
-    close = difflib.get_close_matches("local_timezone", list(keys), n=1,
-                                      cutoff=0.8)
-    return keys[close[0]] if close else None
-
-
-def timezone_typo_note(settings) -> str:
-    """` (it has 'local_timezoen': is that local_timezone misspelled?)`,
-    or "" when no [settings] key looks like one."""
-    typo = timezone_typo(settings)
-    return (f" (it has {typo!r}: is that local_timezone misspelled?)"
-            if typo else "")
-
-
-def local_tz_name() -> str:
-    """The zone crypto rows are dated in (TAXJSON_LOCAL_TZ; `taxjson`
-    sets it from [settings] local_timezone). LocalTimezoneMissing when
-    none is named."""
-    name = (os.environ.get(ENV_LOCAL_TZ) or '').strip()
-    if not name:
-        raise LocalTimezoneMissing(missing_timezone_message("env"))
-    return name
-
-
-def _eastern_offset_hours(dt_utc: datetime) -> int:
-    """UTC offset for North-American Eastern time from the DST rules —
-    the fallback when the platform has no tz database (Windows without
-    the `tzdata` package). 2007+: second Sunday of March 07:00 UTC to
-    first Sunday of November 06:00 UTC; before: first Sunday of April
-    to last Sunday of October."""
-    y = dt_utc.year
-
-    def nth_sunday(month, n):
-        d = datetime(y, month, 1)
-        d += timedelta(days=(6 - d.weekday()) % 7)
-        return d + timedelta(weeks=n - 1)
-
-    if y >= 2007:
-        start = nth_sunday(3, 2) + timedelta(hours=7)
-        end = nth_sunday(11, 1) + timedelta(hours=6)
-    else:
-        start = nth_sunday(4, 1) + timedelta(hours=7)
-        last_oct = datetime(y, 10, 31)
-        last_oct -= timedelta(days=(last_oct.weekday() + 1) % 7)
-        end = last_oct + timedelta(hours=6)
-    return -4 if start <= dt_utc < end else -5
-
-
-def _halved(w0: datetime, elapsed: timedelta) -> datetime:
-    """`w0` plus half of `elapsed`, in whole seconds."""
-    return w0 + timedelta(seconds=int(elapsed.total_seconds()) // 2)
-
-
-def _eastern_local(dt_utc: datetime) -> datetime:
-    """utc_to_local for North-American Eastern time without a tz
-    database (_eastern_offset_hours), the repeated hour ordered as
-    utc_to_local orders it."""
-    off = _eastern_offset_hours(dt_utc)
-    local = dt_utc + timedelta(hours=off)
-    if dt_utc.year >= 2007:
-        d = datetime(dt_utc.year, 11, 1)
-        d += timedelta(days=(6 - d.weekday()) % 7)
-        end = d + timedelta(hours=6)
-    else:
-        last_oct = datetime(dt_utc.year, 10, 31)
-        last_oct -= timedelta(days=(last_oct.weekday() + 1) % 7)
-        end = last_oct + timedelta(hours=6)
-    start = end - timedelta(hours=1)
-    if start <= dt_utc < end + timedelta(hours=1):
-        return _halved(start - timedelta(hours=4), dt_utc - start)
-    return local
-
-
-def utc_to_local(dt_utc: datetime, tz_name: Optional[str] = None) -> datetime:
-    """Naive UTC datetime -> naive local wall-clock datetime.
-
-    In the hour the clocks repeat when they fall back (01:00-01:59 twice
-    in Toronto), the wall clock runs backwards: a sale at 05:50 UTC
-    (01:50 EDT) and a rebuy at 06:10 UTC (01:10 EST) read in that order
-    by their local times put the rebuy first, and the canonical replay
-    (date, time) booked them so (backlog TJ-0747). Inside that hour the
-    two passes are compressed into it in order — the first pass into
-    its first half, the second into its second half, each instant at
-    half its distance from the hour's start — so local time order is
-    the instants' order, except that two instants one second apart may
-    share a whole second (the books store whole seconds: a parser keeps
-    those rows in order, order_within_seconds; backlog TJ-1056); the date
-    is the local date as before."""
-    name = tz_name or local_tz_name()
-    try:
-        from zoneinfo import ZoneInfo
-        tz = ZoneInfo(name)
-    except Exception:
-        if name in ('America/Toronto', 'America/Montreal',
-                    'America/New_York', 'US/Eastern', 'Canada/Eastern'):
-            return _eastern_local(dt_utc)
-        raise ValueError(
-            f"local time zone {name!r} (TAXJSON_LOCAL_TZ) is not available "
-            f"— install the `tzdata` package or use an IANA zone name "
-            f"such as America/Toronto.")
-    local = (dt_utc.replace(tzinfo=timezone.utc).astimezone(tz)
-             .replace(tzinfo=None))
-    return _fold_ordered(dt_utc, local, tz)
+from taxjson.model import money as M
+from typing import Dict, List
 
 
 def order_within_seconds(transactions, row_line, key_of_line) -> None:
@@ -336,31 +67,6 @@ def order_across_exports(rows, instants) -> List[int]:
         for pos, i in zip(idx, sorted(idx, key=lambda n: instants[n])):
             order[pos] = i
     return order
-
-
-def _ambiguous(w: datetime, tz) -> bool:
-    """Wall time `w` occurs twice in `tz` (the repeated hour)."""
-    a = w.replace(tzinfo=tz, fold=0).utcoffset()
-    b = w.replace(tzinfo=tz, fold=1).utcoffset()
-    return a is not None and b is not None and a > b
-
-
-def _fold_ordered(dt_utc: datetime, local: datetime, tz) -> datetime:
-    """`local` (the wall time of `dt_utc` in `tz`), or, inside a
-    repeated hour, its order-keeping stand-in (utc_to_local)."""
-    if not _ambiguous(local, tz):
-        return local
-    first = local.replace(tzinfo=tz, fold=0).utcoffset()
-    second = local.replace(tzinfo=tz, fold=1).utcoffset()
-    span = first - second               # how long the hour repeats
-    on_second = dt_utc + second == local
-    # The repeated span's first wall time: step back while ambiguous.
-    w0 = local
-    for step in (timedelta(minutes=1), timedelta(seconds=1)):
-        while _ambiguous(w0 - step, tz) and local - (w0 - step) < span:
-            w0 -= step
-    elapsed = (local - w0) + (span if on_second else timedelta(0))
-    return _halved(w0, elapsed)
 
 
 def same_coin_hint(a: str, b: str, qty_a: float, qty_b: float,
@@ -418,7 +124,7 @@ class RowIds:
             return
         raise ValueError(
             f"{self.label} lines {p_line} and {line}: {self.id_name} "
-            f"{row_id[:2]}*** is on two rows with DIFFERENT content "
+            f"{mask_id(row_id)} is on two rows with DIFFERENT content "
             f"(line {p_line}: {p_brief}; line {line}: {brief}). One id "
             f"names one transaction, and the books keep one row per id, "
             f"so the other trade would be dropped. Fix the file: delete "
@@ -438,22 +144,28 @@ DEPEG_TOLERANCE = 0.02
 # The run's rates table (work/to_base.csv, the conversion stage's own
 # rates and lookback), installed by `taxjson-brokerage --rates`: a fill
 # valued in CAD, EUR, ... is turned into US dollars through it before
-# the peg test (re-audit A2-0590). None = no rates given.
+# the peg test (re-audit A2-0590), and a parser may book with it (Kraken
+# values a fiat leg of a multi-leg receipt through `usd_value`). The parse
+# stage gives the rates only to a parser the registry marks `reads_rates`,
+# and declares them as its input (TJ-2497, TJ-2508); tests/test_freshness_
+# edges.py holds the parser modules naming these readers to that mark.
+# None = no rates given.
 _DEPEG_RATES = None
 # Currencies already named as "not checked" (one note each per parse run).
-_DEPEG_UNCHECKED: set = set()
+_DEPEG_UNCHECKED = said_set()
 
 
 def set_depeg_rates(path, base) -> None:
     """Load the rates file (`DATE TIME FROM TO RATE [SOURCE]`, rates to
-    `base`) the de-peg test converts a non-USD fill with; None clears."""
+    `base`) the de-peg test converts a non-USD fill with, and `usd_value`
+    reads (see `_DEPEG_RATES`); None clears."""
     global _DEPEG_RATES
     _DEPEG_UNCHECKED.clear()
     if path is None:
         _DEPEG_RATES = None
         return
     from pathlib import Path
-    from taxjson.lib.crypto_sends import Rates, load_rates
+    from taxjson.lib.base_rates import Rates, load_rates
     if not base:
         # The file's own target currency (its TO column).
         base = 'CAD'
@@ -513,12 +225,12 @@ def warn_depeg(coin: str, usd_price: float, qty: float, date: str,
     # The ATTENTION channel: `tjs run` echoes it on the console
     # (it was only in the .sum, re-audit A2-1001) — money the books
     # leave out.
-    via = (f" ({native:.4f} {cur} at the day's rate)" if cur != 'USD'
+    via = (f" ({M.shown(native, 4):.4f} {cur} at the day's rate)" if cur != 'USD'
            else "")
-    emit_line(f"warning: ATTENTION: {where}: {coin} traded at {price:.4f} USD"
+    emit_line(f"warning: ATTENTION: {where}: {coin} traded at {M.shown(price, 4):.4f} USD"
           f"{via} on {date} "
           f"— stablecoins are booked as US-dollar cash (an "
-          f"approximation), so the {abs(price - 1.0) * qty:,.2f} USD "
+          f"approximation), so the {M.shown(abs(price - 1.0) * qty, 2):,.2f} USD "
           f"de-peg difference on {qty:g} {coin} is not in the gains; "
           f"report it by hand if it matters.")
     return True

@@ -16,14 +16,16 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-from taxjson.bin.taxjson_form_export import (build_8949, build_schedule3,
-                                             filing_lines, filing_parts_8949,
-                                             filing_totals, main, mark_crypto,
-                                             property_class)
+from taxjson.lib.tax_forms import build_8949, build_schedule3, mark_crypto, property_class
+from taxjson.bin.taxjson_form_export import (filing_lines, filing_parts_8949, filing_totals,
+                                             main)
 from tax_rules import rule
+from taxjson.rules import ids as R
+import _paths
+from _support.filing_run_record import record_full_run
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 def ent(symbol, proceeds, cost, gain=None, disallowed=0.0, commission=0.0,
@@ -49,7 +51,7 @@ COIN = ent("BTC", 40000.0, 50000.0, account="kr1")
 
 
 class TestRouting(unittest.TestCase):
-    @rule("CA-DISP-03")
+    @rule(R.CA_DISP_03)
     def test_property_classes(self):
         self.assertEqual(property_class(SHARE), "shares")
         self.assertEqual(property_class(OPTION), "option")
@@ -57,7 +59,7 @@ class TestRouting(unittest.TestCase):
         self.assertEqual(property_class(mark_crypto([COIN])[0]), "crypto")
         self.assertEqual(property_class(COIN), "shares")   # unflagged
 
-    @rule("CA-DISP-03")
+    @rule(R.CA_DISP_03)
     def test_2025_lines_and_totals(self):
         rep = build_schedule3([SHARE, OPTION, FUTURE] + mark_crypto([COIN]),
                               2025)
@@ -83,7 +85,7 @@ class TestRouting(unittest.TestCase):
         self.assertEqual(rep["lines"][0]["title"],
                          "Part 3, line 4 (lines 13199/13200)")
 
-    @rule("CA-DISP-03")
+    @rule(R.CA_DISP_03)
     def test_2024_crypto_goes_with_other_properties(self):
         # Before 2025 a coin is one of the other properties. The 2024 form
         # splits by period (A2-1482: this test once pinned a June 10 sale
@@ -114,7 +116,7 @@ class TestRouting(unittest.TestCase):
 
 
 class TestFooting(unittest.TestCase):
-    @rule("CA-DISP-01")
+    @rule(R.CA_DISP_01)
     def test_denied_row_foots_with_reduced_acb(self):
         rep = build_schedule3([DENIED], 2025)
         r = rep["rows"][0]
@@ -129,7 +131,7 @@ class TestFooting(unittest.TestCase):
         self.assertIn("ACB shown reduced", r["notes"])
         self.assertIn("replacement", r["notes"])
 
-    @rule("CA-DISP-01")
+    @rule(R.CA_DISP_01)
     def test_every_row_and_line_foots(self):
         ents = [SHARE, OPTION, FUTURE, DENIED,
                 ent("SHOP.TO", 100.0, 300.0, disallowed=50.0,
@@ -210,6 +212,7 @@ class TestSumReturnBlock(unittest.TestCase):
                  "transactions": [SHARE, OPTION, DENIED]}))
             (root / "work" / "kr1_gains.json").write_text(json.dumps(
                 {"summary": {"year": 2025}, "transactions": [COIN]}))
+            record_full_run(root)  # books a full run built (TJ-4309)
             r = _cli(root, "sum", "--json")
             self.assertEqual(r.returncode, 0, r.stderr)
             f = json.loads(r.stdout)["filing"]
@@ -248,6 +251,7 @@ class TestSumReturnBlock(unittest.TestCase):
             root = _project(td, country="usa")
             (root / "work" / "margin_gains.json").write_text(json.dumps(
                 {"summary": {"year": 2025}, "transactions": us}))
+            record_full_run(root)
             r = _cli(root, "sum", "--json")
             self.assertEqual(r.returncode, 0, r.stderr)
             f = json.loads(r.stdout)["filing"]

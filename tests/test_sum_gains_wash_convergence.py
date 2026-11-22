@@ -9,7 +9,8 @@ a prominent banner when it is explicitly False (missing flag / converged
 """
 import unittest
 
-from taxjson.bin.taxjson_sum_gains import format_report, summarize_gains
+from taxjson.lib.gain_summary import summarize_gains
+from taxjson.bin.taxjson_sum_gains import format_report
 
 _BASE = {'ticker_stats': {}, 'total_year': 'all'}
 _BANNER = 'did NOT converge'

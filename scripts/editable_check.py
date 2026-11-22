@@ -22,13 +22,9 @@ be installed; a venv without taxjson-fetch is fine (CI's core jobs).
 import argparse
 import shutil
 import sys
+import tomllib
 from importlib import metadata
 from pathlib import Path
-
-try:
-    import tomllib
-except ImportError:                       # Python < 3.11
-    import tomli as tomllib               # a core dependency there
 
 REPO = Path(__file__).resolve().parent.parent
 

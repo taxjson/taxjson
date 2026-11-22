@@ -17,8 +17,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 def _run_mod(mod, *args, stdin_text=None):
@@ -281,11 +282,10 @@ class TestSubcommandSynopsis(unittest.TestCase):
     def _help(self, *cmd):
         import subprocess
         import sys
-        from pathlib import Path
         r = subprocess.run(
             [sys.executable, "-m", "taxjson.bin.taxjson_run", *cmd,
              "-h"],
-            cwd=Path(__file__).resolve().parent.parent,
+            cwd=_paths.REPO,
             capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout
@@ -303,11 +303,10 @@ class TestSubcommandSynopsis(unittest.TestCase):
     def test_help_command_shows_it_too(self):
         import subprocess
         import sys
-        from pathlib import Path
         r = subprocess.run(
             [sys.executable, "-m", "taxjson.bin.taxjson_run", "help",
              "watch"],
-            cwd=Path(__file__).resolve().parent.parent,
+            cwd=_paths.REPO,
             capture_output=True, text=True)
         self.assertIn("Report only what CHANGED", r.stdout)
 
@@ -321,13 +320,12 @@ class TestHelpWidth(unittest.TestCase):
         import os
         import subprocess
         import sys
-        from pathlib import Path
         env = dict(os.environ, COLUMNS="220")
         for cmd in ([], ["run"], ["fetch"], ["watch"]):
             r = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_run",
                  *cmd, "-h"],
-                cwd=Path(__file__).resolve().parent.parent,
+                cwd=_paths.REPO,
                 capture_output=True, text=True, env=env)
             self.assertEqual(r.returncode, 0, r.stderr)
             widest = max(len(ln) for ln in r.stdout.splitlines())

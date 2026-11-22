@@ -1,0 +1,52 @@
+{
+  "capital_gains_dividends": null,
+  "crypto_staking": {
+    "USD": 37.29
+  },
+  "payments_in_lieu_as_dividends": 0,
+  "rows": [
+    {
+      "currency": "USD",
+      "dividend": 26.64,
+      "symbol": "ETH"
+    },
+    {
+      "currency": "USD",
+      "dividend": 75.0,
+      "symbol": "MSFT.US"
+    },
+    {
+      "currency": "USD",
+      "dividend": 250.0,
+      "symbol": "PARN.US"
+    },
+    {
+      "currency": "USD",
+      "dividend": 40.0,
+      "symbol": "QZQ.US"
+    },
+    {
+      "currency": "USD",
+      "dividend": 50.0,
+      "symbol": "SAMPA.US"
+    },
+    {
+      "currency": "USD",
+      "dividend": 10.65,
+      "symbol": "USDC"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "tax year 2024",
+  "sheltered_included": [],
+  "totals": {
+    "USD": 452.29
+  },
+  "totals_sheltered": {},
+  "totals_slips": {
+    "USD": 415.0
+  },
+  "totals_taxable": {
+    "USD": 452.29
+  }
+}

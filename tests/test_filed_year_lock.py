@@ -5,8 +5,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 _QT_HEADER = ("Transaction Date,Settlement Date,Action,Symbol,Description,"
               "Quantity,Price,Gross Amount,Commission,Net Amount,Currency,"
@@ -80,6 +81,13 @@ class TestFiledYearLock(unittest.TestCase):
             r = _run_cli(root, "run", "--strict", "--no-input")
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("filed year(s) drifted", r.stderr)
+            # A run that stopped leaves no record of a full run: the books
+            # are refused until one finishes (backlog TJ-4356).
+            r = _run_cli(root, "close-year", "--yes", "--force")
+            self.assertEqual(r.returncode, 1, r.stderr)
+            self.assertIn("no full `tjs run` recorded", r.stderr)
+            r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr)
             # Refreshing the lock clears everything.
             r = _run_cli(root, "close-year", "--yes", "--force")
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -111,8 +119,8 @@ class TestGainPreservingDriftDetected(unittest.TestCase):
              "account": "m", "date": "2025-05-01"}]}
 
     def test_proceeds_acb_shift_detected(self):
-        from taxjson.bin.taxjson_filed import (aggregates_from_gains,
-                                               diff_snapshot)
+        from taxjson.lib.filed_locks import aggregates_from_gains
+        from taxjson.bin.taxjson_filed import diff_snapshot
         filed = aggregates_from_gains(self._doc(9000.0, 10000.0, ""))
         # Same -1,000 gain, but proceeds/cost both shifted +500:
         # Schedule 3 13199 / 8949 (d)-(e) move.
@@ -122,8 +130,8 @@ class TestGainPreservingDriftDetected(unittest.TestCase):
         self.assertTrue(any("proceeds" in l for l in lines), lines)
 
     def test_term_flip_detected(self):
-        from taxjson.bin.taxjson_filed import (aggregates_from_gains,
-                                               diff_snapshot)
+        from taxjson.lib.filed_locks import aggregates_from_gains
+        from taxjson.bin.taxjson_filed import diff_snapshot
         filed = aggregates_from_gains(
             self._doc(12000.0, 10000.0, "LONG_TERM"))
         cur = aggregates_from_gains(
@@ -133,8 +141,8 @@ class TestGainPreservingDriftDetected(unittest.TestCase):
                             for l in lines), lines)
 
     def test_pre_upgrade_snapshot_stays_clean(self):
-        from taxjson.bin.taxjson_filed import (aggregates_from_gains,
-                                               diff_snapshot)
+        from taxjson.lib.filed_locks import aggregates_from_gains
+        from taxjson.bin.taxjson_filed import diff_snapshot
         cur = aggregates_from_gains(self._doc(9000.0, 10000.0, ""))
         old_lock = {k: cur[k] for k in ("realized", "disallowed",
                                         "dispositions", "income",

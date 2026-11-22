@@ -1,0 +1,5 @@
+# The fx-cash ledger v2: the deposit's cost in CAD, and a mid-year
+# statement balance between the sale (2025-03-18) and the commission
+# refund IB paid on 2025-03-24.
+CASHMOVE 2025-01-06 USD 200.00 cost=270
+CASHBAL 2025-03-20 USD 825.00 at=ib

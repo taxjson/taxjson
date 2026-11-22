@@ -1,0 +1,28 @@
+TRADES — tax year 2024
+
+SYMBOL                   CUR  BUYS  SELLS     BOUGHT       SOLD   FEES
+----------------------------------------------------------------------
+AAPL.US                  USD     4      3  54,009.90  40,635.15  24.75
+ABCD270219C00045000.US   USD     1      1   1,559.75   1,690.00  19.75
+BCE.TO                   CAD     1      0   7,054.95       0.00   4.95
+BTC                      USD     3      2   9,632.10   7,370.50  61.60
+ENB.TO                   CAD     1      0  11,009.95       0.00   9.95
+ETH                      USD     4      2   5,441.75   3,061.74  37.56
+INTC.US                  USD     2      1   1,102.00     409.00   3.00
+JNJ.US                   USD     1      1   6,281.00   6,519.00   2.00
+KO240920C00065000.US     USD     1      1     371.30     168.70   2.60
+MSFT.US                  USD     1      1  20,001.00  20,099.00   2.00
+NVDA.US                  USD     2      1   2,832.00   1,394.00   3.00
+PARNT.US                 USD     1      0   4,001.00       0.00   1.00
+RY.TO                    CAD     2      1  20,019.90  13,990.05  29.85
+SAMPG.US                 USD     0      1       0.00     369.00   1.00
+SAMPW250117C00030000.US  USD     0      1       0.00     148.95   1.05
+SHOP.TO                  CAD     2      0   5,709.90       0.00   9.90
+SPNCO.US                 USD     1      1     500.00     549.00   1.00
+TD.TO                    CAD     1      1   8,204.95   7,895.05   9.90
+XIU.TO                   CAD     1      1   9,600.00   3,745.05   4.95
+ZAG.TO                   CAD     1      0   2,760.00       0.00   0.00
+
+TOTAL CAD: bought 64,359.65, sold 25,630.15, fees 69.50
+TOTAL USD: bought 105,731.80, sold 82,414.04, fees 160.31
+SOLD IN TAXABLE ACCOUNTS: 75,726.34 USD  (the totals include the registered lira, rrsp, tfsa)

@@ -4,9 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from taxjson.bin.taxjson_convert_tt import (
-    parse_tt_line, tx_to_tt_line, tt_to_json, json_to_tt_lines,
-)
+from taxjson.lib.tt_format import parse_tt_line, tx_to_tt_line, tt_to_json, json_to_tt_lines
 
 
 class TestParseTTLine(unittest.TestCase):
@@ -72,7 +70,7 @@ class TestTxToTTLine(unittest.TestCase):
         # re-parsed net as gross and inflated income). Legacy consumers
         # ignore trailing columns; the total field is still the gross.
         self.assertTrue(line.rstrip().endswith('85.00000'), line)
-        from taxjson.bin.taxjson_convert_tt import parse_tt_line
+        from taxjson.lib.tt_format import parse_tt_line
         back = parse_tt_line(line)
         self.assertAlmostEqual(back['gross_amount'], 100.0, places=2)
         self.assertAlmostEqual(back['net_amount'], 85.0, places=2)

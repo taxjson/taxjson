@@ -1,0 +1,38 @@
+WASH RADAR — superficial losses (s.54, settlement dates), as of <stamp>, positions with an advisory
+ROWS: the listings of rbc; every account's books decide each status (TAXABLE: all your taxable accounts).
+
+VIOLATION — superficial loss; act to rescue the loss (0)
+  (none)
+
+BLOCKED — do not buy (0)
+  (none)
+
+LOCKED — recent buy; do not sell at a loss (0)
+  (none)
+
+EXITABLE — loss OK only if you exit the FULL position (0)
+  (none)
+
+CAUTION — recent buy, but the buyer has since sold out (0)
+  (none)
+
+COOLING — wait before re-entering (0)
+  (none)
+
+RISK — sellable now; sheltered still holds (pause DRIPs 30 days after selling) (0)
+  (none)
+
+CLEAR — safe to sell at a loss (0)
+  (none)
+
+DEFINITIONS
+  - VIOLATION: a loss sale, and a holder that bought the same security inside the 30-day window either side still holds it: that holder sells ALL of it by the printed TRADE date (its settlement within 30 days of the loss's; crypto settles on its trade date) to rescue the loss. Shares held before the window never make a loss superficial.
+  - BLOCKED: a loss sale in the last 30 days: buying back cancels the loss on as many shares as you buy and still hold 30 days after it (s.54; the per-unit amount is printed).
+  - LOCKED: a registered account bought in the last 30 days and still holds: a taxable loss sale is superficial for that many shares, permanently unless that account sells them within 30 days after.
+  - EXITABLE: bought in a taxable account in the last 30 days: a FULL exit at a loss is fine, a partial loss sale is superficial.
+  - CAUTION: a registered account bought recently and has since sold: a loss sale stands unless an affiliated account re-buys within 30 days after.
+  - COOLING: sold out at a loss recently: wait 30 days from the sale before buying back.
+  - RISK: sellable at a loss NOW, but a sheltered account still holds: an affiliated buy (a DRIP too) within 30 days after denies the loss permanently; pause sheltered adds for 30 days.
+  - CLEAR: no recent buys; safe to sell at a loss (no buy-back for 30 days).
+
+Scope: these verdicts cover this project's accounts only. A purchase by your spouse or common-law partner, or by a corporation you or they control (affiliated persons, ITA s.251.1), within 30 days before or after a loss sale also makes it superficial — those accounts are not in the project, so check them yourself.

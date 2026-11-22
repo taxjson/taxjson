@@ -1,0 +1,29 @@
+# The rows of sample.csv the parser must count as skipped (row accounting:
+# tests/parser_conformance.py, `tjs parser-check`).
+#
+# Row kinds the fixture covers (classify's chain, the builder each reaches):
+#   Buy / Sell (stock, a CAD-settled US buy with EXCHANGE RATE, options) -> _build_trade
+#   EXP (an option expiry, booked on the contract's expiry day)      -> _build_trade
+#   ASN option leg (zero cash) and its stock leg (with cash)          -> _build_trade (ASSIGN)
+#   DIV cash dividend, a distribution, a NON-RES TAX WITHHELD net one,
+#     a SUBST PAY in lieu, a return of capital                        -> _build_dividend
+#   DIS STK SPLIT under an internal code (X000001)                   -> _build_split
+#   DIS STK DIV (shares at $0)                                       -> _build_stock_dividend
+#   CIL cash in lieu of a fraction                                   -> _build_cil
+#   REI reinvestment, its reversal and the rebooked one              -> _build_reinvestment
+#   BRW currency journal, both legs (TO USD / FROM CAD BOOK VALUE)   -> _build_journal
+#   TF6 transfer-in under an internal code (Q999001), BOOK VALUE     -> _build_transfer
+#   FCH fee                                                          -> _build_fee
+#   INT interest                                                     -> _build_interest
+#
+# The 12 rows counted as skipped:
+#   non-events (8): FXT conversion (a lone leg, and a two-leg CAD -> USD pair: the cash
+#     reader's CASHMOVE and FXCONV); DEP deposit; DIS spinoff leg (corp-actions'); TF6 cash-only
+#     journal; zero-net DIV (informational); the header repeated (a second export pasted)
+#   skips (4): action XYZ (unknown); DIS with shares and no cash (unknown); DIV stating an
+#     ADJUSTMENT TO BOOK COST with no cash; LFJ stock-lending income
+expected_skips = 12
+# The kinds its rows and its broker's cash events have (parsers.protocol ROW_KINDS and
+# CASH_KINDS): the conformance kit asks for a row, or an event, of each.
+kinds = "trade, expiry, assign, split, stock_dividend, dividend, dividend_in_lieu, interest, fee, transfer, roc"
+cash_kinds = "FXCONV, CASHMOVE, FLOW"

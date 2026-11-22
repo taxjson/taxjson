@@ -1,0 +1,32 @@
+{
+  "amend": 0,
+  "attention": 0,
+  "filed_years": [],
+  "missing_books": [],
+  "partial_locks": {},
+  "rows": [
+    {
+      "account": "margin",
+      "action": "if assigned in a later year after 2024 is filed: T1-ADJ 2024 to remove it (s.49(4)); if bought back: loss in that year; if it expires: nothing",
+      "attention": false,
+      "close_kind": "open",
+      "close_year": null,
+      "closed": "",
+      "paid": 0.0,
+      "premium": 201.08,
+      "question": false,
+      "symbol": "SAMPW250117C00030000.US",
+      "timing": "grant",
+      "units": 1.0,
+      "where": "premium 201.08 recognised in 2024; open",
+      "write_year": 2024,
+      "written": "2024-11-05"
+    }
+  ],
+  "schema_version": 1,
+  "since": 2024,
+  "since_explicit": true,
+  "since_warning": false,
+  "timing": "grant",
+  "year": 2024
+}

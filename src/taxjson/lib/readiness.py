@@ -17,7 +17,7 @@ from typing import Any, Dict, Iterable, List
 CONSERVATION_PREFIX = "warning: conservation: "
 # The engine's warning that an ASSIGN option leg's premium found no
 # stock leg to fold into: that premium is in no gain
-# (core._warn_undrained_adjustments; backlog TJ-0824).
+# (engine/rows._warn_undrained_adjustments; backlog TJ-0824).
 UNCONSUMED_PREFIX = "warning: "
 UNCONSUMED_MARK = "unconsumed option-assignment adjustment(s)"
 # The US engine's warning that dividend compensation paid on a short still
@@ -53,9 +53,9 @@ def _diag_lines(gains_paths: Iterable[Any], keep) -> List[str]:
 
 
 def conservation_lines(gains_paths: Iterable[Any]) -> List[str]:
-    """The engine's conservation warnings (core._warn_stranded_basis,
-    _verify_share_conservation) captured beside each gains file, each
-    once."""
+    """The engine's conservation warnings (engine/ca/pools.py
+    _warn_stranded_basis, engine/rows.py _verify_share_conservation)
+    captured beside each gains file, each once."""
     def keep(ln: str) -> str:
         return (ln[len(CONSERVATION_PREFIX):].strip()
                 if ln.startswith(CONSERVATION_PREFIX) else "")
@@ -64,8 +64,8 @@ def conservation_lines(gains_paths: Iterable[Any]) -> List[str]:
 
 def unconsumed_premium_lines(gains_paths: Iterable[Any]) -> List[str]:
     """The engine's warnings that an assignment's premium is in no gain
-    (core._warn_undrained_adjustments) captured beside each gains file,
-    each once."""
+    (engine/rows._warn_undrained_adjustments) captured beside each
+    gains file, each once."""
     def keep(ln: str) -> str:
         if not ln.startswith(UNCONSUMED_PREFIX) or UNCONSUMED_MARK not in ln:
             return ""

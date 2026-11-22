@@ -24,14 +24,15 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+import _paths
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(_paths.TESTS))
 
 from _style import PIPE_WIDTH, assert_styled, env, project  # noqa: E402
 
 from taxjson.lib import checklist as cl  # noqa: E402
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = _paths.REPO
 
 def _cli(*args, cwd=None, **extra):
     return subprocess.run(
@@ -41,7 +42,7 @@ def _cli(*args, cwd=None, **extra):
 
 
 def _grouped():
-    from taxjson.bin.taxjson_run import _COMMAND_GROUPS
+    from taxjson.cli.parser import _COMMAND_GROUPS
     return {n for _t, names in _COMMAND_GROUPS for n in names}
 
 
@@ -104,7 +105,7 @@ class TestCoverage(unittest.TestCase):
     def test_every_command_line_parses(self):
         """Each `tjs CMD ...` line is a real command with real flags
         (placeholders such as ACCOUNT or FILE are positionals)."""
-        from taxjson.bin.taxjson_run import _build_parser
+        from taxjson.cli.parser import _build_parser
         p, sub = _build_parser()
         for it in cl.items(2025):
             for c in it.cmds:
@@ -139,7 +140,7 @@ class TestCoverage(unittest.TestCase):
                                      c.command)
 
     def test_quick_start_is_gone(self):
-        from taxjson.bin.taxjson_run import _COMMAND_GROUPS, _build_parser
+        from taxjson.cli.parser import _COMMAND_GROUPS, _build_parser
         self.assertIn("checklist", dict(_COMMAND_GROUPS)["Set up"])
         self.assertNotIn("quick-start", _grouped())
         _p, sub = _build_parser()

@@ -1,0 +1,23 @@
+{
+  "rows": [
+    {
+      "currency": "USD",
+      "in_lieu": 2.0,
+      "rows": 1,
+      "symbol": "SAMPLD.US",
+      "treatment": "ordinary"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "tax year 2025",
+  "sheltered_included": [],
+  "totals": {
+    "USD": 2.0
+  },
+  "totals_capitalized": {},
+  "totals_dividend": {},
+  "totals_ordinary": {
+    "USD": 2.0
+  },
+  "totals_sheltered": {}
+}

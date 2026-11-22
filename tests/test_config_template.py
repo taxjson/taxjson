@@ -33,15 +33,18 @@ from pathlib import Path
 from unittest import mock
 
 from taxjson.lib import config_template as CT
+from taxjson.lib import timezones as TZ
 from taxjson.lib import country as C
-from taxjson.lib.config_check import (ACCOUNT_KEYS, CARRYOVER_KEYS, CGD_KEYS,
-                                      DISTRIBUTION_KEYS, ESTIMATE_KEYS,
+from taxjson.lib.config_check import (ACCOUNT_KEYS, ESTIMATE_KEYS,
                                       INSTALMENTS_KEYS, RETIRED_SETTINGS,
                                       TOP_LEVEL_TABLES)
-from taxjson.lib.tomlcompat import tomllib
+from taxjson.lib.project_tables import CARRYOVER_KEYS, DISTRIBUTION_KEYS
+from taxjson.lib.cg_dividends import CGD_KEYS
+import tomllib
+import _paths
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = _paths.REPO
 _FIXTURES = REPO_ROOT / "tests" / "fixtures" / "config_template"
 
 
@@ -190,14 +193,14 @@ class TestInitScaffold(unittest.TestCase):
         # user lives: the key stays commented instead.
         for z in ("UTC", "Etc/UTC", "Etc/GMT", "Zulu"):
             with mock.patch.dict(os.environ, {"TZ": z}):
-                self.assertIsNone(CT.system_timezone(), z)
+                self.assertIsNone(TZ.system_timezone(), z)
 
     def test_system_timezone_reads_tz_and_validates(self):
         with mock.patch.dict(os.environ, {"TZ": "America/Vancouver"}):
-            self.assertEqual(CT.system_timezone(), "America/Vancouver")
-        self.assertFalse(CT.valid_timezone("EST5EDT"))
-        self.assertFalse(CT.valid_timezone("Not/AZone"))
-        self.assertTrue(CT.valid_timezone("UTC"))
+            self.assertEqual(TZ.system_timezone(), "America/Vancouver")
+        self.assertFalse(TZ.valid_timezone("EST5EDT"))
+        self.assertFalse(TZ.valid_timezone("Not/AZone"))
+        self.assertTrue(TZ.valid_timezone("UTC"))
 
     def test_only_the_scaffold_accounts_no_example_account(self):
         # The owner: init shows margin/tfsa/rrsp/crypto (US: margin/roth/
@@ -1475,7 +1478,7 @@ class TestFormatCommand(unittest.TestCase):
             self.assertEqual(r.returncode, 2)
 
     def test_formatted_project_still_loads_the_same(self):
-        from taxjson.bin.taxjson_run import load_config
+        from taxjson.pipeline.config import load_config
         with tempfile.TemporaryDirectory() as td:
             # (a scaffold with a crypto account names its zone)
             root = self._project(td, CT.render_init(
@@ -1505,7 +1508,7 @@ class TestFormatCommand(unittest.TestCase):
                              _MESSY_CA_VALID)
 
     def test_command_is_in_the_set_up_group(self):
-        from taxjson.bin.taxjson_run import _COMMAND_GROUPS
+        from taxjson.cli.parser import _COMMAND_GROUPS
         self.assertIn("format", dict(_COMMAND_GROUPS)["Set up"])
 
 

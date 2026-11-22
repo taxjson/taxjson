@@ -1,0 +1,104 @@
+{
+  "by_ticker": {
+    "SAMPQ241018C00005000.US": {
+      "hold_days": [
+        17
+      ],
+      "total_cost": 55.6875,
+      "total_div": 0.0,
+      "total_gain": -55.6875,
+      "total_pil": 0.0,
+      "total_proceeds": 0.0,
+      "trade_count": 1
+    },
+    "SAMPQ241231P00004000.US": {
+      "hold_days": [
+        0
+      ],
+      "total_cost": 28.6875,
+      "total_div": 0.0,
+      "total_gain": -28.6875,
+      "total_pil": 0.0,
+      "total_proceeds": 0.0,
+      "trade_count": 1
+    }
+  },
+  "inventory": [],
+  "inventory_year_end": [],
+  "option_replacement_warnings": [],
+  "summary": {
+    "option_buyback_loss_superficial": false,
+    "option_grant_since": 2024,
+    "option_premium_timing": "grant",
+    "tax_date_basis": "settle",
+    "total_disallowed": 0,
+    "total_fees_by_currency": {
+      "CAD": {
+        "options": 3.375,
+        "stocks": 0.0,
+        "total": 3.375
+      }
+    },
+    "total_gain": -84.375,
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1,
+    "year": "2024"
+  },
+  "transactions": [
+    {
+      "account": "qt",
+      "commission": 0.0,
+      "cost": 55.6875,
+      "currency": "CAD",
+      "date": "2024-10-18",
+      "date_settle": "2024-10-18",
+      "days_held": 17,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 0.0,
+      "gain": -55.6875,
+      "grant": false,
+      "id": "ae8db043fd86d2ea",
+      "is_option": true,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 0.0,
+      "qty": 1.0,
+      "raw_gain": -55.6875,
+      "replacement_lot_ids": [],
+      "symbol": "SAMPQ241018C00005000.US",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "qt",
+      "commission": 0.0,
+      "cost": 28.6875,
+      "currency": "CAD",
+      "date": "2024-12-31",
+      "date_settle": "2024-12-31",
+      "days_held": 0,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 0.0,
+      "gain": -28.6875,
+      "grant": false,
+      "id": "b940c495aecac852",
+      "is_option": true,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 0.0,
+      "qty": 2.0,
+      "raw_gain": -28.6875,
+      "replacement_lot_ids": [],
+      "symbol": "SAMPQ241231P00004000.US",
+      "term": null,
+      "wash_replacements": null
+    }
+  ],
+  "wash_sales": []
+}

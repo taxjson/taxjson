@@ -43,7 +43,7 @@ until it is fixed. A fixed bug leaves this file, and the CHANGELOG names the rel
   refused otherwise; a negative price with a positive total is not caught.
 - **Meanwhile:** book such a fill from the IB statement or a generic CSV, or as a `.tt` line with the
   signed total (and the contract size on a sell), or enter the close's realized P/L by hand.
-- **Code:** `src/taxjson/bin/taxjson_convert_tt.py` — `_excess_commission_sale`
+- **Code:** `src/taxjson/lib/tt_format.py` — `_excess_commission_sale`
 
 ## Kraken fees taken in the traded coin are not in the fee reports
 
@@ -52,7 +52,7 @@ until it is fixed. A fixed bug leaves this file, and the CHANGELOG names the rel
   `fees.rpt`, `tjs fees-sum` and the `.sum` FEES line leave it out. These can be most of a Kraken
   account's trading fees. The parse note says so.
 - **Meanwhile:** the gains are right; for a fee total, add the coin fees from the Kraken ledger.
-- **Code:** `src/taxjson/lib/brokerages/kraken.py` — `_parse_trades`; `src/taxjson/bin/taxjson_fees.py`
+- **Code:** `src/taxjson/lib/brokerages/kraken.py` — `_ledger_trade_legs`; `src/taxjson/bin/taxjson_fees.py`
 
 ## A stock dividend received while short covers part of the short
 
@@ -62,18 +62,7 @@ until it is fixed. A fixed bug leaves this file, and the CHANGELOG names the rel
   shares. In a US project the warning then says "no shares held". Both countries.
 - **Meanwhile:** replace the row in a `.tt` file with the entry that matches the broker's statement (for
   example a $0 short sale of the new shares).
-- **Code:** `src/taxjson/lib/core.py` — `STOCK_DIVIDEND`
-
-## Second-order superficial losses from the ACB bump's date
-
-- **What happens:** the denied loss is added to the replacement shares on the date of the purchase that
-  triggered it. With a rebuy, a partial sale inside the window and the rest sold later, the inner sale
-  takes part of that amount and can itself be denied and deferred again, whereas CRA's guide (T4037)
-  puts the whole denied amount on the shares still held at day 30. Year totals agree unless the two
-  sales fall in different years; the extra DISALLOW row shows in `tjs wash-sales`.
-- **Meanwhile:** when the two sales fall in different years, check the split in `tjs wash-sales` and
-  correct it by hand.
-- **Code:** `src/taxjson/lib/core.py`
+- **Code:** `src/taxjson/lib/row_types.py` — `STOCK_DIVIDEND`
 
 ## Limitations and things taxjson does not do
 

@@ -11,17 +11,13 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-from taxjson.bin.taxjson_carryover import (
-    _us_worksheet,
-    build_canada_ledger,
-    build_usa_ledger,
-    load_claimed,
-    main,
-    yearly_nets,
-)
-from taxjson.lib.core import TaxTransaction
+from taxjson.lib.carryover_inputs import load_claimed
+from taxjson.bin.taxjson_carryover import (_us_worksheet, build_canada_ledger,
+                                           build_usa_ledger, main, yearly_nets)
+from taxjson.model.transaction import TaxTransaction
 from taxjson.lib.pipeline import GainsRequest, run_gains
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 
 def tx(action="BUYSELL", date="2025-01-15", symbol="XEI.TO", qty=0.0,
@@ -50,7 +46,7 @@ def ca_nets(claimed=None, history=CA_HISTORY):
 
 
 class TestCanadaLedger(unittest.TestCase):
-    @rule("CA-RPT-10")
+    @rule(R.CA_RPT_10)
     def test_gain_loss_gain_flow(self):
         ledger = ca_nets()
         by_year = {r["year"]: r for r in ledger["rows"]}
@@ -91,7 +87,7 @@ class TestCanadaLedger(unittest.TestCase):
         self.assertAlmostEqual(ledger["final_carryforward"], 7000.0,
                                places=2)
 
-    @rule("CA-RPT-10")
+    @rule(R.CA_RPT_10)
     def test_carryback_only_reaches_three_years(self):
         nets = {
             2019: {"net": 9000.0, "st": 0, "lt": 0, "dispositions": 1},
@@ -134,7 +130,7 @@ class TestUsaLedger(unittest.TestCase):
                    "dispositions": 1},
         }
 
-    @rule("US-RPT-08")
+    @rule(R.US_RPT_08)
     def test_offset_and_carryover_chain(self):
         ledger = build_usa_ledger(self._nets(), {})
         by_year = {r["year"]: r for r in ledger["rows"]}
@@ -146,7 +142,7 @@ class TestUsaLedger(unittest.TestCase):
         self.assertAlmostEqual(by_year[2024]["st_carryover"], 0.0, places=2)
         self.assertAlmostEqual(ledger["final_carryforward"], 0.0, places=2)
 
-    @rule("US-RPT-08")
+    @rule(R.US_RPT_08)
     def test_claimed_zero_disables_assumed_offset(self):
         ledger = build_usa_ledger(self._nets(), {2023: 0.0})
         by_year = {r["year"]: r for r in ledger["rows"]}
@@ -239,14 +235,7 @@ class TestCliAndRender(unittest.TestCase):
 
 class TestRunWrapper(unittest.TestCase):
     def test_taxjson_carryover_subcommand(self):
-        try:
-            import tomllib  # noqa: F401  (availability check: TOML support)
-        except ImportError:
-            try:
-                import tomli  # noqa: F401  (availability check: TOML support)
-            except ImportError:
-                self.skipTest("no TOML support on this interpreter")
-        from taxjson.bin.taxjson_run import cmd_carryover
+        from taxjson.cli.file import cmd_carryover
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

@@ -1,0 +1,23 @@
+{
+  "booked_twice": [],
+  "books_not_read": [],
+  "in_kind_not_booked": [],
+  "income_not_held": [],
+  "no_purchase": [],
+  "no_purchase_in_sum": [],
+  "schema_version": 1,
+  "transfer_in_book_value": [],
+  "transfer_in_no_cost": [],
+  "unbacked_covers": [],
+  "unchecked_accounts": [
+    {
+      "account": "margin",
+      "positions": 4
+    }
+  ],
+  "unknown_cost_sales": [],
+  "year": 2024,
+  "zero_cost_declared": [],
+  "zero_cost_held": [],
+  "zero_cost_sold": []
+}

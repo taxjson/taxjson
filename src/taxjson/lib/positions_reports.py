@@ -76,7 +76,15 @@ import re
 from dataclasses import dataclass, field
 from datetime import date as _date, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
+
+from taxjson.project.toml_io import read_toml
+from taxjson.lib.symbol_case import book_symbol
+from taxjson.lib.privacy import mask_id
+from taxjson.lib.futures_prefixes import FUTURES_PREFIXES
+from taxjson.lib.ib_listing import _IB_EXT_RE, _ib_currency_ext
+from taxjson.lib.brokerages.detect import (_first_text, _preamble_date, _rows,
+                                          kind_label, positions_only_text)
 
 COST_AVERAGE = "average cost"
 COST_LOTS = "lot basis"
@@ -104,13 +112,6 @@ UNSUPPORTED: Dict[str, str] = {
     "kraken": "the Kraken parser reads trades and ledgers; a ledger's "
               "running balance is not a positions report — use a "
               "[[holding]] TOML",
-}
-
-_KIND_LABEL = {
-    "ib_open_positions": "Interactive Brokers Activity Statement — Open "
-                         "Positions",
-    "rbc_holdings": "RBC Holdings Export",
-    "holdings_toml": "holdings TOML",
 }
 
 
@@ -177,8 +178,7 @@ class PositionsReport:
 
 def mask_account(acct) -> str:
     """First two characters + *** (the parsers' rule); '' for none."""
-    a = str(acct or '').strip()
-    return (a[:2] + '***') if a else ''
+    return mask_id(acct)
 
 
 def account_key(acct) -> str:
@@ -192,42 +192,7 @@ def account_key(acct) -> str:
                           .encode('utf-8')).hexdigest()[:16]
 
 
-def kind_label(kind: str) -> str:
-    return _KIND_LABEL.get(kind, kind)
-
-
 # ------------------------------------------------------------ detection
-
-_HOLDINGS_PREAMBLE_RE = re.compile(
-    r'^\s*Holdings\s+Export\b(?:\s+as\s+of\s+(?:Date\s+)?'
-    # The comma may be a CSV cell break ("...Jan 5,2026 at ..." unquoted).
-    r'([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s*(\d{4}))?', re.I)
-
-
-def _rows(text: str, limit: Optional[int] = None) -> List[List[str]]:
-    from taxjson.lib.brokerages.detect import csv_rows
-    return csv_rows(text, limit)
-
-
-def _first_text(rows) -> str:
-    for r in rows:
-        if r and any(c.strip() for c in r):
-            return " ".join(c.strip() for c in r if c.strip())
-    return ''
-
-
-def _preamble_date(first: str) -> str:
-    m = _HOLDINGS_PREAMBLE_RE.match(first or '')
-    if not m or not m.group(1):
-        return ''
-    mon, day, yr = m.group(1), m.group(2), m.group(3)
-    for fmt, mm in (('%b %d %Y', mon[:3]), ('%B %d %Y', mon)):
-        try:
-            return datetime.strptime(f"{mm} {day} {yr}",
-                                     fmt).strftime('%Y-%m-%d')
-        except ValueError:
-            continue
-    return ''
 
 
 def _ib_has_open_positions(rows) -> bool:
@@ -247,24 +212,9 @@ def text_kind(text: str) -> Optional[str]:
     return None
 
 
-def positions_only_text(text: str) -> Optional[Tuple[str, str]]:
-    """(kind, as_of) when decoded CSV text is a positions-ONLY report
-    (never activity), else None. An IB Activity Statement is activity
-    whatever sections it carries."""
-    from taxjson.lib.brokerages.rbc_direct import is_holdings_export
-    rows = _rows(text, 40)
-    first = _first_text(rows)
-    if is_holdings_export(first):
-        return 'rbc_holdings', _preamble_date(first)
-    return None
-
-
 def _is_holdings_toml(path: Path) -> bool:
-    from taxjson.lib.tomlcompat import tomllib
-    if tomllib is None:
-        return False
     try:
-        doc = tomllib.loads(path.read_text(encoding='utf-8-sig'))
+        doc = read_toml(path)
     except (OSError, ValueError, UnicodeDecodeError):
         return False
     return isinstance(doc, dict) and isinstance(doc.get('holding'), list)
@@ -383,8 +333,9 @@ def _blank_symbol_error(where: str, qty: float,
 
 
 def _asset_type_of(symbol: str) -> str:
-    from taxjson.lib.core import is_option_symbol
-    if symbol.startswith('F:'):
+    from taxjson.lib.option_symbols import is_option_symbol
+    # A holdings TOML is the user's own: `/ESZ5` is a future, as `F:ESZ5` is.
+    if symbol.startswith(FUTURES_PREFIXES):
         return 'future'
     if is_option_symbol(symbol):
         return 'option'
@@ -505,25 +456,25 @@ def _read_ib(path: Path, text: str) -> PositionsReport:
             if cat in ('Equity and Index Options', 'Options On Futures'):
                 occ = ex._option_symbol(raw, cat, fii, pre['root_alias'],
                                         aliased, where)
-                occ = ibx._IB_EXT_RE.sub('', occ)
-                sym = f"{occ}.{ibx._ib_currency_ext(cur)}"
+                occ = _IB_EXT_RE.sub('', occ)
+                sym = f"{occ}.{_ib_currency_ext(cur)}"
                 if cat == 'Options On Futures':
                     sym = f"F:{sym}"
                 atype = 'option'
             elif cat == 'Futures':
-                sym = (f"F:{ibx._IB_EXT_RE.sub('', raw.replace(' ', '.'))}"
-                       f".{ibx._ib_currency_ext(cur)}")
+                sym = (f"F:{_IB_EXT_RE.sub('', raw.replace(' ', '.'))}"
+                       f".{_ib_currency_ext(cur)}")
                 atype = 'future'
             elif cat in ('Stocks', 'Warrants'):
                 sym = ibx._ib_stock_symbol(cat, raw, cur, fii)
                 atype = 'stock'
             else:
-                sym = (f"{ibx._IB_EXT_RE.sub('', raw.replace(' ', '.'))}"
-                       f".{ibx._ib_currency_ext(cur)}")
+                sym = (f"{_IB_EXT_RE.sub('', raw.replace(' ', '.'))}"
+                       f".{_ib_currency_ext(cur)}")
                 atype = 'other'
         except BrokerageParseError as e:
             raise PositionsReportError(str(e)) from e
-        _safe_cell(sym, field='Symbol', where=where)
+        sym = book_symbol(_safe_cell(sym, field='Symbol', where=where))
         _from = 'Mult'
         if mult is None:
             info = (fii.get((cat, raw))
@@ -841,17 +792,12 @@ def toml_as_of(meta: Any, name: str) -> str:
 
 def _read_toml(path: Path) -> PositionsReport:
     from taxjson.lib.brokerages.base import shown_name
-    from taxjson.lib.tomlcompat import tomllib
     name = shown_name(path)
-    if tomllib is None:
-        raise PositionsReportError("reading a holdings TOML needs tomllib "
-                                   "(Python 3.11+) or tomli")
     try:
-        doc = tomllib.loads(path.read_text(encoding='utf-8-sig'))
+        doc = read_toml(path)
     except (OSError, ValueError, UnicodeDecodeError) as e:
         raise PositionsReportError(f"{name}: cannot parse it: {e}") from e
     holdings = doc.get('holding') if isinstance(doc, dict) else None
-    from taxjson.lib.holdings_dir import empty_snapshot
     if holdings is None and empty_snapshot(doc):
         holdings = []               # the account holds nothing (#46)
     if not isinstance(holdings, list):
@@ -1032,8 +978,8 @@ def _read_toml(path: Path) -> PositionsReport:
         if acct:
             accts.add(acct)
         rep.rows.append(PositionRow(
-            broker='toml', account=acct, account_key=akey, symbol=sym,
-            raw_symbol=sym,
+            broker='toml', account=acct, account_key=akey,
+            symbol=book_symbol(sym), raw_symbol=sym,
             quantity=qty, currency=cur, cost=cost,
             cost_currency=(str(h.get('cost_currency') or '').strip()
                            .upper() or cur),
@@ -1090,3 +1036,20 @@ def read_positions(path) -> PositionsReport:
         f"(supported: {', '.join(kind_label(k) for k in SUPPORTED)}; "
         f"Questrade, Webull, Coinbase and Kraken have none — use a "
         f"[[holding]] TOML)")
+
+
+def empty_snapshot(doc: Any) -> bool:
+    """A snapshot of an account that holds nothing (#46): no
+    `[[holding]]` table, a `[meta]` table and nothing else (a
+    top-level `schema_version` aside), and no `holdings_count` above 0
+    — what taxjson-fetch --positions writes after every position is
+    closed. A `[[holdings]]` typo, another tool's file or a count with
+    no rows is not one."""
+    if not isinstance(doc, dict) or "holding" in doc:
+        return False
+    meta = doc.get("meta")
+    if not isinstance(meta, dict) or set(doc) - {"meta", "schema_version"}:
+        return False
+    count = meta.get("holdings_count", 0)
+    return (isinstance(count, int) and not isinstance(count, bool)
+            and count == 0)

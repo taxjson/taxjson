@@ -1,0 +1,5 @@
+tjs audit: warning: these books are not the clean result of the current inputs
+  - inputs changed since the last full run (added: filed/ (locked years))
+  The figures below may leave sales out or carry default FX; fix and re-run `tjs run` before using them. 2024 is filed (filed/2024.json) and its inputs changed since the last run: `tjs run` here recomputes the year and says whether the filed figures moved (DRIFTED).
+NOTE: 1 unmatched TRANSFER row(s) in the --sheltered context kept as custody moves: their shares count as held; none is a purchase or a sale for the wash-sale walk (transfers_as_acquisitions = false).
+note: KELPQ options: the export does not state the contract size, so 100 shares per contract is ASSUMED where it matters (an exercise or assignment, replacement shares); for a mini or an adjusted series add `MULT KELPQ N` to ticker.map.

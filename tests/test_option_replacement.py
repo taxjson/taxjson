@@ -19,15 +19,13 @@ import io
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
-from taxjson.lib.core import (
-    CanadaTaxRules,
-    TaxTransaction,
-    USATaxRules,
-    parse_option_right,
-    parse_option_strike,
-)
+from taxjson.engine.ca.taxrules import CanadaTaxRules
+from taxjson.engine.us.taxrules import USATaxRules
+from taxjson.model.transaction import TaxTransaction
+from taxjson.lib.option_symbols import parse_option_right, parse_option_strike
 from _radar_text import radar_rows
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 CALL = 'AAPL250620C00150000.US'
 PUT = 'AAPL250620P00140000.US'
@@ -87,7 +85,7 @@ class TestRuleOneCallVsShareLoss(unittest.TestCase):
             tx(date=opt_date, symbol=option, qty=opt_qty, price=3.0,
                net=300.0)]
 
-    @rule("CA-SL-05")
+    @rule(R.CA_SL_05)
     def test_call_denies_share_loss_canada(self):
         res, err = gains(CanadaTaxRules(), self._txs())
         self.assertAlmostEqual(res['summary']['total_gain'], 0.0, places=2)
@@ -105,7 +103,7 @@ class TestRuleOneCallVsShareLoss(unittest.TestCase):
         res, _ = gains(CanadaTaxRules(), self._txs(), cross_asset=False)
         self.assertAlmostEqual(res['summary']['total_gain'], 0.0, places=2)
 
-    @rule("CA-SL-05")
+    @rule(R.CA_SL_05)
     def test_partial_denial_one_contract_per_100_shares(self):
         txs = [
             tx(date='2025-01-06', symbol='AAPL.US', qty=400, price=20.0,
@@ -119,7 +117,7 @@ class TestRuleOneCallVsShareLoss(unittest.TestCase):
         self.assertAlmostEqual(res['summary']['total_gain'], -3000.0,
                                places=2)
 
-    @rule("CA-SL-03")
+    @rule(R.CA_SL_03)
     def test_registered_call_makes_denial_permanent(self):
         rrsp_call = TaxTransaction(
             action='BUYSELL', date='2025-03-20', date_settle='2025-03-20',
@@ -140,7 +138,7 @@ class TestRuleOneCallVsShareLoss(unittest.TestCase):
         res, _ = gains(CanadaTaxRules(), txs)
         self.assertEqual(res['wash_sales'], [])
 
-    @rule("CA-SL-05")
+    @rule(R.CA_SL_05)
     def test_ca_not_held_at_window_end(self):
         txs = self._txs() + [
             tx(date='2025-03-25', symbol=CALL, qty=-1, price=4.0, net=400.0)]
@@ -165,7 +163,7 @@ class TestRuleOneCallVsShareLoss(unittest.TestCase):
             self.assertEqual(len(on['transactions']),
                              len(off['transactions']))
 
-    @rule("US-WASH-12")
+    @rule(R.US_WASH_12)
     def test_us_warns_without_any_setting(self):
         res, err = gains(USATaxRules(), self._txs(), cross_asset=False)
         self.assertEqual(len(res['option_replacement_warnings']), 1)
@@ -177,7 +175,7 @@ class TestRuleOneCallVsShareLoss(unittest.TestCase):
         self.assertEqual(res['wash_sales'], [])
         self.assertEqual(res['option_replacement_warnings'], [])
 
-    @rule("CA-SL-06")
+    @rule(R.CA_SL_06)
     def test_put_does_not_trigger_long_loss(self):
         res, _ = gains(CanadaTaxRules(), self._txs(option=PUT))
         self.assertEqual(res['wash_sales'], [])
@@ -201,7 +199,7 @@ class TestReplacementCapacity(unittest.TestCase):
     fills of ONE sale; each separate sale is judged on its own (CRA's
     per-disposition formula, CA-SL-08)."""
 
-    @rule("CA-SL-08")
+    @rule(R.CA_SL_08)
     def test_one_call_ten_fills(self):
         txs = [tx(date='2025-01-06', qty=1000, price=20.0, net=20000.0)]
         for i in range(10):
@@ -215,7 +213,7 @@ class TestReplacementCapacity(unittest.TestCase):
         self.assertAlmostEqual(res['summary']['total_gain'], -9000.0,
                                places=2)
 
-    @rule("CA-SL-08")
+    @rule(R.CA_SL_08)
     def test_one_call_two_losses(self):
         txs = [
             tx(date='2025-01-06', qty=200, price=20.0, net=4000.0),
@@ -228,7 +226,7 @@ class TestReplacementCapacity(unittest.TestCase):
         denied = sum(w['amount'] for w in res['wash_sales'])
         self.assertAlmostEqual(denied, 2000.0, places=2)
 
-    @rule("CA-SL-08")
+    @rule(R.CA_SL_08)
     def test_one_share_rebuy_two_fills(self):
         txs = [
             tx(date='2025-01-06', qty=200, price=20.0, net=4000.0),
@@ -240,7 +238,7 @@ class TestReplacementCapacity(unittest.TestCase):
         denied = sum(w['amount'] for w in res['wash_sales'])
         self.assertAlmostEqual(denied, 1000.0, places=2)
 
-    @rule("CA-SL-05")
+    @rule(R.CA_SL_05)
     def test_call_expiring_before_day_30_is_not_held(self):
         short = 'AAPL250321C00150000.US'          # expires 03-21
         res, _ = gains(CanadaTaxRules(), long_loss() + [
@@ -249,12 +247,12 @@ class TestReplacementCapacity(unittest.TestCase):
         self.assertEqual(res['wash_sales'], [])
 
 
-@rule("CA-SL-06")
+@rule(R.CA_SL_06)
 class TestPutsNeverReplace(unittest.TestCase):
     """A put is a right to SELL: never replacement property, for shares
     or for a short-cover loss."""
 
-    @rule("US-WASH-01")         # both engines: only the same security
+    @rule(R.US_WASH_01)         # both engines: only the same security
     def test_put_after_short_cover_loss(self):
         txs = short_loss() + [
             tx(date='2025-03-20', symbol=PUT, qty=1, price=3.0, net=300.0)]
@@ -273,7 +271,7 @@ class TestPutsNeverReplace(unittest.TestCase):
 
 
 class TestAsymmetry(unittest.TestCase):
-    @rule("CA-SL-06")
+    @rule(R.CA_SL_06)
     def test_different_series_never_replaces_an_option(self):
         # A loss on one call series is not deferred by buying another
         # series (strike or expiry) on the same shares.
@@ -286,8 +284,8 @@ class TestAsymmetry(unittest.TestCase):
         res, _ = gains(CanadaTaxRules(), txs)
         self.assertEqual(res['wash_sales'], [])
 
-    @rule("CA-SL-06")
-    @rule("US-WASH-01")         # both engines: only the same security
+    @rule(R.CA_SL_06)
+    @rule(R.US_WASH_01)         # both engines: only the same security
     def test_share_buy_never_triggers_option_loss(self):
         # Rule 4: lose money on a call, buy the shares in-window → silent.
         txs = [
@@ -301,7 +299,7 @@ class TestAsymmetry(unittest.TestCase):
             self.assertEqual(res['option_replacement_warnings'], [],
                              rules_cls.__name__)
 
-    @rule("CA-SL-06")
+    @rule(R.CA_SL_06)
     def test_identical_contract_wash_still_enforced(self):
         # Rule 3 pin: the EXISTING same-symbol machinery still disallows
         # an identical-contract option repurchase — unaffected by the
@@ -368,8 +366,8 @@ class TestCrossAssetRetired(unittest.TestCase):
                                    places=2)
 
     def test_setting_warns_retired(self):
-        from taxjson.bin import taxjson_run as tr
-        w = tr.validate_config({'settings': {'year': 2025,
+        from taxjson.pipeline import config as pipeline_config
+        w = pipeline_config.validate_config({'settings': {'year': 2025,
                                              'cross_asset': True, 'country': 'canada'},
                                 'accounts': {'m': {'type': 'taxable'}}})
         self.assertTrue(any('cross_asset is retired' in x for x in w))
@@ -379,11 +377,11 @@ class TestRadarAndPlanningTools(unittest.TestCase):
     """The radar and buy-check/sell-check follow the same one-way rule."""
 
     def _radar(self, txs, date):
-        from test_audit_round2_fixes import _radar
+        from _support.planning_radar_run import _radar
         return _radar(txs, date)
 
     def test_radar_call_after_share_loss_is_violation(self):
-        from test_audit_round2_fixes import _row
+        from _support.planning_radar_run import _row
         txs = [
             _row("BUYSELL", "2026-01-05", "ZZZ.TO", 100, 2000.0),
             _row("BUYSELL", "2026-06-01", "ZZZ.TO", -100, 1000.0),
@@ -395,7 +393,7 @@ class TestRadarAndPlanningTools(unittest.TestCase):
         self.assertIn("long call contract", line)
 
     def test_radar_share_buy_after_option_loss_is_not_a_trigger(self):
-        from test_audit_round2_fixes import _row
+        from _support.planning_radar_run import _row
         opt = "ZZZ270115C00010000.TO"
         txs = [
             _row("BUYSELL", "2026-01-05", opt, 1, 500.0),
@@ -407,7 +405,7 @@ class TestRadarAndPlanningTools(unittest.TestCase):
         self.assertNotIn("VIOLATION", line)
 
     def test_replacement_rows_filter(self):
-        from taxjson.bin.taxjson_run import _replacement_rows
+        from taxjson.cli.plan import _replacement_rows
         rows = {"ZZZ.TO": {"category": "COOLING"},
                 "ZZZ270115C00010000.TO": {"category": "COOLING"},
                 "ZZZ270115C00012000.TO": {"category": "COOLING"},

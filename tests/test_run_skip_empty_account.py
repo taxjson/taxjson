@@ -7,10 +7,11 @@ import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
 
-from taxjson.bin.taxjson_run import stage_account
+from taxjson.pipeline.stages import stage_account
+from taxjson.project.settings import Settings
 
-_SETTINGS = {"base_currency": "CAD", "country": "canada", "year": 2025,
-             "tax_date": "settle"}
+_SETTINGS = Settings.from_table({"base_currency": "CAD", "country": "canada", "year": 2025,
+             "tax_date": "settle"})
 
 
 def _stage(inputs_dir, name, acfg=None):
@@ -22,7 +23,7 @@ def _stage(inputs_dir, name, acfg=None):
     with redirect_stderr(err):
         out = stage_account(name, acfg or {"type": "sheltered"}, _SETTINGS,
                             inputs_dir, cache, reports, Path("rates.csv"),
-                            None, None, False)
+                            None, None)
     return out, err.getvalue()
 
 

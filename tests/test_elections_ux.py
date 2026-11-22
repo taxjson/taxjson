@@ -7,8 +7,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 _PENDING = {"accounts": {"margin": {"pending": [
     {"event_id": "20251022-abg-abh-51d7",
@@ -94,10 +95,7 @@ class TestElectSetHints(unittest.TestCase):
 
 class TestFilingReminder(unittest.TestCase):
     def test_rollover_reminder_after_run(self):
-        try:
-            from tests.test_pending_elections import _SSL_RGLD_CSV
-        except ImportError:
-            from test_pending_elections import _SSL_RGLD_CSV
+        from _support.ib_merger_election import _SSL_RGLD_CSV
         with tempfile.TemporaryDirectory() as tmp:
             root = _proj(tmp)
             (root / "inputs" / "margin" / "ib.csv").write_text(
@@ -132,10 +130,7 @@ class TestFilingReminder(unittest.TestCase):
         # quiet (2026-08-02: it fired for an rrsp account). The event is
         # asked (sheltered_elections = "ask"): by default a sheltered
         # account's merger is booked without asking (CA-CORP-11).
-        try:
-            from tests.test_pending_elections import _SSL_RGLD_CSV
-        except ImportError:
-            from test_pending_elections import _SSL_RGLD_CSV
+        from _support.ib_merger_election import _SSL_RGLD_CSV
         with tempfile.TemporaryDirectory() as tmp:
             root = _proj(tmp)
             (root / "taxjson.toml").write_text(

@@ -9,17 +9,20 @@ All fixtures are synthetic. Items:
   M9  Kraken legacy ledger types, asset suffixes, feecurrency, columns
   LOW multi-asset dust sweeps, UTC -> local dates, CA$ amounts
 """
-import io
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stderr
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 from tax_rules import rule
+from taxjson.rules import ids as R
+from _support.kraken_coin_fees import (
+    _run, _KT_H, _KL_H, _kraken_dir, _COIN_FEE_TRADES, _COIN_FEE_LEDGER,
+)
+import _paths
 
 
 def setUpModule():
@@ -28,14 +31,7 @@ def setUpModule():
     # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
     os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
-
-def _run(fn, *a, **kw):
-    buf = io.StringIO()
-    with redirect_stderr(buf):
-        out = fn(*a, **kw)
-    return out, buf.getvalue()
+REPO_ROOT = _paths.REPO
 
 
 # ------------------------------------------------------------------ H3
@@ -137,7 +133,7 @@ class TestGenericSanity(unittest.TestCase):
 # ------------------------------------------------------------------ H4
 class TestTtStrict(unittest.TestCase):
     def _tt(self, text):
-        from taxjson.bin.taxjson_convert_tt import tt_to_json
+        from taxjson.lib.tt_format import tt_to_json
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "manual.tt"
             p.write_text(text)
@@ -185,7 +181,7 @@ class TestTtStrict(unittest.TestCase):
         self.assertEqual(out["transactions"][0]["net_amount"], 10.0)
 
     def test_declared_only_as_real_token(self):
-        from taxjson.lib.pipeline import MANUAL_TRANSFER_DECLARATION
+        from taxjson.lib.tt_format import MANUAL_TRANSFER_DECLARATION
         out, _ = self._tt(
             "TRANSFER 2025-01-02 09:30:00 A.US -5 USD 1 5  # not DECLARED\n"
             "TRANSFER 2025-01-03 09:30:00 A.US -5 USD 1 5 DECLARED\n")
@@ -205,38 +201,12 @@ class TestTtStrict(unittest.TestCase):
 
 
 # ------------------------------------------------------------------ M3
-_KT_H = ("txid,ordertxid,pair,time,type,ordertype,price,cost,fee,vol,"
-         "margin,misc,ledgers\n")
-_KL_H = ("txid,refid,time,type,subtype,aclass,asset,wallet,amount,fee,"
-         "balance\n")
-
-
-def _kraken_dir(files):
-    from taxjson.lib.brokerages.kraken import KrakenBrokerage
-    td = tempfile.TemporaryDirectory()
-    for name, text in files.items():
-        (Path(td.name) / name).write_text(text)
-    return td, KrakenBrokerage
-
-
 class TestKrakenCoinFees(unittest.TestCase):
-    TRADES = (_KT_H +
-              # buy 10 SOL for 2000 CAD; fee (5 CAD-equiv) taken in SOL
-              "T1,O1,SOL/CAD,2025-06-02 16:00:00.1,buy,limit,200,2000,5,10,,,\n"
-              # sell 4 SOL for 800 CAD; fee taken in SOL
-              "T2,O2,SOL/CAD,2025-06-03 16:00:00.1,sell,limit,200,800,2,4,,,\n"
-              # buy 1 ETH for 3000 CAD; fee in CAD (quote)
-              "T3,O3,ETH/CAD,2025-06-04 16:00:00.1,buy,limit,3000,3000,7.5,1,,,\n")
-    LEDGER = (_KL_H +
-              "L1,T1,2025-06-02 16:00:00,trade,tradespot,currency,SOL,spot,10,0.025,9.975\n"
-              "L2,T1,2025-06-02 16:00:00,trade,tradespot,currency,ZCAD,spot,-2000,0,0\n"
-              "L3,T2,2025-06-03 16:00:00,trade,tradespot,currency,SOL,spot,-4,0.01,5.965\n"
-              "L4,T2,2025-06-03 16:00:00,trade,tradespot,currency,ZCAD,spot,800,0,800\n"
-              "L5,T3,2025-06-04 16:00:00,trade,tradespot,currency,XETH,spot,1,0,1\n"
-              "L6,T3,2025-06-04 16:00:00,trade,tradespot,currency,ZCAD,spot,-3000,7.5,0\n")
+    TRADES = _COIN_FEE_TRADES
+    LEDGER = _COIN_FEE_LEDGER
 
-    @rule("CA-CRYPTO-04")
-    @rule("US-CRYPTO-04")
+    @rule(R.CA_CRYPTO_04)
+    @rule(R.US_CRYPTO_04)
     def test_coin_fee_comes_out_of_the_coins(self):
         td, K = _kraken_dir({"kr_trades.csv": self.TRADES,
                              "kr_ledgers.csv": self.LEDGER})
@@ -311,8 +281,8 @@ class TestKrakenCoinFees(unittest.TestCase):
 
 # ------------------------------------------------------------------ M9
 class TestKrakenLegacyLedger(unittest.TestCase):
-    @rule("CA-INC-04")
-    @rule("US-INC-02")
+    @rule(R.CA_INC_04)
+    @rule(R.US_INC_02)
     def test_staking_dividend_and_suffixes(self):
         csv = (_KL_H +
                "L1,R1,2023-03-01 12:00:00,staking,,currency,DOT.S,spot,0.5,0,100.5\n"
@@ -335,8 +305,8 @@ class TestKrakenLegacyLedger(unittest.TestCase):
         self.assertEqual(buys, ["BTC", "DOT", "ETH2"])
         self.assertNotIn("unhandled type", err)
 
-    @rule("CA-INC-04")
-    @rule("US-INC-02")
+    @rule(R.CA_INC_04)
+    @rule(R.US_INC_02)
     def test_feecurrency_other_than_asset(self):
         csv = ("txid,refid,time,type,subtype,aclass,subclass,asset,wallet,"
                "amount,fee,balance,amountusd,feeusd,balanceusd,feecurrency\n"
@@ -353,8 +323,8 @@ class TestKrakenLegacyLedger(unittest.TestCase):
         # ...it reduces the income.
         self.assertAlmostEqual(div["net_amount"], 22.5)
 
-    @rule("CA-INC-04")
-    @rule("US-INC-02")
+    @rule(R.CA_INC_04)
+    @rule(R.US_INC_02)
     def test_same_ccy_fee_unchanged(self):
         csv = ("txid,refid,time,type,subtype,aclass,subclass,asset,wallet,"
                "amount,fee,balance,amountusd,feeusd,balanceusd,feecurrency\n"
@@ -375,8 +345,8 @@ class TestKrakenLegacyLedger(unittest.TestCase):
             _run(K().parse_file, Path(td.name) / "kr_ledgers.csv")
         self.assertIn("required column(s) missing: fee", str(cm.exception))
 
-    @rule("CA-CRYPTO-03")
-    @rule("US-CRYPTO-03")
+    @rule(R.CA_CRYPTO_03)
+    @rule(R.US_CRYPTO_03)
     def test_withdrawal_coin_fee_is_disposed(self):
         csv = (_KL_H +
                "L1,F1,2026-05-11 16:00:00,withdrawal,,currency,ATOM,spot,-2.5,0.04,11\n")
@@ -425,9 +395,9 @@ class TestUtcToLocal(unittest.TestCase):
         self.assertEqual((txs[0]["date"], txs[0]["time"]),
                          ("2025-12-31", "22:00:00"))
 
-    @rule("CA-DATE-12")
+    @rule(R.CA_DATE_12)
     def test_summer_offset_and_env_override(self):
-        from taxjson.lib.brokerages._crypto_common import utc_to_local
+        from taxjson.lib.timezones import utc_to_local
         self.assertEqual(utc_to_local(datetime(2025, 7, 1, 3, 0)),
                          datetime(2025, 6, 30, 23, 0))
         with mock.patch.dict(os.environ,
@@ -436,7 +406,7 @@ class TestUtcToLocal(unittest.TestCase):
                              datetime(2025, 6, 30, 20, 0))
 
     def test_eastern_fallback_matches_tz_database(self):
-        from taxjson.lib.brokerages import _crypto_common as cc
+        from taxjson.lib import timezones as TZ
         try:
             from zoneinfo import ZoneInfo
             ZoneInfo("America/Toronto")
@@ -444,10 +414,10 @@ class TestUtcToLocal(unittest.TestCase):
             self.skipTest("no tz database")
         d = datetime(2005, 1, 1, 0, 30)
         while d.year < 2028:
-            want = cc.utc_to_local(d, "America/Toronto")
+            want = TZ.utc_to_local(d, "America/Toronto")
             # The fallback, the repeated hour ordered as utc_to_local
             # orders it (backlog TJ-0747).
-            got = cc._eastern_local(d)
+            got = TZ._eastern_local(d)
             self.assertEqual(got, want, d)
             d += timedelta(hours=37)
 

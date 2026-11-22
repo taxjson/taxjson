@@ -1,0 +1,16 @@
+SANITY — taxjson positions (basis: wash-adjusted) vs external holdings TOML (paired check)
+
+  accounts:  margin  (8 combined position(s))  [paired]
+  file:      holdings.toml
+  result:    1 discrepancy(ies)
+
+Not compared (no holdings file given): crypto (2), qt (1), rrsp (2), tfsa (3)
+
+ISSUE: MISSING_IN_HOLDINGS = not in the broker's file; MISSING_IN_TAXJSON = not in the books.
+ACCOUNTS  SYMBOL    ISSUE         TAXJSON  HOLDINGS  DIFF
+---------------------------------------------------------
+margin    SAMPA.TO  QTY_MISMATCH      100        90   +10
+
+! 1 more in the books: a trade after your last export, or a booking problem — tjs audit SYMBOL
+
+COST: 1 of 7 differ from the broker's book value (informational) — tjs sanity --details

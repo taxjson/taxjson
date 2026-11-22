@@ -5,62 +5,24 @@ US-XLIST-05).
 Every fixture is SYNTHETIC: invented tickers (QZ*), invented FIGIs
 (BBG0000000xx), invented names.
 """
-import importlib.util
 import json
 import os
 import tempfile
 import unittest
-import zipfile
 from pathlib import Path
 
 from tax_rules import rule, rule_absent
 from tax_rules.dual import cli, projects_both
+from taxjson.rules import ids as R
 
-from taxjson.bin.taxjson_ticker_map import _parse_map_file, merge_renames
+from taxjson.lib.ticker_map_rules import merge_renames
+from taxjson.lib.map_file import _parse_map_file
 from taxjson.lib import tobase_map as TB
+from _support.symbols_interlisted_master import (
+    REPO, F1, F2, F3, _build_module, _master, SEC, _project, _xlsx, _eq, _build_cache,
+)
 
-REPO = Path(__file__).resolve().parent.parent
-F1, F2, F3, F4 = ("BBG000000Q01", "BBG000000Q02", "BBG000000Q03",
-                  "BBG000000Q04")
-
-
-def _build_module():
-    spec = importlib.util.spec_from_file_location(
-        "build_interlisted", REPO / "scripts" / "build_interlisted.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def _master(security=None, distinct=None, generated="2026-10-01"):
-    return TB.Master({"schema_version": 1, "generated": generated,
-                      "sources": [{"name": "synthetic", "as_of": generated}]},
-                     dict(security or {}), dict(distinct or {}))
-
-
-SEC = {
-    F1: {"name": "QZALPHA", "kind": "share", "share_class_figi": F1,
-         "ca": ["QZA.TO"], "us": ["QZAB.US"], "us_exchange": ["NYSE"]},
-    F2: {"name": "QZBETA", "kind": "share", "share_class_figi": F2,
-         "ca": ["QZB.TO"], "us": [], "us_exchange": [],
-         "us_otc": ["QZBBF.US"]},
-    F3: {"name": "QZGAMMA", "kind": "share", "share_class_figi": F3,
-         "ca": ["QZG.TO"], "us": [], "us_exchange": [],
-         "until": "2025-06-30",
-         "history": [{"listing": "QZG.US", "kind": "us",
-                      "until": "2025-06-30"}]},
-}
-
-
-def _project(td, country="canada", ticker="", tobase=None):
-    root = Path(td) / "p"
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "taxjson.toml").write_text(
-        f'[settings]\ncountry = "{country}"\nyear = 2025\n')
-    (root / "ticker.map").write_text(ticker)
-    if tobase is not None:
-        (root / "tobase.map").write_text(tobase)
-    return root
+F4 = "BBG000000Q04"
 
 
 # ------------------------------------------------------------ the master
@@ -109,7 +71,7 @@ class TestRender(unittest.TestCase):
                                rf"[0-9a-f]{{6}} until=2025-06-30\n")
         self.assertNotIn("DISTINCT", text.split(TB.STAMP)[1])
 
-    @rule("CA-XLIST-06")
+    @rule(R.CA_XLIST_06)
     def test_no_distinct_line_for_a_receipt(self):
         # v0.27.1: look-alike listings are never joined, so a receipt the
         # books hold needs no DISTINCT line (the master keeps it apart:
@@ -151,7 +113,7 @@ class TestOverlay(unittest.TestCase):
         return TB.parse_tobase("\n".join(
             f"{ln}  # master:{F1}" for ln in lines))
 
-    @rule("CA-XLIST-06")
+    @rule(R.CA_XLIST_06)
     def test_applied_and_pooled(self):
         with tempfile.TemporaryDirectory() as td:
             root = _project(td, tobase=f"TOBASE QZAB.US QZA.TO  # master:{F1}\n")
@@ -162,7 +124,7 @@ class TestOverlay(unittest.TestCase):
             # Not in the holdings (GLOBAL) view, as any TOBASE line.
             self.assertNotIn("QZAB.US", merge_renames(tm, False))
 
-    @rule("CA-XLIST-06")
+    @rule(R.CA_XLIST_06)
     def test_ticker_map_wins(self):
         ov = TB.compute_overlay("DISTINCT QZAB.US QZA.TO\n",
                                 self._tob("TOBASE QZAB.US QZA.TO"), True)
@@ -215,7 +177,7 @@ class TestOverlay(unittest.TestCase):
             self.assertTrue(any(p.startswith("tobase.map:1:")
                                 for p in problems), problems)
 
-    @rule("CA-XLIST-06")
+    @rule(R.CA_XLIST_06)
     def test_venture_spelling_is_one_listing(self):
         # A ticker.map line naming X.V covers X.TO, and the reverse.
         with tempfile.TemporaryDirectory() as td:
@@ -235,8 +197,8 @@ class TestOverlay(unittest.TestCase):
             self.assertEqual(merge_renames(tm, True), {"QZVB.US": "QZV.TO"})
             self.assertEqual(tm.generated, frozenset())
 
-    @rule_absent("CA-XLIST-06", country="usa")
-    @rule("US-XLIST-05")
+    @rule_absent(R.CA_XLIST_06, country="usa")
+    @rule(R.US_XLIST_05)
     def test_usa_reads_no_tobase_map_and_no_venture_alias(self):
         with tempfile.TemporaryDirectory() as td:
             root = _project(td, "usa", ticker="TOBASE QZVB.US QZV.V\n",
@@ -251,7 +213,7 @@ class TestOverlay(unittest.TestCase):
     def test_inferences_yield_only_to_the_users_lines(self):
         # named_symbols (what listing-suffix and Questrade-code inference
         # leave alone) counts the user's lines, not the master's.
-        from taxjson.bin.taxjson_ticker_map import named_symbols
+        from taxjson.lib.ticker_map_rules import named_symbols
         with tempfile.TemporaryDirectory() as td:
             root = _project(td, ticker="TOBASE QZUU.US QZUU.TO\n",
                             tobase=f"TOBASE QZAB.US QZA.TO  # master:{F1}\n")
@@ -278,7 +240,7 @@ class TestOverlay(unittest.TestCase):
 
 class TestUntil(unittest.TestCase):
 
-    @rule("CA-XLIST-06")
+    @rule(R.CA_XLIST_06)
     def test_trade_after_until_is_named(self):
         with tempfile.TemporaryDirectory() as td:
             root = _project(td, tobase=(
@@ -386,91 +348,10 @@ class TestPlan(unittest.TestCase):
 
 # ------------------------------------------------------------ the build
 
-def _xlsx(path, sheets):
-    """A minimal .xlsx: {sheet name: rows of str} as inline strings."""
-    ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-    rns = ("http://schemas.openxmlformats.org/officeDocument/2006/"
-           "relationships")
-    with zipfile.ZipFile(path, "w") as z:
-        wb = [f'<workbook xmlns="{ns}" xmlns:r="{rns}"><sheets>']
-        rel = ['<Relationships xmlns="http://schemas.openxmlformats.org/'
-               'package/2006/relationships">']
-        for i, (name, rows) in enumerate(sheets.items(), 1):
-            wb.append(f'<sheet name="{name}" sheetId="{i}" r:id="rId{i}"/>')
-            rel.append(f'<Relationship Id="rId{i}" Target="worksheets/'
-                       f'sheet{i}.xml" Type="x"/>')
-            cells = []
-            for r, row in enumerate(rows, 1):
-                cs = "".join(
-                    f'<c r="{chr(65 + c)}{r}" t="inlineStr"><is><t>{v}</t>'
-                    f'</is></c>' for c, v in enumerate(row))
-                cells.append(f'<row r="{r}">{cs}</row>')
-            z.writestr(f"xl/worksheets/sheet{i}.xml",
-                       f'<worksheet xmlns="{ns}"><sheetData>'
-                       + "".join(cells) + "</sheetData></worksheet>")
-        z.writestr("xl/workbook.xml", "".join(wb) + "</sheets></workbook>")
-        z.writestr("xl/_rels/workbook.xml.rels",
-                   "".join(rel) + "</Relationships>")
-
-
-def _eq(ticker, exch, sc, typ="Common Stock", name="QZ CO"):
-    return {"ticker": ticker, "exchCode": exch, "shareClassFIGI": sc,
-            "securityType": typ, "marketSector": "Equity", "name": name}
-
 
 class TestBuild(unittest.TestCase):
 
-    def _cache(self, td):
-        B = _build_module()
-        cache = Path(td) / "cache"
-        cache.mkdir()
-        (cache / B.TMX_TXT).write_text(
-            "As of January 1, 2026\n\n"
-            "Symbol\tName\tUS Symbol\tSector\tInternational Market\n"
-            "QZA:TSX\tQZ Alpha\tQZAB\tMining\tNYSE\n"
-            "QZM:TSX\tQZ Mismatch\tQZM\tMining\tNYSE\n"
-            "QZW.WT:TSX\tQZ Warrant\tQZWW\tMining\tNYSE\n")
-        (cache / B.NASDAQ).write_text(
-            "Symbol|Security Name|Market Category|Test Issue|Financial "
-            "Status|Round Lot Size|ETF|NextShares\n"
-            "QZD|QZ Delta US Inc|Q|N|N|100|N|N\n"
-            "File Creation Time: 0101202612:00|||||||\n")
-        (cache / B.OTHER).write_text(
-            "ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot "
-            "Size|Test Issue|NASDAQ Symbol\n"
-            "QZAB|QZ Alpha|N|QZAB|N|100|N|QZAB\n"
-            "QZM|QZ Other Co|N|QZM|N|100|N|QZM\n"
-            "File Creation Time: 0101202612:00||||||\n")
-        hdr = ["Co_ID", "Root Ticker", "Name", "SP_Type"]
-        _xlsx(cache / f"{B.TMX_XLSX_PREFIX}2026-01-01.xlsx", {
-            "TSX Issuers": [hdr, ["1", "QZA", "QZ Alpha", ""],
-                            ["2", "QZD", "QZ Delta CDR", "CDR"]],
-            "TSXV Issuers": [hdr, ["3", "QZV", "QZ Venture", ""]]})
-        K = B.Figi.key
-        figi = {
-            K(B.ticker_job("QZA", "CN")): [_eq("QZA", "CN", "BBG000000A01")],
-            K(B.ticker_job("QZAB", "US")): [_eq("QZAB", "US", "BBG000000A01")],
-            K(B.class_job("BBG000000A01", "US")): [
-                _eq("QZAB", "US", "BBG000000A01"),
-                _eq("QZAAF", "US", "BBG000000A01"),
-                _eq("QZAAY", "US", "BBG000000A01", typ="ADR")],
-            K(B.class_job("BBG000000A01", "CN")): [
-                _eq("QZA", "CN", "BBG000000A01"),
-                _eq("QZA/U", "CN", "BBG000000A01")],
-            K(B.ticker_job("QZM", "CN")): [_eq("QZM", "CN", "BBG000000M01")],
-            K(B.ticker_job("QZM", "US")): [_eq("QZM", "US", "BBG000000M02")],
-            K(B.class_job("BBG000000M01", "US")): [],
-            K(B.ticker_job("QZV", "CN")): [_eq("QZV", "CN", "BBG000000V01")],
-            K(B.class_job("BBG000000V01", "US")): [
-                _eq("QZVVF", "US", "BBG000000V01")],
-            K(B.ticker_job("QZD", "CN")): [_eq("QZD", "CN", "BBG000000D01",
-                                               typ="Canadian DR")],
-            K(B.ticker_job("QZD", "US")): [_eq("QZD", "US", "BBG000000D02")],
-            K({"idType": "ID_ISIN", "idValue": "US0000000001"}): [
-                _eq("QZA", "US", "BBG000000A01")],
-        }
-        (cache / B.FIGI_CACHE).write_text(json.dumps(figi))
-        return B, cache
+    _cache = staticmethod(_build_cache)
 
     def test_offline_build_pairs_only_one_share_class(self):
         with tempfile.TemporaryDirectory() as td:
@@ -500,7 +381,7 @@ class TestBuild(unittest.TestCase):
             self.assertNotIn("isin", text.lower())
             self.assertNotIn("US0000000001", text)
             self.assertNotIn("QZ Alpha", text)      # no TMX text shipped
-            from taxjson.lib.tomlcompat import tomllib
+            import tomllib
             self.assertIn("BBG000000A01", tomllib.loads(text)["security"])
 
     def test_append_only(self):
@@ -682,7 +563,7 @@ class TestCli(unittest.TestCase):
             self.assertEqual(_PL.tobase_map_path(top / "2026"),
                              (top / "tobase.map").resolve())
 
-    @rule("US-XLIST-05")
+    @rule(R.US_XLIST_05)
     def test_update_refused_in_a_us_project(self):
         with tempfile.TemporaryDirectory() as td:
             root = _project(td, "usa")
@@ -757,9 +638,9 @@ def _files(country):
 
 class TestRun(unittest.TestCase):
 
-    @rule("CA-XLIST-06")
-    @rule_absent("CA-XLIST-06", country="usa")
-    @rule("US-XLIST-05")
+    @rule(R.CA_XLIST_06)
+    @rule_absent(R.CA_XLIST_06, country="usa")
+    @rule(R.US_XLIST_05)
     def test_pooled_in_canada_not_read_in_the_usa(self):
         with tempfile.TemporaryDirectory() as td:
             for country in ("canada", "usa"):
@@ -786,7 +667,7 @@ class TestRun(unittest.TestCase):
 
 class TestT1135Options(unittest.TestCase):
 
-    @rule("CA-RPT-17")
+    @rule(R.CA_RPT_17)
     def test_option_on_a_pooled_listing_follows_it(self):
         # Filing position: a US-listed call on a Canadian issuer pooled
         # by tobase.map is booked under the Canadian listing's option

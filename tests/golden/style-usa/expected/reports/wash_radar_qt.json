@@ -1,0 +1,48 @@
+{
+  "account": "qt",
+  "as_of_date": "<stamp>",
+  "country": "usa",
+  "generated_at": "<stamp>",
+  "include_all": false,
+  "rows_scoped": true,
+  "schema_version": 1,
+  "scope_note": "Scope: these verdicts cover this project's accounts only. A purchase by your spouse or by a corporation you control within 30 days before or after a loss sale also makes it a wash sale (\u00a71091; IRS Pub. 550) \u2014 those accounts are not in the project, so check them yourself.",
+  "sections": [
+    {
+      "category": "WASHED",
+      "rows": [],
+      "title": "WASHED \u2014 wash sale (\u00a71091): loss disallowed; no sale undoes it"
+    },
+    {
+      "category": "BLOCKED",
+      "rows": [],
+      "title": "BLOCKED \u2014 do not buy"
+    },
+    {
+      "category": "LOCKED",
+      "rows": [],
+      "title": "LOCKED \u2014 recent buy; do not sell at a loss"
+    },
+    {
+      "category": "EXITABLE",
+      "rows": [],
+      "title": "EXITABLE \u2014 loss OK only if you exit the FULL position"
+    },
+    {
+      "category": "COOLING",
+      "rows": [],
+      "title": "COOLING \u2014 wait before re-entering"
+    },
+    {
+      "category": "RISK",
+      "rows": [],
+      "title": "RISK \u2014 sellable now; an IRA still holds (pause IRA buys and dividend reinvestment 30 days after selling)"
+    },
+    {
+      "category": "CLEAR",
+      "rows": [],
+      "title": "CLEAR \u2014 safe to sell at a loss"
+    }
+  ],
+  "similar": []
+}

@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 from taxjson.lib import tax_plot as TP
 from _qa_project import project as qa_project, tj
@@ -120,7 +121,7 @@ BOOK_US = BOOK_CA.replace(".TO", ".US").replace("CAD", "USD")
 
 
 class TestPlotTaxCli(unittest.TestCase):
-    @rule("CA-PLAN-08")
+    @rule(R.CA_PLAN_08)
     def test_canada_months_add_up_to_the_estimate(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = qa_project(tmp, "p", {"margin/m.tt": BOOK_CA})
@@ -158,7 +159,7 @@ class TestPlotTaxCli(unittest.TestCase):
             self.assertNotEqual(bad.returncode, 0)
             self.assertIn("needs a province", bad.stderr)
 
-    @rule("US-PLAN-09")
+    @rule(R.US_PLAN_09)
     def test_usa(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = qa_project(tmp, "p", {"margin/m.tt": BOOK_US},

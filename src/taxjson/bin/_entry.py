@@ -17,7 +17,30 @@ import re
 import sys
 from typing import Any, Callable
 
-from taxjson.lib.cli_diag import console_prog, guard_main, run_top_level
+from taxjson.lib.cli_diag import guard_main, run_top_level
+
+
+# Console-script names spelled out (pyproject.toml's [project.scripts]):
+# taxjson_fees and fill_crypto_prices differ from the taxjson-<x> rule, the
+# other two give what it gives. Here, not in lib/cli_diag: lib names no
+# bin module (step 8 of the architecture plan).
+_PROG_ALIASES = {
+    "taxjson_fees": "taxjson-fees-sum",
+    "to_base_curr": "taxjson-to-base-curr",
+    "fill_crypto_prices": "taxjson-fill-crypto",
+    "xlsx_to_csv": "taxjson-xlsx-to-csv",
+}
+
+
+def console_prog(module: str) -> str:
+    """The console-script name of a bin module (`taxjson.bin.taxjson_corp_
+    actions` or `taxjson_corp_actions` -> `taxjson-corp-actions`)."""
+    name = str(module).rsplit(".", 1)[-1]
+    if name in _PROG_ALIASES:
+        return _PROG_ALIASES[name]
+    if name.startswith("taxjson_"):
+        name = name[len("taxjson_"):]
+    return "taxjson-" + name.replace("_", "-")
 
 
 def private_umask() -> None:
@@ -50,7 +73,7 @@ def __getattr__(name: str) -> Callable[[], Any]:
 
 if __name__ == "__main__":
     # `python -m taxjson.bin._entry <module> ARGS...`: the subprocess form
-    # lib/dispatch uses, so a tool run out of process gets the same
+    # pipeline/dispatch uses, so a tool run out of process gets the same
     # umask, one-line errors and pipe handling as its console script
     # (`python -m taxjson.bin.<module>` skipped all three — A2-0161).
     if len(sys.argv) < 2:

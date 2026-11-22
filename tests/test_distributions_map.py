@@ -15,8 +15,10 @@ import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
 from tax_rules import rule
+from taxjson.rules import ids as R
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 _QT_HEADER = ("Transaction Date,Settlement Date,Action,Symbol,Description,"
               "Quantity,Price,Gross Amount,Commission,Net Amount,Currency,"
@@ -29,10 +31,10 @@ def _run_cli(root, *args):
          *args], cwd=REPO_ROOT, capture_output=True, text=True)
 
 
-@rule("CA-DIST-01")
+@rule(R.CA_DIST_01)
 class TestBalanceWalk(unittest.TestCase):
     def test_split_and_rename_aware(self):
-        from taxjson.bin.taxjson_apply_distributions import balance_on
+        from taxjson.lib.unit_balance import balance_on
         txs = [
             {"action": "BUYSELL", "date": "2025-01-05", "time": "09:30:00",
              "symbol": "OLD.TO", "quantity": 100.0},
@@ -73,7 +75,7 @@ class TestBalanceWalk(unittest.TestCase):
         self.assertAlmostEqual(adjusts[0]["net_amount"], 43.0, places=4)
 
 
-@rule("CA-DIST-01")
+@rule(R.CA_DIST_01)
 class TestEndToEnd(unittest.TestCase):
     def test_map_reduces_gain_at_sale(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -126,7 +128,7 @@ class TestEndToEnd(unittest.TestCase):
         self.assertIn("no ZZZ.TO shares held", r.stderr + r.stdout)
 
 
-@rule("CA-DIST-01")
+@rule(R.CA_DIST_01)
 class TestRecordDateBasis(unittest.TestCase):
     """2026-09 audit: the record-date balance walked TRADE dates, so a
     sale traded 06-19 settling 06-22 made the seller NOT a holder on a
@@ -145,8 +147,8 @@ class TestRecordDateBasis(unittest.TestCase):
     ]
 
     def test_unsettled_sale_still_holder_of_record(self):
-        from taxjson.bin.taxjson_apply_distributions import (
-            apply_distributions, balance_on)
+        from taxjson.lib.unit_balance import balance_on
+        from taxjson.bin.taxjson_apply_distributions import apply_distributions
         self.assertAlmostEqual(
             balance_on(self._BOOK, "XAW.TO", "2026-06-19", "settle"),
             100.0)
@@ -166,7 +168,7 @@ class TestRecordDateBasis(unittest.TestCase):
         self.assertEqual(n, 0)
 
     def test_buy_traded_on_record_date_not_yet_credited(self):
-        from taxjson.bin.taxjson_apply_distributions import balance_on
+        from taxjson.lib.unit_balance import balance_on
         book = [{"action": "BUYSELL", "date": "2026-06-19",
                  "time": "09:30:00", "date_settle": "2026-06-22",
                  "symbol": "XAW.TO", "quantity": 100.0,

@@ -1,0 +1,86 @@
+{
+  "basis": "wash-adjusted",
+  "currency": "USD",
+  "rows": [
+    {
+      "closes": 5,
+      "cost": 2795.9132,
+      "denied": 0.0,
+      "gain": 274.9968,
+      "proceeds": 3070.91,
+      "ticker": "ETH"
+    },
+    {
+      "closes": 2,
+      "cost": 6375.6,
+      "denied": 0.0,
+      "gain": 198.0,
+      "proceeds": 6573.6,
+      "ticker": "BTC"
+    },
+    {
+      "closes": 1,
+      "cost": 20001.0,
+      "denied": 0.0,
+      "gain": 98.0,
+      "proceeds": 20099.0,
+      "ticker": "MSFT.US"
+    },
+    {
+      "closes": 3,
+      "cost": 1.75,
+      "denied": 0.0,
+      "gain": 0.0,
+      "proceeds": 1.75,
+      "ticker": "USDC"
+    },
+    {
+      "closes": 1,
+      "cost": 4009.95,
+      "denied": 519.9,
+      "gain": 0.0,
+      "proceeds": 3490.05,
+      "ticker": "SAMPA.US"
+    },
+    {
+      "closes": 1,
+      "cost": 1481.0,
+      "denied": 82.0,
+      "gain": 0.0,
+      "proceeds": 1399.0,
+      "ticker": "NVDA.US"
+    },
+    {
+      "closes": 1,
+      "cost": 36.25,
+      "denied": 0.0,
+      "gain": -36.25,
+      "proceeds": 0.0,
+      "ticker": "KELPQ.US"
+    },
+    {
+      "closes": 3,
+      "cost": 6603.0,
+      "denied": 301.5,
+      "gain": -205.5,
+      "proceeds": 6096.0,
+      "ticker": "QZQ.US"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "tax year 2024",
+  "sheltered_included": [],
+  "side": "winners",
+  "side_tickers": [
+    "ETH",
+    "BTC",
+    "MSFT.US"
+  ],
+  "side_total_gain": 571.0,
+  "side_total_gain_sheltered": 0.0,
+  "side_total_gain_taxable": 571.0,
+  "tainted_skipped": 0,
+  "total_gain": 329.25,
+  "total_gain_sheltered": 0.0,
+  "total_gain_taxable": 329.25
+}

@@ -1,0 +1,69 @@
+{
+  "capital_gains_dividends": null,
+  "crypto_staking": {
+    "USD": 17.45
+  },
+  "payments_in_lieu_as_dividends": 0,
+  "rows": [
+    {
+      "currency": "USD",
+      "dividend": 18.0,
+      "symbol": "AAPL.US"
+    },
+    {
+      "currency": "CAD",
+      "dividend": 183.0,
+      "symbol": "ENB.TO"
+    },
+    {
+      "currency": "USD",
+      "dividend": 17.45,
+      "symbol": "ETH"
+    },
+    {
+      "currency": "USD",
+      "dividend": 75.0,
+      "symbol": "MSFT.US"
+    },
+    {
+      "currency": "USD",
+      "dividend": 250.0,
+      "symbol": "PARN.US"
+    },
+    {
+      "currency": "USD",
+      "dividend": 40.0,
+      "symbol": "QZQ.US"
+    },
+    {
+      "currency": "CAD",
+      "dividend": 345.0,
+      "symbol": "RY.TO"
+    },
+    {
+      "currency": "CAD",
+      "dividend": 50.0,
+      "symbol": "SAMPA.TO"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "tax year 2024",
+  "sheltered_included": [
+    "tfsa"
+  ],
+  "totals": {
+    "CAD": 578.0,
+    "USD": 400.45
+  },
+  "totals_sheltered": {
+    "CAD": 528.0
+  },
+  "totals_slips": {
+    "CAD": 50.0,
+    "USD": 383.0
+  },
+  "totals_taxable": {
+    "CAD": 50.0,
+    "USD": 400.45
+  }
+}

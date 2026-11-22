@@ -1,0 +1,7 @@
+Created 2025/ from 2024/: taxjson.toml, ticker.map, holdings/
+
+NEXT STEPS
+  1. Save the 2025 exports in inputs/<account>/ (shared), positions snapshots in 2025/holdings/.
+  2. tjs -C <project>/2025 run
+  3. tjs -C <project>/2025 checklist --run
+  4. Later, in 2025/: tjs align --from 2024

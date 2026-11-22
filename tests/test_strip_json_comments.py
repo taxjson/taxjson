@@ -9,7 +9,7 @@ from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
-from taxjson.lib.core import load_transactions, strip_json_comments
+from taxjson.lib.tx_load import load_transactions, strip_json_comments
 
 
 class TestStripJsonComments(unittest.TestCase):

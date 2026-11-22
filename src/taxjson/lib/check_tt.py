@@ -1,5 +1,5 @@
 """`tjs check-tt`: every line of the .tt files read with the parsers
-`tjs run` uses (bin/taxjson_convert_tt and the dated-event readers),
+`tjs run` uses (lib/tt_format and the dated-event readers),
 and every problem named with its file and line — the run and
 `taxjson-convert-tt` stop at the first malformed line; this goes on, so
 one pass shows them all.
@@ -21,12 +21,15 @@ without a line end). Nothing is written.
 """
 from __future__ import annotations
 
+
 import contextlib
 import io
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from taxjson.project.accounts import AccountSettings, configured_accounts, typed_account
+from taxjson.lib import out as _out
 
 ERROR = "error"
 WARNING = "warning"
@@ -126,9 +129,9 @@ def _refuse_inkind_total(ln: Dict[str, Any],
         text = bad.replace(
             f"the INKIND line {ln.get('source') or ''}: ", "INKIND ", 1)
         if unread is not None and unread():
-            print(f"warning: {text}; the broker's transfer row may state "
-                  f"another contract size: `tjs run` reads it and checks the "
-                  f"line at that size", file=sys.stderr)
+            _out.put(f"warning: {text}; the broker's transfer row may state "
+                     f"another contract size: `tjs run` reads it and checks the "
+                     f"line at that size", sys.stderr)
             return
         raise ValueError(text)
 
@@ -184,12 +187,12 @@ def _sizes_unread(root: Path, names: Iterable[str]) -> bool:
     return False
 
 
-def _reads_inkind(acfg: Dict[str, Any]) -> bool:
+def _reads_inkind(acfg: Any) -> bool:
     """`tjs run` reads this account's INKIND lines: a taxable equity
     account that keeps its transfer rows out of the books
-    (taxjson_run._in_kind_plans, in_kind_state)."""
-    return (acfg.get("type") == "taxable" and not acfg.get("transfers")
-            and not acfg.get("crypto"))
+    (pipeline/stages._in_kind_plans, in_kind_state)."""
+    a = typed_account(acfg)
+    return a.taxable and not a.transfers and not a.crypto
 
 
 def parse_line(line: str, where: str, *, account: str, crypto: bool,
@@ -206,11 +209,11 @@ def parse_line(line: str, where: str, *, account: str, crypto: bool,
     `sizes_unread`: _sizes_unread. `inkind_read` false: the run does not
     read this account's INKIND lines (_reads_inkind), so it refuses no
     total of theirs."""
-    from taxjson.bin import taxjson_convert_tt as CT
-    from taxjson.lib.cash_events import CashLineError
-    from taxjson.lib.cash_events import parse_line as _cashline
-    from taxjson.lib.core import is_opening_row
-    from taxjson.lib.loss_overrides import parse_line as _allowloss
+    from taxjson.lib import tt_format as CT
+    from taxjson.lib.cash_lines import CashLineError
+    from taxjson.lib.cash_lines import parse_line as _cashline
+    from taxjson.lib.row_types import is_opening_row
+    from taxjson.lib.loss_override_note import parse_line as _allowloss
     if not CT.strip_tt_comment(line).strip():
         return KIND_BLANK, []
     buf = io.StringIO()
@@ -234,7 +237,7 @@ def parse_line(line: str, where: str, *, account: str, crypto: bool,
             return KIND_EVENT, _captured_warnings(buf, where)
         if _allowloss(line, where) is not None:
             return KIND_EVENT, _captured_warnings(buf, where)
-        from taxjson.lib.transfer_in import parse_not_own_line
+        from taxjson.lib.tt_format import parse_not_own_line
         if parse_not_own_line(line, where) is not None:
             return KIND_EVENT, _captured_warnings(buf, where)
         try:
@@ -256,7 +259,7 @@ def parse_line(line: str, where: str, *, account: str, crypto: bool,
             n += 1
             if crypto and is_opening_row(tx):
                 # The run refuses it after the conversion
-                # (taxjson_run._refuse_crypto_openings).
+                # (pipeline/inputs._refuse_crypto_openings).
                 raise ValueError(
                     f"account {account} is a crypto account: an OPENING "
                     f"line is for share accounts only — enter the coins' "
@@ -288,7 +291,7 @@ def check_file(path: Path, *, file: str, account: str, crypto: bool,
     # The lines as tt_to_json reads and numbers them, split at a line
     # feed only: str.splitlines numbered every line after a form feed or
     # a U+2028 differently from the run (backlog TJ-0029).
-    from taxjson.bin.taxjson_convert_tt import tt_lines
+    from taxjson.lib.tt_format import tt_lines
     lines = tt_lines(text)
     rep.lines = len(lines)
     for n, raw in enumerate(lines, 1):
@@ -315,7 +318,7 @@ def check_file(path: Path, *, file: str, account: str, crypto: bool,
     # As tt_to_json warns: a file cut short still parses, its last number
     # possibly truncated.
     if text and not text.endswith(("\n", "\r")):
-        from taxjson.bin.taxjson_convert_tt import strip_tt_comment
+        from taxjson.lib.tt_format import strip_tt_comment
         last = strip_tt_comment(lines[-1]).strip()
         if last:
             rep.problems.append(Problem(
@@ -341,7 +344,7 @@ def _doc(reports: List[FileReport], extra: List[Problem]) -> Dict[str, Any]:
 
 
 def _is_crypto(acfg: Any) -> bool:
-    return isinstance(acfg, dict) and bool(acfg.get("crypto"))
+    return bool(typed_account(acfg).crypto)
 
 
 def _taxable_transfers(reports: List[FileReport], account: str,
@@ -358,12 +361,13 @@ def _taxable_transfers(reports: List[FileReport], account: str,
     a WARNING. A sheltered account's TRANSFER rows are booked. (A broker
     trade inside a pair's span also stops the run; check-tt does not
     read the exports.)"""
-    if not isinstance(acfg, dict) or acfg.get("type") != "taxable":
+    acfg = typed_account(acfg)
+    if not acfg.taxable:
         return
     rows = [(r, n, shown, tx) for r in reports for n, shown, tx in r.txs]
     if not any(tx.get("action") == "TRANSFER" for *_x, tx in rows):
         return
-    from taxjson.lib.core import coerce_transaction_row
+    from taxjson.lib.tx_load import coerce_transaction_row
     from taxjson.lib.opening import OpeningError, apply_opening_cutoff
     from taxjson.lib.pipeline import _drop_self_cancelling_transfers
     txs: List[Any] = []
@@ -382,7 +386,7 @@ def _taxable_transfers(reports: List[FileReport], account: str,
         except OpeningError:
             pass            # _opening_snapshots names it (two dates)
         txs, _dropped = _drop_self_cancelling_transfers(txs)
-    in_book = bool(acfg.get("transfers"))
+    in_book = bool(acfg.transfers)
     for t in txs:
         if t.action != "TRANSFER" or id(t) not in at:
             continue
@@ -423,7 +427,7 @@ def _opening_snapshots(reports: List[FileReport], account: str) -> None:
     first line whose date differs, naming the line it disagrees with.
     check-tt said "Every line parses." and the run stopped on it
     (backlog TJ-0322). One error per symbol."""
-    from taxjson.lib.core import is_opening_row
+    from taxjson.lib.row_types import is_opening_row
     from taxjson.lib.opening import OpeningError, snapshots
     first: Dict[str, Tuple[FileReport, int, Dict[str, Any]]] = {}
     said: set = set()
@@ -457,14 +461,14 @@ def _project_openings_rule(root: Path) -> Tuple[Optional[str], Optional[str]]:
     from taxjson.lib.country import (CountryError, home_currency,
                                      settings_country)
     cfg = _PL.read_config_soft(root)
-    settings = cfg.get("settings") if isinstance(cfg, dict) else None
-    if not isinstance(settings, dict):
+    table = cfg.get("settings") if isinstance(cfg, dict) else None
+    if not isinstance(table, dict):
         return None, None
     try:
-        country = settings_country(settings)
+        country = settings_country(table)
     except CountryError:
         return None, None
-    base = settings.get("base_currency")
+    base = table.get("base_currency")
     if not isinstance(base, str) or not base.strip():
         base = home_currency(country)
     return country, base.strip().upper()
@@ -481,7 +485,7 @@ def _country_openings(reports: List[FileReport], account: str,
     TJ-0831)."""
     if not country:
         return
-    from taxjson.lib.core import is_opening_row
+    from taxjson.lib.row_types import is_opening_row
     from taxjson.lib.opening import OpeningError, apply_opening_cutoff
     for r in reports:
         for n, shown, tx in r.txs:
@@ -510,9 +514,8 @@ def _not_own_accounts(reports: List[FileReport], root: Path, acct: str,
     as without the line and says so (backlog TJ-0075)."""
     if not reports:
         return
-    from taxjson.lib.transfer_in import (NOTOWN_KEYWORD,
-                                         not_own_account_problem,
-                                         read_not_own)
+    from taxjson.lib.transfer_in import not_own_account_problem, read_not_own
+    from taxjson.lib.tt_format import NOTOWN_KEYWORD
     for n in read_not_own(root, [acct]):
         msg = not_own_account_problem(n, accounts)
         if not msg:
@@ -561,7 +564,7 @@ def _project_reports(root: Path, accounts: Dict[str, Any],
     def unread() -> bool:
         return _sizes_unread(root, sorted(accounts or {}))
     for acct in names:
-        acfg = (accounts or {}).get(acct) or {}
+        acfg = (accounts or {}).get(acct)
         crypto = _is_crypto(acfg)
         by_out: Dict[str, str] = {}
         mine: List[FileReport] = []
@@ -573,7 +576,7 @@ def _project_reports(root: Path, accounts: Dict[str, Any],
                              inkind_read=_reads_inkind(acfg))
             reports.append(rep)
             mine.append(rep)
-            # The names the run refuses (taxjson_run.stage_account):
+            # The names the run refuses (pipeline/stages.stage_account):
             # problems of the file, counted in its row of the table
             # (backlog TJ-0012: its status said `ok`).
             out = tt_json_path(root / "work", acct, tt.name).name
@@ -604,7 +607,7 @@ def _project_reports(root: Path, accounts: Dict[str, Any],
     # already refused above is not named twice.
     seen = {p.where for r in reports for p in r.problems
             if p.severity == ERROR}
-    sub = {a: (accounts or {}).get(a) or {} for a in names}
+    sub = {a: (accounts or {}).get(a) for a in names}
 
     def _add(text: str) -> None:
         for msg in str(text).split("\n"):
@@ -645,7 +648,7 @@ def _project_reports(root: Path, accounts: Dict[str, Any],
 
 def project_root(path: Path) -> Optional[Path]:
     """The project a .tt file sits in: the folder taxjson.toml is in, up
-    to three levels above the file (as taxjson_convert_tt._equity_account
+    to three levels above the file (as tt_format._equity_account
     looks), or, in the shared layout (inputs/ beside the year folders),
     the newest year folder. None when there is no project."""
     from taxjson.lib import project_layout as _PL
@@ -658,14 +661,16 @@ def project_root(path: Path) -> Optional[Path]:
     return None
 
 
-def _accounts_of(root: Path) -> Dict[str, Any]:
+def _accounts_of(root: Path) -> Dict[str, AccountSettings]:
+    """The project's account tables typed; an entry that is no table (a
+    leniently read `margin = 42`) is left out, so its files are checked
+    as of an account of unknown kind."""
     from taxjson.lib import project_layout as _PL
     cfg = _PL.read_config_soft(root)
-    accts = cfg.get("accounts") if isinstance(cfg, dict) else None
-    return accts if isinstance(accts, dict) else {}
+    return configured_accounts(cfg.get("accounts") if isinstance(cfg, dict) else None)
 
 
-def project_accounts(path: Path) -> Optional[Dict[str, Any]]:
+def project_accounts(path: Path) -> Optional[Dict[str, AccountSettings]]:
     """The `[accounts]` of the project a .tt file sits in (project_root);
     None when there is no project."""
     root = project_root(path)
@@ -730,21 +735,24 @@ def check_paths(paths: Iterable[Path], account: Optional[str] = None,
     extra: List[Problem] = []
     loose: Dict[str, List[FileReport]] = {}
     paths = [Path(p) for p in paths]
+    _accts_of: Dict[Path, Dict[str, AccountSettings]] = {}   # one read per project
     labels = list(shown) if shown is not None else [str(p) for p in paths]
     for p, label in zip(paths, labels):
         acct = account or p.resolve().parent.name or "default"
         proj = root if (root is not None and _reads(root, acct, p)) \
             else project_root(p)
-        accts = _accounts_of(proj) if proj is not None else None
+        if proj is not None and proj not in _accts_of:
+            _accts_of[proj] = _accounts_of(proj)
+        accts = _accts_of[proj] if proj is not None else None
         acfg = (accts or {}).get(acct)
         if crypto is not None:
             is_crypto, equity = crypto, not crypto
-        elif isinstance(acfg, dict):
+        elif acfg is not None:
             is_crypto = _is_crypto(acfg)
             equity = not is_crypto
         else:
             is_crypto, equity = False, False
-        if (isinstance(acfg, dict) and is_crypto == _is_crypto(acfg)
+        if (acfg is not None and is_crypto == _is_crypto(acfg)
                 and acct == p.resolve().parent.name
                 and _reads(proj, acct, p)):
             rep, more = _as_in_project(proj, accts, acct, p, label)

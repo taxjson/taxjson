@@ -24,8 +24,9 @@ import unittest
 from pathlib import Path
 
 from taxjson.lib.brokerages.base import _parse_div_qty_rate
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 class TestParseDivQtyRate(unittest.TestCase):

@@ -7,7 +7,7 @@ fix uses `repr(float(x))`, which produces the shortest decimal string
 that uniquely round-trips back to the same IEEE-754 bit pattern."""
 import unittest
 
-from taxjson.lib.core import TaxTransaction
+from taxjson.model.transaction import TaxTransaction
 
 
 class TestComputeIdPrecision(unittest.TestCase):

@@ -27,17 +27,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from taxjson.lib.core import CanadaTaxRules, USATaxRules, TaxTransaction
+from taxjson.engine.ca.taxrules import CanadaTaxRules
+from taxjson.engine.us.taxrules import USATaxRules
+from taxjson.model.transaction import TaxTransaction
+import _paths
 
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python < 3.11
-    try:
-        import tomli as tomllib
-    except ModuleNotFoundError:
-        tomllib = None
+import tomllib
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 # ============================================================================
@@ -244,8 +241,6 @@ class TestUSAPositionStart(unittest.TestCase):
 # ============================================================================
 # taxjson-export holdings.toml — position_start_date emission + aggregation
 # ============================================================================
-@unittest.skipIf(tomllib is None,
-                 "no TOML reader (Python < 3.11 without `tomli`)")
 class TestHoldingsTomlPositionStart(unittest.TestCase):
     def _export(self, inventory, *extra_args):
         with tempfile.TemporaryDirectory() as tmp:

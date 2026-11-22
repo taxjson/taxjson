@@ -1,0 +1,30 @@
+# The rows the parser must count as skipped (TJ-2328). A LEDGERS export; kr_trades.csv beside it is
+# the sibling trades export the coverage check reads (its one fill is the ledger's trade refid). The kinds:
+# a coin deposit (SOL in) and a coin withdrawal with its fee in the coin (the TRANSFER legs, + and -,
+#   and the 0.01 SOL fee sold at its feeusd);
+# an Earn reward net of its commission (ETH: the DIVIDEND and the coins bought at amountusd - feeusd);
+# a legacy staking reward on DOT.S (the DIVIDEND and the DOT bought); a USD.HOLD dividend (the DIVIDEND alone);
+# an instant trade USD -> ETH (one BUYSELL, the spend fee capitalized); an instant swap SOL -> ETH
+#   (the sale and the purchase at the received leg's amountusd);
+# a dust sweep ADA + XRP -> USD (the XRP sale; the ADA leg under the books' zero left out);
+# skipped (14): reported: a fiat deposit, a fiat withdrawal (TJ-4200, below), the two trade rows of one refid (booked from kr_trades.csv),
+#   a coin adjustment (UNBOOKED), a zero-amount fiat adjustment, a repeated row (one txid, same content);
+#   non-events: an Earn allocation's two rows, a transfer spottostaking, the ADA dust leg,
+#   a USD -> CAD instant trade's two rows (forex);
+#   skipped: an orphan spend leg with no receive (UNBOOKED).
+# TJ-2374: a withdrawal with a dust fee (the TRANSFER leg booked, the fee a note), a dust
+# earn reward and a reward its fee consumed: each a non-event the template counts once.
+# TJ-4200, the two stablecoin models' rows (the identical-rows check, BASIS_INPUTS): a fiat
+# withdrawal whose fee is charged in USDC (cash mode, the default: fiat funding, a reported
+# skip; property mode: the 0.43 USDC sold at par) and an Earn reward in USDC (cash mode: the
+# DIVIDEND alone; property mode: the DIVIDEND and the coins bought at par).
+# A DOT Earn reward whose commission Kraken charged in ETH (feecurrency): the DIVIDEND at
+# amountusd - feeusd and described with the commission, the coins bought at the full amountusd,
+# and the ETH fee sold at its feeusd.
+expected_skips = 16
+# The fixture is the Kraken parser's (a ledgers export beside its trades).
+parser = "kraken"
+# The kinds its rows and its broker's cash events have (parsers.protocol ROW_KINDS and
+# CASH_KINDS): the conformance kit asks for a row, or an event, of each.
+kinds = "trade, dividend, transfer"
+cash_kinds = "FXCONV, CASHMOVE, CASHBAL, FLOW"

@@ -66,6 +66,7 @@ converted .tt rows.
 """
 from __future__ import annotations
 
+
 import json
 import math
 from dataclasses import dataclass, field
@@ -73,11 +74,14 @@ from datetime import date as _date
 from pathlib import Path
 from typing import (Any, Callable, Dict, Iterable, List, Optional, Sequence,
                     Tuple)
+from taxjson.model import money as M
+from taxjson.lib.tt_format import NOTOWN_KEYWORD, parse_not_own_line, tt_lines
 
 # The type of the acquisition booked for an arrival at the broker's stated
 # book value. The engines do not treat it as a purchase in a loss window
-# (its date is the arrival, not the acquisition) — core.py.
-from taxjson.lib.core import TRANSFER_BOOK_VALUE_TYPE  # noqa: E402
+# (its date is the arrival, not the acquisition) — engine/rows.py.
+from taxjson.project.accounts import typed_account
+from taxjson.lib.row_types import TRANSFER_BOOK_VALUE_TYPE  # noqa: E402
 # The most days between the two legs of one move of your own: the window
 # the in-kind pairing allows a transfer between two brokers
 # (lib/in_kind.PAIR_DAYS; the US lot carry reads this pairing, backlog
@@ -175,6 +179,13 @@ class OwnMove:
     # The days between the legs when the pairing took them as a slower
     # move (slow_pairs); 0 within the window.
     slow: int = 0
+    # How the two rows' brokers sign a transfer row: "direction" (out
+    # negative, in positive, whatever the position) or "change" (the
+    # position's change: a written option leaving shows +); "" when the
+    # two differ or a broker is not known (transfer_sign_convention). For
+    # a long position the two agree; for a written option they do not,
+    # and the engine reads the move's sender by it (backlog TJ-3243).
+    signed_by: str = ""
     # The units of the out row and of the in row no pairing took, once
     # the pairing is done: a move whose rows' quantities differ (the
     # rest of the out row a transfer-out of its own, of the in row an
@@ -215,13 +226,6 @@ class SlowMove:
         """The .tt line that undoes this pairing (not_own_text)."""
         return not_own_text(self.in_date, self.symbol, self.quantity,
                             self.out_account, self.out_date)
-
-
-# A .tt NOTOWN line (backlog TJ-0075): in the folder of the taxable
-# account the shares arrived in, it says that one transfer-in and the
-# transfer-out the run paired it with are NOT one move of your own.
-NOTOWN_KEYWORD = "NOTOWN"
-NOTOWN_FORM = "NOTOWN <date> <symbol> <qty> <from-account> <from-date>"
 
 
 @dataclass(eq=False)
@@ -272,9 +276,11 @@ class NotOwn:
 
 
 def _qty_text(q: float) -> str:
-    """Units as a .tt line writes them: `100`, `12.5` (never `1e+06`)."""
-    s = f"{abs(float(q)):.8f}".rstrip("0").rstrip(".")
-    return s or "0"
+    """Units as a .tt line writes them: `100`, `12.5` (never `1e+06`,
+    never cut); the one formatter is lib/report_fmt.qty_text (backlog
+    TJ-3212)."""
+    from taxjson.lib.report_fmt import qty_text
+    return qty_text(q)
 
 
 def not_own_text(in_date: str, symbol: str, quantity: float,
@@ -285,68 +291,21 @@ def not_own_text(in_date: str, symbol: str, quantity: float,
             f"{_qty_text(quantity)} {out_account} {str(out_date)[:10]}")
 
 
-def parse_not_own_line(line: str, source: str = ""
-                       ) -> Optional[Dict[str, Any]]:
-    """`NOTOWN <date> <symbol> <qty> <from-account> <from-date>` ->
-    {date, symbol, quantity, from_account, from_date, line}, or None when
-    the line is not a NOTOWN line. Raises ValueError naming the form on
-    a malformed one (`#` starts a comment)."""
-    import re
-    from taxjson.bin.taxjson_convert_tt import _is_date, strip_tt_comment
-    where = f"{source}: " if source else ""
-    parts = strip_tt_comment(line).split()
-    if not parts or parts[0] != NOTOWN_KEYWORD:
-        return None
-    shown = line.strip()
-    toks = parts[1:]
-    if len(toks) >= 2 and not _is_date(toks[0]) and _is_date(toks[1]):
-        raise ValueError(
-            f"{where}malformed {NOTOWN_KEYWORD} line — a .tt line is date "
-            f"first (expected `{NOTOWN_FORM}`): {shown!r}")
-    if len(toks) != 5:
-        raise ValueError(
-            f"{where}malformed {NOTOWN_KEYWORD} line — expected "
-            f"`{NOTOWN_FORM}` (the transfer-in's date, symbol and units, "
-            f"then the account and date of the transfer-out it was paired "
-            f"with): {shown!r}")
-    date, symbol, qty, frm, fdate = toks
-    for d, what in ((date, "date"), (fdate, "from-date")):
-        if not _is_date(d):
-            raise ValueError(
-                f"{where}{NOTOWN_KEYWORD} {what} {d!r} is not a valid "
-                f"YYYY-MM-DD date (expected `{NOTOWN_FORM}`): {shown!r}")
-    from taxjson.lib.brokerages.base import parse_strict_number
-    try:
-        # Strict, like a .tt row's quantity: a decimal comma is refused.
-        if not re.fullmatch(r"[0-9.,eE+]+", qty):
-            raise ValueError(qty)       # no sign, `$` or parentheses
-        q = parse_strict_number(qty, field="quantity")
-    except ValueError:
-        q = None
-    if q is None or not math.isfinite(q) or q <= 0:
-        raise ValueError(
-            f"{where}{NOTOWN_KEYWORD} quantity {qty!r} is not the number of "
-            f"units that arrived, positive (expected `{NOTOWN_FORM}`): "
-            f"{shown!r}")
-    return {"date": date, "symbol": symbol.upper(), "quantity": float(q),
-            "from_account": frm, "from_date": fdate, "line": shown}
-
-
 def not_own_account_problem(n: NotOwn, accounts: Dict[str, Any]) -> str:
     """Why NOTOWN line `n` can undo no pairing, by its accounts alone
     (`accounts`: taxjson.toml's [accounts]); "" when it may. The run
     pairs the transfer rows of taxable share accounts that keep them out
     of their books (`transfers = false`)."""
-    acfg = (accounts or {}).get(n.account)
-    if not isinstance(acfg, dict) or acfg.get("type") != "taxable":
+    acfg = typed_account((accounts or {}).get(n.account), n.account)
+    if not acfg.taxable:
         return (f"account {n.account} is not a taxable account: a move to "
                 f"or from a registered account is an in-kind move "
                 f"(INKIND), never a pairing this line undoes")
-    if acfg.get("crypto"):
+    if acfg.crypto:
         return (f"account {n.account} is a crypto account: sends between "
                 f"your crypto accounts are paired by `tjs "
                 f"crypto-sends` (--unpair undoes one)")
-    if acfg.get("transfers"):
+    if acfg.transfers:
         return (f"account {n.account} keeps its transfer rows in the "
                 f"books (transfers = true): nothing pairs them")
     if n.from_account not in (accounts or {}):
@@ -360,8 +319,7 @@ def read_not_own(root: Path, accounts: Iterable[str]) -> List[NotOwn]:
     """Every NOTOWN line of the accounts' .tt files (inputs/<account>/,
     the shared folder with `inputs_dir`), in account and file order. A
     malformed line is skipped here: the .tt conversion refuses it, naming
-    it (taxjson_convert_tt.tt_to_json)."""
-    from taxjson.bin.taxjson_convert_tt import tt_lines
+    it (tt_format.tt_to_json)."""
     from taxjson.lib import project_layout as _PL
     from taxjson.lib.cli_diag import read_text_utf8
     from taxjson.lib.dated_events import _where, tt_files
@@ -406,10 +364,10 @@ def _d(s: Any) -> Optional[_date]:
 
 def leg_ident(account: str, t: Dict[str, Any]) -> Tuple[str, str, str, float]:
     """A transfer row's identity: (account, symbol as the row spells it,
-    date, units signed) — as taxjson_run._leg_ident and lib/in_kind's
+    date, units signed) — as pipeline/stages._leg_ident and lib/in_kind's
     Leg.ident name a leg."""
     try:
-        q = round(float(t.get("quantity") or 0.0), 8)
+        q = M.units(float(t.get("quantity") or 0.0), 8)
     except (TypeError, ValueError):
         q = 0.0
     return (account, str(t.get("symbol") or ""),
@@ -533,10 +491,10 @@ def own_journal_legs(rows: Sequence[Tuple[str, str, Dict[str, Any]]]
     between two of your accounts, an arrival from outside the books, or
     an in-kind move (pre-release review H1):
 
-    * the legs a journal's own pair id marks (missing_history.
+    * the legs a journal's own pair id marks (cross_listings.
       journal_leg_key: Questrade's BRW `journal_pair`, RBC's J~
       reference, a .tt JOURNAL line's pair id) cancel within their
-      account and pair: a group that is one journal (missing_history.
+      account and pair: a group that is one journal (cross_listings.
       ref_group_journal: its out-legs on one listing, its in-legs on
       one, the same units, within PAIR_DAYS business days) is settled,
       every leg of it;
@@ -547,8 +505,9 @@ def own_journal_legs(rows: Sequence[Tuple[str, str, Dict[str, Any]]]
       business days, another symbol first, the closest date first;
     * a journal leg still left (its pair incomplete) is an orphan: it
       may cancel only legs of its own account."""
-    from taxjson.lib.cross_listings import PAIR_DAYS, business_days
-    from taxjson.lib.missing_history import journal_leg_key
+    from taxjson.lib.cross_listings import (PAIR_DAYS, business_days,
+                                            journal_leg_key,
+                                            ref_group_journal)
     groups: Dict[Tuple[Any, ...], List[int]] = {}
     for n, (acct, broker, t) in enumerate(rows):
         k = journal_leg_key(t, broker=broker)
@@ -560,11 +519,10 @@ def own_journal_legs(rows: Sequence[Tuple[str, str, Dict[str, Any]]]
             return float(rows[n][2].get("quantity") or 0.0)
         except (TypeError, ValueError):
             return 0.0
-    from taxjson.lib.missing_history import ref_group_journal
     settled: set = set()
     left: List[int] = []
     for _k, ns in sorted(groups.items()):
-        # One rule for a reference group (missing_history.
+        # One rule for a reference group (cross_listings.
         # ref_group_journal, as the cross-listing join and the
         # missing-history walk read it).
         if ref_group_journal(
@@ -609,6 +567,39 @@ def movable_rows(rows: Sequence[Tuple[str, str, Dict[str, Any]]]
     settled, orphans = own_journal_legs(rows)
     return [r for n, r in enumerate(rows)
             if n not in settled and n not in orphans]
+
+
+# How each parser signs a TRANSFER row (the survey of backlog TJ-3243):
+# Questrade's TF6 quantity is + in / - out, RBC Direct's is unsigned
+# and its DELIVER verb makes it negative, the generic importer (and a
+# Wealthsimple mapping) takes the sign from the mapped action
+# (transfer_in / transfer_out), a .tt TRANSFER line is in positive and
+# out negative by its form, Coinbase and Kraken sends are negative: all
+# by direction. IB's Transfers section keeps its signed Qty, the
+# position's change (a written option arriving shows -). Webull exports
+# carry no transfer rows.
+TRANSFER_SIGN_BY_BROKER = {
+    "questrade": "direction", "rbc_direct": "direction", "generic": "direction",
+    "coinbase": "direction", "kraken": "direction", "webull": "direction",
+    "ib": "change",
+}
+
+
+def transfer_sign_convention(broker: str) -> str:
+    """"direction", "change" or "" (not known) for a sidecar's brokerage
+    id (a `generic:NAME` mapping is the generic importer's; the .tt
+    sidecar's legs are a .tt line's)."""
+    from taxjson.lib.dated_events import SIDECAR_BROKER
+    b = str(broker or "").strip().lower()
+    if b == SIDECAR_BROKER or b.startswith("tt"):
+        return "direction"
+    return TRANSFER_SIGN_BY_BROKER.get(b.split(":")[0], "")
+
+
+def _pair_sign(out_broker: str, in_broker: str) -> str:
+    """A move's sign convention when its two rows' brokers agree, else ""."""
+    a, b = transfer_sign_convention(out_broker), transfer_sign_convention(in_broker)
+    return a if a == b else ""
 
 
 def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
@@ -741,14 +732,14 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
         # Units cancelled between two accounts: a move of your own.
         if moves is not None and o[0] != g[0]:
             m = OwnMove(
-                key=g[3], quantity=round(take, 8), out_account=o[0],
+                key=g[3], quantity=M.units(take, 8), out_account=o[0],
                 out_date=str(o[2].get("date") or "")[:10],
                 in_account=g[0], in_date=str(g[2].get("date") or "")[:10],
                 out_symbol=str(o[2].get("symbol") or ""),
                 in_symbol=str(g[2].get("symbol") or ""),
                 out_currency=str(o[2].get("currency") or ""),
                 in_currency=str(g[2].get("currency") or ""),
-                slow=slow_days)
+                slow=slow_days, signed_by=_pair_sign(o[1], g[1]))
             moves.append(m)
             made.append((m, o, g))
 
@@ -822,7 +813,7 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
             continue            # a NOTOWN line undoes it (TJ-0075)
         sm = SlowMove(
             key=g[3], symbol=str(g[2].get("symbol") or ""),
-            quantity=round(g[4], 8), out_account=o[0],
+            quantity=M.units(g[4], 8), out_account=o[0],
             out_date=str(o[2].get("date") or "")[:10],
             in_account=g[0], in_date=str(g[2].get("date") or "")[:10])
         if slow is not None:
@@ -830,7 +821,7 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
         _moved(o, g, g[4], sm.days)
         o[4] = g[4] = 0.0
     for m, o, g in made:
-        m.out_left, m.in_left = round(o[4], 8), round(g[4], 8)
+        m.out_left, m.in_left = M.units(o[4], 8), M.units(g[4], 8)
 
     def _departures(g) -> List[Tuple[str, str, float]]:
         # The out legs of the security nothing paired, in any of the
@@ -849,7 +840,7 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
                     and dg is not None and do is not None
                     and 0 <= (dg - do).days <= SLOW_MOVE_DAYS):
                 found.append((o[0], str(o[2].get("date") or "")[:10],
-                              round(o[4], 8)))
+                              M.units(o[4], 8)))
         return sorted(found, key=lambda x: (x[1], x[0]))
     if paired is not None:
         paired.extend(leg_ident(acct, t) for n, (acct, _b, t)
@@ -868,9 +859,9 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
             account=a, symbol=str(t.get("symbol") or ""), key=k,
             date=str(t.get("date") or "")[:10],
             time=str(t.get("time") or "09:30:00"),
-            quantity=round(left, 8),
+            quantity=M.units(left, 8),
             currency=str(t.get("currency") or ""),
-            book_value=(round(bv * left / q, 2) if bv is not None and q
+            book_value=(M.units(bv * left / q, 2) if bv is not None and q
                         else None),
             broker=b, source=str(t.get("source") or ""),
             description=str(t.get("description") or ""),
@@ -886,10 +877,10 @@ def _tt_events(rows: Iterable[Dict[str, Any]], keyf: Callable[[str], str]
     `trade` moves `value` units of `key` (a BUYSELL, an ASSIGN, any row
     with a quantity); a `split` scales the units of `key` by `value` and
     moves them to `new_key` when the SPLIT line renames (the engine's
-    arithmetic: core._verify_share_conservation). Opening balances are
-    not events (mark_covered reads them as snapshots); income and
+    arithmetic: engine/rows._verify_share_conservation). Opening balances
+    are not events (mark_covered reads them as snapshots); income and
     adjustments move no units."""
-    from taxjson.lib.core import is_opening_row
+    from taxjson.lib.row_types import is_opening_row
     out: List[Tuple[str, str, int, str, str, float, str]] = []
     for n, t in enumerate(rows):
         if not isinstance(t, dict) or is_opening_row(t):
@@ -908,7 +899,7 @@ def _tt_events(rows: Iterable[Dict[str, Any]], keyf: Callable[[str], str]
         d, tm = str(t.get("date") or "")[:10], str(t.get("time") or "")
         if act == "SPLIT":
             if v <= 0:
-                continue        # the converter refuses these (core.py)
+                continue        # the converter refuses these (tx_load)
             out.append((d, tm, n, "split", k, v,
                         keyf(str(t.get("symbol_new") or t.get("symbol")
                                  or ""))))
@@ -1099,7 +1090,7 @@ def mark_covered(found: List[Arrival],
     (CA-OPEN-03, US-OPEN-03, as lib/opening cuts the books): rows dated
     on or before the snapshot day are not replayed, so the units count
     once (backlog TJ-1326, TJ-1340)."""
-    from taxjson.lib.core import is_opening_row
+    from taxjson.lib.row_types import is_opening_row
     from taxjson.lib.corporate_timeline import split_copies
     from taxjson.lib.opening import _final_symbol
     keyf = key or (lambda s: str(s or "").upper())
@@ -1180,7 +1171,7 @@ def mark_covered(found: List[Arrival],
                 consumed.append((a.date, a.time, a.key, a.quantity))
                 continue
             if avail > _EPS:
-                a.covered_units = round(avail, 8)
+                a.covered_units = M.units(avail, 8)
                 consumed.append((a.date, a.time, a.key, avail))
             landed.append((a.date, a.time, a.key,
                            a.quantity - max(0.0, avail)))
@@ -1222,7 +1213,7 @@ def booked_rows(found: Iterable[Arrival]) -> List[Dict[str, Any]]:
             "symbol": a.symbol,
             "quantity": a.quantity,
             "currency": a.currency,
-            "price": round(a.book_value / a.quantity, 8),
+            "price": M.units(a.book_value / a.quantity, 8),
             "net_amount": a.book_value,
             "gross_amount": a.book_value,
             "fee": 0.0,
@@ -1318,7 +1309,7 @@ def attention_lines(found: Iterable[Arrival], country: str) -> List[str]:
                 f"the stock in this account; this line then stops.")
             continue
         if status == "book_value":
-            from taxjson.lib.brokerages.detect import DISPLAY_NAMES
+            from taxjson.lib.brokerages.base import DISPLAY_NAMES
             srcs = sorted({DISPLAY_NAMES.get(x.broker, x.broker)
                            or "the broker" for x in xs})
             hp = ("" if is_canada(country) else

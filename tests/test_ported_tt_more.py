@@ -10,8 +10,8 @@ Sources:
 
 import unittest
 
-from taxjson.lib.core import CanadaTaxRules
-from test_ported_tt_helper import parse_tt_lines
+from taxjson.engine.ca.taxrules import CanadaTaxRules
+from _support.tt_ported import parse_tt_lines
 
 
 class TestRealWorldRegressions(unittest.TestCase):
@@ -208,13 +208,20 @@ class TestRollingWashSale(unittest.TestCase):
         self.rules = CanadaTaxRules()
 
     def test_rolling_wash_carries_forward(self):
-        """wash_rollover.tt: chain of wash sales transfers ACB along the chain.
+        """wash_rollover.tt: a chain of superficial losses carries the ACB
+        to the shares held at day 30.
 
-        Buy 100@10, Sell 100@8 (loss 200, washed → 200 disallowed),
-        Buy 100@9 (ACB 1100 after add-back), Sell 100@7 (proceeds 700, cost 1100,
-        loss 400, washed → 400 more disallowed),
-        Buy 100@6 (ACB 1000 after add-back).
-        Total disallowed = 200 + 400 = 600. Final hold: 100 shares, $1000 ACB.
+        Buy 100@10 (01-01), Sell 100@8 (01-15: a loss of 200). The rebuy
+        of 01-18 (100@9) is sold again on 01-20, inside the window, so it
+        is not the substituted property (s.54: acquired in the window and
+        owned at its end); the 100@6 bought 01-22 and held are, for both
+        losses (TJ-2711). The 01-15 loss: 200 denied, added to the 01-22
+        shares. The 01-20 sale: proceeds 700, cost 900 (its own), a loss
+        of 200, denied and added to the 01-22 shares too. Total disallowed
+        = 200 + 200 = 400. Final hold: 100 shares, $1000 ACB (600 + 400).
+        Before TJ-2711 the first 200 joined the 01-18 shares, the 01-20
+        sale showed a loss of 400, and the total denied was 600 for the
+        same final ACB.
         """
         content = """
         BUYSELL 2025-01-01 09:30:00 TEST.US 100 USD 10.00 1000.00 0.00
@@ -225,10 +232,12 @@ class TestRollingWashSale(unittest.TestCase):
         """
         txs = parse_tt_lines(content)
         result = self.rules.compute_gains(txs)
-        # Two wash sales, second one cumulates the rolled-over loss.
+        # Two superficial losses of 200, both added to the 01-22 shares.
         self.assertEqual(len(result['wash_sales']), 2)
+        self.assertEqual([w['disallowed_amount'] for w in result['wash_sales']],
+                         [200.0, 200.0])
         total_disallowed = sum(w['disallowed_amount'] for w in result['wash_sales'])
-        self.assertAlmostEqual(total_disallowed, 600.0, places=2)
+        self.assertAlmostEqual(total_disallowed, 400.0, places=2)
         # Final inventory: 100 shares with $1000 ACB ($10/sh).
         inv = {i['symbol']: i for i in result['inventory']}
         self.assertAlmostEqual(inv['TEST.US']['qty'], 100.0)

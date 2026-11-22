@@ -7,7 +7,8 @@ symbol is rejected with a clear error.
 """
 import unittest
 
-from taxjson.lib.core import TaxTransaction, USATaxRules
+from taxjson.engine.us.taxrules import USATaxRules
+from taxjson.model.transaction import TaxTransaction
 
 
 def _tx(action, date, symbol, qty, price=0.0, net=0.0, currency='USD', account='Margin'):

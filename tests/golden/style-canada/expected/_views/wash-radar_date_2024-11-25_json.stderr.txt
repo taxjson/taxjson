@@ -1,0 +1,1 @@
+note: ABCD options: the export does not state the contract size, so 100 shares per contract is ASSUMED where it matters (an exercise or assignment, replacement shares); for a mini or an adjusted series add `MULT ABCD N` to ticker.map.

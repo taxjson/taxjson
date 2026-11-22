@@ -1,15 +1,19 @@
 """`tjs tax-logic`: the rule summary follows the project's settings."""
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
+from taxjson.lib.json_contract import SCHEMAS
 from taxjson.lib.tax_logic import render, sections
 from tax_rules import rule
+from taxjson.rules import ids as R
+import _paths
 
-SRC = Path(__file__).resolve().parents[1] / "src"
+SRC = _paths.REPO / "src"
 
 
 class TestTaxLogic(unittest.TestCase):
@@ -22,7 +26,7 @@ class TestTaxLogic(unittest.TestCase):
         self.assertIn("a put never replaces the shares",
                       " ".join(text.split()))
 
-    @rule("CA-OPT-05", "CA-OPT-10")
+    @rule(R.CA_OPT_05, R.CA_OPT_10)
     def test_settings_change_the_text(self):
         st = {"tax_date": "trade", "option_premium_timing": "close",
               "futures_settle": "next_day",
@@ -58,7 +62,10 @@ class TestTaxLogic(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             Path(td, "taxjson.toml").write_text(
                 '[settings]\nyear = 2025\ncountry = "usa"\n')
-            env = {"PYTHONPATH": str(SRC), "PATH": "/usr/bin:/bin"}
+            # The test's synthetic HOME (_hermetic, through tax_rules): a
+            # child without one reads the user's own from the password file.
+            env = {"PYTHONPATH": str(SRC), "PATH": "/usr/bin:/bin",
+                   "HOME": os.environ["HOME"]}
             r = subprocess.run([sys.executable, "-m",
                                 "taxjson.bin.taxjson_run", "-C", td,
                                 "tax-logic", "--json"],
@@ -67,6 +74,9 @@ class TestTaxLogic(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             doc = json.loads(r.stdout)
             self.assertEqual(doc["country"], "usa")
+            # The --json contract (lib/json_contract): its number, from the
+            # registry (no golden view holds the spec: UNHELD).
+            self.assertEqual(doc["schema_version"], SCHEMAS["tax-logic"])
             r = subprocess.run([sys.executable, "-m",
                                 "taxjson.bin.taxjson_run", "-C", td,
                                 "tax-logic", "--country", "canada"],

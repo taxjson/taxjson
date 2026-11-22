@@ -1,0 +1,13 @@
+MISSING COST BASIS — tax year 2025
+
+TRUNCATED HISTORY — positions go short (missing a buy): 1 pair(s)
+1 affect tax year 2025; 0 are in registered accounts; 0 do not.
+PeakShort: the deepest short; FirstNeg: the day it went short; InYr: this year's sales from it.
+
+AFFECTS 2025 - missing basis distorts this year's gain; fix before filing:
+Symbol     Account  Cur  PeakShort  FirstNeg    InYrSales  InYrProceeds
+-----------------------------------------------------------------------
+SAMPLA.US  margin   CAD   -15.0000  2025-03-18          1        807.98
+
+! IB states the cost of 1 sale(s): draft the purchase — tjs find-missing-history --write-purchases
+! Add each AFFECTS row's purchase before filing — tjs find-missing-history --details

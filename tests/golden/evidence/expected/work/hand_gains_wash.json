@@ -1,0 +1,52 @@
+{
+  "inventory": [],
+  "inventory_year_end": [],
+  "manual_reporting_required": [],
+  "metadata": {
+    "account": "hand",
+    "blended": true,
+    "split_from": "blended taxable pass"
+  },
+  "summary": {
+    "option_buyback_loss_superficial": false,
+    "option_grant_since": 2025,
+    "option_premium_timing": "grant",
+    "tax_date_basis": "settle",
+    "total_disallowed": 0.0,
+    "total_fees_by_currency": {},
+    "total_gain": 125.0,
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1,
+    "year": "2025"
+  },
+  "transactions": [
+    {
+      "account": "hand",
+      "commission": 0.0,
+      "cost": 775.0,
+      "currency": "CAD",
+      "date": "2025-02-10",
+      "date_settle": "2025-02-10",
+      "days_held": 38,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 0.0,
+      "gain": 125.0,
+      "grant": false,
+      "id": "637030f3f0b0d60c",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 900.0,
+      "qty": 150.0,
+      "raw_gain": 125.0,
+      "replacement_lot_ids": [],
+      "symbol": "SAMPQ.US",
+      "term": null,
+      "wash_replacements": null
+    }
+  ],
+  "wash_sales": []
+}

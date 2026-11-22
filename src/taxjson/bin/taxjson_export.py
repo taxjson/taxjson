@@ -11,7 +11,9 @@ taxjson holdings TOML snapshot (a `.toml` file of `[[holding]]`
 tables, as written by `--holdings-toml`).
 """
 
+from taxjson.project.toml_io import TOML_ERRORS, read_toml
 from taxjson.lib.stage_msg import emit_line
+from taxjson.lib.futures_prefixes import FUTURES_PREFIX_GROUP
 import argparse
 import re
 import sys
@@ -24,6 +26,9 @@ from taxjson.lib.numeric import nonneg_float_arg
 from taxjson.lib.report_model import load_report_json
 from taxjson.lib import cli_diag
 from taxjson.lib.json_input import InputFileError, read_json_doc
+from taxjson.model.result import Holding
+from taxjson.model import money as M
+from taxjson.lib import out as _out
 
 PROG = "taxjson-export"
 
@@ -46,12 +51,18 @@ def _read_json(path, **kw):
 
 
 def _read_rows_doc(path, **kw):
-    """`_read_json`, plus its `inventory` / `transactions` rows checked
-    for type (json_input.check_row_types; a symbol must be text): a
-    damaged gains file with "x" in a number field was a float()
-    traceback in the aggregation (A2-0793, export part)."""
+    """`_read_json`, plus its rows checked (`_checked_rows`)."""
+    return _checked_rows(_read_json(path, **kw), path)
+
+
+def _checked_rows(doc, path):
+    """`doc` with its `inventory` / `transactions` rows checked for type
+    (json_input.check_row_types; a symbol must be text): a damaged gains
+    file with "x" in a number field was a float() traceback in the
+    aggregation (A2-0793, export part). The document read from stdin
+    too: it skipped the check, so an integer too large for a float
+    became a holding of `inf` units at exit 0 (TJ-2899)."""
     from taxjson.lib.json_input import check_row_types
-    doc = _read_json(path, **kw)
     for key in ("inventory", "transactions"):
         rows = doc.get(key)
         if rows is None:
@@ -70,14 +81,13 @@ def _read_rows_doc(path, **kw):
                      f'a ticker — the file is damaged or hand-edited: '
                      f'fix it or re-run `tjs run`')
     return doc
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from taxjson.lib.tomlcompat import tomllib
 
 from taxjson.lib.ticker_map import (
     is_option_ticker, is_future_ticker, get_base_ticker_info,
 )
-from taxjson.bin.taxjson_ticker_map import load_map_file
+from taxjson.lib.map_file import load_map_file
 
 
 def _passes_filters(item: Dict[str, Any], args) -> bool:
@@ -85,7 +95,10 @@ def _passes_filters(item: Dict[str, Any], args) -> bool:
     # A mixed-currency holding read back is one item per currency, the
     # quantity on the first: each is filtered by the holding's quantity,
     # or --long / --short dropped its other currencies' cost (TJ-0881).
-    qty = item.get("holding_qty", item.get("qty", 0))
+    qty = item.get("holding_qty")
+    if qty is None:
+        # A null holding_qty reads as an absent one (TJ-2900).
+        qty = float(Holding(item).quantity or 0)
 
     if args.long and qty <= 0:
         return False
@@ -288,7 +301,7 @@ def _apply_transfer_evidence(agg: Dict[str, Dict[str, Any]],
     if not rows:
         return applied
     if renames:
-        from taxjson.bin.taxjson_ticker_map import map_symbol
+        from taxjson.lib.ticker_map_rules import map_symbol
         rows = [t if t["symbol"] in agg
                 else {**t, "symbol": map_symbol(t["symbol"], renames)}
                 for t in rows]
@@ -410,8 +423,11 @@ def process_data_report(data, args, agg: Dict[str, Dict[str, Any]],
         bucket = agg.setdefault(sym, {'qty': 0.0, 'total_cost': 0.0,
                                       'currency': '',
                                       'position_start_date': None})
-        bucket['qty'] += float(item.get('qty', 0))
-        bucket['total_cost'] += float(item.get('total_cost', 0))
+        # A null qty or total_cost counts as 0, as an absent one did
+        # (TJ-2891: a TypeError).
+        h = Holding(item)
+        bucket['qty'] += float(h.quantity or 0)
+        bucket['total_cost'] += float(h.total_cost or 0)
         # The contract size the parser declared (a futures option's CL
         # 1000 — audit S026-22); two inputs that disagree leave it
         # unknown (said once, the sizes kept for the snapshot's note:
@@ -458,15 +474,15 @@ def process_data_report(data, args, agg: Dict[str, Dict[str, Any]],
         # An input at quantity 0 and no cost holds nothing: its currency
         # does not make the holding mixed (backlog TJ-1293). (A mixed
         # snapshot's later items carry `holding_qty` and a cost.)
-        _holds = bool(float(item.get('qty', 0)) or item.get('holding_qty')
-                      or float(item.get('total_cost', 0))
+        _holds = bool(float(h.quantity or 0) or item.get('holding_qty')
+                      or float(h.total_cost or 0)
                       or item.get('unknown_cost'))
         if _holds:
             _c = item.get('currency') or '?'
             bucket.setdefault('cost_by_currency', {})
             bucket['cost_by_currency'][_c] = (
                 bucket['cost_by_currency'].get(_c, 0.0)
-                + float(item.get('total_cost', 0)))
+                + float(h.total_cost or 0))
         # Carry the EARLIEST position_start across all inputs that
         # contribute to this symbol's bucket (e.g. when aggregating
         # gains JSONs from multiple accounts via `taxjson-export`).
@@ -558,8 +574,8 @@ def render_report(agg: Dict[str, Dict[str, Any]],
         # from another of your accounts, an opening at an unknown cost)
         # reads "unknown", never a cost of 0 (backlog TJ-0279).
         rows.append((sym, qty,
-                     None if b.get('unknown_cost') else f"{cps:.4f}",
-                     None if b.get('unknown_cost') else f"{total:.2f}",
+                     None if b.get('unknown_cost') else f"{M.shown(cps, 4):.4f}",
+                     None if b.get('unknown_cost') else f"{M.shown(total, 2):.2f}",
                      "MIXED" if b.get('mixed_currency')
                      else b['currency']))
 
@@ -618,7 +634,7 @@ def render_report(agg: Dict[str, Dict[str, Any]],
 
 
 # Alias: tests and older callers import `_fmt_qty` from here.
-from taxjson.lib.report_model import fmt_qty6 as _fmt_qty  # noqa: E402
+from taxjson.lib.report_fmt import fmt_qty6 as _fmt_qty  # noqa: E402
 
 
 # --------------------------------------------------------- TOML holdings
@@ -626,7 +642,7 @@ from taxjson.lib.report_model import fmt_qty6 as _fmt_qty  # noqa: E402
 # OCC option symbol: base ticker + YYMMDD + C/P + strike*1000, optional
 # market suffix (and optional F:/slash futures prefix on the base).
 _OCC_RE = re.compile(
-    r'^((?:F:|[\\/])?[A-Z0-9.]{1,10}?)'
+    r'^(' + FUTURES_PREFIX_GROUP + r'?[A-Z0-9.]{1,10}?)'
     r'(\d{6})([CP])(\d+)'
     r'(?:\.([A-Z]+))?$'
 )
@@ -658,14 +674,15 @@ def _resolve_underlying(root_sym: str, held_stock) -> str:
     stock line matches the root (same rule the engine's assignment
     resolver uses), that line is the underlying; otherwise the root
     spelling stays."""
-    from taxjson.lib.core import _root_matches_stock, _split_underlying
+    from taxjson.engine.assign import _split_underlying
+    from taxjson.lib.option_symbols import root_matches_stock
     if root_sym in held_stock:
         return root_sym
     root_base, ext = _split_underlying(root_sym)
     hits = []
     for s in held_stock:
         s_base, s_ext = _split_underlying(s)
-        if s_ext == ext and _root_matches_stock(root_base, s_base):
+        if s_ext == ext and root_matches_stock(root_base, s_base):
             hits.append(s)
     return hits[0] if len(hits) == 1 else root_sym
 
@@ -687,7 +704,7 @@ def _toml_str(value: Any) -> str:
 
 def _engine_clock(tx: Dict[str, Any]) -> str:
     """The row's clock as the engine compares it: its loader writes
-    '9:30:00' or '9:30' as HH:MM:SS (core.py, audit S071-13) and a row
+    '9:30:00' or '9:30' as HH:MM:SS (tx_load.py, audit S071-13) and a row
     with none takes the default. Text, whatever a hand-made book holds
     (the loader refuses that; backlog TJ-1233, TJ-1234)."""
     raw = tx.get("time", "09:30:00")
@@ -726,7 +743,7 @@ def _lag_split_factors(rows) -> Dict[int, float]:
     row) tuples) the Canadian engine re-denominates: a split inside the
     settle lag, after the execution and before the settle date, reaches
     the pool ahead of the trade, so the trade is booked in post-split
-    units (core.py compute_gains, corporate_timeline
+    units (engine/ca/taxrules.py compute_gains, corporate_timeline
     split_in_settle_lag). A rename-split there the engine refuses, so it
     scales nothing here. One split per split_seen, as the replay."""
     from taxjson.lib.corporate_timeline import (normalize_symbol_new,
@@ -809,7 +826,7 @@ def _load_trade_events(paths, mapping=None, drops=None,
     (_replay_key; Canada's without a country) but each event keeps its
     trade `date` for charting; a rename merges the two symbols' events
     in that order (audit 2026-10-24 B44). An opening balance (a BUYSELL
-    of type core.OPENING_TYPE) sets the balance and is no purchase: it
+    of type row_types.OPENING_TYPE) sets the balance and is no purchase: it
     is not charted (backlog TJ-0887). Canada's engine books a trade
     whose settle lag holds a split in post-split units: so does the
     balance here, the event keeping the row's own quantity and price
@@ -833,7 +850,7 @@ def _load_trade_events(paths, mapping=None, drops=None,
     mapping = mapping or {}
     drops = drops or set()
     position_starts = position_starts or {}
-    from taxjson.lib.core import LOT_MOVE_TYPE, is_opening_row
+    from taxjson.lib.row_types import LOT_MOVE_TYPE, is_opening_row
     from taxjson.lib.corporate_timeline import (account_tie,
                                                 normalize_symbol_new,
                                                 split_seen)
@@ -1030,9 +1047,9 @@ def _own_move_arrivals(paths, mapping=None
                        ) -> Dict[str, List[Tuple[str, float, str]]]:
     """{symbol: [(date, units, from account)]}: the units that arrived
     in the book(s) by a move of your own from another of your taxable
-    accounts (the run's lot-move in-legs, lib/core LOT_MOVE_TYPE), whose
+    accounts (the run's lot-move in-legs, lib/row_types LOT_MOVE_TYPE), whose
     cost one account's own books do not have (backlog TJ-0598)."""
-    from taxjson.lib.core import LOT_MOVE_TYPE
+    from taxjson.lib.row_types import LOT_MOVE_TYPE
     mapping = mapping or {}
     out: Dict[str, List[Tuple[str, float, str]]] = {}
     for p in paths:
@@ -1064,7 +1081,7 @@ def _own_move_currency(paths, mapping=None) -> Dict[str, str]:
     """{symbol: currency} of the units moved in from another of your
     accounts (the lot-move in-legs' own currency: their transfer row's),
     where all of a symbol's legs say one."""
-    from taxjson.lib.core import LOT_MOVE_TYPE
+    from taxjson.lib.row_types import LOT_MOVE_TYPE
     mapping = mapping or {}
     seen: Dict[str, set] = {}
     for p in paths:
@@ -1131,8 +1148,9 @@ def _blended_fill(agg: Dict[str, Dict[str, Any]], blended_paths,
                                              for r in cand):
             continue
         try:
-            q = sum(float(r.get('qty') or 0.0) for r in cand)
-            cost = sum(float(r.get('total_cost') or 0.0) for r in cand)
+            views = [Holding(r) for r in cand]
+            q = sum(float(v.quantity or 0.0) for v in views)
+            cost = sum(float(v.total_cost or 0.0) for v in views)
         except (TypeError, ValueError):
             continue
         if abs(q - b['qty']) > max(1e-6, 1e-9 * abs(q)):
@@ -1276,7 +1294,7 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
         return f"{sym}.{s.upper()}" if s else sym
 
     def _unit(v: float, places: int, coin: bool = crypto) -> float:
-        return float(f"{v:.10g}") if coin else round(v, places)
+        return float(f"{v:.10g}") if coin else M.shown(v, places)
     rows = []
     dropped = []
     dropped_unknown = []
@@ -1298,6 +1316,62 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
         rows.append((sym, b['qty'], b['total_cost'], b['currency'],
                      b.get('position_start_date'), b))
 
+    lines = _holdings_meta(args, rows, dropped, dust, dropped_unknown, base_agg, crypto, blended)
+
+    held_stock = [s for s in agg
+                  if not _parse_option(s) and not is_future_ticker(s)]
+    for sym, qty, total_cost, currency, position_start_date, b in rows:
+        opt = _parse_option(sym)
+        if opt:
+            opt['underlying'] = _resolve_underlying(opt['underlying'],
+                                                    held_stock)
+        is_fut = is_future_ticker(sym)
+        # A coin: the account's (--crypto), or one a snapshot read back
+        # declares (asset_type = "crypto", backlog TJ-0875).
+        coin = crypto or bool(b.get('crypto'))
+        mixed = bool(b.get('mixed_currency'))
+        cps = total_cost / qty if qty else 0.0
+        # The one listing currency of a cost in another (TJ-1109).
+        _listings = b.get('listing_currencies') or ()
+        listing = next(iter(_listings)) if len(_listings) == 1 else None
+        lines.append("[[holding]]")
+        lines.append(f"symbol = {_toml_str(_shown(sym))}")
+        if args.account_name:
+            lines.append(f"account = {_toml_str(args.account_name)}")
+        lines.append(f"asset_type = "
+                     f"{_toml_str('crypto' if coin else 'option' if opt else 'future' if is_fut else 'equity')}")
+        _holding_option(opt, lines, sym, b, is_fut)
+        lines.append(f"quantity = "
+                     f"{float(f'{qty:.15g}') if coin else float(qty)!r}")
+        base = base_agg.get(sym)
+        # Units whose cost the account's own books do not have (moved in
+        # from another of your accounts, an opening at an unknown cost):
+        # no cost figure at all, never a cost of 0 a reader would apply
+        # (backlog TJ-0598).
+        unknown = bool(b.get('unknown_cost')
+                       or (base is not None and base.get('unknown_cost')))
+        # Moved-in units' cost from the passes across accounts, the
+        # figure `tjs list` shows (backlog TJ-0598).
+        fill = blended.get(sym) if unknown and not mixed else None
+        _holding_cost(fill, lines, _unit, qty, coin, sym, b, args, arrivals, unknown, listing,
+                      currency, move_currency, mixed, total_cost, cps)
+        _holding_base(b, unknown, lines, sym, args, base, qty, fill, _unit, coin)
+        if position_start_date:
+            # TOML local date — bare YYYY-MM-DD, unquoted, parses
+            # back as a date object via tomllib.
+            lines.append(f"position_start_date = {position_start_date}")
+        _holding_trades(trades_by_symbol, sym, lines, marked_arrivals)
+        lines.append("")
+    return lines
+
+
+def _holdings_meta(args: Any, rows: List[Tuple[str, Any, Any, Any, Any, Dict[str, Any]]],
+                   dropped: List[Tuple[str, Any]], dust: Any,
+                   dropped_unknown: List[Tuple[str, Any]], base_agg: Dict[str, Dict[str, Any]],
+                   crypto: bool, blended: Dict[str, Dict[str, Any]]) -> List[str]:
+    """export: the holdings file's header and [meta] table (the day, the
+    account, the source, the count, the dust left out, what the base
+    cost leaves out and the blended holdings' note)."""
     # The day of the snapshot(s) read back (TJ-0874): their [meta]
     # as_of, kept apart from the day this file is generated.
     as_of = getattr(args, 'snapshot_as_of', None)
@@ -1375,223 +1449,211 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
                      "from another of")
         lines.append("# your accounts, whose cost these books do not have).")
     lines.append("")
+    return lines
 
-    held_stock = [s for s in agg
-                  if not _parse_option(s) and not is_future_ticker(s)]
-    for sym, qty, total_cost, currency, position_start_date, b in rows:
-        opt = _parse_option(sym)
-        if opt:
-            opt['underlying'] = _resolve_underlying(opt['underlying'],
-                                                    held_stock)
-        is_fut = is_future_ticker(sym)
-        # A coin: the account's (--crypto), or one a snapshot read back
-        # declares (asset_type = "crypto", backlog TJ-0875).
-        coin = crypto or bool(b.get('crypto'))
-        mixed = bool(b.get('mixed_currency'))
-        cps = total_cost / qty if qty else 0.0
-        # The one listing currency of a cost in another (TJ-1109).
-        _listings = b.get('listing_currencies') or ()
-        listing = next(iter(_listings)) if len(_listings) == 1 else None
-        lines.append("[[holding]]")
-        lines.append(f"symbol = {_toml_str(_shown(sym))}")
-        if args.account_name:
-            lines.append(f"account = {_toml_str(args.account_name)}")
-        lines.append(f"asset_type = "
-                     f"{_toml_str('crypto' if coin else 'option' if opt else 'future' if is_fut else 'equity')}")
-        if opt:
-            lines.append(f"underlying = {_toml_str(opt['underlying'])}")
-            lines.append(f"right = {_toml_str(opt['right'])}")
-            lines.append(f"strike = {opt['strike']!r}")
-            if opt['expiry']:
-                # TOML local date — bare, unquoted.
-                lines.append(f"expiry = {opt['expiry']}")
-            _cm = contract_multiplier_of(sym, b)
-            if _cm:
-                # The declared size (a futures option: the future's —
-                # CL 1000, ES 50 — audit S026-22), else the equity 100.
-                lines.append(f"contract_multiplier = {_cm:g}")
-                # Unit reminder next to the figure a reader is most
-                # likely to misread (2026-09 audit S030-08): the
-                # trades' prices are per share, cost_per_share is per
-                # contract.
-                lines.append("# cost_per_share below is per CONTRACT; "
-                             "trades[].price is per "
-                             + ("unit of the underlying" if is_fut
-                                else "share"))
-            elif b.get('multiplier_conflict'):
-                # The inputs disagree on the size: unknown, said in a
-                # key a reader keeps (this tool reads it back), never
-                # the equity 100 (audit 2026-10-24 B21).
-                _sizes = ", ".join(f"{x:g}" for x in
-                                   sorted(b.get('multipliers_seen') or []))
-                lines.append("contract_multiplier_unknown = true")
-                lines.append("# contract_multiplier unknown: the inputs "
-                             "declare different contract sizes"
-                             + (f" ({_sizes})" if _sizes else "")
-                             + "; cost_per_share below is per CONTRACT")
-            else:
-                # A futures option's multiplier is the future's (CL
-                # 1000, micro contracts 0.1 ...), not the equity 100:
-                # omitted rather than guessed when no row declared it
-                # (audit S030-09).
-                lines.append("# futures option: contract_multiplier "
-                             "unknown here (not the equity 100)")
-        lines.append(f"quantity = "
-                     f"{float(f'{qty:.15g}') if coin else float(qty)!r}")
-        base = base_agg.get(sym)
-        # Units whose cost the account's own books do not have (moved in
-        # from another of your accounts, an opening at an unknown cost):
-        # no cost figure at all, never a cost of 0 a reader would apply
-        # (backlog TJ-0598).
-        unknown = bool(b.get('unknown_cost')
-                       or (base is not None and base.get('unknown_cost')))
-        # Moved-in units' cost from the passes across accounts, the
-        # figure `tjs list` shows (backlog TJ-0598).
-        fill = blended.get(sym) if unknown and not mixed else None
-        if fill and fill["native"] == fill["currency"]:
-            _ft = fill["total_cost"]
-            lines.append(f"currency = {_toml_str(fill['currency'])}")
-            lines.append(f"total_cost = {round(_ft, 4)!r}")
-            lines.append(f"cost_per_share = "
-                         f"{_unit(_ft / qty if qty else 0.0, 6, coin)!r}")
+
+def _holding_option(opt: Any, lines: List[str], sym: str, b: Dict[str, Any], is_fut: bool) -> None:
+    """export: an option holding's underlying, right, strike, expiry and
+    contract size (or why it is unknown)."""
+    if opt:
+        lines.append(f"underlying = {_toml_str(opt['underlying'])}")
+        lines.append(f"right = {_toml_str(opt['right'])}")
+        lines.append(f"strike = {opt['strike']!r}")
+        if opt['expiry']:
+            # TOML local date — bare, unquoted.
+            lines.append(f"expiry = {opt['expiry']}")
+        _cm = contract_multiplier_of(sym, b)
+        if _cm:
+            # The declared size (a futures option: the future's —
+            # CL 1000, ES 50 — audit S026-22), else the equity 100.
+            lines.append(f"contract_multiplier = {_cm:g}")
+            # Unit reminder next to the figure a reader is most
+            # likely to misread (2026-09 audit S030-08): the
+            # trades' prices are per share, cost_per_share is per
+            # contract.
+            lines.append("# cost_per_share below is per CONTRACT; "
+                         "trades[].price is per "
+                         + ("unit of the underlying" if is_fut
+                            else "share"))
+        elif b.get('multiplier_conflict'):
+            # The inputs disagree on the size: unknown, said in a
+            # key a reader keeps (this tool reads it back), never
+            # the equity 100 (audit 2026-10-24 B21).
+            _sizes = ", ".join(f"{x:g}" for x in
+                               sorted(b.get('multipliers_seen') or []))
+            lines.append("contract_multiplier_unknown = true")
+            lines.append("# contract_multiplier unknown: the inputs "
+                         "declare different contract sizes"
+                         + (f" ({_sizes})" if _sizes else "")
+                         + "; cost_per_share below is per CONTRACT")
+        else:
+            # A futures option's multiplier is the future's (CL
+            # 1000, micro contracts 0.1 ...), not the equity 100:
+            # omitted rather than guessed when no row declared it
+            # (audit S030-09).
+            lines.append("# futures option: contract_multiplier "
+                         "unknown here (not the equity 100)")
+
+
+def _holding_cost(fill: Optional[Dict[str, Any]], lines: List[str], _unit: Callable[..., float],
+                  qty: Any, coin: bool, sym: str, b: Dict[str, Any], args: Any,
+                  arrivals: Optional[Dict[str, List[Tuple[str, float, str]]]], unknown: bool,
+                  listing: Any, currency: Any, move_currency: Dict[str, str], mixed: bool,
+                  total_cost: Any, cps: Any) -> None:
+    """export: a holding's currency and cost: blended from the passes
+    across accounts, unknown, per currency for a mixed bucket, or its
+    own total and per-unit cost."""
+    if fill and fill["native"] == fill["currency"]:
+        _ft = fill["total_cost"]
+        lines.append(f"currency = {_toml_str(fill['currency'])}")
+        lines.append(f"total_cost = {M.shown(_ft, 4)!r}")
+        lines.append(f"cost_per_share = "
+                     f"{_unit(_ft / qty if qty else 0.0, 6, coin)!r}")
+        lines.append('cost_source = "blended"')
+        lines.extend(_blended_note(sym, b,
+                                   getattr(args, 'country', None),
+                                   arrivals or {}, fill))
+    elif unknown:
+        _cur = (listing or currency or (fill or {}).get("native")
+                or move_currency.get(sym))
+        if _cur and not mixed:
+            lines.append(f"currency = {_toml_str(_cur)}")
+        lines.append("cost_unknown = true")
+        if fill:
             lines.append('cost_source = "blended"')
             lines.extend(_blended_note(sym, b,
                                        getattr(args, 'country', None),
                                        arrivals or {}, fill))
-        elif unknown:
-            _cur = (listing or currency or (fill or {}).get("native")
-                    or move_currency.get(sym))
-            if _cur and not mixed:
-                lines.append(f"currency = {_toml_str(_cur)}")
-            lines.append("cost_unknown = true")
-            if fill:
-                lines.append('cost_source = "blended"')
-                lines.extend(_blended_note(sym, b,
-                                           getattr(args, 'country', None),
-                                           arrivals or {}, fill))
-            else:
-                lines.extend(_cost_unknown_note(
-                    sym, b, getattr(args, 'country', None),
-                    arrivals or {}))
-        elif mixed:
-            # A JOURNAL-folded cross-currency bucket: summing native
-            # USD+CAD costs into one number was currency salad. The
-            # flat figures are omitted; per-currency components and
-            # base_total_cost (converted, below) carry the truth.
-            lines.append("mixed_currency = true")
-            for _c, _v in sorted((b.get('cost_by_currency')
-                                  or {}).items()):
-                lines.append(f"total_cost_{_c.lower()} = "
-                             f"{round(_v, 4)!r}")
         else:
-            if currency and listing and listing != currency:
-                # The cost's own label, as the positions reader takes it:
-                # a CAD book value of a USD listing is no USD cost
-                # (backlog TJ-1109).
-                lines.append(f"currency = {_toml_str(listing)}")
-                lines.append(f"cost_currency = {_toml_str(currency)}")
-            elif currency:
-                lines.append(f"currency = {_toml_str(currency)}")
-            lines.append(f"total_cost = {round(total_cost, 4)!r}")
-            lines.append(f"cost_per_share = {_unit(cps, 6, coin)!r}")
-        # What kind of cost it is (`average` or `lots`, TJ-1110), when
-        # every input of the holding says the same.
-        _kinds = b.get('cost_kinds') or set()
-        if not unknown and any(_kinds):
-            if len(_kinds) == 1:
-                lines.append(f"cost_kind = {_toml_str(next(iter(_kinds)))}")
-            else:
-                emit_line(f"warning: {sym}: its inputs state different kinds "
-                          f"of cost: cost_kind is left out for it",
-                          file=sys.stderr)
-        expected_base = getattr(args, 'base_currency', None)
-        # A base bucket whose figures are in more than one currency has
-        # no single base-currency total: its flat figure called a CAD +
-        # USD sum entirely CAD (audit 2026-10-24 B23); omitted and said.
-        base_mixed = (base is not None and not unknown
-                      and bool(base.get('mixed_currency')))
-        base_ok = (base is not None and not unknown and base.get('currency')
-                   and not base_mixed
-                   and (expected_base is None
-                        or base['currency'].upper() == expected_base.upper()))
-        if base_mixed:
-            _curs = ", ".join(sorted(base.get('cost_by_currency') or [])) \
-                or "more than one currency"
-            lines.append(f"# base_total_cost omitted: this holding's "
-                         f"base-currency figures are in {_curs}, so no "
-                         f"one base-currency total exists (a cost was "
-                         f"not converted)")
-            emit_line(f"warning: {sym}: its base-currency figures are in "
-                      f"{_curs}: base_total_cost is omitted for it (a "
-                      f"cost was not converted to the base currency)",
+            lines.extend(_cost_unknown_note(
+                sym, b, getattr(args, 'country', None),
+                arrivals or {}))
+    elif mixed:
+        # A JOURNAL-folded cross-currency bucket: summing native
+        # USD+CAD costs into one number was currency salad. The
+        # flat figures are omitted; per-currency components and
+        # base_total_cost (converted, below) carry the truth.
+        lines.append("mixed_currency = true")
+        for _c, _v in sorted((b.get('cost_by_currency')
+                              or {}).items()):
+            lines.append(f"total_cost_{_c.lower()} = "
+                         f"{M.shown(_v, 4)!r}")
+    else:
+        if currency and listing and listing != currency:
+            # The cost's own label, as the positions reader takes it:
+            # a CAD book value of a USD listing is no USD cost
+            # (backlog TJ-1109).
+            lines.append(f"currency = {_toml_str(listing)}")
+            lines.append(f"cost_currency = {_toml_str(currency)}")
+        elif currency:
+            lines.append(f"currency = {_toml_str(currency)}")
+        lines.append(f"total_cost = {M.shown(total_cost, 4)!r}")
+        lines.append(f"cost_per_share = {_unit(cps, 6, coin)!r}")
+
+
+def _holding_base(b: Dict[str, Any], unknown: bool, lines: List[str], sym: str, args: Any,
+                  base: Optional[Dict[str, Any]], qty: Any, fill: Optional[Dict[str, Any]],
+                  _unit: Callable[..., float], coin: bool) -> None:
+    """export: a holding's cost kind and base-currency cost (omitted, and
+    warned, when mixed or not of the whole holding)."""
+    # What kind of cost it is (`average` or `lots`, TJ-1110), when
+    # every input of the holding says the same.
+    _kinds = b.get('cost_kinds') or set()
+    if not unknown and any(_kinds):
+        if len(_kinds) == 1:
+            lines.append(f"cost_kind = {_toml_str(next(iter(_kinds)))}")
+        else:
+            emit_line(f"warning: {sym}: its inputs state different kinds "
+                      f"of cost: cost_kind is left out for it",
                       file=sys.stderr)
-        # A snapshot's own base figure read back covers that snapshot's
-        # units alone: beside an input with no base figure, or on top of
-        # --base-gains for the same units, it is not the holding's base
-        # cost (backlog TJ-1031). --base-gains holds the same positions
-        # as the inputs, by contract: every input is covered there.
-        base_partial = bool(
-            base is not None and not unknown and not base_mixed
-            and base.get('snapshot_base')
-            and ((b.get('no_base_figure')
-                  and not getattr(args, 'base_gains', None))
-                 or abs(float(base.get('qty') or 0.0) - qty) > 1e-6))
-        if base_partial:
-            base_ok = False
-            lines.append("# base_total_cost omitted: the base-currency "
-                         "figures read are not of this whole holding's "
-                         "units")
-            emit_line(f"warning: {sym}: its base-currency figures are not "
-                      f"of the whole holding's units: base_total_cost is "
-                      f"omitted for it (one input's figure is not the cost "
-                      f"of the summed quantity)", file=sys.stderr)
-        if fill:
-            _ft = fill["total_cost"]
-            lines.append(f"base_currency = {_toml_str(fill['currency'])}")
-            lines.append(f"base_total_cost = {round(_ft, 4)!r}")
-            lines.append(f"base_cost_per_share = "
-                         f"{_unit(_ft / qty if qty else 0.0, 6, coin)!r}")
-        if base_ok:
-            base_total = base['total_cost']
-            # Prefer the base bucket's own quantity for the per-share figure;
-            # it equals the native qty today (FX conversion never touches
-            # quantity) but is the correct denominator if the two passes ever
-            # diverge. Fall back to native qty if base qty is degenerate.
-            base_qty = base.get('qty') or qty
-            base_cps = base_total / base_qty if base_qty else 0.0
-            lines.append(f"base_currency = {_toml_str(base['currency'])}")
-            lines.append(f"base_total_cost = {round(base_total, 4)!r}")
-            lines.append(f"base_cost_per_share = {_unit(base_cps, 6, coin)!r}")
-        if position_start_date:
-            # TOML local date — bare YYYY-MM-DD, unquoted, parses
-            # back as a date object via tomllib.
-            lines.append(f"position_start_date = {position_start_date}")
-        if trades_by_symbol is not None:
-            # Native-currency acquisition/sell events for this symbol, for
-            # charting/annotation downstream. Emitted as a TOML array of
-            # inline tables; dates are bare TOML local dates.
-            evs = trades_by_symbol.get(sym, [])
-            if evs:
-                lines.append("trades = [")
-                for e in evs:
-                    lines.append(
-                        f"  {{ date = {e['date']}, action = {_toml_str(e['action'])}, "
-                        f"qty = {float(e['qty'])!r}, price = {float(e['price'])!r} }},")
-                lines.append("]")
-            else:
-                lines.append("trades = []")
-            # Units that came by transfer: not bought here (TJ-1344).
-            # Left out when none, so a holding's table reads as before.
-            marks = (marked_arrivals or {}).get(sym)
-            if marks:
-                lines.append("arrivals = [")
-                for m in marks:
-                    lines.append(
-                        f"  {{ date = {m['date']}, qty = {float(m['qty'])!r}, "
-                        f"kind = {_toml_str(m['kind'])} }},")
-                lines.append("]")
-        lines.append("")
-    return lines
+    expected_base = getattr(args, 'base_currency', None)
+    # A base bucket whose figures are in more than one currency has
+    # no single base-currency total: its flat figure called a CAD +
+    # USD sum entirely CAD (audit 2026-10-24 B23); omitted and said.
+    base_mixed = (base is not None and not unknown
+                  and bool(base.get('mixed_currency')))
+    base_ok = (base is not None and not unknown and base.get('currency')
+               and not base_mixed
+               and (expected_base is None
+                    or base['currency'].upper() == expected_base.upper()))
+    if base_mixed:
+        _curs = ", ".join(sorted(base.get('cost_by_currency') or [])) \
+            or "more than one currency"
+        lines.append(f"# base_total_cost omitted: this holding's "
+                     f"base-currency figures are in {_curs}, so no "
+                     f"one base-currency total exists (a cost was "
+                     f"not converted)")
+        emit_line(f"warning: {sym}: its base-currency figures are in "
+                  f"{_curs}: base_total_cost is omitted for it (a "
+                  f"cost was not converted to the base currency)",
+                  file=sys.stderr)
+    # A snapshot's own base figure read back covers that snapshot's
+    # units alone: beside an input with no base figure, or on top of
+    # --base-gains for the same units, it is not the holding's base
+    # cost (backlog TJ-1031). --base-gains holds the same positions
+    # as the inputs, by contract: every input is covered there.
+    base_partial = bool(
+        base is not None and not unknown and not base_mixed
+        and base.get('snapshot_base')
+        and ((b.get('no_base_figure')
+              and not getattr(args, 'base_gains', None))
+             or abs(float(base.get('qty') or 0.0) - qty) > 1e-6))
+    if base_partial:
+        base_ok = False
+        lines.append("# base_total_cost omitted: the base-currency "
+                     "figures read are not of this whole holding's "
+                     "units")
+        emit_line(f"warning: {sym}: its base-currency figures are not "
+                  f"of the whole holding's units: base_total_cost is "
+                  f"omitted for it (one input's figure is not the cost "
+                  f"of the summed quantity)", file=sys.stderr)
+    if fill:
+        _ft = fill["total_cost"]
+        lines.append(f"base_currency = {_toml_str(fill['currency'])}")
+        lines.append(f"base_total_cost = {M.shown(_ft, 4)!r}")
+        lines.append(f"base_cost_per_share = "
+                     f"{_unit(_ft / qty if qty else 0.0, 6, coin)!r}")
+    if base_ok:
+        base_total = base['total_cost']
+        # Prefer the base bucket's own quantity for the per-share figure;
+        # it equals the native qty today (FX conversion never touches
+        # quantity) but is the correct denominator if the two passes ever
+        # diverge. Fall back to native qty if base qty is degenerate.
+        base_qty = base.get('qty') or qty
+        base_cps = base_total / base_qty if base_qty else 0.0
+        lines.append(f"base_currency = {_toml_str(base['currency'])}")
+        lines.append(f"base_total_cost = {M.shown(base_total, 4)!r}")
+        lines.append(f"base_cost_per_share = {_unit(base_cps, 6, coin)!r}")
+
+
+def _holding_trades(trades_by_symbol: Optional[Dict[str, List[Dict[str, Any]]]], sym: str,
+                    lines: List[str],
+                    marked_arrivals: Optional[Dict[str, List[Dict[str, Any]]]]) -> None:
+    """export: a holding's trades and transfer arrivals, when asked for."""
+    if trades_by_symbol is not None:
+        # Native-currency acquisition/sell events for this symbol, for
+        # charting/annotation downstream. Emitted as a TOML array of
+        # inline tables; dates are bare TOML local dates.
+        evs = trades_by_symbol.get(sym, [])
+        if evs:
+            lines.append("trades = [")
+            for e in evs:
+                lines.append(
+                    f"  {{ date = {e['date']}, action = {_toml_str(e['action'])}, "
+                    f"qty = {float(e['qty'])!r}, price = {float(e['price'])!r} }},")
+            lines.append("]")
+        else:
+            lines.append("trades = []")
+        # Units that came by transfer: not bought here (TJ-1344).
+        # Left out when none, so a holding's table reads as before.
+        marks = (marked_arrivals or {}).get(sym)
+        if marks:
+            lines.append("arrivals = [")
+            for m in marks:
+                lines.append(
+                    f"  {{ date = {m['date']}, qty = {float(m['qty'])!r}, "
+                    f"kind = {_toml_str(m['kind'])} }},")
+            lines.append("]")
 
 
 def _holdings_toml_to_inventory(doc: Dict[str, Any],
@@ -1623,7 +1685,7 @@ def _holdings_toml_to_inventory(doc: Dict[str, Any],
         # its [meta] table; anything else (a [[holdings]] typo, another
         # tool's file) used to export NOTHING at exit 0 while `tjs
         # sanity` refused the same file (audit S030-10).
-        from taxjson.lib.holdings_dir import empty_snapshot
+        from taxjson.lib.positions_reports import empty_snapshot
         if empty_snapshot(doc):
             holdings = []
         else:
@@ -1864,6 +1926,153 @@ def _refuse_removed_options(argv) -> None:
 
 @guard_main("taxjson-export")
 def main():
+    parser = _export_parser()
+
+    _refuse_removed_options(sys.argv[1:])
+    args = parser.parse_args()
+
+    agg: Dict[str, Dict[str, Any]] = {}
+
+    # The holdings stay per listing: a journal between two listings is
+    # moved by its transfer legs (the broker's, or a .tt JOURNAL line's —
+    # lib/dated_events) through _apply_transfer_evidence, a legacy
+    # ticker.map JOURNAL line being a TOBASE line. DELETE is honored
+    # (idempotent — the merge already applied it).
+    if args.map_file:
+        _tmap = load_map_file(Path(args.map_file))
+        holdings_map, holdings_drops = {}, _tmap.delete
+    else:
+        _tmap = None
+        holdings_map, holdings_drops = {}, set()
+
+    def dispatch(data):
+        process_data_report(data, args, agg, holdings_map, holdings_drops)
+
+    # A holdings snapshot read back has had no rename pass: the map's
+    # GLOBAL renames (chains to their end, an option through its
+    # underlying) apply to its symbols here (backlog TJ-0883). A gains
+    # file of `tjs run` has them already.
+    toml_renames: Dict[str, str] = {}
+    if _tmap is not None:
+        from taxjson.lib.ticker_map_rules import map_symbol, merge_renames
+        try:
+            toml_renames = merge_renames(_tmap, False)
+        except ValueError as e:
+            _die(str(e))
+    # What the snapshots read back carry beside their holdings
+    # (_holdings_toml_to_inventory): base-currency companions, the
+    # figures after the passes across accounts, and each file's day.
+    toml_base: List[Dict[str, Any]] = []
+    toml_blended: Dict[str, Dict[str, Any]] = {}
+    holders: Dict[str, int] = {}
+    toml_days: List[Tuple[str, str]] = []
+    toml_accounts: List[Tuple[Any, Any]] = []
+    json_inputs = not args.inputs
+
+    def dispatch_toml(conv, input_path):
+        def _ren(sym):
+            return map_symbol(sym, toml_renames) if toml_renames else sym
+        for item in conv["inventory"] + conv["base_inventory"]:
+            item["symbol"] = _ren(item["symbol"])
+        for sym in conv["symbols"]:
+            holders[_ren(sym)] = holders.get(_ren(sym), 0) + 1
+        for sym, fill in conv["blended"].items():
+            toml_blended[_ren(sym)] = fill
+        toml_base.extend(conv["base_inventory"])
+        toml_days.append((str(input_path), conv["as_of"]))
+        toml_accounts.append((conv["account"], conv["broker_account"]))
+        dispatch(conv)
+
+    # Every named input must load: a missing, truncated or wrong-shape
+    # file used to print one stderr line and carry on, so the tool wrote
+    # a valid EMPTY (or partial) holdings snapshot at exit 0 and the run
+    # reported every position as closed (audit R1-291, S030-19, S030-14).
+    year = None
+    if not args.inputs:
+        try:
+            data = load_report_json(None)
+        except (ValueError, OSError) as e:
+            _die(f"<stdin>: not valid JSON ({e})")
+        if not isinstance(data, dict) or "inventory" not in data:
+            _die("<stdin>: no 'inventory' section (a taxjson-gains JSON "
+                 "is expected)")
+        data = _checked_rows(data, "<stdin>")
+        year = (data.get("summary") or {}).get("year")
+        dispatch(data)
+    else:
+        for input_path in args.inputs:
+            if str(input_path).lower().endswith(".toml"):
+                try:
+                    # (a leading BOM: the parser drops it; re-audit A2-1409)
+                    doc = read_toml(input_path)
+                except (*TOML_ERRORS, OSError,
+                        UnicodeDecodeError) as e:
+                    _die(f"{input_path}: not a readable TOML file ({e})")
+                _conv = _holdings_toml_to_inventory(doc, input_path)
+                if args.platform == "holdings_toml" and _conv["lots"]:
+                    # One table per symbol here: the lots would be merged
+                    # and their dates lost, and `tjs opening` needs a
+                    # US lot's date for its holding period (backlog
+                    # TJ-1110). The --report table is of totals.
+                    _n, _s = _conv["lots"][0]
+                    _die(f"{input_path}: [[holding]] {_n} ({_s}) is a lot "
+                         f"with its own purchase day (`acquired`): "
+                         f"--holdings-toml writes one table per symbol, so "
+                         f"the lots would be merged and their dates lost. "
+                         f"`tjs sanity` and `tjs opening` read this "
+                         f"file as it is; --report sums it")
+                dispatch_toml(_conv, input_path)
+                continue
+            data = _read_rows_doc(input_path, require_key="inventory")
+            if not isinstance(data["inventory"], list):
+                _die(f"{input_path}: 'inventory' must be a list")
+            year = year or (data.get("summary") or {}).get("year")
+            json_inputs = True
+            for item in data["inventory"]:
+                if item.get("symbol") and Holding(item).quantity:
+                    holders[item["symbol"]] = holders.get(item["symbol"],
+                                                          0) + 1
+                    item["no_base_figure"] = True       # (TJ-1031)
+            dispatch(data)
+
+    _export_snapshot_meta(args, toml_days, json_inputs, toml_accounts)
+
+    # A live exact Doc: each line printed when it is added, as the
+    # print() it replaces printed it.
+    d = _out.Doc(exact=True, width_=0, live=True)
+    if args.platform == "report":
+        for line in render_report(agg, args.dust_threshold, year=year):
+            d.line(line)
+        return
+
+    base_agg, marked_arrivals, trades_by_symbol, arrivals, move_currency = _export_base(
+        args, holdings_map, holdings_drops, toml_base, agg, _tmap, toml_renames)
+    # Their cost after the passes across accounts (TJ-0598).
+    blended = None
+    if args.blended_gains:
+        from taxjson.lib.ticker_map_rules import map_symbol, raw_renames
+        _canon = raw_renames(_tmap, True) if _tmap is not None else {}
+
+        def to_canonical(sym: str) -> str:
+            seen = {sym}
+            while True:
+                nxt = map_symbol(sym, _canon)
+                if nxt in seen:
+                    return sym
+                seen.add(nxt)
+                sym = nxt
+        blended = _blended_fill(
+            agg, args.blended_gains, args.account_name, to_canonical,
+            args.base_currency, args.dust_threshold, move_currency)
+    blended = _export_blended(toml_blended, agg, blended, holders, args)
+    d.line("\n".join(render_holdings_toml(agg, args, base_agg,
+                                          trades_by_symbol, arrivals,
+                                          blended, move_currency,
+                                          marked_arrivals)))
+
+
+def _export_parser() -> argparse.ArgumentParser:
+    """export: the parser, with its two modes and their options."""
     parser = argparse.ArgumentParser(
         description="Export holdings as a plain-text report (--report) or "
                     "a TOML snapshot (--holdings-toml).",
@@ -1999,119 +2208,15 @@ def main():
              "your accounts takes its figure there (`tjs list`'s), "
              "marked cost_source = \"blended\".",
     )
+    return parser
 
-    _refuse_removed_options(sys.argv[1:])
-    args = parser.parse_args()
 
-    agg: Dict[str, Dict[str, Any]] = {}
-
-    # The holdings stay per listing: a journal between two listings is
-    # moved by its transfer legs (the broker's, or a .tt JOURNAL line's —
-    # lib/dated_events) through _apply_transfer_evidence, a legacy
-    # ticker.map JOURNAL line being a TOBASE line. DELETE is honored
-    # (idempotent — the merge already applied it).
-    if args.map_file:
-        _tmap = load_map_file(Path(args.map_file))
-        holdings_map, holdings_drops = {}, _tmap.delete
-    else:
-        _tmap = None
-        holdings_map, holdings_drops = {}, set()
-
-    def dispatch(data):
-        process_data_report(data, args, agg, holdings_map, holdings_drops)
-
-    # A holdings snapshot read back has had no rename pass: the map's
-    # GLOBAL renames (chains to their end, an option through its
-    # underlying) apply to its symbols here (backlog TJ-0883). A gains
-    # file of `tjs run` has them already.
-    toml_renames: Dict[str, str] = {}
-    if _tmap is not None:
-        from taxjson.bin.taxjson_ticker_map import map_symbol, merge_renames
-        try:
-            toml_renames = merge_renames(_tmap, False)
-        except ValueError as e:
-            _die(str(e))
-    # What the snapshots read back carry beside their holdings
-    # (_holdings_toml_to_inventory): base-currency companions, the
-    # figures after the passes across accounts, and each file's day.
-    toml_base: List[Dict[str, Any]] = []
-    toml_blended: Dict[str, Dict[str, Any]] = {}
-    holders: Dict[str, int] = {}
-    toml_days: List[Tuple[str, str]] = []
-    toml_accounts: List[Tuple[Any, Any]] = []
-    json_inputs = not args.inputs
-
-    def dispatch_toml(conv, input_path):
-        def _ren(sym):
-            return map_symbol(sym, toml_renames) if toml_renames else sym
-        for item in conv["inventory"] + conv["base_inventory"]:
-            item["symbol"] = _ren(item["symbol"])
-        for sym in conv["symbols"]:
-            holders[_ren(sym)] = holders.get(_ren(sym), 0) + 1
-        for sym, fill in conv["blended"].items():
-            toml_blended[_ren(sym)] = fill
-        toml_base.extend(conv["base_inventory"])
-        toml_days.append((str(input_path), conv["as_of"]))
-        toml_accounts.append((conv["account"], conv["broker_account"]))
-        dispatch(conv)
-
-    # Every named input must load: a missing, truncated or wrong-shape
-    # file used to print one stderr line and carry on, so the tool wrote
-    # a valid EMPTY (or partial) holdings snapshot at exit 0 and the run
-    # reported every position as closed (audit R1-291, S030-19, S030-14).
-    year = None
-    if not args.inputs:
-        try:
-            data = load_report_json(None)
-        except (ValueError, OSError) as e:
-            _die(f"<stdin>: not valid JSON ({e})")
-        if not isinstance(data, dict) or "inventory" not in data:
-            _die("<stdin>: no 'inventory' section (a taxjson-gains JSON "
-                 "is expected)")
-        year = (data.get("summary") or {}).get("year")
-        dispatch(data)
-    else:
-        for input_path in args.inputs:
-            if str(input_path).lower().endswith(".toml"):
-                if tomllib is None:
-                    _die(f"{input_path}: reading TOML holdings needs "
-                         f"Python 3.11+ or the `tomli` package")
-                try:
-                    # (a leading BOM dropped: re-audit A2-1409)
-                    with open(input_path, 'rb') as f:
-                        _raw = f.read()
-                    doc = tomllib.loads(
-                        _raw.removeprefix(b"\xef\xbb\xbf").decode("utf-8"))
-                except (tomllib.TOMLDecodeError, OSError,
-                        UnicodeDecodeError) as e:
-                    _die(f"{input_path}: not a readable TOML file ({e})")
-                _conv = _holdings_toml_to_inventory(doc, input_path)
-                if args.platform == "holdings_toml" and _conv["lots"]:
-                    # One table per symbol here: the lots would be merged
-                    # and their dates lost, and `tjs opening` needs a
-                    # US lot's date for its holding period (backlog
-                    # TJ-1110). The --report table is of totals.
-                    _n, _s = _conv["lots"][0]
-                    _die(f"{input_path}: [[holding]] {_n} ({_s}) is a lot "
-                         f"with its own purchase day (`acquired`): "
-                         f"--holdings-toml writes one table per symbol, so "
-                         f"the lots would be merged and their dates lost. "
-                         f"`tjs sanity` and `tjs opening` read this "
-                         f"file as it is; --report sums it")
-                dispatch_toml(_conv, input_path)
-                continue
-            data = _read_rows_doc(input_path, require_key="inventory")
-            if not isinstance(data["inventory"], list):
-                _die(f"{input_path}: 'inventory' must be a list")
-            year = year or (data.get("summary") or {}).get("year")
-            json_inputs = True
-            for item in data["inventory"]:
-                if item.get("symbol") and item.get("qty"):
-                    holders[item["symbol"]] = holders.get(item["symbol"],
-                                                          0) + 1
-                    item["no_base_figure"] = True       # (TJ-1031)
-            dispatch(data)
-
+def _export_snapshot_meta(args: argparse.Namespace, toml_days: List[Tuple[str, str]],
+                          json_inputs: bool, toml_accounts: List[Tuple[Any, Any]]) -> None:
+    """export: the day and the account of the snapshots read back,
+    for [meta]: their one day (refused when they are of different
+    days, not written when another input is not of it) and the account
+    every one of them names."""
     # The snapshot's day (backlog TJ-0874): the day of the snapshots read
     # back, when every input is one of that day. Snapshots of different
     # days are no one snapshot; a day beside other inputs (a gains file,
@@ -2147,11 +2252,17 @@ def main():
     args.meta_account = _one_account(0)
     args.meta_broker_account = _one_account(1)
 
-    if args.platform == "report":
-        for line in render_report(agg, args.dust_threshold, year=year):
-            print(line)
-        return
 
+def _export_base(args: argparse.Namespace, holdings_map: Dict[Any, Any], holdings_drops: Any,
+                 toml_base: List[Dict[str, Any]], agg: Dict[str, Dict[str, Any]], _tmap: Any,
+                 toml_renames: Dict[str, str]) -> Tuple[
+        Dict[str, Dict[str, Any]], Dict[str, List[Dict[str, Any]]],
+        Optional[Dict[str, List[Dict[str, Any]]]],
+        Optional[Dict[str, List[Tuple[str, float, str]]]], Dict[str, str]]:
+    """export: the base-currency inventory (--base-gains and a snapshot's
+    own base figures), the trades and transfer arrivals per symbol, the
+    evidenced depot flips on both inventories, the venues' coin
+    suffixes, and the own moves' arrivals and their currency."""
     # --holdings-toml.
     # Base-currency companion inventory (optional). Aggregated with the
     # same JOURNAL/DELETE map as the native holdings so symbol keys line
@@ -2191,23 +2302,16 @@ def main():
                 if args.trades else None)
     move_currency = (_own_move_currency(args.trades, holdings_map)
                      if args.trades else {})
-    # Their cost after the passes across accounts (TJ-0598).
-    blended = None
-    if args.blended_gains:
-        from taxjson.bin.taxjson_ticker_map import map_symbol, raw_renames
-        _canon = raw_renames(_tmap, True) if _tmap is not None else {}
+    return base_agg, marked_arrivals, trades_by_symbol, arrivals, move_currency
 
-        def to_canonical(sym: str) -> str:
-            seen = {sym}
-            while True:
-                nxt = map_symbol(sym, _canon)
-                if nxt in seen:
-                    return sym
-                seen.add(nxt)
-                sym = nxt
-        blended = _blended_fill(
-            agg, args.blended_gains, args.account_name, to_canonical,
-            args.base_currency, args.dust_threshold, move_currency)
+
+def _export_blended(toml_blended: Dict[str, Dict[str, Any]], agg: Dict[str, Dict[str, Any]],
+                    blended: Optional[Dict[str, Dict[str, Any]]], holders: Dict[str, int],
+                    args: argparse.Namespace) -> Optional[Dict[str, Dict[str, Any]]]:
+    """export: the costs after the passes across accounts: from
+    --blended-gains, and those a snapshot read back carries (kept for
+    a holding no other input adds to, in the base currency; else
+    left out, and said)."""
     # A snapshot's cost_source = "blended" figures read back (TJ-0733):
     # kept for a holding no other input adds to, in the expected base
     # currency.
@@ -2244,10 +2348,7 @@ def main():
         blended = blended or {}
         blended[sym] = fill
         b["unknown_cost"] = True      # (its figure is the fill's)
-    print("\n".join(render_holdings_toml(agg, args, base_agg,
-                                         trades_by_symbol, arrivals,
-                                         blended, move_currency,
-                                         marked_arrivals)))
+    return blended
 
 
 if __name__ == "__main__":

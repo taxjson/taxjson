@@ -47,8 +47,9 @@ import json
 import sys
 from pathlib import Path
 
+from taxjson.project.accounts import account_of, typed_accounts
 from taxjson.lib.cli_diag import guard_main, tax_year
-from taxjson.lib.core import load_transactions
+from taxjson.lib.tx_load import load_transactions
 from taxjson.lib.missing_history import (
     detect_missing_history, assess_tax_year_relevance, detect_zero_basis_acquisitions,
     detect_corp_action_links, detect_unbacked_covers, stale_missing_history_entries,
@@ -56,6 +57,13 @@ from taxjson.lib.missing_history import (
     DATE_PLACEHOLDER as _PH_DATE, COST_PLACEHOLDER as _PH_COST,
 )
 from taxjson.lib import project_layout as _PL
+from taxjson.lib.futures_prefixes import FUTURES_PREFIXES
+from taxjson.lib import out as _out
+
+# The print() calls (PLAN step 15): a message is `_out.put(S[, file=F])`
+# (`_out.put("")` is `print()`); a report line, the op of a live exact
+# Doc, `_out.Doc(exact=True, width_=0, live=True)` (`page.line(e)` is
+# `print(e)`). _diag's print of a value not known to be a str stays.
 
 
 def _diag(text, file=None):
@@ -84,11 +92,12 @@ class _Printer:
 
     def gap(self):
         if self.started and not self.blank:
-            print()
+            _out.put("")
             self.blank = True
 
     def line(self, text=""):
-        print(text)
+        page = _out.Doc(exact=True, width_=0, live=True)
+        page.line(text)
         self.started = True
         self.blank = not str(text).strip()
 
@@ -245,9 +254,9 @@ def _load_all(paths):
 
 
 def _is_derivative(symbol: str) -> bool:
-    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.option_symbols import is_option_symbol
     return (is_option_symbol(symbol or '')
-            or (symbol or '').startswith(('F:', '/', '\\')))
+            or (symbol or '').startswith(FUTURES_PREFIXES))
 
 
 def _money(v) -> str:
@@ -290,7 +299,7 @@ def _print_section(title, rows, *, show_year_cols, year=None, sizes=None):
                      + (" `--write-purchases` drafts the line from IB's "
                         "figure for you to review."
                         if c.broker_basis and not c.symbol.startswith(
-                            ('F:', '/', '\\')) else ""))
+                            FUTURES_PREFIXES) else ""))
         if year and r.pooled_with and not r.affects_year:
             d.append(f"{c.symbol} trades in {year} in "
                      f"{', '.join(r.pooled_with)}: one ACB pool across "
@@ -405,14 +414,14 @@ def _rename_sources(map_path, symbols):
     if not map_path or not symbols:
         return {}
     try:
-        from taxjson.bin.taxjson_ticker_map import load_map_file
+        from taxjson.lib.map_file import load_map_file
         tm = load_map_file(Path(map_path))
     except Exception as e:                          # noqa: BLE001
         _diag(f"taxjson-missing-history: warning: could not read "
               f"{map_path} ({e}) — renamed symbols are not traced back.",
               file=sys.stderr)
         return {}
-    from taxjson.lib.core import is_option_symbol, parse_option_underlying
+    from taxjson.lib.option_symbols import is_option_symbol, parse_option_underlying
     by_target = {}
     for attr in ("glob", "tobase", "journal"):
         for src, dst in (getattr(tm, attr, {}) or {}).items():
@@ -497,8 +506,8 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
                      unchecked):
     """--write-purchases: draft .tt purchase lines (tax-logic CA-ACB-15 /
     US-BASIS-08) into a file the run does not read."""
-    from taxjson.lib.missing_history import (draft_purchases,
-                                              format_purchase_drafts)
+    from taxjson.lib.missing_history import format_purchase_drafts
+    from taxjson.lib.purchase_drafts import draft_purchases
     from taxjson.lib.safe_write import backup_copy, write_atomic
     country = country or args.country
     if not country:
@@ -530,14 +539,13 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
     # transfer journal) when it wrote one, as the run's arrivals read
     # them (backlog TJ-0440).
     key = None
-    from taxjson.lib.cross_listings import EFFECTIVE_MAP as _EFF
+    from taxjson.lib.project_layout import EFFECTIVE_MAP as _EFF
     _eff = Path(args.files[0]).resolve().parent / _EFF
     _kmap = str(_eff) if _eff.is_file() else args.ticker_map
     if _kmap:
         try:
-            from taxjson.bin.taxjson_ticker_map import (load_map_file,
-                                                        map_symbol,
-                                                        merge_renames)
+            from taxjson.lib.ticker_map_rules import map_symbol, merge_renames
+            from taxjson.lib.map_file import load_map_file
             _ren = merge_renames(load_map_file(Path(_kmap)),
                                  to_base=True)
 
@@ -563,7 +571,7 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
     # The project's .tt NOTOWN lines: a transfer-in whose pairing one
     # undoes came from outside the books (backlog TJ-0075).
     not_own = []
-    # The run's own pairing of the transfer rows (taxjson_run.
+    # The run's own pairing of the transfer rows (pipeline/stages.
     # own_move_plan: the rows of the taxable share accounts, crypto and
     # `transfers = true` accounts left out, the in-kind moves' legs as
     # the run reads them), not a copy of it on other rows (backlog
@@ -592,11 +600,10 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
         # A transfer-in of a crypto or `transfers = true` account is no
         # arrival the run books (its pairing leaves them out): not
         # drafted.
+        _tables = typed_accounts(_accts)
         transfers = [r for r in transfers
-                     if not ((_accts.get(r.get("account")) or {})
-                             .get("crypto")
-                             or (_accts.get(r.get("account")) or {})
-                             .get("transfers"))]
+                     if not ((_a := account_of(_tables, str(r.get("account")))).crypto
+                             or _a.transfers)]
     drafts, gaps = draft_purchases(
         txs, accounts=set(accounts), country=country, symbol_key=key,
         year=None if args.all_history else args.year, date_basis=basis,
@@ -683,8 +690,8 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
                 # overwritten, a link at the name never written through
                 # (security review M1/L5).
                 bak = backup_copy(out)
-                print(f"  kept the previous {out.name} as "
-                      f"{bak.name}", file=sys.stderr)
+                _out.put(f"  kept the previous {out.name} as "
+                         f"{bak.name}", file=sys.stderr)
             write_atomic(out, text)
         except OSError as e:
             _diag(f"taxjson-missing-history: error: cannot write {out}: "
@@ -735,8 +742,9 @@ def _inside(path, folder) -> bool:
         return False
 
 
-@guard_main("taxjson-missing-history")
-def main(argv=None):
+def _mh_args(argv):
+    """The command line (`--help` prints the module's docstring), read
+    from `argv` (main)."""
     ap = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -809,52 +817,25 @@ def main(argv=None):
                          "its --year (a project's taxjson.toml decides "
                          "otherwise)")
     args = ap.parse_args(argv)
-    global _P, DETAILS, _IK_W, _LATE
-    _P = _Printer()
-    DETAILS = bool(args.details)
-    _IK_W = _in_kind_withdrawals(args.in_kind) if args.in_kind else {}
-    _LATE = {}
-    for _a, _s, _d, _n in args.late_rename:
-        _LATE.setdefault((_s.upper(), _a), []).append((_d[:10], _n))
-    for _v in _LATE.values():
-        _v.sort()
-    if args.phantoms_old and not args.missing_history:
-        args.missing_history = args.phantoms_old
-    # What the report names the lines by.
-    mh_name = "missing_history.tt"
+    return args
 
-    txs, failed = _load_all(args.files)
-    if not txs:
-        print("No transactions loaded.", file=sys.stderr)
-        # An input that could not be read is exit 2, not the 'finding'
-        # code (A2-0164).
-        return 2 if failed else 1
-    if args.account:
-        # An --account no row carries (a typo, the wrong case) filtered
-        # every finding away and printed the all-clear (audit S035-07).
-        present = sorted({t.account for t in txs if t.account})
-        if args.account not in present:
-            _diag(f"taxjson-missing-history: error: no row carries "
-                  f"account {args.account!r} (accounts in the books: "
-                  f"{', '.join(present) or 'none'})", file=sys.stderr)
-            return 2
+
+def _mh_unchecked(failed, args):
+    """What the report says it did not check: each input it could not
+    read and each --unchecked-account (main)."""
     # Anything not read is anything not checked: an all-clear (exit 0)
     # after a load error read as "nothing affects the year" in the
     # checklist (2026-09 audit R1-336, S047-18).
     unchecked = ([Path(f).name for f in failed]
                  + [f"account {a} (no book)"
                     for a in args.unchecked_account])
+    return unchecked
 
-    def _incomplete(rc):
-        if not unchecked:
-            return rc
-        _P.gap()
-        _P.para(f"INCOMPLETE: not checked: {', '.join(unchecked)} — "
-                f"missing basis there is not reported.", "", "  ")
-        print(f"taxjson-missing-history: {len(unchecked)} input(s) not "
-              f"checked: {', '.join(unchecked)}", file=sys.stderr)
-        return 1
 
+def _mh_links(txs, args):
+    """The mergers split across two symbols, reconstructed (the
+    account's only with --account), and their old and new
+    (symbol, account) pairs (main)."""
     # --- 0. Reconstruct split-across-symbols mergers first, so the two halves
     #        (old removed / new received) are reported as one event rather than
     #        an unrelated short + $0-basis buy. ---
@@ -863,18 +844,13 @@ def main(argv=None):
         links = [l for l in links if l.account == args.account]
     linked_old = {(l.old_symbol, l.account) for l in links}
     linked_new = {(l.new_symbol, l.account) for l in links}
+    return links, linked_old, linked_new
 
-    # --- 1. Truncated history (positions go negative) ---
-    # The project's configured account types and tax_date basis, when
-    # the base files sit in a project (audit S076-08, S075-16).
-    from taxjson.lib.missing_history import account_types_near, tax_date_near
-    types = account_types_near(args.files[0])
-    from taxjson.lib.country import CountryError
-    try:
-        basis = tax_date_near(args.files[0])
-    except CountryError as e:
-        print(f"taxjson-missing-history: taxjson.toml: {e}", file=sys.stderr)
-        return 2
+
+def _mh_country(args, basis):
+    """The project's country (None outside a project), its cost word,
+    and the date basis: outside a project, the drafts' --country's
+    default tax_date (else settle), said in a note (main)."""
     # The project's country names the registered-account rule in the
     # SHELTERED sections (superficial loss vs wash sale); None outside a
     # project (tax_date_near above already refused a bad country).
@@ -902,6 +878,13 @@ def main(argv=None):
                  if drafts_for else "")
               + " (run it on a project's work/ files to use the project's "
               "country and tax_date)", file=sys.stderr)
+    return country, _cost, basis
+
+
+def _mh_journal(args, txs):
+    """The journal days: ticker.map's JOURNAL lines (a warning when it
+    cannot be read), the journals of the parsed exports beside the
+    books, or else a JOURNAL line's days read from the books (main)."""
     # Journal days: a same-day Norbert's-gambit pair is not a one-day
     # short with a missing purchase (audit A2-0636 / A2-0309) — on the
     # days that hold a journal only: a join of the run, a broker journal
@@ -927,6 +910,12 @@ def main(argv=None):
         # days are read from the books (books_journal_days).
         from taxjson.lib.missing_history import books_journal_days
         journal |= books_journal_days(txs, _lines)
+    return journal
+
+
+def _mh_drop_covers(args, txs, types):
+    """The books without the covers of the shorts a .tt line declares
+    (--missing-history); the books as given without it (main)."""
     # A short a .tt line declares (TJ-0844): its cover leaves the walks.
     if args.missing_history:
         from taxjson.lib.missing_history import (drop_answered_covers,
@@ -934,10 +923,12 @@ def main(argv=None):
         txs = drop_answered_covers(txs, short_opening_rows(
             _opening_sizes(txs, args.missing_history, args.year,
                            types or None).values()))
-    if args.write_purchases is not None:
-        return _write_purchases(args, txs, country=country, basis=basis,
-                                types=types, journal=journal,
-                                unchecked=unchecked)
+    return txs
+
+
+def _mh_candidates(txs, args, types, journal):
+    """The positions that go short (the account's only with --account),
+    split into the broker-marked real shorts and the rest (main)."""
     candidates = detect_missing_history(txs, include_options=args.include_options,
                                  include_broker_shorts=True,
                                  registered_accounts=types or None,
@@ -950,10 +941,13 @@ def main(argv=None):
     # vanished behind one).
     broker_shorts = [c for c in candidates if c.broker_marked_short]
     candidates = [c for c in candidates if not c.broker_marked_short]
-    # Canada: the other taxable accounts of a symbol's ACB pool that
-    # trade it in the year (lib/missing_history.year_pool) — the same
-    # test `tjs run` lists a short on its console by.
-    from taxjson.lib.missing_history import year_pool
+    return broker_shorts, candidates
+
+
+def _mh_short_rows(year_pool, txs, candidates, args, country, types, basis, journal,
+                   linked_old):
+    """Each short's year relevance, its ACB pool's other accounts read
+    (year_pool), but the old symbol of a reconstructed merger (main)."""
     _pool = year_pool(txs, candidates, args.year, country=country,
                       registered=types, date_basis=basis)
     short_rows = [r for r in assess_tax_year_relevance(txs, candidates, args.year,
@@ -962,7 +956,14 @@ def main(argv=None):
                                                        pool=_pool,
                                                        registered_accounts=types or None)
                   if (r.candidate.symbol, r.candidate.account) not in linked_old]
+    return short_rows
 
+
+def _mh_covers_stale(txs, args, basis, journal, types, mh_name):
+    """The broker-marked covers no short in the data backs, and the
+    OPENING cost=unknown entries today's detection would not propose:
+    the stale ones (each named by its place), those whose purchase is in
+    the books now, and the stale pairs' files (main)."""
     # --- 1b. Broker-marked covers no short in the data backs (RBC
     #         "COVER SHORT.", IB code C on a buy): the short was opened
     #         before the data — the mirror of a sale going short (audit
@@ -1007,7 +1008,12 @@ def main(argv=None):
     stale = [e for e in stale if e.reason != 'complete']
     stale_pairs = {(e.symbol.upper(), e.account): e.file_name
                    for e in stale}
+    return covers, stale, complete, stale_pairs
 
+
+def _mh_zero(args, txs, basis, country, linked_new, types):
+    """The $0-cost acquisitions: the ones an election declares at $0,
+    those later sold, and those still held in a taxable account (main)."""
     # --- 2. $0-cost corp-action acquisitions later sold (and, apart,
     #        those still held: their cost is understated now) ---
     from taxjson.lib.country import stock_dividend_zero_cost
@@ -1036,7 +1042,14 @@ def main(argv=None):
     zero_held = [r for r in zero_all if r.still_held_qty > 0
                  and not is_registered_account(r.account, types or None,
                                                country)]
+    return zero_declared, zero_rows, zero_held
 
+
+def _mh_print_found(args, broker_shorts, stale_pairs, mh_name, stale, complete, covers,
+                    zero_held, _cost, zero_declared):
+    """The report's heading and the findings that need no purchase: the
+    broker-marked shorts, the stale and complete entries, the unbacked
+    covers and the $0-cost shares held or declared (main)."""
     _P.line(f"MISSING COST BASIS — "
             + (f"tax year {args.year}" if args.year else "all history")
             + (f", account {args.account}" if args.account else ""))
@@ -1155,30 +1168,11 @@ def main(argv=None):
                    else "ACCOUNT --redo --event ID`")
                 + ".")
 
-    if not short_rows and not zero_rows and not links:
-        scope = f" (account {args.account})" if args.account else ""
-        if zero_held and not DETAILS:
-            _P.gap()
-            _P.line(_act(f"Give the $0-cost shares their {_cost} before "
-                         f"they are sold",
-                         "tjs find-missing-history --details"))
-        elif zero_held:
-            _print_zero_fix(country, _cost)
-            _P.gap()
-            _P.para(_WALK_THROUGH)
-        if stale or covers or complete or zero_held:
-            return _incomplete(0)
-        if unchecked:
-            _P.gap()
-            _P.para(f"No missing-cost-basis issues found{scope} in the "
-                    f"books that loaded.")
-            return _incomplete(0)
-        _P.gap()
-        _P.para(f"No missing-cost-basis issues found{scope}: no negative "
-                "holdings, no $0-cost corp-action shares sold, no mergers.")
-        return 0
 
-    yr = args.year
+def _mh_covered_by(args, yr, short_rows, txs, types, journal, basis, year_pool, country):
+    """The pairs the missing-history file lists, and, for a tax year,
+    the openings the run booked for them and the pairs those leave
+    short, walked with the books (main)."""
     # Pairs the missing-history file already covers (R1-339: the report
     # kept asking for the file-writing step the user had done, and the
     # checklist step never cleared).
@@ -1222,16 +1216,11 @@ def main(argv=None):
                                    registered=types, date_basis=basis),
                     registered_accounts=types or None)
                 if r.affects_year or r.pooled_with}
+    return _ph, _walked, _logged
 
-    def _covered(r) -> bool:
-        c = r.candidate
-        key = (str(c.symbol).upper(), str(c.account).lower())
-        if key in _ph and key not in _logged:
-            return True
-        if _walked is not None and (r.affects_year or r.pooled_with):
-            return key not in _walked
-        return key in _ph
 
+def _mh_links_section(links, _cost):
+    """Section 0, the reconstructed mergers (main)."""
     # === Section 0: reconstructed mergers ===
     if links:
         _P.heading(f"RECONSTRUCTED MERGERS — old symbol to new symbol: "
@@ -1253,6 +1242,12 @@ def main(argv=None):
             _P.line(_act(f"Supply the old shares' {_cost}: the new shares "
                          f"carry it at $0 now",
                          "tjs find-missing-history --details"))
+
+
+def _mh_truncated(txs, args, yr, types, short_rows, _walked, _covered, mh_name, country):
+    """Section 1, the truncated history: the opening the run applies for
+    each listed pair, and the shorts by their relevance to the tax year
+    (main)."""
     # === Section 1: truncated history ===
     # The opening the run applies for each pair the file lists, said
     # under its row in whichever section it is (CA-ACB-11 / US-BASIS-04).
@@ -1333,6 +1328,10 @@ def main(argv=None):
             _print_section("Short positions (all history):", short_rows,
                            show_year_cols=False, sizes=_sizes)
 
+
+def _mh_zero_section(zero_rows, types, country, yr):
+    """Section 2, the $0-cost corporate-action shares later sold, by
+    their relevance to the tax year (main)."""
     # === Section 2: $0-cost corp-action acquisitions ===
     if zero_rows:
         _P.heading(f"$0-COST CORP-ACTION SHARES LATER SOLD — inflated gain: "
@@ -1359,6 +1358,10 @@ def main(argv=None):
                 f"NOT relevant to {yr} - sold in other years; safe to ignore:",
                 irr)
 
+
+def _mh_renamed(args, short_rows, zero_rows):
+    """The broker's symbols of the rows' consolidated ones, from
+    ticker.map (main)."""
     # The rows show the books' symbol — AFTER ticker.map — in the base
     # currency: ABC.TO / CAD for a short the broker booked as ABC.US
     # in USD (TOBASE ABC.US ABC.TO). A missing buy entered as reported lands on a listing the
@@ -1382,104 +1385,248 @@ def main(argv=None):
                 + ". Enter a missing buy under the broker's symbol and "
                   "currency, as the account labels it.")
 
+
+def _mh_open_rows(short_rows, _covered, zero_rows, zero_held):
+    """What is left to fix: the shorts an in-kind withdrawal or a late
+    trade in a renamed ticker explains, whether any other short is open,
+    and whether $0-cost shares are (main)."""
+    # (registered rows included: their openings still feed the
+    # cross-account loss walk)
+    _open_rows = [r for r in short_rows
+                  if (r.affects_year or r.pooled_with)
+                  and not _covered(r)]
+    # A short an in-kind withdrawal NOT booked explains: its fix is
+    # the move's INKIND line, never the plan's purchase (backlog
+    # TJ-0439).
+    _ik_rows = [r for r in _open_rows
+                if _in_kind_of(r.candidate) is not None]
+    # A short an undeclared late trade in a renamed ticker makes:
+    # its fix is the .tt RENAME line, never a purchase (TJ-0442).
+    _late_rows = [r for r in _open_rows if r not in _ik_rows
+                  and _late_of(r.candidate) is not None]
+    _short_open = (len(_ik_rows) + len(_late_rows)
+                   < len(_open_rows))
+    _zero_open = (any(r.affects_year for r in zero_rows)
+                  or bool(zero_held))
+    return _ik_rows, _late_rows, _short_open, _zero_open
+
+
+def _mh_fix_acts(short_rows, _covered, _ik_rows, _late_rows, _short_open, _zero_open, _cost):
+    """The fixes, one line each, without --details (main)."""
+    _P.gap()
+    _ib = [r for r in short_rows
+           if (r.affects_year or r.pooled_with) and not _covered(r)
+           and getattr(r.candidate, 'broker_basis', None)
+           and not str(r.candidate.symbol).startswith(
+               FUTURES_PREFIXES)]
+    if _ib:
+        _P.line(_act(f"IB states the cost of {len(_ib)} sale(s): "
+                     f"draft the purchase",
+                     "tjs find-missing-history --write-purchases"))
+    if _ik_rows:
+        from taxjson.lib.out import act_list as _act_list
+        _P.line(_act_list(
+            "In-kind withdrawal NOT booked: add its INKIND "
+            "line, not a purchase",
+            sorted({r.candidate.symbol for r in _ik_rows}),
+            "tjs run --details"))
+    if _late_rows:
+        from taxjson.lib.out import act_list as _act_list
+        _P.line(_act_list(
+            "Trades after a rename: declare them, not a purchase",
+            sorted({r.candidate.symbol for r in _late_rows}),
+            "tjs renames"))
+    if _short_open:
+        _P.line(_act("Add each AFFECTS row's purchase before "
+                     "filing" if not (_ik_rows or _late_rows) else
+                     "Add each other AFFECTS row's purchase "
+                     "before filing",
+                     "tjs find-missing-history --details"))
+    if _zero_open:
+        _P.line(_act(f"Give the $0-cost shares their {_cost}",
+                     "tjs find-missing-history --details"))
+
+
+def _mh_fix_steps(_ik_rows, _late_rows, _short_open, _zero_open, country, _cost):
+    """The fixes, step by step, with --details (main)."""
+    if _ik_rows:
+        _P.gap()
+        _P.para(f"{len(_ik_rows)} row(s) an in-kind withdrawal NOT "
+                f"booked explains ("
+                + ", ".join(sorted({r.candidate.symbol
+                                    for r in _ik_rows}))
+                + "): add the INKIND line the in-kind warning of "
+                "`tjs run --details` names, with the fair market "
+                "value on the withdrawal date; then `tjs run`.")
+    if _late_rows:
+        _P.gap()
+        _P.para(f"{len(_late_rows)} row(s) a trade after a rename "
+                f"makes ("
+                + ", ".join(sorted({r.candidate.symbol
+                                    for r in _late_rows}))
+                + "): the purchase is in your files under the old "
+                "ticker. Add the .tt RENAME line `tjs renames` "
+                "prints (`late=fold`, or `late=separate` for another "
+                "security); then `tjs run`.")
+    if _short_open:
+        _P.gap()
+        _P.line("A short sale you made and have not covered also shows "
+                "here: no purchase is missing, and it is in no total "
+                "until it is covered.")
+        _P.line("To fix a sale with no purchase in your files, in this "
+                "order:")
+        for item in (
+                "1. Add an older export that holds the purchase to "
+                "inputs/<account>/.",
+                "2. Or enter the purchase as a .tt BUYSELL line with its "
+                "real date and cost; `--write-purchases` drafts these "
+                "from IB's Basis or a transfer's book value, to review.",
+                "3. Only when it cannot be recovered: `tjs "
+                "find-missing-history --write-missing-history` in the "
+                "project writes .tt OPENING cost=unknown lines into "
+                "inputs/<account>/missing_history.tt — review them, "
+                "then `tjs run` (it reads them); those sales leave "
+                "the totals and are reported by hand."):
+            _P.para(item, "  ", "     ")
+    if _zero_open:
+        _print_zero_fix(country, _cost)
+    _P.gap()
+    _P.para(_WALK_THROUGH)
+
+
+@guard_main("taxjson-missing-history")
+def main(argv=None):
+    args = _mh_args(argv)
+    global _P, DETAILS, _IK_W, _LATE
+    _P = _Printer()
+    DETAILS = bool(args.details)
+    _IK_W = _in_kind_withdrawals(args.in_kind) if args.in_kind else {}
+    _LATE = {}
+    for _a, _s, _d, _n in args.late_rename:
+        _LATE.setdefault((_s.upper(), _a), []).append((_d[:10], _n))
+    for _v in _LATE.values():
+        _v.sort()
+    if args.phantoms_old and not args.missing_history:
+        args.missing_history = args.phantoms_old
+    # What the report names the lines by.
+    mh_name = "missing_history.tt"
+
+    txs, failed = _load_all(args.files)
+    if not txs:
+        _out.put("No transactions loaded.", file=sys.stderr)
+        # An input that could not be read is exit 2, not the 'finding'
+        # code (A2-0164).
+        return 2 if failed else 1
+    if args.account:
+        # An --account no row carries (a typo, the wrong case) filtered
+        # every finding away and printed the all-clear (audit S035-07).
+        present = sorted({t.account for t in txs if t.account})
+        if args.account not in present:
+            _diag(f"taxjson-missing-history: error: no row carries "
+                  f"account {args.account!r} (accounts in the books: "
+                  f"{', '.join(present) or 'none'})", file=sys.stderr)
+            return 2
+    unchecked = _mh_unchecked(failed, args)
+
+    def _incomplete(rc):
+        if not unchecked:
+            return rc
+        _P.gap()
+        _P.para(f"INCOMPLETE: not checked: {', '.join(unchecked)} — "
+                f"missing basis there is not reported.", "", "  ")
+        _out.put(f"taxjson-missing-history: {len(unchecked)} input(s) not "
+                 f"checked: {', '.join(unchecked)}", file=sys.stderr)
+        return 1
+
+    links, linked_old, linked_new = _mh_links(txs, args)
+
+    # --- 1. Truncated history (positions go negative) ---
+    # The project's configured account types and tax_date basis, when
+    # the base files sit in a project (audit S076-08, S075-16).
+    from taxjson.lib.missing_history import account_types_near, tax_date_near
+    types = account_types_near(args.files[0])
+    from taxjson.lib.country import CountryError
+    try:
+        basis = tax_date_near(args.files[0])
+    except CountryError as e:
+        _out.put(f"taxjson-missing-history: taxjson.toml: {e}", file=sys.stderr)
+        return 2
+    country, _cost, basis = _mh_country(args, basis)
+    journal = _mh_journal(args, txs)
+    txs = _mh_drop_covers(args, txs, types)
+    if args.write_purchases is not None:
+        return _write_purchases(args, txs, country=country, basis=basis,
+                                types=types, journal=journal,
+                                unchecked=unchecked)
+    broker_shorts, candidates = _mh_candidates(txs, args, types, journal)
+    # Canada: the other taxable accounts of a symbol's ACB pool that
+    # trade it in the year (lib/missing_history.year_pool) — the same
+    # test `tjs run` lists a short on its console by.
+    from taxjson.lib.missing_history import year_pool
+    short_rows = _mh_short_rows(year_pool, txs, candidates, args, country, types, basis,
+                                journal, linked_old)
+
+    covers, stale, complete, stale_pairs = _mh_covers_stale(txs, args, basis, journal, types,
+                                                            mh_name)
+
+    zero_declared, zero_rows, zero_held = _mh_zero(args, txs, basis, country, linked_new, types)
+
+    _mh_print_found(args, broker_shorts, stale_pairs, mh_name, stale, complete, covers,
+                    zero_held, _cost, zero_declared)
+
+    if not short_rows and not zero_rows and not links:
+        scope = f" (account {args.account})" if args.account else ""
+        if zero_held and not DETAILS:
+            _P.gap()
+            _P.line(_act(f"Give the $0-cost shares their {_cost} before "
+                         f"they are sold",
+                         "tjs find-missing-history --details"))
+        elif zero_held:
+            _print_zero_fix(country, _cost)
+            _P.gap()
+            _P.para(_WALK_THROUGH)
+        if stale or covers or complete or zero_held:
+            return _incomplete(0)
+        if unchecked:
+            _P.gap()
+            _P.para(f"No missing-cost-basis issues found{scope} in the "
+                    f"books that loaded.")
+            return _incomplete(0)
+        _P.gap()
+        _P.para(f"No missing-cost-basis issues found{scope}: no negative "
+                "holdings, no $0-cost corp-action shares sold, no mergers.")
+        return 0
+
+    yr = args.year
+    _ph, _walked, _logged = _mh_covered_by(args, yr, short_rows, txs, types, journal, basis,
+                                           year_pool, country)
+
+    def _covered(r) -> bool:
+        c = r.candidate
+        key = (str(c.symbol).upper(), str(c.account).lower())
+        if key in _ph and key not in _logged:
+            return True
+        if _walked is not None and (r.affects_year or r.pooled_with):
+            return key not in _walked
+        return key in _ph
+
+    _mh_links_section(links, _cost)
+    _mh_truncated(txs, args, yr, types, short_rows, _walked, _covered, mh_name, country)
+
+    _mh_zero_section(zero_rows, types, country, yr)
+
+    _mh_renamed(args, short_rows, zero_rows)
+
     if (yr and (any((r.affects_year or r.pooled_with) and not _covered(r)
                     for r in short_rows)
                 or any(r.affects_year for r in zero_rows) or zero_held)):
-        # (registered rows included: their openings still feed the
-        # cross-account loss walk)
-        _open_rows = [r for r in short_rows
-                      if (r.affects_year or r.pooled_with)
-                      and not _covered(r)]
-        # A short an in-kind withdrawal NOT booked explains: its fix is
-        # the move's INKIND line, never the plan's purchase (backlog
-        # TJ-0439).
-        _ik_rows = [r for r in _open_rows
-                    if _in_kind_of(r.candidate) is not None]
-        # A short an undeclared late trade in a renamed ticker makes:
-        # its fix is the .tt RENAME line, never a purchase (TJ-0442).
-        _late_rows = [r for r in _open_rows if r not in _ik_rows
-                      and _late_of(r.candidate) is not None]
-        _short_open = (len(_ik_rows) + len(_late_rows)
-                       < len(_open_rows))
-        _zero_open = (any(r.affects_year for r in zero_rows)
-                      or bool(zero_held))
+        _ik_rows, _late_rows, _short_open, _zero_open = _mh_open_rows(short_rows, _covered,
+                                                                      zero_rows, zero_held)
         if not DETAILS:
-            _P.gap()
-            _ib = [r for r in short_rows
-                   if (r.affects_year or r.pooled_with) and not _covered(r)
-                   and getattr(r.candidate, 'broker_basis', None)
-                   and not str(r.candidate.symbol).startswith(
-                       ('F:', '/', '\\'))]
-            if _ib:
-                _P.line(_act(f"IB states the cost of {len(_ib)} sale(s): "
-                             f"draft the purchase",
-                             "tjs find-missing-history --write-purchases"))
-            if _ik_rows:
-                from taxjson.lib.out import act_list as _act_list
-                _P.line(_act_list(
-                    "In-kind withdrawal NOT booked: add its INKIND "
-                    "line, not a purchase",
-                    sorted({r.candidate.symbol for r in _ik_rows}),
-                    "tjs run --details"))
-            if _late_rows:
-                from taxjson.lib.out import act_list as _act_list
-                _P.line(_act_list(
-                    "Trades after a rename: declare them, not a purchase",
-                    sorted({r.candidate.symbol for r in _late_rows}),
-                    "tjs renames"))
-            if _short_open:
-                _P.line(_act("Add each AFFECTS row's purchase before "
-                             "filing" if not (_ik_rows or _late_rows) else
-                             "Add each other AFFECTS row's purchase "
-                             "before filing",
-                             "tjs find-missing-history --details"))
-            if _zero_open:
-                _P.line(_act(f"Give the $0-cost shares their {_cost}",
-                             "tjs find-missing-history --details"))
+            _mh_fix_acts(short_rows, _covered, _ik_rows, _late_rows, _short_open, _zero_open,
+                         _cost)
             return _incomplete(0)
-        if _ik_rows:
-            _P.gap()
-            _P.para(f"{len(_ik_rows)} row(s) an in-kind withdrawal NOT "
-                    f"booked explains ("
-                    + ", ".join(sorted({r.candidate.symbol
-                                        for r in _ik_rows}))
-                    + "): add the INKIND line the in-kind warning of "
-                    "`tjs run --details` names, with the fair market "
-                    "value on the withdrawal date; then `tjs run`.")
-        if _late_rows:
-            _P.gap()
-            _P.para(f"{len(_late_rows)} row(s) a trade after a rename "
-                    f"makes ("
-                    + ", ".join(sorted({r.candidate.symbol
-                                        for r in _late_rows}))
-                    + "): the purchase is in your files under the old "
-                    "ticker. Add the .tt RENAME line `tjs renames` "
-                    "prints (`late=fold`, or `late=separate` for another "
-                    "security); then `tjs run`.")
-        if _short_open:
-            _P.gap()
-            _P.line("A short sale you made and have not covered also shows "
-                    "here: no purchase is missing, and it is in no total "
-                    "until it is covered.")
-            _P.line("To fix a sale with no purchase in your files, in this "
-                    "order:")
-            for item in (
-                    "1. Add an older export that holds the purchase to "
-                    "inputs/<account>/.",
-                    "2. Or enter the purchase as a .tt BUYSELL line with its "
-                    "real date and cost; `--write-purchases` drafts these "
-                    "from IB's Basis or a transfer's book value, to review.",
-                    "3. Only when it cannot be recovered: `tjs "
-                    "find-missing-history --write-missing-history` in the "
-                    "project writes .tt OPENING cost=unknown lines into "
-                    "inputs/<account>/missing_history.tt — review them, "
-                    "then `tjs run` (it reads them); those sales leave "
-                    "the totals and are reported by hand."):
-                _P.para(item, "  ", "     ")
-        if _zero_open:
-            _print_zero_fix(country, _cost)
-        _P.gap()
-        _P.para(_WALK_THROUGH)
+        _mh_fix_steps(_ik_rows, _late_rows, _short_open, _zero_open, country, _cost)
     return _incomplete(0)
 
 

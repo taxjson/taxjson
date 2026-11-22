@@ -2,16 +2,19 @@
 a project folder with inputs, `tjs -C <project> ...` as a person
 piping the output runs it (width 120), the gains rows of an account."""
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
 
-import _hermetic  # noqa: F401  (a synthetic HOME, offline: tests/_hermetic)
+import _hermetic  # (a synthetic HOME, offline: tests/_hermetic)
+import _paths
 
-REPO = Path(__file__).resolve().parent.parent
-ENV = dict(os.environ, TAXJSON_OFFLINE="1", PYTHONPATH=str(REPO / "src"),
-           NO_COLOR="1")
+REPO = _paths.REPO
+# The setup's own HOME, kept in the setup: a test that patches HOME (or
+# the setup's record) and is the first to import this module does not
+# leave its folder here (TJ-3889, TJ-3894).
+ENV = _hermetic.environ(TAXJSON_OFFLINE="1", PYTHONPATH=str(REPO / "src"),
+                        NO_COLOR="1", **_hermetic.home_vars(_hermetic.HOME))
 ENV.pop("TAXJSON_WIDTH", None)          # piped: width 120, as a person
 
 

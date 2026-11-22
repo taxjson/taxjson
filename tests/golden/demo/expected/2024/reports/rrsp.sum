@@ -1,0 +1,76 @@
+======================================================================
+ DIAGNOSTICS — rrsp  (parser/merge warnings; not part of the tax totals)
+======================================================================
+note: FX: Bank of Canada Valet for <n> dates, Yahoo fallback for 0
+OK: <merged>: 7 transactions validated.
+note: ib_rrsp_demo.csv: 15 recognized non-event row(s) not translated — Dividends subtotal row: 1, Statement metadata row: 2, section Account Information (not translated): 4, section Cash Report (not translated): 7, section Financial Instrument Information (not translated): 1.
+  ib_rrsp_demo.csv: 7 tax objects
+======================================================================
+
+
+TICKER SUMMARY — CAD, year 2024, sorted by ticker
+
+SYMBOL                                 TOTAL        TOTAL_COST     TOTAL_PROCEED        TOTAL_GAIN          CAP_GAIN          OPT_GAIN          DIVIDEND               PIL   AVG_DAYS
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+JNJ.US                                452.52          8,479.35          8,800.65            321.30            321.30              0.00            131.22              0.00      205.0
+KO.US                                -273.51            501.26            227.75           -273.51              0.00           -273.51              0.00              0.00       63.0
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+TOTAL                                 179.01          8,980.61          9,028.40             47.79            321.30           -273.51            131.22              0.00      134.0
+
+ASSET: Non-option | CURRENCY: CAD   | TRADES: 1 | YEAR: 2024
+
+Total Realized Gain:                321.30 CAD
+Average Holding Period:               205.0 Days
+Avg Fee Per Trade:                    1.35 CAD
+Avg Fee Per Share:                  0.0338 CAD
+----------------------------------------------------------------------------------------------------------------
+Positive Trades: 1 | Negative Trades: 0 | Win/Loss: inf | Win Rate: 100.0%
+Average Positive:            321.30 CAD | Average Negative:              0.00 CAD
+----------------------------------------------------------------------------------------------------------------
+
+ASSET: Options    | CURRENCY: CAD   | TRADES: 1 | YEAR: 2024
+
+Total Realized Gain:               -273.51 CAD
+Average Holding Period:                63.0 Days
+Avg Fee Per Trade:                    1.76 CAD
+Avg Fee Per 100 Opt:                0.8775 CAD
+----------------------------------------------------------------------------------------------------------------
+Positive Trades: 0 | Negative Trades: 1 | Win/Loss: 0.00 | Win Rate: 0.0%
+Average Positive:              0.00 CAD | Average Negative:           -273.51 CAD
+----------------------------------------------------------------------------------------------------------------
+
+CONSOLIDATED TOTALS — CAD, year 2024
+
+TOTAL COST:                          8,980.61 CAD
+TOTAL PROCEEDS:                      9,028.40 CAD
+  (engine sign convention: shorts/written options negated — for Schedule 3 proceeds and ACB use `tjs form-export`)
+------------------------------------------------------
+TOTAL REALIZED NON-OPTION GAIN:        321.30 CAD
+  (shares, units, futures and crypto — Schedule 3 lines: `tjs form-export`)
+TOTAL REALIZED OPTION GAIN:           -273.51 CAD
+TOTAL REALIZED GAIN:                    47.79 CAD
+------------------------------------------------------
+TOTAL DIVIDENDS / STAKING:             131.22 CAD
+------------------------------------------------------
+GRAND TOTAL (GAIN+DIV+PIL):            179.01 CAD
+------------------------------------------------------
+TOTAL TRADING FEES PAID:                 7.56 CAD
+  (OPTION TRADING FEES):                 3.51 CAD
+
+INCOME SUMMARY — CAD, year 2024, sorted by ticker
+
+SYMBOL                            GROSS DIV              PIL          TAX W/H       NET INCOME
+----------------------------------------------------------------------------------------------
+JNJ.US                               131.22             0.00             0.00           131.22
+----------------------------------------------------------------------------------------------
+SUBTOTAL                             131.22             0.00             0.00           131.22
+CASH INTEREST                                                                             0.00
+----------------------------------------------------------------------------------------------
+TOTAL NET INCOME                                                                        131.22
+
+====================================================================================================
+ HOLDINGS REPORT - open positions at the end of the data (not 2024-12-31 positions; `tjs list --date` gives a date) - Sorted by: ticker
+====================================================================================================
+TICKER          QTY  COST/SHARE    TOTAL COST  CUR
+--------------------------------------------------
+INTC.US          20     27.0675        541.35  CAD

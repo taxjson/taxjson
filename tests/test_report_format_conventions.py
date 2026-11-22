@@ -21,7 +21,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from taxjson.lib.report_model import fmt_money
+from taxjson.lib.report_fmt import fmt_money
 
 
 class TestFmtMoney(unittest.TestCase):
@@ -110,8 +110,8 @@ class TestSumGainsConventions(unittest.TestCase):
     }], "summary": {"year": 2025}}
 
     def _report(self, no_color=False):
-        from taxjson.bin.taxjson_sum_gains import (format_report,
-                                                   summarize_gains)
+        from taxjson.lib.gain_summary import summarize_gains
+        from taxjson.bin.taxjson_sum_gains import format_report
         return format_report(summarize_gains(self.GAINS), "ticker", no_color)
 
     def test_no_color_env_var_honored(self):
@@ -144,8 +144,8 @@ class TestSumGainsConventions(unittest.TestCase):
 
 class TestSumIncomeConventions(unittest.TestCase):
     def test_subtotal_and_banner(self):
-        from taxjson.bin.taxjson_sum_income import (format_report,
-                                                    summarize_income)
+        from taxjson.lib.income_summary import summarize_income
+        from taxjson.bin.taxjson_sum_income import format_report
         txs = [{"action": "DIVIDEND", "type": "dividend", "date": "2025-05-01",
                 "symbol": "AAPL.US", "currency": "USD",
                 "gross_amount": 1234.5}]

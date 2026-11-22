@@ -1,0 +1,39 @@
+TRADING FEES BY ACCOUNT / BROKERAGE — tax year 2024, by TRADE date; all amounts in CAD
+%NOTNL: fees / trade value; $/UNIT: per unit; $/CONTR: per option contract.
+BROKERAGE            CUR  TRADES   TOTAL   MEAN  MEDIAN  %NOTNL   $/UNIT  $/CONTR
+---------------------------------------------------------------------------------
+coinbase/crypto      CAD       4   80.73  20.18   21.87  0.800%  94.9765        -
+kraken/crypto        CAD       5   53.14  10.63   11.34  0.219%  30.3634        -
+rbc_direct/tfsa      CAD       4   39.80   9.95    9.95  0.088%   0.0884        -
+webull/webull        CAD       4   38.30   9.57    9.92  0.150%   0.1108   1.3331
+questrade/questrade  CAD       5   31.68   6.34    6.68  0.042%   0.0960        -
+questrade/lira       CAD       4   19.80   4.95    4.95  0.074%   0.0440        -
+ib/margin            CAD       6    8.17   1.36    1.35  0.098%   0.0365   1.4175
+ib/rrsp              CAD       5    7.56   1.51    1.35  0.041%   0.0405   0.8775
+ib/ib                CAD       5    6.75   1.35    1.35  0.011%   0.0519        -
+---------------------------------------------------------------------------------
+TOTAL                CAD      42  285.92   6.81    4.95  0.097%   0.1451   1.2636
+
+Non-option vs option fees
+BROKERAGE            NON-OPTION  OPTIONS
+----------------------------------------
+coinbase/crypto           80.73     0.00
+kraken/crypto             53.14     0.00
+rbc_direct/tfsa           39.80     0.00
+webull/webull             11.63    26.66
+questrade/questrade       31.68     0.00
+questrade/lira            19.80     0.00
+ib/margin                  6.75     1.42
+ib/rrsp                    4.05     3.51
+ib/ib                      6.75     0.00
+
+Native fees folded into the CAD totals
+coinbase/crypto:      59.80 USD
+kraken/crypto:        39.36 USD
+webull/webull:        4.95 CAD, 24.70 USD
+questrade/questrade:  4.95 CAD, 19.80 USD
+ib/margin:            6.05 USD
+ib/rrsp:              5.60 USD
+ib/ib:                5.00 USD
+
+More: tjs fees-sum --details (definitions, the files read)

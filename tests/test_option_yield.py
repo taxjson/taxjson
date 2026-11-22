@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 from taxjson.lib import option_yield as OY
 from _qa_project import project as qa_project, tj
@@ -145,7 +146,7 @@ class TestMatching(unittest.TestCase):
 
 
 class TestAnalyze(unittest.TestCase):
-    @rule("CA-PLAN-07")
+    @rule(R.CA_PLAN_07)
     def test_window_money_and_yield(self):
         rows = [_r("2025-03-01", CALL, -1, 4.0),
                 _r("2025-04-18", CALL, 1, 0.0, 0.0)]
@@ -166,7 +167,7 @@ class TestAnalyze(unittest.TestCase):
         self.assertAlmostEqual(r["annualized"], r["yield"], 6)
         self.assertEqual(doc["totals"]["USD"]["realized"], 400.0)
 
-    @rule("CA-PLAN-07")
+    @rule(R.CA_PLAN_07)
     def test_yield_on_the_shares_held(self):
         rows = [_r("2025-03-01", CALL, -1, 4.0),
                 _r("2025-04-18", CALL, 1, 0.0, 0.0),
@@ -190,7 +191,7 @@ class TestAnalyze(unittest.TestCase):
         one = _doc(rows, accounts=["tfsa"], shares=shares)
         self.assertEqual(one["rows"][0]["shares_held"], 100.0)
 
-    @rule("US-PLAN-08")
+    @rule(R.US_PLAN_08)
     def test_contract_opened_before_the_window_closes_in_it(self):
         rows = [_r("2024-12-01", CALL, -1, 4.0),
                 _r("2025-01-20", CALL, 1, 1.0),
@@ -272,7 +273,7 @@ class TestAnalyze(unittest.TestCase):
 
 
 class TestOptionYieldCli(unittest.TestCase):
-    @rule("CA-PLAN-07")
+    @rule(R.CA_PLAN_07)
     def test_project_end_to_end(self):
         tt = ["BUYSELL 2025-01-02 10:00:00 ZZQ.US 100 USD 480.00 48000",
               "BUYSELL 2025-03-03 10:00:00 ZZQ250418C00500000.US -1 USD "

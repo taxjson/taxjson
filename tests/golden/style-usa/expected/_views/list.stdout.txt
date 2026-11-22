@@ -1,0 +1,22 @@
+OPEN POSITIONS — USD, as of the latest data in the books (2024-12-31)
+COST: book cost in USD after ticker.map, basis: wash-adjusted; DEFERRED: denied losses in it.
+ACCOUNT  SYMBOL                    QTY      COST    COST/SH  DEFERRED  SINCE       NOTE
+---------------------------------------------------------------------------------------------------
+crypto   BTC                      0.05  3,256.50  65,130.00         -  2024-05-22  -
+crypto   ETH                    0.7571  2,655.30   3,507.19         -  2024-06-15  -
+crypto   USDC                      8.9      8.90       1.00         -  2024-08-01  -
+margin   GHOSTQ.US                 -40   -590.05      14.75         -  2024-04-15  missing history?
+margin   NVDA.US                    10  1,433.00     143.30     82.00  2024-12-05  -
+margin   OLDCO.US                  -50   -999.00      19.98         -  2024-04-01  missing history?
+margin   PARN.US                   100  5,001.00      50.01         -  2024-02-01  -
+margin   QZQ.US                    100  2,602.00      26.02    201.00  2024-09-20  -
+margin   QZQ250117C00040000.US      -1   -149.00       1.49         -  2024-11-15  -
+margin   SAMPA.US                  100  3,929.85      39.30    519.90  2024-11-20  -
+margin   SPNC.US                    10    250.00      25.00         -  2024-06-03  -
+roth     QZQ.US                     50  1,229.95      24.60         -  2024-09-25  -
+roth     SAMPB.US                   20      0.00       0.00         -  2024-02-15  -
+
+13 position(s), total book cost 18,628.45 USD
+! 2 short position(s) with no purchase in your files (missing history?) — tjs list --negative
+DEFERRED in the cost:  802.90 USD of disallowed wash-sale losses (§1091)
+More: tjs list --details (notes)

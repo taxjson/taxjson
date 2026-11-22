@@ -1,0 +1,42 @@
+{
+  "by_ticker": {},
+  "inventory": [
+    {
+      "account": "roth",
+      "currency": "USD",
+      "deferred_wash": 0.0,
+      "holding_start_date": "2024-02-15",
+      "last_acq_date": "2024-02-15",
+      "position_start_date": "2024-02-15",
+      "qty": 20.0,
+      "symbol": "SAMPB.US",
+      "total_cost": 0.0
+    },
+    {
+      "account": "roth",
+      "currency": "USD",
+      "deferred_wash": 0.0,
+      "holding_start_date": "2024-09-25",
+      "last_acq_date": "2024-09-25",
+      "position_start_date": "2024-09-25",
+      "qty": 50.0,
+      "symbol": "QZQ.US",
+      "total_cost": 1229.95
+    }
+  ],
+  "option_replacement_warnings": [],
+  "summary": {
+    "count": 0,
+    "total_disallowed": 0,
+    "total_fees_by_currency": {
+      "USD": {
+        "options": 0.0,
+        "stocks": 4.95,
+        "total": 4.95
+      }
+    },
+    "total_gain": 0
+  },
+  "transactions": [],
+  "wash_sales": []
+}

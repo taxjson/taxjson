@@ -1,0 +1,197 @@
+{
+  "rows": [
+    {
+      "bought": 54009.9,
+      "buys": 4,
+      "currency": "USD",
+      "fees": 24.75,
+      "sells": 3,
+      "sold": 40642.65,
+      "symbol": "AAPL.US"
+    },
+    {
+      "bought": 1559.75,
+      "buys": 1,
+      "currency": "USD",
+      "fees": 19.75,
+      "sells": 1,
+      "sold": 1690.0,
+      "symbol": "ABCD270219C00045000.US"
+    },
+    {
+      "bought": 9632.1,
+      "buys": 3,
+      "currency": "USD",
+      "fees": 61.6,
+      "sells": 2,
+      "sold": 7370.5,
+      "symbol": "BTC"
+    },
+    {
+      "bought": 11009.95,
+      "buys": 1,
+      "currency": "CAD",
+      "fees": 9.95,
+      "sells": 0,
+      "sold": 0.0,
+      "symbol": "ENB.TO"
+    },
+    {
+      "bought": 0.0,
+      "buys": 0,
+      "currency": "CAD",
+      "fees": 0.0,
+      "sells": 1,
+      "sold": 337.5,
+      "symbol": "ETH"
+    },
+    {
+      "bought": 5441.75,
+      "buys": 4,
+      "currency": "USD",
+      "fees": 37.56,
+      "sells": 2,
+      "sold": 3061.74,
+      "symbol": "ETH"
+    },
+    {
+      "bought": 0.0,
+      "buys": 0,
+      "currency": "CAD",
+      "fees": 9.95,
+      "sells": 1,
+      "sold": 590.05,
+      "symbol": "GHOSTQ.TO"
+    },
+    {
+      "bought": 20001.0,
+      "buys": 1,
+      "currency": "USD",
+      "fees": 2.0,
+      "sells": 1,
+      "sold": 20099.0,
+      "symbol": "MSFT.US"
+    },
+    {
+      "bought": 2832.0,
+      "buys": 2,
+      "currency": "USD",
+      "fees": 3.0,
+      "sells": 1,
+      "sold": 1394.0,
+      "symbol": "NVDA.US"
+    },
+    {
+      "bought": 0.0,
+      "buys": 0,
+      "currency": "USD",
+      "fees": 1.0,
+      "sells": 1,
+      "sold": 999.0,
+      "symbol": "OLDCO.US"
+    },
+    {
+      "bought": 5001.0,
+      "buys": 1,
+      "currency": "USD",
+      "fees": 1.0,
+      "sells": 0,
+      "sold": 0.0,
+      "symbol": "PARN.US"
+    },
+    {
+      "bought": 9631.95,
+      "buys": 3,
+      "currency": "USD",
+      "fees": 7.95,
+      "sells": 1,
+      "sold": 5699.0,
+      "symbol": "QZQ.US"
+    },
+    {
+      "bought": 602.0,
+      "buys": 1,
+      "currency": "USD",
+      "fees": 4.0,
+      "sells": 1,
+      "sold": 298.0,
+      "symbol": "QZQ240920C00030000.US"
+    },
+    {
+      "bought": 0.0,
+      "buys": 1,
+      "currency": "USD",
+      "fees": 1.0,
+      "sells": 1,
+      "sold": 199.0,
+      "symbol": "QZQ241220C00035000.US"
+    },
+    {
+      "bought": 0.0,
+      "buys": 0,
+      "currency": "USD",
+      "fees": 1.0,
+      "sells": 1,
+      "sold": 149.0,
+      "symbol": "QZQ250117C00040000.US"
+    },
+    {
+      "bought": 20019.9,
+      "buys": 2,
+      "currency": "CAD",
+      "fees": 29.85,
+      "sells": 1,
+      "sold": 13990.05,
+      "symbol": "RY.TO"
+    },
+    {
+      "bought": 7419.9,
+      "buys": 2,
+      "currency": "CAD",
+      "fees": 29.85,
+      "sells": 1,
+      "sold": 3490.05,
+      "symbol": "SAMPA.TO"
+    },
+    {
+      "bought": 5709.9,
+      "buys": 2,
+      "currency": "CAD",
+      "fees": 9.9,
+      "sells": 0,
+      "sold": 0.0,
+      "symbol": "SHOP.TO"
+    },
+    {
+      "bought": 250.0,
+      "buys": 1,
+      "currency": "USD",
+      "fees": 0.0,
+      "sells": 0,
+      "sold": 0.0,
+      "symbol": "SPNC.US"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "tax year 2024",
+  "sheltered_included": [
+    "rrsp",
+    "tfsa"
+  ],
+  "sold_taxable": {
+    "CAD": 4417.6,
+    "USD": 66341.84
+  },
+  "totals": {
+    "CAD": {
+      "bought": 44159.65,
+      "fees": 89.5,
+      "sold": 18407.65
+    },
+    "USD": {
+      "bought": 108961.45,
+      "fees": 164.61,
+      "sold": 81601.89
+    }
+  }
+}

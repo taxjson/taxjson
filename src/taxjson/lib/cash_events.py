@@ -17,9 +17,15 @@ list of events, never rows of the books:
     CASHOPEN  the opening balance of the ledger's year (a .tt line only)
     FLOW      a fee a cash event charged in a foreign currency
 
-Sources (each broker module's `*_cash_events`): IB Trades/Forex rows,
+Sources (the parse's: taxjson-brokerage --cash-out writes what each file
+holds to work/<account>_<broker>.cash, `cash_sidecar`, which `collect` reads;
+each built by the broker's parse from the rows it read, the parser's
+`cash_events` (or why not, its `cash_problem`), for the brokers the parser
+registry marks `builds_cash`): IB Trades/Forex rows,
 Deposits & Withdrawals and the Cash Report's Starting/Ending Cash; RBC's
-cash rows (WIR/DEP/TFI ...); Kraken's ledger (fiat funding, fiat-for-
+cash rows (WIR/DEP/TFI ...); Questrade's conversions (an FXT row's two
+legs), deposits, withdrawals, cash-only journals and stock-lending
+income; Kraken's ledger (fiat funding, fiat-for-
 fiat trades and its running balances); Coinbase fiat and stablecoin
 moves and conversions; and `.tt` lines for whatever no export carries
 (Webull, a bank account), written date first like the other dated lines:
@@ -42,36 +48,23 @@ Every event belongs to a BOOK: one broker account's cash, named
 account>`, or more when two share those 4, when a label holds several
 accounts of one broker), or a book
 a `.tt` line names with `at=<name>` (a bank account kept by hand).
+
+A line is read (`parse_line`, `FORMS`), and a broker's conversions,
+moves, balances and fees built (`conv`, `move`, `balance`, `flow`), by
+lib/cash_lines, which the parsers call too.
 """
 from __future__ import annotations
 
-import math
+
+import json
 import re
 from datetime import date as _date, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
+from taxjson.project.accounts import configured_accounts, typed_account
 from taxjson.lib import project_layout as _PL
-
-KEYWORDS = ("FXCONV", "CASHMOVE", "CASHOPEN", "CASHBAL", "CASHBOOK")
-FORMS = {
-    "FXCONV": "FXCONV <date> <from currency> <amount> <to currency> "
-              "<amount> [value=<base amount>] [at=<book>]",
-    "CASHMOVE": "CASHMOVE <date> <currency> <signed amount> "
-                "own|kept|spot|cost=<base amount>|proceeds=<base amount> "
-                "[at=<book>]",
-    "CASHOPEN": "CASHOPEN <date> <currency> <signed units> <base cost> "
-                "[at=<book>]",
-    "CASHBAL": "CASHBAL <date> <currency> <balance> [at=<book>]",
-    "CASHBOOK": "CASHBOOK <book> [complete]",
-}
-# The brokers whose exports' conversions, deposits and withdrawals the
-# ledger reads (`_extract`). A book of any other broker (Webull, the
-# generic importer) that moves foreign cash is refused until a
-# `CASHBOOK <book> complete` line says its .tt cash lines are all of
-# them (pre-release review M8).
-READERS = ("ib", "rbc_direct", "kraken", "coinbase", "questrade")
-COMPLETE = "complete"
-MOVE_HOW = ("own", "kept", "spot")
+from taxjson.lib.cash_lines import CashLineError, KEYWORDS, parse_line
+from taxjson.model import money as M
 
 # Parser ids (lib/brokerages/detect) -> the short name a book and an
 # `at=` token use.
@@ -79,214 +72,8 @@ BROKER_SHORT = {"ib": "ib", "rbc_direct": "rbc", "questrade": "questrade",
                 "webull": "webull", "coinbase": "coinbase",
                 "kraken": "kraken", "generic": "generic"}
 
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_CUR_RE = re.compile(r"^[A-Z]{3,5}$")
-_KEY_RE = re.compile(r"^([a-z]+)=(\S+)$")
-_BOOK_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*(?::[0-9a-f]{1,10})?$")
-
-
-class CashLineError(ValueError):
-    """A cash .tt line that cannot be read (named, with its form)."""
-
 
 # ------------------------------------------------------------ .tt lines
-
-def _num(tok: str, what: str, where: str, line: str, kw: str) -> float:
-    from taxjson.lib.brokerages.base import (BrokerageParseError,
-                                             parse_strict_number)
-    try:
-        v = parse_strict_number(tok, field=what)
-    except (BrokerageParseError, ValueError):
-        v = None
-    if v is None or not math.isfinite(v):
-        raise CashLineError(f"{where}{kw} {what} {tok!r} is not a number "
-                            f"(expected `{FORMS[kw]}`): {line!r}")
-    return float(v)
-
-
-def _check_date(tok: str, where: str, line: str, kw: str) -> str:
-    ok = bool(_DATE_RE.match(tok or ""))
-    if ok:
-        try:
-            datetime.strptime(tok, "%Y-%m-%d")
-        except ValueError:
-            ok = False
-    if not ok:
-        raise CashLineError(f"{where}{kw} date {tok!r} is not a valid "
-                            f"YYYY-MM-DD date — a .tt line is date first "
-                            f"(expected `{FORMS[kw]}`): {line!r}")
-    return tok
-
-
-def _check_cur(tok: str, where: str, line: str, kw: str) -> str:
-    cur = (tok or "").upper()
-    if not _CUR_RE.match(cur):
-        raise CashLineError(f"{where}{kw} currency {tok!r} is not a "
-                            f"currency code (expected `{FORMS[kw]}`): "
-                            f"{line!r}")
-    return cur
-
-
-def parse_line(line: str, source: str = "") -> Optional[Dict[str, Any]]:
-    """One .tt line -> a cash event (kind, date, ..., `at`, `line`), or
-    None when it is not a cash line. Raises CashLineError naming the
-    form on a malformed one."""
-    where = f"{source}: " if source else ""
-    text = line.split("#", 1)[0]
-    parts = text.split()
-    if not parts or parts[0] not in KEYWORDS:
-        return None
-    kw = parts[0]
-    shown = line.strip()
-    if kw == "CASHBOOK":
-        # Which account's cash this file's rows move (a folder holding
-        # several broker accounts): a standing fact of the file, no date.
-        # `complete`: every conversion, deposit and withdrawal of the
-        # book is a .tt line (a broker whose export taxjson does not read
-        # them, READERS).
-        if (len(parts) not in (2, 3) or not _BOOK_RE.match(parts[1])
-                or (len(parts) == 3 and parts[2] != COMPLETE)):
-            raise CashLineError(f"{where}malformed CASHBOOK line — "
-                                f"expected `{FORMS[kw]}` (a book as "
-                                f"`tjs fx-cash --ledger v2` prints "
-                                f"it: ib, rbc:3f2a, webull ...): {shown!r}")
-        return {"kind": kw, "book_name": parts[1], "line": shown,
-                "complete": len(parts) == 3,
-                "where": source, "origin": "tt", "date": ""}
-    keys: Dict[str, str] = {}
-    toks: List[str] = []
-    for t in parts[1:]:
-        m = _KEY_RE.match(t)
-        if m:
-            if m.group(1) in keys:
-                raise CashLineError(f"{where}{kw}: {m.group(1)}= given "
-                                    f"twice: {shown!r}")
-            keys[m.group(1)] = m.group(2)
-        else:
-            toks.append(t)
-    if not toks:
-        raise CashLineError(f"{where}malformed {kw} line — expected "
-                            f"`{FORMS[kw]}`: {shown!r}")
-    if not _DATE_RE.match(toks[0]) and len(toks) > 1 \
-            and _DATE_RE.match(toks[1]):
-        raise CashLineError(f"{where}malformed {kw} line — a .tt line is "
-                            f"date first (expected `{FORMS[kw]}`): "
-                            f"{shown!r}")
-    d = _check_date(toks[0], where, shown, kw)
-    if d > _date.today().isoformat():
-        raise CashLineError(f"{where}{kw} line is dated {d}, in the "
-                            f"future (check the year): {shown!r}")
-    at = keys.pop("at", None)
-    if at is not None and not _BOOK_RE.match(at):
-        raise CashLineError(f"{where}{kw} at={at!r} is not a book name "
-                            f"(a word, or <broker>:<id> as `tjs "
-                            f"fx-cash --ledger v2` prints it): {shown!r}")
-    ev: Dict[str, Any] = {"kind": kw, "date": d, "settle": d, "at": at,
-                          "line": shown, "where": source, "origin": "tt"}
-    rest = toks[1:]
-
-    def _bad(why: str) -> CashLineError:
-        return CashLineError(f"{where}malformed {kw} line — {why} "
-                             f"(expected `{FORMS[kw]}`): {shown!r}")
-
-    def _no_keys(allowed: Tuple[str, ...]) -> None:
-        bad = [k for k in keys if k not in allowed]
-        if bad:
-            raise _bad(f"unknown key {bad[0]}=")
-
-    if kw == "FXCONV":
-        _no_keys(("value",))
-        if len(rest) != 4:
-            raise _bad("it needs two currencies and two amounts")
-        a = _check_cur(rest[0], where, shown, kw)
-        a_amt = _num(rest[1], "amount", where, shown, kw)
-        b = _check_cur(rest[2], where, shown, kw)
-        b_amt = _num(rest[3], "amount", where, shown, kw)
-        if a == b:
-            raise _bad("a conversion is between two currencies")
-        if a_amt <= 0 or b_amt <= 0:
-            raise _bad("both amounts are positive (what left, what "
-                       "arrived)")
-        ev.update(from_ccy=a, from_amt=a_amt, to_ccy=b, to_amt=b_amt,
-                  value=(_num(keys["value"], "value", where, shown, kw)
-                         if "value" in keys else None))
-        if ev["value"] is not None and ev["value"] <= 0:
-            raise _bad("value= is the positive base-currency amount")
-        return ev
-    if kw == "CASHMOVE":
-        _no_keys(("cost", "proceeds"))
-        how = [t for t in rest[2:]]
-        if len(rest) < 2:
-            raise _bad("it needs a currency and a signed amount")
-        cur = _check_cur(rest[0], where, shown, kw)
-        amt = _num(rest[1], "amount", where, shown, kw)
-        if abs(amt) < 1e-9:
-            raise _bad("the amount is 0")
-        decl: Optional[Dict[str, Any]] = None
-        if keys:
-            if how or len(keys) != 1:
-                raise _bad("say once how the cash moved")
-            k, v = next(iter(keys.items()))
-            val = _num(v, k, where, shown, kw)
-            if val < 0:
-                raise _bad(f"{k}= is a positive base-currency amount")
-            if k == "cost" and amt < 0:
-                raise _bad("cost= declares what cash coming IN cost; "
-                           "money going out takes proceeds=, kept, "
-                           "spot or own")
-            if k == "proceeds" and amt > 0:
-                raise _bad("proceeds= declares what cash going OUT "
-                           "fetched; money coming in takes cost=, spot "
-                           "or own")
-            decl = {"how": k, "value": val}
-        elif len(how) == 1 and how[0] in MOVE_HOW:
-            if how[0] == "kept" and amt > 0:
-                raise _bad("kept is for cash going OUT that you still "
-                           "hold elsewhere; money coming in takes "
-                           "cost=, spot or own")
-            decl = {"how": how[0], "value": None}
-        else:
-            raise _bad("say how the cash moved: own, kept, spot, "
-                       "cost=<base amount> or proceeds=<base amount>")
-        ev.update(currency=cur, amount=amt, decl=decl)
-        return ev
-    if kw == "CASHOPEN":
-        _no_keys(())
-        if len(rest) != 3:
-            raise _bad("it needs a currency, the units and their cost")
-        cur = _check_cur(rest[0], where, shown, kw)
-        units = _num(rest[1], "units", where, shown, kw)
-        cost = _num(rest[2], "cost", where, shown, kw)
-        why = opening_problem(units, cost)
-        if why:
-            raise _bad(why)
-        ev.update(currency=cur, units=units, cost=cost)
-        return ev
-    # CASHBAL
-    _no_keys(())
-    if len(rest) != 2:
-        raise _bad("it needs a currency and the balance")
-    cur = _check_cur(rest[0], where, shown, kw)
-    ev.update(currency=cur,
-              balance=_num(rest[1], "balance", where, shown, kw),
-              statement="tt")
-    return ev
-
-
-def opening_problem(units: float, cost: float) -> Optional[str]:
-    """Why an opening balance of `units` (signed: negative is a debt)
-    at a base-currency `cost` cannot open a year, or None. One rule for
-    a CASHOPEN line (parse_line) and for a book carried from the prior
-    year's close (lib/fx_cash_v2._carry_openings), which a damaged or
-    hand-edited record could otherwise open with a cost CASHOPEN
-    refuses (2026-10-25 audit year-end#2)."""
-    if cost < 0:
-        return ("the cost is a positive base-currency amount (for a "
-                "debt, what the borrowed units were worth when borrowed)")
-    if abs(units) < 1e-9 and abs(cost) > 0.005:
-        return "0 units cannot have a cost"
-    return None
-
 
 def read_project_lines(root: Path, accounts: Dict[str, Any]
                        ) -> Tuple[List[Dict[str, Any]], List[str]]:
@@ -295,13 +82,16 @@ def read_project_lines(root: Path, accounts: Dict[str, Any]
     problems: a malformed line, a line in a sheltered account (its cash
     is outside s.39(1.1) / §988), a .tt file that cannot be read (its
     lines would be missing from the ledger)."""
-    from taxjson.bin.taxjson_convert_tt import tt_lines
+    from taxjson.lib.tt_format import tt_lines
     from taxjson.lib.cli_diag import read_text_utf8
     from taxjson.lib.dated_events import _where, tt_files
     out: List[Dict[str, Any]] = []
     problems: List[str] = []
+    # An entry that is no table is no account: its lines are not "not
+    # taxable" (the config check names it).
+    tables = configured_accounts(accounts)
     for acct in sorted(accounts or {}):
-        acfg = accounts.get(acct) or {}
+        typed = tables.get(acct)
         for tt in tt_files(_PL.inputs_dir(Path(root)) / acct):
             try:
                 text = read_text_utf8(tt)
@@ -327,11 +117,11 @@ def read_project_lines(root: Path, accounts: Dict[str, Any]
                     continue
                 if ev is None:
                     continue
-                if isinstance(acfg, dict) and acfg.get("type") != "taxable":
+                if typed is not None and not typed.taxable:
                     problems.append(
                         f"{where}: {ev['kind']} is a line of the FX-on-"
                         f"cash ledger; account {acct} is "
-                        f"{acfg.get('type') or 'not taxable'} (its cash "
+                        f"{typed.type or 'not taxable'} (its cash "
                         f"is not in it) — move the line to a taxable "
                         f"account's .tt: {ev['line']!r}")
                     continue
@@ -342,47 +132,6 @@ def read_project_lines(root: Path, accounts: Dict[str, Any]
 
 
 # ------------------------------------------------------------ events
-
-def conv(date: str, from_ccy: str, from_amt: float, to_ccy: str,
-         to_amt: float, *, value: Optional[float] = None,
-         settle: Optional[str] = None, where: str = "",
-         account: str = "", desc: str = "") -> Dict[str, Any]:
-    return {"kind": "FXCONV", "date": date, "settle": settle or date,
-            "from_ccy": from_ccy, "from_amt": abs(from_amt),
-            "to_ccy": to_ccy, "to_amt": abs(to_amt), "value": value,
-            "where": where, "account": account, "desc": desc,
-            "origin": "broker"}
-
-
-def move(date: str, ccy: str, amount: float, *,
-         settle: Optional[str] = None, where: str = "", account: str = "",
-         desc: str = "", internal: str = "") -> Dict[str, Any]:
-    """A broker's cash move, undeclared (`decl` None) until a .tt
-    CASHMOVE line says what it was. `internal`: a pairing class
-    ("transfer", "advance") for moves inside one statement that cancel."""
-    return {"kind": "CASHMOVE", "date": date, "settle": settle or date,
-            "currency": ccy, "amount": amount, "decl": None,
-            "where": where, "account": account, "desc": desc,
-            "internal": internal, "origin": "broker"}
-
-
-def balance(date: str, ccy: str, amount: float, *, where: str = "",
-            account: str = "", statement: str = "") -> Dict[str, Any]:
-    """A statement balance at the END of `date` (trade-date basis)."""
-    return {"kind": "CASHBAL", "date": date, "settle": date,
-            "currency": ccy, "balance": amount, "where": where,
-            "account": account, "statement": statement or where,
-            "origin": "broker"}
-
-
-def flow(date: str, ccy: str, amount: float, *,
-         settle: Optional[str] = None, where: str = "", account: str = "",
-         desc: str = "") -> Dict[str, Any]:
-    """A fee charged by a cash event (a conversion's commission, a
-    withdrawal fee) in a currency: signed, - paid."""
-    return {"kind": "FLOW", "date": date, "settle": settle or date,
-            "currency": ccy, "amount": amount, "where": where,
-            "account": account, "desc": desc, "origin": "broker"}
 
 
 def apply_declarations(events: List[Dict[str, Any]],
@@ -453,27 +202,27 @@ def tt_line(e: Dict[str, Any], base: Optional[str] = None,
     k = e["kind"]
     tail = f" at={at}" if at else ""
     if k == "FXCONV":
-        s = (f"FXCONV {e['date']} {e['from_ccy']} {e['from_amt']:,.2f} "
-             f"{e['to_ccy']} {e['to_amt']:,.2f}")
+        s = (f"FXCONV {e['date']} {e['from_ccy']} {M.shown(e['from_amt'], 2):,.2f} "
+             f"{e['to_ccy']} {M.shown(e['to_amt'], 2):,.2f}")
         if e.get("value") is not None:
-            s += f" value={e['value']:,.2f}"
+            s += f" value={M.shown(e['value'], 2):,.2f}"
         return s + tail
     if k == "CASHMOVE":
         d = e.get("decl")
         if not d and base and str(e["currency"]).upper() == base.upper():
             return (f"#CASHMOVE {e['date']} {e['currency']} "
-                    f"{e['amount']:+,.2f}")
+                    f"{M.shown(e['amount'], 2):+,.2f}")
         if not d:
             how = UNDECLARED
         elif d.get("value") is not None:
-            how = f"{d['how']}={d['value']:,.2f}"
+            how = f"{d['how']}={M.shown(d['value'], 2):,.2f}"
         else:
             how = str(d["how"])
         return (f"CASHMOVE {e['date']} {e['currency']} "
-                f"{e['amount']:+,.2f} {how}{tail}")
+                f"{M.shown(e['amount'], 2):+,.2f} {how}{tail}")
     if k == "CASHOPEN":
-        return (f"CASHOPEN {e['date']} {e['currency']} {e['units']:,.2f} "
-                f"{e['cost']:,.2f}{tail}")
+        return (f"CASHOPEN {e['date']} {e['currency']} {M.shown(e['units'], 2):,.2f} "
+                f"{M.shown(e['cost'], 2):,.2f}{tail}")
     if k == "FLOW":
         # A trade's cash leg (a Coinbase Convert's stablecoin side,
         # backlog TJ-0916) is no fee; a FLOW received (a stock-lending
@@ -482,7 +231,7 @@ def tt_line(e: Dict[str, Any], base: Optional[str] = None,
             kw = "#TRADE"
         else:
             kw = "#CREDIT" if float(e["amount"]) > 0 else "#FEE"
-        return f"{kw} {e['date']} {e['currency']} {e['amount']:+,.2f}"
+        return f"{kw} {e['date']} {e['currency']} {M.shown(e['amount'], 2):+,.2f}"
     return None
 
 
@@ -542,13 +291,13 @@ def _identity(e: Dict[str, Any]) -> Tuple:
     k = e["kind"]
     if k == "FXCONV":
         return (k, e.get("book"), e["date"], e["from_ccy"],
-                round(e["from_amt"], 2), e["to_ccy"], round(e["to_amt"], 2))
+                M.units(e["from_amt"], 2), e["to_ccy"], M.units(e["to_amt"], 2))
     if k == "CASHBAL":
         return (k, e.get("book"), e["date"], e["currency"],
-                round(e["balance"], 2))
+                M.units(e["balance"], 2))
     if k in ("CASHMOVE", "FLOW"):
         return (k, e.get("book"), e["date"], e["currency"],
-                round(e["amount"], 2), e.get("desc", ""))
+                M.units(e["amount"], 2), e.get("desc", ""))
     return (k, id(e))
 
 
@@ -723,11 +472,16 @@ class Books:
 
     def unread(self) -> List[Tuple[str, str]]:
         """[(book, broker)] of every book whose broker's export the
-        ledger reads no cash event from (not in READERS)."""
+        ledger reads no cash event from: its parse builds none (the parser
+        registry's `builds_cash`, lib/brokerages/base CASH_EVENT_BROKERS;
+        Webull, the generic importer). A book of theirs that moves foreign
+        cash is refused until a `CASHBOOK <book> complete` line says its .tt
+        cash lines are all of them (pre-release review M8)."""
+        from taxjson.lib.brokerages.base import CASH_EVENT_BROKERS
         out = []
         for label in sorted(self.seen):
             for broker in sorted(self.seen[label]):
-                if broker in READERS:
+                if broker in CASH_EVENT_BROKERS:
                     continue
                 accts = sorted(a for a in self.seen[label][broker]
                                if a) or [""]
@@ -787,63 +541,171 @@ class Books:
         return f"{label}/{at}", ""
 
 
+# ------------------------------------------------------------ the parse's sidecar
+
+# What taxjson-brokerage --cash-out writes beside a parse's books
+# (work/<account>_<broker>.json -> work/<account>_<broker>.cash): a name
+# no `*.json` glob over work/ picks up as a book.
+SIDECAR_SUFFIX = ".cash"
+SIDECAR_KIND = "cash_events"
+
+
+def sidecar_path(parsed: Path) -> Path:
+    """The cash-events sidecar of the parse whose books are `parsed`."""
+    return Path(parsed).with_name(Path(parsed).stem + SIDECAR_SUFFIX)
+
+
+def cash_sidecar(broker: str, account: str, paths: List[Path], country: str,
+                 built: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+                 problems: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    """The cash-events sidecar of one parse (taxjson-brokerage --cash-out):
+    for each of `paths` (one broker group's exports), its name as the run
+    lists it (`name`), as diagnostics show it (`file`, `shown_name`), its
+    events and `problem`: a cell the parse cannot read for them is a
+    problem of that file, never a refused parse (the events read cells the
+    parse itself never reads). Every parse writes one, Webull's and the
+    generic importer's empty: `collect` still sees their files. `country`
+    decides the stablecoin basis, recorded for `collect` to check. `built`:
+    the events the parse built of a file (the parser's `cash_events`, by
+    `str` of its path), taken as they are; a file of a broker whose parse
+    builds them (CASH_EVENT_BROKERS) without them is that file's problem,
+    never an empty list read as no events; another broker's files have
+    none. `problems`: why the parse could not build a file's events (the
+    parser's `cash_problem`, by `str` of its path, worded as `type:
+    message`): that file's problem, its events none."""
+    from taxjson.lib.brokerages.base import CASH_EVENT_BROKERS, shown_name
+    from taxjson.lib.country import stablecoin_model
+    stable_cash = stablecoin_model(country) == "cash"
+    files: List[Dict[str, Any]] = []
+    for p in sorted(Path(x) for x in paths):
+        entry: Dict[str, Any] = {"name": p.name, "file": shown_name(p), "events": [],
+                                 "problem": ""}
+        if problems and problems.get(str(p)):
+            entry["problem"] = problems[str(p)]
+        elif built and str(p) in built:
+            entry["events"] = list(built[str(p)])
+        elif broker in CASH_EVENT_BROKERS:
+            entry["problem"] = (f"ValueError: the cash events of {broker}'s exports are "
+                                f"its parse's (taxjson-brokerage --cash-out): none for "
+                                f"this file")
+        files.append(entry)
+    return {"files": files,
+            "metadata": {"kind": SIDECAR_KIND, "account": account, "brokerage": broker,
+                         "stablecoins_as_cash": stable_cash,
+                         "input_files": sorted(p.name for p in map(Path, paths))}}
+
+
+def _missing(label: str, group: str, rel: str) -> str:
+    return (f"no cash events recorded for the {group} exports of taxable account "
+            f"{label!r} ({rel}) — run `tjs run` first; a ledger without them would be "
+            f"partial")
+
+
+def _sidecar_files(work: Path, label: str, stable_cash: bool
+                   ) -> List[Tuple[str, str, Dict[str, Any]]]:
+    """(broker, its parser id; the file's entry) for every export of the
+    taxable account `label` the last run parsed, from its sources list and
+    each broker group's sidecar (`cash_sidecar`). ValueError naming `tjs
+    run` for a list or a sidecar that is missing, cannot be read, or does
+    not match the other (a run cut short, a sidecar of another basis)."""
+    from taxjson.lib.check_dates import sources
+    lst = work / f"{label}_sources.list"
+    if not lst.is_file():
+        raise ValueError(_missing(label, "broker", f"work/{lst.name}"))
+    listed: Dict[str, Set[str]] = {}
+    for line in lst.read_text(encoding="utf-8").splitlines():
+        kind, _, name = line.partition("/")
+        if name and kind not in ("setting", "map", "moves", "tt"):
+            listed.setdefault(kind, set()).add(name)
+    out: List[Tuple[str, str, Dict[str, Any]]] = []
+    for kind, group, parsed in sources(work, label):
+        if kind != "broker":
+            continue
+        side = sidecar_path(parsed)
+        rel = f"work/{side.name}"
+        try:
+            doc = json.loads(side.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raise ValueError(_missing(label, group, rel)) from None
+        except (OSError, ValueError) as e:
+            raise ValueError(f"{rel} cannot be read ({e}) — run `tjs run` to rebuild "
+                             f"it; a ledger without it would be partial") from None
+        md = doc.get("metadata") if isinstance(doc, dict) else None
+        files = doc.get("files") if isinstance(doc, dict) else None
+        if (not isinstance(md, dict) or md.get("kind") != SIDECAR_KIND
+                or not isinstance(files, list)
+                or not all(isinstance(f, dict) and isinstance(f.get("events"), list)
+                           for f in files)):
+            raise ValueError(f"{rel} is no cash-events file — run `tjs run` to rebuild it")
+        names = {str(f.get("name")) for f in files}
+        if names != listed.get(group, set()):
+            raise ValueError(f"{rel} names other exports than the last run's "
+                             f"work/{lst.name} — run `tjs run` first")
+        if bool(md.get("stablecoins_as_cash")) != stable_cash:
+            raise ValueError(f"{rel} was read with stablecoins as "
+                             f"{'cash' if md.get('stablecoins_as_cash') else 'property'}, "
+                             f"the project's country now books them as "
+                             f"{'cash' if stable_cash else 'property'} — run `tjs run` first")
+        out += [(str(md.get("brokerage") or ""), f["name"], f) for f in files]
+    return out
+
+
 # ------------------------------------------------------------ collection
 
 def collect(root: Path, cfg: Dict[str, Any], country: str,
-            native_by_label: Dict[str, List[Dict[str, Any]]]
-            ) -> Dict[str, Any]:
+            native_by_label: Dict[str, List[Dict[str, Any]]],
+            work: Optional[Path] = None) -> Dict[str, Any]:
     """Every cash event of the taxable accounts: {"events": [...] (each
     with `label` and `book`), "lines": [...] (the .tt cash lines, `book`
     resolved where it can be), "books": Books, "problems": [...]}.
     `native_by_label`: the accounts' native rows (their `source` and
-    `source_account` tell each CSV's accounts)."""
-    from taxjson.lib.brokerages.base import shown_name
-    from taxjson.lib.brokerages.detect import AmbiguousBroker, detect
-    from taxjson.lib.country import is_usa
-    stable_cash = not is_usa(country)
+    `source_account` tell each CSV's accounts). The events of the exports
+    are the last run's parse's (`cash_sidecar`, in `work`, root/work by
+    default), in the order of the account folder's files: ValueError
+    naming `tjs run` when one is missing (`_sidecar_files`). Whether they
+    are as new as the inputs is the caller's to refuse (cli/common
+    `_refuse_cash_older_than_inputs`)."""
+    from taxjson.lib.country import stablecoin_model
+    # (A missing country refused, as everywhere past the parse.)
+    stable_cash = stablecoin_model(country) == "cash"
+    work = Path(work) if work is not None else Path(root) / "work"
     accounts = cfg.get("accounts") or {}
     books = Books()
     events: List[Dict[str, Any]] = []
     problems: List[str] = []
     for label in sorted(accounts):
-        acfg = accounts.get(label) or {}
-        if acfg.get("type") != "taxable":
+        acfg = typed_account(accounts.get(label), label)
+        if not acfg.taxable:
             continue
         folder = _PL.inputs_dir(Path(root)) / label
         for row in native_by_label.get(label, []):
             src = re.sub(r"#\d+$", "", str(row.get("source") or ""))
             sa = str(row.get("source_account") or "")
             books.file_accounts.setdefault((label, src), set()).add(sa)
-        if not folder.is_dir():
+        if not folder.is_dir() or not any(
+                p.suffix.lower() == ".csv" and not p.name.startswith((".", "~$"))
+                and p.is_file() and not _PL.redacted_copy_beside_exports(p)
+                for p in folder.iterdir()):
             continue
-        for p in sorted(folder.iterdir()):
-            if p.suffix.lower() != ".csv" or p.name.startswith((".", "~$")) \
-                    or not p.is_file() \
-                    or _PL.redacted_copy_beside_exports(p):
-                continue
-            try:
-                det = detect(p)
-            except (AmbiguousBroker, OSError, ValueError):
-                continue        # `tjs run` refuses it by name
-            if det.positions or not det.broker:
-                continue
-            name = shown_name(p)
-            books.file_broker[(label, name)] = det.broker
+        # The folder's files in its order (`tjs run`'s input_files), each
+        # under the broker its detection routed it to.
+        for broker, _n, entry in sorted(_sidecar_files(work, label, stable_cash),
+                                        key=lambda x: x[1]):
+            name = str(entry.get("file") or "")
+            books.file_broker[(label, name)] = broker
             for a in books.file_accounts.get((label, name), {""}):
-                books.add(label, det.broker, a)
-            try:
-                found = _extract(det.broker, p, stable_cash,
-                                 acfg.get("crypto"))
-            except Exception as e:                  # noqa: BLE001
+                books.add(label, broker, a)
+            if entry.get("problem"):
                 problems.append(f"{label}/{name}: its cash events could "
-                                f"not be read ({type(e).__name__}: {e})")
+                                f"not be read ({entry['problem']})")
                 continue
+            found = [dict(ev) for ev in entry["events"]]
             for ev in found:
                 ev["label"] = label
-                ev["broker"] = det.broker
+                ev["broker"] = broker
                 ev["file"] = name
                 acct = ev.get("account") or ""
-                books.add(label, det.broker, acct)
+                books.add(label, broker, acct)
             events.extend(found)
     for ev in events:
         acct = ev.get("account") or ""
@@ -886,26 +748,3 @@ def collect(root: Path, cfg: Dict[str, Any], country: str,
     return {"events": events, "lines": lines, "books": books,
             "problems": problems, "warnings": warnings,
             "stablecoins_as_cash": stable_cash}
-
-
-def _extract(broker: str, path: Path, stable_cash: bool,
-             crypto: Any) -> List[Dict[str, Any]]:
-    if broker == "ib":
-        from taxjson.lib.brokerages.ib_extractor import ib_cash_events
-        return ib_cash_events(path)
-    if broker == "rbc_direct":
-        from taxjson.lib.brokerages.rbc_direct import rbc_cash_events
-        return rbc_cash_events(path)
-    if broker == "kraken":
-        from taxjson.lib.brokerages.kraken import kraken_cash_events
-        return kraken_cash_events(path, stable_cash)
-    if broker == "coinbase":
-        from taxjson.lib.brokerages.coinbase import coinbase_cash_events
-        return coinbase_cash_events(path, stable_cash)
-    if broker == "questrade":
-        from taxjson.lib.brokerages.questrade import questrade_cash_events
-        return questrade_cash_events(path)
-    # Webull and the generic importer: no reader (READERS) — the ledger
-    # refuses a book of theirs that moves foreign cash until a CASHBOOK
-    # line declares its .tt cash lines complete.
-    return []

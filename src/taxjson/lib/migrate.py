@@ -42,7 +42,9 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from taxjson.lib.ticker_map import LEGACY_MAP_FILES, RETIRED_MAP_FILES
+from taxjson.project.toml_io import parse_toml, read_toml_text
+from taxjson.lib.ticker_map import (LEGACY_MAP_FILES, RETIRED_MAP_FILES,
+                                    extract_symbol)
 
 # Every old file, in the order migrate handles (and names) them.
 LEGACY_DATA_FILES = {
@@ -53,7 +55,7 @@ LEGACY_DATA_FILES = {
 }
 # The old missing-history file (and its older name): converted into the
 # accounts' .tt OPENING cost=unknown lines by `tjs migrate`
-# (lib/missing_history.plan_missing_history_migration), not by plan().
+# (lib/history_migration.plan_missing_history_migration), not by plan().
 MISSING_HISTORY_FILES = {
     "missing_history.json": "OPENING <date> <SYMBOL> <qty> cost=unknown "
                             "lines in inputs/<account>/missing_history.tt",
@@ -297,6 +299,15 @@ def _conv_extract(text: str, out: _MapOut) -> None:
             raise MigrateError(
                 f"{out.name}:{n}: symbol {sym!r} has a space — ticker.map "
                 f"symbols are one word; fix the line first")
+        # The symbol as ticker.map reads it (upper case, a Canadian
+        # venue as ROOT.TO: lib/ticker_map.extract_symbol), so a line
+        # already in the map in another spelling is the same rule, not
+        # a contradiction.
+        try:
+            book_sym = extract_symbol(desc, cur, sym)
+        except ValueError as e:
+            raise MigrateError(f"{out.name}:{n}: {e}; fix the line "
+                               f"first") from None
         key = (desc.lower(), cur)
         if key in seen:
             out.notes.append(
@@ -308,7 +319,7 @@ def _conv_extract(text: str, out: _MapOut) -> None:
             continue
         seen[key] = (n, sym)
         out.lines.append(f"EXTRACT {desc} | {cur} | {sym}")
-        out.rules.append(("extract", key, sym))
+        out.rules.append(("extract", key, book_sym))
 
 
 def _conv_t1135(text: str, out: _MapOut) -> None:
@@ -458,7 +469,7 @@ def _toml_tables(root: Path, cfg: Dict[str, Any], text: str,
                 raise MigrateError(f"{e} — fix the line first") from None
             _keyed("estimate", "amt_carryover", by_year, name)
         elif name == "claimed_losses.txt":
-            from taxjson.bin.taxjson_carryover import load_claimed
+            from taxjson.lib.carryover_inputs import load_claimed
             import contextlib
             import io
             _read(root, name)
@@ -571,7 +582,6 @@ def _canon_cfg(v: Any) -> Any:
 def plan(root) -> Plan:
     """What `tjs migrate` would do in `root`. Raises MigrateError
     when an old file cannot be converted or a target conflicts."""
-    from taxjson.lib.tomlcompat import tomllib
     root = Path(root).resolve()
     pl = Plan(root)
     # (missing_history.json: its own converter, cmd_migrate)
@@ -588,7 +598,7 @@ def plan(root) -> Plan:
     if map_names:
         from taxjson.lib.ticker_map import (SideRules, add_side_rule,
                                             read_side_rules)
-        from taxjson.bin.taxjson_ticker_map import _parse_map_file
+        from taxjson.lib.map_file import _parse_map_file
         tm = root / "ticker.map"
         existing = SideRules()
         old_problems: List[str] = []
@@ -670,9 +680,9 @@ def plan(root) -> Plan:
         if not cfg_path.is_file():
             raise MigrateError(f"no taxjson.toml in {root} — the contents "
                                f"of {', '.join(data_names)} go there")
-        text = cfg_path.read_text(encoding="utf-8-sig")
+        text = read_toml_text(cfg_path)
         try:
-            cfg = tomllib.loads(text)
+            cfg = parse_toml(text)
         except ValueError as e:
             raise MigrateError(f"taxjson.toml is not valid TOML ({e}) — "
                                f"fix it first") from None
@@ -723,7 +733,7 @@ def plan(root) -> Plan:
         for a in appends:
             new_text = _joined(new_text, a)
         try:
-            got = tomllib.loads(new_text)
+            got = parse_toml(new_text)
         except ValueError as e:
             raise MigrateError(
                 f"taxjson.toml could not take the new entries safely ({e}) "

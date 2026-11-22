@@ -1,0 +1,16 @@
+TAX ESTIMATE — usa (single, standard deduction), rates vintage 2024
+ESTIMATE ONLY, not filing numbers: taxable accounts only; [ ] says how an amount was built.
+  Other income                            0.00
+  Short-term gains (net)                329.25  [329.25 less carryover 0.00]
+  Long-term gains (net)                   0.00  [0.00 less carryover 0.00]
+  Qualified dividends                   415.00
+  Payments in lieu                        0.00  [ordinary]
+  Crypto staking                         37.29  [ordinary]
+
+  Tax with investments:  0.00 + NIIT 0.00
+  Tax on other income alone:  0.00
+  => ESTIMATED TAX ON INVESTMENT INCOME: 0.00 USD  (0.0% of 781.54)
+  Capital loss carryovers in:  0.00 — no close-year lock before 2024 and none entered: see `tjs carryover`
+
+Assumes single filer, standard deduction, qualified dividends; no state tax, no §988 FX
+More: tjs estimate --details (assumptions); the return's lines: tjs sum

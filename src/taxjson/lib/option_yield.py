@@ -37,7 +37,7 @@ are listed, its money is unknown, and the row is flagged. So is a
 contract closed in another currency than it was opened in (never
 converted here): its money is unknown, and the close's row is named.
 
-This module is pure: the command (taxjson_run.cmd_option_yield) reads
+This module is pure: the command (cli/summaries.cmd_option_yield) reads
 the books and hands the rows in.
 """
 from __future__ import annotations
@@ -46,12 +46,13 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-from taxjson.lib.core import (is_option_symbol, parse_option_expiry,
-                              parse_option_right, parse_option_strike,
-                              parse_option_underlying)
+from taxjson.lib.option_symbols import (is_option_symbol, parse_option_expiry, parse_option_right,
+                                        parse_option_strike, parse_option_underlying)
 from taxjson.lib.corporate_timeline import dedupe_split_events
+from taxjson.lib.json_contract import SCHEMAS
+from taxjson.model import money as M
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = SCHEMAS["option-yield"]
 WRITTEN = "written"
 BOUGHT = "bought"
 # How a contract closed: the written side, then the bought side.
@@ -239,7 +240,7 @@ def _kept_transfer_ids(opts: List[Tuple[str, Dict[str, Any]]]) -> set:
     (pipeline._drop_self_cancelling_transfers), so it is one here."""
     if not any(_row(t, "action") == "TRANSFER" for _a, t in opts):
         return set()
-    from taxjson.lib.core import TaxTransaction
+    from taxjson.model.transaction import TaxTransaction
     from taxjson.lib.pipeline import _drop_self_cancelling_transfers
     fields = TaxTransaction.__dataclass_fields__
     objs: List[TaxTransaction] = []
@@ -277,7 +278,7 @@ def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
     new series before a noon-stamped split read as a new long (backlog
     TJ-0697). False: by the clock, as the US engine does."""
     from types import SimpleNamespace
-    from taxjson.lib.missing_history import OrderStarts, unbacked_close
+    from taxjson.lib.unbacked_close import OrderStarts, unbacked_close
     size_of = size_of or default_size
     every = [(a, t) for a, t in rows
              if _row(t, "action", "") in ("BUYSELL", "ASSIGN", "SPLIT",
@@ -697,34 +698,34 @@ def _finish(acc: Dict[str, Any], days: int,
          if cap > 0.005 and not unknown and settled > _EPS
          and basis != OTHER_CURRENCY and not shares_unknown
          else None)
-    out = {k: (round(v, 2) if isinstance(v, float) else v)
+    out = {k: (M.shown(v, 2) if isinstance(v, float) else v)
            for k, v in acc.items() if k != "notional_days"}
-    out["outcomes"] = {k: round(v, 4) for k, v in
+    out["outcomes"] = {k: M.units(v, 4) for k, v in
                        sorted(acc["outcomes"].items())}
     for k in ("written_contracts", "bought_contracts", "closed_contracts",
               "open_contracts", "wins", "unknown_closes",
               "transferred_out", "transferred_in"):
-        out[k] = round(acc[k], 4)
-    out["shares_held"] = round(sq, 4)
-    out["shares_cost"] = round(sc, 2)
+        out[k] = M.units(acc[k], 4)
+    out["shares_held"] = M.units(sq, 4)
+    out["shares_cost"] = M.shown(sc, 2)
     out["shares_cost_unknown"] = bool(shares_unknown)
     out["shares_other_currency"] = {
-        k: {"shares": round(q, 4), "cost": round(c, 2)}
+        k: {"shares": M.units(q, 4), "cost": M.shown(c, 2)}
         for k, (q, c) in other.items()}
     known = settled - acc["unknown_closes"]
     # The win rate: the contracts closed at a profit over the contracts
     # closed in the window (a close at exactly zero is not a win).
-    out["win_rate"] = (round(acc["wins"] / known, 4)
+    out["win_rate"] = (M.units(acc["wins"] / known, 4)
                        if known > _EPS and not unknown else None)
     if unknown:
         out["realized"] = None
-    out["avg_notional"] = round(avg, 2)
+    out["avg_notional"] = M.shown(avg, 2)
     out["yield_basis"] = basis
-    out["capital"] = round(cap, 2)
+    out["capital"] = M.shown(cap, 2)
     out["_capital"] = cap                 # unrounded, for the totals
-    out["yield"] = None if y is None else round(y, 6)
+    out["yield"] = None if y is None else M.units(y, 6)
     out["annualized"] = (None if y is None or days <= 0
-                         else round(y * 365.0 / days, 6))
+                         else M.units(y * 365.0 / days, 6))
     return out
 
 
@@ -745,8 +746,8 @@ def analyze(lots: Iterable[Lot], *, start: str, end: str, scope: str,
     `unknown_shares`: the keys of `shares` whose cost is not all known
     (a holding opened with cost=unknown): no yield on them (backlog
     TJ-0774). `aliases` = {option underlying: share line}: a class
-    share's option root (SYNB.TO for SYN.B.TO, core.class_root_aliases)
-    is that share line (backlog TJ-0910)."""
+    share's option root (SYNB.TO for SYN.B.TO, engine/assign
+    class_root_aliases) is that share line (backlog TJ-0910)."""
     wanted = [w for w in underlyings if str(w or "").strip()]
     accts = set(accounts) if accounts is not None else None
     groups = groups or {}
@@ -805,14 +806,14 @@ def analyze(lots: Iterable[Lot], *, start: str, end: str, scope: str,
                     "right": lot.right, "strike": strike,
                     "expiry": expiry, "currency": lot.currency,
                     "opened": lot.open_date, "closed": c.date,
-                    "how": c.kind, "contracts": round(cu, 4),
+                    "how": c.kind, "contracts": M.units(cu, 4),
                     "premium": (None if lot.unknown_cost
-                                else round(per_unit * cu, 2)),
+                                else M.shown(per_unit * cu, 2)),
                     # (a transfer out has no close money and no P/L)
                     "close_cash": (None if c.currency or moved
-                                   else round(c.cash, 2)),
+                                   else M.shown(c.cash, 2)),
                     "pnl": (None if lot.unknown_cost or moved
-                            else round(c.pnl, 2)),
+                            else M.shown(c.pnl, 2)),
                     "days_open": _days(lot.open_date, c.date)})
         left = lot.units_open_on(end)
         if lot.open_date <= end and left > _EPS:
@@ -821,9 +822,9 @@ def analyze(lots: Iterable[Lot], *, start: str, end: str, scope: str,
                 "account": lot.account, "side": lot.side,
                 "right": lot.right, "strike": strike,
                 "expiry": expiry, "currency": lot.currency,
-                "opened": lot.open_date, "contracts": round(left, 4),
+                "opened": lot.open_date, "contracts": M.units(left, 4),
                 "premium": (None if lot.unknown_cost
-                            else round(per_unit * left, 2)),
+                            else M.shown(per_unit * left, 2)),
                 "days_open": _days(lot.open_date, _next_day(end)),
                 "expired": bool(expiry and expiry < end)})
 
@@ -886,7 +887,7 @@ def analyze(lots: Iterable[Lot], *, start: str, end: str, scope: str,
         t = _finish(acc, days, (sq, sc), capital=(basis, cap), other=other,
                     shares_unknown=any(r["shares_cost_unknown"]
                                        for r in mine))
-        t["notional_capital"] = round(sum(
+        t["notional_capital"] = M.shown(sum(
             r["_capital"] for r in mine if r["yield_basis"] == "notional"), 2)
         totals[cur] = t
     for r in rows + parts + list(totals.values()):
@@ -915,7 +916,7 @@ def _pct(v: Optional[float]) -> str:
 def _money(v: Optional[float]) -> str:
     """A money figure; `?` when it is unknown (a premium before the
     data)."""
-    from taxjson.lib.report_model import fmt_money
+    from taxjson.lib.report_fmt import fmt_money
     return "?" if v is None else fmt_money(v)
 
 
@@ -938,7 +939,7 @@ def render(doc: Dict[str, Any], cmd: str = "tjs option-yield"):
     (and per account, side and right), the totals per currency and
     what to look at."""
     from taxjson.lib import out
-    from taxjson.lib.report_model import fmt_money
+    from taxjson.lib.report_fmt import fmt_money
     which = (", ".join(doc["underlyings"]) + ": " if doc["underlyings"]
              else "")
     d = out.Doc(f"OPTION YIELD — planning numbers, {which}{doc['scope']} "
@@ -1028,6 +1029,21 @@ def render(doc: Dict[str, Any], cmd: str = "tjs option-yield"):
                 body, aligns=["<", "<", "<", ">", ">", ">", ">", ">", "<"],
                 drop=(3, 8))
     d.blank()
+    kv = _render_totals(doc, fmt_money)
+    d.kv(kv)
+    acts = _render_acts(doc, out, rows)
+    if acts:
+        d.blank()
+        for a in acts:
+            d.item(a[len(out.ACT):], bullet=out.ACT)
+    return d
+
+
+def _render_totals(doc: Dict[str, Any], fmt_money: Callable[..., str]
+                   ) -> List[Tuple[str, str]]:
+    """render: each currency's realized P/L (unknown when a close had
+    no premium) and its yield (none, unknown, or on the shares' cost,
+    a strike notional or both), as label-value pairs."""
     kv = []
     for cur, t in doc["totals"].items():
         if t["realized"] is None:
@@ -1073,7 +1089,14 @@ def render(doc: Dict[str, Any], cmd: str = "tjs option-yield"):
         kv.append((f"Yield, {cur}",
                    f"{_pct(t['yield'])} on {on}, {_pct(t['annualized'])}"
                    f" annualized"))
-    d.kv(kv)
+    return kv
+
+
+def _render_acts(doc: Dict[str, Any], out: Any, rows: List[Dict[str, Any]]) -> List[str]:
+    """render: the `! ` lines, contracts past expiry with no expiry
+    row, premiums unknown, contracts moved in, closes in another
+    currency, shares of unknown cost or in another currency, and the
+    underlyings with no option in the books."""
     acts = []
     opened = [o for o in doc["open"] if o["expired"]]
     if opened:
@@ -1116,8 +1139,4 @@ def render(doc: Dict[str, Any], cmd: str = "tjs option-yield"):
     for w in doc["unmatched_underlyings"]:
         acts.append(out.act(f"{w}: no option on it in the books",
                             "tjs events"))
-    if acts:
-        d.blank()
-        for a in acts:
-            d.item(a[len(out.ACT):], bullet=out.ACT)
-    return d
+    return acts

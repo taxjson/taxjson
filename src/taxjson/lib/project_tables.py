@@ -21,8 +21,8 @@ project's taxjson.toml (`tjs migrate` moves an old project's files):
     record_date = 2025-12-29
     per_share = 0.2500                     # base currency; negative = ROC
 
-`table_problems(cfg)` is the one check every config reader applies
-(lib/config_check.settings_problems): types, dates, duplicates and the
+lib/config_check's `table_problems(cfg)` (in settings_problems) is the
+one check every config reader applies: types, dates, duplicates and the
 account an entry names. Country ownership is lib/country CONFIG_COUNTRY
 ([capital_gains_dividends] and [estimate] amt_carryover are Canadian).
 """
@@ -33,12 +33,21 @@ import math
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from taxjson.lib.config_check import CARRYOVER_KEYS, DISTRIBUTION_KEYS
 
 DIST_TABLE = "distributions"
 CGD_TABLE = "capital_gains_dividends"
 CARRY_TABLE = "carryover"
 CLAIMED_KEY = "claimed"
+# The keys a [carryover] table and a [[distributions]] entry may carry
+# (claimed_losses and distribution_rows name any other; lib/config_template
+# lists them).
+CARRYOVER_KEYS = ("claimed",)
+# ...and the key that answers `tjs carryover` where it says it can't tell
+# (Canada): accepted, documented in docs/settings.md, but no part of the
+# template `tjs init` writes; it is refused where the ledger can tell.
+STATED_BACK_KEY = "carried_back"
+CARRYOVER_ANSWER_KEYS = (STATED_BACK_KEY,)
+DISTRIBUTION_KEYS = ("symbol", "record_date", "per_share")
 
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
@@ -137,9 +146,8 @@ def distribution_rows(cfg: Dict[str, Any]
 
 # ------------------------------------------------------------ claimed
 
-def claimed_losses(cfg: Dict[str, Any]) -> Tuple[Dict[int, float], List[str]]:
-    """({year: amount}, problems) of [carryover] claimed — the net
-    capital losses applied on each filed return."""
+def _carry_table(cfg: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
+    """(the [carryover] table, its problems as a table)."""
     tbl = cfg.get(CARRY_TABLE)
     if tbl is None:
         return {}, []
@@ -147,17 +155,20 @@ def claimed_losses(cfg: Dict[str, Any]) -> Tuple[Dict[int, float], List[str]]:
     if not isinstance(tbl, dict):
         return {}, [f"{where} must be a table (a [{CARRY_TABLE}] section), "
                     f"got `{CARRY_TABLE} = {tbl!r}`"]
-    problems = [f"{where}: unknown key {k!r} (only `{CLAIMED_KEY} = "
-                f"{{ 2023 = 4000.00 }}`)" for k in tbl
-                if k not in CARRYOVER_KEYS]
-    v = tbl.get(CLAIMED_KEY)
+    return tbl, [f"{where}: unknown key {k!r} (only `{CLAIMED_KEY} = "
+                 f"{{ 2023 = 4000.00 }}`)" for k in tbl
+                 if k not in CARRYOVER_KEYS + CARRYOVER_ANSWER_KEYS]
+
+
+def _by_year(v: Any, where: str, key: str) -> Tuple[Dict[int, float], List[str]]:
+    """({year: amount}, problems) of a `KEY = { YEAR = AMOUNT }` value."""
     if v is None:
-        return {}, problems
-    where = f"[{CARRY_TABLE}] {CLAIMED_KEY}"
+        return {}, []
     if not isinstance(v, dict):
-        return {}, problems + [
-            f"{where} must be a table by tax year, e.g. `{CLAIMED_KEY} = "
+        return {}, [
+            f"{where} must be a table by tax year, e.g. `{key} = "
             f"{{ 2023 = 4000.00, 2024 = 1500 }}`, got {v!r}"]
+    problems: List[str] = []
     out: Dict[int, float] = {}
     spelled: Dict[int, str] = {}
     for k, a in v.items():
@@ -186,25 +197,34 @@ def claimed_losses(cfg: Dict[str, Any]) -> Tuple[Dict[int, float], List[str]]:
     return out, problems
 
 
+def claimed_losses(cfg: Dict[str, Any]) -> Tuple[Dict[int, float], List[str]]:
+    """({year: amount}, problems) of [carryover] claimed — the net
+    capital losses applied on each filed return."""
+    tbl, problems = _carry_table(cfg)
+    out, more = _by_year(tbl.get(CLAIMED_KEY),
+                         f"[{CARRY_TABLE}] {CLAIMED_KEY}", CLAIMED_KEY)
+    return out, problems + more
+
+
+def carried_back_stated(cfg: Dict[str, Any]) -> Tuple[Dict[int, float], List[str]]:
+    """({year: amount}, problems) of [carryover] carried_back (Canada): the net
+    capital loss each named year's return carried back (T1A), the person's
+    answer where `tjs carryover` says it can't tell (backlog TJ-4880). The
+    table's own problems are `claimed_losses`'s."""
+    return _by_year(_carry_table(cfg)[0].get(STATED_BACK_KEY),
+                    f"[{CARRY_TABLE}] {STATED_BACK_KEY}", STATED_BACK_KEY)
+
+
 # ------------------------------------------------------------ all checks
 
-def table_problems(cfg: Dict[str, Any]) -> List[str]:
-    """Every problem of the four data tables (types, dates, duplicates,
-    the account a box-18 entry names). Country ownership is checked by
-    lib/country with the rest of the config."""
-    out: List[str] = []
-    out += distribution_rows(cfg)[1]
-    out += claimed_losses(cfg)[1]
-    from taxjson.lib.cg_dividends import entries_from_config
+def claims_back(cfg: Dict[str, Any], year: Any) -> bool:
+    """True when [carryover] claimed has an entry under one of the 3
+    years before `year`: a T1A carry-back of `year`'s loss may be
+    recorded, which only the carryover ledger can tell."""
     try:
-        entries_from_config(cfg)
-    except ValueError as e:
-        out.append(str(e))
-    est = cfg.get("estimate")
-    if isinstance(est, dict) and "amt_carryover" in est:
-        from taxjson.lib.carryforward import amt_from_config
-        try:
-            amt_from_config(est["amt_carryover"])
-        except ValueError as e:
-            out.append(str(e))
-    return out
+        y = int(year)
+        claimed = claimed_losses(cfg)[0]
+    except (TypeError, ValueError, SystemExit):
+        return False
+    return any(y - 3 <= int(c) < y and float(a) > 0.005
+               for c, a in claimed.items())

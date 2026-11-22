@@ -13,8 +13,8 @@ mismatch silently:
 """
 import unittest
 
-from taxjson.bin.taxjson_convert_tt import parse_tt_line
-from taxjson.lib.core import TaxTransaction
+from taxjson.lib.tt_format import parse_tt_line
+from taxjson.model.transaction import TaxTransaction
 
 
 class TestConvertTtIdMatchesComputeId(unittest.TestCase):

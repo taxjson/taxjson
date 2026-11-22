@@ -1,20 +1,23 @@
+from taxjson.lib.once import said_set
 from taxjson.lib.stage_msg import emit_line
 import re
 from datetime import datetime
 
-# Delegate the two OCC primitives to the canonical helpers in `core.py`.
-# Previously this module carried its own near-duplicate regexes which
-# could drift from the engine's view of "is this an option?" — a recipe
-# for subtle classification disagreements (e.g. wash-sale vs ticker-map
-# disagreeing on whether `F:CL...` counts).
-from taxjson.lib.core import parse_option_underlying, is_option_symbol
+# Delegate the two OCC primitives to the canonical helpers in
+# `lib/option_symbols.py`. Previously this module carried its own
+# near-duplicate regexes which could drift from the engine's view of "is
+# this an option?" — a recipe for subtle classification disagreements
+# (e.g. wash-sale vs ticker-map disagreeing on whether `F:CL...` counts).
+from taxjson.lib.option_symbols import parse_option_underlying, is_option_symbol
+from taxjson.lib.futures_prefixes import FUTURES_PREFIX_GROUP, FUTURES_PREFIXES
+from taxjson.lib.ca_listing import book_listing
 
 get_underlying = parse_option_underlying
 is_option_ticker = is_option_symbol
 
 def is_future_ticker(symbol: str) -> bool:
     """Checks if a symbol is a future (starts with / or \\ or F:)."""
-    return symbol.startswith(('/', '\\', 'F:'))
+    return symbol.startswith(FUTURES_PREFIXES)
 
 def get_base_ticker_info(symbol: str):
     """
@@ -31,7 +34,8 @@ def get_base_ticker_info(symbol: str):
 
     # Handle OCC Options (extract symbol before the date/strike block)
     # e.g., ABC.B271217C00030000 -> ABC.B
-    match = re.match(r'^((?:F:|[\/\\])?[A-Z0-9\.]+?)\d{6}[CP]\d+', full_ticker, re.IGNORECASE)
+    match = re.match(r'^(' + FUTURES_PREFIX_GROUP + r'?[A-Z0-9\.]+?)\d{6}[CP]\d+', full_ticker,
+                     re.IGNORECASE)
     if match:
         return match.group(1), ext
     
@@ -101,7 +105,7 @@ def underlying_of(symbol: str, aliases: dict) -> str:
 #
 # ticker.map is the project's ONE mapping file. Besides the rename rules
 # (GLOBAL, TOBASE, JOURNAL, DELETE, DISTINCT, RENAME — parsed by
-# bin/taxjson_ticker_map._parse_map_file, which hands these lines here),
+# lib/map_file._parse_map_file, which hands these lines here),
 # it carries four lookup keywords that change no symbol in the books:
 #
 #   QUOTE       SYMBOL YAHOO_SYMBOL [QTY_RATIO]
@@ -207,7 +211,7 @@ class LegacyMapFileError(_InputContentError):
 class SideRules:
     """The parsed QUOTE / CRYPTO / EXTRACT / T1135 lines of one
     ticker.map. quote: {SYMBOL: (yahoo, ratio)}; crypto: {SYMBOL: yahoo
-    id}; extract: [(description words lower-cased, CURRENCY, symbol)] in
+    id}; extract: [(description words lower-cased, CURRENCY, SYMBOL)] in
     file order; t1135: {SYMBOL: ISO3 code, or "CA" for not foreign
     property} (lib/t1135_country); t1135_category: {SYMBOL: the form's
     category 1-6} of the T1135 lines that give one; similar: the SIMILAR groups as
@@ -270,7 +274,8 @@ def parse_side_line(kw: str, line: str):
         if not _CURRENCY_RE.match(cur):
             raise ValueError(f"EXTRACT currency {parts[1]!r} is not a "
                              f"3-letter code or '*'")
-        return "extract", (desc.lower(), cur), sym
+        return "extract", (desc.lower(), cur), extract_symbol(desc, cur,
+                                                                sym)
     toks = body.split()
     if kw == "QUOTE":
         if len(toks) not in (2, 3):
@@ -285,7 +290,7 @@ def parse_side_line(kw: str, line: str):
             if not (ratio > 0 and ratio != float("inf")):
                 raise ValueError(f"QUOTE ratio {toks[2]!r} must be a "
                                  f"positive number")
-        return "quote", toks[0].upper(), (toks[1], ratio)
+        return "quote", book_listing(toks[0]), (toks[1], ratio)
     if kw == "CRYPTO":
         if len(toks) != 2:
             raise ValueError("CRYPTO needs `CRYPTO SYMBOL YAHOO_ID`")
@@ -308,19 +313,19 @@ def parse_side_line(kw: str, line: str):
                 f"CATEGORY the form's 1 to 6)")
         code = parse_country(toks[1])
         if len(toks) == 2:
-            return "t1135", toks[0].upper(), code
+            return "t1135", book_listing(toks[0]), code
         if toks[2] not in ("1", "2", "3", "4", "5", "6"):
             raise ValueError(f"T1135 CATEGORY {toks[2]!r} is not one of "
                              f"the form's categories 1 to 6")
         if code == NOT_FOREIGN:
             raise ValueError(f"a T1135 CATEGORY goes with a foreign "
                              f"country, not {toks[1].upper()}: drop it")
-        return "t1135", toks[0].upper(), (code, int(toks[2]))
+        return "t1135", book_listing(toks[0]), (code, int(toks[2]))
     if kw == "SIMILAR":
         syms = []
         for t in toks:
-            if t.upper() not in syms:
-                syms.append(t.upper())
+            if book_listing(t) not in syms:
+                syms.append(book_listing(t))
         if len(syms) < 2:
             raise ValueError("SIMILAR needs `SIMILAR A B [C ...]`: two or "
                              "more share listings")
@@ -339,7 +344,7 @@ def parse_side_line(kw: str, line: str):
         if kw == "SECFUT":
             # A futures root may be written with its book prefix
             # (F:ZZQ, /ZZQ).
-            root = re.sub(r'^(F:|[\\/])', '', root)
+            root = re.sub('^' + FUTURES_PREFIX_GROUP, '', root)
         root = root.split(".", 1)[0]
         return (kw.lower(), root,
                 not (len(toks) == 2 and toks[1].upper() == "NO"))
@@ -367,7 +372,7 @@ def parse_side_line(kw: str, line: str):
                              "IBCODE NO`")
         suf = toks[1].upper().lstrip(".")
         if suf != "NO":
-            from taxjson.lib.markets import known_suffixes
+            from taxjson.lib.markets_data import known_suffixes
             if suf not in known_suffixes():
                 raise ValueError(
                     f"VENUE suffix {toks[1]!r} is not a listing suffix "
@@ -376,15 +381,48 @@ def parse_side_line(kw: str, line: str):
     raise ValueError(f"{kw} is not a ticker.map lookup keyword")
 
 
+def extract_symbol(desc: str, cur: str, sym: str) -> str:
+    """An EXTRACT line's SYMBOL as the books spell it (`cur`: the line's
+    CURRENCY, upper case, or '*'); ValueError when the line cannot say.
+    Upper case, like every other keyword's: kept as typed, `zyab.TO` was
+    an ACB pool of its own beside the broker's ZYAB.TO, and a superficial
+    loss across the two was missed (backlog TJ-4600). A Canadian venue's
+    listing is ROOT.TO with a dotted preferred series, as every parser
+    and .tt row spells it (lib/ca_listing): `ZYAB.V`, `.CN` or
+    `.NE` was a pool no broker row joins (backlog TJ-4604). A `.V` is TSX
+    Venture only on a CAD line; on a line for another currency, or any,
+    it may be a class letter, so it is refused, naming the line to write:
+    the Venture listing on the line's own CURRENCY, which selects the
+    rows (a CAD on a USD line would match none of them)."""
+    from taxjson.lib.ca_listing import (canonical_ca_listing,
+                                        is_ca_pref_series)
+    from taxjson.lib.option_symbols import is_option_symbol
+    s = sym.upper()
+    if s.startswith(FUTURES_PREFIXES) or is_option_symbol(s):
+        return s
+    canon = canonical_ca_listing(s, cur if cur == "CAD" else "")
+    if canon:
+        return canon
+    if s.endswith(".V") and len(s) > 2 and not is_ca_pref_series(s):
+        root = s[:-2]
+        raise ValueError(
+            f"EXTRACT symbol {sym!r} on a {cur!r} line: `.V` is "
+            f"TSX Venture only in CAD, where the books spell it {root}.TO. "
+            f"Write `EXTRACT {desc} | {cur} | {root}.TO` for the Venture "
+            f"listing, or `EXTRACT {desc} | {cur} | {s}.US` for a US share "
+            f"of class V")
+    return s
+
+
 def _share_listing_spelling(sym: str) -> bool:
     """`sym` is a share listing as the books spell it: ROOT.SFX with a
     suffix taxjson/data/markets.toml knows, not an option contract or a
     future."""
-    from taxjson.lib.core import is_option_symbol
-    from taxjson.lib.markets import known_suffixes, suffix_of
+    from taxjson.lib.option_symbols import is_option_symbol
+    from taxjson.lib.markets_data import known_suffixes, suffix_of
     s = str(sym or "").strip().upper()
     return (suffix_of(s) in known_suffixes()
-            and not s.startswith(("F:", "/", "\\"))
+            and not s.startswith(FUTURES_PREFIXES)
             and not is_option_symbol(s))
 
 
@@ -562,13 +600,13 @@ def find_ticker_map(dirs):
     return None
 
 
-# The map messages (a problem line, a no-op line) this process said:
+# The map messages (a problem line, a no-op line) said (lib/once):
 # `tjs run` reads the map in many in-process passes and the
 # checklist in many checks, and each said every line again (one map
 # line warned 22 times, folded to 2 + a count: backlog TJ-0112,
 # TJ-0126). A captured stage is a process of its own, so its .diag
 # keeps its line; `tjs run` starts each run afresh.
-MAP_MESSAGES_SAID: set = set()
+MAP_MESSAGES_SAID = said_set()
 
 
 def map_problem_line(msg: str) -> str:
@@ -579,7 +617,7 @@ def map_problem_line(msg: str) -> str:
 
 
 def mark_map_problems_said(problems) -> None:
-    """Count the loader's lines for `problems` as said in this process:
+    """Count the loader's lines for `problems` as said:
     a command whose own output names them (the checklist's format step)
     is not followed by the same lines from each check that reads the
     map (backlog TJ-0112). A captured stream still gets every line."""
@@ -588,7 +626,7 @@ def mark_map_problems_said(problems) -> None:
 
 def say_map_message(text: str) -> None:
     """emit_line(`text`) on stderr: every time while it is captured (a
-    stage's .diag keeps every pass's line), once per process while it
+    stage's .diag keeps every pass's line), once (lib/once) while it
     is shown to a person."""
     import sys
     from taxjson.lib.stage_msg import _captured

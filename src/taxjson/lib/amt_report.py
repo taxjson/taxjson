@@ -13,10 +13,11 @@ Form T691; the carryover is claimed on federal Schedule 1 line 40427.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from taxjson.lib import out as _out
-from taxjson.lib.report_model import fmt_money as m
+from taxjson.lib.report_fmt import fmt_money as m
+from taxjson.model import money as M
 
 LAW = ("ITA s.127.5-127.55 (form T691); carryover s.120.2 (T691 Part 8, "
        "federal Schedule 1 line 40427)")
@@ -30,7 +31,7 @@ def build(r: Dict[str, Any], year: Any, currency: str) -> Dict[str, Any]:
         "year": year, "province": r.get("province"),
         "vintage": r.get("vintage"), "currency": currency,
         "law": LAW,
-        "taxable_income": round(float(tw.get("ti") or 0.0), 2),
+        "taxable_income": M.shown(float(tw.get("ti") or 0.0), 2),
         "tax_regular": r.get("tax_with"),
         "amt": amt,
         "estimated_tax": r.get("estimated_tax"),
@@ -143,6 +144,71 @@ def render(doc: Dict[str, Any], details: bool = True) -> List[str]:
                   -float(a.get("ftc") or 0.0), _sftc_note))
     L.append(_row("= Federal minimum tax", a["minimum_fed"]))
     L.append(_row("  Federal regular tax", a["regular_fed"]))
+    _render_binding(a, L, _row, prov)
+    L.append("")
+    c = a.get("carryover") or {}
+    L.append("MINIMUM TAX CARRYOVER (s.120.2)" if details
+             else "MINIMUM TAX CARRYOVER — s.120.2")
+    src = (doc.get("carry_sources") or {}).get("amt_carryover")
+    L += _out.wrap(src or "nothing entered ([estimate] amt_carryover) "
+                          "and no earlier close-year record", None,
+                   "  From: ", "        ")
+    avail = c.get("available_by_year") or {}
+    if avail:
+        L.append(f"  {'ORIGIN':<8}{'AVAILABLE':>14}  {'USABLE THROUGH':<15}"
+                 f"{'RECOVERED':>14}{'LEFT':>14}")
+        rec = c.get("recovered_by_year") or {}
+        last = c.get("last_year_by_origin") or {}
+        for o, v in avail.items():
+            left = float(v) - float(rec.get(o, 0.0))
+            L.append(f"  {o:<8}{m(v):>14}  {str(last.get(o, '')):<15}"
+                     f"{m(rec.get(o, 0.0)):>14}{m(left):>14}")
+    for o, v in (c.get("expired_by_year") or {}).items():
+        L.append(f"  expired: {o} {m(v)} (usable through {int(o) + 7}; "
+                 f"dropped)")
+    _render_recovery(avail, L, _row, c, prov, a)
+    for o, v in (c.get("lapsing_by_year") or {}).items():
+        L.append(f"  {o}: {m(v)} left unrecovered expires after "
+                 f"{doc['year']}")
+    _created = c.get("created", a.get("carryforward",
+                                      a.get("excess_fed", 0.0)))
+    L.append(_row("Created this year (additional tax)", _created,
+                  "[s.120.2(3); T691 Part 7 line 14]"
+                  if float(_created or 0.0) > 0.005 else ""))
+    closing = c.get("closing_by_year") or {}
+    try:
+        nxt = int(doc["year"]) + 1
+    except (TypeError, ValueError):
+        nxt = "next year"
+    L.append(_row(f"Carried forward to {nxt}", c.get("closing", 0.0),
+                  ("[" + ", ".join(f"{o} {m(v)}"
+                                   for o, v in closing.items()) + "]")
+                  if closing else ""))
+    L.append("")
+    L.append(_row("Estimated tax on investment income",
+                  doc.get("estimated_tax")))
+    # Incremental: the top-up the other income owes on its own is not
+    # counted (backlog TJ-0489).
+    _base_top = float(a.get("base_topup") or 0.0)
+    L.append(_row("  with AMT and carryover", doc.get(
+        "estimated_tax_with_amt"),
+        f"[less the other income's own top-up {m(_base_top)}]"
+        if _base_top > 0.005 else ""))
+    notes = doc.get("notes") or []
+    if notes and details:
+        L += _notes(notes)
+    elif not details:
+        L.append(f"Not modelled: donations, the stock-option deduction"
+                 + (f"; {len(notes)} note(s)" if notes else "")
+                 + " — tjs amt --details")
+    return L
+
+
+def _render_binding(a: Dict[str, Any], L: List[str], _row: Callable[..., str],
+                    prov: str) -> None:
+    """render: when the minimum tax binds, the additional federal tax,
+    the provincial minimum tax and its foreign tax credit and the
+    top-up; else the regular tax over the minimum."""
     if a["binding"]:
         # What carries forward is s.120.2(3)'s additional tax, which is
         # the excess only when the special foreign tax credit is the
@@ -182,27 +248,14 @@ def render(doc: Dict[str, Any], details: bool = True) -> List[str]:
                       a["headroom"],
                       f"[a carryover can use {m(_lim)}]"
                       if _lim is not None else ""))
-    L.append("")
-    c = a.get("carryover") or {}
-    L.append("MINIMUM TAX CARRYOVER (s.120.2)" if details
-             else "MINIMUM TAX CARRYOVER — s.120.2")
-    src = (doc.get("carry_sources") or {}).get("amt_carryover")
-    L += _out.wrap(src or "nothing entered ([estimate] amt_carryover) "
-                          "and no earlier close-year record", None,
-                   "  From: ", "        ")
-    avail = c.get("available_by_year") or {}
-    if avail:
-        L.append(f"  {'ORIGIN':<8}{'AVAILABLE':>14}  {'USABLE THROUGH':<15}"
-                 f"{'RECOVERED':>14}{'LEFT':>14}")
-        rec = c.get("recovered_by_year") or {}
-        last = c.get("last_year_by_origin") or {}
-        for o, v in avail.items():
-            left = float(v) - float(rec.get(o, 0.0))
-            L.append(f"  {o:<8}{m(v):>14}  {str(last.get(o, '')):<15}"
-                     f"{m(rec.get(o, 0.0)):>14}{m(left):>14}")
-    for o, v in (c.get("expired_by_year") or {}).items():
-        L.append(f"  expired: {o} {m(v)} (usable through {int(o) + 7}; "
-                 f"dropped)")
+
+
+def _render_recovery(avail: Dict[str, Any], L: List[str], _row: Callable[..., str],
+                     c: Dict[str, Any], prov: str, a: Dict[str, Any]) -> None:
+    """render: a carryover to recover, the recovery limit, the federal
+    and provincial shares recovered, the surtax it saves, the foreign
+    tax credit it limits and the change due to the investment
+    income."""
     if avail:
         L.append(_row("Recovery limit (s.120.2(1)(b))", c.get("limit"),
                       "[basic federal tax, before the foreign tax "
@@ -248,41 +301,6 @@ def render(doc: Dict[str, Any], details: bool = True) -> List[str]:
                           c.get("attributed"),
                           f"[the other income alone would recover "
                           f"{m(c.get('base_recovered', 0.0))}]"))
-    for o, v in (c.get("lapsing_by_year") or {}).items():
-        L.append(f"  {o}: {m(v)} left unrecovered expires after "
-                 f"{doc['year']}")
-    _created = c.get("created", a.get("carryforward",
-                                      a.get("excess_fed", 0.0)))
-    L.append(_row("Created this year (additional tax)", _created,
-                  "[s.120.2(3); T691 Part 7 line 14]"
-                  if float(_created or 0.0) > 0.005 else ""))
-    closing = c.get("closing_by_year") or {}
-    try:
-        nxt = int(doc["year"]) + 1
-    except (TypeError, ValueError):
-        nxt = "next year"
-    L.append(_row(f"Carried forward to {nxt}", c.get("closing", 0.0),
-                  ("[" + ", ".join(f"{o} {m(v)}"
-                                   for o, v in closing.items()) + "]")
-                  if closing else ""))
-    L.append("")
-    L.append(_row("Estimated tax on investment income",
-                  doc.get("estimated_tax")))
-    # Incremental: the top-up the other income owes on its own is not
-    # counted (backlog TJ-0489).
-    _base_top = float(a.get("base_topup") or 0.0)
-    L.append(_row("  with AMT and carryover", doc.get(
-        "estimated_tax_with_amt"),
-        f"[less the other income's own top-up {m(_base_top)}]"
-        if _base_top > 0.005 else ""))
-    notes = doc.get("notes") or []
-    if notes and details:
-        L += _notes(notes)
-    elif not details:
-        L.append(f"Not modelled: donations, the stock-option deduction"
-                 + (f"; {len(notes)} note(s)" if notes else "")
-                 + " — tjs amt --details")
-    return L
 
 
 def render_recorded(year: Any, label: str, mt: Dict[str, Any]

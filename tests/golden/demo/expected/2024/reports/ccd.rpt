@@ -1,0 +1,16 @@
+COVERED CALLS — SAMPW.US
+
+DATE         SYMBOL                            QTY CUR          PREM/QTY        BUYB/QTY        GAIN/QTY         PREMIUM         BUYBACK            GAIN   DAYS
+---------------------------------------------------------------------------------------------------------------------------------------------------------------
+2024-11-04   SAMPW250117C00030000.US        1.0000 CAD          201.0825          0.0000        201.0825          201.08            0.00          201.08      0
+
+TOTAL SAMPW.US COVERED CALL GAIN: 201.08
+
+COVERED CALLS SUMMARY
+
+SYMBOL                      CCD_GAIN
+------------------------------------
+SAMPW.US                      201.08
+------------------------------------
+TOTAL                         201.08
+(amounts in CAD)

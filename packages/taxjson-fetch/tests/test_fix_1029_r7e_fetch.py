@@ -4,7 +4,7 @@ nothing touches the network. Synthetic numbers, account ids and tickers
 (SYN) only; each test's files live in a folder of their own.
 """
 # First: puts the plugin, the core and its test helpers on sys.path.
-import _support  # noqa: F401
+import _bootstrap  # noqa: F401
 import contextlib
 import io
 import tempfile
@@ -15,32 +15,11 @@ from unittest.mock import patch
 
 from taxjson_fetch import api
 from taxjson_fetch import command as fc
-from taxjson.lib.brokerages.questrade import QuestradeBrokerage
 
-from test_fix_1029_r7_fetch import (NUMBER, SESSION, _act, _live,
-                                    _qt_request)
+from _questrade_fetch import (LIVE, NUMBER, OCC, SESSION, _DEP, _DIV, _FX,
+                              _act, _live, _parser_refuses, _qt_request)
 
-_D = "2025-06-20T00:00:00.000000-04:00"
 _Y1 = "0001-01-01T00:00:00.000000-05:00"
-_BASE = dict(tradeDate=_D, transactionDate=_D, settlementDate=_D,
-             description="SYNTHETIC", quantity=0, price=0, grossAmount=0,
-             commission=0, netAmount=5, currency="CAD", symbol="")
-_DIV = {**_BASE, "action": "DIV", "type": "Dividends", "symbol": "SYN.TO"}
-_DEP = {**_BASE, "action": "CON", "type": "Deposits", "netAmount": 500}
-_FX = {**_BASE, "action": "FXT", "type": "FX conversion", "netAmount": -100}
-
-
-def _parser_refuses(acts):
-    with tempfile.TemporaryDirectory() as td, \
-            contextlib.redirect_stderr(io.StringIO()), \
-            contextlib.redirect_stdout(io.StringIO()):
-        p = Path(td) / "questrade_2025.csv"
-        p.write_text(api.qt_to_csv(acts, NUMBER))
-        try:
-            QuestradeBrokerage().parse_file(p)
-        except Exception:
-            return True
-    return False
 
 
 class TestTrimFlagsOnlyWhatTheParserRefuses(unittest.TestCase):
@@ -140,11 +119,6 @@ class TestTrimFlagsOnlyWhatTheParserRefuses(unittest.TestCase):
 
     def test_an_item_that_is_no_activity_is_named(self):
         self.assertEqual(len(api.qt_unusable_activities([5])), 1)
-
-
-LIVE = {"symbol": "SYN18Dec26C6.00", "symbolId": 12345, "openQuantity": 1,
-        "averageEntryPrice": 2}
-OCC = "SYN261218C00006000"
 
 
 def _rows(sym, *qtys, action="BUYSELL"):

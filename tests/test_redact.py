@@ -7,8 +7,9 @@ import unittest
 from pathlib import Path
 
 from taxjson.bin.taxjson_redact import redact_text
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 IB = (
     'Statement,Header,Field Name,Field Value\n'

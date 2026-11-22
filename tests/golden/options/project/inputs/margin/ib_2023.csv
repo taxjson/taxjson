@@ -1,0 +1,23 @@
+Statement,Header,Field Name,Field Value
+Statement,Data,BrokerName,Interactive Brokers (Synthetic Demo)
+Statement,Data,Title,Activity Statement
+Statement,Data,Period,"January 1, 2023 - December 31, 2023"
+Account Information,Header,Field Name,Field Value
+Account Information,Data,Name,Demo User
+Account Information,Data,Account,U99900002
+Account Information,Data,Base Currency,CAD
+Financial Instrument Information,Header,Asset Category,Symbol,Description,Conid,Security ID,Underlying,Listing Exch,Multiplier,Expiry,Delivery Month,Type,Strike,Code
+Financial Instrument Information,Data,Equity and Index Options,QZQ 19JAN24 30 C,QZQ 19JAN24 30 C,999102024,,QZQ,CBOE,100,2024-01-19,2024-01,C,30,
+Financial Instrument Information,Data,Equity and Index Options,SAMPB 21JUN24 50 C,SAMPB 21JUN24 50 C,999102025,,SAMPB,CBOE,100,2024-06-21,2024-06,C,50,
+Financial Instrument Information,Data,Stocks,QZQ,QZQ SAMPLE CORP,999102026,US999102026,,NYSE,1,,,COMMON,,
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Stocks,USD,QZQ,"2023-10-02, 10:00:00",300,28.50,28.50,-8550.00,-1.00,8551.00,0,0,O
+Trades,Data,Order,Equity and Index Options,USD,QZQ 19JAN24 30 C,"2023-11-06, 10:05:00",-2,1.20,1.20,240.00,-2.10,-237.90,0,0,O
+Trades,Data,Order,Equity and Index Options,USD,SAMPB 21JUN24 50 C,"2023-12-04, 10:10:00",1,4.00,4.00,-400.00,-1.05,401.05,0,0,O
+Cash Report,Header,Currency Summary,Currency,Total,Securities,Futures,
+Cash Report,Data,Starting Cash,Base Currency Summary,0,0,0,
+Cash Report,Data,Starting Cash,USD,0,0,0,
+Cash Report,Data,Commissions,USD,-4.15,-4.15,0,
+Cash Report,Data,Trades (Sales),USD,240.00,240.00,0,
+Cash Report,Data,Trades (Purchase),USD,-8950.00,-8950.00,0,
+Cash Report,Data,Ending Cash,USD,-8714.15,-8714.15,0,

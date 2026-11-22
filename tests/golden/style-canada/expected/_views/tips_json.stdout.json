@@ -1,0 +1,12 @@
+{
+  "findings": [
+    {
+      "account": "tfsa",
+      "check": "TFSA-US-DIV",
+      "message": "US dividend payer inside a TFSA: the 15% US withholding is unrecoverable here. Prefer the RRSP (treaty-exempt) or a taxable account (foreign tax credit claimable).",
+      "symbol": "QZQ.US"
+    }
+  ],
+  "schema_version": 2,
+  "unscanned": []
+}

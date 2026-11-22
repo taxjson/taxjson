@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""List all registered brokerage parsers.
+"""List every parser taxjson ships (taxjson.parsers.registry).
 
-Diagnostic tool — shows which brokerage IDs are registered and which
-parser class handles each one.
+Diagnostic tool — shows each parser's id, the other spellings the
+brokerage tool accepts, and the class that handles it.
 """
 
 import argparse
 
-from taxjson.lib.core import _BROKERAGES
-import taxjson.bin.taxjson_brokerage  # noqa: F401  -- triggers registry population
+from taxjson.lib import out as _out
+from taxjson.parsers.registry import SPECS, TIERS
 
 
 def main(argv=None):
@@ -18,16 +18,18 @@ def main(argv=None):
         prog="taxjson-extractors",
         description="List the registered brokerage parser ids and the "
                     "parser class that handles each.").parse_args(argv)
-    # Group IDs by their parser class so 'questrade' and 'qt' show on one row.
-    by_class = {}
-    for bid, cls in _BROKERAGES.items():
-        by_class.setdefault(cls, []).append(bid)
-
-    print(f"{'BROKERAGE IDS':<35} | PARSER CLASS")
-    print('-' * 80)
-    for cls, ids in sorted(by_class.items(), key=lambda kv: kv[0].__name__):
-        ids_str = ", ".join(sorted(ids))
-        print(f"{ids_str:<35} | {cls.__name__}")
+    # One row per parser (taxjson.parsers.registry): its id and the
+    # other spellings the brokerage tool accepts, its class as the
+    # registry names it (nothing is imported: the listing shows what
+    # is registered even when a parser cannot load), its tier.
+    # A live exact Doc: each line written as it is added, as the print()
+    # it replaces wrote it.
+    d = _out.Doc(exact=True, width_=0, live=True)
+    d.line(f"{'BROKERAGE IDS':<35} | {'PARSER CLASS':<22} | TIER")
+    d.line('-' * 80)
+    for s in sorted(SPECS, key=lambda s: s.cls):
+        ids_str = ", ".join(sorted((s.id, *s.aliases)))
+        d.line(f"{ids_str:<35} | {s.cls:<22} | {s.tier} {TIERS[s.tier]}")
 
 
 if __name__ == "__main__":

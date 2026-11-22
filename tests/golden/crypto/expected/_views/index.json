@@ -1,0 +1,17 @@
+[
+ {
+  "view": "crypto-sends --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "staking all --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "staking-sum --json",
+  "cwd": ".",
+  "exit": 0
+ }
+]

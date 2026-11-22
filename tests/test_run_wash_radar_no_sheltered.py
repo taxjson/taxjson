@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from taxjson.bin.taxjson_run import stage_cross_reports
+from taxjson.pipeline.stages import stage_cross_reports
 
 
 class TestWashRadarWithoutSheltered(unittest.TestCase):

@@ -1,0 +1,137 @@
+{
+  "any_account": "A buy in ANY of your accounts counts, RRSP and TFSA included; there the loss is denied for good.",
+  "as_of_date": "<stamp>",
+  "cleared": [],
+  "cleared_days": 7,
+  "country": "canada",
+  "currency": "CAD",
+  "rows": [
+    {
+      "accounts": [
+        "qt"
+      ],
+      "also": [],
+      "days_left": 11,
+      "denied_closed": [],
+      "final": [],
+      "is_option": false,
+      "loss": 3.24,
+      "losses": [
+        {
+          "account": "qt",
+          "buy_replaces": true,
+          "cleared": false,
+          "denied_qty": 0.0,
+          "direction": "LONG",
+          "disallowed": null,
+          "is_option": false,
+          "loss": 3.24,
+          "qty": 75.0,
+          "rebuy_at": "2024-12-06",
+          "rescue_by": null,
+          "rescue_passed": false,
+          "symbol": "AAPL.US",
+          "trade_date": "2024-11-05",
+          "tx_id": "e60f629b611be979",
+          "window_date": "2024-11-07"
+        }
+      ],
+      "qty": 75.0,
+      "rebuy_at": "2024-12-06",
+      "rescue_by": null,
+      "rescues": [],
+      "reshort_ok_from": null,
+      "similar": [],
+      "sold_on": "2024-11-05",
+      "status": "wait",
+      "ticker": "AAPL.US",
+      "underlying": "AAPL.US"
+    },
+    {
+      "accounts": [
+        "margin"
+      ],
+      "also": [],
+      "days_left": 25,
+      "denied_closed": [],
+      "final": [],
+      "is_option": false,
+      "loss": 117.45,
+      "losses": [
+        {
+          "account": "margin",
+          "buy_replaces": true,
+          "cleared": false,
+          "denied_qty": 0.0,
+          "direction": "LONG",
+          "disallowed": null,
+          "is_option": false,
+          "loss": 117.45,
+          "qty": 10.0,
+          "rebuy_at": "2024-12-20",
+          "rescue_by": null,
+          "rescue_passed": false,
+          "symbol": "NVDA.US",
+          "trade_date": "2024-11-20",
+          "tx_id": "bcf11736aab67da9",
+          "window_date": "2024-11-21"
+        }
+      ],
+      "qty": 10.0,
+      "rebuy_at": "2024-12-20",
+      "rescue_by": null,
+      "rescues": [],
+      "reshort_ok_from": null,
+      "similar": [],
+      "sold_on": "2024-11-20",
+      "status": "wait",
+      "ticker": "NVDA.US",
+      "underlying": "NVDA.US"
+    },
+    {
+      "accounts": [
+        "margin"
+      ],
+      "also": [],
+      "days_left": 4,
+      "denied_closed": [],
+      "final": [],
+      "is_option": false,
+      "loss": 519.9,
+      "losses": [
+        {
+          "account": "margin",
+          "buy_replaces": true,
+          "cleared": false,
+          "denied_qty": 100.0,
+          "direction": "LONG",
+          "disallowed": null,
+          "is_option": false,
+          "loss": 519.9,
+          "qty": 100.0,
+          "rebuy_at": "2024-11-29",
+          "rescue_by": "2024-11-28",
+          "rescue_passed": false,
+          "symbol": "SAMPA.TO",
+          "trade_date": "2024-11-01",
+          "tx_id": "f5626ec56b2e6664",
+          "window_date": "2024-11-01"
+        }
+      ],
+      "qty": 100.0,
+      "rebuy_at": "2024-11-29",
+      "rescue_by": "2024-11-28",
+      "rescues": [
+        "2024-11-01"
+      ],
+      "reshort_ok_from": null,
+      "similar": [],
+      "sold_on": "2024-11-01",
+      "status": "rebought",
+      "ticker": "SAMPA.TO",
+      "underlying": "SAMPA.TO"
+    }
+  ],
+  "schema_version": 1,
+  "scope_note": "Scope: these verdicts cover this project's accounts only. A purchase by your spouse or common-law partner, or by a corporation you or they control (affiliated persons, ITA s.251.1), within 30 days before or after a loss sale also makes it superficial \u2014 those accounts are not in the project, so check them yourself."
+}

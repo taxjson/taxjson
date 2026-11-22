@@ -1,0 +1,11 @@
+# Wealthsimple's activities export, read by the generic importer through
+# the layout taxjson ships (src/taxjson/data/layouts/wealthsimple.toml):
+# no sidecar, the signature routes it. Synthetic rows. The rows of
+# sample.csv the parser must count as skipped (row accounting:
+# tests/parser_conformance.py, `tjs parser-check`): the MoneyMovement row.
+parser = "generic"
+expected_skips = 1
+# The kinds its rows and its broker's cash events have (parsers.protocol ROW_KINDS and
+# CASH_KINDS): the conformance kit asks for a row, or an event, of each.
+kinds = "trade, dividend, interest"
+cash_kinds = ""

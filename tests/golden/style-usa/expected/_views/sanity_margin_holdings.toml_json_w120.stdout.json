@@ -1,0 +1,252 @@
+{
+  "accounts": [
+    "margin"
+  ],
+  "accounts_not_checked": [],
+  "basis": "wash-adjusted",
+  "clean": false,
+  "complete": true,
+  "cost": {
+    "accounts_not_compared": [],
+    "compared": 7,
+    "matched": 4,
+    "not_compared": 0,
+    "rows": [
+      {
+        "accounts": [
+          "margin"
+        ],
+        "basis": "filing books (FIFO lots, wash-adjusted)",
+        "books_cost": -590.05,
+        "broker_cost": -590.05,
+        "cost_currency": "USD",
+        "cost_kind": "average cost",
+        "diff": 0.0,
+        "explained": false,
+        "note": "",
+        "quantity": -40.0,
+        "reasons": [],
+        "status": "match",
+        "symbol": "GHOSTQ.US"
+      },
+      {
+        "accounts": [
+          "margin"
+        ],
+        "basis": "filing books (FIFO lots, wash-adjusted)",
+        "books_cost": 1433.0,
+        "broker_cost": 1351.0,
+        "cost_currency": "USD",
+        "cost_kind": "average cost",
+        "diff": 82.0,
+        "explained": true,
+        "note": "",
+        "quantity": 10.0,
+        "reasons": [
+          "wash-sale"
+        ],
+        "status": "differs",
+        "symbol": "NVDA.US"
+      },
+      {
+        "accounts": [
+          "margin"
+        ],
+        "basis": "filing books (FIFO lots, wash-adjusted)",
+        "books_cost": -999.0,
+        "broker_cost": -999.0,
+        "cost_currency": "USD",
+        "cost_kind": "average cost",
+        "diff": 0.0,
+        "explained": false,
+        "note": "",
+        "quantity": -50.0,
+        "reasons": [],
+        "status": "match",
+        "symbol": "OLDCO.US"
+      },
+      {
+        "accounts": [
+          "margin"
+        ],
+        "basis": "filing books (FIFO lots, wash-adjusted)",
+        "books_cost": 5001.0,
+        "broker_cost": 5001.0,
+        "cost_currency": "USD",
+        "cost_kind": "average cost",
+        "diff": 0.0,
+        "explained": false,
+        "note": "",
+        "quantity": 100.0,
+        "reasons": [],
+        "status": "match",
+        "symbol": "PARN.US"
+      },
+      {
+        "accounts": [
+          "margin"
+        ],
+        "basis": "filing books (FIFO lots, wash-adjusted)",
+        "books_cost": 2602.0,
+        "broker_cost": 2401.0,
+        "cost_currency": "USD",
+        "cost_kind": "average cost",
+        "diff": 201.0,
+        "explained": true,
+        "note": "",
+        "quantity": 100.0,
+        "reasons": [
+          "wash-sale"
+        ],
+        "status": "differs",
+        "symbol": "QZQ.US"
+      },
+      {
+        "accounts": [
+          "margin"
+        ],
+        "basis": "filing books (FIFO lots, wash-adjusted)",
+        "books_cost": -149.0,
+        "broker_cost": -149.0,
+        "cost_currency": "USD",
+        "cost_kind": "average cost",
+        "diff": 0.0,
+        "explained": false,
+        "note": "",
+        "quantity": -1.0,
+        "reasons": [],
+        "status": "match",
+        "symbol": "QZQ250117C00040000.US"
+      },
+      {
+        "accounts": [
+          "margin"
+        ],
+        "basis": "filing books (FIFO lots, wash-adjusted)",
+        "books_cost": 250.0,
+        "broker_cost": 240.0,
+        "cost_currency": "USD",
+        "cost_kind": "average cost",
+        "diff": 10.0,
+        "explained": false,
+        "note": "",
+        "quantity": 10.0,
+        "reasons": [
+          "unexplained"
+        ],
+        "status": "differs",
+        "symbol": "SPNC.US"
+      }
+    ],
+    "tolerance": 1.0
+  },
+  "cost_differences": [
+    {
+      "accounts": [
+        "margin"
+      ],
+      "basis": "filing books (FIFO lots, wash-adjusted)",
+      "books_cost": 1433.0,
+      "broker_cost": 1351.0,
+      "cost_currency": "USD",
+      "cost_kind": "average cost",
+      "diff": 82.0,
+      "explained": true,
+      "note": "",
+      "quantity": 10.0,
+      "reasons": [
+        "wash-sale"
+      ],
+      "status": "differs",
+      "symbol": "NVDA.US"
+    },
+    {
+      "accounts": [
+        "margin"
+      ],
+      "basis": "filing books (FIFO lots, wash-adjusted)",
+      "books_cost": 2602.0,
+      "broker_cost": 2401.0,
+      "cost_currency": "USD",
+      "cost_kind": "average cost",
+      "diff": 201.0,
+      "explained": true,
+      "note": "",
+      "quantity": 100.0,
+      "reasons": [
+        "wash-sale"
+      ],
+      "status": "differs",
+      "symbol": "QZQ.US"
+    },
+    {
+      "accounts": [
+        "margin"
+      ],
+      "basis": "filing books (FIFO lots, wash-adjusted)",
+      "books_cost": 250.0,
+      "broker_cost": 240.0,
+      "cost_currency": "USD",
+      "cost_kind": "average cost",
+      "diff": 10.0,
+      "explained": false,
+      "note": "",
+      "quantity": 10.0,
+      "reasons": [
+        "unexplained"
+      ],
+      "status": "differs",
+      "symbol": "SPNC.US"
+    }
+  ],
+  "discrepancies": [
+    {
+      "accounts": [
+        "margin"
+      ],
+      "holdings_qty": 90.0,
+      "issue": "QTY_MISMATCH",
+      "symbol": "SAMPA.US",
+      "taxjson_qty": 100.0
+    }
+  ],
+  "files": [
+    {
+      "file": "<project>/holdings.toml",
+      "file_account": "holdings"
+    }
+  ],
+  "groups": [
+    {
+      "accounts": [
+        "margin"
+      ],
+      "as_of": null,
+      "clean": false,
+      "discrepancies": [
+        {
+          "accounts": [
+            "margin"
+          ],
+          "holdings_qty": 90.0,
+          "issue": "QTY_MISMATCH",
+          "symbol": "SAMPA.US",
+          "taxjson_qty": 100.0
+        }
+      ],
+      "files": [
+        "<project>/holdings.toml"
+      ],
+      "fractions_awaiting_cash_in_lieu": [],
+      "matched_via_underlying": [],
+      "paired": true
+    }
+  ],
+  "income_share_mismatches": [],
+  "notes": [],
+  "schema_version": 1,
+  "uncovered_accounts": [
+    "crypto",
+    "roth"
+  ]
+}

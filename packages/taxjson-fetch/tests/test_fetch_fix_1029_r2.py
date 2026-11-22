@@ -5,7 +5,7 @@ touches the network. Synthetic account numbers (99900001) and tickers
 (SYN) only; each test's files live in a folder of their own.
 """
 # First: puts the plugin, the core and its test helpers on sys.path.
-import _support  # noqa: F401
+import _bootstrap  # noqa: F401
 import contextlib
 import io
 import json

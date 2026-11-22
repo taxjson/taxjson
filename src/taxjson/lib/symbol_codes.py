@@ -71,6 +71,10 @@ from dataclasses import dataclass, field
 from datetime import date as _date
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from taxjson.lib.once import said_set
+from taxjson.lib.futures_prefixes import FUTURES_PREFIXES
+from taxjson.lib.stage_msg import NOTE_HEAD
+from taxjson.lib.brokerages.base import DISPLAY_NAMES
 
 SUFFIX = "_symbol_codes.state"
 FORMAT = "symbol_codes/1"
@@ -80,9 +84,6 @@ FORMAT = "symbol_codes/1"
 PAIR_DAYS_BEFORE = 10
 PAIR_DAYS_AFTER = 3
 
-# The note's fixed head: the console echoes it from the parse .diag and
-# tests / tools parse the entries after it (parse_codes_note).
-NOTE_HEAD = "note: Questrade internal symbol codes resolved"
 
 # Words that say nothing about WHICH security a name is: the broker's
 # transfer wording and the generic "common shares" words. Dropped.
@@ -201,7 +202,6 @@ def _dealer_phrases() -> Tuple[Tuple[str, ...], ...]:
     """The multi-word broker names a transfer-in description may carry
     after the security ("QZX INC INTERACTIVE BROKERS LLC 146.16"): the
     supported parsers' display names — no list of dealers is kept."""
-    from taxjson.lib.brokerages.detect import DISPLAY_NAMES
     out = []
     for v in DISPLAY_NAMES.values():
         ws = tuple(_WORD_RE.findall(str(v).upper()))
@@ -275,10 +275,93 @@ def _name_words_tail(text: str
     return tuple(words), False, ()
 
 
+# ---------------------------------------------- Questrade's description key
+# The Questrade parser's key for matching a dividend row to its trades
+# (lib/brokerages/questrade reads _get_desc_key; corp_actions' Questrade
+# extractor too); here because questrade_name, below, is built on it
+# (moved from the parser, which this module called up into: step 8 of
+# the architecture plan).
+# Patterns to strip when building a "description key" for matching
+# dividend rows to the underlying trade rows. Mirrors qt_dividends.pl.
+_DESC_NOISE_RES = [
+    # Event suffixes on quantity-bearing rows (audit S063-03): a stock
+    # split / stock dividend ("... STK SPLIT ON 10 SHS", "... STK DIV ON
+    # 200 SHS" -- the ' DIV ON' rule below left a stray 'STK'), a DRIP
+    # ("... REINV@C$1.23456") and a cash-in-lieu ("... CASH IN LIEU OF
+    # .50000"). Stripped FIRST, so the key equals the trade row's.
+    re.compile(r'\s+(?:STK\.?|STOCK)\s+(?:SPLIT|DIV(?:IDEND)?)\b.*$',
+               re.IGNORECASE),
+    re.compile(r'\s+REINV\s*@.*$', re.IGNORECASE),
+    re.compile(r'\s+CASH\s+IN\s+LIEU\b.*$', re.IGNORECASE),
+    # A BRW currency journal's legs ("... JOURNAL POSITION TO USD",
+    # "... JOURNAL POSITION FROM CAD BOOK VALUE: $X CNV@ r"): the key is
+    # the security's name, as on its trades.
+    re.compile(r'\s+JOURNAL\s+POSITION\s+(?:TO|FROM)\b.*$', re.IGNORECASE),
+    # Dividend-specific suffixes.
+    re.compile(r'\s+CASH DIV ON.*$', re.IGNORECASE),
+    re.compile(r'\s+RTS DIST ON.*$', re.IGNORECASE),
+    re.compile(r'\s+DIST ON.*$', re.IGNORECASE),
+    re.compile(r'\s+DIV ON.*$', re.IGNORECASE),
+    re.compile(r'\s+DIVIDEND ON.*$', re.IGNORECASE),
+    re.compile(r'\s+NON-RES.*TAX.*ON.*$', re.IGNORECASE),
+    re.compile(r'\s+TAX WITHHELD ON.*$', re.IGNORECASE),
+    re.compile(r'\s+RETURN OF CAPITAL ON.*$', re.IGNORECASE),
+    re.compile(r'\s+SPINOFF ON.*$', re.IGNORECASE),
+    # Trade-specific suffixes.
+    re.compile(r'\s+WE ACTED AS AGENT.*$', re.IGNORECASE),
+    re.compile(r'\s+AVG PRICE.*$', re.IGNORECASE),
+    re.compile(r'\s+REC\s+\d{2}/\d{2}/\d{2}.*$', re.IGNORECASE),
+    # Transfer-specific suffixes. A transfer-in row may also name the
+    # delivering dealer after the security ("<SECURITY> <DEALER> 41.75
+    # TRANSFER BOOK VALUE ..."): no list of dealer names is kept — such a
+    # key is matched to the security's by word prefix
+    # (QtAccountContext.key_candidates).
+    re.compile(r'\s+TFER\s+(?:FROM|TO).*$', re.IGNORECASE),
+    # "... TRANSFER FROM/TO/IN ...", "... TRANSFER BOOK VALUE ..." or a
+    # final "TRANSFER" ("<SECURITY> <DEALER> 135.79 TRANSFER"); a name
+    # with TRANSFER inside it ("ZZ TRANSFER LP") is left alone.
+    re.compile(r'\s+TRANSFER(?:\s+(?:FROM|TO|IN|BOOK\s+VALUE)\b.*)?$',
+               re.IGNORECASE),
+    re.compile(r'\s+BOOK\s+VALUE.*$', re.IGNORECASE),
+    # Cosmetic suffixes seen on various row types.
+    re.compile(r'\s+COMMON STOCK.*$', re.IGNORECASE),
+]
+
+
+# A class designation: "CLASS B SUB VTG" and "CL B" are one key, "CL B",
+# whatever the letter (only CLASS A used to be stripped, so a class-A
+# key lost its letter and a class-B key kept the whole wording).
+_CLASS_RE = re.compile(r'\s+CLASS\s+([A-Z])\b.*$', re.IGNORECASE)
+
+
+_SPINOFF_PARENT_RE = re.compile(
+    r'SPINOFF ON .* FROM SEC# \S+ (.*?)\s+REC', re.IGNORECASE
+)
+
+
+def _get_desc_key(desc: str) -> str:
+    """Build a normalized key for matching dividend descriptions to trade
+    descriptions. Strips dividend/trade-specific suffixes and uppercases."""
+    if not desc:
+        return ''
+    # Whitespace collapsed FIRST: the `\s+SUFFIX.*$` patterns below are
+    # quadratic on a long whitespace run (a 40k-space description took
+    # over a minute; security review L2) and linear on single spaces.
+    # The key itself was always collapsed, so it is unchanged.
+    desc = re.sub(r'\s+', ' ', desc)
+    m = _SPINOFF_PARENT_RE.search(desc)
+    if m:
+        desc = m.group(1)
+    for pat in _DESC_NOISE_RES:
+        desc = pat.sub('', desc)
+    desc = _CLASS_RE.sub(lambda m: f" CL {m.group(1).upper()}", desc)
+    return re.sub(r'\s+', ' ', desc).strip().upper()
+
+
 # A Questrade row describes the event after the security's name: "<NAME>
 # CASH DIV ON 49 SHS REC 09/21/26 PAY 09/23/26", "<NAME> SUBST PAY ON 41
 # SHS ... IN LIEU OF DIVIDEND". The parser's own description key
-# (questrade._get_desc_key: dividend, distribution, tax, DRIP, split,
+# (_get_desc_key, above: dividend, distribution, tax, DRIP, split,
 # transfer and trade wording) cuts that wording off, so the name compares
 # as the security's name; a substitute payment's wording is added here
 # (the parser keeps it in its key on purpose). Questrade's wording only:
@@ -354,13 +437,11 @@ def _cut_confirmation(key: str) -> Tuple[str, str]:
 
 def questrade_name(desc: str) -> str:
     """The security name a Questrade row description gives: the parser's
-    description key (questrade._get_desc_key — its event wording cut),
+    description key (_get_desc_key — its event wording cut),
     without a substitute payment's wording or the trade-confirmation
     wording (_CONFIRM_RE), and with any share designator either cut
     dropped carried back ("QZCO INC COMMON STOCK CLASS C" is "QZCO INC
     CL C", never "QZCO INC")."""
-    from taxjson.lib.brokerages.questrade import (_DESC_NOISE_RES,
-                                                   _get_desc_key)
     d = " ".join(str(desc or "").split())
     key = " ".join(_SUBST_PAY_RE.sub("", _get_desc_key(d)).split())
     key = _cut_account_ref(key)
@@ -378,12 +459,18 @@ def questrade_name(desc: str) -> str:
     return _carry_designators(key, m.group(1) if m else confirm)
 
 
+# The RBC event code that prefixes a Description: "DIV - ...", "MGR -"
+# (the RBC parser, lib/brokerages/rbc_direct, reads it too: moved here
+# from it, which rbc_name called up into; step 8 of the architecture
+# plan).
+_RBC_CODE_RE = re.compile(r'^\s*([A-Z]{2,4})\s*-(?=\s|$)')
+
 # RBC's event wording after the security's name (a dividend, a
 # distribution, a transfer, a reorganization, a tax row): cut with
 # everything after it, nothing carried (what follows is not the share's
 # name: "NON-RES", a new issuer's name). Language only, from RBC's own
-# rows; the event CODE before the name ("DIV - ", "TFO - ") is the
-# parser's (rbc_direct._RBC_CODE_RE).
+# rows; the event CODE before the name ("DIV - ", "TFO - ") is
+# _RBC_CODE_RE's.
 _RBC_EVENT_RE = re.compile(
     r"\s+(?:(?:CASH\s+DIV(?:IDEND)?\s+ON|DIST\s+ON|DIV\s+ON|REINV\s*@"
     r"|ACCOUNT\s+TRANSFER|TRANSFER\s+(?:FROM|TO|IN|BOOK\s+VALUE)"
@@ -412,7 +499,6 @@ def rbc_name(desc: str, trade: bool = False) -> str:
     (_RBC_EVENT_RE) cut, then the trade wording (_RBC_TRADE_RE, _CONFIRM_RE) with any
     share designator in it carried back; on a trade row (`trade`) the
     closing desk code ("DA", "CA JNL") too."""
-    from taxjson.lib.brokerages.rbc_direct import _RBC_CODE_RE
     s = " ".join(_CONTROL_RE.sub(" ", str(desc or "").upper()).split())
     m = _RBC_CODE_RE.match(s)
     if m:
@@ -557,7 +643,7 @@ _KIND_MARKS = frozenset(("~WARRANT", "~RIGHT", "~PREFERRED"))
 # A Questrade spinoff / rights leg's event wording: the security's own
 # name is what comes before it ("WTS QZD DEV CORP WT EXP PENDING
 # SPINOFF ON 500 SHS FROM SEC# ... <PARENT NAME> REC ..." — the parser's
-# description key is the PARENT's name, questrade._SPINOFF_PARENT_RE).
+# description key is the PARENT's name, _SPINOFF_PARENT_RE).
 _QT_LEG_WORDING_RE = re.compile(
     r"\s+(?:SPINOFF|RTS\s+DIST|RIGHTS\s+DIST)\b.*$", re.IGNORECASE)
 
@@ -838,11 +924,11 @@ def is_code(symbol: str) -> bool:
 
 def _plain_listing(symbol: str) -> bool:
     """A share listing (ROOT.SUFFIX), not an option / future / code."""
-    from taxjson.lib.ticker_map_suggest import _TOKEN_RE
+    from taxjson.lib.ticker_map_rules import _TOKEN_RE
     s = str(symbol or "")
     # One ticker.map token (no '#', no Unicode line separator): the
     # symbol is written into a map line (a join, a suggestion).
-    return (bool(s) and bool(_TOKEN_RE.fullmatch(s)) and not s.startswith("F:")
+    return (bool(s) and bool(_TOKEN_RE.fullmatch(s)) and not s.startswith(FUTURES_PREFIXES)
             and "." in s and not is_code(s)
             and not re.search(r"\d{6}[CP]\d", s))
 
@@ -901,7 +987,6 @@ class NameEntry:
 
 
 def _broker_name(broker: str) -> str:
-    from taxjson.lib.brokerages.detect import DISPLAY_NAMES
     b = str(broker or "")
     if b.startswith("generic-"):
         return b[len("generic-"):]
@@ -938,7 +1023,6 @@ def _load(p: Path) -> Optional[Dict[str, Any]]:
 
 
 def _parser_ids() -> List[str]:
-    from taxjson.lib.brokerages.detect import DISPLAY_NAMES
     return sorted(DISPLAY_NAMES)
 
 
@@ -1039,29 +1123,24 @@ def _suggest(code_listing: Callable[[str, str], str], code: str,
     return f"GLOBAL {code_listing(code, cur)} {listing}"
 
 
-def _default_code_listing(code: str, cur: str) -> str:
-    from taxjson.lib.brokerages.questrade import QuestradeBrokerage
-    return QuestradeBrokerage().apply_currency_suffix(code, cur)
-
-
 def resolve(uses: Iterable[CodeUse], outs: List[OutLeg],
             names: List[NameEntry], *,
             listing_ok: Callable[[str, str], bool],
+            code_listing: Callable[[str, str], str],
             mapped: Callable[[str], bool] = lambda _c: False,
-            code_listing: Optional[Callable[[str, str], str]] = None,
             broker: str = "questrade"
             ) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """{"resolved": {code: {...}}, "unresolved": {code: {...}},
     "mapped": {code: {...}}} for the receiving account's codes.
     `listing_ok(listing, currency)`: the listing is the one the receiving
-    parser books a row of that currency under (a CAD row never resolves
-    to a .US listing). `mapped(code)`: a ticker.map rule names the code
-    (any rule: a rename, DELETE, DISTINCT, a dated RENAME) — never
-    inferred, recorded under "mapped". `code_listing(code, currency)`:
-    the code's own listing, for the GLOBAL line an unresolved code's
-    warning suggests. `broker`: the receiving parser — a name cut off by
-    its export is matched only to that broker's own descriptions."""
-    code_listing = code_listing or _default_code_listing
+    parser books a row of that currency under (a CAD row never resolves to a
+    .US listing). `mapped(code)`: a ticker.map rule names the code (any rule: a
+    rename, DELETE, DISTINCT, a dated RENAME) — never inferred, recorded under
+    "mapped". `code_listing(code, currency)`: the code's own listing, for the
+    GLOBAL line an unresolved code's warning suggests: the receiving parser's
+    apply_currency_suffix, which the caller passes (this module never imports a
+    parser). `broker`: the receiving parser — a name cut off by its export is
+    matched only to that broker's own descriptions."""
     uses = sorted(uses, key=lambda u: u.code)
     resolved: Dict[str, Dict[str, Any]] = {}
     unresolved: Dict[str, Dict[str, Any]] = {}
@@ -1389,7 +1468,7 @@ def state_problem(doc: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-_WARNED: set = set()
+_WARNED = said_set()
 
 
 def read_state(path: Optional[Path]) -> Dict[str, Any]:
@@ -1437,14 +1516,3 @@ def codes_note(resolved: Dict[str, Dict[str, Any]]) -> str:
             + " — inferred from the project's exports (`tjs "
               "transfers` lists them); a ticker.map GLOBAL line for the "
               "code overrides the inference.")
-
-
-_ENTRY_RE = re.compile(r"([A-Z]\d+) → (\S+) \(((?:[^()]|\([^()]*\))*)\)")
-
-
-def parse_codes_note(line: str) -> Dict[str, Tuple[str, str]]:
-    """{code: (listing, evidence)} from a codes_note line."""
-    if NOTE_HEAD not in line:
-        return {}
-    return {m.group(1): (m.group(2), m.group(3))
-            for m in _ENTRY_RE.finditer(line)}

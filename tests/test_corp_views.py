@@ -1,38 +1,10 @@
 """`tjs spinoffs` / `tjs splits` (lib/corp_views)."""
-import json
-import tempfile
 import unittest
-from pathlib import Path
 
 from taxjson.lib.corp_views import (render_spinoffs, render_splits,
                                     spinoffs, splits)
-
-
-def _proj(rows, elections=None, sheltered=False):
-    td = tempfile.TemporaryDirectory()
-    root = Path(td.name)
-    (root / "work").mkdir()
-    (root / "inputs" / "m").mkdir(parents=True)
-    (root / "work" / "m_base.json").write_text(json.dumps(rows))
-    (root / "inputs" / "m" / "manifest.json").write_text(
-        json.dumps({"elections": elections or {}}))
-    cfg = {"settings": {"base_currency": "CAD", "country": "canada"},
-           "accounts": {"m": {"type": "sheltered" if sheltered
-                              else "taxable"}}}
-    return td, root, cfg
-
-
-def _row(action, date, sym, qty, net=0.0, **kw):
-    d = {"action": action, "date": date, "time": "09:30:00", "symbol": sym,
-         "quantity": qty, "net_amount": net}
-    d.update(kw)
-    return d
-
-
-EV = "20240513-prnt-spnc-35b9"
-SPIN_DESC = "Spinoff PRNT.US\u2192SPNC.US (deemed dividend at FMV)"
-SUMMARY = ("2024-05-13 spinoff: PRNT.US → SPNC.US (20.0-for-80.0, ratio "
-           "0.25, FMV 830.00 USD)")
+from taxjson.bin.taxjson_corp_actions import extractor_for
+from _support.corp_views import _proj, _row, EV, SPIN_DESC, SUMMARY
 
 
 class TestSpinoffs(unittest.TestCase):
@@ -43,12 +15,12 @@ class TestSpinoffs(unittest.TestCase):
                 _row("BUYSELL", "2024-05-13", "SPNC.US", 20, 0.0,
                      corp_event_id=EV, description=SPIN_DESC)]
         # No value saved (a fmv_per_share=0 written by the user is a
-        # declared $0, not a flag: test_fix_quietdeclared).
+        # declared $0, not a flag: features.corporate_actions.test_declared_zero_value_spinoff).
         td, root, cfg = _proj(rows, {EV: {
             "election": "taxable_deemed_dividend",
             "hints": {}, "summary": SUMMARY}})
         with td:
-            doc = spinoffs(root, cfg)
+            doc = spinoffs(root, cfg, extractor_for=extractor_for)
         items = doc["spinoffs"]
         self.assertEqual(len(items), 1)
         s = items[0]
@@ -60,7 +32,7 @@ class TestSpinoffs(unittest.TestCase):
             "election": "taxable_deemed_dividend",
             "hints": {"fmv_per_share": 0.0}, "summary": SUMMARY}})
         with td:
-            doc = spinoffs(root, cfg)
+            doc = spinoffs(root, cfg, extractor_for=extractor_for)
         self.assertEqual(doc["spinoffs"][0]["flags"], [])
         self.assertIn("the $0 value you declared",
                       "\n".join(render_spinoffs(doc)))
@@ -74,7 +46,7 @@ class TestSpinoffs(unittest.TestCase):
             "election": "taxable_deemed_dividend",
             "hints": {"fmv_per_share": 41.5}, "summary": SUMMARY}})
         with td:
-            s = spinoffs(root, cfg)["spinoffs"][0]
+            s = spinoffs(root, cfg, extractor_for=extractor_for)["spinoffs"][0]
         self.assertEqual(s["flags"], [])
         self.assertAlmostEqual(s["income"], 830.0)
         td, root, cfg = _proj(rows, {EV: {
@@ -82,7 +54,7 @@ class TestSpinoffs(unittest.TestCase):
             "hints": {"fmv_per_share": 0.0}, "summary": SUMMARY}},
             sheltered=True)
         with td:
-            self.assertEqual(spinoffs(root, cfg)["spinoffs"][0]["flags"], [])
+            self.assertEqual(spinoffs(root, cfg, extractor_for=extractor_for)["spinoffs"][0]["flags"], [])
 
     def test_stale_election_listed_separately(self):
         rows = [_row("BUYSELL", "2024-05-13", "SPNC.US", 20, 0.0,
@@ -96,7 +68,7 @@ class TestSpinoffs(unittest.TestCase):
                   "hints": {"fmv_per_share": 0.0},
                   "summary": "2024-05-13 spinoff: X \u2192 Y (1-for-1)"}})
         with td:
-            doc = spinoffs(root, cfg)
+            doc = spinoffs(root, cfg, extractor_for=extractor_for)
         self.assertEqual([s["event_id"] for s in doc["spinoffs"]], [EV])
         self.assertEqual(doc["spinoffs"][0]["parent"], "PRNT.US")
         self.assertEqual([s["event_id"] for s in doc["stale"]], [old])

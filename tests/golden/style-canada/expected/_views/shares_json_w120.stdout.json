@@ -1,0 +1,130 @@
+{
+  "as_of": "2024-12-31",
+  "basis": "wash-adjusted",
+  "currency": "CAD",
+  "options_included": false,
+  "rows": [
+    {
+      "accounts": {
+        "rrsp": 75.0
+      },
+      "cost": 18225.0,
+      "qty": 75.0,
+      "symbol": "AAPL.US",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "crypto": 0.05
+      },
+      "cost": 3250.83,
+      "qty": 0.05,
+      "symbol": "BTC",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "tfsa": 200.0
+      },
+      "cost": 11009.95,
+      "qty": 200.0,
+      "symbol": "ENB.TO",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "crypto": 0.6552
+      },
+      "cost": 3197.81,
+      "qty": 0.6552,
+      "symbol": "ETH",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "margin": -40.0
+      },
+      "cost": -590.05,
+      "qty": -40.0,
+      "symbol": "GHOSTQ.TO",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "margin": 10.0
+      },
+      "cost": 1941.3,
+      "qty": 10.0,
+      "symbol": "NVDA.US",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "margin": -50.0
+      },
+      "cost": -1348.65,
+      "qty": -50.0,
+      "symbol": "OLDCO.US",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "margin": 100.0
+      },
+      "cost": 6751.35,
+      "qty": 100.0,
+      "symbol": "PARN.US",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "margin": 100.0,
+        "tfsa": 50.0
+      },
+      "cost": 5105.63,
+      "qty": 150.0,
+      "symbol": "QZQ.US",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "tfsa": 50.0
+      },
+      "cost": 6673.3,
+      "qty": 50.0,
+      "symbol": "RY.TO",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "margin": 100.0
+      },
+      "cost": 3929.85,
+      "qty": 100.0,
+      "symbol": "SAMPA.TO",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "qt": 30.0,
+        "rrsp": 30.0
+      },
+      "cost": 5709.9,
+      "qty": 60.0,
+      "symbol": "SHOP.TO",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "margin": 10.0
+      },
+      "cost": 337.5,
+      "qty": 10.0,
+      "symbol": "SPNC.US",
+      "unknown_cost": false
+    }
+  ],
+  "schema_version": 1,
+  "scope": "all",
+  "year": "2024"
+}

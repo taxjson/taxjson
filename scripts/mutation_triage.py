@@ -15,14 +15,28 @@ from collections import defaultdict
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_REPORT = os.path.join(REPO, "mutation_report.txt")
 
-FILES = {"core.py": f"{REPO}/src/taxjson/lib/core.py",
-         "pipeline.py": f"{REPO}/src/taxjson/lib/pipeline.py"}
 NOISE = re.compile(
     r"trace|print|warning|note:|symbol_acb_traces|rg_trace|"
     r"win_txs|role|raw_days|window_start|days_from|"
     r"f\"|f'|_wrap|days_held|adjustment_shown|_shown_adj|"
     r"clear_in|summary|window_start|win_txs|description")
 EPS = re.compile(r"1e-\d|0\.005|0\.001|epsilon")
+
+
+_SRCS = {}
+
+
+def _lines(rel: str) -> list:
+    """The lines of a survivor's file, named repo-relative as
+    scripts/mutation_audit.py writes it (src/taxjson/engine/ca/walk.py:
+    the engine's modules repeat basenames); [] for one it cannot read."""
+    if rel not in _SRCS:
+        try:
+            with open(os.path.join(REPO, rel), encoding="utf-8") as f:
+                _SRCS[rel] = f.read().splitlines()
+        except (OSError, UnicodeDecodeError):
+            _SRCS[rel] = []
+    return _SRCS[rel]
 
 
 def main(argv=None) -> int:
@@ -42,10 +56,6 @@ def main(argv=None) -> int:
               f"{e.strerror or e}", file=sys.stderr)
         return 1
 
-    srcs = {}
-    for k, v in FILES.items():
-        with open(v) as f:
-            srcs[k] = f.read().splitlines()
     survivors = []
     for line in lines:
         m = re.match(r"\s+(\S+):(\d+) \[(\w+)\]", line)
@@ -54,7 +64,7 @@ def main(argv=None) -> int:
 
     by_class = defaultdict(list)
     for f, ln, kind in survivors:
-        src = srcs.get(f, [])
+        src = _lines(f)
         text = src[ln - 1].strip() if 0 < ln <= len(src) else "?"
         if NOISE.search(text):
             cls = "NOISE"

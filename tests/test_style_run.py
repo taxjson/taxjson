@@ -20,8 +20,11 @@ from unittest import mock
 from _style import Project, assert_styled, env, project
 
 from taxjson.lib import out
+from _run_patch import patch_run
+from taxjson.pipeline import run_state
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 class _Width(unittest.TestCase):
@@ -160,41 +163,41 @@ class TestBookStateWarnings(_Width):
     def test_artifact_year_and_run_state_brief(self):
         # Shown to a person without --details: one line each
         # (docs/output-style.md, Essentials first).
-        from taxjson.bin import taxjson_run as R
-        with mock.patch.object(R, "_CURRENT_CMD", "sum"), \
-                mock.patch.object(R, "_artifact_year_mismatch",
+        from taxjson.cli import common as cli_common
+        with mock.patch.object(run_state, "current_cmd", "sum"), \
+                patch_run("_artifact_year_mismatch",
                                   return_value={"margin": 2023}):
-            text = self._err(lambda: R._warn_artifact_year({}, 2024))
+            text = self._err(lambda: cli_common._warn_artifact_year({}, 2024))
         self.assertEqual(text.strip().splitlines(), [
             "Warning: these figures are NOT 2024's: work/ was built for "
             "another year — run `tjs run`"])
-        with mock.patch.object(R, "_CURRENT_CMD", "sum"), \
-                mock.patch.object(R, "_refuse_other_country_books"), \
-                mock.patch.object(R, "_run_state_problems",
+        with mock.patch.object(run_state, "current_cmd", "sum"), \
+                patch_run("_refuse_other_country_books"), \
+                patch_run("_run_state_problems",
                                   return_value=["a stale wash pass",
                                                 "default FX " * 12]):
-            text = self._err(lambda: R._warn_run_state(Path("."), {}))
+            text = self._err(lambda: cli_common._warn_run_state(Path("."), {}))
         self.assertEqual(text.strip().splitlines(), [
             "Warning: these books are not the clean result of the "
             "current inputs (2 problems): `tjs checklist --run`"])
 
-    @mock.patch("taxjson.bin.taxjson_run._CURRENT_DETAILS", True)
+    @mock.patch("taxjson.pipeline.run_state.current_details", True)
     def test_artifact_year_and_run_state(self):
-        from taxjson.bin import taxjson_run as R
-        with mock.patch.object(R, "_CURRENT_CMD", "sum"), \
-                mock.patch.object(R, "_artifact_year_mismatch",
+        from taxjson.cli import common as cli_common
+        with mock.patch.object(run_state, "current_cmd", "sum"), \
+                patch_run("_artifact_year_mismatch",
                                   return_value={"margin": 2023}):
-            text = self._err(lambda: R._warn_artifact_year({}, 2024))
+            text = self._err(lambda: cli_common._warn_artifact_year({}, 2024))
         self.assertTrue(_flat(text).startswith(
             "Warning: [settings].year is 2024 but the work/ "
             "books were built for another tax year: margin (2023)"), text)
         self.assertEqual(out.lint(text), [])
-        with mock.patch.object(R, "_CURRENT_CMD", "sum"), \
-                mock.patch.object(R, "_refuse_other_country_books"), \
-                mock.patch.object(R, "_run_state_problems",
+        with mock.patch.object(run_state, "current_cmd", "sum"), \
+                patch_run("_refuse_other_country_books"), \
+                patch_run("_run_state_problems",
                                   return_value=["a stale wash pass",
                                                 "default FX " * 12]):
-            text = self._err(lambda: R._warn_run_state(Path("."), {}))
+            text = self._err(lambda: cli_common._warn_run_state(Path("."), {}))
         lines = text.splitlines()
         self.assertEqual(lines[0], "Warning: these books are "
                                    "not the clean result of the current "

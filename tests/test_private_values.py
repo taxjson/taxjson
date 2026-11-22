@@ -9,8 +9,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+import _paths
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = _paths.REPO
 
 
 class TestPrivateValues(unittest.TestCase):

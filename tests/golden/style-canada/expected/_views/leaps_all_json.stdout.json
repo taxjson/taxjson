@@ -1,0 +1,37 @@
+{
+  "basis": "denials among taxable accounts, full history",
+  "currency": "CAD",
+  "rows": [
+    {
+      "account": "rrsp",
+      "commission": 0.0,
+      "cost": 2105.6625,
+      "currency": "CAD",
+      "date": "2024-12-12",
+      "date_settle": "2024-12-15",
+      "days_held": 21,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 13.5,
+      "gain": 175.8375,
+      "grant": false,
+      "id": "ac64c0c7fd8d4ab0",
+      "is_option": true,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 2281.5,
+      "qty": 10.0,
+      "raw_gain": 175.8375,
+      "replacement_lot_ids": [],
+      "symbol": "ABCD270219C00045000.US",
+      "term": null,
+      "wash_replacements": null
+    }
+  ],
+  "schema_version": 1,
+  "sheltered_gain": 175.84,
+  "taxable_gain": 0.0,
+  "total_gain": 175.84
+}

@@ -1,0 +1,75 @@
+REALIZED-GAINS SUMMARY — CAD, tax year 2024, basis: wash-adjusted
+REALIZED = NON-OPT (shares, units, futures, crypto) + OPTION; TOTAL = REALIZED + DIVIDEND + PIL.
+DIVIDEND of crypto is staking rewards: ordinary income, not dividends.
+
+TAXABLE ACCOUNTS
+ACCOUNT   NON-OPT  OPTION  REALIZED  DIVIDEND   PIL    FEES     TOTAL
+---------------------------------------------------------------------
+crypto     519.97    0.00    519.97     23.56  0.00  133.87    543.53
+margin      30.38   59.40     89.78    542.75  0.00   61.40    632.53
+qt          84.65    0.00     84.65     24.30  0.00   31.68    108.95
+---------------------------------------------------------------------
+SUBTOTAL   635.00   59.40    694.40    590.61  0.00  226.95  1,285.01
+
+SHELTERED ACCOUNTS — not taxable
+ACCOUNT   NON-OPT  OPTION  REALIZED  DIVIDEND   PIL   FEES     TOTAL
+--------------------------------------------------------------------
+rrsp        94.57  175.84    270.41      0.00  0.00  38.30    270.41
+tfsa       643.45    0.00    643.45    528.00  0.00  46.48  1,171.45
+--------------------------------------------------------------------
+SUBTOTAL   738.02  175.84    913.86    528.00  0.00  84.78  1,441.86
+
+ALL ACCOUNTS — sheltered included
+ACCOUNT   NON-OPT  OPTION  REALIZED  DIVIDEND   PIL    FEES     TOTAL
+---------------------------------------------------------------------
+crypto     519.97    0.00    519.97     23.56  0.00  133.87    543.53
+margin      30.38   59.40     89.78    542.75  0.00   61.40    632.53
+qt          84.65    0.00     84.65     24.30  0.00   31.68    108.95
+rrsp        94.57  175.84    270.41      0.00  0.00   38.30    270.41
+tfsa       643.45    0.00    643.45    528.00  0.00   46.48  1,171.45
+---------------------------------------------------------------------
+TOTAL    1,373.02  235.24  1,608.26  1,118.61  0.00  311.73  2,726.87
+
+FOR THE RETURN — taxable accounts (crypto, margin, qt), CAD (Schedule 3, tax year 2024)
+GAIN = PROCEEDS − COST(ACB) − OUTLAYS, the allowed gain; DENIED = superficial losses denied.
+The SUBTOTAL adds the account rows, RETURN each sale's cents: they can differ by a cent or two.
+SCHEDULE 3 LINE                                         PROCEEDS  COST(ACB)  OUTLAYS     GAIN  DENIED
+-----------------------------------------------------------------------------------------------------
+shares & fund units (P1) (10689/10690)                 45,461.25  45,233.03     8.03   220.19    0.00
+shares & fund units (P2) (13199/13200)                 31,313.38  31,399.22    19.33  -105.17  943.13
+options, crypto & other properties (P2) (15199/15300)  15,356.25  14,713.76    63.13   579.36    0.00
+-----------------------------------------------------------------------------------------------------
+RETURN                                                 92,130.88  91,346.01    90.49   694.38  943.13
+
+! 2 sales with no purchase NOT in these totals, or a short — tjs find-missing-history
+! FX on foreign cash (line 15300): not in the rows; its estimate is NOT RELIABLE — tjs fx-cash
+Not in the rows: T3/T5 slip capital gains (lines 17600, 17400). More: tjs sum --details
+
+TAX ESTIMATE — canada/BC, rates vintage 2024
+ESTIMATE ONLY, not filing numbers: taxable accounts only; [ ] says how an amount was built.
+  Other income                       50,000.00
+  Capital gains (taxable)               347.19  [694.38 realized - 0.00 other losses, x50%]
+  Eligible dividends (grossed)           69.00  [50.00 x1.38]
+  Foreign dividends                     517.05  [FTC 26.93: TAX rows 23.28 + assumed 15% 3.65]
+  Payments in lieu                        0.00
+  Crypto staking (ordinary)              23.56  [no withholding, no FTC]
+
+  Tax with investments                7,263.78  federal 5,250.47 + BC 2,013.31
+  Tax on other income alone           7,092.17
+  => ESTIMATED TAX ON INVESTMENT INCOME: 171.62 CAD  (13.4% of 1,284.99)
+  Net capital losses carried in:  0.00 — no close-year lock before 2024 and none entered: see `tjs carryover`
+
+AMT CHECK — post-2024 minimum tax (20.5% over 173,205.00 exemption)
+  Adjusted taxable income            51,284.99
+  Federal minimum tax                     0.00
+  Federal regular tax                 5,250.47
+  => does not bind                    5,250.47  [headroom]
+
+INSTALMENTS — prior-year option (Mar/Jun/Sep/Dec 15)
+  Required this year                  5,200.00
+  Paid to date                        1,150.00
+  Net instalment interest               211.31
+  => instalments behind               4,050.00  [due with the balance April 30; tjs instalments]
+
+Assumes Canadian dividends (trusts' too) eligible; no interest, FX on cash or slip gains
+More: tjs estimate --details (assumptions, 4 note(s))

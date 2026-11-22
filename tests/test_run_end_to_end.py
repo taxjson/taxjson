@@ -14,6 +14,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from _style import CapturedWidth
+import _paths
 
 
 # Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
@@ -28,7 +29,7 @@ def setUpModule():
 def tearDownModule():
     _WIDTH.stop()
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 _CONFIG = """\
 [settings]
@@ -194,20 +195,15 @@ class TestRunEndToEnd(unittest.TestCase):
                 gains_before,
                 (root / "work" / "margin_gains.json").read_text())
 
-    def test_fast_second_run_reuses_cache(self):
-        # `--fast` opts into the mtime cache: unchanged stages are
-        # skipped (the old default behaviour, now behind the flag).
+    def test_fast_flag_was_removed(self):
+        # Every run rebuilds everything (2026-11-17): the incremental
+        # `--fast` is gone, an unknown option before anything is built.
         with tempfile.TemporaryDirectory() as tmp:
             root = self._project(tmp)
-            first = _run_cli(root, "run")
-            self.assertEqual(first.returncode, 0, first.stderr)
-            gains_before = (root / "work" / "margin_gains.json").read_text()
-            second = _run_cli(root, "run", "--fast")
-            self.assertEqual(second.returncode, 0, second.stderr)
-            self.assertNotIn("==> Reading 1 file", second.stdout)  # cached
-            self.assertEqual(
-                gains_before,
-                (root / "work" / "margin_gains.json").read_text())
+            r = _run_cli(root, "run", "--fast")
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("unrecognized arguments: --fast", r.stderr)
+            self.assertFalse((root / "work" / "margin_gains.json").exists())
 
     def test_force_flag_was_removed(self):
         # Full rebuild is simply the default; the development-era

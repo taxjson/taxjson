@@ -40,12 +40,17 @@ before.
 """
 from __future__ import annotations
 
+import collections.abc as _cabc
+
 import datetime as _dt
 import os
 import re
 from pathlib import Path
 from typing import (Any, Dict, List, NamedTuple, Optional, Sequence,
                     Tuple, Union)
+
+from taxjson.project.settings import Settings, as_settings
+from taxjson.project.toml_io import parse_toml as _parse_toml, read_toml
 
 CONFIG = "taxjson.toml"
 TICKER_MAP = "ticker.map"
@@ -94,25 +99,20 @@ def _resolved(root) -> Path:
 def _read_doc(path: Path) -> Dict[str, Any]:
     """The parsed TOML at `path` (a UTF-8 BOM dropped); LayoutError
     naming the file when it cannot be read or parsed."""
-    from taxjson.lib.tomlcompat import tomllib
     try:
-        raw = path.read_bytes()
+        doc = read_toml(path)
     except OSError as e:
         raise LayoutError(f"cannot read {path}: {e.strerror or e}") from None
-    if raw.startswith(b"\xef\xbb\xbf"):
-        raw = raw[3:]
-    try:
-        doc = tomllib.loads(raw.decode("utf-8"))
     except Exception as e:                              # noqa: BLE001
         raise LayoutError(f"{path} is not valid TOML: {e}") from None
     return doc if isinstance(doc, dict) else {}
 
 
 _SETTINGS_CACHE: Dict[Tuple[str, Optional[Tuple[int, int]]],
-                      Dict[str, Any]] = {}
+                      Settings] = {}
 
 
-def _settings(root: Path) -> Dict[str, Any]:
+def _settings(root: Path) -> Settings:
     """The project's [settings] ({} without a readable taxjson.toml)."""
     cfg = Path(root) / CONFIG
     key = (str(cfg), _stamp(cfg))
@@ -125,11 +125,11 @@ def _settings(root: Path) -> Dict[str, Any]:
                 st = None
         if len(_SETTINGS_CACHE) > 256:
             _SETTINGS_CACHE.clear()
-        _SETTINGS_CACHE[key] = st if isinstance(st, dict) else {}
+        _SETTINGS_CACHE[key] = as_settings(st if isinstance(st, dict) else {})
     return _SETTINGS_CACHE[key]
 
 
-def folder_setting(root, key: str, settings: Optional[Dict[str, Any]]
+def folder_setting(root, key: str, settings: Any
                    = None) -> Optional[Path]:
     """The folder `[settings] key` names, resolved against the project
     (None when unset). LayoutError when it is not a path string, or
@@ -137,8 +137,8 @@ def folder_setting(root, key: str, settings: Optional[Dict[str, Any]]
     that folder or the project itself: the shared folders of a
     multi-year project sit beside the year folders, never further out."""
     root = _resolved(root)
-    st = _settings(root) if settings is None else settings
-    v = st.get(key)
+    st = _settings(root) if settings is None else as_settings(settings)
+    v = getattr(st, key, None)
     if v is None:
         return None
     if not isinstance(v, str) or not v.strip():
@@ -417,7 +417,7 @@ def exports_folder(root) -> Optional[Path]:
     return _folder(root, EXPORTS_KEY, None)
 
 
-def tobase_setting(root, settings: Optional[Dict[str, Any]] = None
+def tobase_setting(root, settings: Any = None
                    ) -> Optional[Path]:
     """The shared tobase.map `[settings] tobase_map` names, resolved
     against the project (None when unset). LayoutError when it is not a
@@ -426,8 +426,8 @@ def tobase_setting(root, settings: Optional[Dict[str, Any]] = None
     (its own tobase.map needs no setting) or inside another year's
     folder: the file every year shares sits beside the year folders."""
     root = _resolved(root)
-    st = _settings(root) if settings is None else settings
-    v = st.get(TOBASE_KEY)
+    st = _settings(root) if settings is None else as_settings(settings)
+    v = st.tobase_map
     if v is None:
         return None
     if not isinstance(v, str) or not v.strip():
@@ -496,12 +496,12 @@ def tobase_shown(root) -> str:
             f"every year")
 
 
-def tobase_both_problem(root, settings: Dict[str, Any]) -> Optional[str]:
+def tobase_both_problem(root, table: Any) -> Optional[str]:
     """Why a year folder's tobase.map files are ambiguous, or None: the
     setting names a shared file and the folder still holds a tobase.map
     of its own (one of the two would be silently ignored)."""
     try:
-        shared = tobase_setting(root, settings)
+        shared = tobase_setting(root, table)
     except LayoutError:
         return None                 # said by setting_problems already
     own = Path(root) / TOBASE_MAP
@@ -509,8 +509,8 @@ def tobase_both_problem(root, settings: Dict[str, Any]) -> Optional[str]:
         return None
     if own.exists() and _resolved(own) == shared:
         return None                 # a link to the shared file itself
-    v = settings.get(TOBASE_KEY)
-    if frozen_project(root, settings):
+    v = as_settings(table).tobase_map
+    if frozen_project(root, table):
         # A filed year's tobase.map is the copy close-year froze: the
         # setting is what was written back, never a copy to migrate.
         return (f"two tobase.map files for this year: [settings] "
@@ -536,6 +536,12 @@ def config_files(root) -> List[Path]:
 
 def has_config(root) -> bool:
     return (Path(root) / CONFIG).is_file()
+
+
+def user_config_dir() -> Path:
+    """The user's taxjson folder, ~/.config/taxjson: the installer's
+    channel, the redaction denylist, the generic importer's layouts."""
+    return Path.home() / ".config" / "taxjson"
 
 
 def read_config(root) -> Dict[str, Any]:
@@ -592,7 +598,7 @@ def multi_root(root) -> Optional[Path]:
     return None
 
 
-def setting_problems(root, settings: Dict[str, Any]) -> List[str]:
+def setting_problems(root, table: Any) -> List[str]:
     """What load_config refuses about the folder settings: a path that
     is not one or leaves the folder holding the project (the shared
     tobase.map too, and a year folder holding a tobase.map of its own
@@ -600,25 +606,26 @@ def setting_problems(root, settings: Dict[str, Any]) -> List[str]:
     `exports_dir` that overlaps another folder (exports_overlap); a
     year folder
     (named YYYY) of a shared-exports project whose `year` is another."""
+    st = as_settings(table)              # once: the helpers hand it back as is
     out = []
     for key in FOLDER_KEYS:
         try:
-            folder_setting(root, key, settings)
+            folder_setting(root, key, st)
         except LayoutError as e:
             out.append(str(e))
     try:
-        tobase_setting(root, settings)
+        tobase_setting(root, st)
     except LayoutError as e:
         out.append(str(e))
-    both = tobase_both_problem(root, settings)
+    both = tobase_both_problem(root, st)
     if both:
         out.append(both)
-    ov = exports_overlap(root, settings)
+    ov = exports_overlap(root, st)
     if ov:
         out.append(ov)
     d = _resolved(root)
-    year = settings.get("year")
-    if (settings.get(INPUTS_KEY) is not None and YEAR_DIR_RE.match(d.name)
+    year = st.year
+    if (st.inputs_dir is not None and YEAR_DIR_RE.match(d.name)
             and isinstance(year, int) and not isinstance(year, bool)
             and int(d.name) != year):
         out.append(f"[settings] year = {year} but this folder is {d.name}: "
@@ -632,17 +639,18 @@ def _overlaps(a: Path, b: Path) -> bool:
     return a == b or a in b.parents or b in a.parents
 
 
-def exports_overlap(root, settings: Dict[str, Any]) -> Optional[str]:
+def exports_overlap(root, table: Any) -> Optional[str]:
     """Why `exports_dir` cannot be used, or None: the newest year's run
-    replaces files there (taxjson_run `_write_exports`), so it must be a
+    replaces files there (pipeline/run `_write_exports`), so it must be a
     folder of its own — not the same as, inside or holding the inputs
     (the shared folder or the project's own inputs/), the holdings
     folder, a year folder (YYYY beside the project, this one included),
     the project's work/, reports/ or filed/, or the project folder."""
-    if settings.get(EXPORTS_KEY) is None:
+    _st = as_settings(table)
+    if _st.exports_dir is None:
         return None
     try:
-        exp = folder_setting(root, EXPORTS_KEY, settings)
+        exp = folder_setting(root, EXPORTS_KEY, _st)
     except LayoutError:
         return None                 # said by setting_problems already
     if exp is None:
@@ -655,7 +663,7 @@ def exports_overlap(root, settings: Dict[str, Any]) -> Optional[str]:
     for key, default, what in ((INPUTS_KEY, INPUTS, "inputs folder"),
                                (HOLDINGS_KEY, HOLDINGS, "holdings folder")):
         try:
-            p = folder_setting(root, key, settings)
+            p = folder_setting(root, key, _st)
         except LayoutError:
             p = None
         if p is not None:
@@ -672,7 +680,7 @@ def exports_overlap(root, settings: Dict[str, Any]) -> Optional[str]:
         years.append(exp)           # a year folder still to be made
     for y in sorted({_resolved(p) for p in years}):
         places.append((f"the year folder {y.name}/", y))
-    v = settings.get(EXPORTS_KEY)
+    v = _st.exports_dir
     for what, p in places:
         if _overlaps(exp, _resolved(p)):
             return (f"[settings] {EXPORTS_KEY} = {v!r} overlaps {what} "
@@ -717,7 +725,7 @@ def new_year_text(text: str, old_year: int, new_year: int) -> str:
     #37; [settings] as an inline table, #38, or dotted keys, #39) and
     checks that the result reads as intended. LayoutError when the
     text cannot be read or changed that way."""
-    doc = parse_toml(text)
+    doc = parse_config_text(text)
     for t in YEAR_ONLY_TABLES:
         if t in doc:
             text = set_key_text(
@@ -728,7 +736,7 @@ def new_year_text(text: str, old_year: int, new_year: int) -> str:
     accounts = doc.get("accounts")
     for name, a in (accounts.items() if isinstance(accounts, dict)
                     else ()):
-        if isinstance(a, dict) and "holdings" in a:
+        if isinstance(a, _cabc.Mapping) and "holdings" in a:
             # Last year's positions snapshots are not this year's: the
             # new year's go in its holdings/ (found by account), or are
             # listed here again (lib/holdings_dir).
@@ -777,9 +785,9 @@ def flat_paths(doc: Dict[str, Any]) -> Dict[KeyPath, Any]:
     #36)."""
     out: Dict[KeyPath, Any] = {}
     for t, v in doc.items():
-        if t == "accounts" and isinstance(v, dict):
+        if t == "accounts" and isinstance(v, _cabc.Mapping):
             for name, a in v.items():
-                if isinstance(a, dict):
+                if isinstance(a, _cabc.Mapping):
                     for k, x in a.items():
                         out[("accounts", name, k)] = x
                 else:
@@ -837,8 +845,8 @@ def account_order(here: Dict[str, Any], there: Dict[str, Any]
     moment in two accounts can book differently (GitHub #42)."""
     def _names(doc):
         a = doc.get("accounts")
-        return [n for n, v in a.items() if isinstance(v, dict)] \
-            if isinstance(a, dict) else []
+        return [n for n, v in a.items() if isinstance(v, _cabc.Mapping)] \
+            if isinstance(a, _cabc.Mapping) else []
     a, b = _names(here), _names(there)
     common = set(a) & set(b)
     a = [n for n in a if n in common]
@@ -849,7 +857,7 @@ def account_order(here: Dict[str, Any], there: Dict[str, Any]
 def _account_names(doc: Dict[str, Any]) -> List[str]:
     """The [accounts.NAME] names of a parsed taxjson.toml, in order."""
     a = doc.get("accounts")
-    return [str(n) for n in a] if isinstance(a, dict) else []
+    return [str(n) for n in a] if isinstance(a, _cabc.Mapping) else []
 
 
 def compare(here: Path, other: Path) -> Dict[str, Any]:
@@ -989,9 +997,8 @@ def _toml_key_at(text: str, k: int) -> Tuple[Optional[List[str]], int]:
             m = _BASIC_STR.match(text, k)
             if not m:
                 return None, k
-            from taxjson.lib.tomlcompat import tomllib
             try:
-                segs.append(tomllib.loads(f"k = {m.group(0)}")["k"])
+                segs.append(_parse_toml(f"k = {m.group(0)}")["k"])
             except Exception:                           # noqa: BLE001
                 return None, k
             k = m.end()
@@ -1113,12 +1120,12 @@ def _dotted(parts: Sequence[str]) -> str:
     return ".".join(_toml_key(p) for p in parts)
 
 
-def parse_toml(text: str) -> Dict[str, Any]:
-    """`text` parsed (a leading BOM dropped); LayoutError when it does
-    not read as TOML."""
-    from taxjson.lib.tomlcompat import tomllib
+def parse_config_text(text: str) -> Dict[str, Any]:
+    """taxjson.toml's `text` parsed; LayoutError when it does not read as
+    TOML (toml_io.parse_toml's reading, the BOM dropped there). Named for
+    what it is: toml_io's `parse_toml` is the parser (TJ-1655)."""
     try:
-        doc = tomllib.loads(text.lstrip("﻿"))
+        doc = _parse_toml(text)
     except Exception as e:                              # noqa: BLE001
         raise LayoutError(f"taxjson.toml is not valid TOML: {e}") from None
     return doc if isinstance(doc, dict) else {}
@@ -1198,13 +1205,13 @@ def set_key_text(text: str, dotted: Union[str, Sequence[str]],
         else tuple(dotted)
     if not path:
         raise LayoutError("no key to set")
-    doc = parse_toml(text)
+    doc = parse_config_text(text)
     want = _with_key(doc, path, value)
     if value is None and want == doc:
         return text                 # not set: nothing to remove
     out = _edit_text(text, doc, path, value, after, note)
     try:
-        got = parse_toml(out)
+        got = parse_config_text(out)
     except LayoutError as e:
         got, why = None, str(e)
     else:
@@ -1353,7 +1360,7 @@ def _edit_text(text: str, doc: Dict[str, Any], path: KeyPath, value: Any,
 
 
 # The note close-year's freeze writes over the shared folders' settings
-# it comments out (taxjson_run._FROZEN_NOTE_PREFIX).
+# it comments out (cli/common._FROZEN_NOTE_PREFIX).
 FROZEN_NOTE_PREFIX = "## frozen by `tjs close-year`"
 
 
@@ -1398,7 +1405,7 @@ def filed_reports_kept(d, year) -> bool:
     """`d` (a filed/<year>/reports/ folder) holds a report close-year
     kept (lib/compare.filed_reports_dir) after the year ended: the year
     was closed. Reports all written on or before Dec 31 of `year` are a
-    lock taken during the year, a snapshot (taxjson_filed.
+    lock taken during the year, a snapshot (filed_locks.
     partial_year_note; backlog TJ-1247)."""
     import datetime as _dt
     d = Path(d)
@@ -1503,13 +1510,13 @@ def migrated_shared_inputs(d, fz: Any) -> Optional[Path]:
     return None
 
 
-def frozen_project(d, settings: Optional[Dict[str, Any]] = None) -> bool:
+def frozen_project(d, settings: Any = None) -> bool:
     """frozen_year for the project `d`, its year read from `settings`
     (its [settings]; read from its taxjson.toml when not given). False
     when the year cannot be read."""
-    st = _settings(Path(d)) if settings is None else settings
+    st = _settings(Path(d)) if settings is None else as_settings(settings)
     try:
-        year = int((st or {}).get("year"))
+        year = int(st.year)
     except (TypeError, ValueError):
         return False
     return frozen_year(d, year)
@@ -1560,7 +1567,7 @@ def set_key_after(text: str, dotted: str, value: Any,
 # ------------------------------------------------------------ years view
 
 # The last drift check of the project's filed years, in work/ (written
-# by taxjson_run._check_filed_years: `tjs run`, `check-filed`).
+# by pipeline/run._check_filed_years: `tjs run`, `check-filed`).
 FILED_CHECK_STATE = "filed_check.state"
 _FILED_CHECK_FORMAT = "filed_check/1"
 
@@ -1618,166 +1625,57 @@ def filed_check(root, year) -> Optional[bool]:
     return res == "drifted"
 
 
-def years_report(folder: Path) -> Dict[str, Any]:
-    """`tjs years --json`: each year project of the multi-year folder
-    with its state (docs/settings.md, `tjs years --json`)."""
-    from taxjson.lib import checklist as CL
-    yrs = year_dirs(folder)
-    newest = yrs[-1][1] if yrs else None
-    out_years = []
-    for y, d in yrs:
-        rec: Dict[str, Any] = {"year": y, "folder": d.name,
-                               "filed": False, "closed_at": None,
-                               "partial_lock": False, "totals": None,
-                               "last_run": None, "stale": None,
-                               "changed": None, "problem": None,
-                               "differs_from_newest": None,
-                               "tobase_map": None, "tobase_shared": False,
-                               "tobase_frozen": False, "drifted": None,
-                               "marks": {"done": 0, "forced": 0}}
-        lock = d / "filed" / f"{y}.json"
-        doc = None
-        if lock.is_file():
-            rec["filed"] = True
-            try:
-                from taxjson.bin.taxjson_filed import (lock_damage,
-                                                       load_lock_json)
-                doc = load_lock_json(lock)
-                # The one damage check every reader of a lock applies
-                # (its carryforwards block too: a lock the next year's
-                # estimate refuses was shown as a clean filed year,
-                # 2026-10-25 audit year-end#6).
-                bad = lock_damage(doc, y, f"filed/{y}.json")
-                if bad:
-                    # A damaged lock is named, never shown as a
-                    # clean filed year (issue #49).
-                    rec["problem"] = bad
-                elif isinstance(doc, dict):
-                    rec["closed_at"] = str(doc.get("closed_at") or "") or None
-                    t = doc.get("totals")
-                    if isinstance(t, dict):
-                        rec["totals"] = {k: t.get(k) for k in (
-                            "realized", "disallowed", "income") if k in t}
-                        # Realized and disallowed as filed: the RETURN
-                        # row close-year recorded, not the engine total
-                        # a cent or two apart (backlog TJ-0192).
-                        rr = doc.get("return_row")
-                        if isinstance(rr, dict):
-                            rec["totals"].update(
-                                (k, rr[k]) for k in ("realized",
-                                                     "disallowed")
-                                if isinstance(rr.get(k), (int, float))
-                                and not isinstance(rr.get(k), bool))
-                        # ...and income as `tjs sum`'s taxable
-                        # SUBTOTAL adds it (backlog TJ-0212).
-                        from taxjson.bin.taxjson_filed import \
-                            income_as_summed
-                        _inc = income_as_summed(doc)
-                        if _inc is not None and "income" in rec["totals"]:
-                            rec["totals"]["income"] = _inc
-                    from taxjson.bin.taxjson_filed import partial_year_note
-                    rec["partial_lock"] = bool(partial_year_note(doc, y))
-                    # The last run's drift check, never a recompute here
-                    # (backlog TJ-0159).
-                    rec["drifted"] = filed_check(d, y)
-            except (OSError, ValueError):
-                rec["problem"] = f"filed/{y}.json cannot be read"
-        elif os.path.lexists(lock):
-            # Something other than a file at the lock's path (a folder,
-            # a link to nothing): a damaged lock, never an open year
-            # (backlog TJ-0271), as the checklist's _lock_state says.
-            rec["filed"] = True
-            rec["problem"] = (f"filed/{y}.json cannot be read ("
-                              + ("a directory" if lock.is_dir() else
-                                 "a link to nothing" if lock.is_symlink()
-                                 and not lock.exists() else "not a file")
-                              + ") — restore the lock from git, or "
-                              "remove it and `tjs close-year` after "
-                              "filing")
-        elif lock_missing_frozen(d, y):
-            # A frozen year whose lock was deleted: filed, its lock to
-            # restore, as a damaged one (backlog TJ-0263).
-            rec["filed"] = True
-            rec["problem"] = lock_missing_text(y)
-        fp = d / "work" / CL.FINGERPRINT_FILE
-        try:
-            rec["last_run"] = _dt.datetime.fromtimestamp(
-                fp.stat().st_mtime).isoformat(timespec="seconds")
-        except OSError:
-            pass
-        try:
-            cfg = read_config(d)
-            if isinstance(doc, dict) and not rec["problem"]:
-                # The country check every reader of a lock applies
-                # (taxjson_filed.read_lock): a lock closed under the
-                # other country's law was shown as a clean filed year
-                # (backlog TJ-0069).
-                from taxjson.bin.taxjson_filed import lock_country_problem
-                from taxjson.lib.country import CountryError
-                try:
-                    rec["problem"] = lock_country_problem(
-                        doc, cfg.get("settings") or {}, f"filed/{y}.json")
-                except CountryError:
-                    pass                # no country here to judge it by
-                if rec["problem"]:
-                    rec["totals"] = None    # the other country's figures
-            if rec["last_run"] is not None:
-                why = CL.inputs_changed(d, cfg)
-                rec["stale"] = bool(why) if why is not None else None
-                rec["changed"] = why or None
-        except (LayoutError, OSError) as e:
-            rec["problem"] = "; ".join(
-                x for x in (rec["problem"], str(e).splitlines()[0]) if x)
-        try:
-            p = tobase_setting(d)
-        except LayoutError:
-            p = None
-        # The copy close-year froze: the filed year's own by design —
-        # its file even beside a setting written back, which is the
-        # year's problem (its run refuses the two; backlog TJ-0108).
-        fz = frozen_year(d, y)
-        own_frozen = fz and (d / TOBASE_MAP).is_file()
-        rec["tobase_map"] = (f"{d.name}/{TOBASE_MAP}" if own_frozen
-                             else shown(p, _resolved(folder))
-                             if p is not None
-                             else f"{d.name}/{TOBASE_MAP}"
-                             if (d / TOBASE_MAP).is_file() else None)
-        rec["tobase_shared"] = p is not None and not own_frozen
-        rec["tobase_frozen"] = own_frozen
-        back = [k for k, on in ((INPUTS_KEY, shared_inputs(d)),
-                                (TOBASE_KEY, p is not None)) if on]
-        if fz and back:
-            # A frozen filed year naming the shared folders again reads
-            # them, not its frozen copy (the run warns).
-            rec["problem"] = "; ".join(x for x in (
-                rec["problem"], f"frozen, but [settings] names "
-                f"{', '.join(back)} again: delete "
-                f"{'them' if len(back) > 1 else 'it'}") if x)
-        if newest is not None and d != newest:
-            try:
-                c = compare(d, newest)
-            except LayoutError as e:
-                # Never "the same" when a file cannot be read (#56).
-                rec["problem"] = rec["problem"] or str(e).splitlines()[0]
-            else:
-                rec["differs_from_newest"] = {
-                    "map_rules": len(c["map_only_here"])
-                    + len(c["map_only_there"]),
-                    "tobase_rules": len(c["tobase_only_here"])
-                    + len(c["tobase_only_there"]),
-                    "accounts": len(c["accounts_only_here"])
-                    + len(c["accounts_only_there"]),
-                    "keys": len(c["keys"])}
-        try:
-            st = CL.load_state(d)
-            for ov in (st.get("overrides") or {}).values():
-                s = CL.mark_kind(ov)
-                if s:
-                    rec["marks"][s] += 1
-        except Exception:                               # noqa: BLE001
-            rec["problem"] = rec["problem"] or "checklist.json cannot be read"
-        out_years.append(rec)
-    # 2: `marks` counts "forced", not "skipped" (v0.35 renamed it under
-    # 1; backlog TJ-0030).
-    return {"schema_version": 2, "root": str(folder),
-            "newest": yrs[-1][0] if yrs else None, "years": out_years}
+_GAINS_ALL_SUFFIX = "_gains_all.json"
+
+
+# Pipeline artifacts in work/ that are NOT parsed-source files — the
+# audit's source join must never read a derived book as provenance.
+_AUDIT_DERIVED_SUFFIXES = (
+    "_base.json", "_gains.json", "_gains_wash.json", _GAINS_ALL_SUFFIX,
+    "_raw.json",
+    "_raw_base.json", "_raw_gains.json", "_raw_base_gains.json",
+    "_merged.json", "_sorted.json", "_filled.json", "_report.json",
+    # The crypto ticker.map stage's output: a renamed copy of the
+    # parse, read as a second source it claimed a false 2-file dedup
+    # and hid the rename (S047-12).
+    "_mapped.json", "_manifest.json",
+    "_pending_elections.json", "_validate.diag",
+    # The engine's cost timelines (timeline_beside): pools, not rows.
+    ".timeline.json",
+)
+
+
+def _audit_source_files(cache: Path, name: str,
+                        accounts=None) -> List[Path]:
+    """The parsed-source JSONs for one account: everything the pipeline
+    wrote as `{name}_*.json` that is not a derived book. These are the
+    per-brokerage parses, converted .tt files, and corp-action rows —
+    the nominal-currency provenance the audit joins dispositions to.
+    `accounts` (the configured names) keeps a longer-named sibling's
+    files out: `margin_*.json` also matches margin_us's parses, which
+    the audit then listed twice (S047-13)."""
+    siblings = [a for a in (accounts or [])
+                if a != name and str(a).startswith(f"{name}_")]
+    out = []
+    for p in sorted(cache.glob(f"{name}_*.json")):
+        if any(p.name.endswith(sfx) for sfx in _AUDIT_DERIVED_SUFFIXES):
+            continue
+        if any(p.name.startswith(f"{sib}_") for sib in siblings):
+            continue
+        out.append(p)
+    return out
+
+
+def book_files(cache: Path) -> List[Path]:
+    """The per-account full-history books (work/<acct>_base.json), as
+    `tjs find-missing-history` reads them."""
+    return sorted(p for p in cache.glob("*_base.json")
+                  if not p.name.endswith("_raw_base.json")
+                  and p.name != "sheltered_base.json"
+                  and not p.name.startswith("."))
+
+
+# The map a run applied, in work/ (pipeline/stages.stage_cross_listings
+# writes it, lib/cross_listings.effective_map_text: ticker.map with its
+# tobase.map pairs, the run's TOBASE joins and the .tt RENAME lines).
+EFFECTIVE_MAP = "ticker.map.effective"

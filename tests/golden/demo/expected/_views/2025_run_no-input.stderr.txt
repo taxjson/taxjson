@@ -1,0 +1,7 @@
+taxjson-to-base-curr: note: TAXJSON_OFFLINE is set — using cached rates only (no download); a transaction whose date has no cached rate fails at the conversion stage.
+taxjson-to-base-curr: note: FX USD→CAD: Bank of Canada Valet for <n> dates, Yahoo fallback for 0
+  warning: margin: SAMPW250117C00030000.US expired 2025-01-17 but the books still hold -1 (written) — the export is missing its expiry, assignment or exercise row. Add the missing row (an expiry is a BUYSELL closing the position at 0 on the expiry date) and re-run.
+tjs: note: AAPL.US, SHOP.TO traded in more than one TAXABLE account
+  The blended pass computes their ACB across all non-registered accounts (ITA s. 47). The wash-adjusted artifacts (<account>_wash.sum — the canonical filing numbers) carry the blended figures; the per-account <account>.sum baseline stays isolated, so the pair shows what blending changed.
+tjs: warning: no transaction in any account's books is dated 2025 (the books run 2024-01-09 to 2024-12-20)
+  Every 2025 filing total will be 0. Is [settings] year in taxjson.toml right?

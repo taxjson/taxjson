@@ -1,0 +1,69 @@
+==> Checking the project
+==> Loading currency rates
+==> margin  (taxable, first pass: transfers between your accounts)
+  inputs/margin/ib_demo.csv → Interactive Brokers (content: "Statement,Header" preamble)
+  inputs/margin/ib_extra.csv → Interactive Brokers (content: "Statement,Header" preamble)
+==> Reading 2 files
+  warning: ATTENTION: ib_demo.csv: the statement has no Cash Report — parsed money is NOT reconciled against IB's own totals. Include the Cash Report section in the export (Flex: add it to the query).
+  warning: ATTENTION: ib_extra.csv: the statement has no Cash Report — parsed money is NOT reconciled against IB's own totals. Include the Cash Report section in the export (Flex: add it to the query).
+  ib_demo.csv: 9 tax objects
+  ib_extra.csv: 12 tax objects
+==> roth  (sheltered, first pass: transfers between your accounts)
+==> qt  (taxable, first pass: transfers between your accounts)
+  inputs/qt/questrade_2024.csv → Questrade (content: columns Transaction Date,Settlement Date,Action…)
+==> Reading 1 file
+  questrade_2024.csv: 2 tax objects
+==> roth  (sheltered)
+==> Reading roth_extra.tt
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/roth_holdings.toml
+==> Writing summary reports/roth.sum
+==> Combining sheltered accounts
+==> margin  (taxable)
+==> Processing corporate actions
+==> Reading margin_extra.tt
+  warning: ATTENTION: transfer-in: margin: 1 transfer-in(s) from outside your books have NO cost in the books (30 XYZQ.US (2024-05-01)): the row states no book value (a VALUE column is the market value, never your basis), so the shares are kept out and a later sale reads as a short. Add the original purchase as a .tt BUYSELL line (date and basis from the sending broker) dated on or before the transfer; this line then stops (docs/getting-started.md, step 5c).
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/margin_holdings.toml
+==> Writing summary reports/margin.sum
+==> crypto  (taxable, crypto)
+  inputs/crypto/coinbase_demo.csv → Coinbase (content: columns Timestamp,Transaction Type,Asset…)
+  inputs/crypto/kraken_demo.csv → Kraken (content: trades columns txid,ordertxid,pair…)
+  inputs/crypto/kraken_ledgers_demo.csv → Kraken (content: ledger columns txid,refid,time…)
+==> Reading 1 Coinbase file
+  coinbase_demo.csv: 10 tax objects
+==> Reading 2 Kraken files
+  kraken_demo.csv: 5 tax objects
+  kraken_ledgers_demo.csv: 8 tax objects
+==> Merging the exports
+==> Sorting, de-duplicating
+==> Looking up crypto prices
+==> Converting currency to USD
+  note: wash-sale rule NOT applied to crypto
+    The IRS treats crypto as property, not a security (§1091 does not reach it); losses are allowed in full.
+==> Calculating capital gains
+==> Writing holdings reports/crypto_holdings.toml
+==> Writing summary reports/crypto.sum
+==> qt  (taxable)
+==> Processing corporate actions
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/qt_holdings.toml
+==> Writing summary reports/qt.sum
+==> Checking for missing purchase history
+  warning: ATTENTION: short: OLDCO.US (margin): the broker codes the sale on 2024-04-01 CLOSING (IB code C, IB Basis 600.00 USD), but the data holds no position to close — it is booked as a new short until the missing purchase is supplied (`tjs find-missing-history --write-missing-history` writes its .tt OPENING cost=unknown line).
+  note: 1 position(s) go short in margin's data (GHOSTQ.US)
+    Sales with no purchase in your files, unless they were real short sales. Until the purchase is supplied their gain is in no total — `tjs find-missing-history` lists them with the fixes.
+==> Checking wash sales across taxable accounts (margin, qt)
+==> Writing summary reports/margin_wash.sum
+==> Writing summary reports/qt_wash.sum
+==> Writing cross-account reports to reports/
+==> Writing fees report reports/fees.rpt
+==> Done. Reports are in reports/
+==> Before you trust these numbers (docs/getting-started.md, step 5)
+Warning: 2 positions sold in 2024 with no purchase in your files, not in missing_history.tt: GHOSTQ.US (margin), OLDCO.US (margin). Those sales are NOT in `tjs sum`; run `tjs find-missing-history`. A short sale still open reads the same: it is in no total until it is covered.
+Warning: 1 transfer-in from outside your books kept out with no cost: XYZQ.US (margin). Run `tjs transfers`.
+Info: 3 accounts with open positions and no holdings file to check them against: crypto (3), margin (8), roth (2). Run `tjs sanity` with the broker's positions.
+Info: Then run `tjs checklist --run`: it checks every step and names the next one.

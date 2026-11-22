@@ -21,8 +21,10 @@ import unittest
 from pathlib import Path
 
 from _tmpfiles import private_dir, private_tmpfile
+from _siblings import with_siblings
+import _paths
 
-TESTS = Path(__file__).resolve().parent
+TESTS = _paths.TESTS
 REPO = TESTS.parent
 
 # A temp-file call that lands in the shared temp root unless it names a
@@ -47,7 +49,7 @@ _AFFECTED = (
     "test_parser_activity_coverage.TestKrakenActivities.test_trades_buy",
     "test_parser_activity_coverage.TestKrakenActivities.test_trades_csv_crypto_to_crypto_two_legs",
     "test_parser_activity_coverage.TestKrakenActivities.test_trades_sell",
-    "test_parser_coverage_audit.TestKrakenFiatConversions.test_trades_csv_fiat_base_fills_are_non_events",
+    "features.parsers.test_broker_row_kinds_read.TestKrakenFiatConversions.test_trades_csv_fiat_base_fills_are_non_events",
 )
 
 
@@ -117,7 +119,7 @@ class TestStrayLedgersInTheTempRoot(unittest.TestCase):
         trades.write_text(_TRADES)
         with contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaisesRegex(ValueError, "both carry ledger txid"):
-                KrakenBrokerage().parse_file(trades)
+                with_siblings(KrakenBrokerage()).parse_file(trades)
 
     def test_affected_tests_pass_with_strays_in_tmpdir(self):
         env = dict(os.environ, TMPDIR=str(self.tmp), TAXJSON_WIDTH="0")

@@ -74,12 +74,13 @@ command, the docs). Every command follows these rules.
    (` ...`), and a message of one kind said more than twice is folded
    into one count line at the end (`Info: 7 more like "..." (--details
    shows each)`): `out.concise_show`, `out.fold_summary`, switched on
-   by `taxjson_run._brief_messages` (run, redact and check-filed keep
+   by `cli/main._brief_messages` (run, redact and check-filed keep
    their own lines).
 
-`--json` is unchanged by all of this (its schema is stable), and so is
-the captured text other programs read (see "Never changed by a style
-pass").
+`--json` is unchanged by all of this, and so is the captured text other
+programs read (see "Never changed by a style pass"). Every `--json`
+output carries its top-level `schema_version`, and its keys are the
+contract (docs/settings.md, "`--json` outputs").
 
 ## Width
 
@@ -97,7 +98,7 @@ pass").
   column(s) first, the other cells as `label value` pairs under it.
 
 Output **captured for a program** is never wrapped: inside
-`out.unwrapped()` `width()` is 0. `lib/dispatch.run_cmd` enters it (and
+`out.unwrapped()` `width()` is 0. `pipeline/dispatch.run_cmd` enters it (and
 sets `TAXJSON_WIDTH=0` for a subprocess) whenever it captures a tool's
 stdout or stderr — a stage's work/ or reports/ file, the `.diag` the
 `.sum` DIAGNOSTICS fold in — and `tjs checklist` runs the commands
@@ -148,7 +149,13 @@ The run's must-act channel (ATTENTION) is a `Warning:` to a person; the
 word ATTENTION stays in the captured form only (`warning: ATTENTION:
 <topic>: ...`, what the run and the `.sum` read back). Its topic is
 shown capitalised (`out.ATTENTION_TOPICS`: `short:` is `Short
-position:`, `income year:` is `Income year:` ...).
+position:`, `income year:` is `Income year:` ...). A parser's warning
+of a booking the owner ruled is said rather than refused (and a
+Questrade file's rows that differ only by a blank Symbol) carries
+`[end of run] ` after `ATTENTION: ` in its .diag only
+(`out.END_OF_RUN_MARK`; the console at any width and the `.sum` drop it:
+`out.unmarked`): the run lists it again at its end, under
+`==> Before you trust these numbers`, its account in front (`[margin] `).
 
 ```
 Warning: Short position: ABC.TO (margin) goes short on 2025-03-04
@@ -174,6 +181,11 @@ process (`cli_diag.run_top_level`) `out.settling_streams()` makes every
 write — a report's raw `print()` too — pay the debt first; a program's
 own blank line pays it instead of adding a second. Several messages
 built as lines at once: `out.join_blocks` / `out.show_blocks`.
+
+**Whole.** In a default view a note or warning folds to one line, cut at
+the width. A message whose cut would lose what the person must know (a
+report is incomplete, a paper must be filed) passes `whole=True`
+(`out.emit`, `_say`) and keeps its text and details, as an error does.
 
 **The source.** A message never starts with a program name. The
 command the person typed is not named at all (`Warning: ...`, not
@@ -225,7 +237,7 @@ usage or input error) prints and exits 2.
 
 The shared helpers speak it:
 
-- `taxjson_run._die(headline, *details)` (exit 1) and
+- `pipeline/messages._die(headline, *details)` (exit 1) and
   `_die_input(headline, *details)` (exit 2) print `Error: <headline>`
   and the details under it, flush-left (`tjs <cmd>: error:
   <headline>` and the details two spaces in, captured). An old
@@ -253,7 +265,7 @@ starts with exactly one of:
 
 | start | meaning |
 | --- | --- |
-| `==> ` | a step the run is doing (`_step` in taxjson_run.py) |
+| `==> ` | a step the run is doing (`_step` in pipeline/messages.py) |
 | `Info: ` / `Warning: ` / `Error: ` | a message, the label at column 0 |
 | anything else, flush-left | the continuation of the entry (step or message) on the line directly above |
 
@@ -265,7 +277,7 @@ blank line, never two, never first or last. No indentation, no bare line
 is an implementation detail; its captured line in work/ keeps it), no
 `(content: ...)` detection detail (work/`<acct>`_detect.diag keeps it).
 Without `--details` every message is ONE line, its headline and the
-command with the detail (`stage_msg.concise_line`; Essentials first):
+command with the detail (`out.concise_line`; Essentials first):
 
 ```
 ==> Reading 2 files
@@ -318,13 +330,12 @@ continuation line from a new message, so the run's echo prints it with
 message). A reworded message keeps its meaning and every
 action the reader must take.
 
-The steps, in run order (an account's steps repeat per account; a step
-whose stage is cached under `--fast` is not shown):
+The steps, in run order (an account's steps repeat per account; every
+run builds every stage, so each step is said every run):
 
 | step | when |
 | --- | --- |
 | `==> Checking the project` | always: the checks before the first stage (config warnings, a $0 election, a leftover file) are under it |
-| `==> Rebuilding everything: taxjson's code changed ...` | `--fast` after an upgrade |
 | `==> Reading 3 .tt OPENING cost=unknown lines (openings for sales with no purchase in the files)` | an account's .tt files have such lines |
 | `==> Loading currency rates` | always |
 | `==> Downloading USD → CAD rates` | a rate refresh (`Loading cached USD → CAD rates` with TAXJSON_OFFLINE=1: the cache only) |
@@ -353,7 +364,7 @@ whose stage is cached under `--fast` is not shown):
 | `==> Calculating FX gains on cash (fx_cash_gains = true)` | opted in |
 | `==> Done. Reports are in reports/` | the run finished |
 | `==> Checking positions against the broker's holdings files` | `holdings` configured (one message per finding; `tjs sanity` has the tables) |
-| `==> Before you trust these numbers (docs/getting-started.md, step 5)` | something is incomplete: a `Warning:` per number the totals miss, an `Info:` per check not made, `Info: Then run tjs checklist ...` |
+| `==> Before you trust these numbers (docs/getting-started.md, step 5)` | something is incomplete: a `Warning:` per number the totals miss, a `Warning:` per parser warning marked for the list (a booking to check against the statement), an `Info:` per check not made, `Info: Then run tjs checklist ...` |
 
 ## Numbers, dates
 
@@ -372,14 +383,33 @@ whose stage is cached under `--fast` is not shown):
 - Dates are ISO, `YYYY-MM-DD`; a range is `FROM to TO`.
 - Paths inside the project are shown relative to it (`out.relpath`).
 
+## What a release keeps
+
+Two rules, of different reach. What a release keeps is the contract
+programs read, from 1.0.0: the `--json` shapes, the exit codes and the
+files [upgrading.md](upgrading.md#what-100-keeps) lists ("What 1.0.0
+keeps"). From 1.0.0 every `--json` output carries a `schema_version`,
+and a shape that changes raises it, with a line in upgrading.md. A
+script reads `--json` or those files, never the text.
+
+Report text is for people: a release may change its wording, its order
+and its layout, on the console and in the `.sum` and `.rpt` reports,
+for a fix or a new figure, and upgrading.md says when such a change
+moves a figure or asks something of you. What a style pass may not
+change is the next section: a change made only for how output looks
+leaves those bytes alone, so a diff of two runs' `.sum` files shows a
+fix, never a restyle.
+
 ## Never changed by a style pass
 
-These are read by programs or compared by users; a restyle leaves their
-bytes alone:
+These are read by programs or compared by users, so a restyle leaves
+their bytes alone (a release may still change one for a fix or a new
+figure; what a release keeps is upgrading.md's list, above):
 
-- every `--json` output, and the other machine stdout modes: `events
-  PERIOD ACCOUNT` (re-importable `.tt` lines), `form-export --form txf`
-  and `--out`/`--csv` files;
+- every `--json` output (each carries its `schema_version`:
+  docs/settings.md, "`--json` outputs"), and the other machine stdout
+  modes: `events PERIOD ACCOUNT` (re-importable `.tt` lines),
+  `form-export --form txf` and `--out`/`--csv` files;
 - the files the run writes under `work/` (books, `*.diag`, the
   pending-elections document, fingerprints) and `inputs/` (`manifest.json`,
   `sends.json`, `crypto_sends.tt`, `opening_*.tt`, drafts);
@@ -392,7 +422,8 @@ bytes alone:
   / `Error:` labels are display only;
 - the marker lines the run reads back from its stages' stderr, with their
   exact first-line prefix: `warning: ATTENTION:` (and the topics
-  `short:`, `opening:`, `crypto id:`, ...), `warning: UNBOOKED:`,
+  `short:`, `opening:`, `crypto id:`, ..., and the mark `[end of run] `),
+  `warning: UNBOOKED:`,
   `warning: <file> parsed to 0 transactions`, the `  <file>: N tax
   objects` count lines. The DIAGNOSTICS collector keeps a line matching
   `(prog: )?(ok|warning|note|error|validation):` plus the indented lines

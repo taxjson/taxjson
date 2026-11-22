@@ -11,10 +11,14 @@ import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
 
-from taxjson.lib.core import TaxTransaction, get_tax_rules
+from taxjson.engine.by_country import get_tax_rules
+from taxjson.model.transaction import TaxTransaction
 from tax_rules import rule
+from taxjson.rules import ids as R
+from _support.engine_rules import assert_rule, rules_of
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 OPT = "Q260116C00050000.TO"
 PUT = "Q260220P00048000.TO"
 
@@ -34,7 +38,7 @@ GRANT = dict(option_premium_timing="grant", option_grant_since=2025)
 
 
 class TestGrantTiming(unittest.TestCase):
-    @rule("CA-OPT-03")
+    @rule(R.CA_OPT_03)
     def test_straddle_buy_back_splits_years_close_mode_nets(self):
         book = [T(date="2025-12-15", date_settle="2025-12-16", symbol=OPT, quantity=-1, price=4, net_amount=399.0),
                 T(date="2026-01-10", date_settle="2026-01-12", symbol=OPT, quantity=1, price=1, net_amount=101.0)]
@@ -46,7 +50,7 @@ class TestGrantTiming(unittest.TestCase):
         self.assertTrue(all(abs(x["proceeds"] - x["cost"] - x["gain"]) < 1e-6 for x in g))
         self.assertEqual(run(book)[0], [("2026-01-10", 298.0)])          # library default: close
 
-    @rule("CA-OPT-03")
+    @rule(R.CA_OPT_03)
     def test_expiry_adds_nothing_and_same_year_totals_match(self):
         book = [T(date="2025-12-15", date_settle="2025-12-16", symbol=OPT, quantity=-1, price=4, net_amount=399.0),
                 T(date="2026-01-16", date_settle="2026-01-16", symbol=OPT, quantity=1, price=0, net_amount=0.0)]
@@ -55,7 +59,7 @@ class TestGrantTiming(unittest.TestCase):
                 T(date="2025-05-01", date_settle="2025-05-02", symbol=OPT, quantity=2, price=1, net_amount=202.0)]
         self.assertAlmostEqual(sum(g for _, g in run(same, **GRANT)[0]), sum(g for _, g in run(same)[0]))
 
-    @rule("CA-OPT-06")
+    @rule(R.CA_OPT_06)
     def test_assignment_folds_and_emits_no_grant_record(self):
         book = [T(date="2025-12-15", date_settle="2025-12-16", symbol=PUT, quantity=-1, price=3, net_amount=299.0),
                 TaxTransaction(action="ASSIGN", date="2026-02-20", date_settle="2026-02-20", symbol=PUT, quantity=1, price=0, net_amount=0.0, currency="CAD", account="A0"),
@@ -63,7 +67,7 @@ class TestGrantTiming(unittest.TestCase):
                 T(date="2026-03-01", date_settle="2026-03-02", symbol="Q.TO", quantity=-100, price=55, net_amount=5500.0)]
         self.assertEqual(run(book, **GRANT)[0], [("2026-03-01", 999.0)])   # 5500 - (4800 - 299)
 
-    @rule("CA-OPT-06")
+    @rule(R.CA_OPT_06)
     def test_partial_assignment_recognises_only_the_unassigned_unit(self):
         book = [T(date="2025-12-15", date_settle="2025-12-16", symbol=PUT, quantity=-2, price=3, net_amount=598.0),
                 TaxTransaction(action="ASSIGN", date="2026-02-20", date_settle="2026-02-20", symbol=PUT, quantity=1, price=0, net_amount=0.0, currency="CAD", account="A0"),
@@ -72,7 +76,7 @@ class TestGrantTiming(unittest.TestCase):
                 T(date="2026-03-01", date_settle="2026-03-02", symbol="Q.TO", quantity=-100, price=55, net_amount=5500.0)]
         self.assertEqual(run(book, **GRANT)[0], [("2025-12-15", 299.0), ("2026-01-10", -101.0), ("2026-03-01", 999.0)])
 
-    @rule("CA-OPT-02")
+    @rule(R.CA_OPT_02)
     def test_since_year_keeps_older_contracts_on_close_timing(self):
         book = [T(date="2024-12-15", date_settle="2024-12-16", symbol=OPT, quantity=-1, price=4, net_amount=399.0),
                 T(date="2025-01-10", date_settle="2025-01-13", symbol=OPT, quantity=1, price=1, net_amount=101.0),
@@ -90,8 +94,13 @@ class TestGrantTiming(unittest.TestCase):
         rng = random.Random(7)
         for seed in range(150):
             book = []; pos = 0
-            for i in range(rng.randint(2, 8)):
-                d = f"{rng.choice([2024, 2025, 2026])}-{rng.randint(1, 12):02d}-{rng.randint(1, 28):02d}"
+            # The rows in date order as they are made: a buy-back drawn
+            # before its write would sort as a no-money purchase past the
+            # written contracts, an over-expiry the engine books as nothing
+            # (CA-OPT-06, backlog TJ-3303), leaving contracts open.
+            dates = sorted(f"{rng.choice([2024, 2025, 2026])}-{rng.randint(1, 12):02d}-{rng.randint(1, 28):02d}"
+                           for _ in range(rng.randint(2, 8)))
+            for d in dates:
                 if pos <= 0 and rng.random() < 0.6:
                     q = rng.choice([1, 2, 3]); book.append(T(date=d, date_settle=d, symbol=OPT, quantity=-q, price=3, net_amount=299.0 * q)); pos -= q
                 elif pos < 0:
@@ -155,7 +164,7 @@ class TestGrantTiming(unittest.TestCase):
             for y in cy:
                 self.assertAlmostEqual(ly[y], cy[y], places=3, msg=f"seed {seed} {y}")
 
-    @rule("CA-OPT-02")
+    @rule(R.CA_OPT_02)
     def test_assign_consuming_pre_since_lot_folds_it_once(self):
         """Audit repro r01: a 2024 write (close timing under since=2025)
         is assigned FIFO; the 2025 write is bought back. The ASSIGN
@@ -205,7 +214,7 @@ class TestGrantTiming(unittest.TestCase):
         recs = run(book, option_premium_timing="grant", option_grant_since=2025)[0]
         self.assertEqual(recs, [("2025-02-10", 200.0), ("2025-03-16", 250.0)])
 
-    @rule("CA-OPT-03")
+    @rule(R.CA_OPT_03)
     def test_buy_back_of_a_grant_lot_is_the_amount_paid_whatever_other_lots_cost(self):
         """Two grant lots at different premiums: the buy-back of the
         first is a loss of what was paid, not of the pool average."""
@@ -224,28 +233,42 @@ class TestBuybackLossSuperficialSwitch(unittest.TestCase):
     is denied, permanently, by the registered acquisition."""
     SYM = "QLT270115C00060000.US"
 
-    def _run(self, strict):
-        book = [T(date="2025-11-17", time="11:41:09", date_settle="2025-11-18", symbol=self.SYM, quantity=-6, price=8.25, net_amount=4943.05),
-                T(date="2025-11-17", time="11:41:37", date_settle="2025-11-18", symbol=self.SYM, quantity=6, price=8.31, net_amount=4993.55)]
-        shel = [T(date="2025-11-10", date_settle="2025-11-11", symbol=self.SYM, quantity=3, price=8.0, net_amount=2400.0, account="lira")]
+    def _book(self):
+        return ([T(date="2025-11-17", time="11:41:09", date_settle="2025-11-18", symbol=self.SYM, quantity=-6, price=8.25, net_amount=4943.05),
+                 T(date="2025-11-17", time="11:41:37", date_settle="2025-11-18", symbol=self.SYM, quantity=6, price=8.31, net_amount=4993.55)],
+                [T(date="2025-11-10", date_settle="2025-11-11", symbol=self.SYM, quantity=3, price=8.0, net_amount=2400.0, account="lira")])
+
+    def _gains(self, strict):
+        book, shel = self._book()
         with redirect_stderr(io.StringIO()):
-            r = get_tax_rules("canada").compute_gains(book, sheltered_transactions=shel, option_premium_timing="grant",
-                                                       option_grant_since=2025, option_buyback_loss_superficial=strict)
+            return get_tax_rules("canada").compute_gains(book, sheltered_transactions=shel, option_premium_timing="grant",
+                                                         option_grant_since=2025, option_buyback_loss_superficial=strict)
+
+    def _run(self, strict):
+        r = self._gains(strict)
         return [(g["date"], round(float(g["raw_gain"]), 2), g.get("disallowed_amount"), g.get("permanently_disallowed")) for g in r["transactions"] if "gain" in g]
 
-    @rule("CA-SL-11")
+    @rule(R.CA_SL_11)
     def test_default_allows_the_buyback_loss(self):
         self.assertEqual(self._run(False), [("2025-11-17", 4943.05, 0.0, 0.0), ("2025-11-17", -4993.55, 0.0, 0.0)])
+        self.assertEqual(rules_of(self._gains(False), self._book()[0][1].id), {})   # no record
 
-    @rule("CA-SL-09", "CA-SL-12")
+    @rule(R.CA_SL_09, R.CA_SL_12)
     def test_strict_reading_denies_it_permanently(self):
         recs = self._run(True)
         # 6 bought back, the LIRA holds 3 at day 30: 3 units denied, permanently.
         self.assertAlmostEqual(recs[1][2], 4993.55 / 2, places=2)
         self.assertAlmostEqual(recs[1][3], 4993.55 / 2, places=2)
+        # The denial is a written option's buy-back loss (CA-SL-12); the
+        # LIRA's units take the addition, lost for good (CA-SL-09).
+        (_, buyback), (lira,) = self._book()
+        r = self._gains(True)
+        assert_rule(self, r, buyback.id, R.CA_SL_12, record=buyback.id)
+        assert_rule(self, r, buyback.id, R.CA_SL_09, record=f"WASH_{buyback.id}__{lira.id}")
 
 
 class TestDeemedGainNegativeAcb(unittest.TestCase):
+    @rule(R.CA_ACB_07)
     def test_roc_beyond_acb_is_a_gain_in_the_roc_year(self):
         book = [T(date="2025-01-06", date_settle="2025-01-06", symbol="X.TO", quantity=100, price=10.0, net_amount=1000.0),
                 TaxTransaction(action="ADJUST", date="2025-06-30", date_settle="2025-06-30", symbol="X.TO", currency="CAD", account="A0", quantity=0, net_amount=-1500.0, description="ROC"),
@@ -255,6 +278,7 @@ class TestDeemedGainNegativeAcb(unittest.TestCase):
         deemed = [g for g in r["transactions"] if "gain" in g and g["date"] == "2025-06-30"][0]
         self.assertEqual(deemed["qty"], 0.0)
         self.assertIn("s.40(3)", deemed.get("note", ""))
+        assert_rule(self, r, book[1].id, R.CA_ACB_07, record=book[1].id)   # PLAN step 11
 
 
 class TestShortSaleWashCorrection(unittest.TestCase):
@@ -263,19 +287,19 @@ class TestShortSaleWashCorrection(unittest.TestCase):
                 T(date="2026-01-16", date_settle="2026-01-16", symbol="X.TO", quantity=100, price=110.0, net_amount=11000.0),
                 T(date="2026-01-21", date_settle="2026-01-21", symbol="X.TO", quantity=third_qty, price=105.0, net_amount=10500.0)]
 
-    @rule("CA-SL-07")
+    @rule(R.CA_SL_07)
     def test_re_short_is_not_an_acquisition(self):
         _, r = run(self._book(-100))
         self.assertEqual([g.get("disallowed_amount") for g in r["transactions"] if "gain" in g and g.get("qty")], [0.0])
 
-    @rule("CA-SL-07")
+    @rule(R.CA_SL_07)
     def test_long_rebuy_after_cover_loss_is_denied(self):
         _, r = run(self._book(100))
         self.assertEqual([g.get("disallowed_amount") for g in r["transactions"] if "gain" in g and g.get("qty")], [1000.0])
 
 
 class TestCliThreading(unittest.TestCase):
-    @rule("CA-OPT-01", "CA-OPT-05")
+    @rule(R.CA_OPT_01, R.CA_OPT_05)
     def test_gains_cli_flags_reach_the_engine_and_the_summary(self):
         rows = [{"action": "BUYSELL", "date": "2025-12-15", "time": "09:30:00", "date_settle": "2025-12-16", "symbol": OPT, "quantity": -1, "price": 4.0, "net_amount": 399.0, "currency": "CAD", "account": "A0"},
                 {"action": "BUYSELL", "date": "2026-01-10", "time": "09:30:00", "date_settle": "2026-01-12", "symbol": OPT, "quantity": 1, "price": 1.0, "net_amount": 101.0, "currency": "CAD", "account": "A0"}]

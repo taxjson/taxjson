@@ -8,6 +8,7 @@ nowhere else (never at the end); no `ATTENTION:` word, no
 depend on it: a run shown to a person and a run captured for a program
 (TAXJSON_WIDTH=0) write the same bytes. Every fixture is synthetic."""
 import contextlib
+import datetime
 import io
 import os
 import re
@@ -231,10 +232,15 @@ class TestCaptured(_Runs):
         # A run shown to a person (width 100) and a run captured for a
         # program (TAXJSON_WIDTH=0) write the same work/ diagnostics and
         # reports.
+        days = _todays()
         a, _ra = self.run_of("canada")
         b, _rb = self.run_of("canada", TAXJSON_WIDTH="0")
+        # A run's own date (the wash radar's "as of") may change between
+        # the two runs: they can straddle midnight (TJ-4060).
+        days |= _todays()
         stamp = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}"
-                           r"(\.\d+)?)?([+-]\d{2}:?\d{2}|Z)?")
+                           r"(\.\d+)?)?([+-]\d{2}:?\d{2}|Z)?"
+                           + "|" + "|".join(sorted(days)))
 
         def files(root):
             return sorted([p.relative_to(root) for p in
@@ -248,6 +254,19 @@ class TestCaptured(_Runs):
                 y = stamp.sub("<T>", (b.root / f).read_text(errors="replace"))
                 self.assertEqual(x.replace(str(a.root), "<P>"),
                                  y.replace(str(b.root), "<P>"))
+
+
+def _todays():
+    """The dates a run may write as its own (YYYY-MM-DD): the day before,
+    the day of and the day after today, local and UTC. A run dates the
+    wash radar's "as of" in the project's timezone, which can be a day
+    off both (Toronto's midnight is 05:00 UTC: TJ-4257)."""
+    one = datetime.timedelta(days=1)
+    out = set()
+    for d in (datetime.date.today(),
+              datetime.datetime.now(datetime.timezone.utc).date()):
+        out |= {(d - one).isoformat(), d.isoformat(), (d + one).isoformat()}
+    return out
 
 
 class TestHoldingsCheck(_Runs):
@@ -432,7 +451,7 @@ class TestReword(_Width):
         self.assertFalse(is_continuation("warning: x"))
 
     def test_no_break_inside_parentheses(self):
-        from taxjson.lib.stage_msg import split_message
+        from taxjson.lib.out import split_message
         head, rest = split_message(
             "income year: X.TO: a distribution paid 2025-01-03 is income "
             "of 2024 (a Canadian trust's, s.104(13); the 2024 T3) — it is "
@@ -481,21 +500,21 @@ class TestMessageDetails(_Width):
 
 class TestRunHelpers(_Width):
     def test_say_ignores_nesting_for_a_person(self):
-        from taxjson.bin import taxjson_run as R
+        from taxjson.pipeline import messages as pipeline_messages
         err = io.StringIO()
         with contextlib.redirect_stderr(err), \
                 mock.patch.object(out, "width", return_value=100):
-            R._say("warning", "x: elections required", "Detail.",
+            pipeline_messages._say("warning", "x: elections required", "Detail.",
                    indent="  ")
         self.assertEqual(err.getvalue(),
                          "Warning: x: elections required\nDetail.\n")
 
     def test_step(self):
-        from taxjson.bin import taxjson_run as R
+        from taxjson.pipeline import messages as pipeline_messages
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf), \
                 mock.patch.object(out, "width", return_value=40):
-            R._step("Writing summary reports/a_very_long_account_name.sum")
+            pipeline_messages._step("Writing summary reports/a_very_long_account_name.sum")
         lines = buf.getvalue().splitlines()
         self.assertTrue(lines[0].startswith("==> Writing summary"))
         self.assertGreater(len(lines), 1)

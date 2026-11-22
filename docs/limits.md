@@ -26,12 +26,16 @@ are in [KNOWN_ISSUES.md](../KNOWN_ISSUES.md); problems with a known fix are in
   plugin (Questrade and IBKR Flex). SECURITY.md lists every network call.
 - **Only the listed brokers.** Interactive Brokers, Questrade, RBC Direct Investing, Webull, Kraken and
   Coinbase have parsers. Any other broker's CSV is read through a column mapping you write (the generic
-  importer: shares, options and futures, not crypto; an exercise or assignment is booked by hand).
+  importer: shares, options and futures, not crypto; an exercise or assignment through its `assign_buy` / `assign_sell` targets, a warrant's exercise by hand).
 - **Your books only.** Trades of a spouse or a company you control are not read unless you add them as
   an account (see "Purchases by an affiliated person" below).
 - **No specific-lot identification in the US.** The US engine sells lots first in, first out.
 - **Some rules are not modelled** (US §1256 marking, 1040-ES, US AMT, non-eligible dividends in the
   estimate and others below). `tjs tax-logic` lists every rule it does apply.
+- **FX on foreign cash: no promise yet.** `tjs fx-cash`'s default ledger (`fx_cash_ledger = "v1"`) shows
+  no reportable figure (NOT RELIABLE); ledger v2 is opt-in and under audit. Neither is part of what
+  1.0.0 promises: `tjs fx-cash`, the `fx_cash_*` keys and the `.tt` cash lines may change (see
+  "Foreign cash" below).
 
 ## Status by country
 
@@ -41,9 +45,10 @@ are in [KNOWN_ISSUES.md](../KNOWN_ISSUES.md); problems with a known fix are in
 - **United States: experimental.** The rules (FIFO lots, wash sales under §1091, holding periods,
   Form 8949) are implemented and unit-tested, but have not been validated on a real account. Treat its
   output as a draft and check every figure against your 1099-B.
-- **Pre-1.0.** The pipeline is stable, but command flags, file layouts and JSON field names can still
-  change between releases. Breaking changes, and what to do about each, are listed in
-  [docs/upgrading.md](upgrading.md).
+- **From 1.0.0.** What a release keeps is listed in [docs/upgrading.md](upgrading.md#what-100-keeps)
+  ("What 1.0.0 keeps": the commands and their flags, the settings and project files, the `--json`
+  shapes, the exit codes and the files read from one release to the next); one that has to change is
+  listed there, with what to do. Report text may change in any release, and `work/` is internal.
 
 ## Limitations by design
 
@@ -86,7 +91,7 @@ project every USD stablecoin is property: swaps, rewards and fees in it are sale
 coin (tax-logic US-CRYPTO-02).
 **Instead:** foreign-cash gains are `tjs fx-cash`'s job (see "Foreign cash" below); its opt-in ledger v2
 reads Kraken's and Coinbase's fiat movements.
-**Code:** `src/taxjson/lib/brokerages/kraken.py` — `_parse_trades`, `_build_instant_trade`, `kraken_cash_events`
+**Code:** `src/taxjson/lib/brokerages/kraken.py` — `_fill_facts`, `_build_instant_trade`, `_kr_cash_of`
 
 #### IB `Trades / Forex` conversions are not in the position books
 
@@ -96,7 +101,7 @@ kept for the Cash Report check only; no fake currency position is booked. The de
 ledger does not read it, which is one reason its output says NOT RELIABLE.
 **Instead:** the opt-in ledger v2 (`fx_cash_ledger = "v2"`) reads each conversion at its actual amounts,
 with deposits, withdrawals and the Cash Report balances.
-**Code:** `src/taxjson/lib/brokerages/ib_extractor.py` — `_book_forex`, `ib_cash_events`
+**Code:** `src/taxjson/lib/brokerages/ib_extractor.py` — `_book_forex`, `_ib_cash_events_of`
 
 #### Kraken staking rewards in older exports carry no price
 
@@ -105,7 +110,7 @@ prices the reward. An unpriced reward is priced from Yahoo Finance's daily close
 `taxjson-fill-crypto`. A failed lookup is never silent: it is warned, listed as `UNPRICED`, a validation
 error on the console and fatal under `tjs run --strict`; a failed price is not cached.
 **Instead:** re-export the ledger, or re-run online.
-**Code:** `src/taxjson/lib/brokerages/kraken.py` — `_build_staking_reward`; `src/taxjson/bin/fill_crypto_prices.py`
+**Code:** `src/taxjson/parsers/toolbox/staking.py` — `ledger_reward_legs`; `src/taxjson/bin/fill_crypto_prices.py`
 
 #### RBC foreign dividends are grossed up at 15%
 
@@ -127,7 +132,7 @@ line listing those dividends. (Interest rows are booked as interest.)
 Questrade transactions record their charge as `commission`; every other parser uses `fee`. Gains are not
 affected (the engine works from the net amount, which includes the charge) and the fee reports add both;
 only a per-row report that shows one column lists the charge under a different header.
-**Code:** `src/taxjson/bin/taxjson_fees.py`; `src/taxjson/lib/core.py` — `_effective_fee_for_trace`
+**Code:** `src/taxjson/bin/taxjson_fees.py`; `src/taxjson/engine/ca/walk.py` — `_effective_fee_for_trace`
 
 #### RBC identity across years
 
@@ -237,7 +242,7 @@ With no original anywhere, it stays booked as a reversing trade and merge2 warns
 reversal pairs with its original in any export of the same account; with none, the parse stops.
 **Instead:** when the original is in no export (the export window starts after it), book the correction in
 a `.tt` file.
-**Code:** `src/taxjson/lib/trade_cancel.py`; `src/taxjson/lib/brokerages/ib_extractor.py` — `_reconcile_files`
+**Code:** `src/taxjson/lib/trade_cancel.py`; `src/taxjson/lib/brokerages/ib_extractor.py` — `_ib_cross_trade_cas`, `_ib_cross_held_cas`
 
 #### Identical rows in two exports are booked once
 
@@ -303,7 +308,7 @@ or listing; split-share corporations come from a shipped list (`split_share_corp
 split corp counts too.
 **Instead:** compare the TAXABLE line of `tjs divs-sum` with the T3, which is authoritative; add any other
 corporation that pays "distributions" to `[settings] corporate_distributions`.
-**Code:** `src/taxjson/lib/income_dating.py` — `trust_record_date`, `roc_record_date`
+**Code:** `src/taxjson/characterize/income_dating.py` — `trust_record_date`, `roc_record_date`
 
 #### Payments in lieu: what the exports cannot say
 
@@ -313,7 +318,7 @@ file without that header leaves it unknown and the payment ordinary income. A pa
 the books show to be a Canadian trust's (its payouts labelled distributions) stays ordinary income; a
 trust whose payouts no export labels as distributions is counted as a dividend.
 **Instead:** the dealer's T5 is authoritative; compare with `tjs divs-sum` and `tjs dil-sum`.
-**Code:** `src/taxjson/lib/income_dating.py` — `pil_is_dividend`, `trust_units`
+**Code:** `src/taxjson/characterize/income_dating.py` — `pil_is_dividend`, `trust_units`
 
 #### Foreign return of capital is only reclassified for IBKR
 
@@ -331,7 +336,7 @@ on Dec 31, but no export says which payer is a fund. A US project keeps the pay 
 January dividend has an October-December ex date (IB accruals) or record date (Questrade, RBC), and moves
 the payments listed in `[settings] ric_january_dividends` to Dec 31 (tax-logic US-INC-DATE-RIC).
 **Instead:** list each such payment; Form 1099-DIV is authoritative.
-**Code:** `src/taxjson/lib/income_dating.py` — `ric_prior_year`
+**Code:** `src/taxjson/characterize/income_dating.py` — `ric_prior_year`
 
 #### Spin-off default
 
@@ -364,14 +369,14 @@ BUYSELL 2025-06-02 10:01:00 NEW.TO 5 CAD 20 100 0
 ```
 The sale shows on the gains report with no gain, and the shares kept keep their cost. In the US a purchase
 booked this way starts a new holding period: the old purchase dates are not carried over.
-**Code:** `src/taxjson/bin/taxjson_run.py` — `_warn_partial_carryovers`; `src/taxjson/lib/corp_actions.py` — `_emit_basis_carryover_rename`
+**Code:** `src/taxjson/pipeline/inputs.py` — `_warn_partial_carryovers`; `src/taxjson/lib/corp_actions.py` — `_emit_basis_carryover_rename`
 
 #### A merger's per-account ratios are blended
 
 When one merger shows a slightly different share ratio in each account, the ratios are folded into one
 holdings-weighted ratio (with a NOTE). Totals and the shared ACB pool are right; each account's own
 superficial-loss balance can be a fraction of a share off.
-**Code:** `src/taxjson/lib/core.py` — `_fold_per_account_rename_ratios`
+**Code:** `src/taxjson/engine/splits.py` — `_fold_per_account_rename_ratios`
 
 ### Engine scope: Canada
 
@@ -382,7 +387,20 @@ day 30, which one absorbs the denial follows a fixed order (purchases after the 
 those before it latest first), so the same loss can be permanent (registered) or deferred (taxable).
 s.53(1)(f) prescribes no allocation and CRA has published none.
 **Instead:** `tjs wash-sales` shows the purchase chosen; keep a `.tt` note of the attribution you intend.
-**Code:** `src/taxjson/lib/core.py` — `_holder_rank`
+**Code:** `src/taxjson/engine/ca/run_helpers.py` — `_sl_holder_rank`
+
+#### A sale from a replacement's position before day 30 carries part of the denial
+
+A denied loss is added to the replacements held at the end of day 30, from the later of their purchase
+and the loss sale (CA-SL-09). A sale from that position in between carries its pro-rata share of the
+addition, as any sale from one pool carries its share of the pool's ACB, though its units are not the
+ones held at day 30, and its own loss can then be denied again (a second denial row). s.54 read strictly
+would leave that sale at its own cost and put the whole amount on the shares held at day 30. The total
+is the same unless that sale's own loss is denied onto a registered or affiliated purchase (that part
+lost for good); a gain can move between years where the shares a denial lands on are sold in another
+year. taxjson keeps the pooled reading.
+**Instead:** `tjs wash-sales` lists both denials and the purchases each lands on.
+**Code:** `src/taxjson/engine/ca/denial.py` — `_sl_landing_row`; `src/taxjson/lib/tax_logic.py` — `CA_SL_09`
 
 #### RESP accounts are treated as affiliated
 
@@ -457,6 +475,18 @@ other default (such as highest cost) are not modelled, so a 1099-B computed unde
 match per lot; year totals agree only once every lot is sold.
 **Instead:** set the broker's lot method to FIFO, or reconcile by hand.
 
+#### US: a short sale's term and constructive sales (§1233, §1259)
+
+A short closed by a purchase is short-term. One closed by shares moved in from another of your taxable
+accounts takes its term from the lot delivered alone: long-term only when that lot was held more than one
+year on the day of the short sale (tax-logic US-BASIS-05). §1233(b) and (d) also look at your other
+holdings of the security that day (substantially identical property held a year or less makes a gain
+short-term; held more than a year, a loss long-term), and §1233(b)(2) restarts the holding period of such
+property: neither is modelled. A constructive sale of an appreciated position held beside a short (§1259)
+is not modelled either.
+**Instead:** check the term of a short sale's row against your other lots by hand; the run's line names
+each cover made by a move.
+
 #### US: a long and a short of one futures contract in one folder net together
 
 The US engine keeps one lot queue per symbol. Two broker accounts' exports in one account folder, one long and one
@@ -509,7 +539,7 @@ private-activity bond interest) are not in broker exports. `tjs amt` refuses in 
 §1091(a) covers "a contract or option to acquire". A call bought inside the window of a stock loss is
 warned about, but the loss stays allowed (the Canada engine enforces its call rule).
 **Instead:** treat the warning as an instruction and adjust the loss yourself.
-**Code:** `src/taxjson/lib/core.py` — `detect_option_replacement_matches`
+**Code:** `src/taxjson/engine/us/option_scan.py` — `detect_option_replacement_matches`
 
 #### US: §1091(e)(1) — a long sale after a short-cover loss is not a wash trigger
 
@@ -563,7 +593,7 @@ listing. The foreign tax credit uses the books' TAX rows (15% assumed only when 
 at 15% of each security's foreign dividends and at the Canadian tax on them (forms T2209 and T2036), all foreign
 dividends taken as one country's: a dividend classified on the wrong side moves both.
 **Instead:** `tjs tips` flags a Canadian payer held on its US line when it sees the `.TO` line.
-**Code:** `src/taxjson/bin/taxjson_run.py` — `_issuer_facts`, `_issuer_split`
+**Code:** `src/taxjson/cli/summaries.py` — `_issuer_facts`, `_issuer_split`
 
 #### Credits, OAS recovery tax and AMT adjustments outside the books
 
@@ -589,7 +619,10 @@ instalments you pay.
 
 #### FX on foreign cash: ledger v2 limits
 
-The default ledger (v1) is flagged NOT RELIABLE everywhere and never shows a reportable figure. The opt-in
+The default ledger (v1) is flagged NOT RELIABLE everywhere and never shows a reportable figure. Neither
+ledger is part of what 1.0.0 promises ([upgrading.md](upgrading.md#what-100-keeps)): `tjs fx-cash`, the
+`fx_cash_*` keys, the `.tt` cash lines (`FXCONV`, `CASHMOVE`, `CASHOPEN`, `CASHBAL`, `CASHBOOK`) and a
+lock's `fx_cash_v2` part may change in any release while v2 is audited. The opt-in
 ledger v2 (`fx_cash_ledger = "v2"`) refuses (NOT COMPUTED, each problem listed) rather than guess, so on
 real books it needs `.tt` lines for what no export carries: a `CASHOPEN` for its first year, a `CASHMOVE`
 for each deposit and withdrawal (or `fx_cash_inflow_cost = "spot"`), and a `CASHBAL` for every account
@@ -606,7 +639,7 @@ same-day move through three of your own accounts (a to b to c) when b's broker d
 arrival (a small FX result on the borrow).
 **Instead:** use v2 only with those lines declared; it stays opt-in until it has been checked on real
 books.
-**Code:** `src/taxjson/lib/fx_cash_v2.py` — `build`; `src/taxjson/lib/cash_events.py` — `collect`; `src/taxjson/bin/taxjson_fx_cash.py` — `_non_cash`
+**Code:** `src/taxjson/lib/fx_cash_v2.py` — `build`; `src/taxjson/lib/cash_events.py` — `collect`; `src/taxjson/lib/cash_legs.py` — `_non_cash`
 
 ### Reports and project files
 
@@ -621,7 +654,7 @@ labels its role at the top. Their TOTAL PROCEEDS / TOTAL COST lines are the engi
 covers and written-option buy-backs count as negative proceeds), not Schedule 3 cells.
 **Instead:** take Schedule 3 / Form 8949 figures from `tjs form-export` or the FOR THE RETURN block of
 `tjs sum`.
-**Code:** `src/taxjson/bin/taxjson_run.py` — `stage_account`, `stage_blended_wash_pass`
+**Code:** `src/taxjson/pipeline/stages.py` — `stage_account`, `stage_blended_wash_pass`
 
 #### Futures are booked on their settled P/L
 
@@ -697,7 +730,7 @@ The figures go on real returns, so correctness is checked in layers, not by test
   ACB or FIFO and the superficial-loss / wash-sale decision, and ties each figure to the pipeline's
   saved gains; any disagreement exits 1. The other filing commands (`sum`, `carryover`, `form-export`,
   `t1135`) are checked against it.
-- **12,500+ tests** (`scripts/ci.sh` prints the exact count): every fix lands with a regression test that
+- **15,500+ tests** (`scripts/ci.sh` prints the exact count): every fix lands with a regression test that
   failed before it. This figure is the one the deck and the website quote (`tests/test_deck.py`).
 - **Property fuzzers.** Seeded generators build thousands of random books per run and check
   conservation, determinism and ordering laws (the engine, custody transfers, settlement-lag and split

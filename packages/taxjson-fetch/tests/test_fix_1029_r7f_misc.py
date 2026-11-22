@@ -4,7 +4,7 @@ network. Synthetic numbers, account ids and tickers (SYN) only; each test's
 files live in a folder of their own.
 """
 # First: puts the plugin, the core and its test helpers on sys.path.
-import _support  # noqa: F401
+import _bootstrap  # noqa: F401
 import contextlib
 import io
 import tempfile
@@ -15,10 +15,10 @@ from unittest.mock import patch
 
 from taxjson_fetch import api
 from taxjson_fetch import command as fc
-from taxjson.lib.brokerages.questrade import questrade_cash_events
+from _support.parser_cash import parsed_cash_events
 
-from test_fix_1029_r7_fetch import NUMBER, SESSION, _act, _qt_request
-from test_fix_1029_r7e_fetch import _DEP, _DIV, _FX, _parser_refuses
+from _questrade_fetch import (NUMBER, SESSION, _DEP, _DIV, _FX, _act,
+                              _parser_refuses, _qt_request)
 
 _LFJ = {**_DEP, "action": "LFJ", "type": "Other"}
 _TF6 = {**_DEP, "action": "TF6", "type": "Transfers"}
@@ -73,7 +73,7 @@ class TestACashRowTheLedgerCannotUseBlocksTheTrim(unittest.TestCase):
                                                date(2025, 6, 30))), \
                     contextlib.redirect_stderr(err):
                 res = fc.run(req)
-            events = questrade_cash_events(folder / "manual.csv")
+            events = parsed_cash_events("questrade", folder / "manual.csv")
             return res, events, err.getvalue()
 
     def test_the_gate_names_the_row(self):
@@ -118,10 +118,27 @@ class TestACashRowTheLedgerCannotUseBlocksTheTrim(unittest.TestCase):
         self.assertEqual((out.getvalue(), err.getvalue()), ("", ""))
 
     def test_a_row_that_is_no_cash_row_is_the_parsers_alone(self):
-        # A purchase's cash is not the ledger's: the reader has no say.
-        for bad in ({"price": "abc"}, {"netAmount": None}, {"currency": None}):
+        # A purchase's cash is not the ledger's: the reader has no say. The
+        # parse refuses each alone; the reader answered False for them, so
+        # the gate does too (TJ-4445 restores True for a cash row only).
+        for bad in ({"price": "abc"}, {"netAmount": None}, {"currency": None},
+                    {"quantity": "abc"}):
             row = {**_act("2025-06-02", "2025-06-03", 10, 10), **bad}
-            self.assertFalse(api._qt_cash_reader_loses(row), bad)
+            self.assertFalse(api._qt_cash_ledger_loses(row), bad)
+
+    def test_a_cash_row_the_parse_refuses_is_lost_alone(self):
+        # TJ-4445: the parse refuses each of these alone, and the gate
+        # answers True as the reader did (it refused a cash row's unreadable
+        # Quantity or Net Amount), not leaning on its caller
+        # (`_qt_parser_refuses`) to name the refusal. The first is the
+        # review's repro.
+        for row in ({**_DEP, "action": "", "type": "Transfers", "quantity": "abc",
+                     "netAmount": 0.004},
+                    {**_TF6, "quantity": 5, "netAmount": "abc"},
+                    {**_DEP, "quantity": "abc"}):
+            with self.subTest(row=row):
+                self.assertTrue(_parser_refuses([row]))
+                self.assertTrue(api._qt_cash_ledger_loses(row))
 
 
 if __name__ == "__main__":

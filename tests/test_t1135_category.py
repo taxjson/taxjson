@@ -13,12 +13,13 @@ import unittest
 from unittest import mock
 
 from tax_rules import rule
+from taxjson.rules import ids as R
 from taxjson.bin.taxjson_t1135 import (main, property_category,
                                        render_brief, render_report)
 from taxjson.lib import tobase_map as TB
 from taxjson.lib.ticker_map import side_rules_from_text
-from test_fix_a2_pins2_t1135 import _r, _report
-from test_tobase_map import _master, _project
+from _support.ca_t1135_walk import _r, _report
+from _support.symbols_interlisted_master import _master, _project
 
 FU = "BBG000000U01"
 UNITS = {FU: {"name": "QZ UNITS LP", "kind": "unit",
@@ -34,7 +35,7 @@ def _buys(*symbols):
 
 class TestTakenFromTheInstrument(unittest.TestCase):
 
-    @rule("CA-RPT-18")
+    @rule(R.CA_RPT_18)
     def test_share_option_future_crypto_units(self):
         self.assertEqual(property_category("QZA.US", {}, {}), (2, "listing"))
         self.assertEqual(property_category(CALL, {}, {}), (6, "derivative"))
@@ -48,7 +49,7 @@ class TestTakenFromTheInstrument(unittest.TestCase):
                                            {"QZU.US": "unit"}),
                          (6, "ticker.map"))
 
-    @rule("CA-RPT-18")
+    @rule(R.CA_RPT_18)
     def test_every_row_carries_its_category(self):
         rep = _report(_buys("QZA.US", "QZC") + [
             _r("BUYSELL", "2025-02-03", CALL, 1, -300.0)])
@@ -65,14 +66,14 @@ class TestTakenFromTheInstrument(unittest.TestCase):
 
 class TestTickerMapLine(unittest.TestCase):
 
-    @rule("CA-RPT-18")
+    @rule(R.CA_RPT_18)
     def test_an_optional_category_after_the_country(self):
         side = side_rules_from_text("T1135 QZE.US USA 4\nT1135 QZW.US CA\n")
         self.assertEqual(side.problems, [])
         self.assertEqual(side.t1135, {"QZE.US": "USA", "QZW.US": "CA"})
         self.assertEqual(side.t1135_category, {"QZE.US": 4})
 
-    @rule("CA-RPT-18")
+    @rule(R.CA_RPT_18)
     def test_a_category_the_form_has_not_stops_t1135(self):
         for text, words in (
                 ("T1135 QZE.US USA 7\n", "categories 1 to 6"),
@@ -86,7 +87,7 @@ class TestTickerMapLine(unittest.TestCase):
                 self.assertEqual(len(side.t1135_problems), 1)
                 self.assertIn(words, side.t1135_problems[0])
 
-    @rule("CA-RPT-18")
+    @rule(R.CA_RPT_18)
     def test_the_category_follows_a_rename_and_a_booked_listing(self):
         rows = _buys("QZE.US") + [
             _r("SPLIT", "2025-05-01", "QZE.US", 1.0, 0.0,
@@ -120,7 +121,7 @@ class TestMasterUnits(unittest.TestCase):
             self.assertEqual(rc, 0)
             return json.loads(out.getvalue())
 
-    @rule("CA-RPT-18")
+    @rule(R.CA_RPT_18)
     def test_units_are_named_for_the_user_to_set(self):
         rep = self._run()
         row = rep["properties"][0]
@@ -133,7 +134,7 @@ class TestMasterUnits(unittest.TestCase):
         self.assertIn("QZU.US: units in the interlisted master",
                       " ".join(render_report(rep).split()))
 
-    @rule("CA-RPT-18")
+    @rule(R.CA_RPT_18)
     def test_a_ticker_map_line_sets_their_category(self):
         rep = self._run(ticker="T1135 QZU.US BMU 6\n")
         row = rep["properties"][0]

@@ -1,0 +1,450 @@
+{
+  "accounts": {
+    "crypto": {
+      "disallowed": 0.0,
+      "dispositions": 4,
+      "dividend": 23.56,
+      "form_lines": {
+        "13199": 0.0,
+        "13200": 0.0,
+        "15199": 14141.25,
+        "15300": 670.53
+      },
+      "income": 23.56,
+      "lt_gain": 0.0,
+      "pil": 0.0,
+      "proceeds": 14083.52,
+      "realized": 670.53,
+      "st_gain": 0.0,
+      "tainted": 0
+    },
+    "ib": {
+      "disallowed": 117.45,
+      "dispositions": 2,
+      "dividend": 101.25,
+      "form_lines": {
+        "10689": 27135.0,
+        "10690": 132.3,
+        "13199": 1883.25,
+        "13200": 0.0
+      },
+      "income": 101.25,
+      "lt_gain": 0.0,
+      "pil": 0.0,
+      "proceeds": 29015.55,
+      "realized": 132.3,
+      "st_gain": 0.0,
+      "tainted": 0
+    },
+    "margin": {
+      "disallowed": 394.2,
+      "dispositions": 3,
+      "dividend": 675.0,
+      "form_lines": {
+        "13199": 1296.0,
+        "13200": 66.15,
+        "15199": 202.5,
+        "15300": 201.08
+      },
+      "income": 675.0,
+      "lt_gain": 0.0,
+      "pil": 0.0,
+      "proceeds": 1293.3,
+      "realized": 267.23,
+      "st_gain": 0.0,
+      "tainted": 0
+    },
+    "questrade": {
+      "disallowed": 0.0,
+      "dispositions": 2,
+      "dividend": 24.3,
+      "form_lines": {
+        "10689": 18326.25,
+        "10690": 91.23,
+        "13199": 18225.0,
+        "13200": -10.02
+      },
+      "income": 24.3,
+      "lt_gain": 0.0,
+      "pil": 0.0,
+      "proceeds": 36537.89,
+      "realized": 81.2,
+      "st_gain": 0.0,
+      "tainted": 0
+    },
+    "webull": {
+      "disallowed": 0.0,
+      "dispositions": 2,
+      "dividend": 0.0,
+      "form_lines": {
+        "10689": 18326.25,
+        "10690": 91.23,
+        "13199": 0.0,
+        "13200": 0.0,
+        "15199": 2295.0,
+        "15300": 175.84
+      },
+      "income": 0.0,
+      "lt_gain": 0.0,
+      "pil": 0.0,
+      "proceeds": 20601.07,
+      "realized": 267.06,
+      "st_gain": 0.0,
+      "tainted": 0
+    }
+  },
+  "basis": "wash-adjusted",
+  "boundary_rows": [
+    {
+      "account": "crypto",
+      "action": "BUYSELL",
+      "date": "2024-12-03",
+      "date_settle": "2024-12-03",
+      "group": "crypto",
+      "net": 2827.63,
+      "quantity": -0.5,
+      "symbol": "ETH",
+      "tax_date": "2024-12-03"
+    },
+    {
+      "account": "ib",
+      "action": "BUYSELL",
+      "date": "2024-12-05",
+      "date_settle": "2024-12-06",
+      "group": "equity",
+      "net": 1823.85,
+      "quantity": 10.0,
+      "symbol": "NVDA.US",
+      "tax_date": "2024-12-06"
+    },
+    {
+      "account": "questrade",
+      "action": "BUYSELL",
+      "date": "2024-12-10",
+      "date_settle": "2024-12-12",
+      "group": "equity",
+      "net": 2854.95,
+      "quantity": 30.0,
+      "symbol": "SHOP.TO",
+      "tax_date": "2024-12-12"
+    },
+    {
+      "account": "webull",
+      "action": "BUYSELL",
+      "date": "2024-12-11",
+      "date_settle": "2024-12-12",
+      "group": "equity",
+      "net": 2854.95,
+      "quantity": 30.0,
+      "symbol": "SHOP.TO",
+      "tax_date": "2024-12-12"
+    },
+    {
+      "account": "webull",
+      "action": "BUYSELL",
+      "date": "2024-12-13",
+      "date_settle": "2024-12-16",
+      "group": "equity",
+      "net": 2281.5,
+      "quantity": -10.0,
+      "symbol": "ABCD270219C00045000.US",
+      "tax_date": "2024-12-16"
+    },
+    {
+      "account": "crypto",
+      "action": "BUYSELL",
+      "date": "2024-12-15",
+      "date_settle": "2024-12-15",
+      "group": "crypto",
+      "net": 1305.72,
+      "quantity": -0.25,
+      "symbol": "ETH",
+      "tax_date": "2024-12-15"
+    }
+  ],
+  "carryforwards": {
+    "computed_by": "tjs estimate",
+    "minimum_tax": {
+      "closing": 0.0,
+      "closing_by_year": {},
+      "created": 0.0,
+      "expired_by_year": {},
+      "opening_by_year": {},
+      "opening_source": "none",
+      "other_income": 61000.0,
+      "other_income_entered": true,
+      "province": "ON",
+      "recovered_by_year": {},
+      "recovered_federal": 0.0,
+      "recovered_federal_tax": 0.0,
+      "recovered_provincial": 0.0,
+      "recovered_provincial_credit": 0.0,
+      "recovered_provincial_surtax": 0.0
+    },
+    "net_capital_loss": {
+      "applied": 0.0,
+      "closing": 0.0,
+      "created": 0.0,
+      "opening": 0.0,
+      "opening_source": "none"
+    },
+    "version": 1
+  },
+  "closed_at": "<stamp>",
+  "country": "canada",
+  "date_basis": "settle",
+  "dispositions": [
+    {
+      "account": "crypto",
+      "cost": 3250.83,
+      "date": "2024-10-08",
+      "date_settle": "2024-10-08",
+      "denied": 0.0,
+      "gain": 30.21,
+      "proceeds": 3281.04,
+      "qty": 0.05,
+      "symbol": "BTC"
+    },
+    {
+      "account": "crypto",
+      "cost": 6501.67,
+      "date": "2024-11-08",
+      "date_settle": "2024-11-08",
+      "denied": 0.0,
+      "gain": 167.47,
+      "proceeds": 6669.14,
+      "qty": 0.1,
+      "symbol": "BTC"
+    },
+    {
+      "account": "crypto",
+      "cost": 2440.33,
+      "date": "2024-12-03",
+      "date_settle": "2024-12-03",
+      "denied": 0.0,
+      "gain": 387.3,
+      "proceeds": 2827.63,
+      "qty": 0.5,
+      "symbol": "ETH"
+    },
+    {
+      "account": "crypto",
+      "cost": 1220.16,
+      "date": "2024-12-15",
+      "date_settle": "2024-12-15",
+      "denied": 0.0,
+      "gain": 85.56,
+      "proceeds": 1305.72,
+      "qty": 0.25,
+      "symbol": "ETH"
+    },
+    {
+      "account": "ib",
+      "cost": 27001.35,
+      "date": "2024-06-18",
+      "date_settle": "2024-06-20",
+      "denied": 0.0,
+      "gain": 132.3,
+      "proceeds": 27133.65,
+      "qty": 50.0,
+      "symbol": "MSFT.US"
+    },
+    {
+      "account": "ib",
+      "cost": 1999.35,
+      "date": "2024-11-20",
+      "date_settle": "2024-11-21",
+      "denied": 117.45,
+      "gain": 0.0,
+      "proceeds": 1881.9,
+      "qty": 10.0,
+      "symbol": "NVDA.US"
+    },
+    {
+      "account": "margin",
+      "cost": 946.35,
+      "date": "2024-08-05",
+      "date_settle": "2024-08-06",
+      "denied": 394.2,
+      "gain": 0.0,
+      "proceeds": 552.15,
+      "qty": 20.0,
+      "symbol": "INTC.US"
+    },
+    {
+      "account": "margin",
+      "cost": 675.0,
+      "date": "2024-09-16",
+      "date_settle": "2024-09-17",
+      "denied": 0.0,
+      "gain": 66.15,
+      "proceeds": 741.15,
+      "qty": 25.0,
+      "symbol": "SPNCO.US"
+    },
+    {
+      "account": "margin",
+      "cost": -201.08,
+      "date": "2024-11-04",
+      "date_settle": "2024-11-05",
+      "denied": 0.0,
+      "gain": 201.08,
+      "proceeds": 0.0,
+      "qty": 1.0,
+      "symbol": "SAMPW250117C00030000.US"
+    },
+    {
+      "account": "questrade",
+      "cost": 18228.34,
+      "date": "2024-05-10",
+      "date_settle": "2024-05-14",
+      "denied": 0.0,
+      "gain": 91.23,
+      "proceeds": 18319.57,
+      "qty": 75.0,
+      "symbol": "AAPL.US"
+    },
+    {
+      "account": "questrade",
+      "cost": 18228.34,
+      "date": "2024-11-05",
+      "date_settle": "2024-11-07",
+      "denied": 0.0,
+      "gain": -10.02,
+      "proceeds": 18218.32,
+      "qty": 75.0,
+      "symbol": "AAPL.US"
+    },
+    {
+      "account": "webull",
+      "cost": 18228.34,
+      "date": "2024-05-08",
+      "date_settle": "2024-05-10",
+      "denied": 0.0,
+      "gain": 91.23,
+      "proceeds": 18319.57,
+      "qty": 75.0,
+      "symbol": "AAPL.US"
+    },
+    {
+      "account": "webull",
+      "cost": 2105.66,
+      "date": "2024-12-13",
+      "date_settle": "2024-12-16",
+      "denied": 0.0,
+      "gain": 175.84,
+      "proceeds": 2281.5,
+      "qty": 10.0,
+      "symbol": "ABCD270219C00045000.US"
+    }
+  ],
+  "frozen": {
+    "books": {
+      "work/crypto_gains_wash.json": "<sha256 ok>",
+      "work/ib_gains_wash.json": "<sha256 ok>",
+      "work/margin_gains_wash.json": "<sha256 ok>",
+      "work/questrade_gains_wash.json": "<sha256 ok>",
+      "work/webull_gains_wash.json": "<sha256 ok>"
+    },
+    "copied": 10,
+    "inputs": {
+      "inputs/crypto/coinbase_demo.csv": "<sha256 ok>",
+      "inputs/crypto/kraken_demo.csv": "<sha256 ok>",
+      "inputs/ib/ib_demo.csv": "<sha256 ok>",
+      "inputs/lira/questrade_lira_demo.csv": "<sha256 ok>",
+      "inputs/margin/ib_scenarios_demo.csv": "<sha256 ok>",
+      "inputs/margin/manifest.json": "<sha256 ok>",
+      "inputs/questrade/questrade_demo.csv": "<sha256 ok>",
+      "inputs/rrsp/ib_rrsp_demo.csv": "<sha256 ok>",
+      "inputs/tfsa/rbc_direct_demo.csv": "<sha256 ok>",
+      "inputs/webull/webull_demo.csv": "<sha256 ok>",
+      "taxjson.toml": "run-settings:bd5d7876667b7986867633f5c09265fad1612d6e844911562d725cb30f64b58d",
+      "ticker.map": "<sha256 ok>",
+      "tobase.map": "<sha256 ok>"
+    },
+    "inputs_dir": "../inputs",
+    "tobase_map": "../tobase.map"
+  },
+  "option_timing": {
+    "option_buyback_loss_superficial": false,
+    "option_grant_since": 2024,
+    "option_premium_timing": "grant"
+  },
+  "record_version": 2,
+  "return_row": {
+    "disallowed": 511.65,
+    "realized": 1418.33
+  },
+  "schema_version": 2,
+  "settle_next_year": [],
+  "tainted_counts_manual": true,
+  "taxjson": {
+    "commit": "<build>",
+    "modified": "<build>",
+    "release": "<build>",
+    "version": "<build>"
+  },
+  "totals": {
+    "disallowed": 511.65,
+    "dispositions": 13,
+    "dividend": 824.11,
+    "income": 824.11,
+    "lt_gain": 0.0,
+    "pil": 0.0,
+    "proceeds": 101531.33,
+    "realized": 1418.33,
+    "st_gain": 0.0,
+    "tainted": 0
+  },
+  "year": 2024,
+  "year_end": {
+    "crypto": {
+      "BTC": {
+        "acb": 3250.83,
+        "deferred": 0.0,
+        "qty": 0.05
+      },
+      "ETH": {
+        "acb": 3685.87,
+        "deferred": 0.0,
+        "qty": 0.7552
+      }
+    },
+    "equity": {
+      "AAPL.US": {
+        "acb": 18228.34,
+        "deferred": 0.0,
+        "qty": 75.0
+      },
+      "NVDA.US": {
+        "acb": 1941.3,
+        "deferred": 117.45,
+        "qty": 10.0
+      },
+      "PARNT.US": {
+        "acb": 5401.35,
+        "deferred": 0.0,
+        "qty": 100.0
+      },
+      "SAMPG.US": {
+        "acb": -498.15,
+        "deferred": 0.0,
+        "qty": -20.0
+      },
+      "SAMPW250117C00030000.US": {
+        "acb": -201.08,
+        "deferred": 0.0,
+        "qty": -1.0
+      },
+      "SHOP.TO": {
+        "acb": 5709.9,
+        "deferred": 0.0,
+        "qty": 60.0
+      }
+    }
+  },
+  "year_end_shorts": {
+    "crypto": {},
+    "equity": {}
+  }
+}

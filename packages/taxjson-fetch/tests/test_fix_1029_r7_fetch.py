@@ -5,7 +5,7 @@ network. Synthetic numbers, account ids and tickers (SYN) only; each
 test's files live in a folder of their own.
 """
 # First: puts the plugin, the core and its test helpers on sys.path.
-import _support  # noqa: F401
+import _bootstrap  # noqa: F401
 import contextlib
 import io
 import json
@@ -19,12 +19,8 @@ from unittest.mock import patch
 
 from taxjson_fetch import api
 from taxjson_fetch import command as fc
-from taxjson.lib import markets
-from taxjson.lib.positions_reports import read_positions
 
-NUMBER = "99900001"   # pii-ok (synthetic)
-SESSION = {"api_server": "https://api01.iq.questrade.com",
-           "access_token": "x"}
+from _questrade_fetch import NUMBER, SESSION, _act, _live, _qt_request
 
 # A synthetic IB statement (section,Header/Data CSV).
 HEAD = ("Statement,Header,Field Name,Field Value\n"
@@ -235,32 +231,6 @@ class TestFlexOneAccount(unittest.TestCase):
                 one)
 
 
-def _act(day, settle, qty, price, action="Buy", **kw):
-    gross = qty * price
-    a = dict(tradeDate=f"{day}T00:00:00-05:00",
-             transactionDate=f"{settle}T00:00:00-05:00", action=action,
-             symbol="SYN.TO", description="SYNTHETIC CORP", quantity=qty,
-             price=price, grossAmount=-gross, commission=0,
-             netAmount=-gross, currency="CAD", type="Trades")
-    a.update(kw)
-    return a
-
-
-def _qt_request(root, **args):
-    said = []
-    a = dict(refresh_token="", dry_run=False, days=None, year=None,
-             from_date="2025-06-01", positions=False, trim_overlap=True)
-    a.update(args)
-    req = SimpleNamespace(
-        args=SimpleNamespace(**a), root=root, work=root / "work",
-        config={"settings": {"year": 2025, "country": "canada"},
-                "accounts": {"margin": {"type": "taxable",
-                                        "brokerage": "questrade",
-                                        "account": NUMBER}}},
-        accounts=["margin"], say=said.append, json=True)
-    return req, said
-
-
 class TestTrimNeedsUsableRows(unittest.TestCase):
     """TJ-0868: --trim-overlap removed a manual export's valid rows while
     the fetched replacement had a blank required amount."""
@@ -369,53 +339,6 @@ class TestNumericSpellingOverlap(unittest.TestCase):
         other = api.qt_to_csv([dict(b, netAmount=-101.0)], NUMBER)
         merged, added = fc._merge_csv_text(old, other)
         self.assertEqual(added, 1)
-
-
-def _live(positions, book, *, sizes=None, lookup=None, ticker_map=""):
-    """The live-holdings fetch of one account. Returns (snapshot text,
-    rows, said, symbol-lookup calls)."""
-    calls = []
-
-    def sizes_of(_session, ids, _http):
-        calls.append(("size", sorted(ids)))
-        return dict(sizes or {})
-
-    def items_of(_session, ids, _http):
-        calls.append(("listing", sorted(ids)))
-        if isinstance(lookup, Exception):
-            raise lookup
-        return dict(lookup or {})
-    said = []
-    with tempfile.TemporaryDirectory() as td:
-        root = Path(td)
-        work = root / "work"
-        work.mkdir()
-        (work / "margin_base.json").write_text(
-            json.dumps({"transactions": book}))
-        if ticker_map:
-            (root / "ticker.map").write_text(ticker_map)
-            markets.use_ticker_map(root / "ticker.map")
-        cfg = {"settings": {"year": 2026},
-               "accounts": {"margin": {"brokerage": "questrade",
-                                       "account": NUMBER}}}
-        try:
-            with patch.object(fc, "_qt_open_session",
-                              return_value=(dict(SESSION), "x")), \
-                    patch.object(api, "qt_positions",
-                                 return_value=positions), \
-                    patch.object(api, "qt_contract_sizes",
-                                 side_effect=sizes_of), \
-                    patch.object(api, "qt_option_currencies",
-                                 side_effect=items_of), \
-                    contextlib.redirect_stderr(io.StringIO()):
-                fc._qt_live_holdings(root, work, cfg, ["margin"], None,
-                                     said.append)
-        finally:
-            markets.use_ticker_map(None)
-        snap = root / "holdings" / "margin_live_holdings.toml"
-        text = snap.read_text()
-        rows = read_positions(snap).rows
-    return text, rows, said, calls
 
 
 OPT = {"symbol": "SYN20Nov26C5.00", "symbolId": 12345, "openQuantity": 1,

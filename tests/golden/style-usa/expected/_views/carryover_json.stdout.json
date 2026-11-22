@@ -1,0 +1,24 @@
+{
+  "country": "usa",
+  "currency": "USD",
+  "final_carryforward": 0.0,
+  "final_lt_carryover": 0.0,
+  "final_st_carryover": 0.0,
+  "first_transaction_year": 2024,
+  "project_year": 2024,
+  "rows": [
+    {
+      "dispositions": 17,
+      "lt_carryover": 0.0,
+      "net_gain": 329.25,
+      "net_lt": 0.0,
+      "net_st": 329.25,
+      "ordinary_income_offset": 0.0,
+      "prior_year": false,
+      "st_carryover": 0.0,
+      "year": 2024
+    }
+  ],
+  "schema_version": 1,
+  "scope_note": "Net ST/LT count the dispositions in these books only. Capital gain distributions (1099-DIV box 2a -> Schedule D line 13) are NOT included; in a loss year they change the carryover shown."
+}

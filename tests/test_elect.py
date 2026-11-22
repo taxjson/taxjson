@@ -7,7 +7,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-from taxjson.bin.taxjson_run import cmd_elect
+from taxjson.cli.elect import cmd_elect
 
 _CONFIG = """\
 [settings]
@@ -117,7 +117,7 @@ class TestElectSet(unittest.TestCase):
                                   redo=False, reset=False, event=None,
                                   set=setarg, hint=hints or [])
         out = io.StringIO()
-        from taxjson.bin.taxjson_run import cmd_elect
+        from taxjson.cli.elect import cmd_elect
         with redirect_stdout(out):
             cmd_elect(args)
         return out.getvalue()

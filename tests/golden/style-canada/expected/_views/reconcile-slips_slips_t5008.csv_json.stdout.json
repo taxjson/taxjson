@@ -1,0 +1,60 @@
+{
+  "clean": false,
+  "counts": {
+    "ambiguous_listing": 0,
+    "mismatch": 1,
+    "missing_from_computed": 1,
+    "missing_from_slip": 4,
+    "no_slip_expected": 1,
+    "ok": 2,
+    "unknown_proceeds": 0
+  },
+  "rows": [
+    {
+      "detail": "computed 2.0 disposition(s), proceeds 36,561.38 \u2014 no slip row (missing slip, or a non-slip disposition like a corp action)",
+      "status": "MISSING_FROM_SLIP",
+      "symbol": "AAPL.US"
+    },
+    {
+      "detail": "computed 1.0 disposition(s), proceeds 27,135.00 \u2014 no slip row (missing slip, or a non-slip disposition like a corp action)",
+      "status": "MISSING_FROM_SLIP",
+      "symbol": "MSFT.US"
+    },
+    {
+      "detail": "matches NET proceeds (slip appears net of commissions)",
+      "status": "OK",
+      "symbol": "NVDA"
+    },
+    {
+      "detail": "proceeds off by +5.00 (slip 7,700.00 vs computed gross 7,695.00 / net 7,693.65)",
+      "status": "MISMATCH",
+      "symbol": "QZQ"
+    },
+    {
+      "detail": "computed 1.0 disposition(s), proceeds 405.00 \u2014 no slip row (missing slip, or a non-slip disposition like a corp action)",
+      "status": "MISSING_FROM_SLIP",
+      "symbol": "QZQ240920C00030000.US"
+    },
+    {
+      "detail": "computed 1.0 disposition(s), proceeds 270.00 \u2014 no slip row (missing slip, or a non-slip disposition like a corp action)",
+      "status": "MISSING_FROM_SLIP",
+      "symbol": "QZQ241220C00035000.US"
+    },
+    {
+      "detail": "written option(s) still open at the year end: the 202.50 premium is reported this year without a slip (grant timing, s.49(1)); the broker's slip reports it when the contract closes",
+      "status": "NO_SLIP_EXPECTED",
+      "symbol": "QZQ250117C00040000.US"
+    },
+    {
+      "detail": "matches NET proceeds (slip appears net of commissions)",
+      "status": "OK",
+      "symbol": "SAMPA"
+    },
+    {
+      "detail": "slip has 1.0 row(s), proceeds 120.00 \u2014 nothing computed (dropped CSV rows, a missing statement, or a symbol the books spell differently?)",
+      "status": "MISSING_FROM_COMPUTED",
+      "symbol": "ZZQX"
+    }
+  ],
+  "schema_version": 1
+}

@@ -1,0 +1,20 @@
+{
+  "basis": "wash-adjusted",
+  "currency": "CAD",
+  "rows": [
+    {
+      "contracts": 1,
+      "cost": 0.0,
+      "gain": 469.8,
+      "proceeds": 469.8,
+      "qty": 1.0,
+      "underlying": "QZQ.US"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "tax year 2024",
+  "sheltered_gain": 0.0,
+  "tainted_skipped": 0,
+  "taxable_gain": 469.8,
+  "total_gain": 469.8
+}

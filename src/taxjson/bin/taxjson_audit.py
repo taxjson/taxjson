@@ -40,7 +40,6 @@ project-level front door is `tjs audit`, which resolves every
 path below from the project.
 """
 
-from taxjson.lib.out import exit_text
 from taxjson.lib.stage_msg import emit_line
 import argparse
 import json
@@ -48,21 +47,26 @@ import re
 import sys
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from taxjson.lib.cli_diag import guard_main, tax_year
+from taxjson.lib.json_contract import versioned
 from taxjson.bin.taxjson_convert_currency import (LOOKBACK_DAYS,
                                                   default_rate_for,
                                                   positive_rate)
 from taxjson.bin.taxjson_convert_currency import rate_date as row_rate_date
-from taxjson.lib.core import (get_tax_rules, is_option_symbol,
-                              load_transactions)
+from taxjson.engine.by_country import get_tax_rules
+from taxjson.lib.tx_load import load_transactions
+from taxjson.lib.option_symbols import is_option_symbol
 from taxjson.lib.country import (add_country_argument, canonical_country,
                                  refuse_foreign_flags)
 from taxjson.lib.pipeline import (GainsRequest, apply_roc_record_dates,
                                   engine_options, loss_overrides_from_args,
                                   prepare_books)
 from taxjson.lib.trace_format import render_report_trace
+from taxjson.model.result import GainRow
+from taxjson.model import money as M
+from taxjson.lib import out as _out
 
 # Money agreement threshold for every cross-check in this tool: the
 # books are kept to the cent, so half a cent of float drift is the
@@ -79,12 +83,12 @@ def _load_doc(path: Path) -> Dict[str, Any]:
     # Bare transaction lists are legal input to every other tool
     # (load_transactions accepts them) and are normalized; any other
     # shape — {"transactions": 5}, rows that are not objects — is a
-    # one-line refusal, not a traceback (audit S042-18).
+    # one-line refusal, not a traceback (audit S042-18): main's guard's,
+    # naming the file once, with exit 2. Exit 1 is a check that
+    # disagrees, and `tjs audit --json` added "produced no JSON (rc=1)"
+    # (backlog TJ-3006).
     from taxjson.lib.json_input import read_work_doc
-    try:
-        return read_work_doc(path)
-    except (OSError, ValueError) as e:
-        sys.exit(exit_text(f"taxjson-audit: cannot read {path}: {e}"))
+    return read_work_doc(path)
 
 
 # The source files the run writes itself rather than parses, by what
@@ -120,7 +124,7 @@ def _source_label(path: Path, meta: Dict[str, Any]) -> str:
 
 
 # Shares per listed equity option contract (the per-share quote a
-# statement prints; the engine's own 100x, core.py).
+# statement prints; the engine's own 100x, lib/contract_size.py).
 OPTION_MULTIPLIER = 100
 
 
@@ -131,10 +135,10 @@ def build_source_index(paths: List[Path]) -> Dict[str, List[Dict[str, Any]]]:
 
     A row its file gives no id (a corporate action's rows, a transfer
     in the run booked) is indexed under the id the books gave it: the
-    merge computes it from the row's content (core.TaxTransaction.
-    compute_id). It was skipped, so every such row read as one with no
-    parsed row (backlog TJ-0359)."""
-    from taxjson.lib.core import coerce_transaction_row
+    merge computes it from the row's content (model/transaction.py
+    TaxTransaction.compute_id). It was skipped, so every such row read
+    as one with no parsed row (backlog TJ-0359)."""
+    from taxjson.lib.tx_load import coerce_transaction_row
     index: Dict[str, List[Dict[str, Any]]] = {}
     for p in paths:
         doc = _load_doc(p)
@@ -274,7 +278,10 @@ def money_lineage(rid: str, raw: Dict[str, Any], base_row: Dict[str, Any],
         # A futures fill converts its settled P/L, not the notional the
         # broker row carries (lib/futures.py).
         nominal = (futures_native or {}).get(rid, float("nan"))
-    computed = nominal * float(rate)
+    # The product as the converter takes it (engine/rows.convert_currency:
+    # the amount's Decimal times the rate), exact: the float product
+    # printed its binary error in --json (TJ-4930).
+    computed = float(M.of(nominal) * rate)
     # Tolerance: the converter multiplied the same floats, so only
     # re-derivation slack (repr round-trip) is allowed.
     ties = abs(computed - book) <= max(TIE, abs(book) * 1e-9)
@@ -338,7 +345,7 @@ def _row_day(row: Dict[str, Any]) -> str:
     """The earliest day a row can act on the pool: its trade or
     settlement date, or the record date a return of capital paid later
     lowers the cost on (Canada, s.53(2)(h): the engine dates it there,
-    lib/income_dating roc_date). A ROC paid more than the window after
+    characterize/income_dating roc_date). A ROC paid more than the window after
     the last audited sale, with a record date before it, was left out
     of the pool check while it changed the audited gain (backlog
     TJ-0766)."""
@@ -436,7 +443,7 @@ def row_origin(row: Dict[str, Any], *,
     ... cost=unknown line, a corporate action), else the stage. Rows
     with no parsed row were counted with no word on what they were
     (backlog TJ-0359)."""
-    from taxjson.lib import core as _core
+    from taxjson.lib import row_types as _rt
     rid = str(row.get("id") or "")
     desc = str(row.get("description") or "").strip()
     typ = str(row.get("type") or "")
@@ -476,16 +483,16 @@ def row_origin(row: Dict[str, Any], *,
                 + (f" ({m.group(1)})" if m else "")
                 + ": units held before the data, cost unknown (missing "
                   "history)")
-    if typ == _core.TRANSFER_BOOK_VALUE_TYPE:
+    if typ == _rt.TRANSFER_BOOK_VALUE_TYPE:
         return ("a transfer in, booked by the run at the book value the "
                 "broker states" + (f" ({row['source']})"
                                    if row.get("source") else ""))
-    if typ in _core.IN_KIND_TYPES:
+    if typ in _rt.IN_KIND_TYPES:
         return ("an in-kind move between a taxable and a registered "
                 "account, booked by the run")
-    if typ == _core.LOT_MOVE_TYPE:
+    if typ == _rt.LOT_MOVE_TYPE:
         return "a move between your own accounts, booked by the run"
-    if typ == _core.LISTING_JOURNAL_TYPE:
+    if typ == _rt.LISTING_JOURNAL_TYPE:
         return "a journal between two listings, booked by the run"
     if rid and rid in (filled_index or {}):
         return "a row of the crypto price stage (fill-crypto-prices)"
@@ -740,7 +747,7 @@ def _is_disposition_record(g: Dict[str, Any]) -> bool:
     A2-0316)."""
     if "gain" not in g:
         return False
-    return bool(g.get("qty")) or bool(g.get("deemed"))
+    return bool(GainRow(g).quantity) or bool(g.get("deemed"))
 
 
 def _kind(g: Dict[str, Any]) -> Tuple[str, bool, bool]:
@@ -799,10 +806,11 @@ def merge_lot_records(gains: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             merged.append(lots[0])
             continue
         agg = dict(lots[0])
-        agg["qty"] = sum(float(l.get("qty") or 0) for l in lots)
+        views = [GainRow(l) for l in lots]
+        agg["qty"] = sum(float(v.quantity or 0) for v in views)
         for f in ("gain", "raw_gain", "proceeds", "cost",
                   "disallowed_amount", "permanently_disallowed"):
-            agg[f] = sum(float(l.get(f) or 0) for l in lots)
+            agg[f] = sum(float(getattr(v, f) or 0) for v in views)
         agg["is_wash_sale"] = any(l.get("is_wash_sale") for l in lots)
         agg["replacement_lot_ids"] = [
             r for l in lots for r in (l.get("replacement_lot_ids") or [])]
@@ -812,13 +820,13 @@ def merge_lot_records(gains: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         # comparison (tie_out_differences); never copied into an event.
         agg["_lots"] = lots
         terms: Dict[str, float] = {}
-        for l in lots:
+        for l, v in zip(lots, views):
             t = l.get("term")
             if t:
-                terms[t] = terms.get(t, 0.0) + float(l.get("gain") or 0)
+                terms[t] = terms.get(t, 0.0) + float(v.gain or 0)
         if len(terms) > 1:
             agg["term"] = "MIXED"
-            agg["term_split"] = {t: round(v, 2)
+            agg["term_split"] = {t: M.shown(v, 2)
                                  for t, v in sorted(terms.items())}
         days = {l.get("days_held") for l in lots}
         if len(days) > 1:
@@ -846,13 +854,31 @@ MANUAL_TIE_FIELDS = ("qty", "proceeds") + TIE_TEXT_FIELDS
 
 
 def _qty_differs(a: float, b: float) -> bool:
-    # Quantities are saved unrounded (lib/numeric._QTY_FIELDS): only
+    # Quantities are saved unrounded (model/money _QTY_FIELDS): only
     # float summation slack.
     return abs(a - b) > 1e-9 * max(1.0, abs(a))
 
 
+def _figure(v: GainRow, f: str):
+    """A gains row's figure by its JSON key (`qty` the quantity), read
+    through its view (step 6c(6c1))."""
+    return getattr(v, "quantity" if f == "qty" else f)
+
+
 def _sum(recs: List[Dict[str, Any]], f: str) -> float:
-    return sum(float(r.get(f) or 0.0) for r in recs)
+    return sum(float(_figure(GainRow(r), f) or 0.0) for r in recs)
+
+
+def gain_total(events: List[Dict[str, Any]]) -> float:
+    """The events' computed gain: a manual-reporting sale's is not
+    computed (TJ-0302), so it is left out (backlog TJ-3011); `tjs audit
+    --json` over several books sums it the same way (TJ-3019)."""
+    return _sum([e for e in events if not e.get("manual_reporting")], "gain")
+
+
+def disallowed_total(events: List[Dict[str, Any]]) -> float:
+    """The events' denied loss."""
+    return _sum(events, "disallowed_amount")
 
 
 def _text_differences(g: Dict[str, Any], recs: List[Dict[str, Any]],
@@ -872,8 +898,9 @@ def _lot_groups(recs: List[Dict[str, Any]]) -> Dict[Tuple[str, str],
     for r in recs:
         k = (str(r.get("acquired_date") or ""), str(r.get("term") or ""))
         a = groups.setdefault(k, {f: 0.0 for f in TIE_LOT_FIELDS + ("n",)})
+        v = GainRow(r)
         for f in TIE_LOT_FIELDS:
-            a[f] += float(r.get(f) or 0.0)
+            a[f] += float(_figure(v, f) or 0.0)
         a["n"] += 1
     return groups
 
@@ -887,11 +914,12 @@ def tie_out_differences(g: Dict[str, Any],
     record is allowed beyond the half cent (S026-16)."""
     out: List[Dict[str, Any]] = []
     tol = TIE + 0.00005 * len(checks)
+    v = GainRow(g)
     for f in TIE_MONEY_FIELDS:
-        e, s = float(g.get(f) or 0.0), _sum(checks, f)
+        e, s = float(_figure(v, f) or 0.0), _sum(checks, f)
         if abs(e - s) > tol:
             out.append({"field": f, "engine": e, "saved": s})
-    e, s = float(g.get("qty") or 0.0), _sum(checks, "qty")
+    e, s = float(v.quantity or 0.0), _sum(checks, "qty")
     if _qty_differs(e, s):
         out.append({"field": "qty", "engine": e, "saved": s})
     out += _text_differences(g, checks, TIE_TEXT_FIELDS)
@@ -938,10 +966,11 @@ def manual_differences(g: Dict[str, Any], recs: List[Dict[str, Any]]
     """tie_out_differences for an unknown-cost sale and its MANUAL
     REPORTING REQUIRED rows (MANUAL_TIE_FIELDS)."""
     out: List[Dict[str, Any]] = []
-    e, s = float(g.get("qty") or 0.0), _sum(recs, "qty")
+    v = GainRow(g)
+    e, s = float(v.quantity or 0.0), _sum(recs, "qty")
     if _qty_differs(e, s):
         out.append({"field": "qty", "engine": e, "saved": s})
-    e, s = float(g.get("proceeds") or 0.0), _sum(recs, "proceeds")
+    e, s = float(v.proceeds or 0.0), _sum(recs, "proceeds")
     if abs(e - s) > TIE + 0.00005 * len(recs):
         out.append({"field": "proceeds", "engine": e, "saved": s})
     return out + _text_differences(g, recs, TIE_TEXT_FIELDS)
@@ -995,7 +1024,7 @@ def rate_with_provenance(currency: str, date_str: str,
 # ---------------------------------------------------------------------------
 
 def _fmt(v: float) -> str:
-    return f"{v:,.2f}"
+    return f"{M.shown(v, 2):,.2f}"
 
 
 def _row_line(row: Dict[str, Any]) -> str:
@@ -1010,13 +1039,13 @@ def _row_line(row: Dict[str, Any]) -> str:
             str(row.get("symbol") or "?")]
     price = float(row.get("price") or 0.0)
     if price:
-        bits.append(f"@ {price:,.2f}")
+        bits.append(f"@ {M.shown(price, 2):,.2f}")
     cur = row.get("currency") or "?"
     net = float(row.get("net_amount") or 0.0)
     fee = float(row.get("fee") or 0.0) + float(row.get("commission") or 0.0)
     line = " ".join(b for b in bits if b) + f" — net {_fmt(net)} {cur}"
     if fee:
-        line += f", fee {fee:,.2f}"
+        line += f", fee {M.shown(fee, 2):,.2f}"
     if row.get("corp_event_id"):
         line += f"  [corp event {row['corp_event_id']}]"
     if row.get("source_line"):
@@ -1165,8 +1194,7 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
     if checks:
         # US FIFO can split one sell across lots; compare against the
         # per-id AGGREGATE, which is what the reports sum anyway.
-        cg = sum(float(c.get("gain") or 0.0) for c in checks)
-        cd = sum(float(c.get("disallowed_amount") or 0.0) for c in checks)
+        cg, cd = _sum(checks, "gain"), _sum(checks, "disallowed_amount")
         # The engine re-run also yields one record per lot; the caller
         # aggregates before calling for multi-record ids, so g here is
         # already the aggregate view.
@@ -1263,7 +1291,8 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
     BAD = paint("\u2717 MISMATCH", "bad")
     out: List[str] = []
 
-    qty = float(ev.get("qty") or 0.0)
+    fig = GainRow(ev)               # the event's figures (step 6c(6c1))
+    qty = float(fig.quantity or 0.0)
     verb = ("WRITE" if ev.get("grant") else "DEEMED GAIN" if ev.get("deemed")
             else "COVER" if (ev.get("direction") == "SHORT") else "SELL")
     settle = (f" (settle {ev['date_settle']})"
@@ -1289,6 +1318,106 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
         out.append(paint(head, "h") + paint(_hid, "dim"))
     out.append(paint("\u2500" * W, "dim"))
 
+    _render_event_origin(ev, out, paint, OK, BAD)
+
+    # ---- disposition -------------------------------------------------
+    # A US book run with --no-wash is a crypto account's: digital
+    # assets are outside §1091 (US-WASH-13), so no wash-sale label
+    # (re-audit A2-1267).
+    rule = ("ACB pool — ITA s.47, blended across taxable accounts"
+            if country not in ("us", "usa")
+            else "FIFO lots — IRC; no wash-sale rule (digital assets "
+                 "are outside \u00a71091)" if no_wash
+            else "FIFO lots — IRC, wash sale \u00a71091")
+    _sec(out, paint, "DISPOSITION", paint(rule, "dim"))
+    if ev.get("deemed") and ev.get("note"):
+        # What a deemed row is (a wash-sale basis add booked in the
+        # loss's year, US-WASH-22): its source row is the loss sale.
+        _cont(out, paint(str(ev["note"]), "warn"))
+
+    def money(label, v, mark=""):
+        _cont(out, f"{label:<15}{_fmt(v):>16}{mark}")
+
+    is_opt = bool(ev.get("is_option")
+                  or is_option_symbol(str(ev.get("symbol") or "")))
+
+    def per_share(v):
+        # (1,000 sh @ 12.3400) — the ACB/share (or sale price/share)
+        # the reader wants to sanity-check against a statement. An
+        # option is quoted per share: N contracts x 100 (S026-05).
+        if qty and abs(qty) > 1e-9:
+            if is_opt:
+                n = abs(qty)
+                # The row's declared contract size (a x10 mini, a
+                # futures option's 1000) — the fixed 100 printed a
+                # wrong per-share price (re-audit A2-1099).
+                m = float(ev.get("multiplier") or 0) or OPTION_MULTIPLIER
+                return paint(f"   ({n:,g} contract{'s' if n != 1 else ''}"
+                             f" \u00d7 {m:g} sh @ "
+                             f"{M.shown(abs(v) / (n * m), 4):,.4f})",
+                             "dim")
+            return paint(f"   ({abs(qty):,g} sh @ "
+                         f"{M.shown(abs(v) / abs(qty), 4):,.4f})", "dim")
+        return ""
+
+    _pr = float(fig.proceeds or 0)
+    _cb = float(fig.cost or 0)
+    if ev.get("direction") == "SHORT":
+        # Engine signed short convention: `cost` holds the NEGATED
+        # short-sale proceeds, `proceeds` the NEGATED cover cost. Shown
+        # as the return shows them (form-export): proceeds = what the
+        # short sale (or the write) brought in, cost = the cover
+        # (S026-08); gain = proceeds - cost is unchanged.
+        _pr, _cb = -_cb + 0.0, -float(fig.proceeds or 0) + 0.0
+    money("proceeds", _pr, per_share(_pr))
+    money("cost basis", _cb, per_share(_cb))
+    if ev.get("direction") == "SHORT":
+        _cont(out, paint("short: proceeds = the short sale / write, cost "
+                         "= the buy-to-cover (as on the return)", "dim"))
+
+    _render_event_wash(fig, ev, country, money, out, paint)
+    if isinstance(ev.get("loss_override"), dict):
+        from taxjson.lib.loss_override_note import note_text
+        _sec(out, paint, "POSITION", paint(
+            note_text(ev["loss_override"], country), "warn"))
+
+    # ---- tie-out -----------------------------------------------------
+    tie = ev.get("tie_out") or {}
+    if ev.get("manual_reporting"):
+        _sec(out, paint, "MANUAL", paint(
+            "no purchase in your files (cost unknown) — the gain above "
+            "is not computed on the return; report this sale by hand",
+            "warn"))
+    if tie.get("manual"):
+        _sec(out, paint, "TIE-OUT",
+             "saved gains file: listed under MANUAL REPORTING REQUIRED  "
+             + (BAD if tie.get("ties") is False else OK))
+    elif tie.get("ties") is not None:
+        _sec(out, paint, "TIE-OUT",
+             f"saved gains file: gain {_fmt(tie['pipeline_gain'])}, "
+             f"disallowed {_fmt(tie['pipeline_disallowed'])}  "
+             + (OK if tie["ties"] else BAD))
+
+    from taxjson.lib.out import label as _label, wrap as _wrap
+    for w in ev.get("warnings") or []:
+        for _ln in _wrap(_label("warning", stream=sys.stdout) + str(w),
+                         None, "  ", "    "):
+            out.append(paint(_ln, "warn"))
+    for f in ev.get("failures") or []:
+        for _ln in _wrap(f"FAILED: {f}", None, "  ", "    "):
+            out.append(paint(_ln, "bad"))
+
+    if show_trace and ev.get("trace"):
+        # The engine's pool history in the report layout (as `tjs
+        # wash-sales --explain`), base currency; the trace files keep
+        # render_gain_block's '#' lines.
+        out += render_report_trace({**ev, "trace": ev["trace"]})
+    return out
+
+
+def _render_event_origin(ev: Dict[str, Any], out: List[str], paint: Any, OK: str, BAD: str) -> None:
+    """audit: an event's SOURCE rows, its MAPPING and its CURRENCY or FX
+    line, added to `out`."""
     # ---- source ------------------------------------------------------
     if ev["sources"]:
         seen = []
@@ -1356,71 +1485,20 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
                        f"  =  base book "
                        + (OK if fx["ties"] else BAD))
 
-    # ---- disposition -------------------------------------------------
-    # A US book run with --no-wash is a crypto account's: digital
-    # assets are outside §1091 (US-WASH-13), so no wash-sale label
-    # (re-audit A2-1267).
-    rule = ("ACB pool — ITA s.47, blended across taxable accounts"
-            if country not in ("us", "usa")
-            else "FIFO lots — IRC; no wash-sale rule (digital assets "
-                 "are outside \u00a71091)" if no_wash
-            else "FIFO lots — IRC, wash sale \u00a71091")
-    _sec(out, paint, "DISPOSITION", paint(rule, "dim"))
-    if ev.get("deemed") and ev.get("note"):
-        # What a deemed row is (a wash-sale basis add booked in the
-        # loss's year, US-WASH-22): its source row is the loss sale.
-        _cont(out, paint(str(ev["note"]), "warn"))
 
-    def money(label, v, mark=""):
-        _cont(out, f"{label:<15}{_fmt(v):>16}{mark}")
-
-    is_opt = bool(ev.get("is_option")
-                  or is_option_symbol(str(ev.get("symbol") or "")))
-
-    def per_share(v):
-        # (1,000 sh @ 12.3400) — the ACB/share (or sale price/share)
-        # the reader wants to sanity-check against a statement. An
-        # option is quoted per share: N contracts x 100 (S026-05).
-        if qty and abs(qty) > 1e-9:
-            if is_opt:
-                n = abs(qty)
-                # The row's declared contract size (a x10 mini, a
-                # futures option's 1000) — the fixed 100 printed a
-                # wrong per-share price (re-audit A2-1099).
-                m = float(ev.get("multiplier") or 0) or OPTION_MULTIPLIER
-                return paint(f"   ({n:,g} contract{'s' if n != 1 else ''}"
-                             f" \u00d7 {m:g} sh @ "
-                             f"{abs(v) / (n * m):,.4f})",
-                             "dim")
-            return paint(f"   ({abs(qty):,g} sh @ "
-                         f"{abs(v) / abs(qty):,.4f})", "dim")
-        return ""
-
-    _pr = float(ev.get("proceeds") or 0)
-    _cb = float(ev.get("cost") or 0)
-    if ev.get("direction") == "SHORT":
-        # Engine signed short convention: `cost` holds the NEGATED
-        # short-sale proceeds, `proceeds` the NEGATED cover cost. Shown
-        # as the return shows them (form-export): proceeds = what the
-        # short sale (or the write) brought in, cost = the cover
-        # (S026-08); gain = proceeds - cost is unchanged.
-        _pr, _cb = -_cb + 0.0, -float(ev.get("proceeds") or 0) + 0.0
-    money("proceeds", _pr, per_share(_pr))
-    money("cost basis", _cb, per_share(_cb))
-    if ev.get("direction") == "SHORT":
-        _cont(out, paint("short: proceeds = the short sale / write, cost "
-                         "= the buy-to-cover (as on the return)", "dim"))
-
+def _render_event_wash(fig: GainRow, ev: Dict[str, Any], country: str, money: Any, out: List[str],
+                       paint: Any) -> None:
+    """audit: an event's gain, or with a denied loss its raw gain, the
+    WASH section (the replacements, where the denied loss goes) and
+    the allowed gain, added to `out`."""
     # ---- wash / superficial loss ------------------------------------
-    dis = float(ev.get("disallowed_amount") or 0.0)
-    perm = float(ev.get("permanently_disallowed") or 0.0)
+    dis = float(fig.disallowed_amount or 0.0)
+    perm = float(fig.permanently_disallowed or 0.0)
     if ev.get("is_wash_sale") or dis > TIE:
         title = ("superficial loss — s.40(2)(g)"
                  if country not in ("us", "usa")
                  else "wash sale — \u00a71091")
-        raw_g = float(ev.get("raw_gain")
-                      if ev.get("raw_gain") is not None
-                      else ev.get("gain") or 0)
+        raw_g = float(fig.raw_gain if fig.raw_gain is not None else fig.gain or 0)
         money("raw gain", raw_g)
         _sec(out, paint, "WASH", paint(title, "warn"))
         money("denied", dis,
@@ -1457,46 +1535,9 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
                 f"in a sheltered account — Rev. Rul. 2008-5)")
         for dest in dests:
             _cont(out, paint(dest, "dim"))
-        money("allowed gain", float(ev.get("gain") or 0))
+        money("allowed gain", float(fig.gain or 0))
     else:
-        money("gain", float(ev.get("gain") or 0))
-    if isinstance(ev.get("loss_override"), dict):
-        from taxjson.lib.loss_overrides import note_text
-        _sec(out, paint, "POSITION", paint(
-            note_text(ev["loss_override"], country), "warn"))
-
-    # ---- tie-out -----------------------------------------------------
-    tie = ev.get("tie_out") or {}
-    if ev.get("manual_reporting"):
-        _sec(out, paint, "MANUAL", paint(
-            "no purchase in your files (cost unknown) — the gain above "
-            "is not computed on the return; report this sale by hand",
-            "warn"))
-    if tie.get("manual"):
-        _sec(out, paint, "TIE-OUT",
-             "saved gains file: listed under MANUAL REPORTING REQUIRED  "
-             + (BAD if tie.get("ties") is False else OK))
-    elif tie.get("ties") is not None:
-        _sec(out, paint, "TIE-OUT",
-             f"saved gains file: gain {_fmt(tie['pipeline_gain'])}, "
-             f"disallowed {_fmt(tie['pipeline_disallowed'])}  "
-             + (OK if tie["ties"] else BAD))
-
-    from taxjson.lib.out import label as _label, wrap as _wrap
-    for w in ev.get("warnings") or []:
-        for _ln in _wrap(_label("warning", stream=sys.stdout) + str(w),
-                         None, "  ", "    "):
-            out.append(paint(_ln, "warn"))
-    for f in ev.get("failures") or []:
-        for _ln in _wrap(f"FAILED: {f}", None, "  ", "    "):
-            out.append(paint(_ln, "bad"))
-
-    if show_trace and ev.get("trace"):
-        # The engine's pool history in the report layout (as `tjs
-        # wash-sales --explain`), base currency; the trace files keep
-        # render_gain_block's '#' lines.
-        out += render_report_trace({**ev, "trace": ev["trace"]})
-    return out
+        money("gain", float(fig.gain or 0))
 
 
 # What the audit checks, and what it does not (backlog TJ-0332,
@@ -1600,9 +1641,8 @@ def render_reconciliation(events: List[Dict[str, Any]],
     W = 86
     paint = _mk_paint(use_color)
     OK = paint("\u2713", "ok")
-    total_gain = sum(float(e.get("gain") or 0) for e in events
-                     if not e.get("manual_reporting"))
-    total_dis = sum(float(e.get("disallowed_amount") or 0) for e in events)
+    total_gain = gain_total(events)
+    total_dis = disallowed_total(events)
     tied = sum(1 for e in events if (e["tie_out"].get("ties") is True))
     untied = sum(1 for e in events if (e["tie_out"].get("ties") is False))
     manual = sum(1 for e in events if e["tie_out"].get("manual")
@@ -1705,6 +1745,34 @@ def render_reconciliation(events: List[Dict[str, Any]],
     return out
 
 
+# An event's money as the engine re-run holds it: --json prints it at
+# M.DERIVED_PLACES (json_event).
+EVENT_MONEY = ("proceeds", "cost", "gain", "raw_gain", "disallowed_amount",
+               "permanently_disallowed")
+
+
+def json_event(e: Dict[str, Any]) -> Dict[str, Any]:
+    """An event as --json prints it (TJ-4930): the engine re-run's
+    unrounded figures (a share of a pool's cost is a quotient, which
+    the engine holds to 28 digits and its float to 17, binary error
+    and all: 167.46750000000085 for 167.4675) at M.DERIVED_PLACES, the
+    saved gains files' figures the tie-out adds at their four places.
+    The totals are the unrounded figures' (gain_total)."""
+    d = dict(e)
+    d.pop("base_row", None)
+    d["trace"] = list(e.get("trace") or [])
+    for k in EVENT_MONEY:
+        if isinstance(d.get(k), float):
+            d[k] = M.json_money(d[k], M.DERIVED_PLACES)
+    tie = d.get("tie_out")
+    if isinstance(tie, dict):
+        d["tie_out"] = {k: (M.json_money(v, M.GAINS_PLACES)
+                            if k in ("pipeline_gain", "pipeline_disallowed")
+                            and isinstance(v, float) else v)
+                        for k, v in tie.items()}
+    return d
+
+
 def _finite(v):
     """`v` with every non-finite float as None: --json is strict JSON (a
     futures fill the parsed rows cannot re-derive carried NaN)."""
@@ -1725,9 +1793,8 @@ def manual_reporting_totals(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     merges its books' with the same function, backlog TJ-0302)."""
     man = [e for e in events if e.get("manual_reporting")]
     return {"events": len(man),
-            "qty": round(sum(float(e.get("qty") or 0.0) for e in man), 6),
-            "proceeds": round(sum(float(e.get("proceeds") or 0.0)
-                                  for e in man), 2)}
+            "qty": M.units(_sum(man, "qty"), 6),
+            "proceeds": M.shown(_sum(man, "proceeds"), 2)}
 
 
 # R1-267: the audit sums unrounded engine values; the return's form rows
@@ -1904,123 +1971,10 @@ def main(argv=None) -> int:
     if args.tax_date is None:
         args.tax_date = "trade" if country == "usa" else "settle"
 
-    base_path = Path(args.base)
-    transactions = load_transactions(base_path)
-    # Repeatable (A2-0194): a second --sheltered used to replace the
-    # first silently.
-    sheltered = [t for f in args.sheltered
-                 for t in load_transactions(Path(f))]
-    affiliated = (load_transactions(Path(args.affiliated))
-                  if args.affiliated else [])
+    (transactions, sheltered, affiliated, base_index, replacement_lookup, base_currency, fx_history,
+     tmap, emap, source_index, check_index, check_labels, manual_index) = _audit_books(args)
 
-    # Raw dict twins of the engine input, indexed by id (the engine
-    # consumes TaxTransaction objects; the audit wants the row dicts).
-    base_doc = _load_doc(base_path)
-    base_index: Dict[str, Dict[str, Any]] = {}
-    for row in base_doc.get("transactions") or []:
-        rid = row.get("id")
-        if rid and rid not in base_index:
-            base_index[rid] = row
-    replacement_lookup = dict(base_index)
-    for _sf in args.sheltered:
-        for row in (_load_doc(Path(_sf))
-                    .get("transactions") or []):
-            rid = row.get("id")
-            if rid and rid not in replacement_lookup:
-                replacement_lookup[rid] = row
-
-    base_currency = (args.base_currency
-                     or next((str(r.get("currency"))
-                              for r in base_doc.get("transactions") or []
-                              if r.get("currency")), "CAD")).upper()
-
-    fx_history: Dict[str, Dict[str, Decimal]] = {}
-    if args.rates:
-        from taxjson.bin.taxjson_convert_currency import load_exchange_rates
-        fx_history = load_exchange_rates(Path(args.rates), base_currency)
-
-    tmap = None
-    if args.ticker_map:
-        try:
-            from taxjson.bin.taxjson_ticker_map import load_map_file
-            tmap = load_map_file(Path(args.ticker_map))
-        except Exception as e:
-            emit_line(f"taxjson-audit: warning: could not read ticker.map "
-                      f"({e}) — rename rules will not be named.",
-                      file=sys.stderr)
-    # The listings the run joined by their transfer journal live in its
-    # effective map only: `audit QZD.U.TO` matched nothing although the
-    # run booked that listing's sale as QZD.TO (backlog TJ-0773).
-    emap = None
-    if getattr(args, "effective_map", None):
-        try:
-            from taxjson.bin.taxjson_ticker_map import load_map_file
-            emap = load_map_file(Path(args.effective_map))
-        except Exception as e:
-            emit_line(f"taxjson-audit: warning: could not read the "
-                      f"effective map {args.effective_map} ({e}) — the "
-                      f"listings the run joined are not named.",
-                      file=sys.stderr)
-
-    source_index = build_source_index([Path(s) for s in args.source])
-    check_index, check_labels = build_check_index(
-        [Path(c) for c in args.check])
-    manual_index = build_manual_index([Path(c) for c in args.check])
-
-    # Same load-side preprocessing as the pipeline and explain, so the
-    # audit cannot contradict the .sum it justifies.
-    transactions, sheltered, affiliated, _ = prepare_books(
-        transactions, sheltered, affiliated, taxable=False,
-        incomplete_history=(Path(args.incomplete_history)
-                            if args.incomplete_history else None),
-        phantom_hint=False, country=country,
-        transfers_as_acquisitions=args.transfers_as_acquisitions)
-
-    # The engine options and the income re-dating run_gains applies
-    # (lib/pipeline: one builder): the trust ROC record date
-    # (CA-INC-DATE-ROC-TRUST, A2-0033/A2-0315/A2-0327), the grant-timing
-    # since-year on the tax-date basis (A2-0314/A2-0317) and US
-    # per-account FIFO (A2-0318). Without them the re-run differed from
-    # the books and the tie-out failed a correct project.
-    req = GainsRequest(
-        country=country, tax_date=args.tax_date,
-        per_account_basis=args.per_account_basis,
-        option_premium_timing=args.option_premium_timing or "close",
-        option_grant_since=args.option_grant_since,
-        option_buyback_loss_superficial=args.option_buyback_wash,
-        corporate_distributions=tuple(args.corporate_distribution or ()),
-        ric_january_dividends=tuple(args.ric_january_dividend or ()),
-        loss_overrides=loss_overrides_from_args(args))
-    apply_roc_record_dates(transactions, req)
-    rules = get_tax_rules(country)
-    # The engine traces only when something shows them: the blocks
-    # (without --no-trace) and --json. --summary and --no-trace kept
-    # every sale's whole pool history all the same (backlog TJ-0334).
-    kwargs: Dict[str, Any] = dict(
-        sheltered_transactions=sheltered,
-        affiliated_transactions=affiliated,
-        trace=not args.no_trace and (args.json or not args.summary),
-        detect_wash_sales=not args.no_wash)
-    kwargs.update(engine_options(req))
-    from taxjson.lib.core import AmbiguousTransferDateError
-    try:
-        results = rules.compute_gains(transactions, **kwargs)
-    except AmbiguousTransferDateError as e:
-        sys.exit(exit_text(f"taxjson-audit: {e}"))
-    if country == "usa":
-        # run_gains' post-engine pass (US-WASH-22): a wash-sale basis add
-        # to a replacement sold in a filed (locked) year is booked as its
-        # own row in the loss's year. Without it the audit re-ran the
-        # engine's raw rows, called the saved add row fabricated and
-        # missed its loss (backlog TJ-0313). The run has said its notes
-        # and ATTENTION lines already: not repeated here.
-        from taxjson.lib.pipeline import place_retro_wash_adjustments
-        import contextlib
-        import io
-        with contextlib.redirect_stderr(io.StringIO()):
-            place_retro_wash_adjustments(
-                results, args.tax_date, tuple(args.locked_year or ()),
-                args.year, tuple(args.locked_record or ()))
+    transactions, results = _audit_engine(transactions, sheltered, affiliated, args, country)
 
     date_key = "date_settle" if args.tax_date == "settle" else "date"
 
@@ -2116,6 +2070,158 @@ def main(argv=None) -> int:
         events, base_index, source_index, origin=_origin,
         engine_rows=[t.to_dict() for t in transactions
                      if t.id not in base_index], **_money)
+    _tainted_ids = _audit_manual_tie(merged, events, args, manual_index, date_key)
+
+    reconciliation_failures = _audit_reconcile(args, events, row_filter, check_index, manual_index,
+                                               _tainted_ids, pool, other)
+
+    _stop, _rc, failed = _audit_output(events, reconciliation_failures, args, base_currency,
+                                       country, pool, other, check_labels)
+    if _stop:
+        return _rc
+    return 1 if failed else 0
+
+
+def _audit_books(args: argparse.Namespace) -> Tuple[
+        List[Any], List[Any], List[Any], Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], str,
+        Dict[str, Dict[str, Decimal]], Any, Any, Dict[str, List[Dict[str, Any]]],
+        Dict[str, List[Dict[str, Any]]], List[str], Dict[str, List[Dict[str, Any]]]]:
+    """audit: the books read: the base, sheltered and affiliated rows, the
+    base rows by id (and with the sheltered ones, the replacements'),
+    the base currency, the rates, the ticker maps, and the source,
+    check and manual indexes."""
+    base_path = Path(args.base)
+    transactions = load_transactions(base_path)
+    # Repeatable (A2-0194): a second --sheltered used to replace the
+    # first silently.
+    sheltered = [t for f in args.sheltered
+                 for t in load_transactions(Path(f))]
+    affiliated = (load_transactions(Path(args.affiliated))
+                  if args.affiliated else [])
+
+    # Raw dict twins of the engine input, indexed by id (the engine
+    # consumes TaxTransaction objects; the audit wants the row dicts).
+    base_doc = _load_doc(base_path)
+    base_index: Dict[str, Dict[str, Any]] = {}
+    for row in base_doc.get("transactions") or []:
+        rid = row.get("id")
+        if rid and rid not in base_index:
+            base_index[rid] = row
+    replacement_lookup = dict(base_index)
+    for _sf in args.sheltered:
+        for row in (_load_doc(Path(_sf))
+                    .get("transactions") or []):
+            rid = row.get("id")
+            if rid and rid not in replacement_lookup:
+                replacement_lookup[rid] = row
+
+    base_currency = (args.base_currency
+                     or next((str(r.get("currency"))
+                              for r in base_doc.get("transactions") or []
+                              if r.get("currency")), "CAD")).upper()
+
+    fx_history: Dict[str, Dict[str, Decimal]] = {}
+    if args.rates:
+        from taxjson.lib.exchange_rates import load_exchange_rates
+        fx_history = load_exchange_rates(Path(args.rates), base_currency)
+
+    tmap = None
+    if args.ticker_map:
+        try:
+            from taxjson.lib.map_file import load_map_file
+            tmap = load_map_file(Path(args.ticker_map))
+        except Exception as e:
+            emit_line(f"taxjson-audit: warning: could not read ticker.map "
+                      f"({e}) — rename rules will not be named.",
+                      file=sys.stderr)
+    # The listings the run joined by their transfer journal live in its
+    # effective map only: `audit QZD.U.TO` matched nothing although the
+    # run booked that listing's sale as QZD.TO (backlog TJ-0773).
+    emap = None
+    if getattr(args, "effective_map", None):
+        try:
+            from taxjson.lib.map_file import load_map_file
+            emap = load_map_file(Path(args.effective_map))
+        except Exception as e:
+            emit_line(f"taxjson-audit: warning: could not read the "
+                      f"effective map {args.effective_map} ({e}) — the "
+                      f"listings the run joined are not named.",
+                      file=sys.stderr)
+
+    source_index = build_source_index([Path(s) for s in args.source])
+    check_index, check_labels = build_check_index(
+        [Path(c) for c in args.check])
+    manual_index = build_manual_index([Path(c) for c in args.check])
+    return (transactions, sheltered, affiliated, base_index, replacement_lookup, base_currency, fx_history,
+            tmap, emap, source_index, check_index, check_labels, manual_index)
+
+
+def _audit_engine(transactions: List[Any], sheltered: List[Any], affiliated: List[Any],
+                  args: argparse.Namespace, country: str) -> Tuple[List[Any], Dict[str, Any]]:
+    """audit: the books prepared as the pipeline prepares them, and the
+    engine re-run with the run's options (US: a filed year's wash-sale
+    basis adds placed as the run places them)."""
+    # Same load-side preprocessing as the pipeline and explain, so the
+    # audit cannot contradict the .sum it justifies.
+    transactions, sheltered, affiliated, _ = prepare_books(
+        transactions, sheltered, affiliated, taxable=False,
+        incomplete_history=(Path(args.incomplete_history)
+                            if args.incomplete_history else None),
+        phantom_hint=False, country=country,
+        transfers_as_acquisitions=args.transfers_as_acquisitions)
+
+    # The engine options and the income re-dating run_gains applies
+    # (lib/pipeline: one builder): the trust ROC record date
+    # (CA-INC-DATE-ROC-TRUST, A2-0033/A2-0315/A2-0327), the grant-timing
+    # since-year on the tax-date basis (A2-0314/A2-0317) and US
+    # per-account FIFO (A2-0318). Without them the re-run differed from
+    # the books and the tie-out failed a correct project.
+    req = GainsRequest(
+        country=country, tax_date=args.tax_date,
+        per_account_basis=args.per_account_basis,
+        option_premium_timing=args.option_premium_timing or "close",
+        option_grant_since=args.option_grant_since,
+        option_buyback_loss_superficial=args.option_buyback_wash,
+        corporate_distributions=tuple(args.corporate_distribution or ()),
+        ric_january_dividends=tuple(args.ric_january_dividend or ()),
+        loss_overrides=loss_overrides_from_args(args))
+    apply_roc_record_dates(transactions, req)
+    rules = get_tax_rules(country)
+    # The engine traces only when something shows them: the blocks
+    # (without --no-trace) and --json. --summary and --no-trace kept
+    # every sale's whole pool history all the same (backlog TJ-0334).
+    kwargs: Dict[str, Any] = dict(
+        sheltered_transactions=sheltered,
+        affiliated_transactions=affiliated,
+        trace=not args.no_trace and (args.json or not args.summary),
+        detect_wash_sales=not args.no_wash)
+    kwargs.update(engine_options(req))
+    # An AmbiguousTransferDateError (a ValueError) is main's guard's to
+    # report: one line, exit 2 (backlog TJ-3008).
+    results = rules.compute_gains(transactions, **kwargs)
+    if country == "usa":
+        # run_gains' post-engine pass (US-WASH-22): a wash-sale basis add
+        # to a replacement sold in a filed (locked) year is booked as its
+        # own row in the loss's year. Without it the audit re-ran the
+        # engine's raw rows, called the saved add row fabricated and
+        # missed its loss (backlog TJ-0313). The run has said its notes
+        # and ATTENTION lines already: not repeated here.
+        from taxjson.lib.pipeline import place_retro_wash_adjustments
+        import contextlib
+        import io
+        with contextlib.redirect_stderr(io.StringIO()):
+            place_retro_wash_adjustments(
+                results, args.tax_date, tuple(args.locked_year or ()),
+                args.year, tuple(args.locked_record or ()))
+    return transactions, results
+
+
+def _audit_manual_tie(merged: List[Dict[str, Any]], events: List[Dict[str, Any]],
+                      args: argparse.Namespace, manual_index: Dict[str, List[Dict[str, Any]]],
+                      date_key: str) -> set[Any]:
+    """audit: the unknown-cost dispositions tied to the saved MANUAL
+    REPORTING REQUIRED rows, and with --check-year the events of
+    another year marked out of the saved files' scope."""
     # Unknown-cost dispositions: the books list them under MANUAL
     # REPORTING REQUIRED with no gain; the re-run's figure is fabricated
     # (cost 0 on the synthetic opening). Tie them to that list, never to
@@ -2169,7 +2275,16 @@ def main(argv=None) -> int:
                     w for w in e.get("warnings") or []
                     if not w.startswith("disposition not found in the "
                                         "pipeline gains file")]
+    return _tainted_ids
 
+
+def _audit_reconcile(args: argparse.Namespace, events: List[Dict[str, Any]],
+                     row_filter: Callable[..., bool], check_index: Dict[str, List[Dict[str, Any]]],
+                     manual_index: Dict[str, List[Dict[str, Any]]], _tainted_ids: set[Any],
+                     pool: Dict[str, Any], other: Dict[str, Any]) -> List[str]:
+    """audit: the reconciliation failures: a saved disposition the re-run
+    lacks or adds, the in-scope totals, and the pool trades and rows
+    that differ from their parsed rows."""
     # The tie-out must catch OMISSIONS and FABRICATIONS, not just
     # per-event drift (2026-09 audit: a check file missing a whole
     # disposition — or carrying an extra invented one — passed with
@@ -2192,19 +2307,19 @@ def main(argv=None) -> int:
             scoped = [c for c in recs if _chk_in_scope(c)]
             if not scoped:
                 continue
-            _g = sum(float(c.get("gain") or 0.0) for c in scoped)
+            _g = _sum(scoped, "gain")
             if gid == NOID:
                 reconciliation_failures.append(
                     f"check file carries {len(scoped)} disposition(s) "
                     f"with NO id (first: {scoped[0].get('symbol')} "
-                    f"{scoped[0].get('date')}; gain {_g:,.2f}) — they "
+                    f"{scoped[0].get('date')}; gain {M.shown(_g, 2):,.2f}) — they "
                     f"cannot be tied to the engine re-run: a hand-edited "
                     f"or corrupted gains file.")
                 continue
             reconciliation_failures.append(
                 f"check file carries disposition id {gid[:12]} "
                 f"({scoped[0].get('symbol')} {scoped[0].get('date')}, "
-                f"gain {_g:,.2f}) that the engine re-run did not "
+                f"gain {M.shown(_g, 2):,.2f}) that the engine re-run did not "
                 f"produce — fabricated or double-counted record.")
         for gid, recs in sorted(manual_index.items()):
             if gid in _tainted_ids:
@@ -2225,22 +2340,20 @@ def main(argv=None) -> int:
                 reconciliation_failures.append(
                     f"engine disposition {e['id'][:12]} "
                     f"({e['symbol']} {e['date']}, gain "
-                    f"{float(e.get('gain') or 0):,.2f}) is MISSING "
+                    f"{M.shown(float(GainRow(e).gain or 0), 2):,.2f}) is MISSING "
                     f"from the check file(s) — stale or truncated "
                     f"saved books.")
-        eng_total = sum(float(e.get("gain") or 0) for e in events
-                        if not e["tie_out"].get("out_of_scope")
-                        and not e.get("manual_reporting"))
+        eng_total = gain_total([e for e in events if not e["tie_out"].get("out_of_scope")])
         _chk_rows = [c for recs in check_index.values() for c in recs
                      if _chk_in_scope(c)]
-        chk_total = sum(float(c.get("gain") or 0.0) for c in _chk_rows)
+        chk_total = _sum(_chk_rows, "gain")
         # The saved file rounds each row to 4 dp: a few thousand rows
         # drift past a fixed half-cent even when every row ties
         # (S026-16). Allow the rounding bound, 0.00005 per saved row.
         if abs(eng_total - chk_total) > TIE + 0.00005 * len(_chk_rows):
             reconciliation_failures.append(
                 f"in-scope totals do not tie: engine "
-                f"{eng_total:,.2f} vs check files {chk_total:,.2f}.")
+                f"{M.shown(eng_total, 2):,.2f} vs check files {M.shown(chk_total, 2):,.2f}.")
 
     # A pool trade whose book amount is not its parsed row's (TJ-0333):
     # the first few named, the rest counted (--json lists each).
@@ -2264,7 +2377,16 @@ def main(argv=None) -> int:
         reconciliation_failures.append(
             f"{len(_other_bad) - 5:,} more pool rows differ from their "
             f"parsed rows (--json lists each).")
+    return reconciliation_failures
 
+
+def _audit_output(events: List[Dict[str, Any]], reconciliation_failures: List[str],
+                  args: argparse.Namespace, base_currency: str, country: str, pool: Dict[str, Any],
+                  other: Dict[str, Any],
+                  check_labels: List[str]) -> Tuple[bool, Any, Optional[bool]]:
+    """audit: the result: the exit of a filter that matched nothing, the
+    --date note, the --json document, or the summary or the blocks,
+    then the reconciliation and the verdict."""
     failed = any(e["failures"] for e in events) \
         or bool(reconciliation_failures)
 
@@ -2276,12 +2398,12 @@ def main(argv=None) -> int:
         # a typo (2026-09 CLI audit B15). A saved record the filter
         # matches with no engine event is a finding, not "no match".
         if args.no_match_rc == 1:
-            print(f"taxjson-audit: no disposition matches "
-                  f"{', '.join(_filters)}"
-                  + (f" in {args.year}" if args.year else "")
-                  + " — check the filter (`--summary` lists every "
-                    "event).", file=sys.stderr)
-        return args.no_match_rc
+            _out.put(f"taxjson-audit: no disposition matches "
+                     f"{', '.join(_filters)}"
+                     + (f" in {args.year}" if args.year else "")
+                     + " — check the filter (`--summary` lists every "
+                       "event).", file=sys.stderr)
+        return True, args.no_match_rc, None
     if args.date and events:
         _by_trade = sum(1 for e in events if e.get("date") == args.date)
         emit_line(f"taxjson-audit: note: --date {args.date} matched "
@@ -2289,33 +2411,26 @@ def main(argv=None) -> int:
                   f"date, {len(events) - _by_trade} by settlement date "
                   f"only.", file=sys.stderr)
 
+    # A live exact Doc: each line printed when it is added, as the
+    # print() it replaces printed it.
+    doc = _out.Doc(exact=True, width_=0, live=True)
     if args.json:
-        slim = []
-        for e in events:
-            d = dict(e)
-            d.pop("base_row", None)
-            d["trace"] = list(e.get("trace") or [])
-            slim.append(d)
-        json.dump(_finite({"base_currency": base_currency,
+        slim = [json_event(e) for e in events]
+        json.dump(_finite(versioned({"base_currency": base_currency,
                    "country": country,
                    "events": slim,
-                   "total_gain": round(sum(float(e.get("gain") or 0)
-                                           for e in events
-                                           if not e.get(
-                                               "manual_reporting")), 2),
-                   "total_disallowed": round(
-                       sum(float(e.get("disallowed_amount") or 0)
-                           for e in events), 2),
+                   "total_gain": M.shown(gain_total(events), 2),
+                   "total_disallowed": M.shown(disallowed_total(events), 2),
                    "manual_reporting": manual_reporting_totals(events),
                    "totals_note": totals_note(country),
                    "pool_trades": pool,
                    "pool_other_rows": other,
                    "scope": SCOPE,
                    "reconciliation_failures": reconciliation_failures,
-                   "failed": failed}),
+                   "failed": failed}, "taxjson-audit")),
                   sys.stdout, indent=2, default=str, allow_nan=False)
-        print()
-        return 1 if failed else 0
+        doc.blank()
+        return True, 1 if failed else 0, None
 
     use_color = (not args.no_color and sys.stdout.isatty()
                  and not __import__("os").environ.get("NO_COLOR"))
@@ -2331,20 +2446,19 @@ def main(argv=None) -> int:
                 flags += "  " + paint("warn", "warn")
             if e.get("manual_reporting"):
                 flags += "  " + paint("MANUAL", "warn")
-            if float(e.get("disallowed_amount") or 0) > TIE:
-                flags += "  " + paint(
-                    f"WASH+{float(e['disallowed_amount']):.2f}",
-                    "warn")
+            v = GainRow(e)
+            if float(v.disallowed_amount or 0) > TIE:
+                flags += "  " + paint(f"WASH+{M.shown(float(v.disallowed_amount), 2):.2f}", "warn")
             if isinstance(e.get("loss_override"), dict):
                 # A filing position against the rule (.tt ALLOWLOSS).
                 flags += "  " + paint(
                     f"ALLOWLOSS(rule: "
-                    f"{float(e['loss_override'].get('would_disallow') or 0):.2f})",
+                    f"{M.shown(float(e['loss_override'].get('would_disallow') or 0), 2):.2f})",
                     "warn")
-            print(f"{paint((e['id'] or '')[:_idw].ljust(_idw), 'dim')}  "
-                  f"{e['date']}  "
-                  f"{e['symbol']:<22} qty={float(e['qty'] or 0):>12,.4f} "
-                  f"gain={float(e['gain'] or 0):>+14,.2f}{flags}")
+            doc.line(f"{paint((e['id'] or '')[:_idw].ljust(_idw), 'dim')}  "
+                     f"{e['date']}  "
+                     f"{e['symbol']:<22} qty={float(v.quantity or 0):>12,.4f} "
+                     f"gain={M.shown(float(v.gain or 0), 2):>+14,.2f}{flags}")
     else:
         # Each block printed as it is rendered: holding every block's
         # pool history until the end grew with the square of the sales.
@@ -2353,8 +2467,8 @@ def main(argv=None) -> int:
                                    show_trace=not args.no_trace,
                                    use_color=use_color,
                                    no_wash=args.no_wash):
-                print(ln)
-            print()
+                doc.line(ln)
+            doc.blank()
 
     for ln in render_reconciliation(events, check_labels,
                                     bool(args.check),
@@ -2362,19 +2476,19 @@ def main(argv=None) -> int:
                                     country=country,
                                     brief=args.brief, pool=pool,
                                     other=other):
-        print(ln)
+        doc.line(ln)
     from taxjson.lib.out import wrap as _wrap
     for f in reconciliation_failures:
         for ln in _wrap(f"FAILED: {f}", None, "", "  "):
-            print(ln)
+            doc.line(ln)
     if failed:
-        print(file=sys.stderr)
+        _out.put("", file=sys.stderr)
         for ln in _wrap("taxjson-audit: CHECKS FAILED — see FAILED lines "
                         "above. The usual cause is stale work/ artifacts; "
                         "re-run `tjs run` and audit again.", None, "",
                         "  ", stream=sys.stderr):
             print(ln, file=sys.stderr)
-    return 1 if failed else 0
+    return False, None, failed
 
 
 if __name__ == "__main__":

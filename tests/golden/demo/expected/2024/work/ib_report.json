@@ -1,0 +1,92 @@
+{
+  "account": "ib",
+  "basis": "wash-adjusted",
+  "gains": {
+    "manual_rows": [],
+    "option_fees": {
+      "CAD": 0.0
+    },
+    "returns_by_asset": {
+      "Stocks": {
+        "CAD": {
+          "days": [
+            127,
+            133
+          ],
+          "dollars": [
+            132.3,
+            0.0
+          ],
+          "fee_shares": [
+            50.0,
+            10.0
+          ],
+          "fees": [
+            1.35,
+            1.35
+          ]
+        }
+      }
+    },
+    "tainted_count": 0,
+    "tainted_routed": 0,
+    "ticker_stats": {
+      "MSFT.US": {
+        "CAD": {
+          "cap": 132.3,
+          "cost": 27001.35,
+          "div": 101.25,
+          "hold_days": [
+            127
+          ],
+          "opt": 0.0,
+          "pil": 0.0,
+          "proceeds": 27133.65,
+          "trade_count": 1
+        }
+      },
+      "NVDA.US": {
+        "CAD": {
+          "cap": 0.0,
+          "cost": 1999.35,
+          "div": 0.0,
+          "hold_days": [
+            133
+          ],
+          "opt": 0.0,
+          "pil": 0.0,
+          "proceeds": 1881.9,
+          "trade_count": 1
+        }
+      }
+    },
+    "total_fees": {
+      "CAD": 6.75
+    },
+    "total_year": "2024",
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 2
+  },
+  "generated_at": "<stamp>",
+  "income": {
+    "interest_paid_totals": {},
+    "interest_totals": {},
+    "missing_amount": [],
+    "ticker_stats": {
+      "MSFT.US": {
+        "CAD": {
+          "div": 101.25,
+          "pil": 0.0,
+          "tax": 15.201
+        }
+      }
+    },
+    "total_year": "2024"
+  },
+  "schema_version": 1,
+  "wash": {
+    "count": 1,
+    "total_disallowed": 117.45
+  },
+  "year": "2024"
+}

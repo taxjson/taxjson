@@ -7,11 +7,12 @@ network beyond a 127.0.0.1 stub and never read credentials.
 """
 # First: puts the plugin, the core and its test helpers on sys.path and
 # registers the plugin's entry point when it is not pip-installed.
-import _support  # noqa: F401
+import _bootstrap  # noqa: F401
 import tempfile
 import unittest
 from pathlib import Path
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 
 class TestFetchRedirectRedacted(unittest.TestCase):
@@ -92,7 +93,7 @@ class TestQtCsvBlankMoney(unittest.TestCase):
                           if t["action"] == "DIVIDEND"], [42.5])
 
 
-@rule("CA-SL-01")
+@rule(R.CA_SL_01)
 class TestQtWindowCoversSuperficialLoss(unittest.TestCase):
     """S002-05 / S031-13: the default window ended Jan 15 of the next
     year and started Dec 15 — a Jan 16-30 (or Dec 1-14) repurchase in a

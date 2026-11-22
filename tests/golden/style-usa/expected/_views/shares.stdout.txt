@@ -1,0 +1,17 @@
+SHARES HELD — combined across crypto, margin, qt, roth
+As of the books' latest data (2024-12-31), basis: wash-adjusted, after ticker.map; no futures, no option contracts. COST = combined book cost in USD.
+SYMBOL     SHARES      COST  ACCOUNTS
+------------------------------------------------
+BTC          0.05  3,256.50  crypto 0.05
+ETH        0.7571  2,655.30  crypto 0.7571
+GHOSTQ.US     -40   -590.05  margin -40
+NVDA.US        10  1,433.00  margin 10
+OLDCO.US      -50   -999.00  margin -50
+PARN.US       100  5,001.00  margin 100
+QZQ.US        150  3,831.95  margin 100, roth 50
+SAMPA.US      100  3,929.85  margin 100
+SAMPB.US       20      0.00  roth 20
+SPNC.US        10    250.00  margin 10
+USDC          8.9      8.90  crypto 8.9
+
+11 symbol(s).

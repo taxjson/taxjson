@@ -1,0 +1,10 @@
+TIPS — tax-efficiency advice for next year, canada
+
+TIPS
+CHECK        ACCOUNT  SYMBOL
+----------------------------
+TFSA-US-DIV  tfsa     QZQ.US
+
+1. TFSA-US-DIV [tfsa] QZQ.US: US dividend payer inside a TFSA: the 15% US withholding is unrecoverable here. Prefer the RRSP (treaty-exempt) or a taxable account (foreign tax credit claimable).
+
+1 tip(s) for next year — none changes a number of this year.

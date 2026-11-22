@@ -1,0 +1,93 @@
+{
+  "account": "tfsa",
+  "basis": "pre-wash",
+  "gains": {
+    "manual_rows": [],
+    "option_fees": {
+      "CAD": 0.0
+    },
+    "returns_by_asset": {
+      "Stocks": {
+        "CAD": {
+          "days": [
+            141
+          ],
+          "dollars": [
+            643.45
+          ],
+          "fee_shares": [
+            100.0
+          ],
+          "fees": [
+            9.95
+          ]
+        }
+      }
+    },
+    "tainted_count": 0,
+    "tainted_routed": 0,
+    "ticker_stats": {
+      "ENB.TO": {
+        "CAD": {
+          "cap": 0.0,
+          "cost": 0.0,
+          "div": 183.0,
+          "hold_days": [],
+          "opt": 0.0,
+          "pil": 0.0,
+          "proceeds": 0.0,
+          "trade_count": 0
+        }
+      },
+      "RY.TO": {
+        "CAD": {
+          "cap": 643.45,
+          "cost": 13346.6,
+          "div": 345.0,
+          "hold_days": [
+            141
+          ],
+          "opt": 0.0,
+          "pil": 0.0,
+          "proceeds": 13990.05,
+          "trade_count": 1
+        }
+      }
+    },
+    "total_fees": {
+      "CAD": 46.4825
+    },
+    "total_year": "2024",
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1
+  },
+  "generated_at": "<stamp>",
+  "income": {
+    "interest_paid_totals": {},
+    "interest_totals": {},
+    "missing_amount": [],
+    "ticker_stats": {
+      "ENB.TO": {
+        "CAD": {
+          "div": 183.0,
+          "pil": 0.0,
+          "tax": 0.0
+        }
+      },
+      "RY.TO": {
+        "CAD": {
+          "div": 345.0,
+          "pil": 0.0,
+          "tax": 0.0
+        }
+      }
+    },
+    "total_year": "2024"
+  },
+  "schema_version": 1,
+  "wash": {
+    "count": 0,
+    "total_disallowed": 0
+  },
+  "year": "2024"
+}

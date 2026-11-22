@@ -1,0 +1,65 @@
+{
+  "account": "qt",
+  "basis": "wash-adjusted",
+  "gains": {
+    "manual_rows": [],
+    "option_fees": {
+      "CAD": 3.375
+    },
+    "returns_by_asset": {
+      "Options": {
+        "CAD": {
+          "days": [
+            17,
+            0
+          ],
+          "dollars": [
+            -55.6875,
+            -28.6875
+          ],
+          "fee_shares": [],
+          "fees": []
+        }
+      }
+    },
+    "tainted_count": 0,
+    "tainted_routed": 0,
+    "ticker_stats": {
+      "SAMPQ.US": {
+        "CAD": {
+          "cap": 0.0,
+          "cost": 84.375,
+          "div": 0.0,
+          "hold_days": [
+            17,
+            0
+          ],
+          "opt": -84.375,
+          "pil": 0.0,
+          "proceeds": 0.0,
+          "trade_count": 2
+        }
+      }
+    },
+    "total_fees": {
+      "CAD": 3.375
+    },
+    "total_year": "2024",
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 2
+  },
+  "generated_at": "<stamp>",
+  "income": {
+    "interest_paid_totals": {},
+    "interest_totals": {},
+    "missing_amount": [],
+    "ticker_stats": {},
+    "total_year": "2024"
+  },
+  "schema_version": 1,
+  "wash": {
+    "count": 0,
+    "total_disallowed": 0
+  },
+  "year": "2024"
+}

@@ -1,0 +1,92 @@
+{
+  "by_ticker": {
+    "SAMPR.US": {
+      "hold_days": [
+        133
+      ],
+      "total_cost": 162.0,
+      "total_div": 0.0,
+      "total_gain": 8.1,
+      "total_pil": 0.0,
+      "total_proceeds": 170.1,
+      "trade_count": 1
+    },
+    "SAMPT.US": {
+      "hold_days": [
+        231
+      ],
+      "total_cost": 162.0,
+      "total_div": 0.0,
+      "total_gain": 16.2,
+      "total_pil": 0.0,
+      "total_proceeds": 178.2,
+      "trade_count": 1
+    }
+  },
+  "inventory": [],
+  "option_replacement_warnings": [],
+  "summary": {
+    "total_disallowed": 0,
+    "total_fees_by_currency": {},
+    "total_gain": 24.3,
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1
+  },
+  "transactions": [
+    {
+      "account": "rbc",
+      "commission": 0.0,
+      "cost": 162.0,
+      "currency": "CAD",
+      "date": "2025-03-17",
+      "date_settle": "2025-03-17",
+      "days_held": 133,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 0.0,
+      "gain": 8.1,
+      "grant": false,
+      "id": "f954c4649bcce260",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 170.1,
+      "qty": 12.0,
+      "raw_gain": 8.1,
+      "replacement_lot_ids": [],
+      "symbol": "SAMPR.US",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "rbc",
+      "commission": 0.0,
+      "cost": 162.0,
+      "currency": "CAD",
+      "date": "2025-11-03",
+      "date_settle": "2025-11-04",
+      "days_held": 231,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 0.0,
+      "gain": 16.2,
+      "grant": false,
+      "id": "79b8675ee408fe67",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 178.2,
+      "qty": 12.0,
+      "raw_gain": 16.2,
+      "replacement_lot_ids": [],
+      "symbol": "SAMPT.US",
+      "term": null,
+      "wash_replacements": null
+    }
+  ],
+  "wash_sales": []
+}

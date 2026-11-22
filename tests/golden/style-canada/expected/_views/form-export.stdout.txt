@@ -1,0 +1,35 @@
+SCHEDULE 3 — Capital Gains (or Losses), tax year 2024, CAD
+GAIN(LOSS) = PROCEEDS − ACB − OUTLAYS, the allowed amount; 100% amounts (the form applies the rate).
+
+PERIOD 1 (JANUARY 1 TO JUNE 24, 2024) — LINES 10689/10690
+UNITS  SYMBOL   ACQ. YEAR   PROCEEDS        ACB  OUTLAYS  GAIN(LOSS)
+--------------------------------------------------------------------
+   75  AAPL.US  2024       18,326.25  18,231.68     6.68       87.89
+   50  MSFT.US  2024       27,135.00  27,001.35     1.35      132.30
+  Line 10689 (proceeds of disposition):  45,461.25
+  Line 10690 (gain/loss):                   220.19
+
+PERIOD 2 (JUNE 25 TO DECEMBER 31, 2024) — LINES 13199/13200
+UNITS  SYMBOL    ACQ. YEAR   PROCEEDS        ACB  OUTLAYS  GAIN(LOSS)
+---------------------------------------------------------------------
+   75  AAPL.US   2024       18,235.13  18,231.69     6.68       -3.24
+   10  NVDA.US   2024        1,883.25   1,881.90     1.35        0.00
+  200  QZQ.US    2024        7,695.00   7,795.58     1.35     -101.93
+  100  SAMPA.TO  2024        3,500.00   3,490.05     9.95        0.00
+  Line 13199 (proceeds of disposition):  31,313.38
+  Line 13200 (gain/loss):                  -105.17
+
+PERIOD 2 (JUNE 25 TO DECEMBER 31, 2024) — LINES 15199/15300
+UNITS  SYMBOL                 ACQ. YEAR  PROCEEDS       ACB  OUTLAYS  GAIN(LOSS)
+--------------------------------------------------------------------------------
+ 0.15  BTC                    2024       9,990.00  9,752.50    39.83      197.67
+ 0.85  ETH                    2024       4,488.75  4,148.56    17.90      322.29
+    2  QZQ240920C00030000.US  2024         405.00    812.70     2.70     -410.40
+    1  QZQ241220C00035000.US  2024         270.00      0.00     1.35      268.65
+    1  QZQ250117C00040000.US  2024         202.50      0.00     1.35      201.15
+  Line 15199 (proceeds of disposition):  15,356.25
+  Line 15300 (gain/loss):                   579.36
+
+! 2 sales with no purchase in your files NOT in these rows — tjs find-missing-history
+3 row(s) with a denied superficial loss: the ACB shown is reduced by it — tjs wash-sales
+Not in the rows: FX on cash (15300), slip capital gains (17400, 17600) — tjs form-export --details

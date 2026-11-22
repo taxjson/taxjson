@@ -1,0 +1,9 @@
+{
+ "kind": "project",
+ "source": "written for the golden ledgers: buys, sells, a swap, staking, a superficial loss, a send decided as a gift, across two exchanges; BTC and ETH prices lowered so no gain in a trace's # lines reaches 1,000 (the push gate reads them as comments), and one SOLQ sale price moved so no recorded figure matches the private figure list; its views (TJ-4920, the --json contract): crypto-sends, staking and staking-sum as --json",
+ "views": [
+  "crypto-sends --json",
+  "staking all --json",
+  "staking-sum --json"
+ ]
+}

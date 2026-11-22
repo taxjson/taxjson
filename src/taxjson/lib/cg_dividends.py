@@ -60,6 +60,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from taxjson.model import money as M
 
 MAP_NAME = "capital_gains_dividends.map"
 
@@ -71,6 +72,9 @@ _AMOUNT_RE = re.compile(r"(?:[1-9]\d{0,2}(?:,\d{3})+|\d+)(?:\.\d*)?|\.\d+")
 
 
 TABLE = "capital_gains_dividends"
+# The keys a [[capital_gains_dividends]] entry may carry (entries_from_config
+# names any other; lib/config_template lists them).
+CGD_KEYS = ("symbol", "year", "date", "amount", "account")
 
 
 class CgDividendMapError(ValueError):
@@ -98,7 +102,7 @@ class Entry:
         listing of a same-root issuer (SAMPMC.US for SAMPMC) are other securities
         and never carry a T5 box-18 dividend of this one (audit A2-0075,
         A2-0228)."""
-        from taxjson.lib.income_dating import CA_LISTING_SUFFIXES
+        from taxjson.characterize.income_dating import CA_LISTING_SUFFIXES
         s = (symbol or "").upper()
         if s == self.symbol:
             return True
@@ -176,7 +180,6 @@ def entries_from_config(cfg: dict) -> Optional[List[Entry]]:
     seen: Dict[Tuple[str, str, str], int] = {}
     for n, e in enumerate(v, 1):
         where = f"taxjson.toml [[{TABLE}]] #{n}"
-        from taxjson.lib.config_check import CGD_KEYS
         extra = sorted(set(e) - set(CGD_KEYS))
         if extra:
             raise CgDividendMapError(
@@ -287,8 +290,8 @@ def allocate(entries: Iterable[Entry],
             total = sum(row_amount(t) for _a, t in hits)
             if total <= 0 or e.amount > total + 0.005:
                 raise CgDividendMapError(
-                    f"{e.where()}: {e.amount:.2f} {curs[0]} is more than "
-                    f"the {total:.2f} {curs[0]} of {e.symbol} dividends "
+                    f"{e.where()}: {M.shown(e.amount, 2):.2f} {curs[0]} is more than "
+                    f"the {M.shown(total, 2):.2f} {curs[0]} of {e.symbol} dividends "
                     f"it matches ({e.when})")
             f = min(1.0, e.amount / total)
             frac = {(a, str(t.get("id"))): f for a, t in hits}

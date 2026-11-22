@@ -31,7 +31,7 @@ several slips (pages saved together) is cut at each slip line: each
 slip is read from its own lines.
 
 An imported slip is given to a project account by the books: the
-issuer's name against the brokers' names (lib/brokerages/detect
+issuer's name against the brokers' names (lib/brokerages/base
 DISPLAY_NAMES: the issuer carries the whole name) and the issuers the
 shipped data file names for a broker (data/slip_issuers.toml: a
 carrying dealer such as Webull Canada's, `issuer_aliases`), then the
@@ -60,6 +60,9 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+from taxjson.project.toml_io import read_toml
+from taxjson.model import money as M
 
 SLIP_TITLES = {"T5": "Statement of Investment Income",
                "T3": "Statement of Trust Income"}
@@ -460,7 +463,7 @@ def parse_issuer_aliases(doc: Dict[str, Any], where: str
     CraSlipError on an unknown key, an unknown broker id, a name with no
     distinctive word (it would take another institution's slips) or no
     source."""
-    from taxjson.lib.brokerages.detect import DISPLAY_NAMES
+    from taxjson.lib.brokerages.base import DISPLAY_NAMES
     if set(doc) - {"alias"}:
         raise CraSlipError(f"{where}: unknown key(s) "
                            f"{', '.join(sorted(set(doc) - {'alias'}))} — "
@@ -503,9 +506,8 @@ def parse_issuer_aliases(doc: Dict[str, Any], where: str
 def issuer_aliases() -> Tuple[IssuerAlias, ...]:
     """The shipped issuer aliases (cached). Raises CraSlipError when the
     file cannot be read (a broken install)."""
-    from taxjson.lib.tomlcompat import tomllib
     try:
-        doc = tomllib.loads(ISSUERS_FILE.read_text(encoding="utf-8"))
+        doc = read_toml(ISSUERS_FILE)
     except (OSError, ValueError) as e:
         raise CraSlipError(f"taxjson's slip issuer file {ISSUERS_FILE} "
                            f"cannot be read ({e}) — reinstall "
@@ -529,7 +531,7 @@ def alias_of_issuer(issuer: str) -> Optional[IssuerAlias]:
 
 
 def broker_of_issuer(issuer: str) -> Optional[str]:
-    """The broker id whose display name (lib/brokerages/detect
+    """The broker id whose display name (lib/brokerages/base
     DISPLAY_NAMES) the issuer's name carries in full — every word of it
     but a legal form, at least one of them distinctive (INTERACTIVE
     BROKERS CANADA INC. -> ib; RBC DIRECT INVESTING INC. -> rbc_direct;
@@ -537,7 +539,7 @@ def broker_of_issuer(issuer: str) -> Optional[str]:
     alias it carries (data/slip_issuers.toml: CI INVESTMENT SERVICES
     INC. -> webull; CI DIRECT INVESTING -> None); None when none or
     several."""
-    from taxjson.lib.brokerages.detect import DISPLAY_NAMES
+    from taxjson.lib.brokerages.base import DISPLAY_NAMES
     iw = _all_words(issuer)
     hits = set()
     for b, name in DISPLAY_NAMES.items():
@@ -762,7 +764,7 @@ def place(slips: List[CraSlip], groups: List[Group], year: int,
                       f"fills the cache), or type the slip into slips.toml")
             continue
         by_broker.setdefault(broker_of_issuer(s.issuer), []).append(pl)
-    from taxjson.lib.brokerages.detect import DISPLAY_NAMES
+    from taxjson.lib.brokerages.base import DISPLAY_NAMES
     for broker, pls in by_broker.items():
         gs = [g for g in groups if broker and g.broker == broker
               and (not account or g.account == account)]
@@ -1004,7 +1006,7 @@ def _norm(text: str) -> str:
 
 
 def _boxes_key(boxes: Dict[str, float]) -> Tuple:
-    return tuple(sorted((str(b), round(v, 2)) for b, v in boxes.items()
+    return tuple(sorted((str(b), M.units(v, 2)) for b, v in boxes.items()
                         if abs(v) >= 0.005))
 
 
@@ -1282,7 +1284,7 @@ def table(pl: Placement, key: str = "") -> str:
     broker_key written for its broker account (slip_audit.broker_key:
     salted with the project's work/ salt, never the books' own hash)."""
     s = pl.slip
-    boxes = ", ".join(f"{b} = {v:.2f}" for b, v in
+    boxes = ", ".join(f"{b} = {M.shown(v, 2):.2f}" for b, v in
                       sorted(s.boxes.items(), key=lambda kv: int(kv[0]))
                       if abs(v) >= 0.005)
     lines = ["[[slip]]", f'type = "{s.type}"',

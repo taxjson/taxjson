@@ -1,0 +1,4 @@
+Transaction Date,Settlement Date,Action,Symbol,Description,Quantity,Price,Gross Amount,Commission,Net Amount,Currency,Activity Type,Account #,Account Type
+2024-10-01,2024-10-02,Buy,SAMPQ.OPT,CALL SAMPQ 10/18/24 5.00 SAMPQ INC,1,0.40,-40.00,-1.25,-41.25,USD,Trades,99900021,Margin
+2024-10-21,2024-10-21,EXP,SAMPQ.OPT,CALL SAMPQ 10/18/24 5.00 SAMPQ INC OPTION EXPIRATION - EXPIRED,-1,0.00,0.00,0.00,0.00,USD,Other,99900021,Margin
+2024-12-31,2025-01-02,Buy,SAMPQ.OPT,PUT SAMPQ 12/31/24 4.00 SAMPQ INC,2,0.10,-20.00,-1.25,-21.25,USD,Trades,99900021,Margin

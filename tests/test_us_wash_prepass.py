@@ -24,8 +24,10 @@ These tests assert that the pre-pass and main pass now agree.
 """
 import unittest
 
-from taxjson.lib.core import TaxTransaction, USATaxRules
+from taxjson.engine.us.taxrules import USATaxRules
+from taxjson.model.transaction import TaxTransaction
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 
 class TestPrePassOpeningBalance(unittest.TestCase):
@@ -68,7 +70,7 @@ class TestPrePassOpeningBalance(unittest.TestCase):
                                    "short-replacement to disallow this loss")
 
 
-@rule("US-WASH-05")
+@rule(R.US_WASH_05)
 class TestPrePassShelteredPollution(unittest.TestCase):
     def test_sheltered_buy_does_not_mask_taxable_short_replacement(self):
         """Sheltered BUY at t0; taxable SELL at t1 (real short-open

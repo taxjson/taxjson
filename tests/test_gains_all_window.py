@@ -10,9 +10,11 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from _qa_project import console, project, tj
-from test_workflow_audit_fixes import QT_HEAD
+from _support.qt_trades import QT_HEAD
+from taxjson.lib.records import record_path, sha256_file
 
 ROWS = (QT_HEAD
         + "2023-02-01,2023-02-03,Buy,ZZQ,ZZQ CORP,100,40.00,-4000.00,0,"
@@ -99,16 +101,36 @@ class TestTwoYearProject(unittest.TestCase):
         w, _r = _json(self.root, "win-rates", "all")
         self.assertEqual(w["total"]["trades"], 2)
 
-    def test_built_once_then_reused(self):
+    def test_built_every_time_a_view_reads_it(self):
+        # No record's word serves a view (the owner's rule, TJ-4307): with
+        # nothing changed, the next view builds the file again. Its record is
+        # still written, for the sweep (`_vouched`).
         tj(self.root, "stats", "all")
-        before = self.all_file.stat().st_mtime_ns
+        old = self.all_file.stat().st_mtime_ns - 10 ** 9
+        os.utime(self.all_file, ns=(old, old))
         tj(self.root, "winners", "all")
-        self.assertEqual(self.all_file.stat().st_mtime_ns, before)
-        # A newer base book rebuilds it.
-        base = self.root / "work" / "margin_base.json"
-        os.utime(base, ns=(before + 10 ** 9, before + 10 ** 9))
-        tj(self.root, "stats", "all")
-        self.assertGreater(self.all_file.stat().st_mtime_ns, before)
+        self.assertGreater(self.all_file.stat().st_mtime_ns, old)
+        rec = json.loads(record_path(self.all_file).read_text(encoding="utf-8"))
+        self.assertEqual(rec["out"], sha256_file(self.all_file))
+
+    def test_built_once_per_command(self):
+        # A command that reads the file again (the grant expiries, a pool's
+        # covers, a blend's members) takes the one it built: its own build.
+        # The next command builds it again (`run_state.begin_command`).
+        from taxjson.cli import common
+        from taxjson.pipeline import run_state
+        settings = common.load_settings(self.root, missing_ok=True)
+        work = self.root / "work"
+        self.addCleanup(run_state.begin_command)
+        with mock.patch.object(common, "run_to_file", wraps=common.run_to_file) as built:
+            run_state.begin_command()
+            for _ in range(2):
+                self.assertEqual(common._gains_all_file(self.root, work, "margin", settings),
+                                 self.all_file)
+            self.assertEqual(built.call_count, 1)
+            run_state.begin_command()
+            common._gains_all_file(self.root, work, "margin", settings)
+            self.assertEqual(built.call_count, 2)
 
     def test_the_tax_year_files_are_not_the_full_history_one(self):
         from taxjson.lib.report_model import resolve_gains_files

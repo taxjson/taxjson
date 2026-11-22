@@ -1,0 +1,29 @@
+Statement,Header,Field Name,Field Value
+Statement,Data,BrokerName,Interactive Brokers
+Statement,Data,Title,Activity Statement
+Statement,Data,Period,"January 1, 2025 - December 31, 2025"
+Account Information,Header,Field Name,Field Value
+Account Information,Data,Account,U1234567
+Account Information,Data,Base Currency,CAD
+Cash Report,Header,Currency Summary,Currency,Total,Securities,Futures,
+Cash Report,Data,Starting Cash,USD,0,0,0,
+Cash Report,Data,Commissions,USD,-3.50,-1.50,-2,
+Cash Report,Data,Deposits,USD,200,200,0,
+Cash Report,Data,Trades (Sales),USD,600,600,0,
+Cash Report,Data,Trades (Purchase),USD,0,0,0,
+Cash Report,Data,Cash Settling MTM,USD,30,0,30,
+Cash Report,Data,Ending Cash,USD,826.50,798.50,28,
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Stocks,USD,SAMPLA,"2025-03-18, 10:00:00",-15,40,0,600,-3,-451,146,0,C
+Trades,Data,ClosedLot,Stocks,USD,SAMPLA,"2024-01-10, 09:31:00",10,28,,,,280.50,,,
+Trades,Data,ClosedLot,Stocks,USD,SAMPLA,"2024-06-14, 09:31:00",5,34,,,,170.50,,,
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Notional Value,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Futures,USD,SAMPLMH6,"2025-02-03, 10:00:00",1,20,0,-100,-1,0,0,0,O
+Trades,Data,Order,Futures,USD,SAMPLMH6,"2025-03-03, 10:00:00",-1,26,0,130,-1,0,28,0,C
+Commission Adjustments,Header,Currency,Date,Description,Amount
+Commission Adjustments,Data,USD,2025-03-24,"Refund (SAMPLA, -15, 2025-03-18)",1.50
+Deposits & Withdrawals,Header,Currency,Settle Date,Description,Amount
+Deposits & Withdrawals,Data,USD,2025-01-06,Electronic Fund Transfer,200
+Financial Instrument Information,Header,Asset Category,Symbol,Description,Conid,Security ID,Underlying,Listing Exch,Multiplier,Expiry,Delivery Month,Type,Strike,Code
+Financial Instrument Information,Data,Stocks,SAMPLA,SAMPLA CORP,99900001,US9990000011,,NASDAQ,1,,,COMMON,,
+Financial Instrument Information,Data,Futures,SAMPLMH6,SAMPLM MAR26,99900003,,SAMPLM,CME,5,2026-03-20,2026-03,,,

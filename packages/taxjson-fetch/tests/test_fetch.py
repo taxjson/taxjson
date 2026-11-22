@@ -1,7 +1,7 @@
 """tjs fetch — broker auto-fetch (offline: injected HTTP)."""
 # First: puts the plugin, the core and its test helpers on sys.path and
 # registers the plugin's entry point when it is not pip-installed.
-import _support  # noqa: F401
+import _bootstrap  # noqa: F401
 import json
 import os
 import subprocess
@@ -16,6 +16,7 @@ from taxjson_fetch.api import (flex_fetch, looks_like_ib_statement,
                                        qt_activities, qt_refresh, qt_to_csv,
                                        qt_window)
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -99,8 +100,8 @@ class TestQuestradeCsv(unittest.TestCase):
         self.assertIn("TC ENERGY CORP COM WE ACTED AS AGENT", text)
         self.assertNotIn("CORP  COM", text)
 
-    @rule("CA-DATE-14")
-    @rule("US-DATE-13")
+    @rule(R.CA_DATE_14)
+    @rule(R.US_DATE_13)
     def test_rows_sorted_and_byte_stable(self):
         # Rows sort by trade date; rows of ONE day keep the API's order
         # (Questrade stamps midnight, so that order is the only record
@@ -358,7 +359,7 @@ class TestAccountLevelFetchConfig(unittest.TestCase):
     query_id keys); a stray standalone [fetch.*] table is ignored."""
 
     def test_account_keys_do_not_warn_and_resolve(self):
-        from taxjson.bin.taxjson_run import validate_config
+        from taxjson.pipeline.config import validate_config
         from taxjson_fetch.command import _fetch_sources
         cfg = {"settings": {"year": 2026, "country": "canada"},
                "accounts": {"margin": {"type": "taxable",
@@ -374,7 +375,7 @@ class TestAccountLevelFetchConfig(unittest.TestCase):
         self.assertEqual(src["ibkr"]["query_id"], "42")
 
     def test_unknown_brokerage_warns_with_suggestion(self):
-        from taxjson.bin.taxjson_run import validate_config
+        from taxjson.pipeline.config import validate_config
         w = validate_config(
             {"settings": {"year": 2026, "country": "canada"},
              "accounts": {"m": {"type": "taxable",
@@ -431,7 +432,7 @@ class TestTaxYearStampedFilename(unittest.TestCase):
     def test_year_stamped_name_parses_as_questrade(self):
         # detect_broker must still route questrade_2026.csv to the
         # Questrade parser (content-based header detection).
-        from taxjson.bin.taxjson_run import detect_broker
+        from taxjson.pipeline.inputs import detect_broker
         with tempfile.TemporaryDirectory() as td:
             f = Path(td) / "questrade_2026.csv"
             f.write_text(
@@ -616,7 +617,7 @@ class TestLiveHoldings(unittest.TestCase):
 
     def test_toml_renders_and_parses(self):
         from taxjson_fetch.api import positions_to_holdings_toml
-        from taxjson.lib.tomlcompat import tomllib
+        import tomllib
         text = positions_to_holdings_toml(self._POS, "lira", "123",
                                           "2026-08-24 10:00:00")
         doc = tomllib.loads(text)

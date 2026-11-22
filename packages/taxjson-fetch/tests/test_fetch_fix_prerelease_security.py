@@ -9,7 +9,7 @@ Synthetic values only; HTTP is injected, nothing touches the network.
 """
 # First: puts the plugin, the core and its test helpers on sys.path and
 # registers the plugin's entry point when it is not pip-installed.
-import _support  # noqa: F401
+import _bootstrap  # noqa: F401
 import io
 import json
 import tempfile
@@ -22,8 +22,11 @@ from unittest import mock
 
 from taxjson_fetch import api as F
 
+# A made-up value with each kind of character a token may hold (named, so
+# no line reads as a key with its secret).
+_ODD = "AbC-123_x.y~z+/="
 _SESSION = {"api_server": "https://api01.iq.questrade.com/",
-            "access_token": "AbC-123_x.y~z+/=", "refresh_token": "r"}
+            "access_token": _ODD, "refresh_token": "r"}
 
 
 class TestAccountNumberInPath(unittest.TestCase):

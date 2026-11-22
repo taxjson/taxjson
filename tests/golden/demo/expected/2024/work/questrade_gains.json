@@ -1,0 +1,128 @@
+{
+  "by_ticker": {
+    "AAPL.US": {
+      "hold_days": [
+        51,
+        230
+      ],
+      "total_cost": 36463.365,
+      "total_div": 24.3,
+      "total_gain": 74.52,
+      "total_pil": 0.0,
+      "total_proceeds": 36537.885,
+      "trade_count": 2
+    }
+  },
+  "inventory": [
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-12-10",
+      "last_acq_settle": "2024-12-12",
+      "position_start_date": "2024-12-10",
+      "qty": 30.0,
+      "symbol": "SHOP.TO",
+      "total_cost": 2854.95
+    }
+  ],
+  "inventory_year_end": [
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "qty": 30.0,
+      "symbol": "SHOP.TO",
+      "total_cost": 2854.95
+    }
+  ],
+  "option_replacement_warnings": [],
+  "summary": {
+    "option_buyback_loss_superficial": false,
+    "option_grant_since": 2024,
+    "option_premium_timing": "grant",
+    "tax_date_basis": "settle",
+    "total_disallowed": 0,
+    "total_fees_by_currency": {
+      "CAD": {
+        "options": 0.0,
+        "stocks": 31.68,
+        "total": 31.68
+      }
+    },
+    "total_gain": 74.52,
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1,
+    "year": "2024"
+  },
+  "transactions": [
+    {
+      "account": "questrade",
+      "commission": 6.6825,
+      "cost": 18231.6825,
+      "currency": "CAD",
+      "date": "2024-05-10",
+      "date_settle": "2024-05-14",
+      "days_held": 51,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 0.0,
+      "gain": 87.885,
+      "grant": false,
+      "id": "760d3616ba0bcdab",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 18319.5675,
+      "qty": 75.0,
+      "raw_gain": 87.885,
+      "replacement_lot_ids": [],
+      "symbol": "AAPL.US",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "questrade",
+      "commission": 6.6825,
+      "cost": 18231.6825,
+      "currency": "CAD",
+      "date": "2024-11-05",
+      "date_settle": "2024-11-07",
+      "days_held": 230,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 0.0,
+      "gain": -13.365,
+      "grant": false,
+      "id": "776094dd28aecf44",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 18218.3175,
+      "qty": 75.0,
+      "raw_gain": -13.365,
+      "replacement_lot_ids": [],
+      "symbol": "AAPL.US",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "questrade",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "CAD",
+      "date": "2024-08-15",
+      "date_settle": "2024-08-15",
+      "dividend": 24.3,
+      "gain": 0.0,
+      "id": "1910cc60aad3cf5e",
+      "proceeds": 0.0,
+      "qty": 75.0,
+      "symbol": "AAPL.US",
+      "time": "00:00:00"
+    }
+  ],
+  "wash_sales": []
+}

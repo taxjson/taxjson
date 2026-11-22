@@ -9,7 +9,10 @@ the gate's time, on one core. This runner runs the same tests on N:
   1. COLLECT: one process loads the suite as the serial run does
      (`TestLoader.discover`: the same start folder and pattern) and
      reports each module's test count and test classes. A module that
-     fails to import is a failure here, as in the serial run.
+     fails to import is a failure here, as in the serial run, and so is
+     a TestCase class with tests bound where it is not defined (in a
+     second module, a helper's, or under a second name: unittest runs its
+     tests there too).
   2. RUN: each module is a separate `python -m unittest _hermetic
      <module>` process; a module slow enough to hold up the whole run
      (over half a process's fair share of the expected time, and over
@@ -78,9 +81,10 @@ names = json.loads(sys.stdin.read())
 if preload:
     importlib.import_module(preload)
 loader = unittest.TestLoader()
-total = loader.discover(start, pattern, top_level_dir=start).countTestCases()
+suite = loader.discover(start, pattern, top_level_dir=start)
+total = suite.countTestCases()
 errors = list(loader.errors)
-mods = {}
+mods, found = {}, {}
 for name in names:
     try:
         mod = importlib.import_module(name)
@@ -88,21 +92,58 @@ for name in names:
         errors.append(f"{name}: {type(e).__name__}: {e}")
         continue
     ld = unittest.TestLoader()
-    count = ld.loadTestsFromModule(mod, pattern=pattern).countTestCases()
+    msuite = ld.loadTestsFromModule(mod, pattern=pattern)
+    count = msuite.countTestCases()
     errors.extend(ld.errors)
+    # What the module runs, by class: its suite, as load_tests leaves it.
+    # (unittest's own cases, a FunctionTestCase or a load failure's, are no
+    # module's class; a doctest's is a helper's class, below.)
+    ran, ids_of = {}, {}
+    def walk(s):
+        for t in s:
+            if isinstance(t, unittest.TestSuite):
+                walk(t)
+            elif type(t).__module__.partition(".")[0] != "unittest":
+                ran[type(t)] = ran.get(type(t), 0) + 1
+                ids_of.setdefault(type(t), set()).add(t.id())
+    walk(msuite)
+    # Each name the module binds a class it runs under is a place (an
+    # alias is a second, as the loader runs the class once per name); one
+    # load_tests added from elsewhere is a place too.
     classes = {}
-    if not hasattr(mod, "load_tests"):
-        for attr in dir(mod):
-            obj = getattr(mod, attr)
-            if isinstance(obj, type) and issubclass(obj, unittest.TestCase) \
-                    and obj not in (unittest.TestCase, unittest.FunctionTestCase):
-                n = ld.loadTestsFromTestCase(obj).countTestCases()
-                if n:
-                    classes[attr] = n
-        if sum(classes.values()) != count:
-            classes = {}
+    for cls, k in ran.items():
+        names_of = sorted(a for a, v in vars(mod).items() if v is cls)
+        entry = found.setdefault(id(cls), (cls, [], {}))
+        entry[1].extend((name, a) for a in names_of or ["(load_tests)"])
+        entry[2][name] = ids_of[cls]
+        if len(names_of) == 1:
+            classes[names_of[0]] = k
+    if hasattr(mod, "load_tests") or sum(classes.values()) != count:
+        classes = {}
     mods[name] = {"count": count, "classes": classes}
-print(json.dumps({"total": total, "errors": errors, "modules": mods}))
+# A class with tests runs wherever a module binds it: one found under two
+# names (two modules, or an alias), or bound in a module that does not
+# define it while its own module holds it at the top (a helper's), runs
+# twice or from the wrong place. A class a factory builds is no module's
+# top-level name: it runs where it is found, once. A helper's class that
+# load_tests builds cases from (parameterised, or a doctest's) runs where
+# they are put: it fails only when two modules give the same test id.
+bound = []
+collected = set(names)
+for obj, places, ids in found.values():
+    home = sys.modules.get(obj.__module__)
+    at_home = getattr(home, "__dict__", {}).get(obj.__name__) is obj
+    others = [f"{m}.{a}" for m, a in places if (m, a) != (obj.__module__, obj.__name__)]
+    if not others:
+        continue
+    if obj.__module__ not in collected and all(a == "(load_tests)" for _m, a in places):
+        sets = list(ids.values())
+        if any(a & b for i, a in enumerate(sets) for b in sets[i + 1:]):
+            bound.append(f"{', '.join(others)}: {obj.__module__}.{obj.__qualname__} "
+                         f"(the same test ids)")
+    elif len(places) > 1 or at_home:
+        bound.append(f"{', '.join(others)}: {obj.__module__}.{obj.__qualname__}")
+print(json.dumps({"total": total, "errors": errors, "modules": mods, "bound": sorted(bound)}))
 """
 
 _RAN = re.compile(r"^Ran (\d+) tests? in ([0-9.]+)s$", re.MULTILINE)
@@ -142,7 +183,10 @@ def child_env(tmp: Path) -> dict:
     env.update(TMPDIR=str(tmp), TMP=str(tmp), TEMP=str(tmp), HOME=str(home),
                XDG_CACHE_HOME=str(home / ".cache"),
                XDG_CONFIG_HOME=str(home / ".config"),
-               PYTHONDONTWRITEBYTECODE=env.get("PYTHONDONTWRITEBYTECODE", ""))
+               PYTHONDONTWRITEBYTECODE=env.get("PYTHONDONTWRITEBYTECODE", ""),
+               # What a test prints lands before unittest's summary, not after
+               # it, so the last `Ran` line is the part's own (TJ-3729).
+               PYTHONUNBUFFERED="1")
     if not env["PYTHONDONTWRITEBYTECODE"]:
         del env["PYTHONDONTWRITEBYTECODE"]
     return env
@@ -214,6 +258,39 @@ def save_durations(path: Path, old: dict, new: dict):
         print(f"   (durations not recorded: {e})", file=sys.stderr)
 
 
+def select(collected: dict, names) -> tuple:
+    """The collected modules the names ask for, and the names that are
+    neither: a module (`test_x`, `rules.ca.sl.test_x`) runs whole; a class
+    of one (`test_x.TestY`, as the no-extras stage names a split module's
+    classes so the mover renames them with their class) runs alone, and a
+    module whose every class is named runs whole. A class resolves only
+    where the collect could count it (one name, no load_tests)."""
+    chosen: dict = {}
+    unknown = []
+    for name in names:
+        if name in collected:
+            chosen[name] = None
+            continue
+        mod, _, cls = name.rpartition(".")
+        if mod in collected and cls in collected[mod]["classes"]:
+            if mod not in chosen:
+                chosen[mod] = set()
+            if chosen[mod] is not None:
+                chosen[mod].add(cls)
+            continue
+        unknown.append(name)
+    out = {}
+    for mod, named in chosen.items():
+        info = collected[mod]
+        if named is None or named == set(info["classes"]):
+            out[mod] = info
+        else:
+            classes = {c: info["classes"][c] for c in sorted(named)}
+            out[mod] = {"count": sum(classes.values()), "classes": classes,
+                        "only": True}
+    return out, unknown
+
+
 def plan(collected: dict, start: Path, durations: dict, split_over: float,
          jobs: int = 1):
     """The parts to run — (name, module, expected tests, expected
@@ -235,7 +312,7 @@ def plan(collected: dict, start: Path, durations: dict, split_over: float,
     for mod, guess in guesses.items():
         info = collected[mod]
         classes = info["classes"]
-        if guess > limit and len(classes) > 1:
+        if info.get("only") or (guess > limit and len(classes) > 1):
             total = sum(classes.values())
             for cls, n in classes.items():
                 name = f"{mod}.{cls}"
@@ -248,12 +325,25 @@ def plan(collected: dict, start: Path, durations: dict, split_over: float,
 
 
 def parse_result(text: str):
-    """(tests run, status line) from a unittest run's output (the last
-    of each: a test may print its own)."""
-    ran = _RAN.findall(text)
-    st = _STATUS.findall(text)
-    return (int(ran[-1][0]) if ran else None,
-            (st[-1][0] + st[-1][1]).strip() if st else "")
+    """(tests run, status line) from a unittest run's output: the last
+    `Ran` line and the first status line after it. A test may print its
+    own of either; a part's stdout is unbuffered (child_env), so what it
+    prints lands before the summary, and a status line after the real one
+    is still a test's."""
+    ran = list(_RAN.finditer(text))
+    if not ran:
+        st = _STATUS.findall(text)
+        return None, (st[-1][0] + st[-1][1]).strip() if st else ""
+    st = _STATUS.search(text, ran[-1].end())
+    return int(ran[-1].group(1)), (st.group(1) + st.group(2)).strip() if st else ""
+
+
+def skipped_of(text: str) -> int:
+    """The tests a part skipped, from its status line (`OK (skipped=3)`,
+    parse_result's): the suite's total is compared across a test move
+    (PLAN.md step 9)."""
+    m = re.search(r"\bskipped=(\d+)", parse_result(text)[1])
+    return int(m.group(1)) if m else 0
 
 
 def main(argv=None) -> int:
@@ -324,6 +414,19 @@ def _run(a, py, start, preload, root, t0) -> int:
         for e in col["errors"]:
             print(f"  {e}")
         return 1
+    if col.get("bound"):
+        # A TestCase class with tests runs wherever a module's suite holds
+        # it: one two modules' suites hold, or one module binds under two
+        # names, runs twice; a helper's runs from a module that does not
+        # define it. (One suite that adds a class twice is its own choice.)
+        bound = col["bound"]
+        print(f"COLLECT FAILED — {len(bound)} TestCase class(es) with tests bound where they "
+              f"are not defined (a second module or name: their tests run there too):")
+        for b in bound[:20]:
+            print(f"  {b}")
+        if len(bound) > 20:
+            print(f"  ... and {len(bound) - 20} more")
+        return 1
     mods = col["modules"]
     whole = sum(m["count"] for m in mods.values())
     if whole != col["total"]:
@@ -331,11 +434,10 @@ def _run(a, py, start, preload, root, t0) -> int:
               f"discovery {col['total']} — the module list misses some")
         return 1
     if a.modules:
-        unknown = [m for m in a.modules if m not in mods]
+        mods, unknown = select(mods, a.modules)
         if unknown:
-            print("not test modules here: " + ", ".join(unknown))
+            print("not test modules or classes here: " + ", ".join(unknown))
             return 2
-        mods = {m: mods[m] for m in a.modules}
     expected = sum(m["count"] for m in mods.values())
     durations_path = Path(a.durations)
     old = load_durations(durations_path)
@@ -405,7 +507,10 @@ def _run(a, py, start, preload, root, t0) -> int:
     for m, s in sorted(per_mod.items(), key=lambda kv: -kv[1])[:SLOWEST]:
         nparts = sum(1 for r in results.values() if r[0] == m)
         print(f"  {s:7.1f}  {m}" + (f"  ({nparts} parts)" if nparts > 1 else ""))
-    print(f"\nRan {ran_total} of {expected} tests in {wall:.1f}s on {jobs} "
+    skipped = sum(skipped_of(r[5]) for r in results.values())
+    print(f"\nRan {ran_total} of {expected} tests"
+          + (f" ({skipped} skipped)" if skipped else "")
+          + f" in {wall:.1f}s on {jobs} "
           f"processes ({cpu:.0f}s of process time, {cpu / wall:.1f}x)")
     ok = not failed and not missing and ran_total == expected
     if ran_total != expected and not failed:

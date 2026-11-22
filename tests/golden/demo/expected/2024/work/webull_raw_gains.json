@@ -1,0 +1,124 @@
+{
+  "by_ticker": {
+    "AAPL.US": {
+      "hold_days": [
+        51
+      ],
+      "total_cost": 13500.0,
+      "total_div": 0.0,
+      "total_gain": 70.05,
+      "total_pil": 0.0,
+      "total_proceeds": 13570.05,
+      "trade_count": 1
+    },
+    "ABCD270219C00045000.US": {
+      "hold_days": [
+        22
+      ],
+      "total_cost": 1559.75,
+      "total_div": 0.0,
+      "total_gain": 130.25,
+      "total_pil": 0.0,
+      "total_proceeds": 1690.0,
+      "trade_count": 1
+    }
+  },
+  "inventory": [
+    {
+      "currency": "USD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-03-18",
+      "last_acq_settle": "2024-03-20",
+      "position_start_date": "2024-01-10",
+      "qty": 75.0,
+      "symbol": "AAPL.US",
+      "total_cost": 13500.0
+    },
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-12-11",
+      "last_acq_settle": "2024-12-12",
+      "position_start_date": "2024-12-11",
+      "qty": 30.0,
+      "symbol": "SHOP.TO",
+      "total_cost": 2854.95
+    }
+  ],
+  "option_replacement_warnings": [],
+  "summary": {
+    "total_disallowed": 0,
+    "total_fees_by_currency": {
+      "CAD": {
+        "options": 0.0,
+        "stocks": 4.95,
+        "total": 4.95
+      },
+      "USD": {
+        "options": 19.75,
+        "stocks": 4.95,
+        "total": 24.7
+      }
+    },
+    "total_gain": 200.3,
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1
+  },
+  "transactions": [
+    {
+      "account": "webull",
+      "commission": 0.0,
+      "cost": 13500.0,
+      "currency": "USD",
+      "date": "2024-05-08",
+      "date_settle": "2024-05-10",
+      "days_held": 51,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 4.95,
+      "gain": 70.05,
+      "grant": false,
+      "id": "80adfbc0b93461a3",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 13570.05,
+      "qty": 75.0,
+      "raw_gain": 70.05,
+      "replacement_lot_ids": [],
+      "symbol": "AAPL.US",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "webull",
+      "commission": 0.0,
+      "cost": 1559.75,
+      "currency": "USD",
+      "date": "2024-12-13",
+      "date_settle": "2024-12-16",
+      "days_held": 22,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 10.0,
+      "gain": 130.25,
+      "grant": false,
+      "id": "0c9950f551c70521",
+      "is_option": true,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 1690.0,
+      "qty": 10.0,
+      "raw_gain": 130.25,
+      "replacement_lot_ids": [],
+      "symbol": "ABCD270219C00045000.US",
+      "term": null,
+      "wash_replacements": null
+    }
+  ],
+  "wash_sales": []
+}

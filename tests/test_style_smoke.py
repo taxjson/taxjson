@@ -17,6 +17,7 @@ from unittest import mock
 from _style import assert_console, assert_labelled, assert_styled, project
 
 from taxjson.lib import out
+from taxjson.pipeline import run_state
 
 
 class _Width100(unittest.TestCase):
@@ -103,10 +104,10 @@ class TestLintLongWord(unittest.TestCase):
 # ----------------------------------------------------- shared helpers
 class TestDie(_Width100):
     def test_die_is_an_error_headline_with_details(self):
-        from taxjson.bin import taxjson_run as R
-        with mock.patch.object(R, "_CURRENT_CMD", "sum"), \
+        from taxjson.pipeline import messages as pipeline_messages
+        with mock.patch.object(run_state, "current_cmd", "sum"), \
                 self.assertRaises(SystemExit) as cm:
-            R._die("no gains files in work/", "Run `tjs run` first. "
+            pipeline_messages._die("no gains files in work/", "Run `tjs run` first. "
                    * 12)
         text = str(cm.exception)
         self.assertTrue(text.startswith(
@@ -114,22 +115,22 @@ class TestDie(_Width100):
         self.assertEqual(out.lint(text), [])
 
     def test_die_input_exits_2_on_stderr(self):
-        from taxjson.bin import taxjson_run as R
+        from taxjson.pipeline import messages as pipeline_messages
         err = io.StringIO()
-        with mock.patch.object(R, "_CURRENT_CMD", "opening"), \
+        with mock.patch.object(run_state, "current_cmd", "opening"), \
                 contextlib.redirect_stderr(err), \
                 self.assertRaises(SystemExit) as cm:
-            R._die_input("no such file: x.toml")
+            pipeline_messages._die_input("no such file: x.toml")
         self.assertEqual(cm.exception.code, 2)
         self.assertEqual(err.getvalue(), "Error: no such file: x.toml\n")
         # Captured (width 0): the GNU bytes the checklist reads.
         err = io.StringIO()
-        with mock.patch.object(R, "_CURRENT_CMD", "opening"), \
+        with mock.patch.object(run_state, "current_cmd", "opening"), \
                 out.unwrapped(), contextlib.redirect_stderr(err), \
                 self.assertRaises(SystemExit):
-            R._die_input("no such file: x.toml")
+            pipeline_messages._die_input("no such file: x.toml")
         self.assertEqual(err.getvalue(),
-                         f"{R._PROG} opening: error: no such file: x.toml\n")
+                         f"{pipeline_messages._PROG} opening: error: no such file: x.toml\n")
 
     def test_cli_diag_messages_keep_their_marker_line(self):
         from taxjson.lib import cli_diag
@@ -157,7 +158,7 @@ class TestUnwrappedWhenCaptured(_Width100):
     def test_a_captured_stage_keeps_whole_lines(self):
         # What a .diag (and so the .sum DIAGNOSTICS) receives: a tool's
         # long error stays one line under the run's capture.
-        from taxjson.lib.dispatch import run_cmd
+        from taxjson.pipeline.dispatch import run_cmd
         with tempfile.TemporaryDirectory() as td:
             bad = Path(td) / "bad.json"
             bad.write_text('{"transactions": [')

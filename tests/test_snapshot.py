@@ -19,8 +19,9 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 _TOML = ('[settings]\nyear = 2024\ncountry = "canada"\n'
          'base_currency = "CAD"\nsource_currencies = []\n'
@@ -317,7 +318,7 @@ class TestRefusals(_Base):
 
     def test_never_replaces_one_and_leaves_nothing_when_it_fails(self):
         from taxjson.lib import compare as C
-        from taxjson.bin.taxjson_run import load_config
+        from taxjson.pipeline.config import load_config
         root = self.single()
         cfg = load_config(root)
         now = datetime(2026, 1, 2, 3, 4, 5)
@@ -335,7 +336,7 @@ class TestRefusals(_Base):
 
 class TestScaffold(unittest.TestCase):
     def test_the_gitignore_keeps_the_copies_out(self):
-        from taxjson.bin.taxjson_run import _TEMPLATE_GITIGNORE
+        from taxjson.cli.setup import _TEMPLATE_GITIGNORE
         self.assertIn("\n/snapshot/\n/*/snapshot/\n", _TEMPLATE_GITIGNORE)
 
 

@@ -1,4 +1,4 @@
-"""Moved from the core's tests/test_fix_l_runcore_b.py with `tjs fetch` (now the
+"""Moved from the core's tests/features/planning/test_run_core_planning_totals_and_locks.py with `tjs fetch` (now the
 taxjson-fetch plugin). Original module docstring:
 
 Regression pins for the run-core LOW findings, second half (2026-09
@@ -10,12 +10,11 @@ stub yfinance stands in where a command would call Yahoo).
 """
 # First: puts the plugin, the core and its test helpers on sys.path and
 # registers the plugin's entry point when it is not pip-installed.
-import _support  # noqa: F401
+import _bootstrap  # noqa: F401
 import tempfile
 import unittest
 from pathlib import Path
-from test_fix_l_runcore_a import (_QT_HEADER,  # noqa: E402
-                                  )
+from _support.qt_margin_views import _QT_HEADER
 
 
 class TestFetchAndWatch(unittest.TestCase):
@@ -54,7 +53,7 @@ class TestFetchAndWatch(unittest.TestCase):
                       boom)
         self.assertNotIn("55500009", str(cm.exception))
         self.assertIn("/v1/accounts/55***/activities", str(cm.exception))
-        src = (_support.PLUGIN_SRC / "command.py").read_text()
+        src = (_bootstrap.PLUGIN_SRC / "command.py").read_text()
         self.assertNotIn('questrade #{number}', src)
 
 

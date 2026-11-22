@@ -1,0 +1,38 @@
+{
+  "errors": 0,
+  "events": 0,
+  "files": [
+    {
+      "account": "crypto",
+      "errors": 0,
+      "events": 0,
+      "file": "inputs/crypto/crypto_sends.tt",
+      "lines": 9,
+      "rows": 1,
+      "warnings": 0
+    },
+    {
+      "account": "margin",
+      "errors": 0,
+      "events": 0,
+      "file": "inputs/margin/margin_extra.tt",
+      "lines": 8,
+      "rows": 7,
+      "warnings": 0
+    },
+    {
+      "account": "tfsa",
+      "errors": 0,
+      "events": 0,
+      "file": "inputs/tfsa/tfsa_extra.tt",
+      "lines": 1,
+      "rows": 1,
+      "warnings": 0
+    }
+  ],
+  "lines": 18,
+  "problems": [],
+  "rows": 9,
+  "schema_version": 1,
+  "warnings": 0
+}

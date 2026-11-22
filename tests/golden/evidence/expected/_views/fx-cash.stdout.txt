@@ -1,0 +1,13 @@
+FX on foreign cash: NOT RELIABLE for 2025 — 1 in-year overdraft; do not file this figure.
+
+FX GAINS ON CASH — CAD, tax year 2025, ITA s.39(1.1) (capital, $200 de minimis), ledger v1 (default)
+GAIN(LOSS): the FX move realized when foreign cash is spent (pooled average cost), in CAD.
+CUR                 UNITS IN  UNITS OUT  GAIN(LOSS) CAD
+-------------------------------------------------------
+USD                   981.50     201.00            0.00
+-------------------------------------------------------
+NET (NOT RELIABLE)                                 0.00
+
+Ledger balance 2025-12-31:  USD 981.50 (compare with the brokers' year-end cash)
+! It misses conversions, deposits and margin; ledger v2 reads them — tjs fx-cash --ledger v2
+More: tjs fx-cash --details (why it is not reliable)

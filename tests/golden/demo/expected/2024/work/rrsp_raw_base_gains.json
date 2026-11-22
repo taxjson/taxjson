@@ -1,0 +1,139 @@
+{
+  "by_ticker": {
+    "JNJ.US": {
+      "hold_days": [
+        205
+      ],
+      "total_cost": 8479.35,
+      "total_div": 131.22,
+      "total_gain": 321.3,
+      "total_pil": 0.0,
+      "total_proceeds": 8800.65,
+      "trade_count": 1
+    },
+    "KO240920C00065000.US": {
+      "hold_days": [
+        63
+      ],
+      "total_cost": 501.255,
+      "total_div": 0.0,
+      "total_gain": -273.51,
+      "total_pil": 0.0,
+      "total_proceeds": 227.745,
+      "trade_count": 1
+    }
+  },
+  "inventory": [
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-08-19",
+      "last_acq_settle": "2024-08-20",
+      "position_start_date": "2024-08-19",
+      "qty": 20.0,
+      "symbol": "INTC.US",
+      "total_cost": 541.35
+    }
+  ],
+  "option_replacement_warnings": [],
+  "summary": {
+    "total_disallowed": 0,
+    "total_fees_by_currency": {
+      "CAD": {
+        "options": 3.51,
+        "stocks": 4.05,
+        "total": 7.56
+      }
+    },
+    "total_gain": 47.79,
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1
+  },
+  "transactions": [
+    {
+      "account": "rrsp",
+      "commission": 0.0,
+      "cost": 501.255,
+      "currency": "CAD",
+      "date": "2024-08-05",
+      "date_settle": "2024-08-06",
+      "days_held": 63,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 1.755,
+      "gain": -273.51,
+      "grant": false,
+      "id": "d99535e15a3f1074",
+      "is_option": true,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 227.745,
+      "qty": 2.0,
+      "raw_gain": -273.51,
+      "replacement_lot_ids": [],
+      "symbol": "KO240920C00065000.US",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "rrsp",
+      "commission": 0.0,
+      "cost": 8479.35,
+      "currency": "CAD",
+      "date": "2024-08-14",
+      "date_settle": "2024-08-15",
+      "days_held": 205,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 1.35,
+      "gain": 321.3,
+      "grant": false,
+      "id": "901bb5b914a5f39c",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 8800.65,
+      "qty": 40.0,
+      "raw_gain": 321.3,
+      "replacement_lot_ids": [],
+      "symbol": "JNJ.US",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "rrsp",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "CAD",
+      "date": "2024-03-05",
+      "date_settle": "2024-03-05",
+      "dividend": 64.26,
+      "gain": 0.0,
+      "id": "9dc5a9fdb4be735d",
+      "proceeds": 0.0,
+      "qty": 40.0,
+      "symbol": "JNJ.US",
+      "time": "09:30:00"
+    },
+    {
+      "account": "rrsp",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "CAD",
+      "date": "2024-06-11",
+      "date_settle": "2024-06-11",
+      "dividend": 66.96,
+      "gain": 0.0,
+      "id": "e73fcb215b151042",
+      "proceeds": 0.0,
+      "qty": 40.0,
+      "symbol": "JNJ.US",
+      "time": "09:30:00"
+    }
+  ],
+  "wash_sales": []
+}

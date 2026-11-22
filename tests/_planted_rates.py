@@ -25,7 +25,8 @@ import os
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional, Tuple
 
-from taxjson.bin import to_base_curr as TB
+import _hermetic  # noqa: F401  (the synthetic HOME before taxjson's caches read it: TJ-3857)
+from taxjson.lib import rate_cache as TB
 
 CACHE = ".currency_price_cache.json"
 

@@ -37,7 +37,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from taxjson.lib import cli_diag
-from taxjson.bin.taxjson_apply_distributions import balance_on, moment_rank
+from taxjson.lib import out as _out
+from taxjson.model.result import GainRow, Holding
+from taxjson.model import money as M
+from taxjson.lib.unit_balance import balance_on
+from taxjson.bin.taxjson_apply_distributions import moment_rank
 
 PROG = "taxjson-split-gains"
 
@@ -83,7 +87,7 @@ def _position_starts(rows: List[dict], basis: str) -> Dict[str, str]:
     # balance_on re-denominate it: a June 3 sale of 100 settling June 6
     # over a June 4 2-for-1 left 100 phantom shares here, and a June 9
     # buy's position kept January's start (backlog TJ-1013).
-    from taxjson.bin.taxjson_apply_distributions import _settle_lag_factors
+    from taxjson.lib.unit_balance import _settle_lag_factors
     factor = _settle_lag_factors(order) if basis == "settle" else {}
     for t in order:
         sym = str(t.get("symbol") or "")
@@ -125,7 +129,7 @@ def _own_premium_cost(lots: Any, account: str, qty: float, share: float,
             return None
         rest = float(total_cost or 0.0) + sum(float(e["premium"])
                                               for e in lots.values())
-        return round(-float(own["premium"]) + rest * share, 6)
+        return M.units(-float(own["premium"]) + rest * share, 6)
     except (AttributeError, KeyError, TypeError, ValueError):
         return None
 
@@ -175,7 +179,7 @@ def _split_inventory(rows: List[Dict[str, Any]], account: str,
     for row in rows:
         if row.get("short_pool") and row.get("account") == account:
             sym = row.get("symbol", "")
-            own_short[sym] = own_short.get(sym, 0.0) - float(row.get("qty")
+            own_short[sym] = own_short.get(sym, 0.0) - float(Holding(row).quantity
                                                              or 0.0)
     for row in rows:
         row_acct = row.get("account")
@@ -190,14 +194,14 @@ def _split_inventory(rows: List[Dict[str, Any]], account: str,
         qty = (balance_on(book, row.get("symbol", ""), until,
                           date_basis=date_basis)
                + own_short.get(row.get("symbol", ""), 0.0))
-        total_qty = float(row.get("qty") or 0.0)
+        total_qty = float(Holding(row).quantity or 0.0)
         if abs(qty) < 1e-9 or abs(total_qty) < 1e-9:
             continue
         share = qty / total_qty
         r = dict(row)
         # Full precision (audit S050-21: 6 dp turned 4e-07 ETH into a
         # 0.0-unit row with a cost); 10 dp only trims float noise.
-        r["qty"] = round(qty, 10)
+        r["qty"] = M.units(qty, 10)
         # SINCE is the account's own position start; last_acq_date stays
         # the POOL's on purpose (s.54 looks at any acquisition of the
         # identical property, in any account).
@@ -213,7 +217,7 @@ def _split_inventory(rows: List[Dict[str, Any]], account: str,
         for _f in ("total_cost", "deferred_wash", "base_total_cost",
                    "recognised_premium"):
             if _f in row:
-                r[_f] = round(float(row.get(_f) or 0.0) * share, 6)
+                r[_f] = M.units(float(row.get(_f) or 0.0) * share, 6)
         # A written option open in several accounts: its own contracts'
         # premium, which a close takes, with its share of what the lots
         # do not hold (backlog TJ-1251). Units that are not its own lots
@@ -292,12 +296,13 @@ def split_for_account(combined: Dict[str, Any], account: str,
     realized = disallowed = 0.0
     for e in txs:
         if "gain" in e and "qty" in e and not e.get("tainted"):
-            realized += float(e.get("gain") or 0.0)
-            disallowed += float(e.get("disallowed_amount")
+            g = GainRow(e)
+            realized += float(g.gain or 0.0)
+            disallowed += float(g.disallowed_amount
                                 or e.get("disallowed") or 0.0)
     summary = dict(combined.get("summary") or {})
-    summary["total_gain"] = round(realized, 2)
-    summary["total_disallowed"] = round(disallowed, 2)
+    summary["total_gain"] = M.shown(realized, 2)
+    summary["total_disallowed"] = M.shown(disallowed, 2)
     if "count" in summary:          # US: this file's records (S050-23)
         summary["count"] = len(txs)
     # Per-slice fee map: copying the COMBINED map into every account's
@@ -448,7 +453,7 @@ def main(argv=None) -> int:
     out = split_for_account(combined, args.account, base_txs, pool_rows)
     from taxjson.lib.json_input import dump_filing_json
     dump_filing_json(out, sys.stdout)
-    print()
+    _out.put("")  # the document's closing newline, as print() wrote it
     return 0
 
 

@@ -243,7 +243,7 @@ class TestRedactProject(unittest.TestCase):
         self.assertTrue(tax_object_counts(r))
 
     def test_init_gitignore_lists_the_copy(self):
-        from taxjson.bin.taxjson_run import _TEMPLATE_GITIGNORE
+        from taxjson.cli.setup import _TEMPLATE_GITIGNORE
         self.assertIn("\n/inputs_redact/\n", _TEMPLATE_GITIGNORE)
 
 

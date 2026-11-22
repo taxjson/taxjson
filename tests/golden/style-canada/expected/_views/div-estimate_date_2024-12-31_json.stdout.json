@@ -1,0 +1,237 @@
+{
+  "as_of_date": "<stamp>",
+  "currency": "CAD",
+  "months": 12,
+  "no_fx": [],
+  "omitted_no_history": [
+    {
+      "account": "margin",
+      "shares": 10.0,
+      "symbol": "NVDA.US"
+    },
+    {
+      "account": "margin",
+      "shares": 100.0,
+      "symbol": "PARN.US"
+    },
+    {
+      "account": "qt",
+      "shares": 30.0,
+      "symbol": "SHOP.TO"
+    },
+    {
+      "account": "rrsp",
+      "shares": 30.0,
+      "symbol": "SHOP.TO"
+    },
+    {
+      "account": "margin",
+      "shares": 10.0,
+      "symbol": "SPNC.US"
+    }
+  ],
+  "planning_only": true,
+  "rows": [
+    {
+      "account": "rrsp",
+      "currency": "USD",
+      "flags": [
+        "single payment"
+      ],
+      "frequency": "1 payment",
+      "fx_rate": 1.35,
+      "group": "sheltered",
+      "last_pay_date": "2024-08-15",
+      "last_per_share": 0.24,
+      "median_gap_days": null,
+      "next_amount": null,
+      "next_amount_base": null,
+      "next_pay_date": null,
+      "next_tax_date": null,
+      "payments": 1,
+      "projected": [],
+      "rest_of_year_amount": 0.0,
+      "rest_of_year_base": 0.0,
+      "shares": 75.0,
+      "status": "irregular",
+      "symbol": "AAPL.US",
+      "ttm_per_share": 0.24,
+      "window_amount": 18.0,
+      "window_amount_base": 24.3,
+      "withholding_rate": null,
+      "withholding_rest_of_year_base": null,
+      "withholding_window_base": null
+    },
+    {
+      "account": "tfsa",
+      "currency": "CAD",
+      "flags": [
+        "single payment"
+      ],
+      "frequency": "1 payment",
+      "fx_rate": 1.0,
+      "group": "sheltered",
+      "last_pay_date": "2024-12-20",
+      "last_per_share": 0.915,
+      "median_gap_days": null,
+      "next_amount": null,
+      "next_amount_base": null,
+      "next_pay_date": null,
+      "next_tax_date": null,
+      "payments": 1,
+      "projected": [],
+      "rest_of_year_amount": 0.0,
+      "rest_of_year_base": 0.0,
+      "shares": 200.0,
+      "status": "irregular",
+      "symbol": "ENB.TO",
+      "ttm_per_share": 0.915,
+      "window_amount": 183.0,
+      "window_amount_base": 183.0,
+      "withholding_rate": null,
+      "withholding_rest_of_year_base": null,
+      "withholding_window_base": null
+    },
+    {
+      "account": "margin",
+      "currency": "USD",
+      "flags": [
+        "single payment"
+      ],
+      "frequency": "1 payment",
+      "fx_rate": 1.35,
+      "group": "taxable",
+      "last_pay_date": "2024-09-12",
+      "last_per_share": 0.2,
+      "median_gap_days": null,
+      "next_amount": null,
+      "next_amount_base": null,
+      "next_pay_date": null,
+      "next_tax_date": null,
+      "payments": 1,
+      "projected": [],
+      "rest_of_year_amount": 0.0,
+      "rest_of_year_base": 0.0,
+      "shares": 100.0,
+      "status": "irregular",
+      "symbol": "QZQ.US",
+      "ttm_per_share": 0.2,
+      "window_amount": 20.0,
+      "window_amount_base": 27.0,
+      "withholding_rate": 0.15,
+      "withholding_rest_of_year_base": 0.0,
+      "withholding_window_base": 4.05
+    },
+    {
+      "account": "tfsa",
+      "currency": "USD",
+      "flags": [
+        "single payment"
+      ],
+      "frequency": "1 payment",
+      "fx_rate": 1.35,
+      "group": "sheltered",
+      "last_pay_date": "2024-09-12",
+      "last_per_share": 0.2,
+      "median_gap_days": null,
+      "next_amount": null,
+      "next_amount_base": null,
+      "next_pay_date": null,
+      "next_tax_date": null,
+      "payments": 1,
+      "projected": [],
+      "rest_of_year_amount": 0.0,
+      "rest_of_year_base": 0.0,
+      "shares": 50.0,
+      "status": "irregular",
+      "symbol": "QZQ.US",
+      "ttm_per_share": 0.2,
+      "window_amount": 10.0,
+      "window_amount_base": 13.5,
+      "withholding_rate": null,
+      "withholding_rest_of_year_base": null,
+      "withholding_window_base": null
+    },
+    {
+      "account": "tfsa",
+      "currency": "CAD",
+      "flags": [
+        "2 expected payments not in the books"
+      ],
+      "frequency": "quarterly",
+      "fx_rate": 1.0,
+      "group": "sheltered",
+      "last_pay_date": "2024-06-15",
+      "last_per_share": 1.38,
+      "median_gap_days": 92.0,
+      "next_amount": null,
+      "next_amount_base": null,
+      "next_pay_date": null,
+      "next_tax_date": null,
+      "payments": 2,
+      "projected": [],
+      "rest_of_year_amount": 0,
+      "rest_of_year_base": 0.0,
+      "shares": 50.0,
+      "status": "stopped",
+      "symbol": "RY.TO",
+      "ttm_per_share": 2.76,
+      "window_amount": 0,
+      "window_amount_base": 0.0,
+      "withholding_rate": null,
+      "withholding_rest_of_year_base": null,
+      "withholding_window_base": null
+    },
+    {
+      "account": "margin",
+      "currency": "CAD",
+      "flags": [
+        "single payment"
+      ],
+      "frequency": "1 payment",
+      "fx_rate": 1.0,
+      "group": "taxable",
+      "last_pay_date": "2024-03-28",
+      "last_per_share": 0.5,
+      "median_gap_days": null,
+      "next_amount": null,
+      "next_amount_base": null,
+      "next_pay_date": null,
+      "next_tax_date": null,
+      "payments": 1,
+      "projected": [],
+      "rest_of_year_amount": 0.0,
+      "rest_of_year_base": 0.0,
+      "shares": 100.0,
+      "status": "irregular",
+      "symbol": "SAMPA.TO",
+      "ttm_per_share": 0.5,
+      "window_amount": 50.0,
+      "window_amount_base": 50.0,
+      "withholding_rate": null,
+      "withholding_rest_of_year_base": null,
+      "withholding_window_base": null
+    }
+  ],
+  "schema_version": 1,
+  "tax_year": 2024,
+  "totals": {
+    "rest_of_year": {
+      "sheltered": 0.0,
+      "taxable": 0.0
+    },
+    "window": {
+      "sheltered": 220.8,
+      "taxable": 77.0
+    },
+    "withholding_rest_of_year": {
+      "sheltered": 0.0,
+      "taxable": 0.0
+    },
+    "withholding_window": {
+      "sheltered": 0.0,
+      "taxable": 4.05
+    }
+  },
+  "window_end": "2025-12-31"
+}

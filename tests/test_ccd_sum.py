@@ -11,8 +11,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 SHORT_CALL = "BNS260116C00082000.TO"       # sold 2 for 300, bought back 100
 LONG_CALL = "AAPL260116C00150000.US"

@@ -13,9 +13,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from taxjson.bin.taxjson_ticker_map import (
-    load_map_file, apply_drops, merge_renames,
-)
+from taxjson.lib.ticker_map_rules import merge_renames
+from taxjson.lib.map_file import load_map_file
+from taxjson.bin.taxjson_ticker_map import apply_drops
 
 
 def _map(content):

@@ -17,60 +17,51 @@ Order (`detect`):
      coinbase    coinbase.resolve_header (every required field through
                  the synonym table; preamble lines above it allowed)
      kraken      kraken.header_kind (the trades or ledgers columns)
-   The signatures are mutually exclusive (tests/test_fix_detect.py
+   The signatures are mutually exclusive (tests/features/discovery/test_detection_precedence.py
    checks every sample against every detector); a file matching two is
    refused, naming both — never a silent pick.
    A positions-ONLY report (an RBC "Holdings Export": what is held on a
-   date, not activity — lib/positions_reports) matches no trade
-   detector: `detect` returns it with `positions` set and no parser,
-   and `tjs run` skips it with a note (`tjs sanity` and
-   `tjs opening` read it).
-3. The file name, only when no content signature matched: a `cb_` /
-   `kr_` / `generic_` prefix, or the word coinbase / kraken in the name.
-   When the content matched and the name suggests another broker, the
-   content wins and a note says so.
+   date, not activity — lib/positions_reports; positions_only_text,
+   below) matches no trade detector: `detect` returns it with
+   `positions` set and no parser, and `tjs run` skips it with a note
+   (`tjs sanity` and `tjs opening` read it).
+3. The file name, only when no content signature matched: the prefixes
+   and words each parser's registry entry lists
+   (taxjson.parsers.registry: NAME_PREFIXES, NAME_WORDS). When the
+   content matched and the name suggests another broker, the content
+   wins and a note says so.
+   A generic mapping's [signature] (the folder's generic.toml, or a
+   layout under <project>/layouts/ or ~/.config/taxjson/layouts/) fits
+   a file by its header, under any name; when a supported export's
+   signature fits the same file, the file is refused as ambiguous: a
+   sidecar picks.
 """
 
 import csv
 import io
+import re
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from taxjson.lib.brokerages.base import (BrokerageParseError,
+from taxjson.lib.brokerages.base import (DISPLAY_NAMES, BrokerageParseError,
                                          decode_broker_text, shown_name)
+from taxjson.parsers.registry import name_prefixes, name_words
 
 # How far into the file a header row may sit (an RBC / Webull / Coinbase
 # preamble, blank spacer lines).
 SCAN_ROWS = 40
 
-DISPLAY_NAMES: Dict[str, str] = {
-    'ib': 'Interactive Brokers',
-    'questrade': 'Questrade',
-    'webull': 'Webull',
-    'rbc_direct': 'RBC Direct Investing',
-    'coinbase': 'Coinbase',
-    'kraken': 'Kraken',
-    'generic': 'generic',
-}
-
-# The file-name fallback (step 3). Underscore prefixes match only at the
-# START of the name: a substring match routed ibkr_statement.csv
+# The parsers, their names and the file-name fallback (step 3): the
+# registry's (taxjson.parsers.registry; the names, DISPLAY_NAMES, through
+# lib/brokerages/base). Underscore prefixes match only
+# at the START of the name: a substring match routed ibkr_statement.csv
 # (contains "kr_") to the Kraken parser (REVIEW-2026-07-ui #3). Words
 # match anywhere. Prefixes are tried before words, so
 # kr_trades_moved_from_coinbase.csv is Kraken's.
-NAME_PREFIXES: Tuple[Tuple[str, str], ...] = (
-    ("cb_", "coinbase"),
-    ("kr_", "kraken"),
-    # The column-mapped importer for unsupported brokers; a generic_ file
-    # with no mapping still goes there so its "no mapping" message says
-    # which file to write.
-    ("generic_", "generic"),
-)
-NAME_WORDS: Tuple[Tuple[str, str], ...] = (
-    ("coinbase", "coinbase"),
-    ("kraken", "kraken"),
-)
+NAME_PREFIXES: Tuple[Tuple[str, str], ...] = name_prefixes()
+NAME_WORDS: Tuple[Tuple[str, str], ...] = name_words()
 
 # Sections an IB Activity Statement (or a Flex query with section codes)
 # can start with. A file whose first row is `<one of these>,Header,...`
@@ -90,7 +81,10 @@ IB_SECTIONS = frozenset({
 
 
 class AmbiguousBroker(BrokerageParseError):
-    """A file whose content matches two broker exports' signatures."""
+    """A file whose content matches two broker exports' signatures (or
+    a generic mapping's [signature] beside an export's: generic.
+    MappingAmbiguity), and a generic layout refused for every file it
+    could have read (generic.LayoutError): the run stops and names it."""
 
 
 @dataclass(frozen=True)
@@ -292,8 +286,10 @@ def _kraken(rows, head) -> _Result:
     return None, None
 
 
-# Every content detector, by parser id. Order only fixes the order
-# matches are NAMED in (an ambiguity is an error, never a pick).
+# Every content detector, by parser id (every registry parser but the
+# generic importer, which a mapping routes: tests/test_parser_registry.py
+# holds the two lists together). Order only fixes the order matches are
+# NAMED in (an ambiguity is an error, never a pick).
 DETECTORS: Dict[str, Callable[[list, list], _Result]] = {
     'ib': _ib,
     'questrade': _questrade,
@@ -334,19 +330,30 @@ def name_hint(name: str) -> Optional[Tuple[str, str]]:
     return None
 
 
-def generic_mapping(path: Path) -> Optional[Path]:
-    """The generic mapping that configures this CSV, or None: its own
-    `<name>.toml` sidecar (any file name), or — for a generic_ file —
-    the folder's shared generic.toml (generic.mapping_path's rule). A
-    sidecar that is a dangling link still counts: the generic importer
-    then refuses it with its own message."""
-    sidecar = path.with_name(path.name + ".toml")
-    if sidecar.exists() or sidecar.is_symlink():
-        return sidecar
-    shared = path.parent / "generic.toml"
-    if path.name.lower().startswith("generic_") and shared.is_file():
-        return shared
-    return None
+def mapping_choice(path: Path, project: Optional[Path] = None):
+    """How the generic importer would read this CSV
+    (generic.effective_mapping): a sidecar, the folder's generic.toml for
+    a generic_ file or by its [signature], a layout by its [signature].
+    A sidecar that is a dangling link still counts: the generic importer
+    then refuses it with its own message. Two layouts that fit, or a
+    layout that cannot be read, raise AmbiguousBroker. `project`: the
+    project whose layouts apply, when the caller knows it."""
+    from taxjson.lib.brokerages.generic import (LayoutError,
+                                                MappingAmbiguity,
+                                                effective_mapping)
+    try:
+        return effective_mapping(path, lenient=True, project=project)
+    except (MappingAmbiguity, LayoutError) as e:
+        raise AmbiguousBroker(str(e)) from e
+
+
+def generic_mapping(path: Path, project: Optional[Path] = None) -> Optional[Path]:
+    """The generic mapping that configures this CSV, or None
+    (`mapping_choice`; a refused choice counts as none here)."""
+    try:
+        return mapping_choice(path, project).path
+    except AmbiguousBroker:
+        return None
 
 
 # ------------------------------------------------------------ detect
@@ -369,7 +376,7 @@ _MATCH_CACHE: Dict[tuple, tuple] = {}
 def _file_matches(path: Path):
     """(hits, near misses, decoding error, positions) of one file's
     content — positions is (kind, as_of) for a positions-only report
-    (lib/positions_reports.positions_only_text), else None."""
+    (positions_only_text, below), else None."""
     try:
         st = path.stat()
         key = (str(path.resolve()), st.st_mtime_ns, st.st_size)
@@ -384,7 +391,6 @@ def _file_matches(path: Path):
     try:
         text = decode_broker_text(path.read_bytes(), shown_name(path))
         hits, near = content_matches(text)
-        from taxjson.lib.positions_reports import positions_only_text
         positions = positions_only_text(text)
     except BrokerageParseError as e:
         error = str(e)
@@ -402,21 +408,46 @@ def detect(path: Path) -> Detection:
     """How `tjs run` routes `path` (see the module docstring).
     Raises AmbiguousBroker when the content matches two exports."""
     path = Path(path)
-    mapping = generic_mapping(path)
+    choice = mapping_choice(path)
+    mapping = choice.path
     hits, near, error, positions = _file_matches(path)
-    if mapping is not None:
+    by_header = choice.how in ("signature", "layout")
+    # A signature is a guess the mapping makes about files it never
+    # named: a positions report its cells fit stays a positions report,
+    # and a supported export's own match is as good as the signature's.
+    if mapping is not None and not (by_header and positions and not hits):
+        if by_header and hits:
+            pick = (f"a bare `[layout] name = \"{choice.name}\"` names the "
+                    f"layout" if choice.how == "layout"
+                    else "holding the mapping itself, generic.toml's lines")
+            raise AmbiguousBroker(
+                f"{shown_name(path)}: its header fits both "
+                f"{DISPLAY_NAMES[hits[0][0]]} ({hits[0][1]}) and the "
+                f"[signature] of the generic mapping {mapping.name} — "
+                f"refusing to guess which reads it. A sidecar "
+                f"{path.name}.toml picks the mapping ({pick}); otherwise "
+                f"narrow the signature.")
         note = ''
         if len(hits) == 1:
             note = (f"{shown_name(path)}: its content matches "
                     f"{DISPLAY_NAMES[hits[0][0]]}, but the generic mapping "
                     f"{mapping.name} configures it — read with the "
                     f"mapping.")
-        return Detection(path, 'generic', 'mapping',
-                         f"mapping {mapping.name}", note=note, error=error)
+        reason = (f"layout {choice.name}, by its header" if choice.how == "layout"
+                  else f"mapping {mapping.name}, by its header"
+                  if choice.how == "signature"
+                  else f"mapping {mapping.name}"
+                  + (f" (layout {choice.name})" if choice.name else ""))
+        # A mapping never run on a real export (`[broker] verified =
+        # false`, TJ-2573): the parse says what to check.
+        from taxjson.lib.brokerages.generic import unverified_mapping
+        if unverified_mapping(path):
+            reason += "; unverified against a real export"
+        return Detection(path, 'generic', 'mapping', reason, note=note,
+                         error=error)
     if len(hits) > 1:
         raise AmbiguousBroker(ambiguity_message(path, hits))
     if positions and not hits:
-        from taxjson.lib.positions_reports import kind_label
         kind, as_of = positions
         return Detection(
             path, None, 'positions',
@@ -496,3 +527,64 @@ def same_broker_siblings(path: Path, broker: str,
         except (BrokerageParseError, OSError):
             continue            # reported when that file is detected
     return out
+
+
+# ------------------------------------------------- positions-only reports
+# A positions report's kind and label, and the positions-only test the
+# detector applies; lib/positions_reports reads the files (step 8 of the
+# architecture plan: moved here from lib/positions_reports, which the
+# detector called up into).
+
+_KIND_LABEL = {
+    "ib_open_positions": "Interactive Brokers Activity Statement — Open "
+                         "Positions",
+    "rbc_holdings": "RBC Holdings Export",
+    "holdings_toml": "holdings TOML",
+}
+
+
+def kind_label(kind: str) -> str:
+    return _KIND_LABEL.get(kind, kind)
+
+
+_HOLDINGS_PREAMBLE_RE = re.compile(
+    r'^\s*Holdings\s+Export\b(?:\s+as\s+of\s+(?:Date\s+)?'
+    # The comma may be a CSV cell break ("...Jan 5,2026 at ..." unquoted).
+    r'([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s*(\d{4}))?', re.I)
+
+
+def _rows(text: str, limit: Optional[int] = None) -> List[List[str]]:
+    return csv_rows(text, limit)
+
+
+def _first_text(rows) -> str:
+    for r in rows:
+        if r and any(c.strip() for c in r):
+            return " ".join(c.strip() for c in r if c.strip())
+    return ''
+
+
+def _preamble_date(first: str) -> str:
+    m = _HOLDINGS_PREAMBLE_RE.match(first or '')
+    if not m or not m.group(1):
+        return ''
+    mon, day, yr = m.group(1), m.group(2), m.group(3)
+    for fmt, mm in (('%b %d %Y', mon[:3]), ('%B %d %Y', mon)):
+        try:
+            return datetime.strptime(f"{mm} {day} {yr}",
+                                     fmt).strftime('%Y-%m-%d')
+        except ValueError:
+            continue
+    return ''
+
+
+def positions_only_text(text: str) -> Optional[Tuple[str, str]]:
+    """(kind, as_of) when decoded CSV text is a positions-ONLY report
+    (never activity), else None. An IB Activity Statement is activity
+    whatever sections it carries."""
+    from taxjson.lib.brokerages.rbc_direct import is_holdings_export
+    rows = _rows(text, 40)
+    first = _first_text(rows)
+    if is_holdings_export(first):
+        return 'rbc_holdings', _preamble_date(first)
+    return None

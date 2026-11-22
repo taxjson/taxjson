@@ -10,30 +10,10 @@ on an unknown layout, and assignment/exercise detection.
 
 Synthetic data only; account ids are fake (pii-ok).
 """
-import tempfile
 import unittest
-from pathlib import Path
 
-from taxjson.lib.brokerages.webull import WebullBrokerage
+from _support.wb_summary_2024 import _PRE, _H24, _H25, _parse
 
-
-def _wb():
-    """Webull with a $1.00 exercise/assignment charge configured
-    (`[accounts.X] exercise_fee = 1.00`): these fixtures carry that
-    charge, and nothing is inferred without the setting (B11)."""
-    p = WebullBrokerage()
-    p.exercise_fee = 1.00
-    return p
-
-_PRE = (",,,,,,,,\n"
-        "Account Number / Numéro de compte:,,,,,,,55500001,\n"  # pii-ok: synthetic id
-        "Year / Année:,,,,,,,2024,\n"
-        "Report / Rapport:,,,,,,,TRADING SUMMARY / RÉSUMÉ DES TRANSACTIONS,\n")
-_H24 = ('"Currency\nDevise",Date,"Action Code\nCode d\'action","Symbol\nSymbole",'
-        '"Security Description\nDescription des titres",Type Code of Securities Code de genre de titres,'
-        '"Quantity of Securities Quantité\nde titres","Price\nPrix",'
-        '"Proceeds of\nDisposition or Settlement Amount Produits de disposition"\n')
-_H25 = _H24.replace('"Price\nPrix",', '"Price\nPrix",,')
 
 F24 = (_PRE + _H24 +
        'USD,09-12-2024,BUY,@ZZQ,CALL ZZQ03/21/25 45,OPC,3,1.80,"(541.97)"\n'
@@ -46,13 +26,6 @@ F25 = (_PRE.replace("2024", "2025") + _H25 +
        'USD,10-07-2025,BUY,@ZZS,PUT ZZS07/18/25 240,OPC,1,0.00,,\n'
        'USD,03-07-2025,SELL,,,,-1,6.20,,619.35\n'
        'USD,11-07-2025,BUY,ZZS,ZZS INC,SHS,100,240.00,,"(24,001.00)"\n')
-
-
-def _parse(text):
-    with tempfile.TemporaryDirectory() as td:
-        f = Path(td) / "wb.csv"
-        f.write_text(text, encoding="utf-8")
-        return _wb().parse_file(f)
 
 
 class TestBothLayouts(unittest.TestCase):

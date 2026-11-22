@@ -9,8 +9,10 @@ from pathlib import Path
 from taxjson.bin.taxjson_fx_cash import (apply_jurisdiction,
                                          build_ledger)
 from tax_rules import rule
+from taxjson.rules import ids as R
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 _RATES = {("USD", "2026-01-10"): 1.30, ("USD", "2026-02-10"): 1.40,
           ("USD", "2026-03-10"): 1.35, ("USD", "2026-06-10"): 1.25}
@@ -121,7 +123,7 @@ class TestLedger(unittest.TestCase):
 
 
 class TestJurisdiction(unittest.TestCase):
-    @rule("CA-FX-07")
+    @rule(R.CA_FX_07)
     def test_ca_200_de_minimis_both_directions(self):
         self.assertEqual(apply_jurisdiction(150.0, "canada")
                          ["reportable"], 0.0)
@@ -213,7 +215,7 @@ class TestFxCashCli(unittest.TestCase):
         # The command itself always works; the end-of-run report only
         # appears with fx_cash_gains = true. (Exercised via the hook
         # function directly — a full run needs a populated pipeline.)
-        from taxjson.bin.taxjson_run import _fx_cash_after_run
+        from taxjson.pipeline.run import _fx_cash_after_run
         import io
         from contextlib import redirect_stdout
         with tempfile.TemporaryDirectory() as tmp:

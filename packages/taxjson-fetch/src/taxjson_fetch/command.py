@@ -342,7 +342,7 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
                 + ": no currency is written for its cost. Run `tjs "
                   "fetch --positions` again later.")
         out[a] = toml_path
-    _year = (cfg.get("settings") or {}).get("year")
+    _year = _project_year(cfg)
     if out and isinstance(_year, int) and _year < _dt.now().year:
         # A year folder keeps the snapshot taken at its year end
         # (lib/holdings_dir): today's positions belong to this year's.
@@ -396,6 +396,110 @@ def _qt_row_key(row, cols) -> tuple:
     return tuple(out)
 
 
+class _Merged(tuple):
+    """`_merge_csv_text`'s (merged text, new row count), with what the
+    merge did to the existing file's blank-Symbol rows (backlog
+    TJ-4955). `dropped_rows`: those left out, each equal in every other
+    cell to a named row the file keeps, as (the row, that row's symbol);
+    `dropped` their number. `filled`: those the download's named copy
+    replaces in a file that named no symbol for the activity (the copy
+    is then not counted as new)."""
+    dropped: int = 0
+    filled: int = 0
+    dropped_rows: tuple = ()
+
+    def __new__(cls, text: str, added: int, dropped_rows=(),
+                filled: int = 0) -> "_Merged":
+        self = super().__new__(cls, (text, added))
+        self.dropped_rows = tuple(dropped_rows)
+        self.dropped = len(self.dropped_rows)
+        self.filled = filled
+        return self
+
+
+def _qt_symbol_col(header) -> Optional[int]:
+    """Index of `header`'s Symbol column, None without one."""
+    return next((i for i, h in enumerate(header)
+                 if str(h).strip().lstrip("\ufeff").lower() == "symbol"),
+                None)
+
+
+def _qt_drop_blank_copies(ex_rows: list, new_rows: list, key,
+                          sym: int) -> Tuple[list, list, int, list]:
+    """`ex_rows` and `new_rows` (data rows of the existing fetch file
+    and of the new download) without the blank-Symbol rows that are a
+    copy of a named row kept: Questrade returns a re-fetched activity
+    with its Symbol blank, and the merge kept it as a second trade
+    (backlog TJ-4955).
+
+    Rows are grouped by every cell but the Symbol (`key`: numbers by
+    value). A group in which neither side names a symbol is left as it
+    is (fees, FX conversions, deposits: the larger side's count, as
+    before), and so is one neither side holds a blank row of. Otherwise
+    the blank rows kept are `qt_blank_copies`' count, the first ones of
+    each side: the exact merge that follows then keeps each symbol's
+    most copies and that many blank rows. A group the new download
+    holds no row of is left as it is: the file alone cannot tell a twin
+    from a second fill, and the parser's ATTENTION names the pair.
+
+    Third: how many of the existing rows left out stood for an activity
+    the file named no symbol of and the download now names (replaced,
+    not dropped). Fourth: the others, each as (the row, a symbol of the
+    named rows it equals)."""
+    from collections import Counter
+
+    def base_of(r):
+        return key(r[:sym] + ("",) + r[sym + 1:]) if sym < len(r) else key(r)
+
+    def is_blank(r):
+        return sym < len(r) and not r[sym].strip()
+    sides = []
+    for rows in (ex_rows, new_rows):
+        named: Dict[tuple, Counter] = {}
+        blank: Counter = Counter()
+        for r in rows:
+            if is_blank(r):
+                blank[base_of(r)] += 1
+            else:
+                named.setdefault(base_of(r), Counter())[r[sym] if sym < len(r)
+                                                        else ""] += 1
+        sides.append((named, blank))
+    (ex_named, ex_blank), (new_named, new_blank) = sides
+    want: Dict[tuple, int] = {}
+    fill: Dict[tuple, int] = {}
+    for base in set(ex_blank) | set(new_blank):
+        if base in ex_named or base in new_named:
+            had = ex_named.get(base, Counter())
+            now = new_named.get(base, Counter())
+            want[base] = F.qt_blank_copies(had, ex_blank[base], now,
+                                           new_blank[base],
+                                           kept_exact=False)
+            # Only where the file named no symbol is the blank row
+            # surely the download's named one and no twin of a file row.
+            fill[base] = 0 if had else min(
+                max(0, ex_blank[base] - want[base]), sum(now.values()))
+    filled = sum(fill.values())
+    gone: list = []
+
+    def cut(rows, note=False):
+        left = dict(want)
+        out = []
+        for r in rows:
+            base = base_of(r) if is_blank(r) else None
+            if base in left:
+                if left[base] <= 0:
+                    if note and fill[base] > 0:
+                        fill[base] -= 1
+                    elif note:
+                        gone.append((r, next(iter(
+                            ex_named.get(base) or new_named[base]))))
+                    continue
+                left[base] -= 1
+            out.append(r)
+        return out
+    return cut(ex_rows, note=True), cut(new_rows), filled, gone
+
+
 def _merge_csv_text(existing: str, new: str) -> Tuple[str, int]:
     """Union-merge two same-header CSVs on LOGICAL rows (csv module,
     not text lines — a quoted field may contain newlines, and a
@@ -404,7 +508,12 @@ def _merge_csv_text(existing: str, new: str) -> Tuple[str, int]:
     byte-identical rows can be physically distinct split fills (the
     parser's disambiguate_split_fills exists for exactly this), so a
     plain set-union would delete real trades on an overlap re-fetch.
-    Returns (merged_text, new_row_count). Refuses on a header
+    A row that differs from another only by a blank Symbol is that
+    row's copy, not a second trade: the named one is kept
+    (`_qt_drop_blank_copies`, backlog TJ-4955).
+    Returns (merged_text, new_row_count), a `_Merged` whose `dropped`
+    counts the existing rows left out. Merging the same download again
+    changes nothing. Refuses on a header
     mismatch — a format change must not silently corrupt the file."""
     import csv as _csv
     import io as _io
@@ -418,9 +527,9 @@ def _merge_csv_text(existing: str, new: str) -> Tuple[str, int]:
     ex_rows = _rows(existing.removeprefix("\ufeff"))
     new_rows = _rows(new.removeprefix("\ufeff"))
     if not new_rows:
-        return existing, 0
+        return _Merged(existing, 0)
     if not ex_rows:
-        return new, max(0, len(new_rows) - 1)
+        return _Merged(new, max(0, len(new_rows) - 1))
     if ex_rows[0] != new_rows[0]:
         raise ValueError("header mismatch between the existing fetch "
                          "file and the new download")
@@ -428,9 +537,15 @@ def _merge_csv_text(existing: str, new: str) -> Tuple[str, int]:
 
     def key(r):
         return _qt_row_key(r, cols)
-    ex_c = Counter(key(r) for r in ex_rows[1:])
-    new_c = Counter(key(r) for r in new_rows[1:])
-    added = sum((new_c - ex_c).values())
+    ex_data, new_data = ex_rows[1:], new_rows[1:]
+    sym = _qt_symbol_col(ex_rows[0])
+    filled, gone = 0, []
+    if sym is not None:
+        ex_data, new_data, filled, gone = _qt_drop_blank_copies(
+            ex_data, new_data, key, sym)
+    ex_c = Counter(key(r) for r in ex_data)
+    new_c = Counter(key(r) for r in new_data)
+    added = sum((new_c - ex_c).values()) - filled
     # ORDER (audit A2-0598): rows of one moment keep the export's order
     # (CA-DATE-14 / US-DATE-13) and Questrade stamps every row at
     # midnight, so the row sequence is data. The new download is the
@@ -440,11 +555,11 @@ def _merge_csv_text(existing: str, new: str) -> Tuple[str, int]:
     # sort on the trade date keeps the file chronological (the parser
     # reads a newest-first file bottom-up). Sorting the row tuples put
     # every same-day Buy ahead of its Sell.
-    merged = list(new_rows[1:])
+    merged = list(new_data)
     mkeys = [key(r) for r in merged]
     matched = [False] * len(merged)
     anchor = -1
-    for row in ex_rows[1:]:
+    for row in ex_data:
         k = key(row)
         hit = next((i for i in range(anchor + 1, len(merged))
                     if not matched[i] and mkeys[i] == k), None)
@@ -478,7 +593,98 @@ def _merge_csv_text(existing: str, new: str) -> Tuple[str, int]:
     w.writerow(ex_rows[0])
     for row in merged:
         w.writerow(row)
-    return buf.getvalue(), added
+    return _Merged(buf.getvalue(), added,
+                   [_qt_row_shown(ex_rows[0], r, s) for r, s in gone], filled)
+
+
+def _qt_row_shown(header, row, symbol: str) -> str:
+    """A fetch file's row as a message names it: its trade date, action,
+    `symbol` (the named row's, for a blank-Symbol copy) and quantity."""
+    def cell(name: str) -> str:
+        i = next((i for i, h in enumerate(header) if
+                  str(h).strip().lstrip("\ufeff").lower() == name), None)
+        return row[i].strip() if i is not None and i < len(row) else ""
+    return " ".join(x for x in (cell("transaction date")[:10],
+                                cell("action"), symbol.strip(),
+                                cell("quantity")) if x)
+
+
+def _qt_merged(existing: str, new_csv: str
+               ) -> Tuple[str, int, Dict[str, int], List[str]]:
+    """`_merge_csv_text`'s text and new row count; what it did to the
+    existing file's blank-Symbol rows as the `--json` summary names it:
+    `dropped` (copies of a named row kept, which an older version wrote
+    as second trades, backlog TJ-4955) and `symbol_filled`; and the
+    dropped rows as the console names them."""
+    merge = _merge_csv_text(existing, new_csv)
+    return merge[0], merge[1], {
+        "dropped": getattr(merge, "dropped", 0),
+        "symbol_filled": getattr(merge, "filled", 0)}, list(
+            getattr(merge, "dropped_rows", ()))
+
+
+_QT_DROPPED_SHOWN = 3     # dropped rows a message names; the rest counted
+
+
+def _qt_say_merged(say, name: str, added: int, downloaded: int,
+                   blank: Dict[str, int], gone: List[str],
+                   backup: Optional[Path] = None) -> None:
+    """What `tjs fetch` says of a merge into the file `name`: the rows
+    added, then the blank-Symbol rows it replaced (`symbol_filled`) or
+    left out (`gone`: each named, the first _QT_DROPPED_SHOWN), with the
+    file. `backup`: the copy of the file as it was; None on a dry run,
+    which says what it would do."""
+    would = backup is None
+    if would:
+        say(f"  would add {added} row(s) to {name} "
+            f"({downloaded} activities downloaded)")
+    else:
+        say(f"  {name}: +{added} new row(s) ({downloaded} downloaded)")
+    filled = blank["symbol_filled"]
+    if filled:
+        rows = "1 row" if filled == 1 else f"{filled} rows"
+        say(f"  {name}: {rows} with a blank Symbol "
+            f"{'would be replaced' if would else 'replaced'} by the "
+            f"download's copy that names the symbol (the same activity, "
+            f"not a new row).")
+    if gone:
+        rows = "1 row" if len(gone) == 1 else f"{len(gone)} rows"
+        more = len(gone) - _QT_DROPPED_SHOWN
+        say(f"  {name}: {'would drop' if would else 'dropped'} {rows} "
+            f"with a blank Symbol, "
+            f"{'' if len(gone) == 1 else 'each '}equal in every other cell "
+            f"to a row kept and read as its copy (the row kept, then the "
+            f"quantity): {'; '.join(gone[:_QT_DROPPED_SHOWN])}"
+            f"{f'; and {more} more' if more > 0 else ''}."
+            + ("" if would else f" The file as it was: {backup.name}. A "
+               f"dropped row that was booked counted its trade twice: run "
+               f"`tjs run` again and check the account's positions with "
+               f"`tjs sanity`."))
+
+
+def _qt_write_merged(out: Path, merged: str, gone: List[str]) -> Path:
+    """Write the merged fetch file; when the merge left rows out, the
+    file as it was is kept beside it first (`backup_copy`: <name>.bak,
+    as --trim-overlap keeps a trimmed export). Returns the backup's
+    path, or `out` when none was needed."""
+    bak = out
+    if gone and out.exists():
+        from taxjson.lib.safe_write import backup_copy
+        bak = backup_copy(out)
+    F.write_private(out, merged)
+    return bak
+
+
+def _project_year(cfg: Dict[str, Any]) -> Any:
+    """`[settings] year` of the project's config. The core hands the table
+    over as its typed settings object (read by attribute; it is no mapping);
+    a plain table is read as one."""
+    st = cfg.get("settings")
+    if st is None:
+        return None
+    if isinstance(st, dict):
+        return st.get("year")
+    return getattr(st, "year", None)
 
 
 def _fetch_sources(cfg: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
@@ -570,7 +776,7 @@ def _qt_window_overlap(acct_dir: Path, out: Path,
     hits: List[Tuple[Path, int]] = []
     import csv as _csv
     import io as _io
-    from taxjson.bin.taxjson_run import detect_broker, input_files
+    from taxjson.pipeline.plugin_api import detect_broker, input_files
     # input_files, not glob("*.csv"): `run` reads QT_MANUAL.CSV too, so
     # a case-sensitive glob let an overlapping upper-case export double
     # the books with no warning (S046-14).
@@ -996,7 +1202,7 @@ def _run_locked(request) -> Dict[str, Any]:
                              "rotating chain then lives in "
                              f"{tok_cache}.")
             _fetch_year = (getattr(args, "year", None)
-                           or cfg.get("settings", {}).get("year"))
+                           or _project_year(cfg))
             try:
                 start, end = F.qt_window(getattr(args, "days", None),
                                          getattr(args, "from_date", None),
@@ -1034,7 +1240,9 @@ def _run_locked(request) -> Dict[str, Any]:
             try:
                 existing = (out.read_text(encoding="utf-8")
                             if out.exists() else "")
-                merged, added = _merge_csv_text(existing, new_csv)
+                # _blank, _gone: the file's blank-Symbol copies of a named
+                # row, replaced or left out (backlog TJ-4955).
+                merged, added, _blank, _gone = _qt_merged(existing, new_csv)
             except ValueError as e:
                 sys.exit(f"tjs fetch: {a}: {e} — move the old "
                          f"{out.name} aside and re-fetch.")
@@ -1044,21 +1252,19 @@ def _run_locked(request) -> Dict[str, Any]:
             results[a] = {
                 "source": "questrade", "file": out.name,
                 "window": [start.isoformat(), end.isoformat()],
-                "downloaded": len(acts), "added": added,
+                "downloaded": len(acts), "added": added, **_blank,
                 "by_type": by_type,
                 "overlaps": [{"file": sib.name, "rows": n}
                              for sib, n in overlap_now],
             }
             if getattr(args, "dry_run", False):
-                say(f"  would add {added} row(s) to {out.name} "
-                    f"({len(acts)} activities downloaded)")
+                _qt_say_merged(say, out.name, added, len(acts), _blank, _gone)
                 for sib, n in overlap_now:
                     say(f"  note: {sib.name} has {n} row(s) inside "
                         f"the window (see --trim-overlap)")
                 continue
-            F.write_private(out, merged)
-            say(f"  {out.name}: +{added} new row(s) "
-                f"({len(acts)} downloaded)")
+            _qt_say_merged(say, out.name, added, len(acts), _blank, _gone,
+                           _qt_write_merged(out, merged, _gone))
             _restated = _qt_restatement_suspects(existing, new_csv)
             for _line in _restated[:5]:
                 say(f"  note: possible broker RESTATEMENT — an "
@@ -1196,7 +1402,7 @@ def _run_locked(request) -> Dict[str, Any]:
                          f"line descriptor', then re-fetch.")
             results[a] = {"source": "ibkr_flex", "file": out.name,
                           "lines": len(text.splitlines())}
-            _pyear = cfg.get("settings", {}).get("year")
+            _pyear = _project_year(cfg)
             _existing = (out.read_text(encoding="utf-8", errors="replace")
                          if out.exists() else "")
             _lost = _flex_lost_dates(_existing, text, _pyear,

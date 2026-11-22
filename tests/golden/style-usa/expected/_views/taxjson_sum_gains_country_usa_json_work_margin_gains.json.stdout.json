@@ -1,0 +1,139 @@
+{
+  "manual_rows": [],
+  "option_fees": {
+    "USD": 6.0
+  },
+  "returns_by_asset": {
+    "Options": {
+      "USD": {
+        "days": [
+          92,
+          80
+        ],
+        "dollars": [
+          -304.0,
+          199.0
+        ],
+        "fee_shares": [
+          2.0
+        ],
+        "fees": [
+          2.0
+        ]
+      }
+    },
+    "Stocks": {
+      "USD": {
+        "days": [
+          127,
+          193,
+          296,
+          133
+        ],
+        "dollars": [
+          98.0,
+          -201.0,
+          0.0,
+          0.0
+        ],
+        "fee_shares": [
+          50.0,
+          200.0,
+          100.0,
+          10.0
+        ],
+        "fees": [
+          1.0,
+          1.0,
+          9.95,
+          1.0
+        ]
+      }
+    }
+  },
+  "schema_version": 1,
+  "tainted_count": 0,
+  "tainted_routed": 0,
+  "ticker_stats": {
+    "MSFT.US": {
+      "USD": {
+        "cap": 98.0,
+        "cost": 20001.0,
+        "div": 75.0,
+        "hold_days": [
+          127
+        ],
+        "opt": 0.0,
+        "pil": 0.0,
+        "proceeds": 20099.0,
+        "st_gain": 98.0,
+        "trade_count": 1
+      }
+    },
+    "NVDA.US": {
+      "USD": {
+        "cap": 0.0,
+        "cost": 1481.0,
+        "div": 0.0,
+        "hold_days": [
+          133
+        ],
+        "opt": 0.0,
+        "pil": 0.0,
+        "proceeds": 1399.0,
+        "st_gain": 0.0,
+        "trade_count": 1
+      }
+    },
+    "PARN.US": {
+      "USD": {
+        "cap": 0.0,
+        "cost": 0.0,
+        "div": 250.0,
+        "hold_days": [],
+        "opt": 0.0,
+        "pil": 0.0,
+        "proceeds": 0.0,
+        "trade_count": 0
+      }
+    },
+    "QZQ.US": {
+      "USD": {
+        "cap": -201.0,
+        "cost": 6404.0,
+        "div": 40.0,
+        "hold_days": [
+          92,
+          193,
+          80
+        ],
+        "opt": -105.0,
+        "pil": 0.0,
+        "proceeds": 5897.0,
+        "st_gain": -306.0,
+        "trade_count": 3
+      }
+    },
+    "SAMPA.US": {
+      "USD": {
+        "cap": 0.0,
+        "cost": 4009.95,
+        "div": 50.0,
+        "hold_days": [
+          296
+        ],
+        "opt": 0.0,
+        "pil": 0.0,
+        "proceeds": 3490.05,
+        "st_gain": 0.0,
+        "trade_count": 1
+      }
+    }
+  },
+  "total_fees": {
+    "USD": 55.8
+  },
+  "total_year": "2024",
+  "wash_solver_converged": true,
+  "wash_solver_iterations": null
+}

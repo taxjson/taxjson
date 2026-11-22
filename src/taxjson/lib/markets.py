@@ -2,7 +2,9 @@
 the security lists taxjson cannot read from a broker export.
 
 The shipped defaults live in ``taxjson/data/markets.toml`` (package
-data, clearly labelled there). A project's ticker.map extends or
+data, clearly labelled there; read by lib/markets_data, with the listing
+suffixes it names, so lib/ticker_map checks a suffix without this
+module). A project's ticker.map extends or
 overrides them one symbol at a time (lib/ticker_map side rules):
 
     STABLE      SYMBOL USD|NO     a US-dollar stablecoin (or: not one)
@@ -26,6 +28,15 @@ line that would change it.
 """
 from __future__ import annotations
 
+from taxjson.lib.once import said_set
+# canadian_suffixes and listing_suffix_re live in lib/markets_data (the
+# Canadian listing spelling, lib/ca_listing, reads them below
+# lib/ticker_map: backlog TJ-4604); named here for their readers.
+from taxjson.lib.markets_data import (_venues,
+                                     canadian_suffixes as canadian_suffixes,
+                                     data,
+                                     listing_suffix_re as listing_suffix_re,
+                                     suffix_of)
 import os
 import re
 import sys
@@ -34,31 +45,10 @@ from pathlib import Path
 from typing import Any, Dict, FrozenSet, Optional, Tuple
 
 ENV_TICKER_MAP = "TAXJSON_TICKER_MAP"
-DATA_FILE = Path(__file__).resolve().parent.parent / "data" / "markets.toml"
 
-_DATA: Optional[Dict[str, Any]] = None
 _EXPLICIT_MAP: Optional[str] = None
 _OVR_CACHE: Dict[Tuple[str, float], "Overrides"] = {}
-_NOTED: set = set()
-
-
-class MarketsDataError(RuntimeError):
-    """The shipped data file is missing or unreadable (a broken
-    install)."""
-
-
-def data() -> Dict[str, Any]:
-    """The parsed shipped defaults (cached)."""
-    global _DATA
-    if _DATA is None:
-        from taxjson.lib.tomlcompat import tomllib
-        try:
-            _DATA = tomllib.loads(DATA_FILE.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as e:
-            raise MarketsDataError(
-                f"taxjson's market data file {DATA_FILE} cannot be read "
-                f"({e}) — reinstall taxjson") from None
-    return _DATA
+_NOTED = said_set()
 
 
 @lru_cache(maxsize=None)
@@ -259,16 +249,6 @@ def _decide(kind: str, key: str, ovr: Dict[str, bool],
 
 # --------------------------------------------------------------- venues
 
-def _venues() -> Dict[str, Dict[str, str]]:
-    return data()["venues"]
-
-
-@lru_cache(maxsize=None)
-def known_suffixes() -> FrozenSet[str]:
-    """Every listing suffix the books know (TO V CN NE VN US L AX)."""
-    return frozenset(_venues())
-
-
 @lru_cache(maxsize=None)
 def receipt_suffixes() -> FrozenSet[str]:
     """The listing suffixes of venues that list depositary receipts
@@ -281,18 +261,6 @@ def receipt_words() -> FrozenSet[str]:
     """The name words of a depositary receipt ([lists] receipt_words, as
     symbol_codes.exact_name spells them)."""
     return _list("receipt_words")
-
-
-@lru_cache(maxsize=None)
-def canadian_suffixes() -> FrozenSet[str]:
-    """The listing suffixes of Canadian exchanges (TO V CN NE VN)."""
-    return frozenset(s for s, v in _venues().items()
-                     if v.get("country") == "CAN")
-
-
-def suffix_of(symbol: str) -> str:
-    s = str(symbol or "").strip().upper()
-    return s.rsplit(".", 1)[-1] if "." in s else ""
 
 
 def is_canadian_listing(symbol: str) -> bool:
@@ -315,23 +283,6 @@ def suffix_country(suffix: str) -> Optional[str]:
     """ISO 3166 alpha-3 country of a listing suffix's exchange."""
     v = _venues().get(str(suffix or "").upper())
     return v.get("country") if v else None
-
-
-_SUFFIX_RE_CACHE: Dict[FrozenSet[str], Any] = {}
-
-
-def listing_suffix_re(suffixes=None):
-    """A compiled `\\.(SUFFIX|...)$` (any case) for `suffixes` (default:
-    every known listing suffix), longest alternative first."""
-    import re
-    key = frozenset(s.upper() for s in (suffixes if suffixes is not None
-                                        else known_suffixes()))
-    rx = _SUFFIX_RE_CACHE.get(key)
-    if rx is None:
-        alt = "|".join(sorted(key, key=lambda s: (-len(s), s)))
-        rx = re.compile(rf"\.({alt})$", re.IGNORECASE)
-        _SUFFIX_RE_CACHE[key] = rx
-    return rx
 
 
 def strip_listing_suffix(symbol: str, suffixes=None) -> str:

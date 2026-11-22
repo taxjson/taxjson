@@ -24,7 +24,7 @@ base currency at IB's rate; `Withhold*` is the tax withheld (negative).
 
 The `Account` section carries the account holder's NAME: this module
 never keeps it (only the account number, which is hashed the way the
-books' rows carry it — bin/taxjson_brokerage.hash_broker_account, kept
+books' rows carry it — lib/privacy.hash_broker_account, kept
 in memory and in work/ only; slips.toml gets a salted key,
 lib/slip_audit.broker_key — and masked to its first two characters for
 display). A report holding two accounts is refused: its payment rows
@@ -42,6 +42,7 @@ from typing import Dict, List, Optional, Tuple
 
 from taxjson.lib.brokerages.base import (BrokerageParseError,
                                          parse_strict_number)
+from taxjson.model import money as M
 
 # The marker a dividends report carries (a header line of its detail
 # section); enough to tell it from a T5008 CSV in inputs/slips/.
@@ -212,7 +213,7 @@ def _num(raw: str, col: str, where: str) -> float:
 def read_report(path: Path) -> Report:
     """Read one dividends report. Raises IBReportError naming the file
     (its shown name: an account id in it masked) and line."""
-    from taxjson.bin.taxjson_brokerage import hash_broker_account
+    from taxjson.lib.privacy import hash_broker_account
     from taxjson.lib.brokerages.base import shown_name
     from taxjson.lib.positions_reports import mask_account
     name = shown_name(path)
@@ -361,8 +362,8 @@ def read_report(path: Path) -> Report:
                      " withheld (WithholdInBase)", 0.01 * n + 1e-9)):
                 got, want = getattr(p, attr), getattr(summ, attr)
                 if abs(want - got) > tol:
-                    detail = (f"the components add up to {got:.2f} "
-                              f"{cur}{what}, the payment to {want:.2f}")
+                    detail = (f"the components add up to {M.shown(got, 2):.2f} "
+                              f"{cur}{what}, the payment to {M.shown(want, 2):.2f}")
                     rep.problems.append(
                         f"{p.symbol} {p.pay_date}: {detail}")
                     rep.mismatched.append((p, detail))

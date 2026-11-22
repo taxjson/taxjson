@@ -9,6 +9,13 @@ that lists and fixes it (docs/getting-started.md, step 5):
     OPENING cost=unknown lines) does
     not cover and that fall in the tax year (taxable accounts) —
     `tjs find-missing-history`;
+  * sales at an unknown cost: the tax year's rows routed out of the
+    totals to manual reporting (CA-ACB-11) — a sale drawing on the units
+    an OPENING cost=unknown line opens, a buy closing a short sold before
+    the data — each named with its row and the line it came by (the
+    engine writes the line's own fields on the record,
+    `unknown_cost_from`), and the cost to add: the OPENING line's cost,
+    or `tjs opening` (backlog TJ-2770, TJ-3209);
   * positions at a $0 cost: sold in the tax year, or still held —
     `tjs find-missing-history` (a spin-off whose election declares
     the $0, fmv_per_share=0, is an Info naming its event instead);
@@ -25,12 +32,17 @@ its own warning.
 """
 from __future__ import annotations
 
+
 import json
 from datetime import date as _date, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from taxjson.lib.core import TaxTransaction, is_option_symbol, load_transactions
+from taxjson.project.accounts import configured_accounts, sheltered_by_name
+from taxjson.project.settings import settings_of
+from taxjson.model.transaction import TaxTransaction
+from taxjson.lib.tx_load import load_transactions
+from taxjson.lib.option_symbols import is_option_symbol
 from taxjson.lib.missing_history import (
     MissingHistoryRow, UnbackedCover, ZeroBasisRow, _basis_date,
     _drop_duplicate_splits, _walk_key, assess_tax_year_relevance,
@@ -38,9 +50,14 @@ from taxjson.lib.missing_history import (
     detect_unbacked_covers, detect_zero_basis_acquisitions,
     drop_answered_covers, is_registered_account)
 from taxjson.lib.corporate_timeline import normalize_symbol_new
+from taxjson.lib.in_kind import in_kind_unbooked
 from taxjson.lib import project_layout as _PL
 
 SUMMARY_FILE = "run_summary.json"
+
+# A parser's warning for the end-of-run list, as its .diag captured it
+# (lib/out.END_OF_RUN_MARK).
+_MARKED = "warning: ATTENTION: "
 
 # Income paid this long after the books last held the security is not a
 # late payment on shares just sold (a record date before the sale, the
@@ -48,20 +65,11 @@ SUMMARY_FILE = "run_summary.json"
 _INCOME_GRACE_DAYS = 60
 
 
-def book_files(cache: Path) -> List[Path]:
-    """The per-account full-history books (work/<acct>_base.json), as
-    `tjs find-missing-history` reads them."""
-    return sorted(p for p in cache.glob("*_base.json")
-                  if not p.name.endswith("_raw_base.json")
-                  and p.name != "sheltered_base.json"
-                  and not p.name.startswith("."))
-
-
 def load_books(cache: Path) -> Tuple[List[TaxTransaction], List[str]]:
     """(rows of every book, [book files that could not be read])."""
     txs: List[TaxTransaction] = []
     failed: List[str] = []
-    for p in book_files(cache):
+    for p in _PL.book_files(cache):
         try:
             txs.extend(load_transactions(p))
         except (OSError, ValueError):
@@ -403,7 +411,7 @@ def income_without_position(txs: Sequence[TaxTransaction], year: Any, *,
     .tt OPENING cost=unknown lines', whose holding the user has already
     declared.
 
-    `rules` (lib/income_dating.IncomeRules, the project's): the year a
+    `rules` (characterize/income_dating.IncomeRules, the project's): the year a
     row belongs to is the one the income stage gives it
     (IncomeRules.income_date: a Canadian trust's distribution is the
     year of its record date) — a distribution paid in March on units
@@ -412,7 +420,7 @@ def income_without_position(txs: Sequence[TaxTransaction], year: Any, *,
     income stage would accept (on or before the pay date, less than
     MAX_RECORD_LEAD_DAYS before it) is held when the books held the
     security on it, however long before the pay date it is."""
-    from taxjson.lib.income_dating import MAX_RECORD_LEAD_DAYS
+    from taxjson.characterize.income_dating import MAX_RECORD_LEAD_DAYS
     skip = set(skip_accounts)
     known = {(str(sy).upper(), str(a)) for sy, a in declared}
     ys = str(year) if year is not None else None
@@ -556,10 +564,10 @@ def unchecked_accounts(cache: Path, accounts: Dict[str, Any],
     except Exception:                               # noqa: BLE001
         snapshots = {}
     out = []
+    accounts = configured_accounts(accounts)     # `margin = 42` is no account
     for acct, f in sorted(resolved.items()):
         cfg = accounts.get(acct)
-        if (not isinstance(cfg, dict) or cfg.get("holdings")
-                or snapshots.get(acct)):
+        if cfg is None or cfg.holdings or snapshots.get(acct):
             continue
         try:
             data = json.loads(Path(f).read_text(encoding="utf-8"))
@@ -577,21 +585,117 @@ def in_kind_not_booked(cache: Path, year: Any) -> List[Dict[str, Any]]:
     """The in-kind moves with a registered account the run did NOT book
     (work/in_kind.json; on or before the year's end): {symbol, account
     (the taxable one), kind, date}. Their sale or purchase is not in the
-    totals; `tjs sum` says the same (taxjson_run.in_kind_unbooked)."""
-    try:
-        doc = json.loads((cache / "in_kind.json").read_text(
-            encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    moves = doc.get("moves") if isinstance(doc, dict) else None
-    end = f"{year}-12-31" if year else None
+    totals; `tjs sum` reads the same moves (lib/in_kind.in_kind_unbooked,
+    TJ-3527)."""
     return [{"symbol": str(m.get("symbol") or ""),
              "account": str(m.get("taxable") or ""),
              "kind": str(m.get("kind") or ""),
              "date": str(m.get("date") or "")[:10]}
-            for m in moves or [] if isinstance(m, dict)
-            and not m.get("booked")
-            and not (end and str(m.get("date") or "")[:10] > end)]
+            for m in in_kind_unbooked(cache, year)]
+
+
+def _opening_where(root: Optional[Path]) -> Dict[Tuple[str, str, str], str]:
+    """{(account, date, SYMBOL): "inputs/<acct>/<file>.tt:<n>"} for the
+    project's OPENING cost=unknown lines, by the symbol as written and
+    as the books spell it (ticker.map / tobase.map); {} without a
+    project or when a line cannot be read."""
+    out: Dict[Tuple[str, str, str], str] = {}
+    if root is None:
+        return out
+    from taxjson.lib.missing_history import (project_missing_history,
+                                             read_tt_openings)
+    try:
+        lines = list(read_tt_openings(Path(root)))
+        mh = project_missing_history(Path(root))
+    except (OSError, ValueError):
+        return out
+    for t in lines:
+        out[(str(t.account), str(t.date)[:10], str(t.symbol).upper())] = t.where
+    for t in (mh.fixed.values() if mh is not None else ()):
+        out.setdefault((str(t.account), str(t.date)[:10],
+                        str(t.symbol).upper()), t.where)
+    return out
+
+
+def unknown_cost_sales(cache: Path, year: Any, *,
+                       root: Optional[Path] = None,
+                       sheltered: Optional[Dict[str, bool]] = None,
+                       date_basis: str = "settle") -> List[Dict[str, Any]]:
+    """The tax year's rows at an unknown cost, out of every total: the
+    rows the taxable accounts' gains files (the ones `tjs sum` reads)
+    route to `manual_reporting_required` (lib/pipeline; CA-ACB-11),
+    dated on the project's basis. Each: symbol, account, date, qty,
+    proceeds, currency, direction, `kind` ("sale"; "cover", a buy
+    closing a short the tainted pool went into inside the files;
+    "cover-before", a buy closing a short a negative OPENING
+    cost=unknown line declares) and `sources`: the OPENING cost=unknown
+    rows the unknown units came by, as the engine wrote them on the
+    record (`unknown_cost_from`: account, symbol, date, signed
+    quantity), each with the line's `where` when the project's .tt files
+    hold it. Units moved in from another of your accounts
+    (`own_move_from`) are left out: their cost is in the blended figures
+    (CA-ACB-OWN-MOVE). Written to reports/run_summary.json, which the
+    checklist reads (one copy of the list; backlog TJ-2770, TJ-3209,
+    TJ-3216). [] without a readable gains file."""
+    from taxjson.lib.report_model import resolve_gains_files
+    ys = str(year) if year is not None else ""
+    try:
+        files = resolve_gains_files(Path(cache), prefer_wash=True,
+                                    warn_stale=False)
+    except (OSError, ValueError):
+        return []
+    where = _opening_where(root)
+    out: List[Dict[str, Any]] = []
+    for acct, f in files.items():
+        if sheltered and sheltered.get(acct):
+            continue
+        try:
+            doc = json.loads(Path(f).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        rows = doc.get("manual_reporting_required") \
+            if isinstance(doc, dict) else None
+        for t in rows or []:
+            if (not isinstance(t, dict) or t.get("qty") is None
+                    or t.get("own_move_from")):
+                continue
+            d = str((t.get("date_settle") if date_basis == "settle"
+                     else None) or t.get("date") or "")[:10]
+            if ys and not d.startswith(ys):
+                continue
+            # (the gains file's own numbers: money is read as written)
+            qty, proceeds = t.get("qty"), t.get("proceeds") or 0.0
+            if not isinstance(qty, (int, float)) \
+                    or not isinstance(proceeds, (int, float)):
+                continue
+            sources = []
+            for src in t.get("unknown_cost_from") or []:
+                if not isinstance(src, dict):
+                    continue
+                sq = src.get("quantity")
+                key = (str(src.get("account") or ""),
+                       str(src.get("date") or "")[:10],
+                       str(src.get("symbol") or "").upper())
+                sources.append({
+                    "account": key[0], "symbol": str(src.get("symbol") or ""),
+                    "date": key[1],
+                    "quantity": sq if isinstance(sq, (int, float)) else 0.0,
+                    "where": where.get(key)})
+            direction = str(t.get("direction") or "LONG")
+            kind = ("sale" if direction != "SHORT"
+                    else "cover-before" if any(x["quantity"] < 0
+                                               for x in sources)
+                    else "cover")
+            out.append({
+                "symbol": str(t.get("symbol") or ""),
+                "account": str(t.get("account") or acct),
+                "date": d, "qty": abs(qty), "proceeds": proceeds,
+                "currency": str(t.get("currency") or ""),
+                "direction": direction, "kind": kind,
+                "sources": sources,
+            })
+    out.sort(key=lambda e: (e["date"], e["account"], e["symbol"]))
+    return out
 
 
 def collect(root: Path, cfg: Dict[str, Any], *,
@@ -601,16 +705,13 @@ def collect(root: Path, cfg: Dict[str, Any], *,
     books, the run just written)."""
     from taxjson.lib.country import settings_country, settings_tax_date
     cache = root / "work"
-    settings = cfg.get("settings") or {}
-    accounts = cfg.get("accounts") or {}
+    settings = settings_of(cfg)
+    accounts = configured_accounts(cfg.get("accounts"))
     country = settings_country(settings)
-    year = settings.get("year")
+    year = settings.year
     basis = settings_tax_date(settings)
-    sheltered = {str(n): (a.get("type") == "sheltered")
-                 for n, a in accounts.items() if isinstance(a, dict)
-                 and a.get("type") in ("taxable", "sheltered")}
-    crypto = {n for n, a in accounts.items()
-              if isinstance(a, dict) and a.get("crypto")}
+    sheltered = sheltered_by_name(accounts)
+    crypto = {n for n, a in accounts.items() if a.crypto}
     tm = _PL.ticker_map_path(root)
     from taxjson.lib.missing_history import walk_journal_symbols
     journal = walk_journal_symbols(cache, tm if tm.is_file() else None)
@@ -632,7 +733,7 @@ def collect(root: Path, cfg: Dict[str, Any], *,
                  and r.affects_year]
     zero_held = [r for r in _zrows if not r.declared
                  and r.still_held_qty > 0]
-    # (the income stage's year of each row: lib/income_dating)
+    # (the income stage's year of each row: characterize/income_dating)
     try:
         from taxjson.lib.income_dating import rules_for
         _rules = rules_for(country, settings)
@@ -660,6 +761,11 @@ def collect(root: Path, cfg: Dict[str, Any], *,
                          "account": r.candidate.account,
                          "sales": r.in_year_dispositions}
                         for r in shorts if _how(r) == BOOKED_OPEN],
+        # The year's sales at an unknown cost (units an OPENING
+        # cost=unknown line opens): routed out of the totals to manual
+        # reporting, each named with the cost to add (backlog TJ-2770).
+        "unknown_cost_sales": unknown_cost_sales(
+            cache, year, root=root, sheltered=sheltered, date_basis=basis),
         # Sales the walk reads short that the gains engine booked
         # (engine_booking): in `tjs sum`.
         "no_purchase_in_sum": [{"symbol": r.candidate.symbol,
@@ -698,11 +804,58 @@ def collect(root: Path, cfg: Dict[str, Any], *,
         # One export (or broker account) in two accounts, as the run
         # recorded it: every row booked in both (backlog TJ-0478).
         "booked_twice": _booked_twice(root),
+        # The parsers' warnings marked for this list (owner's rulings of
+        # 2026-11-19): a key only when there is one, so a summary
+        # without one keeps its bytes.
+        **({"parser_warnings": pw}
+           if (pw := parser_warnings(cache, list(accounts))) else {}),
     }
 
 
+def parser_warnings(cache: Path, accounts: Sequence[str]
+                    ) -> List[Dict[str, str]]:
+    """The parsers' warnings marked for the end-of-run list (a booking
+    the owner ruled is said, not refused: lib/out.END_OF_RUN_MARK), read
+    back from each account's work/<account>_*.json.diag (not another
+    account's whose name starts `<account>_`, as collect_diagnostics
+    reads them): {"account", "text"}, the text as captured after
+    `warning: ATTENTION: ` and the mark, once per account, in the
+    accounts' and the files' order. Two accounts' exports of one name
+    say one text: each account keeps its own (review round 1). A
+    parser's warning otherwise reaches only the console mid-run, which
+    scrolls away, and its .diag."""
+    from taxjson.lib.out import END_OF_RUN_MARK
+    head = _MARKED + END_OF_RUN_MARK
+    found: List[Dict[str, str]] = []
+    for acct in accounts:
+        others = [a for a in accounts if a != acct
+                  and a.startswith(f"{acct}_")]
+        for p in sorted(cache.glob(f"{acct}_*.json.diag")):
+            if any(p.name.startswith(f"{o}_") for o in others):
+                continue
+            try:
+                lines = p.read_text(errors="replace").splitlines()
+            except OSError:
+                continue
+            for ln in lines:
+                it = {"account": acct, "text": ln[len(head):]}
+                if ln.startswith(head) and it not in found:
+                    found.append(it)
+    return found
+
+
+def _parser_items(doc: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """The marked parser warnings (parser_warnings) as the list shows
+    them: one `Warning:` each, its account in front (`[margin] `, as the
+    .sum names another account's message) and its text as the run's
+    console shows it."""
+    from taxjson.lib.out import shown_topic
+    return [("Warning", f"[{w['account']}] {shown_topic(w['text'])}")
+            for w in doc.get("parser_warnings") or []]
+
+
 def _booked_twice(root: Path) -> List[str]:
-    from taxjson.lib.checklist import recorded_booked_twice
+    from taxjson.lib.fingerprint_record import recorded_booked_twice
     return recorded_booked_twice(root)
 
 
@@ -713,11 +866,11 @@ def _names(items: Sequence[Dict[str, Any]], n: int = 3) -> str:
 
 def is_clean(doc: Dict[str, Any]) -> bool:
     return not any(doc.get(k) for k in (
-        "no_purchase", "no_purchase_in_sum", "unbacked_covers",
-        "zero_cost_sold",
+        "no_purchase", "unknown_cost_sales", "no_purchase_in_sum",
+        "unbacked_covers", "zero_cost_sold",
         "zero_cost_held", "zero_cost_declared", "transfer_in_no_cost",
         "in_kind_not_booked", "unchecked_accounts", "income_not_held",
-        "booked_twice"))
+        "booked_twice", "parser_warnings"))
 
 
 def _accounts_shown(items: Sequence[Dict[str, Any]], n: int = 6) -> str:
@@ -756,15 +909,167 @@ def _syms(items: Sequence[Dict[str, Any]], n: int = 2) -> str:
     return shown + (f" +{len(items) - n} more" if len(items) > n else "")
 
 
+def unknown_cost_phrase(items: Sequence[Dict[str, Any]]) -> str:
+    """What the rows at an unknown cost are, by `kind`: `1 sale at an
+    unknown cost`, `2 buys closing a short at an unknown cost` (the
+    tainted pool went short inside the files), `1 buy closing a short
+    sold before your files` (a negative OPENING cost=unknown line),
+    joined by `and`."""
+    sales = [i for i in items if i.get("kind", "sale") == "sale"]
+    covers = [i for i in items if i.get("kind") == "cover"]
+    before = [i for i in items if i.get("kind") == "cover-before"]
+    parts = []
+    if sales:
+        parts.append(f"{_n(len(sales), 'sale', 'sales')} at an unknown cost")
+    if covers:
+        parts.append(f"{_n(len(covers), 'buy', 'buys')} closing a short at "
+                     f"an unknown cost")
+    if before:
+        parts.append(f"{_n(len(before), 'buy', 'buys')} closing a short "
+                     f"sold before your files")
+    return " and ".join(parts)
+
+
+def unknown_cost_row(i: Dict[str, Any]) -> str:
+    """`QZQ.TO 2025-06-02 in margin`: the row, as the closing line
+    names it (no parentheses: the line's width rule strips those)."""
+    return f"{i['symbol']} {i['date']} in {i['account']}"
+
+
+def unknown_cost_lines(items: Sequence[Dict[str, Any]]
+                       ) -> Dict[Tuple[str, str, str], Dict[str, Any]]:
+    """The OPENING cost=unknown lines the rows' units came by, keyed
+    (account, date, symbol) in order — only when every row names at
+    least one (the engine wrote `unknown_cost_from`); {} otherwise (a
+    hand-written book, an older run). The one copy of the rule the run's
+    texts and the checklist name a line by (backlog TJ-3216)."""
+    out: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    for i in items:
+        srcs = i.get("sources") or []
+        if not srcs:
+            return {}
+        for src in srcs:
+            out.setdefault((src["account"], src["date"], src["symbol"]), src)
+    return out
+
+
+def line_name(src: Dict[str, Any], parens: bool = True) -> str:
+    """How a text names an OPENING cost=unknown line: its file and line
+    when the project holds it, with the line's own fields (in
+    parentheses, or after a colon inside a list), else the fields."""
+    own = f"OPENING {src['date']} {src['symbol']} in {src['account']}"
+    if not src.get("where"):
+        return f"the line {own}"
+    return f"{src['where']} ({own})" if parens else f"{src['where']}: {own}"
+
+
+def unknown_cost_advice(items: Sequence[Dict[str, Any]]
+                        ) -> Tuple[str, str, str]:
+    """(kind, the one-line fix, the whole advice) for the rows at an
+    unknown cost. `kind`: "cost" when every line is a long opening (give
+    it the cost, or `tjs opening`), "short-sale" when every line is a
+    negative one (the short's own sale is what to add), "by-hand"
+    otherwise (no line to name, or both)."""
+    from taxjson.lib.report_fmt import qty_text
+    lines = unknown_cost_lines(items)
+    one = len(items) == 1
+    it = "it" if one else "them"
+    if lines and all(src["quantity"] > 0 for src in lines.values()):
+        if len(lines) == 1:
+            (src,) = lines.values()
+            cur = next((i.get("currency") for i in items
+                        if i.get("currency")), "") or "<CUR>"
+            return ("cost", "add the cost to its OPENING line",
+                    f"give its OPENING cost=unknown line, {line_name(src)}, "
+                    f"the cost of the {qty_text(src['quantity'])} "
+                    f"{src['symbol']} held before your files (`OPENING "
+                    f"{src['date']} {src['symbol']} "
+                    f"{qty_text(src['quantity'])} {cur} <total cost>`), or "
+                    f"`tjs opening`")
+        shown = "; ".join(line_name(src, parens=False)
+                          for src in list(lines.values())[:3]) \
+            + (f" +{len(lines) - 3} more" if len(lines) > 3 else "")
+        return ("cost", "add the cost to their OPENING lines",
+                f"give their OPENING cost=unknown lines ({shown}) the cost "
+                f"of the units held before your files (`OPENING <date> "
+                f"<SYMBOL> <qty> <CUR> <total cost>` each), or `tjs opening`")
+    if lines and all(src["quantity"] < 0 for src in lines.values()):
+        shown = "; ".join(line_name(src, parens=False)
+                          for src in list(lines.values())[:3]) \
+            + (f" +{len(lines) - 3} more" if len(lines) > 3 else "")
+        return ("short-sale", "add the short's own sale as a .tt line",
+                f"the short's own sale is not in your files: add it as a "
+                f".tt line in place of the OPENING cost=unknown line "
+                f"({shown}), or report the "
+                f"{'buy' if one else 'buys'} by hand (`tjs form-export`)")
+    named = (f"; the units came by {'; '.join(line_name(src, parens=False) for src in list(lines.values())[:3])}"
+             if lines else
+             "; `tjs find-missing-history` names what opened the units")
+    return ("by-hand", "`tjs find-missing-history`",
+            f"report {it} by hand (`tjs form-export` lists {it}){named}")
+
+
+def _unknown_cost_item(items: Sequence[Dict[str, Any]],
+                       width_: Optional[int]) -> str:
+    """The closing block's one line for the rows at an unknown cost:
+    always one line, always naming the first row's symbol and date; the
+    fix text, the long phrase, the count of the others and the account
+    give way to the width, in that order (backlog TJ-3208, TJ-3214,
+    TJ-3236)."""
+    n = len(items)
+    first = items[0]
+    row = unknown_cost_row(first)
+    more = f" and {n - 1} more" if n > 1 else ""
+    kind, fix, _long = unknown_cost_advice(items)
+    phrase = unknown_cost_phrase(items)
+    short = f"{_n(n, 'trade', 'trades')} at an unknown cost"
+    # Each shorter than the last: the fix text, the long phrase, "and
+    # N more", then the account go; the symbol and date never do
+    # (TJ-3236: an option symbol in a long account's name).
+    texts = [f"NOT in the totals: {phrase}: {row}{more} — {fix}",
+             f"NOT in the totals: {phrase}: {row}{more}",
+             f"NOT in the totals: {short}: {row}{more}",
+             f"NOT in the totals: {short}: {row}",
+             f"NOT in the totals: {short}: {first['symbol']} {first['date']}"]
+    for text in texts:
+        if not width_ or width_ <= 0 or len("Warning: ") + len(text) <= width_:
+            return text
+    return texts[-1]
+
+
+def _unknown_cost_detail(items: Sequence[Dict[str, Any]], yr: Any) -> str:
+    """The whole text for the rows at an unknown cost (`tjs run
+    --details`): each row, the OPENING cost=unknown line its units came
+    by and the ways to settle it (unknown_cost_advice)."""
+    from taxjson.lib.report_fmt import qty_text
+    rows = "; ".join(
+        f"{i['symbol']} ({i['account']}) on {i['date']}, "
+        f"{qty_text(i['qty'])} units"
+        for i in items[:3]) + (f" +{len(items) - 3} more"
+                               if len(items) > 3 else "")
+    kind, _fix, advice = unknown_cost_advice(items)
+    one = len(items) == 1
+    it = "it" if one else "them"
+    text = f"{unknown_cost_phrase(items)} in {yr}, NOT in `tjs sum`: {rows}."
+    if kind != "cost":
+        # (the advice already offers the report by hand)
+        return f"{text} {advice[0].upper()}{advice[1:]}."
+    return (f"{text} {advice[0].upper()}{advice[1:]}; until then, report "
+            f"{it} by hand (`tjs form-export` lists {it}).")
+
+
 # The closing block's one-line form (docs/output-style.md, Essentials
 # first): at most this many lines under its heading.
 CONCISE_BUDGET = 6
 
 
-def concise_items(doc: Dict[str, Any]) -> List[Tuple[str, str]]:
+def concise_items(doc: Dict[str, Any],
+                  width_: Optional[int] = None) -> List[Tuple[str, str]]:
     """Each finding as (kind, one line naming the command with the
     detail): the default view of the run's closing block. Every warning
-    class render_blocks says is here; the explanation is in --details."""
+    class render_blocks says is here; the explanation is in --details.
+    `width_`: the console's, for the item that shortens itself to one
+    line (the rows at an unknown cost)."""
     items: List[Tuple[str, str]] = []
     tw = doc.get("booked_twice") or []
     if tw:
@@ -776,6 +1081,13 @@ def concise_items(doc: Dict[str, Any]) -> List[Tuple[str, str]]:
         items.append(("Warning", f"NOT in the totals: "
                       f"{_n(len(np_), 'sale', 'sales')} with no purchase "
                       f"({_syms(np_)}) — `tjs find-missing-history`"))
+    uc = doc.get("unknown_cost_sales") or []
+    if uc:
+        # The first row named (symbol, date, account) with the cost to
+        # add, one line whatever the width (backlog TJ-2770, TJ-3208);
+        # the line's file and `tjs opening` are in --details and in
+        # `tjs checklist`.
+        items.append(("Warning", _unknown_cost_item(uc, width_)))
     ins = doc.get("no_purchase_in_sum") or []
     cov = [i for i in ins if i.get("booked") == BOOKED_SHORT_COVER]
     mat = [i for i in ins if i.get("booked") != BOOKED_SHORT_COVER]
@@ -813,6 +1125,7 @@ def concise_items(doc: Dict[str, Any]) -> List[Tuple[str, str]]:
         items.append(("Warning", f"{_n(len(inc), 'security', 'securities')}"
                       f" paid income the books do not hold ({_syms(inc)}) — "
                       f"`tjs sanity`"))
+    items += _parser_items(doc)
     if mat:
         items.append(("Info", f"{_n(len(mat), 'position', 'positions')} "
                       f"read short by the history check "
@@ -851,7 +1164,7 @@ def render_blocks(doc: Dict[str, Any], *,
         w = out.width() if width_ is None else width_
         heading = ["==> Before you trust these numbers "
                    "(docs/getting-started.md, step 5)"]
-        items = concise_items(doc)
+        items = concise_items(doc, w)
         room = CONCISE_BUDGET - 1
         if len(items) > room:
             warns = [i for i in items if i[0] == "Warning"]
@@ -874,10 +1187,8 @@ def render_blocks(doc: Dict[str, Any], *,
                 import re as _re
                 text = _re.sub(r" \([^()]*\)(?= — )", "", text, count=1)
             return out.wrap(text, w, "", "" if w > 0 else "  ")
-        blocks = ([heading] if items else [])
-        blocks += [_one(f"{kind}: {it}") for kind, it in items]
-        blocks.append(_one(closing))
-        return blocks
+        return (([heading] if items else [])
+                + [_one(f"{kind}: {it}") for kind, it in items] + [_one(closing)])
     yr = doc.get("year")
     items: List[Tuple[str, str]] = []
     for tw in doc.get("booked_twice") or []:
@@ -893,6 +1204,9 @@ def render_blocks(doc: Dict[str, Any], *,
                      f"`tjs sum`; run `tjs find-missing-history`. A short "
                      f"sale still open reads the same: it is in no total "
                      f"until it is covered."))
+    uc = doc.get("unknown_cost_sales") or []
+    if uc:
+        items.append(("Warning", _unknown_cost_detail(uc, yr)))
     ins = doc.get("no_purchase_in_sum") or []
     cov = [i for i in ins if i.get("booked") == BOOKED_SHORT_COVER]
     mat = [i for i in ins if i.get("booked") != BOOKED_SHORT_COVER]
@@ -900,10 +1214,10 @@ def render_blocks(doc: Dict[str, Any], *,
         items.append(("Warning", f"{_n(len(cov), 'position', 'positions')} "
                      f"sold in {yr} with no purchase in your files, not in "
                      f"{mh_name}: {_names(cov)}. `tjs sum` books those "
-                     f"sales as short sales closed by a later purchase, at "
-                     f"that purchase's cost — not yours if you held the "
-                     f"shares before your files start; run `tjs "
-                     f"find-missing-history`."))
+                     f"sales as short sales closed by a later purchase (or "
+                     f"shares moved in from another of your accounts), at "
+                     f"its cost — not yours if you held the shares before "
+                     f"your files start; run `tjs find-missing-history`."))
     if mat:
         items.append(("Info", f"{_n(len(mat), 'position', 'positions')} "
                      f"read short in {yr} by `tjs find-missing-history`"
@@ -969,6 +1283,7 @@ def render_blocks(doc: Dict[str, Any], *,
                      f"paid income in {yr} that the books do not hold (a "
                      f"holding with no purchase in your files?): "
                      f"{_names(inc)}. Run `tjs sanity`."))
+    items += _parser_items(doc)
     w = out.width() if width_ is None else width_
     hang = "" if w > 0 else "  "
     blocks = [["==> Before you trust these numbers "

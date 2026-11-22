@@ -8,12 +8,12 @@ import json
 import os
 import re
 import unittest
-from pathlib import Path
 from unittest import mock
 
 from _style import assert_styled, project
 
 from taxjson.lib import out
+import _paths
 
 
 def _flat(text):
@@ -90,7 +90,7 @@ class TestStyledNonZeroExits(unittest.TestCase):
         self.assertTrue(lines[i + 1].startswith(" " * col + "2 position"))
 
     def test_redact_check(self):
-        root = Path(__file__).resolve().parent.parent
+        root = _paths.REPO
         r = project("canada").run(
             "redact", "--check", str(root / "examples" /
                                      "questrade_demo.csv"))

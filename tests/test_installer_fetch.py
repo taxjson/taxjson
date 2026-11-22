@@ -14,7 +14,7 @@ import os
 import subprocess
 import unittest
 
-from test_fix_release_channels import GIT_ENV, REPO, _Repos
+from _support.release_channel_repos import GIT_ENV, REPO, _Repos
 
 REPO_INSTALL = REPO / "install.sh"
 
@@ -58,8 +58,7 @@ class TestInstallerFetch(_Repos):
         self.git(self.dev, "push", "-q", "origin", "main", "--tags")
         self.stub = self.d / "stub"
         self.stub.mkdir()
-        for name in ("python3", "python3.10", "python3.11",
-                     "python3.12", "python3.13"):
+        for name in ("python3", "python3.12", "python3.13"):
             (self.stub / name).write_text(_PY_STUB)
             (self.stub / name).chmod(0o755)
         self.home = self.d / "home"

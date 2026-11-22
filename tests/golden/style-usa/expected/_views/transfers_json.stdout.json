@@ -1,0 +1,49 @@
+{
+  "count": 3,
+  "schema_version": 1,
+  "symbol_codes": [],
+  "transfers": [
+    {
+      "account": "roth",
+      "arrival": "-",
+      "currency": "USD",
+      "date": "2024-02-15",
+      "fee": 0.0,
+      "fee_currency": "",
+      "fee_qty": 0.0,
+      "quantity": 20.0,
+      "symbol": "SAMPB.US",
+      "type": "",
+      "value": 0.0,
+      "where": "book"
+    },
+    {
+      "account": "margin",
+      "arrival": "NO COST",
+      "currency": "USD",
+      "date": "2024-05-01",
+      "fee": 0.0,
+      "fee_currency": "",
+      "fee_qty": 0.0,
+      "quantity": 30.0,
+      "symbol": "XYZQ.US",
+      "type": "ACATS (XYZQ)",
+      "value": 1500.0,
+      "where": "sidecar"
+    },
+    {
+      "account": "crypto",
+      "arrival": "-",
+      "currency": "USD",
+      "date": "2024-09-01",
+      "fee": 0.0,
+      "fee_currency": "",
+      "fee_qty": 0.0,
+      "quantity": -0.1,
+      "symbol": "ETH",
+      "type": "Send",
+      "value": 250.0,
+      "where": "sidecar"
+    }
+  ]
+}

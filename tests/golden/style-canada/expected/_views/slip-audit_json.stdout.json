@@ -1,0 +1,300 @@
+{
+  "accounts": [
+    {
+      "account": "margin",
+      "groups": [
+        {
+          "account": "margin",
+          "broker_account": null,
+          "buckets": [
+            {
+              "currency": "CAD",
+              "lines": [
+                {
+                  "books": 50.0,
+                  "books_annual_average": null,
+                  "boxes": "T5 24/10, T3 49/23",
+                  "category": "ca_div",
+                  "closest": null,
+                  "converted": 0.0,
+                  "diff": -10.0,
+                  "label": "Canadian dividends",
+                  "slip": 60.0,
+                  "status": "differs",
+                  "tolerance": 1.0
+                },
+                {
+                  "books": 0.0,
+                  "books_annual_average": null,
+                  "boxes": "T3 21",
+                  "category": "trust_cg",
+                  "closest": null,
+                  "converted": 0.0,
+                  "diff": -4.25,
+                  "label": "Trust capital gains",
+                  "slip": 4.25,
+                  "status": "differs",
+                  "tolerance": 1.0
+                },
+                {
+                  "books": 0.0,
+                  "books_annual_average": null,
+                  "boxes": "T3 42",
+                  "category": "roc",
+                  "closest": null,
+                  "converted": 0.0,
+                  "diff": -1.5,
+                  "label": "Return of capital",
+                  "slip": 1.5,
+                  "status": "differs",
+                  "tolerance": 1.0
+                },
+                {
+                  "books": 12.34,
+                  "books_annual_average": null,
+                  "boxes": "T5 13",
+                  "category": "interest",
+                  "closest": null,
+                  "converted": 0.0,
+                  "diff": 0.34,
+                  "label": "Interest",
+                  "slip": 12.0,
+                  "status": "ok",
+                  "tolerance": 1.0
+                }
+              ],
+              "slips": [
+                "T5 Sample Securities",
+                "T3 Sample Fund Trust XYZQ"
+              ],
+              "split_by_t3": []
+            },
+            {
+              "currency": "USD",
+              "lines": [
+                {
+                  "books": 365.0,
+                  "books_annual_average": null,
+                  "books_cad_daily": 492.75,
+                  "boxes": "T5 15, T3 24/25",
+                  "category": "foreign",
+                  "closest": null,
+                  "converted": 0.0,
+                  "diff": 3.8,
+                  "label": "Foreign income",
+                  "slip": 361.2,
+                  "slip_cad_annual_average": 487.62,
+                  "status": "differs",
+                  "tolerance": 0.74
+                },
+                {
+                  "books": 17.26,
+                  "books_annual_average": null,
+                  "books_cad_daily": 23.3,
+                  "boxes": "T5 16, T3 33/34",
+                  "category": "foreign_tax",
+                  "closest": null,
+                  "converted": 0.0,
+                  "diff": 0.16,
+                  "label": "Foreign tax withheld",
+                  "slip": 17.1,
+                  "slip_cad_annual_average": 23.09,
+                  "status": "ok",
+                  "tolerance": 0.74
+                }
+              ],
+              "slips": [
+                "T5 Sample Securities"
+              ],
+              "split_by_t3": []
+            }
+          ],
+          "key": "*",
+          "payments": {
+            "amount_differs": [],
+            "currency_differs": [],
+            "matched": 0,
+            "missing_from_books": [],
+            "missing_from_slip": [],
+            "other_year": []
+          },
+          "record_year": [],
+          "securities": [
+            {
+              "books": {
+                "cg_div": 0,
+                "roc": 0
+              },
+              "currency": "CAD",
+              "slip": {
+                "roc": 1.5
+              },
+              "symbol": "XYZQ"
+            }
+          ],
+          "slips": [
+            {
+              "boxes": {
+                "13": 12.0,
+                "24": 50.0
+              },
+              "currency": "CAD",
+              "label": "T5 Sample Securities (CAD)",
+              "source": "typed",
+              "type": "T5",
+              "where": "inputs/slips/slips.toml [[slip]] #1"
+            },
+            {
+              "boxes": {
+                "15": 361.2,
+                "16": 17.1
+              },
+              "currency": "USD",
+              "label": "T5 Sample Securities (USD)",
+              "source": "typed",
+              "type": "T5",
+              "where": "inputs/slips/slips.toml [[slip]] #2"
+            },
+            {
+              "boxes": {
+                "21": 4.25,
+                "42": 1.5,
+                "49": 10.0
+              },
+              "currency": "CAD",
+              "label": "T3 Sample Fund Trust XYZQ (CAD)",
+              "source": "typed",
+              "type": "T3",
+              "where": "inputs/slips/slips.toml [[slip]] #4"
+            }
+          ]
+        }
+      ],
+      "status": "differences"
+    },
+    {
+      "account": "qt",
+      "groups": [
+        {
+          "account": "qt",
+          "broker_account": null,
+          "buckets": [
+            {
+              "currency": "USD",
+              "lines": [
+                {
+                  "books": 18.0,
+                  "books_annual_average": null,
+                  "books_cad_daily": 24.3,
+                  "boxes": "T5 15, T3 24/25",
+                  "category": "foreign",
+                  "closest": null,
+                  "converted": 0.0,
+                  "diff": 0.0,
+                  "label": "Foreign income",
+                  "slip": 18.0,
+                  "slip_cad_annual_average": 24.3,
+                  "status": "ok",
+                  "tolerance": 0.74
+                }
+              ],
+              "slips": [
+                "T5 Sample Trading"
+              ],
+              "split_by_t3": []
+            }
+          ],
+          "key": "*",
+          "payments": {
+            "amount_differs": [],
+            "currency_differs": [],
+            "matched": 0,
+            "missing_from_books": [],
+            "missing_from_slip": [],
+            "other_year": []
+          },
+          "record_year": [],
+          "securities": [],
+          "slips": [
+            {
+              "boxes": {
+                "15": 18.0
+              },
+              "currency": "USD",
+              "label": "T5 Sample Trading (USD)",
+              "source": "typed",
+              "type": "T5",
+              "where": "inputs/slips/slips.toml [[slip]] #3"
+            }
+          ]
+        }
+      ],
+      "status": "ok"
+    }
+  ],
+  "annual_average": {
+    "USD": {
+      "observations": 262,
+      "rate": 1.35,
+      "source": "the mean of the 262 Bank of Canada daily rates of 2024 in the FX cache"
+    }
+  },
+  "country": "canada",
+  "coverage": {
+    "no_slip": [],
+    "slips_without_books": []
+  },
+  "fx_band": 0.005,
+  "issues": [
+    {
+      "account": "margin",
+      "kind": "differs",
+      "text": "margin CAD: Canadian dividends (T5 24/10, T3 49/23) slip 60.00, books 50.00 (-10.00)"
+    },
+    {
+      "account": "margin",
+      "kind": "differs",
+      "text": "margin CAD: trust capital gains (T3 21) slip 4.25, books 0.00 (-4.25)"
+    },
+    {
+      "account": "margin",
+      "kind": "differs",
+      "text": "margin CAD: return of capital (T3 42) slip 1.50, books 0.00 (-1.50)"
+    },
+    {
+      "account": "margin",
+      "kind": "differs",
+      "text": "margin USD: foreign income (T5 15, T3 24/25) slip 361.20, books 365.00 (+3.80)"
+    }
+  ],
+  "not_compared": [],
+  "problems": [],
+  "schema_version": 1,
+  "sources": [
+    {
+      "file": "inputs/slips/slips.toml",
+      "kind": "slips.toml",
+      "slips": 4
+    }
+  ],
+  "status": "attention",
+  "suggestions": {
+    "capital_gains_dividends": [],
+    "notes": [
+      "margin: the T3 for XYZQ splits its distribution (Canadian dividends 10.00, trust capital gains 4.25); the books carry it as one dividend \u2014 file the T3's boxes (CA-INC-02); taxjson's estimate counts the whole as eligible dividends (CA-EST-TRUST)"
+    ],
+    "tt_lines": [
+      {
+        "account": "margin",
+        "file": "inputs/margin/slip-audit.tt",
+        "lines": [
+          "ADJUST 2024-12-31 16:00:00 XYZQ CAD -1.50 type=roc"
+        ],
+        "shared": false
+      }
+    ]
+  },
+  "t5008": [],
+  "tolerance": 1.0,
+  "year": 2024
+}

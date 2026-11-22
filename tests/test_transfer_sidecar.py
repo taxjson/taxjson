@@ -20,6 +20,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from _style import CapturedWidth
+import _paths
 
 
 # Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
@@ -38,7 +39,7 @@ def setUpModule():
 def tearDownModule():
     _WIDTH.stop()
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 # A minimal IBKR flex CSV: one trade + one InterDepot transfer row.
 IB_CSV = """\
@@ -171,7 +172,7 @@ class TestTransfersView(unittest.TestCase):
         return root
 
     def _run(self, root, **kw):
-        from taxjson.bin.taxjson_run import cmd_transfers_view
+        from taxjson.cli.listings import cmd_transfers_view
         out = io.StringIO()
         ns = dict(dir=str(root), account=None, json=False)
         ns.update(kw)

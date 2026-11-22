@@ -86,6 +86,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
+from taxjson.lib.cross_listings import other_listing
+
 SUFFIX = "_listing_suffix.state"
 FORMAT = "listing_suffix/1"
 
@@ -104,22 +106,6 @@ _EPS = 1e-6
 
 def state_path(cache: Path, account: str, broker: str) -> Path:
     return Path(cache) / f"{account}_{broker}{SUFFIX}"
-
-
-def other_listing(listing: str) -> Optional[str]:
-    """ROOT.US -> ROOT.TO and back; None for any other spelling (a
-    TSX US-dollar unit ROOT.U.TO is its own security)."""
-    s = str(listing or "").upper()
-    if "." not in s:
-        return None
-    root, sfx = s.rsplit(".", 1)
-    if not root or root.endswith(".U"):
-        return None
-    if sfx == "US":
-        return f"{root}.TO"
-    if sfx == "TO":
-        return f"{root}.US"
-    return None
 
 
 def _root(listing: str) -> str:

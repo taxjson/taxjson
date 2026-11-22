@@ -8,29 +8,13 @@ import unittest
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 from tax_rules import rule
+from taxjson.rules import ids as R
 
-from taxjson.bin.taxjson_form_export import (
-    build_8949,
-    build_schedule3,
-    load_dispositions,
-    main,
-)
-
-
-def us_entry(symbol="AAPL.US", date="2025-05-02", qty=-100, proceeds=12000.0,
-             cost=10000.0, gain=None, disallowed=0.0, days_held=200,
-             term="SHORT_TERM", direction="LONG", **extra):
-    e = {
-        "date": date, "date_settle": date, "symbol": symbol, "qty": qty,
-        "proceeds": proceeds, "cost": cost,
-        "gain": (proceeds - cost + disallowed) if gain is None else gain,
-        "raw_gain": proceeds - cost,
-        "disallowed_amount": disallowed, "days_held": days_held,
-        "term": term, "direction": direction, "commission": 0.0, "fee": 0.0,
-        "account": "margin", "is_option": False,
-    }
-    e.update(extra)
-    return e
+from taxjson.lib.tax_forms import build_8949, build_schedule3
+from taxjson.bin.taxjson_form_export import load_dispositions, main
+from taxjson.lib.json_contract import SCHEMAS
+from _support.us_form_entries import us_entry
+from _support.filing_run_record import record_full_run
 
 
 def ca_entry(symbol="SHOP.TO", date="2025-06-10", qty=-50, proceeds=9000.0,
@@ -78,7 +62,7 @@ class TestLoadDispositions(unittest.TestCase):
 
 
 class Test8949(unittest.TestCase):
-    @rule("US-RPT-01", "US-RPT-02")
+    @rule(R.US_RPT_01, R.US_RPT_02)
     def test_parts_and_wash_code(self):
         rep = build_8949([
             us_entry(term="SHORT_TERM", disallowed=250.0,
@@ -194,8 +178,10 @@ class TestCli(unittest.TestCase):
                 rc = main([str(g), "--country", "usa", "--form", "8949", "--json"])
             rep = json.loads(out.getvalue())
             self.assertEqual(len(rep["part_I"]), 1)
+            # The --json contract (lib/json_contract): its number.
+            self.assertEqual(rep["schema_version"], SCHEMAS["form-export"])
 
-    @rule("CA-DISP-02", "CA-DISP-03")
+    @rule(R.CA_DISP_02, R.CA_DISP_03)
     def test_schedule3_text(self):
         with tempfile.TemporaryDirectory() as td:
             g = self._gains(td, [ca_entry()])
@@ -228,14 +214,7 @@ class TestCli(unittest.TestCase):
 
 class TestRunWrapper(unittest.TestCase):
     def test_form_defaults_from_country(self):
-        try:
-            import tomllib  # noqa: F401  (availability check: TOML support)
-        except ImportError:
-            try:
-                import tomli  # noqa: F401  (availability check: TOML support)
-            except ImportError:
-                self.skipTest("no TOML support on this interpreter")
-        from taxjson.bin.taxjson_run import cmd_form_export
+        from taxjson.cli.file import cmd_form_export
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -248,6 +227,7 @@ class TestRunWrapper(unittest.TestCase):
             work.mkdir()
             (work / "margin_gains.json").write_text(json.dumps({
                 "transactions": [ca_entry()]}))
+            record_full_run(root)  # books a full run built (TJ-4309)
 
             args = argparse.Namespace(dir=str(root), form=None, csv=None,
                                       json=True)
@@ -267,10 +247,11 @@ class TestTxf(unittest.TestCase):
     """TXF V042 export — TurboTax import built on the 8949 model."""
 
     def _txf(self, entries, box="A"):
-        from taxjson.bin.taxjson_form_export import build_8949, build_txf
+        from taxjson.lib.tax_forms import build_8949
+        from taxjson.bin.taxjson_form_export import build_txf
         return build_txf(build_8949(entries), box)
 
-    @rule("US-RPT-03")
+    @rule(R.US_RPT_03)
     def test_record_shape_and_refnums(self):
         doc = self._txf([
             us_entry(term="SHORT_TERM", proceeds=1600.0, cost=1500.0,
@@ -290,7 +271,7 @@ class TestTxf(unittest.TestCase):
         self.assertEqual(lines.count("TD"), 2)
         self.assertEqual(lines.count("^"), 3)  # header + 2 records
 
-    @rule("US-RPT-03")
+    @rule(R.US_RPT_03)
     def test_wash_sale_amount_rides_along(self):
         doc = self._txf([
             us_entry(proceeds=4000.0, cost=5000.0, disallowed=1000.0,
@@ -312,6 +293,23 @@ class TestTxf(unittest.TestCase):
         self.assertIn("N713", doc)
         self.assertIn("N716", doc)
         self.assertNotIn("N711", doc)
+
+    def test_json_is_refused_as_a_usage_error(self):
+        # TXF is its own format: --json printed the TXF text, not JSON,
+        # under a warning. Refused (exit 2) before any file is read, with
+        # what to run instead; nothing on stdout.
+        with tempfile.TemporaryDirectory() as td:
+            g = Path(td) / "margin_gains.json"
+            g.write_text(json.dumps({"transactions": [us_entry()]}))
+            out, err = io.StringIO(), io.StringIO()
+            with redirect_stdout(out), redirect_stderr(err):
+                rc = main([str(g), "--country", "usa", "--form", "txf",
+                           "--json"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(out.getvalue(), "")
+        self.assertIn("--json does not apply to --form txf", err.getvalue())
+        self.assertIn("Drop --json to print the TXF", err.getvalue())
+        self.assertIn("`--form 8949 --json`", err.getvalue())
 
     def test_short_sale_rows_use_real_world_columns(self):
         doc = self._txf([

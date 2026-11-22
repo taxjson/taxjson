@@ -13,8 +13,9 @@ from taxjson.lib.corp_actions import (
     CorporateAction, Manifest, ElectionRecord,
 )
 from taxjson.bin.taxjson_corp_actions import _emit_resolved, _unresolved
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 def _merger():
@@ -74,7 +75,7 @@ class TestCliMainNonInteractive(unittest.TestCase):
                 '"","2025-03-17","1","0","USD","MGR - ABDCO CORPORATION SHRS '
                 'RECEIVED THRU MERGER"\n')
             # Resolve the event id the extractor will produce.
-            from taxjson.lib.corp_actions import parse_rbc_corporate_actions
+            from taxjson.lib.rbc_corp_actions import parse_rbc_corporate_actions
             ev = parse_rbc_corporate_actions(csv, "margin")[0]
             manifest = tmp / "m.json"
             manifest.write_text(json.dumps({"elections": {ev.event_id: {

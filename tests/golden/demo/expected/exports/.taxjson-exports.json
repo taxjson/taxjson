@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "year": 2024,
+  "files": [
+    "README.txt",
+    "crypto_holdings.toml",
+    "ib_holdings.toml",
+    "lira_holdings.toml",
+    "margin_holdings.toml",
+    "questrade_holdings.toml",
+    "rrsp_holdings.toml",
+    "tfsa_holdings.toml",
+    "wash_radar_COMBINED.json",
+    "wash_radar_COMBINED.rpt",
+    "wash_radar_crypto.json",
+    "wash_radar_crypto.rpt",
+    "wash_radar_ib.json",
+    "wash_radar_ib.rpt",
+    "wash_radar_margin.json",
+    "wash_radar_margin.rpt",
+    "wash_radar_questrade.json",
+    "wash_radar_questrade.rpt",
+    "wash_radar_webull.json",
+    "wash_radar_webull.rpt",
+    "webull_holdings.toml"
+  ]
+}

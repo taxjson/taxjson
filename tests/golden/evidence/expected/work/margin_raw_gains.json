@@ -1,0 +1,72 @@
+{
+  "by_ticker": {
+    "F:SAMPLMH6.US": {
+      "hold_days": [
+        28
+      ],
+      "total_cost": 101.0,
+      "total_div": 0.0,
+      "total_gain": 28.0,
+      "total_pil": 0.0,
+      "total_proceeds": 129.0,
+      "trade_count": 1
+    }
+  },
+  "inventory": [
+    {
+      "currency": "USD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2025-03-18",
+      "last_acq_settle": "2025-03-19",
+      "position_start_date": "2025-03-18",
+      "qty": -15.0,
+      "symbol": "SAMPLA.US",
+      "total_cost": -598.5
+    }
+  ],
+  "option_replacement_warnings": [],
+  "summary": {
+    "total_disallowed": 0,
+    "total_fees_by_currency": {
+      "USD": {
+        "futures": 2.0,
+        "options": 0.0,
+        "stocks": 1.5,
+        "total": 3.5
+      }
+    },
+    "total_gain": 28.0,
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1
+  },
+  "transactions": [
+    {
+      "account": "margin",
+      "commission": 0.0,
+      "cost": 101.0,
+      "currency": "USD",
+      "date": "2025-03-03",
+      "date_settle": "2025-03-03",
+      "days_held": 28,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 1.0,
+      "gain": 28.0,
+      "grant": false,
+      "id": "3d9ef0e047f4b222",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 129.0,
+      "qty": 1.0,
+      "raw_gain": 28.0,
+      "replacement_lot_ids": [],
+      "symbol": "F:SAMPLMH6.US",
+      "term": null,
+      "wash_replacements": null
+    }
+  ],
+  "wash_sales": []
+}

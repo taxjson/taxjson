@@ -1,0 +1,58 @@
+Statement,Header,Field Name,Field Value
+Statement,Data,BrokerName,Interactive Brokers (Synthetic Demo)
+Statement,Data,Title,Activity Statement
+Statement,Data,Period,"January 1, 2024 - December 31, 2024"
+Account Information,Header,Field Name,Field Value
+Account Information,Data,Name,Demo User
+Account Information,Data,Account,U99900002
+Account Information,Data,Base Currency,CAD
+Financial Instrument Information,Header,Asset Category,Symbol,Description,Conid,Security ID,Underlying,Listing Exch,Multiplier,Expiry,Delivery Month,Type,Strike,Code
+Financial Instrument Information,Data,Equity and Index Options,QZQ 15MAR24 28 C,QZQ 15MAR24 28 C,999102025,,QZQ,CBOE,100,2024-03-15,2024-03,C,28,
+Financial Instrument Information,Data,Equity and Index Options,QZQ 17JAN25 35 C,QZQ 17JAN25 35 C,999102026,,QZQ,CBOE,100,2025-01-17,2025-01,C,35,
+Financial Instrument Information,Data,Equity and Index Options,QZQ 19JAN24 30 C,QZQ 19JAN24 30 C,999102027,,QZQ,CBOE,100,2024-01-19,2024-01,C,30,
+Financial Instrument Information,Data,Equity and Index Options,QZQ 21JUN24 25 P,QZQ 21JUN24 25 P,999102028,,QZQ,CBOE,100,2024-06-21,2024-06,P,25,
+Financial Instrument Information,Data,Equity and Index Options,QZQ 21JUN24 30 C,QZQ 21JUN24 30 C,999102029,,QZQ,CBOE,100,2024-06-21,2024-06,C,30,
+Financial Instrument Information,Data,Equity and Index Options,SAMPA 18OCT24 45 C,SAMPA 18OCT24 45 C,999102030,,SAMPA,CBOE,100,2024-10-18,2024-10,C,45,
+Financial Instrument Information,Data,Equity and Index Options,SAMPA 19APR24 40 P,SAMPA 19APR24 40 P,999102031,,SAMPA,CBOE,100,2024-04-19,2024-04,P,40,
+Financial Instrument Information,Data,Equity and Index Options,SAMPB 20JUN25 60 P,SAMPB 20JUN25 60 P,999102032,,SAMPB,CBOE,100,2025-06-20,2025-06,P,60,
+Financial Instrument Information,Data,Equity and Index Options,SAMPB 21JUN24 50 C,SAMPB 21JUN24 50 C,999102033,,SAMPB,CBOE,100,2024-06-21,2024-06,C,50,
+Financial Instrument Information,Data,Equity and Index Options,XYZQ 16AUG24 18 P,XYZQ 16AUG24 18 P,999102034,,XYZQ,CBOE,100,2024-08-16,2024-08,P,18,
+Financial Instrument Information,Data,Stocks,QZQ,QZQ SAMPLE CORP,999102035,US999102035,,NYSE,1,,,COMMON,,
+Financial Instrument Information,Data,Stocks,SAMPA,SAMPA SAMPLE CORP,999102036,US999102036,,NYSE,1,,,COMMON,,
+Financial Instrument Information,Data,Stocks,SAMPB,SAMPB SAMPLE CORP,999102037,US999102037,,NYSE,1,,,COMMON,,
+Financial Instrument Information,Data,Stocks,XYZQ,XYZQ SAMPLE CORP,999102038,US999102038,,NYSE,1,,,COMMON,,
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Equity and Index Options,USD,QZQ 19JAN24 30 C,"2024-01-19, 16:20:00",2,0.00,0.00,0.00,0.00,0.00,0,0,C;Ep
+Trades,Data,Order,Equity and Index Options,USD,QZQ 15MAR24 28 C,"2024-02-05, 10:00:00",3,1.12,1.12,-336.00,-3.15,339.15,0,0,O
+Trades,Data,Order,Equity and Index Options,USD,QZQ 15MAR24 28 C,"2024-03-04, 10:00:00",-2,1.90,1.90,380.00,-2.10,0.00,0,0,C
+Trades,Data,Order,Equity and Index Options,USD,SAMPA 19APR24 40 P,"2024-03-11, 10:00:00",-1,2.50,2.50,250.00,-1.05,-248.95,0,0,O
+Trades,Data,Order,Equity and Index Options,USD,QZQ 15MAR24 28 C,"2024-03-15, 16:20:00",-1,0.00,0.00,0.00,0.00,0.00,0,0,C;Ep
+Trades,Data,Order,Equity and Index Options,USD,QZQ 21JUN24 25 P,"2024-04-08, 10:00:00",2,2.00,2.00,-400.00,-2.10,402.10,0,0,O
+Trades,Data,Order,Equity and Index Options,USD,SAMPA 19APR24 40 P,"2024-04-19, 16:20:00",1,0.00,0.00,0.00,0.00,0.00,0,0,A;C
+Trades,Data,Order,Stocks,USD,SAMPA,"2024-04-19, 16:20:00",100,40.00,40.00,-4000.00,0.00,4000.00,0,0,A;O
+Trades,Data,Order,Equity and Index Options,USD,QZQ 21JUN24 25 P,"2024-05-06, 10:00:00",-2,0.80,0.80,160.00,-2.10,0.00,0,0,C
+Trades,Data,Order,Equity and Index Options,USD,QZQ 21JUN24 30 C,"2024-05-13, 10:00:00",-1,1.00,1.00,100.00,-1.05,-98.95,0,0,O
+Trades,Data,Order,Equity and Index Options,USD,QZQ 21JUN24 25 P,"2024-05-20, 10:00:00",2,0.70,0.70,-140.00,-2.10,142.10,0,0,O
+Trades,Data,Order,Equity and Index Options,USD,QZQ 21JUN24 25 P,"2024-06-21, 16:20:00",-2,0.00,0.00,0.00,0.00,0.00,0,0,C;Ep
+Trades,Data,Order,Equity and Index Options,USD,QZQ 21JUN24 30 C,"2024-06-21, 16:20:00",1,0.00,0.00,0.00,0.00,0.00,0,0,A;C
+Trades,Data,Order,Stocks,USD,QZQ,"2024-06-21, 16:20:00",-100,30.00,30.00,3000.00,0.00,0.00,0,0,A;C
+Trades,Data,Order,Equity and Index Options,USD,SAMPB 21JUN24 50 C,"2024-06-21, 16:20:00",-1,0.00,0.00,0.00,0.00,0.00,0,0,Ex;C
+Trades,Data,Order,Stocks,USD,SAMPB,"2024-06-21, 16:20:00",100,50.00,50.00,-5000.00,0.00,5000.00,0,0,Ex;O
+Trades,Data,Order,Stocks,USD,XYZQ,"2024-07-08, 10:00:00",100,20.00,20.00,-2000.00,-1.00,2001.00,0,0,O
+Trades,Data,Order,Equity and Index Options,USD,XYZQ 16AUG24 18 P,"2024-07-15, 10:00:00",1,0.90,0.90,-90.00,-1.05,91.05,0,0,O
+Trades,Data,Order,Stocks,USD,SAMPA,"2024-08-12, 10:00:00",-100,40.00,40.00,4000.00,-1.00,0.00,0,0,C
+Trades,Data,Order,Equity and Index Options,USD,XYZQ 16AUG24 18 P,"2024-08-16, 16:20:00",-1,0.00,0.00,0.00,0.00,0.00,0,0,Ex;C
+Trades,Data,Order,Stocks,USD,XYZQ,"2024-08-16, 16:20:00",-100,18.00,18.00,1800.00,0.00,0.00,0,0,Ex;C
+Trades,Data,Order,Stocks,USD,SAMPB,"2024-09-09, 10:00:00",-50,54.50,54.50,2725.00,-1.00,0.00,0,0,C
+Trades,Data,Order,Equity and Index Options,USD,SAMPA 18OCT24 45 C,"2024-09-16, 10:00:00",-3,1.50,1.50,450.00,-3.15,-446.85,0,0,O
+Trades,Data,Order,Equity and Index Options,USD,SAMPA 18OCT24 45 C,"2024-10-07, 10:00:00",1,0.60,0.60,-60.00,-1.05,0.00,0,0,C
+Trades,Data,Order,Equity and Index Options,USD,SAMPA 18OCT24 45 C,"2024-10-18, 16:20:00",2,0.00,0.00,0.00,0.00,0.00,0,0,C;Ep
+Trades,Data,Order,Equity and Index Options,USD,QZQ 17JAN25 35 C,"2024-11-04, 10:00:00",-1,1.40,1.40,140.00,-1.05,-138.95,0,0,O
+Trades,Data,Order,Equity and Index Options,USD,SAMPB 20JUN25 60 P,"2024-12-02, 10:00:00",2,3.00,3.00,-600.00,-2.10,602.10,0,0,O
+Cash Report,Header,Currency Summary,Currency,Total,Securities,Futures,
+Cash Report,Data,Starting Cash,Base Currency Summary,0,0,0,
+Cash Report,Data,Starting Cash,USD,0,0,0,
+Cash Report,Data,Commissions,USD,-25.05,-25.05,0,
+Cash Report,Data,Trades (Sales),USD,13005.00,13005.00,0,
+Cash Report,Data,Trades (Purchase),USD,-12626.00,-12626.00,0,
+Cash Report,Data,Ending Cash,USD,353.95,353.95,0,

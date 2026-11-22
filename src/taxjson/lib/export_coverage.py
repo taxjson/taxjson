@@ -70,6 +70,7 @@ date and file; the run's Warning names them and says the same.
 """
 from __future__ import annotations
 
+
 import csv
 import json
 import re
@@ -77,6 +78,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+from taxjson.project.accounts import accounts_of
+from taxjson.project.settings import settings_of
 from taxjson.lib import project_layout as _PL
 
 STEP = "export-coverage"
@@ -165,7 +168,7 @@ def key_text(key: str) -> str:
 
 
 def broker_name(broker: str) -> str:
-    from taxjson.lib.brokerages.detect import DISPLAY_NAMES
+    from taxjson.lib.brokerages.base import DISPLAY_NAMES
     b = str(broker or "")
     if b.startswith("generic-"):
         return b[len("generic-"):]
@@ -304,7 +307,7 @@ def _quiet_days(a: date, b: date) -> bool:
 
 
 def _expired_by(sym: str, day: date) -> bool:
-    from taxjson.lib.core import is_option_symbol, parse_option_expiry
+    from taxjson.lib.option_symbols import is_option_symbol, parse_option_expiry
     if not is_option_symbol(sym):
         return False
     exp = _d(parse_option_expiry(sym))
@@ -349,7 +352,7 @@ def open_positions(rows: Iterable[Dict[str, Any]], day: date,
     share position is left out: with no purchase in the data it is
     missing history (find-missing-history), not a sign of a short
     export."""
-    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.option_symbols import is_option_symbol
     from taxjson.lib.corporate_timeline import split_copies
     rows = list(rows)
     # One split reported twice is ONE event; positions here are keyed by
@@ -399,7 +402,7 @@ def open_positions(rows: Iterable[Dict[str, Any]], day: date,
 
 def _broker_files(cache: Path, acct: str) -> List[Tuple[str, Path]]:
     """(broker, parsed file) of an account's parsed exports in work/."""
-    from taxjson.lib.brokerages.detect import DISPLAY_NAMES
+    from taxjson.lib.brokerages.base import DISPLAY_NAMES
     out = []
     for b in sorted(DISPLAY_NAMES):
         if b in ("coinbase", "kraken", "generic"):
@@ -484,7 +487,7 @@ def _book_renames(root: Path, cache: Path) -> Dict[str, str]:
     JOURNAL lines — else ticker.map): a transfer sidecar's and a
     corporate-action file's rows are read through them, as the books'
     own rows were."""
-    from taxjson.lib.xlist_loss_radar import _map_rules
+    from taxjson.lib.map_file import _map_rules
     try:
         return _map_rules(root, cache)[0]
     except Exception:                                   # noqa: BLE001
@@ -503,7 +506,7 @@ def _expiry_in_gap(sym: str, end: date, cutoff: date, current: bool
     """An option's expiry (ISO) when its contract expired after `end`
     and by the cutoff (before today in the running year: a contract
     expiring today may still trade), else None."""
-    from taxjson.lib.core import is_option_symbol, parse_option_expiry
+    from taxjson.lib.option_symbols import is_option_symbol, parse_option_expiry
     if not is_option_symbol(sym):
         return None
     exp = _d(parse_option_expiry(sym))
@@ -660,7 +663,7 @@ def account_gaps(root: Path, acct: str, year: int, today: date,
     # another broker, a transfer leg): what happened after an export's end.
     # A move between two of your accounts is there twice — its sidecar
     # row and the books' lot-move leg (backlog TJ-0093): the row counts.
-    from taxjson.lib.core import LOT_MOVE_TYPE
+    from taxjson.lib.row_types import LOT_MOVE_TYPE
     all_rows = ([r for r in _rows(base) if r.get("type") != LOT_MOVE_TYPE]
                 + [r for v in sidecars.values() for r in v])
     gaps: List[Gap] = []
@@ -767,7 +770,7 @@ def next_activity(rows: Iterable[Dict[str, Any]], end: date,
     a .tt line, a later export — that moves one of `symbols` (income
     rows aside), else None. The file is the name the parse shows (an
     account id in it masked: brokerages.base.shown_name)."""
-    from taxjson.lib.core import POOL_FREE_ACTIONS
+    from taxjson.lib.row_types import POOL_FREE_ACTIONS
     want = {str(x).upper() for x in symbols}
     best: Optional[Tuple[str, str, str]] = None
     for r in rows:
@@ -825,7 +828,8 @@ def _spend_own_units(rows: List[Dict[str, Any]], spent: Dict[int, float],
     or the broker marks it a short (backlog TJ-1287)."""
     from types import SimpleNamespace
 
-    from taxjson.lib.core import LOT_MOVE_TYPE, is_option_symbol
+    from taxjson.lib.row_types import LOT_MOVE_TYPE
+    from taxjson.lib.option_symbols import is_option_symbol
     from taxjson.lib.corporate_timeline import split_copies
     from taxjson.lib.missing_history import broker_short_marker
     dup = split_copies(rows)
@@ -950,8 +954,8 @@ def find_gaps(root: Path, cfg: Dict[str, Any],
     """Every account's short exports (crypto accounts excepted). [] when
     the project has no year or no books yet."""
     root = Path(root)
-    settings = (cfg or {}).get("settings") or {}
-    year = settings.get("year")
+    settings = settings_of(cfg)
+    year = settings.year
     if not isinstance(year, int) or isinstance(year, bool):
         return []
     today = today or date.today()
@@ -965,8 +969,8 @@ def find_gaps(root: Path, cfg: Dict[str, Any],
     except Exception:                                   # noqa: BLE001
         split_at_open = False
     out: List[Gap] = []
-    for name, a in sorted(((cfg or {}).get("accounts") or {}).items()):
-        if not isinstance(a, dict) or a.get("crypto"):
+    for name, a in sorted(accounts_of(cfg).items()):
+        if a.crypto:
             continue
         try:
             out += account_gaps(root, str(name), year, today,

@@ -1,0 +1,14 @@
+{
+  "account": null,
+  "problems": [],
+  "rows": [],
+  "schema_version": 1,
+  "scope": "all history",
+  "totals": {
+    "converted": {},
+    "credits": {},
+    "deposits": {},
+    "fees": {},
+    "withdrawals": {}
+  }
+}

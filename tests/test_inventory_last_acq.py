@@ -12,8 +12,9 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 def _gains(country, base_doc, tmp):

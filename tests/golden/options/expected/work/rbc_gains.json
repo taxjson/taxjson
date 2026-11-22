@@ -1,0 +1,104 @@
+{
+  "by_ticker": {
+    "SAMPR240719C00012000.TO": {
+      "hold_days": [
+        46
+      ],
+      "total_cost": 61.2,
+      "total_div": 0.0,
+      "total_gain": -61.2,
+      "total_pil": 0.0,
+      "total_proceeds": 0.0,
+      "trade_count": 1
+    },
+    "SAMPW.WT.TO": {
+      "hold_days": [
+        203
+      ],
+      "total_cost": 29.95,
+      "total_div": 0.0,
+      "total_gain": -29.95,
+      "total_pil": 0.0,
+      "total_proceeds": 0.0,
+      "trade_count": 1
+    }
+  },
+  "inventory": [],
+  "inventory_year_end": [],
+  "option_replacement_warnings": [],
+  "summary": {
+    "option_buyback_loss_superficial": false,
+    "option_grant_since": 2024,
+    "option_premium_timing": "grant",
+    "tax_date_basis": "settle",
+    "total_disallowed": 0,
+    "total_fees_by_currency": {
+      "CAD": {
+        "options": 11.2,
+        "stocks": 9.95,
+        "total": 21.15
+      }
+    },
+    "total_gain": -91.15,
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1,
+    "year": "2024"
+  },
+  "transactions": [
+    {
+      "account": "rbc",
+      "commission": 0.0,
+      "cost": 61.2,
+      "currency": "CAD",
+      "date": "2024-07-19",
+      "date_settle": "2024-07-19",
+      "days_held": 46,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 0.0,
+      "gain": -61.2,
+      "grant": false,
+      "id": "280b8ba720bdadcc",
+      "is_option": true,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 0.0,
+      "qty": 1.0,
+      "raw_gain": -61.2,
+      "replacement_lot_ids": [],
+      "symbol": "SAMPR240719C00012000.TO",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "rbc",
+      "commission": 0.0,
+      "cost": 29.95,
+      "currency": "CAD",
+      "date": "2024-09-20",
+      "date_settle": "2024-09-20",
+      "days_held": 203,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 0.0,
+      "gain": -29.95,
+      "grant": false,
+      "id": "0c36ca22fa40c69b",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 0.0,
+      "qty": 100.0,
+      "raw_gain": -29.95,
+      "replacement_lot_ids": [],
+      "symbol": "SAMPW.WT.TO",
+      "term": null,
+      "wash_replacements": null
+    }
+  ],
+  "wash_sales": []
+}

@@ -1,0 +1,699 @@
+"""The rename rules of a ticker.map, read: its GLOBAL, TOBASE, JOURNAL,
+DELETE, DISTINCT and RENAME lines parsed into a TickerMap
+(`_parse_map_text`; a file, lib/map_file), merged into one {from: to}
+(`merge_renames`) and applied to one symbol (`map_symbol`); the look-alike
+listing spellings (`distinct_spellings`, `listing_spelling_notes`), the
+bare-target check (`bare_target_warnings`) and the form of a symbol a
+suggestion writes into a map line (`_TOKEN_RE`).
+
+The stage that applies them to transactions is bin/taxjson_ticker_map.py;
+the lookup keywords (QUOTE, CRYPTO, EXTRACT, T1135, SIMILAR) are
+lib/ticker_map.py's. Moved from bin (PLAN step 8): lib reads a map
+without importing the command code.
+"""
+import json
+import re
+from collections import namedtuple
+from types import MappingProxyType
+from typing import Dict, List, Optional, Tuple
+
+from taxjson.lib.cli_diag import InputContentError
+from taxjson.lib.futures_prefixes import FUTURES_PREFIXES
+from taxjson.lib.ca_listing import book_listing
+
+
+# A ticker-map line is `KEYWORD from [to]`. One file, four rule types:
+#   GLOBAL  from to   — a plain rename; applies in every stage (a
+#                       security's true ticker, e.g. QZD1 -> QZD).
+#   TOBASE  from to   — currency-equivalent consolidation; applies only
+#                       when converting to base currency (the main
+#                       pipeline). The raw holdings view keeps the two
+#                       listings separate.
+#   JOURNAL from to   — legacy: read as TOBASE (one security). The
+#                       journal itself is a dated event now, a .tt line
+#                       `JOURNAL <date> FROM TO <qty>` (lib/dated_events);
+#                       `tjs format-map --write` rewrites the line.
+#   DELETE  from      — nuke that ticker's transactions (a pure artifact).
+#   DISTINCT a b      — declares two look-alike listings are SEPARATE
+#                       securities (a CDR vs its US underlying); changes
+#                       no symbol; silences any finding or suggestion
+#                       for the pair (not needed for a CDR or another
+#                       company the exports' names already show apart).
+#   RENAME  from to YYYY-MM-DD [late=fold|late=separate]
+#                     — legacy: a ticker change on that date, a DATED
+#                       event (lib/renames) now written in a .tt file as
+#                       `RENAME <date> OLD NEW` (`tjs format-map
+#                       --write` moves it). Without a date it is GLOBAL.
+# Five more keywords are lookups that change no symbol (lib/ticker_map,
+# which parses them): QUOTE (Yahoo quote spelling), CRYPTO (a coin's
+# Yahoo id), EXTRACT (a parser symbol-extraction override), T1135 (a
+# symbol's T1135 domicile) and SIMILAR (look-alike funds: flagged in a
+# loss window, never pooled). A
+# TRADINGVIEW line (the removed TradingView export) is skipped here;
+# `tjs run` notes it once (lib/ticker_map.RETIRED_KEYWORDS).
+_MAP_KEYWORDS = ("GLOBAL", "TOBASE", "JOURNAL", "DELETE", "DISTINCT",
+                 "RENAME")
+
+# Parsed map: glob/tobase/journal are {from: to}; delete is {symbol,...};
+# distinct is a set of frozenset pairs the user declares are SEPARATE
+# securities despite looking like one (CDRs vs their US underlying:
+# SAMPLR.TO is a fractional CAD-hedged receipt over SAMPLR.US, not a listing
+# equivalent — pooling their ACB would be wrong). DISTINCT changes no
+# symbol; it silences the MAP-GAP finding for that pair and
+# records the judgment in the map file where it belongs.
+# dated: the dated RENAME lines (lib/rename_decl.DatedRename), each a ticker
+# change booked as an event on its date; undated_rename: the FROM symbols
+# of undated RENAME lines (kept in glob — they mean exactly GLOBAL).
+# lookup_named: the symbols the lookup lines name (QUOTE, CRYPTO, T1135,
+# STABLE, MULT, an EXTRACT target) — they change no symbol, but a line
+# written for a symbol says the user decided what that symbol is
+# (named_symbols(lookups=True)).
+# generated: the FROM symbols and DISTINCT pairs that tobase.map lines
+# (and the .V / .TO spellings, lib/tobase_map) add to a project's map —
+# not the user's own lines (the unused-rule check leaves them alone);
+# overlay_named: the symbols only those lines name (named_symbols leaves
+# them out: an inference yields only to a line the user wrote).
+# case_spellings: {an export's spelling with a lower-case letter: SAME or
+# APART (lib/symbol_case)} from the GLOBAL and DISTINCT lines whose two
+# symbols differ only in letter case (`GLOBAL ZYXa.US ZYXA.US`: one
+# security; `DISTINCT ZYXa.US ZYXA.US`: two), which every reader of an
+# export's symbol reads (backlog TJ-4606). Such a line is the one place a
+# symbol's case is read as written.
+TickerMap = namedtuple("TickerMap",
+                       ["glob", "tobase", "journal", "delete",
+                        "distinct", "dated", "undated_rename",
+                        "lookup_named", "generated", "overlay_named",
+                        "case_spellings"],
+                       defaults=((), frozenset(), frozenset(),
+                                 frozenset(), frozenset(),
+                                 MappingProxyType({})))
+
+
+def _bare_symbol(sym: str) -> bool:
+    """A symbol written without a market suffix (no `.SFX` that
+    taxjson/data/markets.toml knows), not an option contract or a
+    future: in the books such a symbol is a coin (price_chain.
+    is_crypto_symbol) — every share listing carries its suffix (a US
+    one `.US`, whatever the broker wrote: base.apply_currency_suffix)."""
+    from taxjson.lib.option_symbols import is_option_symbol
+    from taxjson.lib.markets_data import known_suffixes, suffix_of
+    s = str(sym or "").strip().upper()
+    return (bool(s) and suffix_of(s) not in known_suffixes()
+            and not s.startswith(FUTURES_PREFIXES)
+            and not is_option_symbol(s))
+
+
+def _share_listing(sym: str) -> bool:
+    """A share listing as the books spell it (ROOT.SFX, a suffix
+    markets.toml knows), not an option contract or a future."""
+    from taxjson.lib.option_symbols import is_option_symbol
+    from taxjson.lib.markets_data import known_suffixes, suffix_of
+    s = str(sym or "").strip().upper()
+    return (suffix_of(s) in known_suffixes()
+            and not s.startswith(FUTURES_PREFIXES)
+            and not is_option_symbol(s))
+
+
+def us_listing(bare: str) -> str:
+    """The book spelling of a US listing written bare (QZX -> QZX.US):
+    the suffix markets.toml gives a US-dollar row ([currency_suffix])."""
+    from taxjson.lib.markets_data import data
+    sfx = str(data()["currency_suffix"].get("USD") or "US").upper()
+    return f"{str(bare).strip().upper()}.{sfx}"
+
+
+def listing_pair_spelling(a: str, b: str) -> Optional[str]:
+    """The bare side of a pair whose OTHER side is a share listing
+    (`QZX` in `QZX QZX.TO`), when its US spelling is not that other
+    side; None otherwise (two bare symbols are two coins; a pair with
+    no share listing is left as written)."""
+    a, b = str(a).upper(), str(b).upper()
+    for x, y in ((a, b), (b, a)):
+        if _bare_symbol(x) and _share_listing(y) and us_listing(x) != y:
+            return x
+    return None
+
+
+def distinct_spellings(a: str, b: str) -> Tuple[frozenset, ...]:
+    """The pairs a DISTINCT line keeps apart: the two symbols as written
+    and, when one is a bare ticker beside a share listing (`DISTINCT QZX
+    QZX.TO`), that ticker's US listing too (QZX.US — the spelling every
+    parser gives a broker's bare US ticker), so the line answers the
+    pair the loss radar, `ticker-map --suggest` and the cross-listing
+    join name. The pair as written stays (a bare symbol may be a coin or
+    a broker's code in the books). A DISTINCT line changes no symbol, so
+    neither reading moves a pool (v0.24.1 leftovers, 1)."""
+    a, b = str(a).upper(), str(b).upper()
+    out = [frozenset((a, b))]
+    bare = listing_pair_spelling(a, b)
+    if bare is not None:
+        out.append(frozenset((us_listing(a), b) if a == bare
+                             else (a, us_listing(b))))
+    return tuple(out)
+
+
+def listing_spelling_notes(text: str, name: str = "ticker.map",
+                           books: Optional[set] = None
+                           ) -> Tuple[List[str], List[str]]:
+    """(Info lines, Warning lines) for the map's lines that pair a bare
+    ticker with a share listing (listing_pair_spelling) where the books
+    (`books`: every symbol they name, ticker_map_suggest.books_symbols)
+    hold the ticker's US listing and not the bare symbol itself (a coin
+    or a broker's code is a symbol of its own). A DISTINCT line also
+    keeps the US listing apart (distinct_spellings) — said as Info. A
+    GLOBAL / TOBASE / JOURNAL / undated RENAME line is NOT re-read (it
+    would move pools and the gain): it joins nothing, said as a Warning
+    naming the line to write. Without `books`, every such line. With
+    `books`, also a Warning for a line naming ROOT.V the books spell
+    ROOT.TO (`_venture_spelling_warnings`)."""
+    infos: List[str] = []
+    warns: List[str] = []
+    for lineno, raw in enumerate(str(text or "").splitlines(), 1):
+        parts = raw.split("#", 1)[0].split()
+        if len(parts) != 3:
+            continue
+        kw = parts[0].upper()
+        a, b = parts[1].upper(), parts[2].upper()
+        bare = listing_pair_spelling(a, b)
+        if bare is None:
+            continue
+        if books is not None and (bare in books
+                                  or us_listing(bare) not in books):
+            continue
+        line = " ".join(parts)
+        where = f"{name}:{lineno}"
+        fa = us_listing(a) if a == bare else a
+        fb = us_listing(b) if b == bare else b
+        if kw == "DISTINCT":
+            infos.append(f"{where}: `{line}` is read as `DISTINCT {fa} "
+                         f"{fb}`: a US listing is {us_listing(bare)} in "
+                         f"the books")
+        elif kw in ("GLOBAL", "TOBASE", "JOURNAL", "RENAME"):
+            warns.append(f"{where}: `{line}` names {bare}, a symbol the "
+                         f"books do not hold (they spell its US listing "
+                         f"{us_listing(bare)}), so the line joins nothing. "
+                         f"If {bare} is the US listing, write `{kw} {fa} "
+                         f"{fb}`")
+    if books is not None:
+        warns += _venture_spelling_warnings(text, name, books)
+    return infos, warns
+
+
+# The positions of a line's tokens that name a book symbol, by keyword
+# (None: every token after the keyword).
+_BOOK_TOKENS = {"GLOBAL": (1, 2), "TOBASE": (1, 2), "JOURNAL": (1, 2),
+                "RENAME": (1, 2), "DISTINCT": (1, 2), "DELETE": (1,),
+                "QUOTE": (1,), "T1135": (1,), "SIMILAR": None}
+
+
+def _venture_spelling_warnings(text: str, name: str, books: set
+                               ) -> List[str]:
+    """A Warning for each line naming ROOT.V where the books hold
+    ROOT.TO and not ROOT.V: a TSX Venture listing is ROOT.TO in the books
+    (every parser, every .tt row, an EXTRACT line's CAD target: backlog
+    TJ-4604), so the line does nothing for it; the line cannot say it is
+    one (a `.V` outside CAD may be a class letter), so it is not re-read
+    (backlog TJ-4607)."""
+    from taxjson.lib.ca_listing import is_ca_pref_series
+    out: List[str] = []
+    for lineno, raw in enumerate(str(text or "").splitlines(), 1):
+        parts = raw.split("#", 1)[0].split()
+        if len(parts) < 2 or parts[0].upper() not in _BOOK_TOKENS:
+            continue
+        pos = _BOOK_TOKENS[parts[0].upper()]
+        for i in (pos if pos is not None else range(1, len(parts))):
+            tok = parts[i].upper() if i < len(parts) else ""
+            if (not tok.endswith(".V") or len(tok) < 3
+                    or is_ca_pref_series(tok) or tok in books
+                    or f"{tok[:-2]}.TO" not in books):
+                continue
+            out.append(f"{name}:{lineno}: `{' '.join(parts)}` names {tok}, "
+                       f"a symbol the books do not hold: they spell a TSX "
+                       f"Venture listing {tok[:-2]}.TO, so the line does "
+                       f"nothing for it. If {tok} is the Venture listing, "
+                       f"write {tok[:-2]}.TO in the line")
+    return out
+
+
+def _parse_map_text(text: str, name: str = "ticker.map",
+                    dropped: Optional[List[str]] = None):
+    """(TickerMap, problems, notes) of a map's text, `name` its file
+    name in the messages; `dropped`, when given, receives the problems
+    whose line's rule is not in the map (a malformed line, a second
+    target or lookup value: lib/ticker_map_format files those lines
+    under Unrecognized). `problems` are the lines that
+    could not be parsed — each rule on them is DROPPED — or that
+    contradict another line (one FROM with two targets, a rename
+    cycle, a DISTINCT pair the renames join), as
+    `<file>:<lineno>: <message>: '<line>'`; `notes` are harmless
+    no-op lines (a DISTINCT that pairs a symbol with itself).
+
+    Symbols are upper-cased (the keyword always was): a lower-case
+    rule used to match nothing in the pipeline while the unused-rule
+    check (now `ticker-map --suggest`), which upper-cases, called it
+    live (S009-05). A BOM and inline `# notes` are stripped (R1-139)."""
+    glob: Dict[str, str] = {}
+    tobase: Dict[str, str] = {}
+    journal: Dict[str, str] = {}
+    delete = set()
+    distinct = set()
+    problems: List[str] = []
+    notes: List[str] = []
+    buckets = {"GLOBAL": glob, "TOBASE": tobase, "JOURNAL": journal,
+               "RENAME": glob}
+    # The effective map `tjs run` writes (lib/cross_listings) carries
+    # the .tt RENAME declarations with their origin in a note (`# .tt:
+    # inputs/<acct>/<file>.tt:<n>`, lib/dated_events): read back as that
+    # declaration's place and source.
+    from taxjson.lib.rename_decl import EVENT_META, TT_ORIGIN_RE
+    _effective = str(name).endswith(".effective")
+    dated: list = []
+    # The merged facts of each rename event (lib/dated_events.
+    # effective_lines): a .tt line's JSON tail, {index in dated: facts};
+    # a legacy map line's EVENT_META comment lines.
+    _origin_meta: Dict[int, dict] = {}
+    _event_meta: List[dict] = []
+    undated_rename = set()
+    # from -> (target, where, line) of its first rename rule
+    first_rule: Dict[str, tuple] = {}
+    distinct_where: Dict[frozenset, tuple] = {}
+    case: Dict[str, str] = {}
+    from io import StringIO
+    from taxjson.lib.ticker_map import (RENAME_KEYWORDS,
+                                        RETIRED_KEYWORDS, SIDE_KEYWORDS,
+                                        SideRules, add_side_rule,
+                                        parse_side_line)
+    side = SideRules()
+    with StringIO(text) as f:
+        for lineno, raw in enumerate(f, 1):
+            line = raw.split('#', 1)[0].strip()
+            if not line:
+                if _effective and raw.lstrip().startswith(EVENT_META):
+                    try:
+                        _m = json.loads(raw.lstrip()[len(EVENT_META):])
+                    except ValueError:
+                        _m = None
+                    if isinstance(_m, dict):
+                        _event_meta.append(_m)
+                continue
+            where = f"{name}:{lineno}"
+            parts = line.split()
+            kw = parts[0].upper()
+            syms = [book_listing(p) for p in parts[1:]]     # TJ-4607
+            if kw in RETIRED_KEYWORDS:
+                # TRADINGVIEW: a removed feature's line — ignored, never
+                # a problem (`tjs run` asks once to delete it).
+                continue
+            if kw in SIDE_KEYWORDS:
+                # QUOTE / CRYPTO / EXTRACT / T1135: lookups that
+                # change no symbol (lib/ticker_map); checked here so
+                # `tjs run` refuses a malformed one up front too.
+                try:
+                    _k, _key, _val = parse_side_line(kw, line)
+                except ValueError as e:
+                    problems.append(f"{where}: {e}: {line!r}")
+                    continue
+                add_side_rule(side, _k, _key, _val, where, line)
+                continue
+            if kw not in _MAP_KEYWORDS:
+                problems.append(
+                    f"{where}: line has no ticker.map keyword "
+                    f"({'/'.join(RENAME_KEYWORDS + SIDE_KEYWORDS)}): "
+                    f"{line!r}")
+                continue
+            if kw == "RENAME" and len(syms) > 2:
+                # RENAME OLD NEW YYYY-MM-DD [late=fold|late=separate]
+                from taxjson.lib.rename_decl import DatedRename, parse_rename_tail
+                try:
+                    _d, _late = parse_rename_tail(parts[3:])
+                except ValueError as e:
+                    problems.append(
+                        f"{where}: RENAME line needs `from to "
+                        f"YYYY-MM-DD [late=fold|late=separate]` — {e}: "
+                        f"{line!r}")
+                    continue
+                if syms[0] == syms[1]:
+                    notes.append(f"{where}: RENAME renames a symbol to "
+                                 f"itself (no effect): {line!r}")
+                    continue
+                # An option contract or a future is never renamed into
+                # shares (or another series): the .tt form's refusal
+                # (pre-release review H7).
+                from taxjson.lib.derivative_checks import _rename_derivative_check
+                try:
+                    _rename_derivative_check(syms[0], syms[1], _d,
+                                             f"{where}: ", line.strip())
+                except ValueError as e:
+                    problems.append(str(e))
+                    continue
+                _origin = (TT_ORIGIN_RE.match(raw.split('#', 1)[1])
+                           if _effective and '#' in raw else None)
+                if _origin:
+                    if _origin.group(3):
+                        try:
+                            _m = json.loads(_origin.group(3))
+                        except ValueError:
+                            _m = None
+                        if isinstance(_m, dict):
+                            _origin_meta[len(dated)] = _m
+                    dated.append(DatedRename(
+                        syms[0], syms[1], _d, _late, _origin.group(1),
+                        (_origin.group(2) or "").strip(), source="tt"))
+                else:
+                    dated.append(DatedRename(syms[0], syms[1], _d, _late,
+                                             where, line))
+                continue
+            want = 1 if kw == "DELETE" else 2
+            if len(syms) > want:
+                problems.append(
+                    f"{where}: {kw} line has extra token(s) "
+                    f"{parts[1 + want:]} — notes go after `#`: {line!r}")
+                continue
+            if kw == "DELETE":
+                if syms:
+                    delete.add(syms[0])
+                else:
+                    problems.append(f"{where}: DELETE line needs a "
+                                    f"symbol: {line!r}")
+            elif kw == "DISTINCT":
+                if len(syms) == 2:
+                    if syms[0] == syms[1]:
+                        _self_pair(kw, parts, where, line, case, problems, notes)
+                        continue
+                    # A bare US ticker beside a share listing: its US
+                    # listing too (distinct_spellings).
+                    for pair in distinct_spellings(*syms):
+                        distinct.add(pair)
+                        distinct_where.setdefault(pair, (where, line))
+                else:
+                    problems.append(f"{where}: DISTINCT line needs "
+                                    f"`a b`: {line!r}")
+            else:
+                if len(syms) == 2:
+                    frm, to = syms
+                    if frm == to:
+                        _self_pair(kw, parts, where, line, case, problems, notes)
+                        continue
+                    # An option contract or a future is never one
+                    # security with shares, nor with another contract
+                    # (second pre-release review, 6).
+                    from taxjson.lib.derivative_checks import _join_derivative_check
+                    try:
+                        _join_derivative_check(kw, frm, to, f"{where}: ",
+                                               line.strip())
+                    except ValueError as e:
+                        problems.append(str(e))
+                        continue
+                    prev = first_rule.get(frm)
+                    if prev is not None and prev[0] != to:
+                        problems.append(
+                            f"{where}: {frm} is renamed to {to} here but "
+                            f"to {prev[0]} at {prev[1]} ({prev[2]!r}) — "
+                            f"one symbol can have only one target: "
+                            f"{line!r}")
+                        continue
+                    first_rule.setdefault(frm, (to, where, line))
+                    buckets[kw][frm] = to
+                    if kw == "JOURNAL":
+                        # Legacy: a JOURNAL line is a TOBASE line (one
+                        # security); its holdings netting is done by the
+                        # journal's dated legs (lib/dated_events). Kept in
+                        # `journal` too, for the legacy note and the
+                        # missing-history walk's order.
+                        tobase[frm] = to
+                    if kw == "RENAME":
+                        undated_rename.add(frm)
+                else:
+                    problems.append(f"{where}: {kw} line needs `from to` "
+                                    f"(two symbols separated by a space): "
+                                    f"{line!r}")
+    # Every problem so far dropped its line's rule; the ones below
+    # (contradictions between rules) keep both.
+    if dropped is not None:
+        dropped.extend(problems + side.problems)
+    if _origin_meta or _event_meta:
+        from taxjson.lib.rename_decl import apply_meta
+        dated = apply_meta(dated, _event_meta, _origin_meta)
+    # A dated rename next to an undated rule for the same symbol, or two
+    # dated renames of one symbol close together, contradict each other
+    # (two events of different kinds — a security's and a coin's — never
+    # meet: lib/dated_events).
+    _seen_dated: Dict[str, list] = {}
+    for dr in dated:
+        if dr.old in glob:
+            to, w, ln = first_rule[dr.old]
+            problems.append(
+                f"{dr.where}: RENAME {dr.old} {dr.new} {dr.date} is "
+                f"dated but {dr.old} is also renamed (undated) to {to} at "
+                f"{w} ({ln!r}) — an undated rule applies to every row "
+                f"at any date; keep one of the two: {dr.line!r}")
+        for prev in _seen_dated.get(dr.old, []):
+            from taxjson.lib.rename_decl import WINDOW_DAYS, _days
+            gap = _days(prev.date, dr.date)
+            if prev.kind and dr.kind and prev.kind != dr.kind:
+                continue
+            if gap is not None and gap <= WINDOW_DAYS:
+                problems.append(
+                    f"{dr.where}: RENAME {dr.old} on {dr.date} repeats "
+                    f"the rename of {dr.old} on {prev.date} at "
+                    f"{prev.where} — one event, one line: {dr.line!r}")
+        _seen_dated.setdefault(dr.old, []).append(dr)
+    problems += side.problems
+    tmap = TickerMap(glob, tobase, journal, delete, distinct,
+                     tuple(dated), frozenset(undated_rename),
+                     _lookup_named(side), case_spellings=case)
+    for to_base in (False, True):
+        raw = raw_renames(tmap, to_base)
+        for frm in sorted(raw):
+            cyc = _chain_cycle(frm, raw)
+            if cyc and frm == min(cyc):
+                wheres = ", ".join(first_rule[s][1] for s in cyc
+                                   if s in first_rule)
+                msg = (f"rename cycle {' -> '.join(cyc + [cyc[0]])} "
+                       f"({wheres}) — a chain of renames must end at "
+                       f"one symbol")
+                if not any(msg in p for p in problems):
+                    problems.append(f"{name}: {msg}")
+    if not any("rename cycle" in p for p in problems):
+        for to_base, view in ((False, "GLOBAL"), (True, "base-currency")):
+            ren = merge_renames(tmap, to_base)
+            for pair in sorted(distinct, key=sorted):
+                a, b = sorted(pair)
+                if map_symbol(a, ren) == map_symbol(b, ren):
+                    w, ln = distinct_where[pair]
+                    via = ", ".join(first_rule[s][1] for s in (a, b)
+                                    if s in first_rule)
+                    msg = (f"{w}: DISTINCT {a} {b} ({ln!r}) contradicts "
+                           f"the rename rule(s) at {via}, which pool "
+                           f"both into {map_symbol(a, ren)} ({view} "
+                           f"view) — delete one of the two statements")
+                    if msg not in problems:
+                        problems.append(msg)
+    return tmap, problems, notes
+
+
+def _self_pair(kw: str, parts, where: str, line: str, case: dict,
+               problems: List[str], notes: List[str]) -> None:
+    """A two-symbol line (`parts`, as written) whose symbols are one in
+    the books: a case pair (`_case_pair`), else a no-op note."""
+    if _case_pair(kw, parts[1:3], where, line, case, problems):
+        return
+    if kw == "DISTINCT":
+        notes.append(f"{where}: DISTINCT pairs a symbol with itself (no "
+                     f"effect): {line!r}")
+    else:
+        notes.append(f"{where}: {kw} renames a symbol to itself (no "
+                     f"effect): {line!r}")
+
+
+def _case_pair(kw: str, toks, where: str, line: str, case: dict,
+               problems: List[str]) -> bool:
+    """Whether a `kw` line is a case pair: a GLOBAL or DISTINCT line
+    whose two symbols (`toks`, as written) differ only in letter case,
+    the one line read in its case (backlog TJ-4606). Then each spelling
+    with a lower-case letter is recorded in `case` as one security with
+    the other (GLOBAL: SAME) or apart from it (DISTINCT: APART, booked in
+    its class spelling: lib/symbol_case), or the line's problem is added
+    to `problems`."""
+    from taxjson.lib.symbol_case import APART, SAME, class_spelling, has_lower
+    if kw not in ("GLOBAL", "DISTINCT") or len(toks) != 2:
+        return False
+    a, b = toks
+    if a == b or a.upper() != b.upper():
+        return False
+    kind = APART if kw == "DISTINCT" else SAME
+    for tok in (a, b):
+        if not has_lower(tok):
+            continue
+        if kind == APART and class_spelling(tok) is None:
+            problems.append(
+                f"{where}: DISTINCT {a} {b}: a spelling is kept apart from "
+                f"its upper-case one only when lower-case letters end its "
+                f"root after an upper-case start (ZYXa.US, booked "
+                f"ZYX.A.US); {tok} is not one. Delete the line, or write "
+                f"`GLOBAL {tok} {tok.upper()}` if the exports spell one "
+                f"security so: {line!r}")
+            continue
+        if case.get(tok, kind) != kind:
+            problems.append(
+                f"{where}: {tok} is one security with {tok.upper()} in "
+                f"one line and two in another (a GLOBAL and a DISTINCT "
+                f"line): keep one of the two lines: {line!r}")
+            continue
+        case.setdefault(tok, kind)
+    return True
+
+
+def _chain_cycle(frm: str, raw: Dict[str, str]):
+    """The cycle (list of symbols) reached by following renames from
+    `frm`, or None when the chain ends."""
+    seen: List[str] = []
+    cur = frm
+    while cur in raw:
+        if cur in seen:
+            return seen[seen.index(cur):]
+        seen.append(cur)
+        cur = raw[cur]
+    return None
+
+
+def raw_renames(tmap: "TickerMap", to_base: bool) -> Dict[str, str]:
+    """The stage's rename rules as written (one hop each)."""
+    renames = dict(tmap.glob)
+    if to_base:
+        renames.update(tmap.tobase)
+        renames.update(tmap.journal)
+    return renames
+
+
+def _lookup_named(side) -> frozenset:
+    """The symbols the lookup lines of a map name (SideRules): the
+    symbol of a QUOTE, CRYPTO, T1135, STABLE or MULT line, every symbol
+    of a SIMILAR line and an EXTRACT line's target. A root-wide market
+    line (SPLITSHARE, INDEXOPT, SECFUT, EVENING) and a VENUE code name no
+    symbol."""
+    out = set()
+    for table in (side.quote, side.crypto, side.t1135, side.stable,
+                  side.mult):
+        out.update(str(k) for k in table)
+    out.update(str(sym) for _d, _c, sym in side.extract)
+    for syms, _w, _l in side.similar:
+        out.update(str(s) for s in syms)
+    return frozenset(s.upper() for s in out if s)
+
+
+def named_symbols(tmap: "TickerMap", lookups: bool = False) -> frozenset:
+    """Every symbol a rule of the map names, on either side: GLOBAL /
+    TOBASE / JOURNAL / undated RENAME, DELETE, DISTINCT and dated RENAME
+    lines. A symbol the user wrote a rule for is the user's call: an
+    inference (lib/symbol_codes) never overrides it — a DELETEd code
+    stays deleted, a dated rename keeps its date. `lookups`: the symbols
+    the lookup lines name too (QUOTE, CRYPTO, T1135, STABLE, MULT, an
+    EXTRACT target — TickerMap.lookup_named): an inference that would
+    move a symbol's rows to another symbol (lib/listing_suffix, IB's
+    temporary-symbol fold) leaves a symbol any ticker.map line names, so
+    the line keeps meaning what it says. A symbol only tobase.map's
+    lines name (TickerMap.overlay_named) is not counted: those lines
+    are the master's, not the user's decision."""
+    out = set(tmap.delete)
+    if lookups:
+        out.update(tmap.lookup_named)
+    for d in (tmap.glob, tmap.tobase, tmap.journal):
+        out.update(d)
+        out.update(d.values())
+    for pair in tmap.distinct:
+        out.update(pair)
+    for dr in tmap.dated:
+        out.update((dr.old, dr.new))
+    # The symbols only tobase.map's lines name are not the user's call.
+    out.difference_update(getattr(tmap, "overlay_named", ()) or ())
+    return frozenset(s.upper() for s in out)
+
+
+def merge_renames(tmap: "TickerMap", to_base: bool) -> Dict[str, str]:
+    """Build the symbol-rename dict for a merge stage. GLOBAL renames
+    always apply; TOBASE and JOURNAL renames apply only when converting
+    to base currency (`to_base`) — pre-gains they'd otherwise create a
+    mixed-currency ACB pool, which only the conversion stage resolves.
+
+    Chains resolve to their fixed point: `GLOBAL OLD.US NEW.US` plus
+    `TOBASE NEW.US NEW.TO` sends OLD.US to NEW.TO. A one-hop lookup left
+    OLD.US's lots in NEW.US — a split pool and a phantom short (R1-139).
+    A cycle raises (`tjs run` refuses such a map up front)."""
+    raw = raw_renames(tmap, to_base)
+    out: Dict[str, str] = {}
+    for frm in raw:
+        cyc = _chain_cycle(frm, raw)
+        if cyc:
+            # InputContentError (a ValueError): one line, exit 2, in every
+            # stand-alone tool that merges renames (re-audit A2-0770).
+            raise InputContentError(
+                f"ticker.map: rename cycle "
+                f"{' -> '.join(cyc + [cyc[0]])} — a chain of renames "
+                f"must end at one symbol")
+        cur = raw[frm]
+        while cur in raw:
+            cur = raw[cur]
+        out[frm] = cur
+    return out
+
+
+def bare_rename_target(frm: str, to: str) -> bool:
+    """True when a rename takes a listed symbol (a known market suffix:
+    RY.TO, SAMPLE.US) to a bare one (RY). A bare symbol is read as crypto
+    or as an unknown listing: a Canadian eligible dividend on RY became
+    a foreign dividend with an assumed foreign tax credit (audit
+    A2-0304). Options, futures and cash are not judged."""
+    from taxjson.lib.brokerages.schema import KNOWN_SUFFIXES
+    from taxjson.lib.option_symbols import is_option_symbol
+    frm, to = str(frm or ''), str(to or '')
+    if (not frm or not to or '.' in to or to.upper() == 'CASH'
+            or is_option_symbol(frm) or is_option_symbol(to)
+            or frm.startswith(FUTURES_PREFIXES)
+            or to.startswith(FUTURES_PREFIXES)):
+        return False
+    return '.' in frm and frm.rsplit('.', 1)[1].upper() in KNOWN_SUFFIXES
+
+
+def bare_target_warnings(symbols, mapping: Dict[str, str]) -> List[str]:
+    """One ATTENTION text per rename rule that takes a listed symbol the
+    book holds to a bare symbol (bare_rename_target)."""
+    held = set(symbols)
+    return [f"ticker.map: {frm} -> {to}: the target has no market suffix "
+            f"— a bare symbol is read as crypto / an unknown listing (a "
+            f"Canadian dividend on it is counted as foreign). Write the "
+            f"listing ({to}.TO, {to}.US)."
+            for frm, to in sorted(mapping.items())
+            if frm in held and bare_rename_target(frm, to)]
+
+
+def map_symbol(symbol: str, mapping: Dict[str, str]) -> str:
+    """The rename a mapping implies for ONE symbol — exact match first,
+    else options map through their UNDERLYING (SAMPLM.US -> SAMPLM.TO also
+    renames SAMPLM260116C00150000.US -> ...TO). Pure-string twin of
+    apply_mapping so non-transaction consumers (tjs sanity) apply
+    the same consolidation the pipeline does."""
+    if symbol in mapping:
+        return mapping[symbol]
+    # Option check (e.g. SAMPLM260116C00150000.US or F:SAMPLX251220P00053000.US)
+    match = re.match(r'^((?:F:)?[A-Z0-9\.]+?)(\d{6}[CP]\d+)\.(\S+)$',
+                     symbol, re.IGNORECASE)
+    if match:
+        underlying, contract, ext = match.groups()
+        lookup = f"{underlying}.{ext}"
+        if lookup in mapping:
+            target_full = mapping[lookup]
+            if '.' in target_full:
+                target_underlying, target_ext = target_full.rsplit('.', 1)
+            else:
+                target_underlying, target_ext = target_full, ext
+            return f"{target_underlying}{contract}.{target_ext}"
+    return symbol
+
+
+# The symbols a suggestion or a join writes into a map line
+# (lib/ticker_map_suggest, lib/symbol_codes): an ASCII letter or digit,
+# then letters, digits and `. - _ : / = ^` (so no space, `#`, `+`, `$`,
+# non-ASCII letter or line separator). Narrower than what the parser
+# reads; `.match` admits a final newline, `.fullmatch` does not.
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-_:/=^]*$")

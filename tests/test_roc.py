@@ -14,6 +14,7 @@ from taxjson.lib.brokerages.base import is_roc_description
 from taxjson.lib.brokerages.questrade import QuestradeBrokerage
 from taxjson.lib.brokerages.rbc_direct import RbcBrokerage
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 
 def _parse_with(parser, content):
@@ -44,7 +45,7 @@ class TestQuestradeRoc(unittest.TestCase):
     HDR = ('Transaction Date,Settlement Date,Action,Symbol,Description,'
            'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,Account #,Activity Type,Account Type\n')
 
-    @rule("CA-ACB-06")
+    @rule(R.CA_ACB_06)
     def test_roc_row_becomes_negative_adjust(self):
         csv = (self.HDR +
                '2025-03-31 09:30:00 AM,2025-03-31 12:00:00 AM,DIV,XEI.TO,'
@@ -113,16 +114,18 @@ class TestIbRoc(unittest.TestCase):
     DIV_HDR = 'Dividends,Header,Currency,Account,Date,Description,Amount\n'
 
     def _parse(self, body, foreign_roc=None):
+        # The parse marks a foreign issuer's return of capital; the
+        # characterize step books it (dividend or cost reduction).
+        from taxjson.characterize import characterize_rows
         from taxjson.lib.brokerages.ib_extractor import IbBrokerage
         with private_tmpfile(mode='w', suffix='.csv',
                              delete=False) as f:
             f.write(self.STMT + body)
             fname = f.name
         try:
-            ib = IbBrokerage()
-            if foreign_roc is not None:
-                ib.foreign_return_of_capital = foreign_roc
-            return ib.parse_file(Path(fname))
+            txs = IbBrokerage().parse_file(Path(fname))
+            characterize_rows(txs, country=None, foreign_return_of_capital=foreign_roc)
+            return txs
         finally:
             os.remove(fname)
 
@@ -154,7 +157,7 @@ class TestIbRoc(unittest.TestCase):
         self.assertEqual(len(adjusts), 1)
         self.assertAlmostEqual(adjusts[0]['net_amount'], 24.00, places=2)
 
-    @rule("CA-ACB-08")
+    @rule(R.CA_ACB_08)
     def test_foreign_issuer_roc_is_a_dividend_s90_2(self):
         # A US corporation's "(Return of Capital)" distribution on a
         # portfolio share: a foreign dividend (ITA s.90(1); s.90(2)/(3)
@@ -181,7 +184,7 @@ class TestIbRoc(unittest.TestCase):
         # The per-share rate still reconciles the row.
         self.assertAlmostEqual(divs[0]['price'], 0.12)
 
-    @rule("CA-ACB-09")
+    @rule(R.CA_ACB_09)
     def test_foreign_roc_acb_opt_out(self):
         # [settings] foreign_return_of_capital = "acb" (taxjson-brokerage
         # --foreign-roc acb): the earlier ACB-reduction treatment.
@@ -195,8 +198,8 @@ class TestIbRoc(unittest.TestCase):
         self.assertAlmostEqual(adjusts[0]['net_amount'], -24.00, places=2)
         self.assertFalse([t for t in txs if t['action'] == 'DIVIDEND'])
 
-    @rule("US-INC-01")
-    @rule("CA-INC-03")
+    @rule(R.US_INC_01)
+    @rule(R.CA_INC_03)
     def test_strc_style_split_posting_pil_is_income(self):
         # Real-data shape (synthetic amounts): a distribution split
         # between "Cash Dividend ... (Return of Capital)" and "Payment in
@@ -271,7 +274,8 @@ class TestNegativeAcbWarning(unittest.TestCase):
     def _run(self, adjust_amount):
         import io
         from contextlib import redirect_stderr, redirect_stdout
-        from taxjson.lib.core import CanadaTaxRules, TaxTransaction
+        from taxjson.engine.ca.taxrules import CanadaTaxRules
+        from taxjson.model.transaction import TaxTransaction
         txs = [
             TaxTransaction(action='BUYSELL', date='2025-01-10',
                            symbol='XEI.TO', quantity=100, currency='CAD',
@@ -285,7 +289,7 @@ class TestNegativeAcbWarning(unittest.TestCase):
             CanadaTaxRules().compute_gains(txs)
         return err.getvalue()
 
-    @rule("CA-ACB-07")
+    @rule(R.CA_ACB_07)
     def test_negative_acb_flags_s40_3(self):
         err = self._run(-1200.0)          # ROC exceeds the $1000 ACB
         # 2026-09: booked, not just flagged — a deemed gain of the excess
@@ -307,7 +311,7 @@ class TestRocSumView(unittest.TestCase):
         import io
         import json
         from contextlib import redirect_stdout
-        from taxjson.bin.taxjson_run import cmd_roc_sum
+        from taxjson.cli.totals import cmd_roc_sum
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -351,19 +355,19 @@ class TestUsEngineRocAdjust(unittest.TestCase):
 
     @staticmethod
     def _tx(**kw):
-        from taxjson.lib.core import TaxTransaction
+        from taxjson.model.transaction import TaxTransaction
         return TaxTransaction(**kw)
 
     def _run(self, txs):
         import io
         from contextlib import redirect_stderr, redirect_stdout
-        from taxjson.lib.core import USATaxRules
+        from taxjson.engine.us.taxrules import USATaxRules
         err = io.StringIO()
         with redirect_stderr(err), redirect_stdout(io.StringIO()):
             res = USATaxRules().compute_gains(txs)
         return res, err.getvalue()
 
-    @rule("US-ROC-01")
+    @rule(R.US_ROC_01)
     def test_roc_reduces_basis_before_sale(self):
         res, err = self._run([
             self._tx(action='BUYSELL', date='2025-01-10', symbol='PRFD.US',
@@ -382,7 +386,7 @@ class TestUsEngineRocAdjust(unittest.TestCase):
         self.assertAlmostEqual(gains[0]['gain'], 500.0, places=2)
         self.assertNotIn("NEGATIVE", err)
 
-    @rule("US-ROC-01")
+    @rule(R.US_ROC_01)
     def test_roc_apportions_per_share_across_lots(self):
         # 100 sh @ $10 and 300 sh @ $20: a -$400 ROC is $1/sh, so the
         # lots carry $900 and $5700. FIFO sale of 100 must consume $900.
@@ -408,7 +412,7 @@ class TestUsEngineRocAdjust(unittest.TestCase):
         self.assertEqual(len(inv), 1)
         self.assertAlmostEqual(inv[0]['total_cost'], 5700.0, places=2)
 
-    @rule("US-ROC-02")
+    @rule(R.US_ROC_02)
     def test_excess_over_basis_is_a_gain_in_the_distribution_year(self):
         # §301(c)(3): 1,200 on a 1,000 basis -> 200 capital gain on the
         # distribution date (short-term: held < 1 year), basis zero, so
@@ -433,12 +437,12 @@ class TestUsEngineRocAdjust(unittest.TestCase):
         self.assertAlmostEqual(sale[0]['cost'], 0.0, places=2)
         self.assertAlmostEqual(sale[0]['gain'], 300.0, places=2)
         # Form 8949 names it for what it is (no shares were sold).
-        from taxjson.bin.taxjson_form_export import build_8949
+        from taxjson.lib.tax_forms import build_8949
         text = repr(build_8949(deemed))
         self.assertIn("nondividend distribution in excess of basis", text)
         self.assertIn("200.0", text)
 
-    @rule("US-ROC-02")
+    @rule(R.US_ROC_02)
     def test_excess_over_basis_takes_the_lots_holding_period(self):
         # A2-0838: the same excess on a lot held more than a year is
         # long-term (the lot's own holding period, §301(c)(3)).
@@ -454,7 +458,7 @@ class TestUsEngineRocAdjust(unittest.TestCase):
         self.assertEqual([(round(g['gain'], 2), g['term']) for g in deemed],
                          [(200.0, 'LONG_TERM')])
 
-    @rule("US-ROC-03")
+    @rule(R.US_ROC_03)
     def test_roc_after_full_exit_warns_and_skips(self):
         res, err = self._run([
             self._tx(action='BUYSELL', date='2025-01-10', symbol='PRFD.US',

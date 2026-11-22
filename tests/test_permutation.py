@@ -71,23 +71,24 @@ class TestFileOrder(unittest.TestCase):
         """Two statements of one IB account with another merger value
         (audit #104 through the real extractor): the same result in
         either order."""
-        import test_fix_corp as C
-        t = C.TestEventInTwoBrokerAccounts()
+        from _support.ib_corp_projects import (
+            _ABC_MERGER, _IB_CA, _IB_HEAD, _IB_TRADES, _ib_buy, _ib_ca, _pending, _project,
+        )
 
         def file_(v):
-            ca = (C._ib_ca(f'{t.D} (DEF, DEF CORP, CA0000000002)', 500,
-                           1000 * v, when='2026-06-11, 20:25:00')
-                  + C._ib_ca(f'{t.D} (ABC, ABC CORP, CA0000000001)', -1000,
-                             -1000 * v, when='2026-06-11, 20:25:00'))
-            return (C._IB_HEAD.format(acct='U5550001')         # pii-ok
-                    + C._IB_TRADES
-                    + C._ib_buy('ABC', 1000, 10, when='2026-03-03, 10:00:00')
-                    + C._IB_CA + ca)
+            ca = (_ib_ca(f'{_ABC_MERGER} (DEF, DEF CORP, CA0000000002)', 500,
+                         1000 * v, when='2026-06-11, 20:25:00')
+                  + _ib_ca(f'{_ABC_MERGER} (ABC, ABC CORP, CA0000000001)',
+                           -1000, -1000 * v, when='2026-06-11, 20:25:00'))
+            return (_IB_HEAD.format(acct='U5550001')         # pii-ok
+                    + _IB_TRADES
+                    + _ib_buy('ABC', 1000, 10, when='2026-03-03, 10:00:00')
+                    + _IB_CA + ca)
         with tempfile.TemporaryDirectory() as tmp:
-            root = C._project(tmp, {'ib_a.csv': file_(12),
-                                    'ib_b.csv': file_(13)})
+            root = _project(tmp, {'ib_a.csv': file_(12),
+                                  'ib_b.csv': file_(13)})
             tj(root, "run", "--no-input", check=False)
-            for p in C._pending(root):
+            for p in _pending(root):
                 tj(root, "elect", "margin", "--set",
                    f"{p['event_id']}=taxable_disposition")
             self._check(root, root / "inputs")

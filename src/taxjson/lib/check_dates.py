@@ -35,8 +35,11 @@ from datetime import date, datetime, time as dtime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from taxjson.project.accounts import accounts_of
+from taxjson.project.settings import settings_of
 from taxjson.lib import market_calendar as mc
 from taxjson.lib.dates import settlement_calendar, settlement_date
+from taxjson.model import money as M
 
 TRADE_ACTIONS = ("BUYSELL", "ASSIGN")
 # The earliest trade year a date may carry: the floor of the project
@@ -45,7 +48,7 @@ TRADE_ACTIONS = ("BUYSELL", "ASSIGN")
 # cost, not an impossible date (backlog TJ-0820).
 EARLIEST_YEAR = 1900
 
-from taxjson.lib.core import is_opening_row  # noqa: E402
+from taxjson.lib.row_types import is_opening_row  # noqa: E402
 INCOME_ACTIONS = ("DIVIDEND", "DIVIDEND_IN_LIEU", "INTEREST", "TAX",
                   "ROC", "PIL")
 from taxjson.lib.dates import CA_LISTING_SUFFIXES as CA_SUFFIXES  # noqa: E402
@@ -140,7 +143,7 @@ def sources(cache: Path, account: str) -> List[Tuple[str, str, Path]]:
 
 # The source label of an account whose sources list is lost (TJ-0395).
 SOURCES_LIST_LABEL = "sources list"
-# The files a run writes for an account it read (taxjson_run's
+# The files a run writes for an account it read (pipeline/run's
 # _NATIVE_TX_SUFFIXES, and the base-currency books).
 _BOOK_SUFFIXES = ("_raw.json", "_filled.json", "_sorted.json", "_base.json")
 
@@ -163,14 +166,14 @@ def _lost_sources_list(cache: Path, account: str) -> str:
 
 
 def asset_class(symbol: str, crypto_account: bool) -> str:
-    from taxjson.lib.core import is_option_symbol
-    from taxjson.lib.futures import _FUTURES_PREFIXES
+    from taxjson.lib.option_symbols import is_option_symbol
+    from taxjson.lib.futures_prefixes import FUTURES_PREFIXES
     s = (symbol or "").upper()
     if crypto_account:
         return "crypto"
     # Every futures spelling lib/futures reads (F:, /, \): a /ESH5 row
     # was classed a US stock and checked on the NYSE calendar (A2-1194).
-    if s.startswith(_FUTURES_PREFIXES):
+    if s.startswith(FUTURES_PREFIXES):
         return "futures"
     if is_option_symbol(s):
         return "option"
@@ -205,7 +208,7 @@ def _is_event_row(r: Dict[str, Any], td: date,
     """A corporate event booked as a trade row: a typed stock dividend,
     or a $0 row dated (and settled) its event day whose description
     names the event (_EVENT_RE)."""
-    from taxjson.lib.core import STOCK_DIVIDEND
+    from taxjson.lib.row_types import STOCK_DIVIDEND
     if str(r.get("type") or "") == STOCK_DIVIDEND:
         return True
     try:
@@ -301,11 +304,11 @@ def _settle_day_anywhere(d: date) -> bool:
 
 def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
             account: Optional[str] = None) -> Dict[str, Any]:
-    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.option_symbols import is_option_symbol
     cache = Path(root) / "work"
     today = today or date.today()
-    settings = cfg.get("settings", {}) or {}
-    year = int(settings.get("year") or today.year)
+    settings = settings_of(cfg)
+    year = int(settings.year or today.year)
     # The one validator `run` and tax-logic use: a typo is refused, not
     # read as next_day (audit A2-0697).
     from taxjson.lib.country import futures_settle_mode
@@ -332,10 +335,10 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
                        "date_settle": r.get("date_settle"),
                        "quantity": r.get("quantity")})
 
-    for acct, acfg in sorted((cfg.get("accounts") or {}).items()):
+    for acct, acfg in sorted(accounts_of(cfg).items()):
         if account and acct != account:
             continue
-        crypto = bool((acfg or {}).get("crypto"))
+        crypto = bool(acfg.crypto)
         lost = _lost_sources_list(cache, acct)
         if lost:
             # The run built the account's books, but the list naming its
@@ -405,7 +408,7 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
                             "income dated on a weekend (pay dates are "
                             "normally business days)", acct, label, r,
                             f"{td.strftime('%A')}; "
-                            f"{float(r.get('net_amount') or 0):,.2f} "
+                            f"{M.shown(float(r.get('net_amount') or 0), 2):,.2f} "
                             f"{r.get('currency') or ''}".strip())
                     continue
                 if action not in TRADE_ACTIONS:
@@ -467,7 +470,7 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
                             "is the Monday", acct, label, r)
                     continue
                 if is_option_symbol(sym):
-                    from taxjson.lib.core import parse_option_expiry
+                    from taxjson.lib.option_symbols import parse_option_expiry
                     _exp = _d(parse_option_expiry(sym))
                     if (_exp and sd > _exp and td <= _exp
                             and abs(float(r.get("price") or 0)) < 1e-9
@@ -514,7 +517,7 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
                                      str(r.get("description") or ""))):
                     continue       # an event row, dated its event day
                 if cls == "option":
-                    from taxjson.lib.core import parse_option_expiry
+                    from taxjson.lib.option_symbols import parse_option_expiry
                     if (parse_option_expiry(sym) or "") == sd.isoformat():
                         continue   # settlement capped at expiry
                 mkt = _calendar(cls, sym, cur) or "USD"

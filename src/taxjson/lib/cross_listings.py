@@ -94,14 +94,15 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import date
 from datetime import date as _date
 from datetime import timedelta as _timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from taxjson.model import money as M
 
 STATE = "cross_listings.state"
 FORMAT = "cross_listings/1"
-EFFECTIVE_MAP = "ticker.map.effective"
 # How far apart (days) the out-leg and the in-leg of one journal may be.
 PAIR_DAYS = 5
 _EPS = 1e-6
@@ -110,6 +111,12 @@ _EPS = 1e-6
 EFFECTIVE_HEAD = ("# taxjson run: listings joined by their transfer journal "
                   "(work/cross_listings.state; a ticker.map rule naming "
                   "either symbol wins)")
+# The one that opens the ticker changes the .tt files declare
+# (lib/dated_events.effective_lines) after them; moved here from
+# lib/dated_events, which only this module's effective_map_text read it
+# from (step 8 of the architecture plan).
+RENAMES_EFFECTIVE_HEAD = ("# taxjson run: ticker changes declared in .tt files "
+                          "(lib/dated_events)")
 
 
 @dataclass
@@ -181,11 +188,11 @@ class Pair:
                 "out": {"account": self.out.account,
                         "broker": self.out.broker,
                         "symbol": self.out.symbol, "date": self.out.date,
-                        "quantity": round(-self.out.quantity, 8)},
+                        "quantity": M.units(-self.out.quantity, 8)},
                 "in": {"account": self.into.account,
                        "broker": self.into.broker,
                        "symbol": self.into.symbol, "date": self.into.date,
-                       "quantity": round(self.into.quantity, 8)},
+                       "quantity": M.units(self.into.quantity, 8)},
                 "names": list(self.names),
                 **({"reason": self.reason} if self.reason else {})}
 
@@ -239,7 +246,6 @@ def gather(cache: Path, accounts: Iterable[str],
     account's parsed exports in work/. `rows`, when given, receives
     every share-listing and broker-code row (Row: the symbol-collision
     check, `collisions`)."""
-    from taxjson.lib.missing_history import journal_leg_key
     from taxjson.lib.symbol_codes import (_CONTROL_RE, _plain_listing,
                                           _row_name, exact_name, is_code)
     legs: List[Leg] = []
@@ -296,7 +302,7 @@ def gather(cache: Path, accounts: Iterable[str],
                                      str(t.get("description") or ""))
                 pair = str(t.get("journal_pair") or "")
                 # The broker's pair id: Questrade's journal_pair, RBC's
-                # J~ reference (missing_history.journal_leg_key).
+                # J~ reference (journal_leg_key, below).
                 key = journal_leg_key(t, broker=broker)
                 ref = "|".join(key) if key else ""
                 legs.append(Leg(acct, broker, sym,
@@ -323,13 +329,20 @@ _RBC_JOURNAL_RE = re.compile(
     r"^\s*TFR\s*-.*\bTRANSFER\s+(?:TO|FROM)\s+[CU]\$\s+J(?:~\S+)?\s*$",
     re.IGNORECASE)
 _IB_JOURNAL_RE = re.compile(r"^\s*InterDepot\s*\(", re.IGNORECASE)
+# Questrade's: a BRW currency journal's direction, the out-leg saying
+# where the units go ("JOURNAL POSITION TO USD"), the in-leg where they
+# came from ("JOURNAL POSITION FROM CAD ..."); the Questrade parser reads
+# it too (moved from the parser, which journal_wording called up into:
+# step 8).
+_BRW_JOURNAL_RE = re.compile(
+    r'\bJOURNAL\s+POSITION\s+(TO|FROM)\s+([A-Z]{3})\b', re.IGNORECASE)
 
 
 def journal_wording(broker: str, desc: str) -> str:
     """The broker when a transfer row carries its journal wording
     (_RBC_JOURNAL_RE, _IB_JOURNAL_RE, Questrade's BRW JOURNAL POSITION),
     else "". The reference both legs of one journal share (RBC's J~,
-    Questrade's journal_pair) is missing_history.journal_leg_key's."""
+    Questrade's journal_pair) is journal_leg_key's (below)."""
     d = " ".join(str(desc or "").split())
     if broker == "rbc_direct":
         if _RBC_JOURNAL_RE.match(d):
@@ -338,16 +351,9 @@ def journal_wording(broker: str, desc: str) -> str:
         if _IB_JOURNAL_RE.match(d):
             return broker
     elif broker == "questrade":
-        from taxjson.lib.brokerages.questrade import _BRW_JOURNAL_RE
         if _BRW_JOURNAL_RE.search(d):
             return broker
     return ""
-
-
-def _other_listing(symbol: str) -> Optional[str]:
-    """ROOT.US <-> ROOT.TO (lib/listing_suffix.other_listing)."""
-    from taxjson.lib.listing_suffix import other_listing
-    return other_listing(symbol)
 
 
 def tobase_direction(out_sym: str, in_sym: str,
@@ -508,7 +514,7 @@ def declared_twins(journals: Iterable[Any]) -> Tuple[List[Any], List[str]]:
     seen: Dict[Tuple[Any, ...], Any] = {}
     warnings: List[str] = []
     for j in journals:
-        k = (j.account, j.date, j.frm, j.to, round(float(j.quantity), 8))
+        k = (j.account, j.date, j.frm, j.to, M.units(float(j.quantity), 8))
         first = seen.get(k)
         if first is None:
             seen[k] = j
@@ -590,7 +596,6 @@ def near_restatements(journals: Iterable[Any], legs: Iterable[Leg],
     date for its settlement date): booked in full, it moves those units
     twice. On the broker's own date it stops the run (partial_overlaps);
     here it is booked, and said."""
-    from taxjson.lib.missing_history import _opposite_trades
     journals = list(journals)
     legs = [g for g in legs if g.broker != "tt" and not g.decl]
     out: List[str] = []
@@ -729,7 +734,7 @@ def _journal_names_verdict(o: Leg, i: Leg, nx: Set[Tuple[str, ...]],
 
 def listing_root(symbol: str) -> str:
     """A listing's symbol without its VENUE suffix (a listing suffix the
-    market data knows: lib/markets.known_suffixes) and, on a Canadian
+    market data knows: lib/markets_data.known_suffixes) and, on a Canadian
     venue, without the US-dollar unit class (markets.toml
     [usd_unit_class]: SAMPLF.U.TO and SAMPLF.TO are SAMPLF; QZG.US is
     QZG). Any other dotted part is the security's own — a class, a
@@ -737,8 +742,8 @@ def listing_root(symbol: str) -> str:
     QZG.WS is QZG.WS, and QZG.A and QZG.B are two roots (second
     pre-release review, finding 12: a class or warrant suffix read as a
     venue joined two securities on one root)."""
-    from taxjson.lib.markets import data, known_suffixes
-    from taxjson.lib.income_dating import CA_LISTING_SUFFIXES
+    from taxjson.lib.markets_data import data, known_suffixes
+    from taxjson.characterize.income_dating import CA_LISTING_SUFFIXES
     s = str(symbol or "").upper().strip()
     if "." not in s:
         return s
@@ -782,8 +787,8 @@ def receipt_why(symbol: str, names: Iterable[Tuple[str, ...]] = (),
     states one (a company named "QZX SPONSORED HLDGS INC" on both
     sides; v0.24.1 review, M2 / L2). A receipt word after the name
     ("... INC CDR") always counts."""
-    from taxjson.lib.markets import (receipt_suffixes, receipt_words,
-                                     suffix_of)
+    from taxjson.lib.markets import receipt_suffixes, receipt_words
+    from taxjson.lib.markets_data import suffix_of
     w = str(written or "").upper()
     ow = str(other_written or "").upper()
     rs = receipt_suffixes()
@@ -1138,11 +1143,9 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
         if g.ref and not g.used:
             by_ref.setdefault((g.account, g.broker, g.ref), []).append(g)
     from dataclasses import replace as _replace
-    from taxjson.lib.missing_history import ref_group_journal
     for _k, gl in sorted(by_ref.items()):
-        # One rule for a reference group (missing_history.
-        # ref_group_journal, as transfer_in and the missing-history walk
-        # read it): a journal the broker split over several rows (1000
+        # One rule for a reference group (ref_group_journal, below, as
+        # transfer_in and the missing-history walk read it): a journal the broker split over several rows (1000
         # out, 600 + 400 in) is one pair of its total units.
         jr = ref_group_journal((g.symbol, g.quantity, g.date) for g in gl)
         if jr is None:
@@ -1224,7 +1227,7 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
             if ambiguous:
                 o, i = outs[n], ins[m]
                 g = (o.account, o.symbol, str(o.date)[:10], i.symbol,
-                     round(abs(o.quantity), 6))
+                     M.units(abs(o.quantity), 6))
                 if (g, "out", n) in spent or (g, "in", m) in spent:
                     continue
                 spent.update(((g, "out", n), (g, "in", m)))
@@ -1251,7 +1254,7 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
             # The map books the out-leg as the in-leg's other listing
             # (through its lines): the in-leg is that listing too —
             # joined to it, never the map's own symbols renamed.
-            alt = _other_listing(i.symbol)
+            alt = other_listing(i.symbol)
             if (not ambiguous and verdict == "" and alt
                     and o.symbol != alt and i.symbol not in named
                     and _booked(o.symbol) != _booked(i.symbol)
@@ -1692,7 +1695,6 @@ def effective_map_text(ticker_map: Optional[Path],
     then the joins' TOBASE lines, then the ticker changes declared in .tt
     files (`renames`: lib/dated_events.effective_lines). None when there
     is none of them."""
-    from taxjson.lib.dated_events import EFFECTIVE_HEAD as _REN_HEAD
     lines = map_lines(joined)
     renames = list(renames)
     base = ""
@@ -1707,7 +1709,8 @@ def effective_map_text(ticker_map: Optional[Path],
     if base and not base.endswith("\n"):
         base += "\n"
     out = base
-    for head, block in ((EFFECTIVE_HEAD, lines), (_REN_HEAD, renames)):
+    for head, block in ((EFFECTIVE_HEAD, lines),
+                        (RENAMES_EFFECTIVE_HEAD, renames)):
         if block:
             out += ("\n" if out else "") + head + "\n" + \
                 "\n".join(block) + "\n"
@@ -1885,3 +1888,132 @@ def map_split_note(account: str, items: Iterable[Tuple[Pair, str, str, str]]
              "carried."] + details
             + ["`tjs journals` lists the pair; `run --strict` stops on "
                "it."])
+
+
+def other_listing(listing: str) -> Optional[str]:
+    """ROOT.US -> ROOT.TO and back; None for any other spelling (a
+    TSX US-dollar unit ROOT.U.TO is its own security)."""
+    s = str(listing or "").upper()
+    if "." not in s:
+        return None
+    root, sfx = s.rsplit(".", 1)
+    if not root or root.endswith(".U"):
+        return None
+    if sfx == "US":
+        return f"{root}.TO"
+    if sfx == "TO":
+        return f"{root}.US"
+    return None
+
+
+# ------------------------------------------------------------ journal legs
+# The two legs of one journal between a security's listings: the trades
+# of a Norbert's gambit (_opposite_trades), a TRANSFER row's journal key
+# (journal_leg_key: a `journal_pair`, RBC's J~ reference) and a reference
+# group's legs read as one journal (ref_group_journal). lib/missing_history
+# and lib/transfer_in read them too (step 8 of the architecture plan:
+# moved here from lib/missing_history, which this module called up into).
+
+
+def _opposite_trades(day: Dict[str, List[float]], a: str, b: str) -> bool:
+    """A journal's trades on one day: units of one listing bought and the
+    same number of units of the OTHER listing sold (a Norbert's gambit's
+    buy and sale, the broker's clock in any order). Never one listing's
+    own sale and rebuy (a == b)."""
+    if a == b:
+        return False
+    ta, tb = day.get(a), day.get(b)
+    if not ta or not tb:
+        return False
+
+    return _same_units(ta[0], tb[1]) or _same_units(tb[0], ta[1])
+
+
+def _same_units(x: float, y: float) -> bool:
+    return x > 1e-9 and abs(x - y) <= max(1e-6, 1e-6 * max(x, y))
+
+
+# RBC's reference on the two TFR legs of one journal between a
+# security's lines ("TFR - ... TRANSFER TO U$ J~1" / "... FROM C$ J~1"),
+# read only on a TFR row (any other text that happens to hold "J~" is no
+# journal reference).
+_JOURNAL_REF_RE = re.compile(r'^\s*TFR\b.*(?<!\S)J~(\w+)\b',
+                             re.IGNORECASE)
+
+
+# The broker whose J~ reference that is (lib/brokerages ids).
+_JOURNAL_REF_BROKER = 'rbc_direct'
+
+
+def journal_leg_key(t: Any, broker: Optional[str] = None
+                    ) -> Optional[Tuple[str, ...]]:
+    """What pairs a TRANSFER row with the other leg of its journal,
+    within one account: the row's `journal_pair` (a Questrade BRW
+    currency journal, brokerages/questrade; a .tt JOURNAL line's legs,
+    lib/dated_events), else RBC's J~ reference on a TFR row, with the
+    leg's date — and only on an RBC row when `broker` (the parser id of
+    the row's file) is known. None for any other row. `t` is a
+    TaxTransaction or a parsed row (dict)."""
+    get = t.get if isinstance(t, dict) else (
+        lambda k, d=None: getattr(t, k, d))
+    if str(get('action') or '').upper() != 'TRANSFER':
+        return None
+    pair = str(get('journal_pair') or '').strip()
+    if pair:
+        return ('pair', pair)
+    if broker and broker != _JOURNAL_REF_BROKER:
+        return None
+    m = _JOURNAL_REF_RE.search(' '.join(str(get('description') or '')
+                                        .split()))
+    if m:
+        return ('ref', str(get('date') or '')[:10], m.group(1).upper())
+    return None
+
+
+def ref_group_journal(legs: Iterable[Tuple[str, float, str]]
+                      ) -> Optional[Tuple[str, str, float]]:
+    """THE rule for the legs one broker reference groups in one account
+    (journal_leg_key: a Questrade journal_pair, RBC's J~ reference, a
+    .tt JOURNAL line's pair id), shared by cross_listings.analyze (step
+    0b), transfer_in.own_journal_legs and
+    missing_history._detected_journals (v0.24.1
+    leftovers, 4). `legs` are (symbol, signed quantity, date): the group
+    is ONE journal of (out symbol, in symbol, units) when its out-legs
+    all name one listing, its in-legs all name one listing (the same one
+    for a custody note), the two directions move the same units (a
+    journal the broker split over several rows — 600 + 400 into the
+    1000 out — is one journal) and every leg is dated within
+    cross_listings.PAIR_DAYS business days of the others; None
+    otherwise (one direction only, units that do not balance, a third
+    listing: not a journal the reference proves)."""
+    eps = 1e-6
+    outs: List[Tuple[str, float, str]] = []
+    ins: List[Tuple[str, float, str]] = []
+    for sym, q, day in legs:
+        try:
+            q = float(q)
+        except (TypeError, ValueError):
+            return None
+        if q < -eps:
+            outs.append((str(sym).upper(), q, str(day or "")[:10]))
+        elif q > eps:
+            ins.append((str(sym).upper(), q, str(day or "")[:10]))
+    if not outs or not ins:
+        return None
+    o_syms = {x[0] for x in outs}
+    i_syms = {x[0] for x in ins}
+    if len(o_syms) != 1 or len(i_syms) != 1:
+        return None
+    qo = -sum(x[1] for x in outs)
+    qi = sum(x[1] for x in ins)
+    if abs(qo - qi) > max(eps, 1e-6 * max(qo, qi)):
+        return None
+    days = sorted(x[2] for x in outs + ins)
+    try:
+        lo, hi = (date.fromisoformat(days[0]),
+                  date.fromisoformat(days[-1]))
+    except ValueError:
+        return None
+    if business_days(lo, hi) > PAIR_DAYS:
+        return None
+    return next(iter(o_syms)), next(iter(i_syms)), qi

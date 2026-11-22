@@ -1,0 +1,111 @@
+{
+  "as_of": "2024-12-31",
+  "basis": "wash-adjusted",
+  "currency": "USD",
+  "options_included": false,
+  "rows": [
+    {
+      "accounts": {
+        "crypto": 0.05
+      },
+      "cost": 3256.5,
+      "qty": 0.05,
+      "symbol": "BTC",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "crypto": 0.7571
+      },
+      "cost": 2655.3,
+      "qty": 0.7571,
+      "symbol": "ETH",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "margin": -40.0
+      },
+      "cost": -590.05,
+      "qty": -40.0,
+      "symbol": "GHOSTQ.US",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "margin": 10.0
+      },
+      "cost": 1433.0,
+      "qty": 10.0,
+      "symbol": "NVDA.US",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "margin": -50.0
+      },
+      "cost": -999.0,
+      "qty": -50.0,
+      "symbol": "OLDCO.US",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "margin": 100.0
+      },
+      "cost": 5001.0,
+      "qty": 100.0,
+      "symbol": "PARN.US",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "margin": 100.0,
+        "roth": 50.0
+      },
+      "cost": 3831.95,
+      "qty": 150.0,
+      "symbol": "QZQ.US",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "margin": 100.0
+      },
+      "cost": 3929.85,
+      "qty": 100.0,
+      "symbol": "SAMPA.US",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "roth": 20.0
+      },
+      "cost": 0.0,
+      "qty": 20.0,
+      "symbol": "SAMPB.US",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "margin": 10.0
+      },
+      "cost": 250.0,
+      "qty": 10.0,
+      "symbol": "SPNC.US",
+      "unknown_cost": false
+    },
+    {
+      "accounts": {
+        "crypto": 8.9
+      },
+      "cost": 8.9,
+      "qty": 8.9,
+      "symbol": "USDC",
+      "unknown_cost": false
+    }
+  ],
+  "schema_version": 1,
+  "scope": "all",
+  "year": "2024"
+}

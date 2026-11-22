@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from taxjson.lib import cli_diag
+from taxjson.lib import out as _out
 from taxjson.lib.brokerages.base import BrokerageParseError, decode_broker_text
 # Re-exported: `tjs fetch` and older callers import them from here.
 from taxjson.lib.brokerages.detect import (  # noqa: F401
@@ -91,18 +92,21 @@ def main():
         sys.exit(1)
     if det.error and det.broker is None:
         cli_diag.error(PROG, det.error)
+    # stdout: the parser id, each line written where its print() was
+    # (out.put, a live exact Doc); the per-file line on stderr between.
     if det.positions:
         # A positions report: no parser reads it as activity.
-        print(f"positions:{det.positions}")
+        _out.put(f"positions:{det.positions}")
         print(det.line(), file=sys.stderr)
         sys.exit(0)
     if det.broker:
-        print(det.broker)
+        d = _out.Doc(exact=True, width_=0, live=True)
+        d.line(det.broker)
         print(det.line(), file=sys.stderr)
         if det.note:
             emit_line(f"note: {det.note}", file=sys.stderr)
     else:
-        print("unknown", file=sys.stderr)
+        _out.put("unknown", sys.stderr)
         if not det.error:
             print(cannot_detect_message(det), file=sys.stderr)
         sys.exit(1)

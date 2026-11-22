@@ -1,0 +1,102 @@
+[
+ {
+  "view": "sum",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "sum --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "trades-sum",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "fees-sum",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "roc-sum",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "roc-sum --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "dil-sum",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "dil-sum --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "events all",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "events all --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "fx-cash",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "fx-cash --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "fx-cash --ledger v2 --cash-events",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "fx-cash --ledger v2 --events --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "audit",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "find-missing-history",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "find-missing-history --details",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "find-missing-history --write-purchases",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "sanity --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "audit --json",
+  "cwd": ".",
+  "exit": 0
+ }
+]

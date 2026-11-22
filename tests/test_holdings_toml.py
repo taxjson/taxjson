@@ -17,16 +17,11 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+import _paths
 
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python < 3.11
-    try:
-        import tomli as tomllib
-    except ModuleNotFoundError:
-        tomllib = None
+import tomllib
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 def _export_toml(inventory, *extra_args):
@@ -42,8 +37,6 @@ def _export_toml(inventory, *extra_args):
         return tomllib.loads(r.stdout), r.stdout
 
 
-@unittest.skipIf(tomllib is None,
-                 "no TOML reader (Python < 3.11 without `tomli`)")
 class TestHoldingsToml(unittest.TestCase):
     def test_valid_toml_with_meta(self):
         doc, _ = _export_toml([
@@ -302,8 +295,6 @@ class TestHoldingsToml(unittest.TestCase):
             self.assertEqual(syms, ['QAE.US'])  # unrelated holding kept
 
 
-@unittest.skipIf(tomllib is None,
-                 "no TOML reader (Python < 3.11 without `tomli`)")
 class TestTomlInput(unittest.TestCase):
     """taxjson-export accepts a holdings TOML snapshot as input (detected
     by the .toml extension), not just gains JSON — so --report can run

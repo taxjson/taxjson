@@ -15,6 +15,7 @@ from taxjson.lib.corp_actions import (
     resolve_event,
 )
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 
 # IB-shaped fixture of a cross-border share merger (tickers, quantities,
@@ -343,7 +344,7 @@ class TestCanadaMergerRules(unittest.TestCase):
             account='Margin',
         )
 
-    @rule("CA-CORP-03")
+    @rule(R.CA_CORP_03)
     def test_taxable_disposition_emits_buysell_pair(self):
         """Default treatment: QSAN sold at FMV, QRGD bought at FMV. Two
         rows, one of each side, with prices derived from FMV/qty."""
@@ -363,7 +364,7 @@ class TestCanadaMergerRules(unittest.TestCase):
         self.assertEqual(sell['time'], '20:25:00')
         self.assertEqual(buy['time'], '20:25:01')
 
-    @rule("CA-CORP-03")
+    @rule(R.CA_CORP_03)
     def test_taxable_disposition_uses_target_currency_on_buy(self):
         """Cross-currency merger: QSAN.TO (CAD) → QRGD.US (USD). The BUY
         leg must be expressed in the target market's currency and use
@@ -408,7 +409,7 @@ class TestCanadaMergerRules(unittest.TestCase):
         expected = (120.0 / 120.0041) * 25920.89
         self.assertAlmostEqual(buy['net_amount'], expected, places=2)
 
-    @rule("CA-CORP-04")
+    @rule(R.CA_CORP_04)
     def test_rollover_emits_single_split(self):
         """s. 85.1(5) rollover: SPLIT row preserves the source's ACB,
         renames to target, scales qty by ratio. No realized gain."""
@@ -425,7 +426,7 @@ class TestCanadaMergerRules(unittest.TestCase):
         with self.assertRaises(KeyError):
             resolve_event(self._event(), 'not_a_real_election')
 
-    @rule("CA-CORP-08")
+    @rule(R.CA_CORP_08)
     def test_ignore_election_emits_no_rows(self):
         """`ignore` is the escape hatch for IB noise (cross-listing
         journals, duplicates, etc.). It's a universal option — works
@@ -665,7 +666,7 @@ class TestOccHelpers(unittest.TestCase):
     (e.g. F:CL.US) stay distinct from same-base equity buckets."""
 
     def test_parse_equity_option(self):
-        from taxjson.lib.core import parse_option_underlying
+        from taxjson.lib.option_symbols import parse_option_underlying
         self.assertEqual(parse_option_underlying('AAPL250120C00150000.US'), 'AAPL.US')
         self.assertEqual(parse_option_underlying('MDX260320P00027000.TO'), 'MDX.TO')
 
@@ -675,7 +676,7 @@ class TestOccHelpers(unittest.TestCase):
         merged futures positions into their same-base equity buckets in
         the summary report. The pipeline diff caught this; the test
         pins it."""
-        from taxjson.lib.core import parse_option_underlying
+        from taxjson.lib.option_symbols import parse_option_underlying
         self.assertEqual(
             parse_option_underlying('F:CL250120P00053000.US'),
             'F:CL.US',
@@ -686,7 +687,7 @@ class TestOccHelpers(unittest.TestCase):
         )
 
     def test_is_option_symbol_handles_prefix_and_anchors(self):
-        from taxjson.lib.core import is_option_symbol
+        from taxjson.lib.option_symbols import is_option_symbol
         self.assertTrue(is_option_symbol('AAPL250120C00150000.US'))
         self.assertTrue(is_option_symbol('F:CL250120P00053000.US'))
         self.assertFalse(is_option_symbol('AAPL'))
@@ -729,7 +730,7 @@ class TestCanadaSpinoffRules(unittest.TestCase):
         path = _write_csv(_QT_WARRANT_SPINOFF_CSV)
         return parse_questrade_corporate_actions(path, account='LIRA')[0]
 
-    @rule("CA-CORP-07")
+    @rule(R.CA_CORP_07)
     def test_deemed_dividend_emits_div_plus_buysell(self):
         """Default treatment: foreign dividend at FMV + cost-basis BUYSELL
         at same FMV so the later sale realizes only post-receipt change."""
@@ -764,7 +765,7 @@ class TestCanadaSpinoffRules(unittest.TestCase):
         self.assertEqual(rows[0]['net_amount'], 0.0)
         self.assertEqual(rows[1]['net_amount'], 0.0)
 
-    @rule("CA-CORP-06")
+    @rule(R.CA_CORP_06)
     def test_rollover_s_86_1_emits_acquire_plus_parent_adjust(self):
         """s. 86.1 rollover: new position acquired at allocated cost,
         parent's ACB reduced by the same amount (ADJUST row) — on the

@@ -1,0 +1,28 @@
+{
+  "accounts": [],
+  "against": "base",
+  "different": false,
+  "diffs": {},
+  "inputs": {
+    "added": [],
+    "changed": [],
+    "removed": [],
+    "same": 13
+  },
+  "kind": "saved",
+  "partial_before": [],
+  "partial_now": [],
+  "reports": {
+    "added": [],
+    "changed": [],
+    "removed": [],
+    "same": 26
+  },
+  "schema_version": 1,
+  "taken": "<stamp>",
+  "unchanged_accounts": [
+    "crypto",
+    "margin",
+    "qt"
+  ]
+}

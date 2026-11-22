@@ -1,0 +1,11 @@
+REBUY — superficial losses (s.54, settlement dates), as of 2024-11-25 (CAD)
+REBUY ON: the first day a buy no longer cancels the loss; option series under their underlying.
+TICKER    SOLD ON       LOSS  ACCOUNTS  REBUY ON
+--------------------------------------------------------
+AAPL.US   2024-11-05    3.24  qt        2024-12-06 (11d)
+NVDA.US   2024-11-20  117.45  margin    2024-12-20 (25d)
+SAMPA.TO  2024-11-01  519.90  margin    2024-11-29 (4d)
+
+! SAMPA.TO: already bought back; sell it by 2024-11-28 to keep the loss — tjs wash-radar
+A buy in ANY of your accounts counts, RRSP and TFSA included; there the loss is denied for good.
+More: tjs rebuy --details; not checked: affiliated persons' buys (ITA s.251.1)

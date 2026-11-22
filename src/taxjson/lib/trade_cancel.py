@@ -19,6 +19,7 @@ Rows may be dicts (parser output) or TaxTransaction objects (merge2).
 """
 
 from typing import Any, Callable, List, Optional, Tuple
+from taxjson.model import money as M
 
 TRADE_CANCEL_TYPE = 'trade_cancel'
 
@@ -124,9 +125,9 @@ def _reduced(orig: Any, ca: Any) -> Any:
         if c is not None and f in _TRADE_MONEY and c < 1e-9:
             c = None
         if c is None or c > abs(v) + 1e-9:
-            d[f] = round(v * keep, 10)
+            d[f] = M.units(v * keep, 10)
         else:
-            d[f] = round((abs(v) - c) * (1.0 if v >= 0 else -1.0), 10)
+            d[f] = M.units((abs(v) - c) * (1.0 if v >= 0 else -1.0), 10)
     if isinstance(orig, dict):
         if 'id' in d:
             d.pop('id')
@@ -158,7 +159,7 @@ def retained_fee(orig: Any, ca: Any) -> Any:
          'time': _g(orig, 'time') or '09:30:00',
          'date_settle': _g(orig, 'date_settle') or _g(orig, 'date'),
          'symbol': _g(orig, 'symbol'), 'quantity': 0.0,
-         'currency': _g(orig, 'currency'), 'net_amount': round(left, 10),
+         'currency': _g(orig, 'currency'), 'net_amount': M.units(left, 10),
          'type': 'fee', 'account': _g(orig, 'account'),
          'description': f"{_g(orig, 'description') or ''} (commission "
                         f"kept on a cancelled trade)".strip()}

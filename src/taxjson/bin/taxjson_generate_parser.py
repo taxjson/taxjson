@@ -3,8 +3,10 @@
 
 Maintainer-side tool. Reads a sample CSV from a new brokerage, feeds the
 chosen LLM:
-  - the BaseBrokerage class (so the model sees what helpers exist)
-  - a complete example subclass (Questrade)
+  - the parse template's contract (parsers/protocol.py) and the
+    BaseBrokerage class (so the model sees what helpers exist)
+  - a complete example parser on the template (taxjson.parsers.example,
+    a made-up broker in the template's shape)
   - the canonical transaction schema
   - the CSV sample
 
@@ -39,6 +41,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from taxjson.lib.brokerages.schema import render_schema_prompt
+from taxjson.lib import out as _out
 
 
 # Stable across every invocation: instructions + canonical schema + BaseBrokerage
@@ -74,12 +77,17 @@ because it turns a blank into 0.0 — a blank net read that way makes
 back_compute_fee book the whole trade value as a fee and the sale as $0.
 Call back_compute_fee only with a strictly parsed, non-blank net.
 
-# BaseBrokerage source (the helpers available to you)
+# The parse template's contract (every parser fills its phases)
+```python
+{protocol_source}
+```
+
+# BaseBrokerage source (the template and the helpers available to you)
 ```python
 {base_source}
 ```
 
-# Complete example: a working subclass for Questrade
+# Complete example: a parser on the template (a made-up broker, Sample Securities)
 ```python
 {example_source}
 ```
@@ -87,7 +95,11 @@ Call back_compute_fee only with a strictly parsed, non-blank net.
 # Output requirements
 - Output ONLY valid Python source code for a single file.
 - Subclass `BaseBrokerage` from `taxjson.lib.brokerages.base`.
-- Implement `parse_file(self, path: Path) -> List[Dict[str, Any]]`.
+- Fill the parse template's phases: `read(path)` yields the file's rows
+  (each with its `line`), `classify(row)` returns an `Outcome` (skip,
+  nonevent, reported, consumed or build), `build(row)` returns the row's
+  transaction dicts, `finish(transactions, path)` closes the parse.
+  NEVER override `parse_file`: it is the template's.
 - Prefer the base helpers (parse_strict_number for required numbers,
   apply_currency_suffix, signed_quantity, back_compute_fee,
   theoretical_gross, clean_number for OPTIONAL cells only, parse_date,
@@ -258,7 +270,7 @@ def _call_claude(system_text: str, user_text: str, model_id: str) -> str:
     usage = response.usage
     cache_read = getattr(usage, 'cache_read_input_tokens', 0) or 0
     cache_write = getattr(usage, 'cache_creation_input_tokens', 0) or 0
-    print(
+    _out.put(
         f"Claude usage: input={usage.input_tokens} "
         f"cache_write={cache_write} cache_read={cache_read} "
         f"output={usage.output_tokens}",
@@ -297,11 +309,130 @@ _DEFAULT_MODELS = {
 }
 
 
-def main():
-    here = Path(__file__).resolve().parents[1]
-    base_path = here / 'lib' / 'brokerages' / 'base.py'
-    example_path = here / 'lib' / 'brokerages' / 'questrade.py'
+_HERE = Path(__file__).resolve().parents[1]
+# What the prompt sends beside the schema (the test pins these paths too).
+_BASE_PATH = _HERE / 'lib' / 'brokerages' / 'base.py'
+_PROTOCOL_PATH = _HERE / 'parsers' / 'protocol.py'
+_EXAMPLE_PATH = _HERE / 'parsers' / 'example.py'      # a parser in the template's shape
 
+
+def main():
+    here, base_path, protocol_path, example_path = _HERE, _BASE_PATH, _PROTOCOL_PATH, _EXAMPLE_PATH
+
+    args = _parse_args()
+
+    from taxjson.lib.brokerages.base import shown_name
+    input_path = Path(args.input_file)
+    output_path = Path(args.output)
+    if not input_path.exists():
+        # Exit 2: a missing input is a usage error (A2-1435).
+        emit_line(f"taxjson-generate-parser: error: file not found: {shown_name(input_path)}", file=sys.stderr)
+        sys.exit(2)
+    if not all(p.exists() for p in (base_path, protocol_path, example_path)):
+        emit_line(f"taxjson-generate-parser: error: base.py, parsers/protocol.py or parsers/example.py not found under {here}", file=sys.stderr)
+        sys.exit(1)
+
+    brokerage_name = args.brokerage_name or _safe_default_name(input_path.stem)
+    if not args.brokerage_name and brokerage_name != input_path.stem:
+        emit_line("note: the file name carries an account id or a denylisted "
+                  "word; the default brokerage name uses a placeholder "
+                  f"({brokerage_name}) — pass --brokerage-name to choose one",
+                  file=sys.stderr)
+    class_name = args.class_name or _default_class_name(brokerage_name)
+    default_account = args.default_account or brokerage_name
+    model_id = args.model or _DEFAULT_MODELS[args.provider]
+
+    from taxjson.lib.brokerages.base import BrokerageParseError
+    try:
+        sample = _read_sample(input_path, args.sample_lines)
+    except BrokerageParseError as e:
+        emit_line(f"taxjson-generate-parser: error: {e}", file=sys.stderr)
+        sys.exit(1)
+    if not sample:
+        emit_line(f"taxjson-generate-parser: error: {shown_name(input_path)} is empty", file=sys.stderr)
+        sys.exit(1)
+    # The sample goes to a third-party API, and broker exports keep the
+    # holder's name, account id and address in their first lines: scan it
+    # with the redactor's detectors (and the private denylist) and refuse
+    # unless told otherwise (R1-342).
+    redacted, found = gate_sample(sample)
+    if found and not args.allow_unredacted:
+        emit_line(f"taxjson-generate-parser: error: the first {args.sample_lines} "
+                  f"line(s) of {shown_name(input_path)} still carry personal data "
+                  f"({', '.join(found)}) and would be sent to {args.provider}. "
+                  f"Run `tjs redact {shown_name(input_path)}` and use its output; "
+                  f"once you have read the lines it lists for review and "
+                  f"found no personal data there, or to send it anyway, "
+                  f"pass --allow-unredacted (the file is then sent as it is).",
+                  file=sys.stderr)
+        sys.exit(1)
+    if found:
+        emit_line(f"warning: sending a sample that carries personal data "
+                  f"({', '.join(found)}) — --allow-unredacted", file=sys.stderr)
+    else:
+        # Only the reviewed, redacted copy goes out (it differs from the
+        # file at most by transaction-id pseudonyms): a change no check
+        # above could see still never leaves the machine (GitHub #80).
+        sample = redacted
+
+    system_text = _SYSTEM_TEMPLATE.format(schema_block=render_schema_prompt(), 
+        protocol_source=_load_text(protocol_path), base_source=_load_text(base_path),
+        example_source=_load_text(example_path),
+    )
+    user_text = _USER_TEMPLATE.format(
+        brokerage_name=brokerage_name,
+        class_name=class_name,
+        default_account=default_account,
+        n_lines=args.sample_lines,
+        sample_csv=sample,
+    )
+
+    _out.put(
+        f"Calling {args.provider} ({model_id}) for {brokerage_name} ({class_name})...",
+        file=sys.stderr,
+    )
+    if args.provider == "claude":
+        raw = _call_claude(system_text, user_text, model_id)
+    else:
+        raw = _call_gemini(system_text, user_text, model_id)
+
+    code = _strip_code_fences(raw)
+
+    try:
+        compile(code, str(output_path), 'exec')
+    except SyntaxError as e:
+        emit_line(
+            f"taxjson-generate-parser: error: generated code has syntax errors: {e}\n"
+            "Writing it to <output>.bad for inspection.",
+            file=sys.stderr,
+        )
+        bad_path = output_path.with_suffix(output_path.suffix + '.bad')
+        bad_path.write_text(code, encoding='utf-8')
+        sys.exit(1)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(code, encoding='utf-8')
+
+    _out.put(f"Draft parser written to {output_path}", file=sys.stderr)
+    # The hint quotes the sample's path unless its name carries an id.
+    sample_hint = (str(input_path) if shown_name(input_path) == input_path.name
+                   else str(input_path.parent / "<sample>.csv"))
+    _out.put(
+        "\nNext steps:\n"
+        f"  1. Read {output_path} top to bottom. Verify column names match the CSV.\n"
+        "  2. Hand-test with a sample file:\n"
+        f"       python -c \"from {output_path.stem} import {class_name}; "
+        f"print({class_name}().parse_file('{sample_hint}')[:3])\"\n"
+        "  3. Confirm the model used self.* helpers — not inlined regex/date logic.\n"
+        "  4. Register the class in taxjson/bin/taxjson_brokerage.py.\n"
+        "  5. Add a test against a real CSV sample.\n",
+        file=sys.stderr,
+    )
+
+
+def _parse_args() -> argparse.Namespace:
+    """generate-parser: the command line, read (a --sample-lines under 1
+    is a usage error)."""
     parser = argparse.ArgumentParser(
         description=(
             "Draft a Python brokerage parser from a sample CSV using an LLM. "
@@ -357,115 +488,7 @@ def main():
     if args.sample_lines < 1:
         parser.error(f"--sample-lines must be at least 1 "
                      f"(got {args.sample_lines})")
-
-    from taxjson.lib.brokerages.base import shown_name
-    input_path = Path(args.input_file)
-    output_path = Path(args.output)
-    if not input_path.exists():
-        # Exit 2: a missing input is a usage error (A2-1435).
-        emit_line(f"taxjson-generate-parser: error: file not found: {shown_name(input_path)}", file=sys.stderr)
-        sys.exit(2)
-    if not base_path.exists() or not example_path.exists():
-        emit_line(f"taxjson-generate-parser: error: base.py or questrade.py not found in {here / 'lib' / 'brokerages'}",
-                  file=sys.stderr)
-        sys.exit(1)
-
-    brokerage_name = args.brokerage_name or _safe_default_name(input_path.stem)
-    if not args.brokerage_name and brokerage_name != input_path.stem:
-        emit_line("note: the file name carries an account id or a denylisted "
-                  "word; the default brokerage name uses a placeholder "
-                  f"({brokerage_name}) — pass --brokerage-name to choose one",
-                  file=sys.stderr)
-    class_name = args.class_name or _default_class_name(brokerage_name)
-    default_account = args.default_account or brokerage_name
-    model_id = args.model or _DEFAULT_MODELS[args.provider]
-
-    from taxjson.lib.brokerages.base import BrokerageParseError
-    try:
-        sample = _read_sample(input_path, args.sample_lines)
-    except BrokerageParseError as e:
-        emit_line(f"taxjson-generate-parser: error: {e}", file=sys.stderr)
-        sys.exit(1)
-    if not sample:
-        emit_line(f"taxjson-generate-parser: error: {shown_name(input_path)} is empty", file=sys.stderr)
-        sys.exit(1)
-    # The sample goes to a third-party API, and broker exports keep the
-    # holder's name, account id and address in their first lines: scan it
-    # with the redactor's detectors (and the private denylist) and refuse
-    # unless told otherwise (R1-342).
-    redacted, found = gate_sample(sample)
-    if found and not args.allow_unredacted:
-        emit_line(f"taxjson-generate-parser: error: the first {args.sample_lines} "
-                  f"line(s) of {shown_name(input_path)} still carry personal data "
-                  f"({', '.join(found)}) and would be sent to {args.provider}. "
-                  f"Run `tjs redact {shown_name(input_path)}` and use its output; "
-                  f"once you have read the lines it lists for review and "
-                  f"found no personal data there, or to send it anyway, "
-                  f"pass --allow-unredacted (the file is then sent as it is).",
-                  file=sys.stderr)
-        sys.exit(1)
-    if found:
-        emit_line(f"warning: sending a sample that carries personal data "
-                  f"({', '.join(found)}) — --allow-unredacted", file=sys.stderr)
-    else:
-        # Only the reviewed, redacted copy goes out (it differs from the
-        # file at most by transaction-id pseudonyms): a change no check
-        # above could see still never leaves the machine (GitHub #80).
-        sample = redacted
-
-    system_text = _SYSTEM_TEMPLATE.format(schema_block=render_schema_prompt(), 
-        base_source=_load_text(base_path),
-        example_source=_load_text(example_path),
-    )
-    user_text = _USER_TEMPLATE.format(
-        brokerage_name=brokerage_name,
-        class_name=class_name,
-        default_account=default_account,
-        n_lines=args.sample_lines,
-        sample_csv=sample,
-    )
-
-    print(
-        f"Calling {args.provider} ({model_id}) for {brokerage_name} ({class_name})...",
-        file=sys.stderr,
-    )
-    if args.provider == "claude":
-        raw = _call_claude(system_text, user_text, model_id)
-    else:
-        raw = _call_gemini(system_text, user_text, model_id)
-
-    code = _strip_code_fences(raw)
-
-    try:
-        compile(code, str(output_path), 'exec')
-    except SyntaxError as e:
-        emit_line(
-            f"taxjson-generate-parser: error: generated code has syntax errors: {e}\n"
-            "Writing it to <output>.bad for inspection.",
-            file=sys.stderr,
-        )
-        bad_path = output_path.with_suffix(output_path.suffix + '.bad')
-        bad_path.write_text(code, encoding='utf-8')
-        sys.exit(1)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(code, encoding='utf-8')
-
-    print(f"Draft parser written to {output_path}", file=sys.stderr)
-    # The hint quotes the sample's path unless its name carries an id.
-    sample_hint = (str(input_path) if shown_name(input_path) == input_path.name
-                   else str(input_path.parent / "<sample>.csv"))
-    print(
-        "\nNext steps:\n"
-        f"  1. Read {output_path} top to bottom. Verify column names match the CSV.\n"
-        "  2. Hand-test with a sample file:\n"
-        f"       python -c \"from {output_path.stem} import {class_name}; "
-        f"print({class_name}().parse_file('{sample_hint}')[:3])\"\n"
-        "  3. Confirm the model used self.* helpers — not inlined regex/date logic.\n"
-        "  4. Register the class in taxjson/bin/taxjson_brokerage.py.\n"
-        "  5. Add a test against a real CSV sample.\n",
-        file=sys.stderr,
-    )
+    return args
 
 
 if __name__ == "__main__":

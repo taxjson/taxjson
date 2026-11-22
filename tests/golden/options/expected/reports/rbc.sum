@@ -1,0 +1,67 @@
+======================================================================
+ DIAGNOSTICS — rbc  (parser/merge warnings; not part of the tax totals)
+======================================================================
+OK: <merged>: 4 transactions validated.
+note: rbc_direct_2024.csv: line 10: non-option expiry (rights/warrants) booked as a $0 disposition of SAMPW.WT.TO
+  rbc_direct_2024.csv: 4 tax objects
+======================================================================
+
+
+TICKER SUMMARY — CAD, year 2024, sorted by ticker
+
+SYMBOL                                 TOTAL        TOTAL_COST     TOTAL_PROCEED        TOTAL_GAIN          CAP_GAIN          OPT_GAIN          DIVIDEND               PIL   AVG_DAYS
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+SAMPR.TO                              -61.20             61.20              0.00            -61.20              0.00            -61.20              0.00              0.00       46.0
+SAMPW.WT.TO                           -29.95             29.95              0.00            -29.95            -29.95              0.00              0.00              0.00      203.0
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+TOTAL                                 -91.15             91.15              0.00            -91.15            -29.95            -61.20              0.00              0.00      124.5
+
+ASSET: Non-option | CURRENCY: CAD   | TRADES: 1 | YEAR: 2024
+
+Total Realized Gain:                -29.95 CAD
+Average Holding Period:               203.0 Days
+Avg Fee Per Trade:                    0.00 CAD
+Avg Fee Per Share:                  0.0000 CAD
+----------------------------------------------------------------------------------------------------------------
+Positive Trades: 0 | Negative Trades: 1 | Win/Loss: 0.00 | Win Rate: 0.0%
+Average Positive:              0.00 CAD | Average Negative:            -29.95 CAD
+----------------------------------------------------------------------------------------------------------------
+
+ASSET: Options    | CURRENCY: CAD   | TRADES: 1 | YEAR: 2024
+
+Total Realized Gain:                -61.20 CAD
+Average Holding Period:                46.0 Days
+Avg Fee Per Trade:                    0.00 CAD
+Avg Fee Per 100 Opt:                0.0000 CAD
+----------------------------------------------------------------------------------------------------------------
+Positive Trades: 0 | Negative Trades: 1 | Win/Loss: 0.00 | Win Rate: 0.0%
+Average Positive:              0.00 CAD | Average Negative:            -61.20 CAD
+----------------------------------------------------------------------------------------------------------------
+
+CONSOLIDATED TOTALS — CAD, year 2024
+
+TOTAL COST:                             91.15 CAD
+TOTAL PROCEEDS:                          0.00 CAD
+  (engine sign convention: shorts/written options negated — for Schedule 3 proceeds and ACB use `tjs form-export`)
+------------------------------------------------------
+TOTAL REALIZED NON-OPTION GAIN:        -29.95 CAD
+  (shares, units, futures and crypto — Schedule 3 lines: `tjs form-export`)
+TOTAL REALIZED OPTION GAIN:            -61.20 CAD
+TOTAL REALIZED GAIN:                   -91.15 CAD
+------------------------------------------------------
+TOTAL DIVIDENDS / STAKING:               0.00 CAD
+------------------------------------------------------
+GRAND TOTAL (GAIN+DIV+PIL):            -91.15 CAD
+------------------------------------------------------
+TOTAL TRADING FEES PAID:                21.15 CAD
+  (OPTION TRADING FEES):                11.20 CAD
+
+INCOME SUMMARY — year 2024, sorted by ticker
+
+SYMBOL                            GROSS DIV              PIL          TAX W/H       NET INCOME
+----------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------
+SUBTOTAL                               0.00             0.00             0.00             0.00
+CASH INTEREST                                                                             0.00
+----------------------------------------------------------------------------------------------
+TOTAL NET INCOME                                                                          0.00

@@ -41,9 +41,12 @@ bash -c "$(curl -fsSL https://taxjson.com/install.sh)"
 tjs --version
 ```
 
-This also installs the taxjson-fetch plugin (`tjs fetch`: Questrade /
-IBKR Flex auto-fetch, a separate package that does nothing until you run
-it); add `_ --without-fetch` to the installer line to leave it out.
+It needs git and Python 3.12 or newer (macOS: `brew install python`;
+Ubuntu 22.04 and Debian 12 ship an older one: the installer says so and
+stops, see [troubleshooting.md](troubleshooting.md)). This also installs
+the taxjson-fetch plugin (`tjs fetch`: Questrade / IBKR Flex auto-fetch, a
+separate package that does nothing until you run it); add
+`_ --without-fetch` to the installer line to leave it out.
 
 **A Questrade account?** Its transaction history downloads as Excel, and
 `taxjson-xlsx-to-csv` (step 3) converts it only with the optional `xlsx`

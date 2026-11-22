@@ -22,9 +22,8 @@ Paths and symbols the two files name are checked by the knowledge-pack test.
 """
 import re
 import unittest
-from pathlib import Path
 
-from taxjson.bin import taxjson_convert_tt as tt
+from taxjson.lib import tt_format as tt
 from taxjson.lib import config_check as cc
 from taxjson.lib import config_template as tpl
 from taxjson.lib import corp_actions as ca
@@ -32,8 +31,9 @@ from taxjson.lib import crypto_sends as cs
 from taxjson.lib import tax_logic as tl
 from taxjson.lib import ticker_map as tm
 from taxjson.lib.brokerages import generic as gen
+import _paths
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = _paths.REPO
 SETTINGS = (ROOT / "docs" / "settings.md").read_text(encoding="utf-8")
 RULES = (ROOT / "docs" / "tax-rules.md").read_text(encoding="utf-8")
 
@@ -156,9 +156,12 @@ class TestSettingsDocFiles(unittest.TestCase):
         sec = _section(SETTINGS, "## Generic importer mapping", level="## ")
         want = {f"[{s}]" for s in gen._SECTIONS}
         for keys in (gen._COLUMN_KEYS, gen._FORMAT_KEYS, gen._DEFAULT_KEYS,
-                     gen._BROKER_KEYS, gen._OPTIONS, gen._VALID_TARGETS):
+                     gen._BROKER_KEYS, gen._OPTIONS, gen._VALID_TARGETS,
+                     gen._CLASSIFY_KEYS, gen._EXTRACT_KEYS):
             want |= set(keys)
         have = _ticked(sec)
+        # An array of tables is documented as `[[name]]`.
+        have |= {t[1:-1] for t in have if t.startswith("[[") and t.endswith("]]")}
         self.assertEqual(want - have, set())
 
     def test_elections_and_hints(self):

@@ -1,0 +1,16 @@
+CLOSED-TRADE STATISTICS — tax year 2024 (CAD; taxable accounts: crypto, margin, qt)
+Economic P/L in CAD before any superficial-loss denial, not a filing number.
+WIN_RATE = wins / trades; PROFIT_FACTOR = gross wins / gross losses.
+CLASS            TRADES  WINS  LOSSES  WIN_RATE  NET_P/L  AVG_WIN  AVG_LOSS  LARGEST_WIN  LARGEST_LOSS  PROFIT_FACTOR
+---------------------------------------------------------------------------------------------------------------------
+long-shares           6     2       4     33.3%  -828.10   110.10   -262.07       132.30       -519.90           0.21
+short-shares          0     0       0         -     0.00        -         -            -             -              -
+long-options          1     0       1      0.0%  -410.40        -   -410.40            -       -410.40           0.00
+written-options       1     1       0    100.0%   268.65   268.65         -       268.65             -              -
+futures               0     0       0         -     0.00        -         -            -             -              -
+crypto                5     4       1     80.0%   519.97   167.64   -150.57       387.30       -150.57           4.45
+---------------------------------------------------------------------------------------------------------------------
+TOTAL                13     7       6     53.8%  -449.88   165.63   -268.21       387.30       -519.90           0.72
+
+Denied by the superficial-loss rule (NOT subtracted above): 943.13 CAD over 3 disposition(s).
+More: tjs stats --details (how the trades are counted)

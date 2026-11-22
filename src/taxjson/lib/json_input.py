@@ -8,7 +8,7 @@ non-zero exit — never a traceback, and never a warning followed by a
 report built from the files that happened to load (audit S028-09,
 S049-22, S051-11, S079-11, S035-13).
 
-The document shape follows ``core.load_transactions``: a JSON object,
+The document shape follows ``tx_load.load_transactions``: a JSON object,
 or — for a transaction book — a bare JSON array of rows, which is
 wrapped as ``{list_key: [...]}``. ``#`` comments are accepted, as the
 canonical loader accepts them.
@@ -48,12 +48,12 @@ def read_json_doc(path, *, list_key: Optional[str] = "transactions",
 
     * unreadable / non-UTF-8 / invalid JSON -> InputFileError
     * a bare array -> ``{list_key: array}`` when ``list_key`` is set
-      (the transaction-book form ``core.load_transactions`` accepts),
+      (the transaction-book form ``tx_load.load_transactions`` accepts),
       otherwise InputFileError
     * any other non-object -> InputFileError
     * ``require_key`` set and missing -> InputFileError
     """
-    from taxjson.lib.core import strip_json_comments
+    from taxjson.lib.tx_load import strip_json_comments
     p = Path(path)
     try:
         raw = p.read_bytes()
@@ -125,18 +125,30 @@ _STR_FIELDS = ("date", "date_settle")
 # `dividend` and `pil`: the income rows a gains file carries beside its
 # dispositions — a dividend of 1e400 (valid JSON, inf as a float) summed
 # to "TOTAL DIVIDENDS / STAKING: inf" at exit 0 (audit 2026-10-24 D03).
+# `raw_gain`, `permanently_disallowed`, `deferred_loss_recovered`: the
+# rest of the money a gains row carries (model/result `GainRow`); a text
+# one stopped the report that took float() of it (TJ-2879).
 _NUM_FIELDS = ("qty", "quantity", "proceeds", "cost", "gain", "net_amount",
                "price", "commission", "fee", "total_cost",
-               "disallowed_amount", "dividend", "pil")
+               "disallowed_amount", "dividend", "pil", "raw_gain",
+               "permanently_disallowed", "deferred_loss_recovered",
+               "deferred_wash", "capitalized_263h", "recognised_premium",
+               "denied_contribution")
 
 
-def check_row_types(rows, path, key: str = "transactions") -> None:
+def check_row_types(rows, path, key: str = "transactions", only=None,
+                    fields=None) -> None:
     """InputFileError naming the file, list, row and field when a row's
-    date is not a string or a numeric field is not a finite number."""
+    date is not a string or a numeric field is not a finite number;
+    with `only`, the rows it is true of (a reader's own, at their index
+    in the list: backlog TJ-2992), and with `fields` those fields alone
+    (the ones it reads: TJ-2998)."""
+    str_fields = _STR_FIELDS if fields is None else [f for f in _STR_FIELDS if f in fields]
+    num_fields = _NUM_FIELDS if fields is None else [f for f in _NUM_FIELDS if f in fields]
     for i, r in enumerate(rows or []):
-        if not isinstance(r, dict):
+        if not isinstance(r, dict) or (only is not None and not only(r)):
             continue
-        for f in _STR_FIELDS:
+        for f in str_fields:
             v = r.get(f)
             if v is not None and not isinstance(v, str):
                 raise InputFileError(
@@ -144,7 +156,7 @@ def check_row_types(rows, path, key: str = "transactions") -> None:
                     f"{f} is {v!r}, not a YYYY-MM-DD string — the file "
                     f"is damaged or hand-edited: fix it or re-run "
                     f"`tjs run`")
-        for f in _NUM_FIELDS:
+        for f in num_fields:
             v = r.get(f)
             if v is not None and (isinstance(v, bool)
                                   or not isinstance(v, (int, float))):
@@ -152,7 +164,17 @@ def check_row_types(rows, path, key: str = "transactions") -> None:
                     f'{path}: "{key}" row {i} ({r.get("symbol") or "?"}): '
                     f"{f} is {v!r}, not a number — the file is damaged "
                     f"or hand-edited: fix it or re-run `tjs run`")
-            if v is not None and not math.isfinite(v):
+            try:
+                finite = v is None or math.isfinite(v)
+            except OverflowError:
+                # Valid JSON, read as an int a float cannot hold
+                # (TJ-2886: an OverflowError traceback).
+                raise InputFileError(
+                    f'{path}: "{key}" row {i} ({r.get("symbol") or "?"}): '
+                    f"{f} is an integer of {len(str(abs(v)))} digits, too "
+                    f"large to read — the file is damaged or hand-edited: "
+                    f"fix it or re-run `tjs run`") from None
+            if not finite:
                 # issue #8: a NaN gain reached a filing export.
                 raise InputFileError(
                     f'{path}: "{key}" row {i} ({r.get("symbol") or "?"}): '
@@ -179,6 +201,14 @@ INCOME_AMOUNT_FIELDS = {"DIVIDEND": ("dividend",),
                         "DIVIDEND_IN_LIEU": ("pil", "dividend")}
 
 
+def is_disposition(row: Dict[str, Any]) -> bool:
+    """Whether a row of a gains document's `transactions` is a disposition
+    (a manual, unknown-cost one included), not an income row: what the
+    total, a trace file's counts and taxjson-explain take (audit R1-313;
+    TJ-2784: a payment in lieu counted as a sale)."""
+    return row.get("action") not in INCOME_ROW_ACTIONS
+
+
 def gains_row_kind(row: Dict[str, Any]) -> str:
     """'income', 'manual' (an unknown-cost row flagged `tainted`) or
     'disposition' — every other row of a gains document's
@@ -190,7 +220,30 @@ def gains_row_kind(row: Dict[str, Any]) -> str:
     return "disposition"
 
 
-def check_gains_rows(rows, path, key: str = "transactions") -> None:
+def read_rows_doc(path, key: str = "transactions", fields=(), only=None,
+                  shown=None) -> Optional[Dict[str, Any]]:
+    """A work/ JSON document a reader takes beside its own (another
+    account's, an earlier year's, a pass's), or None when it cannot be
+    read or is not an object (the reader leaves it out, as it always
+    did). Its `key` rows (those `only` is true of) are held to the types
+    of `fields` alone, the ones the reader's views read: a damaged field
+    it never reads leaves the document in (backlog TJ-3043, TJ-3044,
+    TJ-3057). A refused one is an InputFileError naming the file
+    (`shown`, else `path`): the caller says so, or stops."""
+    try:
+        doc = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    rows = doc.get(key)
+    check_row_types(rows if isinstance(rows, list) else None,
+                    path if shown is None else shown, key,
+                    only=only, fields=tuple(fields))
+    return doc
+
+
+def check_gains_rows(rows, path, key: str = "transactions", only=None) -> None:
     """InputFileError naming the file and row when a computed
     disposition lacks its units, its gain or a date (DISPOSITION_FIELDS
     and date / date_settle: absent, null or empty), a manual row its
@@ -203,9 +256,10 @@ def check_gains_rows(rows, path, key: str = "transactions") -> None:
     the disposition out at exit 0. One contract for every filing and
     summary reader: form-export, reconcile-slips, sum-gains, the option
     reports, t1135, close-year and check-filed (taxjson_filed) and
-    carryover."""
+    carryover. With `only`, the rows it is true of (as check_row_types:
+    one account's, backlog TJ-3032)."""
     for i, r in enumerate(rows or []):
-        if not isinstance(r, dict):
+        if not isinstance(r, dict) or (only is not None and not only(r)):
             continue
         kind = gains_row_kind(r)
         if kind == "income":
@@ -258,6 +312,12 @@ def require_gains_doc(doc: Dict[str, Any], path) -> Dict[str, Any]:
             f"{path}: a pipeline stage file (its rows have no 'gain') — "
             f"pass the <account>_gains.json (or _gains_wash.json) the "
             f"gains stage writes")
+    # Its other row lists are lists of objects too (TJ-2939: form-export
+    # and reconcile-slips stopped with an AttributeError or a TypeError
+    # on one that was not); an empty one of any type reads as none, as
+    # its transactions and model/result's parts do (TJ-2859).
+    require_object_lists(doc, path, [k for k in _WORK_ROW_LISTS
+                                     if k != "transactions"], empty_ok=True)
     for key in _WORK_ROW_LISTS:
         check_row_types(doc.get(key) if isinstance(doc.get(key), list)
                         else [], path, key)
@@ -276,8 +336,25 @@ def require_row_lists(doc: Dict[str, Any], path) -> Dict[str, Any]:
         if rows and (not isinstance(rows, list)
                      or any(not isinstance(r, dict) for r in rows)):
             raise InputFileError(f'{path}: "{key}" must be a list of JSON '
-                                 f'objects')
+                                 f'objects{_bad_row(rows)}')
     return doc
+
+
+def require_object_lists(doc: Dict[str, Any], path, keys=None, *,
+                         empty_ok: bool = False) -> None:
+    """InputFileError naming the file and the first row that is not an
+    object, when one of a work/ document's row lists (`keys`, default
+    _WORK_ROW_LISTS) is present and not null but not a list of JSON
+    objects; with `empty_ok`, an empty value of any type ({}, "", 0)
+    reads as none too."""
+    for key in _WORK_ROW_LISTS if keys is None else keys:
+        rows = doc.get(key)
+        if rows is None or (empty_ok and not rows):
+            continue
+        if not isinstance(rows, list) or any(not isinstance(r, dict)
+                                             for r in rows):
+            raise InputFileError(f'{path}: "{key}" must be a list of JSON '
+                                 f"objects{_bad_row(rows)}")
 
 
 def load_json_doc_or_exit(prog: str, path, *, exit_code: int = 2,
@@ -310,11 +387,11 @@ def rows_or_exit(prog: str, doc: Dict[str, Any], path, key: str,
 
 
 def load_transactions_or_exit(prog: str, path, *, exit_code: int = 2):
-    """``core.load_transactions(path)``, or a one-line
+    """``tx_load.load_transactions(path)``, or a one-line
     ``<prog>: error: <file>: ...`` and exit — its refusals (a missing
     file, bad JSON, a row the coercion funnel rejects) were tracebacks
     in the tools that called it bare (audit S051-11, S049-22)."""
-    from taxjson.lib.core import load_transactions
+    from taxjson.lib.tx_load import load_transactions
     p = Path(path)
     try:
         return load_transactions(p)
@@ -330,7 +407,13 @@ def load_transactions_or_exit(prog: str, path, *, exit_code: int = 2):
 
 
 # The row lists and the summary a pipeline artifact in work/ may carry.
-_WORK_ROW_LISTS = ("transactions", "inventory", "manual_reporting_required")
+# A gains file's covers of short sales realized next year, its pools or
+# lots at the project year's end and its grant-timed closes of no value
+# are rows too (TJ-2909, TJ-2919, TJ-2938): an older file has no year end
+# at all (None), never one of another type.
+_WORK_ROW_LISTS = ("transactions", "inventory", "manual_reporting_required",
+                   "covers_realized_next_year", "inventory_year_end",
+                   "grant_nil_closes")
 # What every gains file the engine writes carries (each may be empty).
 _GAINS_PARTS = ("transactions", "inventory", "summary")
 
@@ -356,6 +439,20 @@ def check_gains_parts(doc: Dict[str, Any], path) -> None:
             f"{', '.join(sorted(map(str, doc))) or 'none'}): damaged")
 
 
+def advises_rerun(msg: str) -> bool:
+    """Whether `msg` already says to re-run `tjs run`, as the row checks'
+    messages do ("fix it or re-run `tjs run`"); a message naming the
+    command for another reason does not (backlog TJ-2970, TJ-2980)."""
+    return "re-run `tjs run`" in msg.lower()
+
+
+def rerun_advice(msg: str, tail: str = " — re-run `tjs run`") -> str:
+    """`msg` with the advice to re-run (`tail`) unless it already gives
+    it: a reader wrapping a row check's refusal says it once (backlog
+    TJ-2912, TJ-2968, TJ-2976 to TJ-2978)."""
+    return msg if advises_rerun(msg) else msg + tail
+
+
 def read_work_doc(path) -> Dict[str, Any]:
     """A pipeline artifact from work/ (<acct>_base/_raw/_gains*.json,
     _report.json): :func:`read_json_doc`, plus its row lists must be
@@ -366,14 +463,7 @@ def read_work_doc(path) -> Dict[str, Any]:
     doc = read_json_doc(path, list_key="transactions")
     p = Path(path)
     check_gains_parts(doc, p)
-    for key in _WORK_ROW_LISTS:
-        rows = doc.get(key)
-        if rows is None:
-            continue
-        if not isinstance(rows, list) or any(not isinstance(r, dict)
-                                             for r in rows):
-            raise InputFileError(f'{p}: "{key}" must be a list of JSON '
-                                 f"objects{_bad_row(rows)}")
+    require_object_lists(doc, p)
     if doc.get("summary") is not None and not isinstance(doc["summary"],
                                                          dict):
         raise InputFileError(f'{p}: "summary" must be a JSON object')

@@ -11,7 +11,7 @@ on their own, so they hold what the engine holds: `tjs t1135` (the
 cost amounts, src/taxjson/bin/taxjson_t1135.py `walk_costs`), the
 year-end snapshot `close-year` records and `handoff` compares
 (lib/handoff `snapshot`) and `tjs list --date`
-(src/taxjson/bin/taxjson_run.py `cmd_positions`).
+(src/taxjson/cli/positions.py `cmd_positions`).
 
 A row's date is the day from which its state holds, on the engine's own
 date basis (`basis`: the settlement date, or the trade date on a
@@ -22,9 +22,12 @@ another). A pool's `total_cost` follows the inventory's convention: a
 short's is negative (the opening proceeds credited).
 
 A short pool beside a long (Canada: a future, or a share short the broker
-marks) is no property held, so it has no row here while the long is held.
-Its part `shorts`, a timeline of the same shape, has each account's part
-of it, per (account, symbol): `short_rows_on`.
+marks) is no property held, so it has no row here while the long is held,
+nor while the symbol's flat pool holds a denied loss's waiting addition
+(CA-SL-19): that pool's row is the wait, 0 units and the deferred amount
+(engine/ca/pools._pool_waits; backlog TJ-2712). Its part `shorts`, a
+timeline of the same shape, has each account's part of it, per (account,
+symbol): `short_rows_on`.
 
 A written option open in several accounts under close timing (Canada):
 `account_premiums` has, by row number, each account's premium in the
@@ -32,7 +35,14 @@ contracts then open, which `inventory_on` passes to the per-account views
 (backlog TJ-1251).
 """
 
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeAlias, Union
+
+from taxjson.model import money as M
+
+if TYPE_CHECKING:
+    from decimal import Decimal
 
 VERSION = 1
 
@@ -54,6 +64,14 @@ FIELDS = ("seq", "date", "account", "symbol", "qty", "total_cost",
 # add each account's written premium: `account_premiums`).
 State = Tuple[float, float, float, bool, str, Optional[str], Optional[str]]
 Label = Tuple[str, str]                 # (account, symbol)
+# A state as an engine's `state_of` hands it in: State's fields with the
+# money (total_cost, deferred_wash) Decimal, the engines' own; the Canadian
+# engine adds each account's written premium as an eighth field when it has
+# one (engine/ca/pools._PoolState). The flat state, _FLAT, keeps float zeros.
+EngineState: TypeAlias = Union[
+    Tuple[float, "Decimal", "Decimal", bool, str, Optional[str], Optional[str]],
+    Tuple[float, "Decimal", "Decimal", bool, str, Optional[str], Optional[str],
+          Dict[str, Any]]]
 
 _FLAT: State = (0.0, 0.0, 0.0, False, "", None, None)
 
@@ -68,17 +86,30 @@ class Recorder:
     name (a basis addition landing in another account's lot) is in the
     day's state. `finish` dates the rows."""
 
-    def __init__(self, state_of: Callable[[Label], Optional[State]]):
+    def __init__(self, state_of: Callable[[Label], Optional[EngineState]]):
         self._state_of = state_of
-        self._last: Dict[Label, State] = {}
+        self._last: Dict[Label, Union[State, EngineState]] = {}
         self._held: Dict[Label, None] = {}      # ordered set
-        self._rows: List[Tuple[int, Label, State, str]] = []
+        self._rows: List[Tuple[int, Label, Union[State, EngineState], str]] = []
         # The id of the book row each `seq` is (the engine appends one
         # per row it walks; the Canadian engine does): the document's
         # `row_ids`, so a reader can place a row of the books between
         # two steps of one day (T1135: a custody account's units at
         # each step, backlog TJ-0646).
         self.row_ids: List[str] = []
+
+    def fold_state(self) -> tuple:
+        """What a walk changes here, copied (the entries are tuples and strings):
+        the Canadian re-fold's checkpoint (`engine/ca/fold._WalkFold`)."""
+        return (dict(self._last), dict(self._held), list(self._rows), list(self.row_ids))
+
+    def restore(self, state: tuple) -> None:
+        """Back to a `fold_state`, in place (the engine's closures keep this object)."""
+        for dst, src in zip((self._last, self._held), state[:2]):
+            dst.clear()
+            dst.update(src)
+        self._rows[:] = state[2]
+        self.row_ids[:] = state[3]
 
     def touch(self, seq: int, labels: Iterable[Label],
               renamed: Optional[Dict[Label, str]] = None) -> None:
@@ -94,7 +125,8 @@ class Recorder:
         if st == self._last.get(lab, _FLAT) and not renamed:
             return
         self._last[lab] = st
-        if abs(st[0]) > 1e-12 or abs(st[1]) > 1e-9:
+        # (the flat state's cost is a float zero: read through the switch)
+        if abs(st[0]) > 1e-12 or abs(M.of(st[1])) > M.of(1e-9):
             self._held[lab] = None
         else:
             self._held.pop(lab, None)
@@ -287,9 +319,10 @@ def inventory_on(doc: Dict[str, Any], date: str,
     file's `inventory` (symbol, qty, total_cost, currency,
     position_start_date, last_acq_date, deferred_wash; `account` on a
     per-account pool), the engine's flat tolerance applied: `eps(symbol)`,
-    the Canadian engine's (core.pool_qty_eps) when not given — the US
+    the Canadian engine's (pool_eps.pool_qty_eps) when not given — the US
     engine's is US_QTY_EPS."""
-    from taxjson.lib.core import MATERIAL_COST, pool_qty_eps
+    from taxjson.lib.pool_eps import pool_qty_eps
+    from taxjson.lib.row_types import MATERIAL_COST
     eps = eps or pool_qty_eps
     out: List[Dict[str, Any]] = []
     for (acct, sym), r in pools_on(doc, date, account).items():
@@ -306,7 +339,7 @@ def inventory_on(doc: Dict[str, Any], date: str,
                     "currency": r.get("currency") or "",
                     "position_start_date": r.get("position_start_date"),
                     "last_acq_date": r.get("last_acq_date"),
-                    "deferred_wash": round(float(
+                    "deferred_wash": M.units(float(
                         r.get("deferred_wash") or 0.0), 4),
                     "unknown_cost": bool(r.get("unknown_cost")),
                     **({"account_premiums": r["account_premiums"]}
@@ -317,10 +350,12 @@ def inventory_on(doc: Dict[str, Any], date: str,
 def short_rows_on(doc: Dict[str, Any], date: str,
                   eps: Optional[Callable[[str], float]] = None
                   ) -> List[Dict[str, Any]]:
-    """The account-held shorts beside a long at the end of `date`, as
+    """The account-held shorts beside a long, or beside the symbol's flat
+    pool while it holds a denied loss's waiting addition (0 units, the
+    deferred amount: backlog TJ-2712), at the end of `date`, as
     `inventory_on` rows with their `account` and `short_pool`. A short
-    with no long beside it is left out: it is the pool's own row in the
-    timeline (core._ca_pool_state)."""
+    with neither beside it is left out: it is the pool's own row in the
+    timeline (engine/ca/pools), 0 units there once covered."""
     shorts = doc.get("shorts")
     if not isinstance(shorts, dict):
         return []
@@ -328,6 +363,6 @@ def short_rows_on(doc: Dict[str, Any], date: str,
     out = []
     for r in inventory_on(shorts, date, eps=eps):
         pooled = pools.get(("", r["symbol"]))
-        if pooled is not None and float(pooled.get("qty") or 0.0) > 0:
+        if pooled is not None and float(pooled.get("qty") or 0.0) >= 0:
             out.append(dict(r, short_pool=True))
     return out

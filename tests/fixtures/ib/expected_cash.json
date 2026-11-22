@@ -1,0 +1,106 @@
+[
+ {
+  "account": "",
+  "amount": 20000.0,
+  "currency": "USD",
+  "date": "2025-01-06",
+  "decl": null,
+  "desc": "Electronic Fund Transfer",
+  "internal": "",
+  "kind": "CASHMOVE",
+  "line_where": "sample.csv:57",
+  "origin": "broker",
+  "settle": "2025-01-06",
+  "where": "sample.csv"
+ },
+ {
+  "account": "",
+  "date": "2025-08-04",
+  "desc": "Forex USD.CAD",
+  "from_amt": 500.0,
+  "from_ccy": "USD",
+  "kind": "FXCONV",
+  "origin": "broker",
+  "settle": "2025-08-04",
+  "time": "10:00:00",
+  "to_amt": 700.0,
+  "to_ccy": "CAD",
+  "value": null,
+  "where": "sample.csv:42"
+ },
+ {
+  "_fee_of": "sample.csv:42",
+  "account": "",
+  "amount": -2.0,
+  "currency": "USD",
+  "date": "2025-08-04",
+  "desc": "Forex USD.CAD commission",
+  "kind": "FLOW",
+  "origin": "broker",
+  "settle": "2025-08-04",
+  "time": "10:00:00",
+  "where": "sample.csv:42"
+ },
+ {
+  "date": "2025-01-01",
+  "end": "2025-12-31",
+  "kind": "PERIOD",
+  "origin": "broker",
+  "settle": "2025-01-01",
+  "start": "2025-01-01",
+  "where": "sample.csv"
+ },
+ {
+  "account": "",
+  "balance": 744.0,
+  "currency": "CAD",
+  "date": "2025-12-31",
+  "kind": "CASHBAL",
+  "origin": "broker",
+  "settle": "2025-12-31",
+  "statement": "sample.csv",
+  "where": "sample.csv: Cash Report Ending Cash"
+ },
+ {
+  "account": "",
+  "balance": 20628.12,
+  "currency": "USD",
+  "date": "2025-12-31",
+  "kind": "CASHBAL",
+  "origin": "broker",
+  "settle": "2025-12-31",
+  "statement": "sample.csv",
+  "where": "sample.csv: Cash Report Ending Cash"
+ },
+ {
+  "account": "",
+  "balance": 0.0,
+  "currency": "CAD",
+  "date": "2024-12-31",
+  "kind": "CASHBAL",
+  "origin": "broker",
+  "settle": "2024-12-31",
+  "statement": "sample.csv",
+  "where": "sample.csv: Cash Report Starting Cash"
+ },
+ {
+  "account": "",
+  "balance": 1000.0,
+  "currency": "USD",
+  "date": "2024-12-31",
+  "kind": "CASHBAL",
+  "origin": "broker",
+  "settle": "2024-12-31",
+  "statement": "sample.csv",
+  "where": "sample.csv: Cash Report Starting Cash"
+ },
+ {
+  "currency": "CAD",
+  "date": "2025-12-31",
+  "kind": "NOTE",
+  "origin": "broker",
+  "settle": "2025-12-31",
+  "text": "sample.csv: Forex Balances CAD 722.00 differs from the Cash Report's Ending Cash 744.00",
+  "where": "sample.csv"
+ }
+]

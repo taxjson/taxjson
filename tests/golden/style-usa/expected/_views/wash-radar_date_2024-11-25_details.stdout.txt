@@ -1,0 +1,57 @@
+WASH RADAR — wash sales (§1091, trade dates), as of <stamp>, positions with an advisory
+
+WASHED — wash sale (§1091): loss disallowed; no sale undoes it (1)
+  TICKER    TAXABLE  SHELTERED  CLEARS
+  ------------------------------------
+  SAMPA.US      100          0  -
+    the loss of 519.90 USD on 2024-11-01 is a wash sale (§1091): 519.90 USD disallowed — a replacement was bought within 30 days ('margin' bought 100 on 2024-11-20). There is no still-held test: selling the replacement does not undo it. 519.90 USD is added to the replacement's basis and comes back when that lot is sold.
+
+BLOCKED — do not buy (0)
+  (none)
+
+LOCKED — recent buy; do not sell at a loss (0)
+  (none)
+
+EXITABLE — loss OK only if you exit the FULL position (1)
+  TICKER                 TAXABLE  SHELTERED  CLEARS
+  -----------------------------------------------------------
+  QZQ250117C00040000.US       -1          0  2024-12-16 (21d)
+    Recent short sale in 'margin' on 2024-11-15. Covering the FULL short in one order at a loss is fine now; a PARTIAL cover at a loss before 2024-12-16 is a wash sale (the loss defers into the shares still short).
+
+COOLING — wait before re-entering (1)
+  TICKER   TAXABLE  SHELTERED  CLEARS
+  ---------------------------------------------
+  NVDA.US        0          0  2024-12-23 (28d)
+    Loss of 82.00 USD on 2024-11-20. Safe to re-enter on 2024-12-23.
+
+RISK — sellable now; an IRA still holds (pause IRA buys and dividend reinvestment 30 days after selling) (1)
+  TICKER  TAXABLE  SHELTERED  CLEARS
+  ----------------------------------
+  QZQ.US      100         50  -
+    Sellable at a loss NOW (no buys in the last 30 days) — but an IRA still holds, so an IRA buy (dividend reinvestment included) within 30 days AFTER the sale disallows the loss PERMANENTLY on as many shares as it buys (Rev. Rul. 2008-5). Pause IRA buys/reinvestment for 30 days.
+
+CLEAR — safe to sell at a loss (6)
+  TICKER                 TAXABLE  SHELTERED  CLEARS
+  -------------------------------------------------
+  GHOSTQ.US                  -40          0  -
+  OLDCO.US                   -50          0  -
+    no recent short sales; safe to cover at a loss (do not short it again for 30 days: a new short sale is the replacement, §1091(e)).
+  PARN.US                    100          0  -
+  SPNC.US                     10          0  -
+    no recent buys; safe to sell at a loss (do not repurchase for 30 days).
+  QZQ241220C00035000.US       -1          0  -
+    no recent writes of this contract; safe to buy it back at a loss (do not write it again for 30 days).
+  SAMPB.US                     0         20  -
+    Held only in IRA(s) — selling it there has no tax effect.
+
+DEFINITIONS
+  - WASHED: a loss sale with a replacement bought within 30 days either side (trade dates), IRAs included: disallowed (§1091), no still-held test; the loss moves into the replacement's basis (lost in an IRA).
+  - BLOCKED: a loss sale in the last 30 days, some still held: a buy before the printed date disallows the loss on as many shares as you buy.
+  - LOCKED: an IRA bought in the last 30 days: a taxable loss sale is a wash sale for that many shares, permanently (Rev. Rul. 2008-5).
+  - EXITABLE: bought in a taxable account in the last 30 days: a FULL exit at a loss is fine, a partial loss sale is a wash sale.
+  - COOLING: sold out at a loss recently: wait 31 days from the sale (trade date) before buying back.
+  - RISK: sellable at a loss NOW, but an IRA still holds: an IRA buy (a DRIP too) within 30 days after disallows the loss permanently.
+  - CLEAR: no recent buys; safe to sell at a loss (no buy-back for 30 days).
+  - A long call bought in a loss's window is noted, not enforced; after a loss on covering a short only a new short sale replaces it (§1091(e)); futures and their options are §1256, outside §1091.
+
+Scope: these verdicts cover this project's accounts only. A purchase by your spouse or by a corporation you control within 30 days before or after a loss sale also makes it a wash sale (§1091; IRS Pub. 550) — those accounts are not in the project, so check them yourself.

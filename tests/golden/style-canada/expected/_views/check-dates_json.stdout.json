@@ -1,0 +1,163 @@
+{
+  "checked": 64,
+  "counts": {
+    "ERROR": {
+      "settle-weekend": 1
+    },
+    "NOTE": {
+      "income-weekend": 1,
+      "settle-cycle": 6
+    },
+    "WARN": {
+      "holiday-trade": 1
+    }
+  },
+  "errors": 1,
+  "issues": [
+    {
+      "account": "qt",
+      "action": "BUYSELL",
+      "code": "holiday-trade",
+      "date": "2024-01-15",
+      "date_settle": "2024-01-17",
+      "detail": "",
+      "message": "the NYSE is closed that day",
+      "quantity": 100.0,
+      "severity": "WARN",
+      "source": "questrade",
+      "symbol": "AAPL.US",
+      "time": "00:00:00"
+    },
+    {
+      "account": "qt",
+      "action": "BUYSELL",
+      "code": "settle-cycle",
+      "date": "2024-11-05",
+      "date_settle": "2024-11-07",
+      "detail": "standard cycle 2024-11-06",
+      "message": "broker settle date differs from the standard cycle",
+      "quantity": -75.0,
+      "severity": "NOTE",
+      "source": "questrade",
+      "symbol": "AAPL.US",
+      "time": "00:00:00"
+    },
+    {
+      "account": "qt",
+      "action": "BUYSELL",
+      "code": "settle-cycle",
+      "date": "2024-12-10",
+      "date_settle": "2024-12-12",
+      "detail": "standard cycle 2024-12-11",
+      "message": "broker settle date differs from the standard cycle",
+      "quantity": 30.0,
+      "severity": "NOTE",
+      "source": "questrade",
+      "symbol": "SHOP.TO",
+      "time": "00:00:00"
+    },
+    {
+      "account": "rrsp",
+      "action": "BUYSELL",
+      "code": "settle-cycle",
+      "date": "2024-01-10",
+      "date_settle": "2024-01-15",
+      "detail": "standard cycle 2024-01-12",
+      "message": "broker settle date differs from the standard cycle",
+      "quantity": 100.0,
+      "severity": "NOTE",
+      "source": "webull",
+      "symbol": "AAPL.US",
+      "time": "09:30:00"
+    },
+    {
+      "account": "rrsp",
+      "action": "BUYSELL",
+      "code": "settle-weekend",
+      "date": "2024-12-12",
+      "date_settle": "2024-12-15",
+      "detail": "",
+      "message": "settles on a weekend",
+      "quantity": -10.0,
+      "severity": "ERROR",
+      "source": "webull",
+      "symbol": "ABCD270219C00045000.US",
+      "time": "09:30:00"
+    },
+    {
+      "account": "tfsa",
+      "action": "BUYSELL",
+      "code": "settle-cycle",
+      "date": "2024-01-12",
+      "date_settle": "2024-01-15",
+      "detail": "standard cycle 2024-01-16",
+      "message": "broker settle date differs from the standard cycle",
+      "quantity": 100.0,
+      "severity": "NOTE",
+      "source": "rbc_direct",
+      "symbol": "RY.TO",
+      "time": "09:30:00"
+    },
+    {
+      "account": "tfsa",
+      "action": "DIVIDEND",
+      "code": "income-weekend",
+      "date": "2024-06-15",
+      "date_settle": "2024-06-15",
+      "detail": "Saturday; 207.00 CAD",
+      "message": "income dated on a weekend (pay dates are normally business days)",
+      "quantity": 150.0,
+      "severity": "NOTE",
+      "source": "rbc_direct",
+      "symbol": "RY.TO",
+      "time": "09:30:00"
+    },
+    {
+      "account": "tfsa",
+      "action": "BUYSELL",
+      "code": "settle-cycle",
+      "date": "2024-09-10",
+      "date_settle": "2024-09-12",
+      "detail": "standard cycle 2024-09-11",
+      "message": "broker settle date differs from the standard cycle",
+      "quantity": -100.0,
+      "severity": "NOTE",
+      "source": "rbc_direct",
+      "symbol": "RY.TO",
+      "time": "09:30:00"
+    },
+    {
+      "account": "tfsa",
+      "action": "BUYSELL",
+      "code": "settle-cycle",
+      "date": "2024-11-05",
+      "date_settle": "2024-11-07",
+      "detail": "standard cycle 2024-11-06",
+      "message": "broker settle date differs from the standard cycle",
+      "quantity": 200.0,
+      "severity": "NOTE",
+      "source": "rbc_direct",
+      "symbol": "ENB.TO",
+      "time": "09:30:00"
+    }
+  ],
+  "later_frozen": false,
+  "later_years": 0,
+  "schema_version": 1,
+  "sources": {
+    "crypto: coinbase": 8,
+    "crypto: crypto_sends.tt": 1,
+    "crypto: kraken": 5,
+    "margin: ib": 21,
+    "margin: ib corporate actions": 2,
+    "margin: margin_extra.tt": 7,
+    "qt: questrade": 6,
+    "qt: questrade corporate actions": 0,
+    "rrsp: webull": 6,
+    "tfsa: rbc_direct": 7,
+    "tfsa: rbc_direct corporate actions": 0,
+    "tfsa: tfsa_extra.tt": 1
+  },
+  "warnings": 1,
+  "year": 2024
+}

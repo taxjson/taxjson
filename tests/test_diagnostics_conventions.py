@@ -18,12 +18,14 @@ import subprocess
 import sys
 import tempfile
 from _tmpfiles import private_tmpfile
+from taxjson.lib.brokerages.base import BaseBrokerage
 import unittest
 from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 from _style import CapturedWidth
+import _paths
 
 
 # Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
@@ -38,7 +40,7 @@ def setUpModule():
 def tearDownModule():
     _WIDTH.stop()
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 def _run(module, *args):
@@ -168,7 +170,7 @@ class TestBrokerageExitCodes(unittest.TestCase):
     def test_strict_schema_violation_is_a_finding_exit_1(self):
         """Schema violations found in the data are FINDINGS → exit 1
         (was exit 2, which the convention reserves for usage/environment)."""
-        class _Empty:
+        class _Empty(BaseBrokerage):            # a parser is a BaseBrokerage
             _rows_seen = None
 
             def parse_file(self, path):
@@ -178,7 +180,7 @@ class TestBrokerageExitCodes(unittest.TestCase):
             code, err = self._main_exit(
                 ['taxjson-brokerage', '--brokerage', 'kraken', '--strict',
                  f.name],
-                load_brokerage=lambda _id: _Empty,
+                parser_class=lambda _id: _Empty,
                 validate_transactions=lambda txs, lint=False:
                     (['synthetic violation'], []),
             )
@@ -186,8 +188,9 @@ class TestBrokerageExitCodes(unittest.TestCase):
         self.assertIn('synthetic violation', err)
 
     def test_lint_problems_exit_1_not_3(self):
-        class _Unaccounted:
+        class _Unaccounted(BaseBrokerage):
             def __init__(self):
+                super().__init__()
                 self._rows_seen = 5
                 self._rows_consumed = 1
                 self._skip_counts = {}
@@ -199,7 +202,7 @@ class TestBrokerageExitCodes(unittest.TestCase):
             code, err = self._main_exit(
                 ['taxjson-brokerage', '--brokerage', 'kraken', '--lint',
                  f.name],
-                load_brokerage=lambda _id: _Unaccounted,
+                parser_class=lambda _id: _Unaccounted,
                 validate_transactions=lambda txs, lint=False: ([], []),
             )
         self.assertEqual(code, 1)
@@ -229,7 +232,7 @@ class TestCollectDiagnosticsMarkers(unittest.TestCase):
         """run.py's DIAGNOSTICS collector must keep both the parser-layer
         bare `warning:` shape and the C1 `<prog>: warning:` shape, or the
         prefixed bin-CLI diagnostics silently vanish from .sum files."""
-        from taxjson.bin.taxjson_run import collect_diagnostics
+        from taxjson.pipeline.diagnostics import collect_diagnostics
         with tempfile.TemporaryDirectory() as tmp:
             cache = Path(tmp)
             (cache / 'acct_base.diag').write_text(

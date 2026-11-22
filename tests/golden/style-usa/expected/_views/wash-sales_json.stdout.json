@@ -1,0 +1,150 @@
+{
+  "basis": "wash-adjusted",
+  "currency": "USD",
+  "manual_check_flags": [],
+  "rows": [
+    {
+      "account": "margin",
+      "acquired_date": "2024-03-01",
+      "commission": 0.0,
+      "cost": 6001.0,
+      "currency": "USD",
+      "date": "2024-09-10",
+      "date_settle": "2024-09-11",
+      "days_held": 193,
+      "direction": "LONG",
+      "disallowed_amount": 301.5,
+      "fee": 1.0,
+      "gain": -100.5,
+      "id": "0a78ef268cf7b162",
+      "is_option": false,
+      "is_wash_sale": true,
+      "permanently_disallowed": 100.5,
+      "proceeds": 5599.0,
+      "qty": 200.0,
+      "raw_gain": -402.0,
+      "replacement_lot_ids": [
+        "91282a350b6b2396",
+        "35e8d278ef88bbec"
+      ],
+      "symbol": "QZQ.US",
+      "term": "SHORT_TERM",
+      "wash_replacements": [
+        {
+          "account": "margin",
+          "basis_bump": 201.0,
+          "date": "2024-09-20",
+          "is_affiliated": false,
+          "is_sheltered": false,
+          "match_qty": 100.0,
+          "price": 24.0,
+          "qty_total": 100.0,
+          "tx_id": "91282a350b6b2396"
+        },
+        {
+          "account": "roth",
+          "basis_bump": 100.5,
+          "date": "2024-09-25",
+          "is_affiliated": false,
+          "is_sheltered": true,
+          "match_qty": 50.0,
+          "price": 24.5,
+          "qty_total": 50.0,
+          "tx_id": "35e8d278ef88bbec"
+        }
+      ],
+      "wash_trigger": null,
+      "wash_window": null
+    },
+    {
+      "account": "margin",
+      "acquired_date": "2024-01-10",
+      "commission": 0.0,
+      "cost": 4009.95,
+      "currency": "USD",
+      "date": "2024-11-01",
+      "date_settle": "2024-11-01",
+      "days_held": 296,
+      "direction": "LONG",
+      "disallowed_amount": 519.9,
+      "fee": 9.95,
+      "gain": 0.0,
+      "id": "64e284e899fcec7b",
+      "is_option": false,
+      "is_wash_sale": true,
+      "permanently_disallowed": 0.0,
+      "proceeds": 3490.05,
+      "qty": 100.0,
+      "raw_gain": -519.9,
+      "replacement_lot_ids": [
+        "6d7d81e91885cd7f"
+      ],
+      "symbol": "SAMPA.US",
+      "term": "SHORT_TERM",
+      "wash_replacements": [
+        {
+          "account": "margin",
+          "basis_bump": 519.9,
+          "date": "2024-11-20",
+          "is_affiliated": false,
+          "is_sheltered": false,
+          "match_qty": 100.0,
+          "price": 34.0,
+          "qty_total": 100.0,
+          "tx_id": "6d7d81e91885cd7f"
+        }
+      ],
+      "wash_trigger": null,
+      "wash_window": null
+    },
+    {
+      "account": "margin",
+      "acquired_date": "2024-07-10",
+      "commission": 0.0,
+      "cost": 1481.0,
+      "currency": "USD",
+      "date": "2024-11-20",
+      "date_settle": "2024-11-21",
+      "days_held": 133,
+      "direction": "LONG",
+      "disallowed_amount": 82.0,
+      "fee": 1.0,
+      "gain": 0.0,
+      "id": "c06c7e1ff627bebc",
+      "is_option": false,
+      "is_wash_sale": true,
+      "permanently_disallowed": 0.0,
+      "proceeds": 1399.0,
+      "qty": 10.0,
+      "raw_gain": -82.0,
+      "replacement_lot_ids": [
+        "a0a5b9bb717c0c05"
+      ],
+      "symbol": "NVDA.US",
+      "term": "SHORT_TERM",
+      "wash_replacements": [
+        {
+          "account": "margin",
+          "basis_bump": 82.0,
+          "date": "2024-12-05",
+          "is_affiliated": false,
+          "is_sheltered": false,
+          "match_qty": 10.0,
+          "price": 135.0,
+          "qty_total": 10.0,
+          "tx_id": "a0a5b9bb717c0c05"
+        }
+      ],
+      "wash_trigger": null,
+      "wash_window": null
+    }
+  ],
+  "schema_version": 1,
+  "totals": {
+    "denied": 903.4,
+    "denied_unrounded": 903.4,
+    "embedded_in_open": 802.9,
+    "permanently_denied": 100.5
+  },
+  "year": "2024"
+}

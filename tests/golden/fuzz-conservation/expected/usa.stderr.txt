@@ -1,0 +1,2 @@
+warning: S0.TO: the 2025-03-12 loss (A0) has a replacement bought 2025-03-02 in A2 and sold 2025-03-11 at a loss that was itself disallowed — not matched; check this wash sale by hand (§1091).
+note: 2 earlier sale(s) or cover(s) (S0.TO in A0, S0.TO in A1) that a wash sale's disallowed loss turned into a loss were tested for a wash sale of their own, 2 with a part disallowed. Each was tested after the losses already matched, not in the order of the sales (Reg. §1.1091-1), so a replacement a later loss took first stayed with it (US-WASH-22).

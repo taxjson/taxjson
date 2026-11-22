@@ -1,0 +1,12 @@
+{
+  "elections": {
+    "20250317-sampr-sampt-1b4d": {
+      "election": "taxable_disposition",
+      "hints": {
+        "fmv_per_share": 10.0
+      },
+      "notes": "set via elect --set",
+      "summary": "2025-03-17 merger: SAMPR.US \u2192 SAMPT.US (1.05-for-1.0, ratio 1.05, FMV 0.00 USD)"
+    }
+  }
+}

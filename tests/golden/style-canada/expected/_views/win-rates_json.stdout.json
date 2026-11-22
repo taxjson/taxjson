@@ -1,0 +1,174 @@
+{
+  "accounts": [
+    "crypto",
+    "margin",
+    "qt"
+  ],
+  "basis": "economic P/L before any superficial-loss denial",
+  "by": "symbol",
+  "currency": "CAD",
+  "denied_count": 3,
+  "denied_total": 943.13,
+  "moved_in_kind": {
+    "count": 0,
+    "net_pl": 0
+  },
+  "rows": [
+    {
+      "avg_loss": -150.57,
+      "avg_win": 236.43,
+      "breakeven": 0,
+      "classes": {
+        "crypto": 3
+      },
+      "gross_losses": -150.57,
+      "gross_wins": 472.86,
+      "key": "ETH",
+      "largest_loss": -150.57,
+      "largest_win": 387.3,
+      "losses": 1,
+      "net_pl": 322.29,
+      "profit_factor": 3.1405,
+      "trades": 3,
+      "win_rate": 0.6667,
+      "wins": 2
+    },
+    {
+      "avg_loss": -409.05,
+      "avg_win": 268.65,
+      "breakeven": 0,
+      "classes": {
+        "long-options": 1,
+        "long-shares": 1,
+        "written-options": 1
+      },
+      "gross_losses": -818.1,
+      "gross_wins": 268.65,
+      "key": "QZQ.US",
+      "largest_loss": -410.4,
+      "largest_win": 268.65,
+      "losses": 2,
+      "net_pl": -549.45,
+      "profit_factor": 0.3284,
+      "trades": 3,
+      "win_rate": 0.3333,
+      "wins": 1
+    },
+    {
+      "avg_loss": null,
+      "avg_win": 98.84,
+      "breakeven": 0,
+      "classes": {
+        "crypto": 2
+      },
+      "gross_losses": 0.0,
+      "gross_wins": 197.68,
+      "key": "BTC",
+      "largest_loss": null,
+      "largest_win": 167.47,
+      "losses": 0,
+      "net_pl": 197.68,
+      "profit_factor": null,
+      "trades": 2,
+      "win_rate": 1.0,
+      "wins": 2
+    },
+    {
+      "avg_loss": -3.24,
+      "avg_win": 87.89,
+      "breakeven": 0,
+      "classes": {
+        "long-shares": 2
+      },
+      "gross_losses": -3.24,
+      "gross_wins": 87.89,
+      "key": "AAPL.US",
+      "largest_loss": -3.24,
+      "largest_win": 87.89,
+      "losses": 1,
+      "net_pl": 84.65,
+      "profit_factor": 27.1265,
+      "trades": 2,
+      "win_rate": 0.5,
+      "wins": 1
+    },
+    {
+      "avg_loss": null,
+      "avg_win": 132.3,
+      "breakeven": 0,
+      "classes": {
+        "long-shares": 1
+      },
+      "gross_losses": 0.0,
+      "gross_wins": 132.3,
+      "key": "MSFT.US",
+      "largest_loss": null,
+      "largest_win": 132.3,
+      "losses": 0,
+      "net_pl": 132.3,
+      "profit_factor": null,
+      "trades": 1,
+      "win_rate": 1.0,
+      "wins": 1
+    },
+    {
+      "avg_loss": -117.45,
+      "avg_win": null,
+      "breakeven": 0,
+      "classes": {
+        "long-shares": 1
+      },
+      "gross_losses": -117.45,
+      "gross_wins": 0.0,
+      "key": "NVDA.US",
+      "largest_loss": -117.45,
+      "largest_win": null,
+      "losses": 1,
+      "net_pl": -117.45,
+      "profit_factor": 0.0,
+      "trades": 1,
+      "win_rate": 0.0,
+      "wins": 0
+    },
+    {
+      "avg_loss": -519.9,
+      "avg_win": null,
+      "breakeven": 0,
+      "classes": {
+        "long-shares": 1
+      },
+      "gross_losses": -519.9,
+      "gross_wins": 0.0,
+      "key": "SAMPA.TO",
+      "largest_loss": -519.9,
+      "largest_win": null,
+      "losses": 1,
+      "net_pl": -519.9,
+      "profit_factor": 0.0,
+      "trades": 1,
+      "win_rate": 0.0,
+      "wins": 0
+    }
+  ],
+  "schema_version": 1,
+  "scope": "tax year 2024",
+  "sheltered": false,
+  "symbols": [],
+  "tainted_skipped": 0,
+  "total": {
+    "avg_loss": -268.21,
+    "avg_win": 165.63,
+    "breakeven": 0,
+    "gross_losses": -1609.26,
+    "gross_wins": 1159.38,
+    "largest_loss": -519.9,
+    "largest_win": 387.3,
+    "losses": 6,
+    "net_pl": -449.88,
+    "profit_factor": 0.7204,
+    "trades": 13,
+    "win_rate": 0.5385,
+    "wins": 7
+  },
+  "unmatched_symbols": []
+}

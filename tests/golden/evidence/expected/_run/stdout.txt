@@ -1,0 +1,60 @@
+==> Checking the project
+==> Loading currency rates
+==> Loading cached USD → CAD rates
+==> margin  (taxable, first pass: transfers between your accounts)
+  inputs/margin/ib_2025.csv → Interactive Brokers (content: "Statement,Header" preamble)
+==> Reading 1 file
+  ib_2025.csv: 3 tax objects
+==> margin2  (taxable, first pass: transfers between your accounts)
+  inputs/margin2/ib_2025.csv → Interactive Brokers (content: "Statement,Header" preamble)
+==> Reading 1 file
+  ib_2025.csv: 6 tax objects
+==> rbc  (taxable, first pass: transfers between your accounts)
+  inputs/rbc/rbc_2024.csv → RBC Direct Investing (content: activity header Date,Activity,Symbol,Symbol Description…)
+  inputs/rbc/rbc_2025.csv → RBC Direct Investing (content: activity header Date,Activity,Symbol,Symbol Description…)
+==> Reading 2 files
+  rbc_2024.csv: 1 tax objects
+  rbc_2025.csv: 1 tax objects
+==> hand  (taxable, first pass: transfers between your accounts)
+==> margin  (taxable)
+==> Processing corporate actions
+==> Reading cash.tt
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/margin_holdings.toml
+==> Writing summary reports/margin.sum
+==> margin2  (taxable)
+==> Processing corporate actions
+==> Reading cash.tt
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/margin2_holdings.toml
+==> Writing summary reports/margin2.sum
+==> rbc  (taxable)
+==> Processing corporate actions
+==> Reading cash.tt
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/rbc_holdings.toml
+==> Writing summary reports/rbc.sum
+==> hand  (taxable)
+==> Reading book.tt
+==> Sorting, de-duplicating, mapping tickers, converting currency
+  warning: ATTENTION: opening: hand: the opening snapshot (2024-12-31) replaces 2 earlier row(s) of SAMPQ.US — left out of the books so the shares are not counted twice (income rows stay).
+==> Calculating capital gains
+==> Writing holdings reports/hand_holdings.toml
+==> Writing summary reports/hand.sum
+==> Checking for missing purchase history
+  warning: ATTENTION: short: SAMPLA.US (margin): the broker codes the sale on 2025-03-18 CLOSING (IB code C, IB Basis 451.00 USD), but the data holds no position to close — it is booked as a new short until the missing purchase is supplied (`tjs find-missing-history --write-missing-history` writes its .tt OPENING cost=unknown line).
+==> Pooling cost and checking superficial losses across taxable accounts (4 accounts)
+==> Writing summary reports/margin_wash.sum
+==> Writing summary reports/margin2_wash.sum
+==> Writing summary reports/rbc_wash.sum
+==> Writing summary reports/hand_wash.sum
+==> Writing cross-account reports to reports/
+==> Writing fees report reports/fees.rpt
+==> Done. Reports are in reports/
+==> Before you trust these numbers (docs/getting-started.md, step 5)
+Warning: 1 position sold in 2025 with no purchase in your files, not in missing_history.tt: SAMPLA.US (margin). Those sales are NOT in `tjs sum`; run `tjs find-missing-history`. A short sale still open reads the same: it is in no total until it is covered.
+Info: 1 account with open positions and no holdings file to check them against: margin (1). Run `tjs sanity` with the broker's positions.
+Info: Then run `tjs checklist --run`: it checks every step and names the next one.

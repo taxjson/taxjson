@@ -1,0 +1,21 @@
+TRADING FEES BY ACCOUNT / BROKERAGE — tax year 2025, by TRADE date; all amounts in CAD
+%NOTNL: fees / trade value; $/UNIT: per unit; $/CONTR: per option contract.
+BROKERAGE   CUR  TRADES  TOTAL  MEAN  MEDIAN  %NOTNL  $/UNIT  $/CONTR
+---------------------------------------------------------------------
+ib/margin2  CAD       4   5.40  1.35    1.35  0.611%  0.1350        -
+ib/margin   CAD       3   4.73  1.58    1.35  0.422%  0.1350        -
+---------------------------------------------------------------------
+TOTAL       CAD       7  10.13  1.45    1.35  0.505%  0.1350        -
+
+Non-option vs option fees
+BROKERAGE   NON-OPTION  OPTIONS
+-------------------------------
+ib/margin2        5.40     0.00
+ib/margin         4.73     0.00
+
+Native fees folded into the CAD totals
+ib/margin2:  4.00 USD
+ib/margin:   3.50 USD
+
+Brokers with NO fees in this period: rbc_direct
+More: tjs fees-sum --details (definitions, the files read)

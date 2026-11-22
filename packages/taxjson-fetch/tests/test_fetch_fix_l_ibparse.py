@@ -9,11 +9,11 @@ account ids marked pii-ok.
 """
 # First: puts the plugin, the core and its test helpers on sys.path and
 # registers the plugin's entry point when it is not pip-installed.
-import _support  # noqa: F401
+import _bootstrap  # noqa: F401
 import unittest
 
 
-_EX = _support.REPO_ROOT / 'examples'
+_EX = _bootstrap.REPO_ROOT / 'examples'
 
 
 class TestBrokerDetection(unittest.TestCase):

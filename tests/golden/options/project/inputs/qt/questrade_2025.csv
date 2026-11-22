@@ -1,0 +1,2 @@
+Transaction Date,Settlement Date,Action,Symbol,Description,Quantity,Price,Gross Amount,Commission,Net Amount,Currency,Activity Type,Account #,Account Type
+2025-01-02,2025-01-02,EXP,SAMPQ.OPT,PUT SAMPQ 12/31/24 4.00 SAMPQ INC OPTION EXPIRATION - EXPIRED,-2,0.00,0.00,0.00,0.00,USD,Other,99900021,Margin

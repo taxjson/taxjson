@@ -24,6 +24,8 @@ from instead of implying freshness.
 import contextlib
 import math
 from taxjson.lib.stage_msg import emit_line
+from taxjson.lib import out as _out
+from taxjson.lib.markets_data import known_suffixes as _known_sfx
 import json
 import sys
 from dataclasses import dataclass
@@ -42,8 +44,7 @@ IBKR_SNAPSHOT_WAIT = 8.0
 # data's one venue table (lib/markets), every venue Yahoo spells as the
 # books do (or bare: .US). Questrade's .VN is Yahoo's .V (Yahoo's own
 # .VN is another market), so it is not read here.
-from taxjson.lib.markets import (known_suffixes as _known_sfx,  # noqa: E402
-                                 suffix_currency as _sfx_cur,
+from taxjson.lib.markets import (suffix_currency as _sfx_cur,  # noqa: E402
                                  yahoo_suffix as _yh_sfx)
 _SUFFIX_CURRENCY = {s: _sfx_cur(s) for s in _known_sfx()
                     if _yh_sfx(s) in (s, "")}
@@ -262,7 +263,7 @@ def load_fx_history(rates_path, base: str) -> Dict[str, Dict]:
         return {}
     # Deferred bin import (the loader lives with the converter CLI);
     # price_chain is the shared consumer-side home.
-    from taxjson.bin.taxjson_convert_currency import load_exchange_rates
+    from taxjson.lib.exchange_rates import load_exchange_rates
     return load_exchange_rates(p, target_curr=base)
 
 
@@ -349,16 +350,16 @@ def _ibkr_fetcher(symbols: List[str], *, host: str, port: int,
     except ImportError:
         if verbose:
             from taxjson.lib.install_hint import extra_hint
-            print("price-chain: ib_insync not installed — skipping IBKR "
-                  f"tier ({extra_hint('ibkr')})", file=sys.stderr)
+            _out.put("price-chain: ib_insync not installed — skipping IBKR "
+                     f"tier ({extra_hint('ibkr')})", sys.stderr)
         return {}
     ib = IB()
     try:
         ib.connect(host, port, clientId=17, timeout=IBKR_CONNECT_TIMEOUT)
     except Exception as exc:
         if verbose:
-            print(f"price-chain: no IBKR gateway at {host}:{port} ({exc}) "
-                  f"— falling through to yfinance", file=sys.stderr)
+            _out.put(f"price-chain: no IBKR gateway at {host}:{port} ({exc}) "
+                     f"— falling through to yfinance", sys.stderr)
         return {}
     out: Dict[str, float] = {}
     try:
@@ -398,8 +399,8 @@ def _ibkr_fetcher(symbols: List[str], *, host: str, port: int,
             ib.cancelMktData(c)
     except Exception as exc:
         if verbose:
-            print(f"price-chain: IBKR snapshot failed ({exc})",
-                  file=sys.stderr)
+            _out.put(f"price-chain: IBKR snapshot failed ({exc})",
+                     sys.stderr)
     finally:
         ib.disconnect()
     return out
@@ -412,25 +413,24 @@ def _ibkr_option_fetcher(symbols: List[str], *, host: str, port: int,
     stale/wide for illiquid strikes; better no mark than a bad one).
     Same failure contract as the stock fetcher: any problem leaves the
     symbol for the cache tier."""
-    from taxjson.lib.core import (parse_option_expiry, parse_option_right,
-                                  parse_option_strike,
-                                  parse_option_underlying)
+    from taxjson.lib.option_symbols import (parse_option_expiry, parse_option_right,
+                                            parse_option_strike, parse_option_underlying)
     try:
         from ib_insync import IB, Option
     except ImportError:
         if verbose:
             from taxjson.lib.install_hint import extra_hint
-            print("price-chain: ib_insync not installed — skipping IBKR "
-                  f"option tier ({extra_hint('ibkr')})",
-                  file=sys.stderr)
+            _out.put("price-chain: ib_insync not installed — skipping IBKR "
+                     f"option tier ({extra_hint('ibkr')})",
+                     sys.stderr)
         return {}
     ib = IB()
     try:
         ib.connect(host, port, clientId=18, timeout=IBKR_CONNECT_TIMEOUT)
     except Exception as exc:
         if verbose:
-            print(f"price-chain: no IBKR gateway at {host}:{port} ({exc}) "
-                  f"— option quotes unavailable", file=sys.stderr)
+            _out.put(f"price-chain: no IBKR gateway at {host}:{port} ({exc}) "
+                     f"— option quotes unavailable", sys.stderr)
         return {}
     out: Dict[str, float] = {}
     try:
@@ -461,8 +461,8 @@ def _ibkr_option_fetcher(symbols: List[str], *, host: str, port: int,
                     break
             if c is None:
                 if verbose:
-                    print(f"price-chain: IBKR did not recognize {sym}",
-                          file=sys.stderr)
+                    _out.put(f"price-chain: IBKR did not recognize {sym}",
+                             sys.stderr)
                 continue
             t = ib.reqMktData(c, "", False, False)
             ib.sleep(IBKR_SNAPSHOT_WAIT)
@@ -476,8 +476,8 @@ def _ibkr_option_fetcher(symbols: List[str], *, host: str, port: int,
             ib.cancelMktData(c)
     except Exception as exc:
         if verbose:
-            print(f"price-chain: IBKR option snapshot failed ({exc})",
-                  file=sys.stderr)
+            _out.put(f"price-chain: IBKR option snapshot failed ({exc})",
+                     sys.stderr)
     finally:
         ib.disconnect()
     return out
@@ -525,8 +525,8 @@ def _ibkr_history_fetcher(pairs: Dict[str, str], *, start: str, end: str,
         from ib_insync import IB, Stock
     except ImportError:
         if verbose:
-            print("price-chain: ib_insync not installed — skipping IBKR "
-                  "history tier", file=sys.stderr)
+            _out.put("price-chain: ib_insync not installed — skipping IBKR "
+                     "history tier", sys.stderr)
         return {}
     from datetime import date as _date
     try:
@@ -540,8 +540,8 @@ def _ibkr_history_fetcher(pairs: Dict[str, str], *, start: str, end: str,
         ib.connect(host, port, clientId=19, timeout=IBKR_CONNECT_TIMEOUT)
     except Exception as exc:
         if verbose:
-            print(f"price-chain: no IBKR gateway at {host}:{port} ({exc})",
-                  file=sys.stderr)
+            _out.put(f"price-chain: no IBKR gateway at {host}:{port} ({exc})",
+                     sys.stderr)
         return {}
     out: Dict[str, Dict[str, float]] = {}
     try:
@@ -609,8 +609,8 @@ def _yf_history_fetcher(pairs: Dict[str, str], *, start: str, end: str,
         import yfinance as yf
     except ImportError:
         if verbose:
-            print("price-chain: yfinance not installed — skipping "
-                  "history tier", file=sys.stderr)
+            _out.put("price-chain: yfinance not installed — skipping "
+                     "history tier", sys.stderr)
         return {}
     from datetime import date as _date, timedelta as _td
     out: Dict[str, Dict[str, float]] = {}
@@ -667,8 +667,8 @@ def _yfinance_fetcher(pairs: Dict[str, str], *,
         import yfinance as yf
     except ImportError:
         if verbose:
-            print("price-chain: yfinance not installed — skipping tier",
-                  file=sys.stderr)
+            _out.put("price-chain: yfinance not installed — skipping tier",
+                     sys.stderr)
         return {}
     out: Dict[str, Tuple[float, Optional[str]]] = {}
     for sym, yf_sym in pairs.items():
@@ -694,8 +694,8 @@ def _yfinance_fetcher(pairs: Dict[str, str], *,
                     out[sym] = (px, cur)
         except Exception as exc:
             if verbose:
-                print(f"price-chain: yfinance miss {sym} ({yf_sym}): {exc}",
-                      file=sys.stderr)
+                _out.put(f"price-chain: yfinance miss {sym} ({yf_sym}): {exc}",
+                         sys.stderr)
     return out
 
 
@@ -822,7 +822,7 @@ def fetch_prices(pairs: Dict[str, str], *,
             got = fetcher(dict(remaining))
         except Exception as exc:
             if verbose:
-                print(f"price-chain: tier failed ({exc})", file=sys.stderr)
+                _out.put(f"price-chain: tier failed ({exc})", sys.stderr)
             continue
         for sym, hit in got.items():
             if sym not in remaining:
@@ -970,8 +970,8 @@ def fetch_prices(pairs: Dict[str, str], *,
             details=["Unset TAXJSON_OFFLINE, or run once online to fill "
                      "the cache."])
     if remaining and verbose:
-        print(f"price-chain: unpriced after all tiers: "
-              f"{', '.join(sorted(remaining))}", file=sys.stderr)
+        _out.put(f"price-chain: unpriced after all tiers: "
+                 f"{', '.join(sorted(remaining))}", sys.stderr)
     return quotes
 
 
@@ -1084,8 +1084,8 @@ def close_on(symbol: str, quote_symbol: str, day: str, *,
             got = fetcher({symbol: quote_symbol}, start, day)
         except Exception as exc:                        # noqa: BLE001
             if verbose:
-                print(f"price-chain: close tier failed ({exc})",
-                      file=sys.stderr)
+                _out.put(f"price-chain: close tier failed ({exc})",
+                         sys.stderr)
             continue
         hit = got.get(symbol) if isinstance(got, dict) else None
         cur = None

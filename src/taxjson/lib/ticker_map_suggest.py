@@ -54,13 +54,16 @@ are offered as before.
 """
 from __future__ import annotations
 
+
 import json
 import re
 from dataclasses import dataclass
 from datetime import date as _date
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from taxjson.project.accounts import accounts_of
 from taxjson.lib import project_layout as _PL
+from taxjson.lib.ticker_map_rules import _TOKEN_RE
 
 # The keywords a suggestion may carry.
 KEYWORDS = ("GLOBAL", "TOBASE", "JOURNAL", "DISTINCT", "RENAME", "CRYPTO",
@@ -78,7 +81,6 @@ _BARE_RE = re.compile(rf"^\s+((?:{_KW})\s+\S+\s+\S+)\s*$")
 # spaces: read on its own; a backticked one ends at the backtick).
 _EXTRACT_RE = re.compile(r"\bEXTRACT\s+([^|`\n]+?)\s*\|\s*([A-Za-z*]{1,5})"
                          r"\s*\|\s*([^\s`|]+)")
-_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-_:/=^]*$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # A message that says a change was BOOKED (IB's contract id under two
 # symbols): its backticked lines are the way out (DISTINCT, late=
@@ -394,18 +396,18 @@ def from_xlist_loss_radar(cache: Path) -> List[Suggestion]:
     (lib/xlist_loss_radar). Offered, not conditional: the books hold
     both symbols and the equal names are the evidence; DISTINCT is the
     answer when they are two securities (the reason says so)."""
-    from taxjson.lib import xlist_loss_radar as XR
+    from taxjson.lib import xlist_state as XST
     try:
-        doc = json.loads((cache / XR.STATE).read_text(encoding="utf-8"))
+        doc = json.loads((cache / XST.STATE).read_text(encoding="utf-8"))
         country = str(doc.get("country") or "")
     except (OSError, ValueError, RecursionError, AttributeError):
         return []
     out = []
-    for f in XR.read_state(cache):
+    for f in XST.read_state(cache):
         line = _clean(str(f.get("tobase") or ""))
         if line:
-            out.append(Suggestion(line, XR.suggestion_reason(f, country),
-                                  f"work/{XR.STATE}"))
+            out.append(Suggestion(line, XST.suggestion_reason(f, country),
+                                  f"work/{XST.STATE}"))
     return out
 
 
@@ -457,9 +459,8 @@ def _holdings_files(root: Path) -> List[Path]:
     except (OSError, ValueError, UnicodeDecodeError):
         return []
     out: List[Path] = []
-    accts = cfg.get("accounts") if isinstance(cfg, dict) else None
-    for acfg in (accts.values() if isinstance(accts, dict) else []):
-        raw = acfg.get("holdings") if isinstance(acfg, dict) else None
+    for acfg in accounts_of(cfg if isinstance(cfg, dict) else None).values():
+        raw = acfg.holdings
         for x in ([raw] if isinstance(raw, str) else
                   raw if isinstance(raw, list) else []):
             pp = Path(str(x)).expanduser()
@@ -479,8 +480,8 @@ def books_symbols(root: Path) -> Set[str]:
     (OPENING balances too) in work/ (never a derived book: those carry
     the map's renames), plus the holdings files (_holdings_files). An
     option adds its underlying listing."""
-    from taxjson.bin.taxjson_run import _AUDIT_DERIVED_SUFFIXES
-    from taxjson.lib.core import parse_option_underlying
+    from taxjson.lib.project_layout import _AUDIT_DERIVED_SUFFIXES
+    from taxjson.lib.option_symbols import parse_option_underlying
     syms: Set[str] = set()
     cache = Path(root) / "work"
     for p in sorted(cache.glob("*.json")) if cache.is_dir() else []:
@@ -528,7 +529,8 @@ def map_state(path: Path) -> MapState:
         return MapState({}, set(), set(), set(), [], set(),
                         {frozenset((dr.old.upper(), dr.new.upper()))
                          for dr in tt_renames(Path(path).parent)})
-    from taxjson.bin.taxjson_ticker_map import _parse_map_file, named_symbols
+    from taxjson.lib.ticker_map_rules import named_symbols
+    from taxjson.lib.map_file import _parse_map_file
     from taxjson.lib.ticker_map import read_side_rules
     tm = _parse_map_file(Path(path))[0]
     renamed: Dict[str, str] = {}

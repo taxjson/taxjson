@@ -14,6 +14,7 @@ from pathlib import Path
 from taxjson.bin.taxjson_diff import (
     extract_records, field_diffs, make_key, values_equal,
 )
+import _paths
 
 
 class TestValuesEqual(unittest.TestCase):
@@ -171,7 +172,7 @@ class TestMissingInputIsClearError(unittest.TestCase):
     def _run(self, *args):
         import subprocess
         import sys
-        repo = Path(__file__).resolve().parent.parent
+        repo = _paths.REPO
         return subprocess.run(
             [sys.executable, "-m", "taxjson.bin.taxjson_diff", *args],
             cwd=repo, capture_output=True, text=True)

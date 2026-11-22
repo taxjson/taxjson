@@ -4,7 +4,7 @@ produced two historical bug classes)."""
 
 import unittest
 
-from taxjson.lib.core import TaxTransaction
+from taxjson.model.transaction import TaxTransaction
 from taxjson.lib.corporate_timeline import (
     CaPriority,
     Phase,
@@ -12,6 +12,7 @@ from taxjson.lib.corporate_timeline import (
     event_sort_key,
 )
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 
 def tx(action='BUYSELL', date='2025-06-10', time='09:30:00', qty=100,
@@ -28,7 +29,7 @@ def order(txs, profile, date_of=None):
 
 
 class TestLadders(unittest.TestCase):
-    @rule("CA-DATE-14")
+    @rule(R.CA_DATE_14)
     def test_ca_priority_ladder_values(self):
         # Pinned: renumbering silently reorders same-timestamp events.
         self.assertEqual(CaPriority.OPENING_BALANCE, -1)
@@ -41,7 +42,7 @@ class TestLadders(unittest.TestCase):
         self.assertEqual(CaPriority.ADJUST, 4)
         self.assertEqual(CaPriority.OTHER, 5)
 
-    @rule("US-DATE-13")
+    @rule(R.US_DATE_13)
     def test_us_priority_ladder_values(self):
         self.assertEqual(UsPriority.OPENING_BALANCE, -1)
         self.assertEqual(UsPriority.ASSIGN_OPTION, 0)

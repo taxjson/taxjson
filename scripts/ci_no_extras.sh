@@ -3,6 +3,7 @@
 # stage of scripts/ci.sh; under a minute).
 #
 #   scripts/ci_no_extras.sh [PYTHON [MODULE...]]
+#   scripts/ci_no_extras.sh --list    (the modules it runs, one a line; nothing run)
 #
 # GitHub's matrix jobs install taxjson WITHOUT the optional extras
 # (`pip install -e .`), and run the suite BEFORE they install the
@@ -35,19 +36,40 @@
 # a synthetic HOME, offline (tests/_hermetic).
 set -u
 cd "$(dirname "$0")/.."
+LIST=0
+if [ "${1:-}" = --list ]; then LIST=1; shift; fi
 PY="${1:-${PYTHON:-$PWD/venv/bin/python3}}"
 shift $(( $# > 0 ? 1 : 0 ))
 # The modules that import an extra, check for one, or stand one in.
-EXTRAS_TESTS="test_ci_hermetic test_fx_boc test_fix_m_engine test_xlsx_to_csv
-  test_price_chain test_fix_generalize_e test_rbc_parser"
+EXTRAS_TESTS="test_ci_hermetic test_fx_boc rules.ca.opt.test_engine_options_denials_and_opening_paths.TestAssignmentPremiumPairing
+  rules.ca.opt.test_engine_options_denials_and_opening_paths.TestAssignmentRootResolution rules.ca.opt.test_engine_options_denials_and_opening_paths.TestSameMomentOrdering
+  rules.ca.opt.test_engine_options_denials_and_opening_paths.TestSuperficialLossRules rules.ca.opt.test_engine_options_denials_and_opening_paths.TestExplainText
+  rules.ca.opt.test_engine_options_denials_and_opening_paths.TestPhantomRowsInTracesAndExplain rules.ca.opt.test_engine_options_denials_and_opening_paths.TestReturnOfCapital
+  rules.ca.opt.test_engine_options_denials_and_opening_paths.TestInputAndSigns rules.ca.opt.test_engine_options_denials_and_opening_paths.TestGrantTiming
+  rules.ca.opt.test_engine_options_denials_and_opening_paths.TestMergerFold rules.ca.opt.test_engine_options_denials_and_opening_paths.TestDiagnosticsReachTheUser
+  rules.ca.opt.test_engine_options_denials_and_opening_paths.TestPerAccountSplit rules.ca.opt.test_engine_options_denials_and_opening_paths.TestPhantomWalks
+  rules.ca.opt.test_engine_options_denials_and_opening_paths.TestPriceChain rules.ca.opt.test_engine_options_denials_and_opening_paths.TestFxSources test_xlsx_to_csv
+  test_price_chain rules.ca.fx.test_no_hard_coded_rates_spellings_twins_or_dealer_names.TestNoBuiltInFxRate
+  rules.ca.fx.test_no_hard_coded_rates_spellings_twins_or_dealer_names.TestYahooSpelling rules.ca.fx.test_no_hard_coded_rates_spellings_twins_or_dealer_names.TestCanadianTwinOnEveryVenue
+  rules.ca.fx.test_no_hard_coded_rates_spellings_twins_or_dealer_names.TestQuestradeKeyWithoutDealerNames
+  rules.ca.fx.test_no_hard_coded_rates_spellings_twins_or_dealer_names.TestIbRocHomeCountry test_rbc_parser"
 # The modules that touch the broker-fetch plugin, by what they contain:
 # a `fetch` command (not a `git fetch` line), the fetcher discovery, the
 # plugin's package or its refusal.
 PLUGIN_RE="[\"']fetch[\"']|lib\\.fetchers|import fetchers|taxjson_fetch|no fetcher is installed"
-PLUGIN_TESTS="$(cd tests && grep -HE "$PLUGIN_RE" test_*.py | grep -vE '\bgit\b' \
-  | cut -d: -f1 | sort -u | sed 's/\.py$//' | tr '\n' ' ')"
+# Every test module below tests/, as a dotted name (a module in a package,
+# PLAN.md step 9: rules.ca.sl.test_x).
+PLUGIN_TESTS="$(cd tests && grep -rHE --include='test_*.py' "$PLUGIN_RE" . \
+  | grep -vE '^[^:]*:.*\bgit\b' | cut -d: -f1 | sort -u \
+  | sed 's#^\./##; s/\.py$//; s#/#.#g' | tr '\n' ' ')"
 # shellcheck disable=SC2086
 MODULES="${*:-$(printf '%s\n' $EXTRAS_TESTS $PLUGIN_TESTS | awk '!seen[$0]++' | tr '\n' ' ')}"
+# --list: the stage's own list (tests/features/repo_checks/test_gate_as_strict_as_ci.py reads it).
+if [ "$LIST" = 1 ]; then
+  # shellcheck disable=SC2086
+  printf '%s\n' $MODULES
+  exit 0
+fi
 ROOT=$(mktemp -d "${TMPDIR:-/tmp}/taxjson-noextras.XXXXXX") || exit 2
 trap 'rm -rf "$ROOT"' EXIT
 mkdir -p "$ROOT/home/.cache" "$ROOT/tmp" "$ROOT/hide"

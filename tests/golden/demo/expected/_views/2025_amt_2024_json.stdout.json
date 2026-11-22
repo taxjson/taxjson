@@ -1,0 +1,24 @@
+{
+  "law": "ITA s.127.5-127.55 (form T691); carryover s.120.2 (T691 Part 8, federal Schedule 1 line 40427)",
+  "lock": "../2024/filed/2024.json",
+  "minimum_tax": {
+    "closing": 0.0,
+    "closing_by_year": {},
+    "created": 0.0,
+    "expired_by_year": {},
+    "opening_by_year": {},
+    "opening_source": "none",
+    "other_income": 61000.0,
+    "other_income_entered": true,
+    "province": "ON",
+    "recovered_by_year": {},
+    "recovered_federal": 0.0,
+    "recovered_federal_tax": 0.0,
+    "recovered_provincial": 0.0,
+    "recovered_provincial_credit": 0.0,
+    "recovered_provincial_surtax": 0.0
+  },
+  "recorded": true,
+  "schema_version": 1,
+  "year": 2024
+}

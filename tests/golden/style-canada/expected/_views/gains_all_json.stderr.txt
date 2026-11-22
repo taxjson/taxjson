@@ -1,0 +1,2 @@
+tjs gains: note: crypto account 'crypto' is not shown (crypto has no native-currency gains)
+  Its gains are in `tjs sum` / `tjs winners`.

@@ -1,0 +1,70 @@
+# Wealthsimple's activities export, read with no Python of its own: a
+# layout taxjson ships (src/taxjson/data/layouts/, step 5's layout
+# broker). Any CSV whose header has the [signature] columns is read with
+# it, under any file name, unless a project or user layout also fits (that
+# one wins) or a sidecar picks another.
+#
+# UNVERIFIED: written from the export's documented shape, not checked
+# against a real file yet (docs/brokers.md, "Wealthsimple"); `verified =
+# false` below makes every run that reads it say so (TJ-2573). The importer
+# refuses rather than guesses (a trade whose amount is not qty x price,
+# a sign that contradicts the action); a row type the layout does not map
+# is an UNBOOKED warning, not booked. To change it, copy this file to your
+# project's layouts/wealthsimple.toml (or ~/.config/taxjson/layouts/) and
+# edit the copy: a layout of the same name wins over this one.
+
+[signature]
+headers = ["activity_type", "activity_sub_type", "net_cash_amount"]
+
+[columns]
+date        = "transaction_date"
+settle      = "settlement_date"
+account     = "account_id"
+# TFSA, RRSP, Non-registered ...: checked against the taxjson account's type.
+account_type = "account_type"
+action      = "activity_type"
+# The sub-type (BUY, SELL ...) is what [[classify]] reads for a Trade row.
+description = "activity_sub_type"
+symbol      = "symbol"
+quantity    = "quantity"
+price       = "unit_price"
+fee         = "commission"
+amount      = "net_cash_amount"     # signed: a buy's cash out is negative
+currency    = "currency"
+
+[formats]
+date = "%Y-%m-%d"
+
+[actions]
+"Dividend"      = "dividend"
+"Interest"      = "interest"
+
+# A MoneyMovement row is a cash move (no tax event) when its sub-type is
+# a deposit or a withdrawal; one carrying a quantity or a ticker (shares
+# moved in kind) is UNBOOKED instead. Any other MoneyMovement sub-type
+# (a fee, a tax, a credit) is UNBOOKED too, not listed as a cash move.
+[[classify]]
+action = "^MoneyMovement$"
+over = "description"
+match = "^(EFT|E_TRANSFER|DEPOSIT|WITHDRAWAL|CONTRIBUTION)$"
+target = "cash"
+
+# A Trade row is a buy or a sell by its sub-type; another activity type
+# with a BUY or SELL sub-type is not a trade of this layout's.
+[[classify]]
+action = "^Trade$"
+over = "description"
+match = "^BUY$"
+target = "buy"
+
+[[classify]]
+action = "^Trade$"
+over = "description"
+match = "^SELL$"
+target = "sell"
+
+[broker]
+name = "wealthsimple"
+# Never run on a real export: `tjs run` warns, at its end too, until a real
+# file has checked the columns and values above (then drop this line).
+verified = false

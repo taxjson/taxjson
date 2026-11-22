@@ -16,9 +16,8 @@ from pathlib import Path
 
 from taxjson.lib.brokerages.rbc_direct import RbcBrokerage
 from taxjson.lib.brokerages.rbc_direct import classify_rbc_row, read_rbc_rows
-from taxjson.lib.corp_actions import (
-    parse_rbc_corporate_actions, resolve_event,
-)
+from taxjson.lib.corp_actions import resolve_event
+from taxjson.lib.rbc_corp_actions import parse_rbc_corporate_actions
 
 _HEADER = ('"Date","Activity","Symbol","Symbol Description","Quantity","Price",'
            '"Settlement Date","Account","Value","Currency","Description"\n')

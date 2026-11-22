@@ -1,10 +1,10 @@
 # taxjson: notes for AI assistants
 
 taxjson computes capital gains, adjusted cost base (ACB), income and the
-superficial-loss rule from broker CSV exports (Questrade, RBC Direct,
-Interactive Brokers, Webull, Coinbase, Kraken, or a generic mapping). Canada
+superficial-loss rule from broker CSV exports (Questrade, RBC Direct, IB,
+Webull, Coinbase, Kraken, Wealthsimple's shipped layout, a generic mapping). Canada
 first; the US engine (FIFO basis, wash sales) is experimental. It runs on the
-user's own machine. Python 3.10+, `src/taxjson/`; the CLI is `tjs`.
+user's own machine. Python 3.12+, `src/taxjson/`; the CLI is `tjs`.
 
 ## Helping someone use taxjson
 
@@ -26,8 +26,8 @@ user's own machine. Python 3.10+, `src/taxjson/`; the CLI is `tjs`.
    Commands: `docs/commands.md`; downloads: `docs/brokers.md`; out of
    scope: `docs/limits.md`; terms: `docs/glossary.md`; a first project:
    `docs/getting-started.md`; the year end: `docs/filing.md`.
-4. **Where the code is:** `docs/architecture-map.md`. Don't read
-   `src/taxjson/bin/taxjson_run.py` (38k lines) top to bottom: search it for
+4. **Where the code is:** `docs/architecture-map.md`. The commands are in
+   `src/taxjson/cli/` and the run in `src/taxjson/pipeline/`: search them for
    the `cmd_<command>` or `stage_` name the map gives.
 
 **Privacy.** Work from tjs command output. Never read the raw CSVs in a
@@ -54,12 +54,12 @@ IRS guidance and a tax professional.
 
 ## Changing the code
 
-- **Set up:** `scripts/dev-setup.sh` (venv, editable install, ruff, the
+- **Set up:** `scripts/dev-setup.sh` (venv, editable install, ruff, mypy, the
   pre-push hook), then `source setup.sh`.
-- **The gate:** `scripts/ci.sh` (lint, consistency, tax-rules, PII, suite in
-  parallel, no-extras, fuzzers; `--quick` skips the fuzzers). Read its last
-  line for PASS: a pipe hides the exit status. One module: `cd tests &&
-  TAXJSON_WIDTH=0 python -m unittest test_x`. Before pushing, in a fresh `git clone`
+- **The gate:** `scripts/ci.sh` (lint, types, consistency, tax-rules, PII, architecture,
+  suite in parallel, no-extras, fuzzers; `--quick` skips the fuzzers). Read its last
+  line for PASS: a pipe hides the exit status. One module: `cd tests && TAXJSON_WIDTH=0
+  python -m unittest _hermetic test_x` (the runner's synthetic HOME first). Before pushing, in a fresh `git clone`
   (it catches untracked files): `PYTHONPATH=$PWD/src PYTHON=<dev clone>/venv/bin/python3 scripts/ci.sh`,
   then `python3 -I scripts/kit_checks.py` (CI's `kit-checks` job; a hit is fixed, or
   excepted in `kit-checks.toml` with a reason and an expiry).
@@ -70,10 +70,10 @@ IRS guidance and a tax professional.
   CI passed, `scripts/release.sh vX.Y.Z`; once published, `scripts/promote.sh`.
   Known bugs and tasks: `backlog.md` (TJ ids; dev repo only, not published).
 - **Conventions the tests and hooks enforce:**
-  - Canadian and US law never mix. Read the country only through
-    `src/taxjson/lib/country.py`. `tjs tax-logic` is the spec: a tax change
-    edits its `Rule` in `src/taxjson/lib/tax_logic.py`, and the test cites it
-    with `@rule("CA-...")` (`tests/tax_rules/`; `scripts/check_tax_rules.py`).
+  - Canadian and US law never mix. Read the country only through `src/taxjson/lib/country.py`
+    (the parse, characterize, engine: its leaf, `src/taxjson/rules/country.py`). `tjs tax-logic` is the spec: a tax change
+    edits its `Rule` in `src/taxjson/lib/tax_logic.py` (id: `R.CA_SL_02`, `src/taxjson/rules/ids.py`),
+    and the test cites it with `@rule(R.CA_...)` (`tests/tax_rules/`; `scripts/check_tax_rules.py`).
   - No personal data in the repo (pre-push: `scripts/check-pii.sh`). A money
     amount with thousands separators and cents added to a doc, CHANGELOG or
     comment stays under 1,000 or carries a `pii-ok` marker on its line.
@@ -90,10 +90,10 @@ IRS guidance and a tax professional.
   - Child Python: `lib/dispatch.py` `python_module_argv` (`-P`), never
     `[sys.executable, "-m", ...]` (imports a planted `json.py` from the
     cwd); in a project run `tjs`, never `python -m taxjson...`.
-  - Synthetic test data only (ids like `U1234567` or `99900001`, made-up tickers).
-  - A test's temp file goes in a folder of its own
-    (`tests/_tmpfiles.py` `private_tmpfile`, or `tempfile.TemporaryDirectory()`),
-    never the shared temp root: parsers read the broker CSVs beside a file.
+  - Synthetic test data only (ids like `U1234567` or `99900001`, made-up tickers). A test's
+    temp file goes in a folder of its own (`tests/_tmpfiles.py` `private_tmpfile`), never the
+    shared temp root: parsers read the broker CSVs beside a file. Folders: `tests/_paths.py`.
+    Shared helpers: `tests/_support/` (a `SUPPORT_PREFIXES` prefix), never another test module (`CROSS_IMPORTS_MAX`).
 
 ## The knowledge pack
 

@@ -1,0 +1,2 @@
+txid,ordertxid,pair,time,type,ordertype,price,cost,fee,vol,margin,misc,ledgers
+TQ9ABC-AAAAA-000001,OQ9ABC-AAAAA-000001,XBT/USD,2025-01-12 15:00:00.1000,buy,limit,60000,300,0.78,0.005,,,

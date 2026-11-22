@@ -1,0 +1,3 @@
+Wrote 2 draft purchase line(s) for margin to inputs/margin/purchases_draft.tt.txt (2 from IB's closed lots).
+
+taxjson does not read a draft. Review every line, fill in the placeholders, then rename the file to end in .tt (e.g. purchases.tt) and `tjs run`; `tjs find-missing-history` should then drop the fixed positions.

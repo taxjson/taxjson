@@ -1,0 +1,258 @@
+{
+  "accounts": [
+    {
+      "account": "crypto",
+      "dividend": 23.56,
+      "dividend_is_staking": true,
+      "fees": 133.87,
+      "option": 0.0,
+      "pil": 0.0,
+      "realized": 519.97,
+      "stock": 519.97,
+      "total": 543.53,
+      "type": "taxable"
+    },
+    {
+      "account": "margin",
+      "dividend": 542.75,
+      "fees": 61.4,
+      "option": 59.4,
+      "pil": 0.0,
+      "realized": 89.78,
+      "stock": 30.38,
+      "total": 632.53,
+      "type": "taxable"
+    },
+    {
+      "account": "qt",
+      "dividend": 24.3,
+      "fees": 31.68,
+      "option": 0.0,
+      "pil": 0.0,
+      "realized": 84.65,
+      "stock": 84.65,
+      "total": 108.95,
+      "type": "taxable"
+    },
+    {
+      "account": "rrsp",
+      "dividend": 0.0,
+      "fees": 38.3,
+      "option": 175.84,
+      "pil": 0.0,
+      "realized": 270.41,
+      "stock": 94.57,
+      "total": 270.41,
+      "type": "sheltered"
+    },
+    {
+      "account": "tfsa",
+      "dividend": 528.0,
+      "fees": 46.48,
+      "option": 0.0,
+      "pil": 0.0,
+      "realized": 643.45,
+      "stock": 643.45,
+      "total": 1171.45,
+      "type": "sheltered"
+    }
+  ],
+  "basis": "wash-adjusted",
+  "currency": "CAD",
+  "filing": {
+    "accounts": [
+      {
+        "acb": 13901.06,
+        "account": "crypto",
+        "denied": 0.0,
+        "denied_contribution": 0.0,
+        "dispositions": 5,
+        "gain": 519.96,
+        "outlays": 57.73,
+        "proceeds": 14478.75
+      },
+      {
+        "acb": 40981.58,
+        "account": "margin",
+        "denied": 943.13,
+        "denied_contribution": 0.0,
+        "dispositions": 7,
+        "gain": 89.77,
+        "outlays": 19.4,
+        "proceeds": 41090.75
+      },
+      {
+        "acb": 36463.37,
+        "account": "qt",
+        "denied": 0.0,
+        "denied_contribution": 0.0,
+        "dispositions": 2,
+        "gain": 84.65,
+        "outlays": 13.36,
+        "proceeds": 36561.38
+      }
+    ],
+    "date_basis": "date_settle",
+    "engine_denied_unrounded": 943.13,
+    "engine_gain_unrounded": 694.39,
+    "fx_cash": {
+      "active": true,
+      "currency": "CAD",
+      "headline": "FX on foreign cash: NOT RELIABLE for 2024 \u2014 8 in-year overdrafts (66,271.83 USD); conversions, deposits/withdrawals and margin balances are not read; do not file this figure",
+      "ledger": "v1",
+      "line": "15300",
+      "overdrafts_in_year": {
+        "USD": {
+          "count": 8,
+          "units": 66271.83
+        }
+      },
+      "reasons": [
+        "8 in-year overdraft(s): the ledger spent currency it never saw acquired (66,271.83 USD)",
+        "currency conversions (IB Forex, Kraken/Coinbase fiat trades, bank conversions) are not read",
+        "cash deposits and withdrawals are not read",
+        "foreign-currency margin balances (debt) are not modelled",
+        "each history starts with an empty pool (no opening balance carried from the year before)"
+      ],
+      "reliable": false,
+      "rule": "ITA s.39(1.1) (capital, $200 de minimis)",
+      "status": "unreliable",
+      "unreliable_raw": {
+        "net_gain": 0.0,
+        "reportable": 0.0
+      },
+      "year": 2024
+    },
+    "lines": [
+      {
+        "acb": 45233.03,
+        "denied": 0.0,
+        "denied_contribution": 0.0,
+        "dispositions": 2,
+        "gain": 220.19,
+        "gain_code": "10690",
+        "key": "shares_p1",
+        "label": "Publicly traded shares, mutual fund units, deferral of eligible small business corporation shares, and other shares \u2014 Period 1 (January 1 to June 24, 2024)",
+        "line": "",
+        "outlays": 8.03,
+        "period": 1,
+        "proceeds": 45461.25,
+        "proceeds_code": "10689",
+        "rows": 2,
+        "short": "shares & fund units (P1)",
+        "title": "Period 1 (January 1 to June 24, 2024), lines 10689/10690"
+      },
+      {
+        "acb": 31399.22,
+        "denied": 943.13,
+        "denied_contribution": 0.0,
+        "dispositions": 4,
+        "gain": -105.17,
+        "gain_code": "13200",
+        "key": "shares",
+        "label": "Publicly traded shares, mutual fund units, deferral of eligible small business corporation shares, and other shares \u2014 Period 2 (June 25 to December 31, 2024)",
+        "line": "",
+        "outlays": 19.33,
+        "period": 2,
+        "proceeds": 31313.38,
+        "proceeds_code": "13199",
+        "rows": 4,
+        "short": "shares & fund units (P2)",
+        "title": "Period 2 (June 25 to December 31, 2024), lines 13199/13200"
+      },
+      {
+        "acb": 14713.76,
+        "denied": 0.0,
+        "denied_contribution": 0.0,
+        "dispositions": 8,
+        "gain": 579.36,
+        "gain_code": "15300",
+        "key": "other",
+        "label": "Bonds, debentures, promissory notes, crypto-assets, and other similar properties (options, futures, foreign currency) \u2014 Period 2 (June 25 to December 31, 2024)",
+        "line": "",
+        "outlays": 63.13,
+        "period": 2,
+        "proceeds": 15356.25,
+        "proceeds_code": "15199",
+        "rows": 5,
+        "short": "options, crypto & other properties (P2)",
+        "title": "Period 2 (June 25 to December 31, 2024), lines 15199/15300"
+      }
+    ],
+    "totals": {
+      "acb": 91346.01,
+      "denied": 943.13,
+      "denied_contribution": 0.0,
+      "gain": 694.38,
+      "outlays": 90.49,
+      "permanently_denied": 101.93,
+      "proceeds": 92130.88
+    }
+  },
+  "no_purchase_in_totals": [],
+  "no_purchase_uncovered": [
+    {
+      "account": "margin",
+      "proceeds": 590.05,
+      "sales": 1,
+      "symbol": "GHOSTQ.TO"
+    },
+    {
+      "account": "margin",
+      "proceeds": 1348.65,
+      "sales": 1,
+      "symbol": "OLDCO.US"
+    }
+  ],
+  "readiness": {
+    "complete": false,
+    "issues": [
+      {
+        "count": 2,
+        "detail": "2 sale(s) with no purchase in the files are in no total",
+        "fix": "tjs find-missing-history",
+        "kind": "no-purchase"
+      }
+    ]
+  },
+  "run_state_problems": [],
+  "schema_version": 1,
+  "sheltered_included": [
+    "rrsp",
+    "tfsa"
+  ],
+  "subtotals": {
+    "sheltered": {
+      "dividend": 528.0,
+      "fees": 84.78,
+      "option": 175.84,
+      "pil": 0.0,
+      "realized": 913.86,
+      "stock": 738.02,
+      "total": 1441.86
+    },
+    "taxable": {
+      "dividend": 590.61,
+      "fees": 226.95,
+      "option": 59.4,
+      "pil": 0.0,
+      "realized": 694.4,
+      "stock": 635.0,
+      "total": 1285.01
+    }
+  },
+  "tainted_included": 0,
+  "tainted_routed": 0,
+  "totals": {
+    "dividend": 1118.61,
+    "fees": 311.73,
+    "option": 235.24,
+    "pil": 0.0,
+    "realized": 1608.26,
+    "stock": 1373.02,
+    "total": 2726.87
+  },
+  "unknown_cost_included": 0,
+  "unknown_cost_routed": 0,
+  "year": "2024"
+}

@@ -29,7 +29,7 @@ def _project(tmp, files, toml=TOML):
 
 def _run(argv):
     """cmd_check_tt in-process: (stdout, stderr, exit code)."""
-    from taxjson.bin.taxjson_run import _build_parser
+    from taxjson.cli.parser import _build_parser
     p, _sub = _build_parser()
     args = p.parse_args(argv)
     out, err = io.StringIO(), io.StringIO()
@@ -259,7 +259,7 @@ class TestCommand(unittest.TestCase):
             self.assertEqual(doc["errors"], 1)
             self.assertEqual(sorted(doc), ["errors", "events", "files",
                                            "lines", "problems", "rows",
-                                           "warnings"])
+                                           "schema_version", "warnings"])
             _out, err, code = _run(["-C", d, "check-tt", "nope"])
             self.assertEqual(code, 2)
             self.assertIn("no account 'nope'", err)
@@ -268,7 +268,7 @@ class TestCommand(unittest.TestCase):
             self.assertIn("no such file", err)
 
     def test_a_file_needs_no_project(self):
-        from taxjson.bin.taxjson_run import _check_tt_files_only
+        from taxjson.cli.main import _check_tt_files_only
         import argparse
         with tempfile.TemporaryDirectory() as d:
             p = Path(d, "x.tt")

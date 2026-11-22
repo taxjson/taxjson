@@ -1,0 +1,226 @@
+{
+  "by_ticker": {
+    "BTC": {
+      "hold_days": [
+        139,
+        170
+      ],
+      "total_cost": 9752.5013,
+      "total_div": 0.0,
+      "total_gain": 197.6738,
+      "total_pil": 0.0,
+      "total_proceeds": 9950.175,
+      "trade_count": 2
+    },
+    "ETH": {
+      "hold_days": [
+        144,
+        156
+      ],
+      "total_cost": 3660.4915,
+      "total_div": 23.5575,
+      "total_gain": 472.8575,
+      "total_pil": 0.0,
+      "total_proceeds": 4133.349,
+      "trade_count": 2
+    }
+  },
+  "inventory": [
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-05-22",
+      "last_acq_settle": "2024-05-22",
+      "position_start_date": "2024-01-18",
+      "qty": 0.05000000000000002,
+      "symbol": "BTC",
+      "total_cost": 3250.8338
+    },
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-07-12",
+      "last_acq_settle": "2024-07-12",
+      "position_start_date": "2024-03-05",
+      "qty": 0.7551999999999999,
+      "symbol": "ETH",
+      "total_cost": 3685.871
+    }
+  ],
+  "inventory_year_end": [
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "qty": 0.05000000000000002,
+      "symbol": "BTC",
+      "total_cost": 3250.8338
+    },
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "qty": 0.7551999999999999,
+      "symbol": "ETH",
+      "total_cost": 3685.871
+    }
+  ],
+  "option_replacement_warnings": [],
+  "summary": {
+    "option_buyback_loss_superficial": false,
+    "option_grant_since": 2024,
+    "option_premium_timing": "grant",
+    "tax_date_basis": "settle",
+    "total_disallowed": 0,
+    "total_fees_by_currency": {
+      "CAD": {
+        "options": 0.0,
+        "stocks": 133.866,
+        "total": 133.866
+      }
+    },
+    "total_gain": 670.5312,
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1,
+    "year": "2024"
+  },
+  "transactions": [
+    {
+      "account": "crypto",
+      "commission": 0.0,
+      "cost": 3250.8338,
+      "currency": "CAD",
+      "date": "2024-10-08",
+      "date_settle": "2024-10-08",
+      "days_held": 139,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 26.46,
+      "gain": 30.2063,
+      "grant": false,
+      "id": "CB-DEMO-0005",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 3281.04,
+      "qty": 0.05,
+      "raw_gain": 30.2063,
+      "replacement_lot_ids": [],
+      "symbol": "BTC",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "crypto",
+      "commission": 0.0,
+      "cost": 6501.6675,
+      "currency": "CAD",
+      "date": "2024-11-08",
+      "date_settle": "2024-11-08",
+      "days_held": 170,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 13.365,
+      "gain": 167.4675,
+      "grant": false,
+      "id": "T0004-DEMO-DDDD",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 6669.135,
+      "qty": 0.1,
+      "raw_gain": 167.4675,
+      "replacement_lot_ids": [],
+      "symbol": "BTC",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "crypto",
+      "commission": 0.0,
+      "cost": 2440.3277,
+      "currency": "CAD",
+      "date": "2024-12-03",
+      "date_settle": "2024-12-03",
+      "days_held": 144,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 7.371,
+      "gain": 387.3013,
+      "grant": false,
+      "id": "T0005-DEMO-EEEE",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 2827.629,
+      "qty": 0.5,
+      "raw_gain": 387.3013,
+      "replacement_lot_ids": [],
+      "symbol": "ETH",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "crypto",
+      "commission": 0.0,
+      "cost": 1220.1638,
+      "currency": "CAD",
+      "date": "2024-12-15",
+      "date_settle": "2024-12-15",
+      "days_held": 156,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 10.53,
+      "gain": 85.5562,
+      "grant": false,
+      "id": "CB-DEMO-0006",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 1305.72,
+      "qty": 0.25,
+      "raw_gain": 85.5562,
+      "replacement_lot_ids": [],
+      "symbol": "ETH",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "crypto",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "CAD",
+      "date": "2024-04-22",
+      "date_settle": "2024-04-22",
+      "dividend": 10.8,
+      "gain": 0.0,
+      "id": "CB-DEMO-0003-div",
+      "proceeds": 0.0,
+      "qty": 0.0025,
+      "symbol": "ETH",
+      "time": "07:15:00"
+    },
+    {
+      "account": "crypto",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "CAD",
+      "date": "2024-07-12",
+      "date_settle": "2024-07-12",
+      "dividend": 12.7575,
+      "gain": 0.0,
+      "id": "CB-DEMO-0004-div",
+      "proceeds": 0.0,
+      "qty": 0.0027,
+      "symbol": "ETH",
+      "time": "10:02:50"
+    }
+  ],
+  "wash_sales": []
+}

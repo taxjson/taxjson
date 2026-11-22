@@ -1,0 +1,16 @@
+COVERED CALLS — QZQ.US
+
+DATE         SYMBOL                            QTY CUR          PREM/QTY        BUYB/QTY        GAIN/QTY         PREMIUM         BUYBACK            GAIN   DAYS
+---------------------------------------------------------------------------------------------------------------------------------------------------------------
+2024-12-20   QZQ241220C00035000.US          1.0000 USD          199.0000          0.0000        199.0000          199.00            0.00          199.00     80
+
+TOTAL QZQ.US COVERED CALL GAIN: 199.00
+
+COVERED CALLS SUMMARY
+
+SYMBOL                      CCD_GAIN
+------------------------------------
+QZQ.US                        199.00
+------------------------------------
+TOTAL                         199.00
+(amounts in USD)

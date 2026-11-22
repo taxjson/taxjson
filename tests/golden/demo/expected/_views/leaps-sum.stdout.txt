@@ -1,0 +1,7 @@
+LEAPS REALIZED GAINS — tax year 2024 (CAD; long option buys placed >9 months to expiry)
+Allowed amounts, lot-matched, basis: wash-adjusted; closed portions only, no mark-to-market on open contracts.
+CONTRACT                EXPIRY      QTY_CLOSED  PROCEEDS      COST    GAIN
+--------------------------------------------------------------------------
+ABCD270219C00045000.US  2027-02-19          10  2,281.50  2,105.66  175.84
+
+TOTAL REALIZED GAIN: 175.84 CAD

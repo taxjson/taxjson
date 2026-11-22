@@ -9,8 +9,8 @@ from pathlib import Path
 
 from taxjson.lib import checklist as cl
 
-from test_checklist import _ctx, _project
-from test_checklist_run import OK, _cli
+from _support.filing_checklist_run_project import _ctx, _project
+from _support.filing_checklist_cli import OK, _cli
 
 
 class TestNames(unittest.TestCase):

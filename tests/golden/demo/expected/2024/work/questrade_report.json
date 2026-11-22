@@ -1,0 +1,79 @@
+{
+  "account": "questrade",
+  "basis": "wash-adjusted",
+  "gains": {
+    "manual_rows": [],
+    "option_fees": {
+      "CAD": 0.0
+    },
+    "returns_by_asset": {
+      "Stocks": {
+        "CAD": {
+          "days": [
+            51,
+            230
+          ],
+          "dollars": [
+            91.2263,
+            -10.0238
+          ],
+          "fee_shares": [
+            75.0,
+            75.0
+          ],
+          "fees": [
+            6.6825,
+            6.6825
+          ]
+        }
+      }
+    },
+    "tainted_count": 0,
+    "tainted_routed": 0,
+    "ticker_stats": {
+      "AAPL.US": {
+        "CAD": {
+          "cap": 81.2025,
+          "cost": 36456.6826,
+          "div": 24.3,
+          "hold_days": [
+            51,
+            230
+          ],
+          "opt": 0.0,
+          "pil": 0.0,
+          "proceeds": 36537.885,
+          "trade_count": 2
+        }
+      }
+    },
+    "total_fees": {
+      "CAD": 31.68
+    },
+    "total_year": "2024",
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 2
+  },
+  "generated_at": "<stamp>",
+  "income": {
+    "interest_paid_totals": {},
+    "interest_totals": {},
+    "missing_amount": [],
+    "ticker_stats": {
+      "AAPL.US": {
+        "CAD": {
+          "div": 24.3,
+          "pil": 0.0,
+          "tax": 0.0
+        }
+      }
+    },
+    "total_year": "2024"
+  },
+  "schema_version": 1,
+  "wash": {
+    "count": 0,
+    "total_disallowed": 0
+  },
+  "year": "2024"
+}

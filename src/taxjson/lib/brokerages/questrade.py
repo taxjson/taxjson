@@ -1,22 +1,29 @@
 from taxjson.lib.stage_msg import emit_line
+from taxjson.lib.out import END_OF_RUN_MARK
 import csv
 import io
 import math
 import re
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, NamedTuple
 
-from taxjson.lib.core import STOCK_DIVIDEND
+from taxjson.lib.row_types import STOCK_DIVIDEND
+from taxjson.lib.cross_listings import _BRW_JOURNAL_RE
+from taxjson.lib.symbol_codes import _get_desc_key
+from taxjson.parsers.protocol import Outcome, Row, builds
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         is_taxable_account_type, plan_shelter_of,
+                                         check_account_plans,
+                                         check_account_plans_across,
+                                         names_underlying,
                                          ticker_map_joins,
                                          answered_rename_note,
+                                         rename_how, rename_reach,
                                          declared_rename_where,
                                          ticker_map_names,
                                          ticker_map_renames,
-                                         combined_accounts_note,
-                                         combined_accounts_refusal,
-                                         _parse_div_qty_rate,
                                          DESC_NUMBER_RE,
                                          canonical_ca_listing,
                                          decode_broker_text,
@@ -25,7 +32,19 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          is_roc_description,
                                          parse_strict_number,
                                          refuse_pasted_overlap,
-                                         shown_name)
+                                         shown_name, zero_units_refusal)
+from taxjson.lib.markets_data import known_suffixes
+from taxjson.parsers.toolbox.assets import QTY_ZERO
+from taxjson.parsers.toolbox.money import money_close
+from taxjson.parsers.toolbox.expiry import (non_option_expiry_booking_date,
+                                            option_expiry_booking_date)
+from taxjson.model import money as M
+from taxjson.parsers.toolbox.descriptions import (PIL_DESC_RE, REINV_CUR,
+                                                  _parse_div_qty_rate,
+                                                  REINV_CUR_RE,
+                                                  REINV_PRICE_RE,
+                                                  reinvest_identity_error,
+                                                  reinvest_row_price)
 
 
 _DATE_FMT = "%Y-%m-%d %I:%M:%S %p"
@@ -45,7 +64,6 @@ _QT_COLUMNS = ('Transaction Date', 'Settlement Date', 'Action', 'Symbol',
                'Activity Type', 'Account Type')
 
 
-
 def missing_columns(cells) -> List[str]:
     """The _QT_COLUMNS a header row (the export's FIRST row, as
     _read_qt_rows reads it) lacks. Broker detection uses this same test
@@ -56,9 +74,6 @@ def missing_columns(cells) -> List[str]:
 
 # Registered-plan markers in the Account Type column (a warning that
 # matters only in a TAXABLE account stays quiet for these).
-_QT_REGISTERED_RE = re.compile(
-    r'\b(RRSP|RRIF|TFSA|LIRA|LIF|LRSP|RLSP|RESP|FHSA|RDSP|SRRSP|PRPP)\b',
-    re.IGNORECASE)
 
 # A stock-split distribution (Action DIS) reports the NEW shares in Quantity
 # and the held count as "... ON <held> SHS ...". Used to recover the ratio.
@@ -78,8 +93,6 @@ _FX_SETTLED_RE = re.compile(r'EXCHANGE RATE\s+([0-9]+(?:\.[0-9]+)?)', re.IGNOREC
 # The fraction with every comma captured, judged by desc_number: '1,5'
 # read as 1 and '0,5' as no fraction (re-audit A2-1058).
 _CIL_RE = re.compile(r'CASH\s+IN\s+LIEU\s+OF\s+' + DESC_NUMBER_RE, re.I)
-_REINV_PRICE_RE = re.compile(r'REINV@(?:[A-Z]{1,3}\$)?\s*' + DESC_NUMBER_RE,
-                             re.I)
 _STK_DIV_RE = re.compile(r'\bSTK\.?\s+DIV\b|\bSTOCK\s+DIVIDEND\b',
                          re.IGNORECASE)
 
@@ -88,58 +101,6 @@ _STK_DIV_RE = re.compile(r'\bSTK\.?\s+DIV\b|\bSTOCK\s+DIVIDEND\b',
 # linked to its real ticker). Pattern: one letter followed by digits.
 _INTERNAL_CODE_RE = re.compile(r'^[A-Z]\d+$')
 
-# Patterns to strip when building a "description key" for matching
-# dividend rows to the underlying trade rows. Mirrors qt_dividends.pl.
-_DESC_NOISE_RES = [
-    # Event suffixes on quantity-bearing rows (audit S063-03): a stock
-    # split / stock dividend ("... STK SPLIT ON 10 SHS", "... STK DIV ON
-    # 200 SHS" -- the ' DIV ON' rule below left a stray 'STK'), a DRIP
-    # ("... REINV@C$1.23456") and a cash-in-lieu ("... CASH IN LIEU OF
-    # .50000"). Stripped FIRST, so the key equals the trade row's.
-    re.compile(r'\s+(?:STK\.?|STOCK)\s+(?:SPLIT|DIV(?:IDEND)?)\b.*$',
-               re.IGNORECASE),
-    re.compile(r'\s+REINV\s*@.*$', re.IGNORECASE),
-    re.compile(r'\s+CASH\s+IN\s+LIEU\b.*$', re.IGNORECASE),
-    # A BRW currency journal's legs ("... JOURNAL POSITION TO USD",
-    # "... JOURNAL POSITION FROM CAD BOOK VALUE: $X CNV@ r"): the key is
-    # the security's name, as on its trades.
-    re.compile(r'\s+JOURNAL\s+POSITION\s+(?:TO|FROM)\b.*$', re.IGNORECASE),
-    # Dividend-specific suffixes.
-    re.compile(r'\s+CASH DIV ON.*$', re.IGNORECASE),
-    re.compile(r'\s+RTS DIST ON.*$', re.IGNORECASE),
-    re.compile(r'\s+DIST ON.*$', re.IGNORECASE),
-    re.compile(r'\s+DIV ON.*$', re.IGNORECASE),
-    re.compile(r'\s+DIVIDEND ON.*$', re.IGNORECASE),
-    re.compile(r'\s+NON-RES.*TAX.*ON.*$', re.IGNORECASE),
-    re.compile(r'\s+TAX WITHHELD ON.*$', re.IGNORECASE),
-    re.compile(r'\s+RETURN OF CAPITAL ON.*$', re.IGNORECASE),
-    re.compile(r'\s+SPINOFF ON.*$', re.IGNORECASE),
-    # Trade-specific suffixes.
-    re.compile(r'\s+WE ACTED AS AGENT.*$', re.IGNORECASE),
-    re.compile(r'\s+AVG PRICE.*$', re.IGNORECASE),
-    re.compile(r'\s+REC\s+\d{2}/\d{2}/\d{2}.*$', re.IGNORECASE),
-    # Transfer-specific suffixes. A transfer-in row may also name the
-    # delivering dealer after the security ("<SECURITY> <DEALER> 41.75
-    # TRANSFER BOOK VALUE ..."): no list of dealer names is kept — such a
-    # key is matched to the security's by word prefix
-    # (QtAccountContext.key_candidates).
-    re.compile(r'\s+TFER\s+(?:FROM|TO).*$', re.IGNORECASE),
-    # "... TRANSFER FROM/TO/IN ...", "... TRANSFER BOOK VALUE ..." or a
-    # final "TRANSFER" ("<SECURITY> <DEALER> 135.79 TRANSFER"); a name
-    # with TRANSFER inside it ("ZZ TRANSFER LP") is left alone.
-    re.compile(r'\s+TRANSFER(?:\s+(?:FROM|TO|IN|BOOK\s+VALUE)\b.*)?$',
-               re.IGNORECASE),
-    re.compile(r'\s+BOOK\s+VALUE.*$', re.IGNORECASE),
-    # Cosmetic suffixes seen on various row types.
-    re.compile(r'\s+COMMON STOCK.*$', re.IGNORECASE),
-]
-# A class designation: "CLASS B SUB VTG" and "CL B" are one key, "CL B",
-# whatever the letter (only CLASS A used to be stripped, so a class-A
-# key lost its letter and a class-B key kept the whole wording).
-_CLASS_RE = re.compile(r'\s+CLASS\s+([A-Z])\b.*$', re.IGNORECASE)
-_SPINOFF_PARENT_RE = re.compile(
-    r'SPINOFF ON .* FROM SEC# \S+ (.*?)\s+REC', re.IGNORECASE
-)
 # Questrade transfer-in rows carry the cost basis (ACB) only in the
 # description — "TRANSFER BOOK VALUE <amount>" — no numeric column holds
 # it. Extract it so a parsed transfer establishes the right pool size.
@@ -164,11 +125,6 @@ _BRW_BOOK_VALUE_RE = re.compile(
 # Every comma captured, judged by desc_number: 'CNV@ 1,3579' read as a
 # rate of 1 (re-audit A2-0278).
 _BRW_CNV_RE = re.compile(r'\bCNV\s*@\s*' + DESC_NUMBER_RE, re.IGNORECASE)
-# A BRW currency journal's direction: the out-leg says where the units
-# go ("JOURNAL POSITION TO USD"), the in-leg where they came from
-# ("JOURNAL POSITION FROM CAD ...").
-_BRW_JOURNAL_RE = re.compile(
-    r'\bJOURNAL\s+POSITION\s+(TO|FROM)\s+([A-Z]{3})\b', re.IGNORECASE)
 # A zero-cash row stating a book-cost change ("... RETURN OF CAPITAL
 # ADJUSTMENT TO BOOK COST $1.16"), the shape RBC exports.
 _QT_BOOK_COST_RE = re.compile(r'\bADJUSTMENT\s+TO\s+BOOK\s+COST\b', re.I)
@@ -184,34 +140,34 @@ def _journal_root(symbol: str) -> str:
     return re.sub(r'\.U$', '', s)
 
 
-def _get_desc_key(desc: str) -> str:
-    """Build a normalized key for matching dividend descriptions to trade
-    descriptions. Strips dividend/trade-specific suffixes and uppercases."""
-    if not desc:
-        return ''
-    # Whitespace collapsed FIRST: the `\s+SUFFIX.*$` patterns below are
-    # quadratic on a long whitespace run (a 40k-space description took
-    # over a minute; security review L2) and linear on single spaces.
-    # The key itself was always collapsed, so it is unchanged.
-    desc = re.sub(r'\s+', ' ', desc)
-    m = _SPINOFF_PARENT_RE.search(desc)
-    if m:
-        desc = m.group(1)
-    for pat in _DESC_NOISE_RES:
-        desc = pat.sub('', desc)
-    desc = _CLASS_RE.sub(lambda m: f" CL {m.group(1).upper()}", desc)
-    return re.sub(r'\s+', ' ', desc).strip().upper()
-
-
 # Questrade writes 'Buy'/'Sell' and upper-case codes (DIV, TF6, DIS, ...).
 # An export in another case ('BUY', 'buy') was skipped as an unknown
 # action and the sale opened a phantom short (audit R1-71).
 _QT_ACTION_CANON = {'BUY': 'Buy', 'SELL': 'Sell'}
 
+# The cash rows the position parser leaves out (recognized non-events)
+# and its cash events book (`_qt_cash_kind`): deposits and withdrawals
+# (pre-release review M8 — the FX-on-cash ledger v2 computed a Questrade
+# account's figure without them). One list for both (TJ-2564).
+_QT_CASH_MOVE_CODES = ('CON', 'DEP', 'EFT', 'EWD', 'WDR', 'CTR')
+_QT_CASH_MOVE_TYPES = ('Deposits', 'Withdrawals', 'Contributions')
+
 
 def _canon_action(raw: Optional[str]) -> str:
     a = (raw or '').strip()
     return _QT_ACTION_CANON.get(a.upper(), a.upper())
+
+
+def _qt_cash_kind(action: str, atype: str) -> bool:
+    """Whether a row of this action code (`_canon_action`) and Activity
+    Type is one the file's cash events are read from: an FX conversion's
+    leg (FXT), a deposit, withdrawal or contribution, a transfer journal
+    (TF6), stock-lending income (LFJ). classify notes each (`note_cash`)
+    whatever the parse makes of it; the finish reads its Quantity and Net
+    Amount, which the parse itself never reads on most of them."""
+    return (action == 'FXT' or atype == 'FX conversion'
+            or action in _QT_CASH_MOVE_CODES or atype in _QT_CASH_MOVE_TYPES
+            or action in ('TF6', 'LFJ') or atype == 'Transfers')
 
 
 def _is_qt_header(row: Dict[str, Any]) -> bool:
@@ -299,6 +255,91 @@ def _read_qt_rows(path: Path, warn: bool = False) -> List[tuple]:
                 if k is not None)))
     refuse_pasted_overlap(shown_name(path), segs, "the header")
     return rows
+
+
+_QT_NUMBER_COLUMNS = ('Quantity', 'Price', 'Gross Amount', 'Commission',
+                      'Net Amount')
+
+
+def blank_symbol_twins(rows) -> List[Tuple[int, int]]:
+    """(line of the row that names its symbol, line of the blank one) for
+    each pair of `rows` ((line number, row) of one export) that are equal
+    in every cell but Symbol, one blank and one not. Questrade's API
+    returns a re-fetched activity with its symbol blank, and `tjs fetch`
+    before backlog TJ-4955 kept it as a second row: the parser reads the
+    blank row's contract from its description and books the trade twice.
+    Numbers are compared by value (10 and 10.0), the rest as written.
+
+    A blank-Symbol row with no such partner (a fee, an FX conversion, a
+    transfer) is no pair. In a group each blank row is paired with one
+    named row, in file order; a blank row beyond the named ones is not
+    paired (it is then no copy of them). The header repeated is no row."""
+    def cell(col, v):
+        v = str(v or '').strip()
+        if col in _QT_NUMBER_COLUMNS:
+            try:
+                d = Decimal(v)
+            except (InvalidOperation, ValueError):
+                return v
+            return d if d.is_finite() else v
+        return v
+    groups: Dict[tuple, Tuple[List[int], List[int]]] = {}
+    for lineno, row in rows:
+        if _is_qt_header(row):
+            continue
+        key = tuple((k, cell(k, v)) for k, v in row.items()
+                    if k is not None and k != 'Symbol')
+        named, blank = groups.setdefault(key, ([], []))
+        (named if (row.get('Symbol') or '').strip() else blank).append(lineno)
+    return sorted(pair for named, blank in groups.values()
+                  for pair in zip(named, blank))
+
+
+_QT_TWINS_SHOWN = 3     # pairs a file's ATTENTION names; the rest counted
+
+
+def _warn_blank_symbol_twins(shown: str, rows) -> None:
+    """The file's ATTENTION for its `blank_symbol_twins`: the first
+    _QT_TWINS_SHOWN pairs named and the rest counted (a re-run names
+    them once these are repaired), nothing dropped (the file alone
+    cannot tell a copy from a second fill whose symbol came back
+    blank). In `tjs run`'s end-of-run list too (END_OF_RUN_MARK). It
+    says what is so of every pair: a pair's rows may both be booked
+    (an option, read from its description: the trade counts twice),
+    neither (a row with no cash and no units), or the blank one refused
+    further on (a share trade with no symbol)."""
+    pairs = blank_symbol_twins(rows)
+    if not pairs:
+        return
+    by_line = dict(rows)
+
+    def what(named: int, blank: int) -> str:
+        r = by_line[named]
+        row = ' '.join(x for x in (
+            (r.get('Transaction Date') or '').strip()[:10],
+            (r.get('Action') or '').strip(),
+            (r.get('Symbol') or '').strip()) if x)
+        return f"({row}; the blank one is line {blank})"
+    n = len(pairs)
+    more = n - _QT_TWINS_SHOWN
+    emit_line(
+        f"warning: ATTENTION: {END_OF_RUN_MARK}{shown}: "
+        + (f"lines {pairs[0][0]} and {pairs[0][1]} differ only by a blank "
+           f"Symbol: probably one trade fetched twice {what(*pairs[0])}"
+           if n == 1 else
+           f"{n} pairs of rows differ only by a blank Symbol, each "
+           f"probably one trade fetched twice: "
+           + '; '.join(f"lines {a} and {b} {what(a, b)}"
+                       for a, b in pairs[:_QT_TWINS_SHOWN])
+           + (f"; and {more} more (named once these are repaired)"
+              if more > 0 else ""))
+        + ". Where both rows of a pair are booked, the position, the "
+          "cash and the gain or loss count the trade twice. Run `tjs "
+          "fetch` over those dates again: it drops the blank row when "
+          "Questrade's download holds the trade once. If the pair "
+          "stays, check the broker's statement: delete the blank row "
+          "when it shows one trade, keep both when it shows two. Then "
+          "`tjs run`.")
 
 
 @dataclass
@@ -514,7 +555,6 @@ def _quiet_resolver(ctx: QtAccountContext, helper) -> 'QuestradeBrokerage':
     h = type(helper)()
     h.account_context = ctx
     h._ctx = ctx
-    h._qt_name = ''
     h._ambiguous_warned = set()
     h.lint_findings = []
     return h
@@ -599,6 +639,7 @@ def _plan_qt_journals(ctx: QtAccountContext, helper) -> None:
                 'date': dt.strftime('%Y-%m-%d'),
                 'way': m.group(1).upper(), 'to': m.group(2).upper(),
                 'cur': (row.get('Currency') or '').strip().upper(),
+                'cell': (row.get('Symbol') or '').strip(),
                 'sym': (row.get('Symbol') or '').strip().lstrip('.')
                 .upper(),
                 'key': _get_desc_key(desc), 'pair': ''})
@@ -662,8 +703,9 @@ def _plan_qt_journals(ctx: QtAccountContext, helper) -> None:
                          f"of {abs(g['q']):g} on {g['date']}, same name "
                          f"in this account")}
     for g in legs:
-        if g['pair']:
-            continue
+        moved = g['listing'] or g['cell'].upper()
+        if g['pair'] or not moved:
+            continue    # (a blank leg nothing names: parse_file refuses it)
         # The journal's source and target currencies, from this leg.
         src, dst = ((g['cur'], g['to']) if g['q'] < 0
                     else (g['to'], g['cur']))
@@ -676,7 +718,7 @@ def _plan_qt_journals(ctx: QtAccountContext, helper) -> None:
             f"'{nm} JOURNAL POSITION TO {dst}' (-units, in {src}) and "
             f"'{nm} JOURNAL POSITION FROM {src} BOOK VALUE: $X CNV@ r' "
             f"(+units, in {dst}). Booked as a transfer leg of "
-            f"{g['listing']} on its own, so its units do not move to the "
+            f"{moved} on its own, so its units do not move to the "
             f"other line: check that the export holds both rows "
             f"(re-export the day), or book the move in a .tt file.")
 
@@ -829,7 +871,7 @@ def _qt_reversal_kind(row, helper) -> Optional[Tuple[tuple, bool, str]]:
         sym = _qt_booked_listing(row, helper)
         if sym is None:
             return None
-        return ('STK DIV', sym, round(abs(qty), 6), 0.0), qty < 0, date
+        return ('STK DIV', sym, M.units(abs(qty), 6), 0.0), qty < 0, date
     if action == 'CIL' and _CIL_RE.search(desc):
         try:
             frac = desc_number(_CIL_RE.search(desc).group(1))
@@ -838,14 +880,14 @@ def _qt_reversal_kind(row, helper) -> Optional[Tuple[tuple, bool, str]]:
         sym = _qt_booked_listing(row, helper)
         if frac <= 0 or abs(net) <= 0 or sym is None:
             return None
-        return ('CIL', sym, round(frac, 6), round(abs(net), 2)), net < 0, date
+        return ('CIL', sym, M.units(frac, 6), M.units(abs(net), 2)), net < 0, date
     if action == 'REI' or act == 'Dividend reinvestment':
         if abs(qty) <= 1e-12 or abs(net) < 0.005 or (qty > 0) == (net > 0):
             return None
         sym = _qt_booked_listing(row, helper, rei=True)
         if sym is None:
             return None
-        return (('REI', sym, round(abs(qty), 6), round(abs(net), 2)),
+        return (('REI', sym, M.units(abs(qty), 6), M.units(abs(net), 2)),
                 qty < 0, date)
     return None
 
@@ -856,7 +898,7 @@ def _qt_cell_value(row, col: str) -> float:
     10, 10.00 and 10.0000 are one value."""
     v = parse_strict_number(row.get(col), field=col, allow_blank=True,
                             blank=0.0)
-    return round(v, 9) + 0.0
+    return M.units(v, 9) + 0.0
 
 
 def _plan_qt_reversals(ctx: QtAccountContext, helper) -> None:
@@ -919,14 +961,17 @@ def _plan_qt_reversals(ctx: QtAccountContext, helper) -> None:
                     bucket.setdefault(f, set()).add(lines[oi])
 
 
-
-def _qt_position_event(row, h) -> Optional[Tuple[str, str, str, float]]:
+def _qt_position_event(row, h, journal: Optional[Dict[str, Any]] = None
+                       ) -> Optional[Tuple[str, str, str, float]]:
     """(broker account, listing, date, signed change in shares) of a row
     that moves a listed position, else None: a Buy or Sell, a transfer,
-    and a split, stock dividend or reinvestment (whose signed Quantity
-    is the change, on a long or a short position) on the listing
-    parse_file books it on. Unparseable cells: None (parse_file names
-    the row)."""
+    an assignment's or exercise's stock leg (its cash says the side), a
+    BRW journal leg (`journal`: its planned leg, _plan_qt_journals), and
+    a split, stock dividend or reinvestment (whose signed Quantity is the
+    change, on a long or a short position) on the listing parse_file
+    books it on. Unparseable cells: None (parse_file names the row). A
+    stock leg or a journal leg that carried the holding across zero made
+    a later split read the wrong side (TJ-4546)."""
     act = (row.get('Activity Type') or '').strip()
     action = _canon_action(row.get('Action'))
     desc = row.get('Description') or ''
@@ -942,13 +987,21 @@ def _qt_position_event(row, h) -> Optional[Tuple[str, str, str, float]]:
     sym = (row.get('Symbol') or '').strip().lstrip('.').upper()
     cur = (row.get('Currency') or '').strip().upper()
     listing = None
-    if act in ('Trades', 'Transfers'):
+    # An assignment's or exercise's leg, whatever its Activity Type (a
+    # stock leg under Trades read as no event: review round 1).
+    leg = action in ('ASN', 'EX')
+    if act in ('Trades', 'Transfers') and not leg:
         try:
             if h.parse_option_from_description(desc):
                 return None         # a contract, not a listing
         except BrokerageParseError:
             return None
-    if act in ('Trades', 'Transfers') and sym and cur \
+    if leg:
+        stock_leg = _qt_stock_leg(row, h, desc, sym)
+        if stock_leg is None:
+            return None
+        listing, q = stock_leg[0], math.copysign(q or 0.0, stock_leg[1])
+    elif act in ('Trades', 'Transfers') and sym and cur \
             and not _INTERNAL_CODE_RE.match(sym):
         # As the timelines read them (build_qt_account_context).
         if act == 'Trades':
@@ -960,6 +1013,10 @@ def _qt_position_event(row, h) -> Optional[Tuple[str, str, str, float]]:
         listing = h.apply_currency_suffix(sym, cur)
     elif act == 'Transfers':
         listing = _qt_booked_listing(row, h)    # an internal code
+    elif action == 'BRW' and 'JOURNAL' in desc.upper():
+        listing = ((journal or {}).get('symbol')
+                   or h.apply_currency_suffix(
+                       (row.get('Symbol') or '').strip().upper(), cur))
     elif h._is_stock_split(action, act, desc) and not h._is_cash_only(row):
         listing = _qt_booked_listing(row, h)
     elif action == 'DIS' and _STK_DIV_RE.search(desc):
@@ -970,6 +1027,31 @@ def _qt_position_event(row, h) -> Optional[Tuple[str, str, str, float]]:
         return None
     return ((row.get('Account #') or '').strip(), listing,
             dt.strftime('%Y-%m-%d'), q)
+
+
+def _qt_stock_leg(row: Dict[str, Any], h: Any, desc: str,
+                  sym: str) -> Optional[Tuple[str, float]]:
+    """(listing, side) of an ASN / EX row that is an assignment's or an
+    exercise's stock leg, as parse_file books it: a row carrying cash
+    whose description names no contract, or names one whose underlying
+    the Symbol column is; shares bought (Net < 0, side +1) or delivered.
+    Else None (an option leg, a row with no cash, an internal code, as a
+    trade under one is, or unreadable cells)."""
+    try:
+        cash = [parse_strict_number(row.get(c), allow_blank=True, blank=0.0)
+                or 0.0 for c in ('Gross Amount', 'Net Amount')]
+        opt = h.parse_option_from_description(desc)
+    except BrokerageParseError:
+        return None
+    if not any(abs(c) > 0.005 for c in cash) or (
+            opt and not (sym and names_underlying(opt['base'], sym))):
+        return None
+    cur = (row.get('Currency') or '').strip().upper()
+    if not (sym and cur) or _INTERNAL_CODE_RE.match(sym):
+        return None             # as for a trade under an internal code
+    if cur == 'CAD' and _FX_SETTLED_RE.search(desc):
+        cur = 'USD'
+    return h.apply_currency_suffix(sym, cur), (1.0 if cash[1] < 0 else -1.0)
 
 
 def _plan_qt_positions(ctx: QtAccountContext, helper) -> None:
@@ -990,7 +1072,7 @@ def _plan_qt_positions(ctx: QtAccountContext, helper) -> None:
         for _lineno, row in _read_qt_rows(Path(k)):
             if _is_qt_header(row):
                 continue
-            ev = _qt_position_event(row, h)
+            ev = _qt_position_event(row, h, ctx.journal_legs.get((k, _lineno)))
             if ev is None:
                 continue
             try:
@@ -1026,19 +1108,10 @@ def _detect_qt_ticker_changes(ctx: QtAccountContext, by_name, where) -> None:
         for a in sorted(listings):
             for b in sorted(listings):
                 ta, tb = ctx.timelines.get(a), ctx.timelines.get(b)
-                if a == b or not ta or not tb or ta[-1][0] > tb[0][0]:
+                reach = None if a == b else rename_reach(ta, tb)
+                if reach is None:
                     continue
-                open_a = sum(q for _d, q in ta)
-                run = low = 0.0
-                when = ''
-                for d, q in tb:
-                    run += q
-                    if run < low - 1e-9:
-                        low, when = run, d
-                first_b = next((q for _d, q in tb if abs(q) > 1e-9), 0.0)
-                if (open_a <= 1e-9 or low >= -1e-9
-                        or -low > open_a + 1e-6):
-                    continue
+                open_a, low, when, first_b = reach
                 if ticker_map_joins(a, b):
                     continue    # ticker.map already pools them (A2-1056)
                 declared = declared_rename_where(a, b)
@@ -1047,10 +1120,7 @@ def _detect_qt_ticker_changes(ctx: QtAccountContext, by_name, where) -> None:
                     ctx.messages.append(answered_rename_note(
                         where.get(b, '?'), "Questrade", a, b, declared))
                     continue
-                how = (f"first appears on {tb[0][0]} with a SALE of "
-                       f"{-first_b:g}" if first_b < 0 else
-                       f"first appears on {tb[0][0]} and goes {-low:g} "
-                       f"short on {when}")
+                how = rename_how(tb[0][0], low, when, first_b)
                 ctx.messages.append(
                     f"warning: ATTENTION: {where.get(b, '?')}: Questrade "
                     f"symbol {a} looks renamed to {b} — if they are one "
@@ -1064,7 +1134,7 @@ def _detect_qt_ticker_changes(ctx: QtAccountContext, by_name, where) -> None:
                     f"out).")
 
 
-def _qt_real_order(path: Path, rows, note: bool = True) -> List[tuple]:
+def _qt_real_order(path: Path, rows) -> List[tuple]:
     """Rows of one day tie (Questrade stamps 00:00:00) and keep the
     order they are emitted in (CA-DATE-14 / US-DATE-13): a
     newest-first export is read bottom-up so that order is the real
@@ -1072,9 +1142,10 @@ def _qt_real_order(path: Path, rows, note: bool = True) -> List[tuple]:
     newest-first exports concatenated (the header repeated, which
     the parse accepts) went both ways over the whole file and were
     read top-down — a same-day sale replayed after its rebuy. The
-    position parser and the v2 cash reader (`questrade_cash_events`)
-    both read rows through it; `note=False` leaves the "not in date
-    order" note to the position parser, which says it once."""
+    parse reads its rows through it (`_in_real_order`), and its cash
+    events keep that order (`_cash_events_of_rows`; once a second
+    reading of the file, which left the "not in date order" note to
+    the parse, PLAN step 16 commit 9)."""
     segs: List[List[tuple]] = [[]]
     for item in rows:
         r = item[1]
@@ -1099,11 +1170,81 @@ def _qt_real_order(path: Path, rows, note: bool = True) -> List[tuple]:
         elif not all(a <= b for a, b in zip(ds, ds[1:])):
             mixed = True
         out.extend(head + body)
-    if mixed and note:
+    if mixed:
         emit_line(f"note: {shown_name(path)}: rows are not in date order, "
                   f"so same-day rows keep the file's order (intra-day "
                   f"order unknown) — check a same-day sale and rebuy.")
     return out
+
+
+class _QtShape(NamedTuple):
+    """A trade row's shape (`_trade_shape`): what the money and the row
+    read of it."""
+    carries_cash: Any
+    date: Any
+    date_settle: Any
+    is_assigned: Any
+    is_expired: Any
+    opt: Any
+    qty: Any
+    time: Any
+
+
+class _QtMoney(NamedTuple):
+    """A trade row's money (`_trade_money`): what the row reads of it."""
+    comm: Any
+    listing_currency: Any
+    mult: Any
+    net: Any
+    price: Any
+    size_basis: Any
+
+
+class _QtRow(Row):
+    """A row of the export as `read` returns it: its cells, its line,
+    whether it is the header repeated; what `classify` learned for `build`
+    (the action, the activity type, the description, the currency, the
+    builder and, for a trade, its shape flags; the quantity a blank 0)."""
+    __slots__ = ("header", "action_raw", "activity_type", "desc",
+                 "currency", "is_trade", "code_expired", "code_assigned",
+                 "word_assigned", "is_expired", "is_assigned", "q")
+
+    def __init__(self, cells: Dict[str, Any], line: int, header: bool = False):
+        super().__init__(cells, line)
+        self.header = header
+        self.action_raw = self.activity_type = self.desc = self.currency = None
+        self.q = None
+        self.is_trade = self.code_expired = self.code_assigned = None
+        self.word_assigned = self.is_expired = self.is_assigned = None
+
+
+@dataclass
+class _QtParse:
+    """What `read` hands the loop and the finish of one export: the file,
+    and what the rows accumulate for the finish (the quantity-bearing DIS
+    legs, the net-of-tax dividends, the $0 transfer-ins, the BRW journals
+    and their rows, the reversal originals and the reversals, the
+    stock-dividend notes). Released by `release` whatever happened."""
+    path: Path
+    shown: str                      # the file as the messages name it
+    key: str                        # the file's key in the account context (its resolved path)
+    ca_legs: List[str] = field(default_factory=list)
+    net_of_tax: List[str] = field(default_factory=list)
+    no_book_value: List[str] = field(default_factory=list)
+    journals: List[str] = field(default_factory=list)
+    journal_txs: List[Dict[str, Any]] = field(default_factory=list)
+    # CIL / REI reversals (audit R1-66): a same-code row with the signs
+    # negated cancels its original. Originals by key -> list of emitted
+    # leg groups; reversal rows -> (key, lineno, desc), paired at the end
+    # of the parse (the export may list newest first).
+    rev_originals: Dict[tuple, List[List[Dict[str, Any]]]] = field(default_factory=dict)
+    reversals: List[tuple] = field(default_factory=list)
+    # Stock-dividend notes, printed only for the ones a reversal does not
+    # cancel (re-audit A2-1060).
+    sd_notes: List[tuple] = field(default_factory=list)
+    # id(original leg group) -> its line (the account-wide plan names
+    # originals by line).
+    orig_line: Dict[int, int] = field(default_factory=dict)
 
 
 class QuestradeBrokerage(BaseBrokerage):
@@ -1117,6 +1258,17 @@ class QuestradeBrokerage(BaseBrokerage):
     account_taxable: Optional[bool] = None
 
     # ------------------------------------------------------------ helpers
+
+    _qt: Optional["_QtParse"] = None    # the parse's state, None between parses
+
+    @property
+    def _qt_name(self) -> str:
+        """The file as the messages name it: the parse's; '' between
+        parses (a bare parser's option parse names nothing)."""
+        return self._qt.shown if self._qt is not None else ''
+
+    def _where_name(self) -> str:
+        return self._qt_name
 
     def _where(self, lineno: int) -> str:
         return f"{self._qt_name} line {lineno}"
@@ -1163,45 +1315,6 @@ class QuestradeBrokerage(BaseBrokerage):
             return self.account_taxable
         return self._qt_taxable_hint
 
-    def _shelter_of(self, account_type: str) -> Optional[str]:
-        """The registered plan an Account Type names (TFSA, RRSP ...),
-        upper case, when the project's country shelters it; None for any
-        other type. A plan the country taxes like an ordinary account
-        (`plans_taxed`: a TFSA in a US project, tax-logic US-BASIS-09)
-        is no shelter (backlog TJ-0613)."""
-        m = _QT_REGISTERED_RE.search(account_type or '')
-        if m and m.group(1).lower() not in self.plans_taxed:
-            return m.group(1).upper()
-        return None
-
-    def _taxed_plan_of(self, account_type: str) -> Optional[str]:
-        """The registered plan an Account Type names when the project's
-        country taxes it like an ordinary account, else None."""
-        m = _QT_REGISTERED_RE.search(account_type or '')
-        if m and m.group(1).lower() in self.plans_taxed:
-            return m.group(1).upper()
-        return None
-
-    def _is_taxable_type(self, account_type: str) -> bool:
-        """A margin or cash account's Account Type, or one naming a plan
-        the project's country taxes (`_taxed_plan_of`)."""
-        if self._taxed_plan_of(account_type):
-            return True
-        return bool(re.search(r'margin|cash', account_type or '', re.I)
-                    and not _QT_REGISTERED_RE.search(account_type or ''))
-
-    def _taxed_plans_note(self, types) -> str:
-        """' (a US return taxes a TFSA like an ordinary account: ...)'
-        when `types` name such a plan, else ''."""
-        plans = sorted({p for t in types for p in [self._taxed_plan_of(t)]
-                        if p})
-        if not plans:
-            return ''
-        return (f" (a US return taxes "
-                f"{'a ' + plans[0] if len(plans) == 1 else ', '.join(plans)}"
-                f" like an ordinary account: no treaty deferral, tax-logic "
-                f"US-BASIS-09)")
-
     def apply_currency_suffix(self, symbol: str, currency: str) -> str:
         """Questrade names the LISTING in the symbol: SAMPLZ.TO is a TSX
         listing and a bare symbol a US one. A .TO symbol keeps .TO
@@ -1217,12 +1330,11 @@ class QuestradeBrokerage(BaseBrokerage):
 
     def parse_option_from_description(self, desc):
         # A strike only partly read ('2,50' as 2) is refused (A2-1041).
-        from taxjson.lib.brokerages.rbc_direct import (
-            strict_option_from_description)
-        return strict_option_from_description(self, desc)
+        return self.strict_option_from_description(desc)
 
     @classmethod
-    def prepare_files(cls, paths, symbol_codes=None) -> QtAccountContext:
+    def prepare_files(cls, paths, symbol_codes=None, *, tax_year=None, combined=False,
+                      taxable=None, project=None) -> QtAccountContext:
         """Read ALL of one account's Questrade exports once and build the
         identity maps every per-file parse shares (description ->
         traded symbol, a symbol's listing currency, position timelines).
@@ -1253,17 +1365,21 @@ class QuestradeBrokerage(BaseBrokerage):
     # Set by taxjson-brokerage (see `prepare_files`); None = this file alone.
     account_context: Optional[QtAccountContext] = None
 
-    def _unbooked(self, lineno: int, msg: str) -> None:
+    def _unbooked(self, lineno: int, msg: str, label: str) -> Outcome:
         """A real row the parser could not book: `tjs run` echoes
         the UNBOOKED prefix to the console and `run --strict` refuses
-        to publish (the old skip note reached only the .sum banner)."""
+        to publish (the old skip note reached only the .sum banner).
+        The row's answer, the reported class under `label`: counted, and
+        not listed again in the skip summary, which the warning would
+        repeat (TJ-2377, TJ-2401)."""
         emit_line(f"warning: UNBOOKED: {self._where(lineno)}: {msg}")
+        return Outcome.reported(label)
 
     def _in_real_order(self, path: Path, rows) -> List[tuple]:
         """Rows in the order they happened: `_qt_real_order`."""
         return _qt_real_order(path, rows)
 
-    def _check_account_mix(self, path: Path, rows) -> None:
+    def _check_account_mix(self, path: Path, cells) -> None:
         """One export holding rows of SEVERAL Questrade accounts (re-audit
         A2-0025): every row is booked to the one taxjson account the file
         sits in. A registered plan's rows (Account Type TFSA/RRSP/...)
@@ -1282,115 +1398,21 @@ class QuestradeBrokerage(BaseBrokerage):
         ctx = self._ctx
         if ctx is not None and not ctx.plans_checked:
             ctx.plans_checked = True
-            held = [{a for a, fs in ctx.plan_files.items() if f in fs}
-                    for f in ctx.files]
-            names = sorted({shown_name(Path(f)) for f in ctx.files})
-            if len(ctx.plan_types) == 1 or not any(
-                    h >= set(ctx.plan_types) for h in held):
-                # One Questrade account, or several no one export holds
-                # all of (an export holding them all is checked below).
-                self._check_plans(
-                    ', '.join(names), ctx.plan_types,
-                    "the export holds" if len(names) == 1 else
-                    "these exports of one taxjson account hold",
-                    spread=len(names) > 1)
+            # One Questrade account, or several no one export holds all
+            # of (an export holding them all is checked below): base.py.
+            check_account_plans_across(self, ctx.files, ctx.plan_types,
+                                       ctx.plan_files, broker="Questrade",
+                                       column="Account Type")
         accts: Dict[str, set] = {}
-        for _ln, r in rows:
-            if _is_qt_header(r):
-                continue      # its 'Account #' cell is no account
+        for r in cells:
             a = (r.get('Account #') or '').strip()
             if a:
                 accts.setdefault(a, set()).add(
                     (r.get('Account Type') or '').strip())
         if len(accts) > 1:
-            self._check_plans(shown_name(path), accts, "the export holds")
-
-    def _check_plans(self, where: str, accts: Dict[str, set], holds: str,
-                     *, spread: bool = False) -> None:
-        """The taxable-versus-registered check of `_check_account_mix`
-        over `accts` ({Account #: {Account Type}}) of one export, or of
-        all the account's exports (`spread`)."""
-        if not accts:
-            return
-        _no = {a: i for i, a in enumerate(sorted(accts), 1)}
-
-        def _mask(a: str) -> str:
-            return f"#{_no[a]} {a[:2]}***"
-        desc = ', '.join(f"{_mask(a)} ({'/'.join(sorted(t - {''})) or '?'})"
-                         for a, t in sorted(accts.items()))
-        taxable = self.account_taxable       # None: the caller did not say
-        wrong = []
-        for a, types in sorted(accts.items()):
-            reg = any(self._shelter_of(t) for t in types)
-            tax = any(self._is_taxable_type(t) for t in types)
-            if (taxable is True and reg) or (taxable is False and tax):
-                wrong.append(_mask(a))
-        # A plan the country taxes (a US project's TFSA) said so, when it
-        # is the reason a type reads as taxable (backlog TJ-0613).
-        why = (self._taxed_plans_note({t for types in accts.values()
-                                       for t in types})
-               if taxable is False and wrong else '')
-        if len(accts) < 2:
-            if wrong:
-                # The folder's type is the user's word about this very
-                # account, the Account Type column the broker's: said
-                # out loud (`run --strict` stops), never guessed.
-                types = '/'.join(sorted(next(iter(accts.values())) - {''}))
-                emit_line(
-                    f"warning: ATTENTION: {where}: the Account Type says "
-                    f"Questrade account {wrong[0]} is "
-                    f"{'a registered plan' if taxable else 'a taxable account'}"
-                    f" ({types}){why}, but this taxjson account is "
-                    f"{'taxable' if taxable else 'sheltered'}, so its "
-                    f"trades are booked "
-                    f"{'as taxable' if taxable else 'as sheltered (none of them on the return)'}"
-                    f". If the Account Type is right, move "
-                    f"{'the exports' if spread else 'the export'} into "
-                    f"the inputs/<account>/ folder of an account of type = "
-                    f"\"{'sheltered' if taxable else 'taxable'}\".")
-            return
-        if not wrong and self.combined_broker_accounts:
-            # combined_broker_accounts = true (owner decision): a NOTE —
-            # on a sheltered label only when every account is the SAME
-            # registered plan (Questrade's Account Type names it).
-            masked = [_mask(a) for a in sorted(accts)]
-            if taxable is False:
-                plans = {p for types in accts.values() for t in types
-                         for p in [self._shelter_of(t)] if p}
-                untyped = any(not any(self._shelter_of(t) for t in types)
-                              for types in accts.values())
-                if len(plans) != 1 or untyped:
-                    raise combined_accounts_refusal(
-                        where, 'Questrade', masked,
-                        f"their Account Types differ ({desc})"
-                        if len(plans) > 1 else
-                        f"the Account Type does not name one plan for "
-                        f"every account ({desc})")
-            emit_line(combined_accounts_note(where, 'Questrade', masked))
-            return
-        if wrong:
-            raise BrokerageParseError(
-                f"{where}: {holds} rows of {len(accts)} "
-                f"Questrade accounts ({desc}); {', '.join(wrong)} "
-                f"{'is a registered plan' if taxable else 'is a taxable account'}"
-                f"{why} but {'the files sit' if spread else 'the file sits'} in a "
-                f"{'taxable' if taxable else 'registered'} taxjson account, "
-                f"so its trades would be booked there — refusing. "
-                + ("Move each Questrade account's exports into its own "
-                   "inputs/<account>/ folder." if spread else
-                   "Export each Questrade account separately into its own "
-                   "inputs/<account>/ folder."))
-        # A US project's TFSA is no shelter (US-BASIS-09): the plans that
-        # still are, named as such.
-        plan = self.law('a registered plan (TFSA/RRSP)',
-                        'a retirement plan (RRSP/RRIF)',
-                        'a registered plan (TFSA/RRSP)')
-        emit_line(f"warning: ATTENTION: {where}: {holds} rows of "
-              f"{len(accts)} Questrade accounts ({desc}) — every row is "
-              f"booked to ONE account. That is right only when they are one "
-              f"tax entity (two taxable accounts of yours); "
-              + (f"give {plan} its own inputs/<account>/ folder."
-                 if spread else f"export {plan} separately."))
+            check_account_plans(self, shown_name(path), accts,
+                                "the export holds", broker="Questrade",
+                                column="Account Type")
 
     def _listing_currency(self, sym: str, currency: str) -> str:
         """The currency whose suffix a real (non-code) symbol takes: a
@@ -1562,7 +1584,11 @@ class QuestradeBrokerage(BaseBrokerage):
 
     # ------------------------------------------------------------- parse
 
-    def parse_file(self, path: Path) -> List[Dict[str, Any]]:
+    def read(self, path: Path) -> List["_QtRow"]:
+        """The account context (built for this file alone when the tool gave
+        none), the rows in book order (`_in_real_order`), the taxable hint
+        from the account types, the account mix checked; what the later
+        phases need as `_qt`."""
         # The description -> (ticker, listing currency) map and the
         # position timelines come from ALL of the account's exports (the
         # shared context taxjson-brokerage builds via prepare_files); a
@@ -1570,721 +1596,810 @@ class QuestradeBrokerage(BaseBrokerage):
         path = Path(path)
         # Masked like every diagnostic (a default download name is the
         # account number).
-        self._qt_name = shown_name(path)
-        self._qt_path = path
+        self._qt = _QtParse(path, shown_name(path), str(path.resolve()))
         self._ambiguous_warned: set = set()
         self.lint_findings: List[str] = []
         ctx = self.account_context
-        if ctx is None or str(path.resolve()) not in ctx.files:
+        if ctx is None or self._qt.key not in ctx.files:
             ctx = build_qt_account_context([path], helper=self)
             ctx.add_codes_note()
             ctx.emit()
         self._ctx = ctx
         ctx.plan_rows(self)
         self._desc_to_ticker = ctx.desc_to_ticker
-        rows = self._in_real_order(path, _read_qt_rows(path, warn=True))
+        raw = _read_qt_rows(path, warn=True)
+        # A fetch file of an older `tjs fetch`: said, never dropped
+        # (backlog TJ-4955).
+        _warn_blank_symbol_twins(self._qt.shown, raw)
+        rows = self._in_real_order(path, raw)
+        qrows = [_QtRow(row, lineno, header=_is_qt_header(row))
+                 for lineno, row in rows]
+        data = [r.cells for r in qrows if not r.header]    # the header repeated is no row
 
         # Taxable hint from the Account Type column: a registered-plan
         # marker -> sheltered; "margin"/"cash" without one -> taxable;
         # anything else ("API" from `tjs fetch`) -> unknown.
-        _types = {(r.get('Account Type') or '').strip() for _, r in rows
-                  if not _is_qt_header(r)}
+        _types = {(c.get('Account Type') or '').strip() for c in data}
         _types.discard('')
-        if _types and all(self._shelter_of(t) for t in _types):
+        if _types and all(plan_shelter_of(self.plans_taxed, t) for t in _types):
             self._qt_taxable_hint = False
-        elif _types and all(self._is_taxable_type(t) for t in _types):
+        elif _types and all(is_taxable_account_type(self.plans_taxed, t)
+                            for t in _types):
             self._qt_taxable_hint = True
         else:
             self._qt_taxable_hint = None
-        self._check_account_mix(path, rows)
+        self._check_account_mix(path, data)
 
-        transactions: List[Dict[str, Any]] = []
-        expiries: List[Dict[str, Any]] = []     # EXP rows (settle == date)
-        ca_legs: List[str] = []                 # quantity-bearing DIS legs
-        net_of_tax: List[str] = []              # NON-RES TAX WITHHELD divs
-        no_book_value: List[str] = []           # transfer-ins at $0 cost
-        journals: List[str] = []                # BRW listing journals
-        journal_txs: List[Dict[str, Any]] = []
-        # CIL / REI reversals (audit R1-66): a same-code row with the
-        # signs negated cancels its original. Originals by key -> list of
-        # emitted leg groups; reversal rows -> (key, lineno), paired at
-        # the end of the parse (the export may list newest first).
-        rev_originals: Dict[tuple, List[List[Dict[str, Any]]]] = {}
-        reversals: List[tuple] = []
-        # id(original leg group) -> its line (the account-wide plan
-        # names originals by line); stock-dividend notes printed only
-        # for the ones a reversal does not cancel (re-audit A2-1060).
-        self._orig_line: Dict[int, int] = {}
-        sd_notes: List[tuple] = []
-        self._rows_seen = 0
         # Each row's broker account (`Account #`): every row emitted for
         # a CSV row carries it as `broker_account`, so cross-file dedup
         # never collapses two accounts' identical rows (audit A2-0008).
-        self._qt_accounts = {(r.get('Account #') or '').strip()
-                             for _, r in rows} - {''}
-        _acct_from, _acct, _line = 0, '', 0
-        for lineno, row in rows:
-            for _t in transactions[_acct_from:]:
-                if _acct:
-                    _t.setdefault('broker_account', _acct)
-                self.note_row_line(_t, _line)
-            _acct_from = len(transactions)
-            _acct = (row.get('Account #') or '').strip()
-            _line = lineno
-            self._rows_seen += 1
-            action_raw = _canon_action(row.get('Action'))
-            activity_type = (row.get('Activity Type') or '').strip()
-            desc = row.get('Description') or ''
-            if [(row.get(c) or '').strip() for c in _QT_COLUMNS[:5]] == \
-                    list(_QT_COLUMNS[:5]):
-                # The header repeated mid-file (concatenated exports).
-                self.count_nonevent("repeated header row")
-                continue
-            if action_raw == 'FXT' or activity_type == 'FX conversion':
-                # "CONVERSION - USD/CAD": the account's own cash moving
-                # between denominations. Not a disposition of property
-                # in this model — FX cash gains are reconstructed by
-                # `tjs fx-cash` from security cash flows
-                # (KNOWN_ISSUES) — so a recognized non-event, not an
-                # unclassified action.
-                self.count_nonevent(f"FX conversion "
+        self._qt_accounts = {(c.get('Account #') or '').strip() for c in data} - {''}
+        return qrows
+
+    def classify(self, r) -> Outcome:
+        """The row's action and activity type read; the header repeated
+        mid-file and an FX conversion non-events; its currency; then the
+        chain by action code (the builder kept on the row for `build`):
+        the stock split, the stock dividend, the dividend, the transfer,
+        the fee, the cash-only rows (a deposit or withdrawal a non-event,
+        the interest, stock-lending income a skip noted as unbooked), the
+        cash in lieu, the reinvestment, the BRW journal, an action the
+        parser does not know (a skip, noted when it moves shares), else
+        the trade with its shape flags. A cash row (`_qt_cash_kind`) is
+        noted for the file's cash events first, whatever the chain makes
+        of it."""
+        row, lineno = r.cells, r.line
+        action_raw = r.action_raw = _canon_action(row.get('Action'))
+        activity_type = r.activity_type = (row.get('Activity Type') or '').strip()
+        desc = r.desc = row.get('Description') or ''
+        if r.header:
+            # The header repeated mid-file (concatenated exports).
+            return Outcome.nonevent("repeated header row")
+        if _qt_cash_kind(action_raw, activity_type):
+            self.note_cash(r)           # its event the finish's (cash_events)
+        if action_raw == 'FXT' or activity_type == 'FX conversion':
+            # "CONVERSION - USD/CAD": the account's own cash moving
+            # between denominations. Not a disposition of property
+            # in this model — FX cash gains are reconstructed by
+            # `tjs fx-cash` from security cash flows
+            # (KNOWN_ISSUES) — so a recognized non-event, not an
+            # unclassified action.
+            return Outcome.nonevent(f"FX conversion "
                                     f"({action_raw or activity_type})")
-                continue
-            currency = self._currency(row, lineno)
-
-            # Dispatch by Action/Activity Type. Questrade uses short
-            # codes (DIV, TF6, Buy, Sell, EXP, ASN, EX) plus a longer
-            # Activity Type label for context.
-
-            # A stock split arrives as a DIS row tagged 'Dividends' with
-            # 'STK SPLIT' in the description — must be checked BEFORE the
-            # dividend branch, which would otherwise drop it as a $0 dividend
-            # and lose the split shares entirely.
-            if (self._is_stock_split(action_raw, activity_type, desc)
-                    and not self._is_cash_only(row)):
-                tx = self._parse_split(row, currency, desc, lineno)
-                if tx:
-                    self.note_row_consumed()
-                    transactions.append(tx)
-                else:
-                    self.count_skip("stock-split row not understood "
-                                    "(see warning)")
-                    self._unbooked(lineno, f"stock-split row not "
-                                   f"understood ({desc[:60]!r}) — NOT "
-                                   f"booked; the position's share count "
-                                   f"is wrong until it is (a .tt SPLIT).")
-                continue
-
-            if (action_raw == 'DIS' and _STK_DIV_RE.search(desc)
-                    and abs(self._num(row, 'Quantity', lineno)) > 1e-9):
-                # STOCK dividend: new shares delivered in kind. This
-                # row previously fell into the dividend branch, whose
-                # zero-cash guard silently DISCARDED it — the position
-                # then went phantom-short by the delivered count at the
-                # next full sale. Emitted as a NEUTRAL stock-dividend
-                # event (a $0 BUYSELL typed stock_dividend): the gains
-                # engine applies the country's rule (partition
-                # INPUTS-01); the declared amount is not in the CSV.
-                qty = self._num(row, 'Quantity', lineno)
-                net_sd = parse_strict_number(
-                    row.get('Net Amount'), field='Net Amount',
-                    where=self._where(lineno), allow_blank=True, blank=0.0)
-                if abs(net_sd) > 0.005:
-                    # Shares AND cash on one row (audit R1-72): booking
-                    # the shares dropped the cash.
-                    raise BrokerageParseError(
-                        f"{self._where(lineno)}: a stock-dividend DIS row "
-                        f"carries both a quantity ({qty:g}) and cash "
-                        f"({net_sd:,.2f}; {desc[:50]!r}) — refusing to "
-                        f"guess which part is the dividend. Split it into "
-                        f"a share row and a cash row, or book it in a .tt "
-                        f"file.")
-                date = self._date(row, 'Transaction Date',
-                                  lineno).strftime('%Y-%m-%d')
-                sym_raw, scur = self._resolve_symbol(row, currency, lineno)
-                sym = self.apply_currency_suffix(sym_raw, scur)
-                sd_key = ('STK DIV', sym, round(abs(qty), 6), 0.0)
-                self.note_row_consumed()
-                if qty < 0:
-                    # A negated STK DIV row is Questrade REVERSING a
-                    # stock dividend: it cancels the original (paired at
-                    # the end of the parse). It used to be counted as
-                    # consumed and dropped, leaving phantom shares that
-                    # diluted the ACB (audit R1-65).
-                    reversals.append((sd_key, lineno, desc))
-                    continue
-                sd_tx = {
-                    'action': 'BUYSELL',
-                    'date': date, 'time': '09:30:00',
-                    'date_settle': date,
-                    'symbol': sym,
-                    'quantity': qty, 'currency': currency,
-                    'price': 0.0, 'net_amount': 0.0,
-                    'gross_amount': 0.0,
-                    'account': self.DEFAULT_ACCOUNT,
-                    'description': desc,
-                    'type': STOCK_DIVIDEND,
-                }
-                transactions.append(sd_tx)
-                _grp = [sd_tx]
-                rev_originals.setdefault(sd_key, []).append(_grp)
-                self._orig_line[id(_grp)] = lineno
-                sd_notes.append((sd_tx,
-                                 f"NOTE: {sym_raw}: stock dividend of "
-                                 f"{qty:g} share(s) on {date} booked as a "
-                                 f"stock-dividend event — the gains run "
-                                 f"applies your country's rule to its cost "
-                                 f"(`tjs tax-logic`)."))
-                continue
-
-            if action_raw == 'DIV' or activity_type == 'Dividends':
-                qty_col = self._num(row, 'Quantity', lineno)
-                net_col = self._num(row, 'Net Amount', lineno)
-                if abs(qty_col) > 1e-9 and abs(net_col) >= 1e-9:
-                    # Shares AND cash on one income row (audit R1-72):
-                    # the dividend branch booked the cash and silently
-                    # dropped the delivered shares.
-                    raise BrokerageParseError(
-                        f"{self._where(lineno)}: a {action_raw or 'DIS'} "
-                        f"row carries both a quantity ({qty_col:g}) and "
-                        f"cash ({net_col:,.2f}; {desc[:50]!r}) — refusing "
-                        f"to book the cash and drop the shares. Split it "
-                        f"into a share row and a cash row, or book it in "
-                        f"a .tt file.")
-                if abs(qty_col) > 1e-9:
-                    # A quantity-bearing, zero-cash DIS row is a
-                    # CORPORATE-ACTION leg (warrant spinoff / rights
-                    # distribution chain: +100 / -100 / +100), not an
-                    # informational dividend. taxjson-corp-actions
-                    # books the spinoff chains (run by `tjs run`);
-                    # anything else is unclassified — loud.
-                    _sym = (row.get('Symbol') or '').strip() or '?'
-                    if _QT_CA_LEG_RE.search(desc):
-                        ca_legs.append(f"{_sym} {qty_col:+g}")
-                        if _INTERNAL_CODE_RE.match(_sym.upper()):
-                            # Say it when nothing resolves the code
-                            # (audit R1-3): the chain would book on it.
-                            self._resolve_symbol(row, currency, lineno)
-                        self.count_nonevent(
-                            "DIS corporate-action leg (quantity-bearing; "
-                            "booked by taxjson-corp-actions)")
-                    else:
-                        self.count_skip(
-                            f"DIS row with a quantity and no cash "
-                            f"({_sym}) — not a dividend, not booked")
-                        self._unbooked(
-                            lineno, f"DIS row moves {qty_col:g} {_sym} "
-                            f"with no cash ({desc[:60]!r}) — not a "
-                            f"dividend, split, stock dividend or spinoff "
-                            f"leg the parser knows; NOT booked. Book it "
-                            f"in a .tt file.")
-                    continue
-                tx = self._parse_dividend(row, currency, desc, lineno)
-                if tx:
-                    self.note_row_consumed()
-                    transactions.append(tx)
-                    if (_NONRES_NET_RE.search(desc)
-                            and tx['action'] in ('DIVIDEND',
-                                                 'DIVIDEND_IN_LIEU')
-                            and float(tx['net_amount']) > 0):
-                        net_of_tax.append(
-                            f"{tx['symbol']} {tx['date']} "
-                            f"{tx['net_amount']:.2f}")
-                elif _QT_BOOK_COST_RE.search(desc):
-                    # A zero-cash row that STATES a book-cost change
-                    # (RBC's year-end ROC / notional distribution shape,
-                    # re-audit A2-1062): the ACB moves and nothing here
-                    # books it — not an informational row.
-                    self.count_skip("book-cost adjustment row (see "
-                                    "warning)")
-                    self._unbooked(
-                        lineno, f"{(row.get('Symbol') or '').strip() or '?'}"
-                        f": the description states a book-cost adjustment "
-                        f"({desc[:80]!r}) on a row with no cash — NOT "
-                        f"booked; the ACB is wrong until it is. Book it as "
-                        f"a .tt ADJUST (a return of capital lowers the "
-                        f"ACB, a notional distribution raises it).")
-                else:
-                    # Zero-net informational row: was marked consumed
-                    # with nothing emitted, which the lint reconciled
-                    # but the skip summary never showed.
-                    self.count_nonevent("zero-net dividend row "
-                                        "(informational)")
-                continue
-
-            if action_raw == 'TF6' or activity_type == 'Transfers':
-                tx = self._parse_transfer(row, currency, lineno)
-                if tx:
-                    self.note_row_consumed()
-                    transactions.append(tx)
-                    if (tx['quantity'] > 0 and not tx.get('_book_value')):
-                        no_book_value.append(
-                            f"{tx['quantity']:g} {tx['symbol']} "
-                            f"({tx['date']})")
-                    tx.pop('_book_value', None)
-                else:
-                    self.count_nonevent("cash-only transfer journal")
-                continue
-
-            if action_raw == 'FCH' or activity_type == 'Fees and rebates':
-                # Account/custody charges (ADR custody fee, ...). Was
-                # an unclassified skip — the fee never reached the
-                # fee totals.
-                tx = self._parse_fee(row, currency, desc, lineno)
-                if tx:
-                    self.note_row_consumed()
-                    transactions.append(tx)
-                else:
-                    self.count_nonevent("zero-amount fee row")
-                continue
-
-            _cash_q = parse_strict_number(
-                row.get('Quantity'), field='Quantity',
-                where=self._where(lineno), allow_blank=True, blank=0.0)
-            if abs(_cash_q) < 1e-9 and not (row.get('Symbol') or '').strip():
-                # Cash-only rows (re-audit A2-0277 / A2-0614): they were
-                # 'unclassified ... needs a new branch'.
-                if (activity_type in ('Deposits', 'Withdrawals',
-                                      'Contributions')
-                        or action_raw in ('CON', 'DEP', 'EFT', 'EWD',
-                                          'WDR', 'CTR')):
-                    self.count_nonevent(f"cash deposit/withdrawal "
+        currency = r.currency = self._currency(row, lineno)
+        # A stock split arrives as a DIS row tagged 'Dividends' with
+        # 'STK SPLIT' in the description — checked BEFORE the dividend
+        # branch, which would otherwise drop it as a $0 dividend.
+        if (self._is_stock_split(action_raw, activity_type, desc)
+                and not self._is_cash_only(row)):
+            return r.build(self._build_split)
+        if (action_raw == 'DIS' and _STK_DIV_RE.search(desc)
+                and abs(self._num(row, 'Quantity', lineno)) > 1e-9):
+            return r.build(self._build_stock_dividend)
+        if action_raw == 'DIV' or activity_type == 'Dividends':
+            return r.build(self._build_dividend)
+        if action_raw == 'TF6' or activity_type == 'Transfers':
+            return r.build(self._build_transfer)
+        if action_raw == 'FCH' or activity_type == 'Fees and rebates':
+            return r.build(self._build_fee)
+        # The quantity, a blank 0, read once for the chain (the builders
+        # that need it read it strictly, a blank an error, as before).
+        _cash_q = r.q = parse_strict_number(
+            row.get('Quantity'), field='Quantity',
+            where=self._where(lineno), allow_blank=True, blank=0.0)
+        if abs(_cash_q) < 1e-9 and not (row.get('Symbol') or '').strip():
+            if (activity_type in _QT_CASH_MOVE_TYPES
+                    or action_raw in _QT_CASH_MOVE_CODES):
+                return Outcome.nonevent(f"cash deposit/withdrawal "
                                         f"({action_raw or activity_type})")
-                    continue
-                if action_raw == 'INT' or activity_type == 'Interest':
-                    # Interest credited (+) or margin interest charged
-                    # (-), sign kept, as RBC's interest rows.
-                    _net = self._num(row, 'Net Amount', lineno)
-                    if abs(_net) < 0.005:
-                        self.count_nonevent("zero interest row")
-                        continue
-                    _d = self._date(row, 'Transaction Date', lineno)
-                    self.note_row_consumed()
-                    transactions.append({
-                        'action': 'INTEREST',
-                        'date': _d.strftime('%Y-%m-%d'),
-                        'time': '09:30:00',
-                        'date_settle': _d.strftime('%Y-%m-%d'),
-                        'symbol': 'CASH', 'quantity': 0.0,
-                        'currency': currency, 'net_amount': _net,
-                        'type': 'interest',
-                        'account': self.DEFAULT_ACCOUNT,
-                        'description': desc,
-                    })
-                    continue
-                if action_raw == 'LFJ':
-                    # Stock-lending income: real income no branch books.
-                    _net = self._num(row, 'Net Amount', lineno)
-                    if abs(_net) >= 0.005:
-                        self.count_skip("stock-lending income (LFJ)")
-                        self._unbooked(
-                            lineno, f"stock-lending income {_net:,.2f} "
-                            f"{currency} ({desc[:50]!r}) — NOT booked; "
-                            f"take it from the slip (a T5 / 1099-MISC).")
-                        continue
+            if action_raw == 'INT' or activity_type == 'Interest':
+                return r.build(self._build_interest)
+            if action_raw == 'LFJ':
+                _net = self._num(row, 'Net Amount', lineno)
+                if abs(_net) >= 0.005:
+                    return self._unbooked(
+                        lineno, f"stock-lending income {M.shown(_net, 2):,.2f} "
+                        f"{currency} ({desc[:50]!r}) — NOT booked; "
+                        f"take it from the slip (a T5 / 1099-MISC).",
+                        "stock-lending income (LFJ)")
+        if action_raw == 'CIL' and _CIL_RE.search(desc):
+            return r.build(self._build_cil)
+        if action_raw == 'REI' or activity_type == 'Dividend reinvestment':
+            return r.build(self._build_reinvestment)
+        r.is_trade = action_raw in ('Buy', 'Sell')
+        _du = desc.upper()
+        r.code_expired = action_raw == 'EXP'
+        r.code_assigned = action_raw in ('ASN', 'EX')
+        word_expired = ' - EXPIRED' in _du
+        r.word_assigned = 'ASSIGNMENT' in _du or 'EXERCISE' in _du
+        r.is_expired = r.code_expired or word_expired
+        r.is_assigned = r.code_assigned or r.word_assigned
+        if not (r.is_trade or r.is_expired or r.is_assigned):
+            _q = r.q
+            if action_raw == 'BRW' and 'JOURNAL' in _du and abs(_q) > 1e-9:
+                return r.build(self._build_journal)
+            label = f"action {action_raw or activity_type or '?'!s}"
+            if abs(_q) > 1e-9:
+                return self._unbooked(
+                    lineno, f"action {action_raw or '?'!r} moves "
+                    f"{_q:g} {(row.get('Symbol') or '').strip() or '?'}"
+                    f" ({desc[:60]!r}) — not an action the parser "
+                    f"knows; NOT booked. Book it in a .tt file.", label)
+            return Outcome.skip(label)
+        return r.build(self._build_trade)
 
-            if action_raw == 'CIL' and _CIL_RE.search(desc):
-                # Cash in lieu of a FRACTIONAL share (a stock dividend
-                # or consolidation that would have delivered x.5
-                # shares delivers x whole ones + cash). The fraction
-                # never entered inventory (the DIS row books the whole
-                # shares), so the disposition is a same-day pair: the
-                # fraction acquired at its stock-dividend cost ($0 —
-                # the same convention as the DIS branch) and sold for
-                # the cash. In a taxable account the cash is the gain;
-                # was a counted skip.
-                legs = self._parse_cash_in_lieu(row, currency, desc, lineno,
-                                                rev_originals, reversals)
-                if legs:
-                    # Consumed only on emission — the builder counts
-                    # its own skip, and consuming AND skipping the same
-                    # row put the lint reconciliation below zero.
-                    self.note_row_consumed()
-                    transactions.extend(legs)
-                continue
+    def build(self, r) -> "List[Dict[str, Any]] | Outcome":
+        """The builder classify chose, run; the row's account stamped on
+        what it books (as the one loop stamped each row's rows)."""
+        out = r.builder(r)
+        acct = (r.cells.get('Account #') or '').strip()
+        if acct and not isinstance(out, Outcome):
+            for tx in out:
+                tx.setdefault('broker_account', acct)
+        return out
 
-            if action_raw == 'REI' or activity_type == 'Dividend reinvestment':
-                # DRIP purchase. Questrade reports the cash dividend as
-                # its own Dividends row (booked above) and the
-                # reinvestment as REI: Quantity = shares bought, Net
-                # Amount = −cost, Price column 0 with the unit price
-                # only in the description ("REINV@C$7.12345"). A plain
-                # BUYSELL at that cost; the residual dividend cash
-                # (dividend − cost) stays as cash. Was a counted skip —
-                # DRIP shares never entered inventory.
-                tx = self._parse_reinvestment(row, currency, desc, lineno,
-                                              rev_originals, reversals)
-                if tx:
-                    self.note_row_consumed()   # builder counts its skip
-                    transactions.append(tx)
-                continue
+    @builds("split")
+    def _build_split(self, r) -> "List[Dict[str, Any]] | Outcome":
+        """A stock split (a DIS row tagged 'Dividends' with 'STK SPLIT' in
+        the description, checked before the dividend branch, which would
+        drop it as a $0 dividend): booked, or a skip noted as unbooked."""
+        row, lineno, desc = r.cells, r.line, r.desc
+        currency = r.currency
+        net = parse_strict_number(row.get('Net Amount'), field='Net Amount',
+                                  where=self._where(lineno), allow_blank=True,
+                                  blank=0.0) or 0.0
+        if abs(net) > 0.005:
+            # Shares and cash on one split row: the cash was dropped
+            # without a word (TJ-4548; R1-72 refuses the stock dividend's).
+            raise BrokerageParseError(
+                f"{self._where(lineno)}: a stock-split DIS row carries both a "
+                f"quantity ({self._num(row, 'Quantity', lineno):g}) and cash "
+                f"({M.shown(net, 2):,.2f}; {desc[:50]!r}) — refusing to guess "
+                f"what the cash is. Split it into a share row at Net Amount "
+                f"0.00 and a cash row of what the cash is (a DIV row for a "
+                f"dividend), or book it in a .tt file.")
+        tx = self._parse_split(row, currency, desc, lineno)
+        if tx:
+            return [tx]
+        else:
+            return self._unbooked(lineno, f"stock-split row not "
+                                  f"understood ({desc[:60]!r}) — NOT "
+                                  f"booked; the position's share count "
+                                  f"is wrong until it is (a .tt SPLIT).",
+                                  "stock-split row not understood (see warning)")
 
-            is_trade = action_raw in ('Buy', 'Sell')
-            _du = desc.upper()
-            code_expired = action_raw == 'EXP'
-            code_assigned = action_raw in ('ASN', 'EX')
-            word_expired = ' - EXPIRED' in _du
-            word_assigned = 'ASSIGNMENT' in _du or 'EXERCISE' in _du
-            is_expired = code_expired or word_expired
-            is_assigned = code_assigned or word_assigned
+    @builds("stock_dividend")
+    def _build_stock_dividend(self, r) -> "List[Dict[str, Any]] | Outcome":
+        """A stock-dividend DIS row (shares, no cash): the shares at $0 as a
+        stock-dividend event, its reversal recorded for the pairing after
+        the loop (consumed, nothing booked)."""
+        st = self._qt
+        row, lineno, desc = r.cells, r.line, r.desc
+        currency = r.currency
+        rev_originals, reversals, sd_notes = st.rev_originals, st.reversals, st.sd_notes
+        qty = self._num(row, 'Quantity', lineno)
+        net_sd = parse_strict_number(
+            row.get('Net Amount'), field='Net Amount',
+            where=self._where(lineno), allow_blank=True, blank=0.0)
+        if abs(net_sd) > 0.005:
+            # Shares AND cash on one row (audit R1-72): booking
+            # the shares dropped the cash.
+            raise BrokerageParseError(
+                f"{self._where(lineno)}: a stock-dividend DIS row "
+                f"carries both a quantity ({qty:g}) and cash "
+                f"({M.shown(net_sd, 2):,.2f}; {desc[:50]!r}) — refusing to "
+                f"guess which part is the dividend. Split it into "
+                f"a share row and a cash row, or book it in a .tt "
+                f"file.")
+        date = self._date(row, 'Transaction Date',
+                          lineno).strftime('%Y-%m-%d')
+        sym_raw, scur = self._resolve_symbol(row, currency, lineno)
+        sym = self.apply_currency_suffix(sym_raw, scur)
+        sd_key = ('STK DIV', sym, M.units(abs(qty), 6), 0.0)
+        if qty < 0:
+            # A negated STK DIV row is Questrade REVERSING a
+            # stock dividend: it cancels the original (paired at
+            # the end of the parse). It used to be counted as
+            # consumed and dropped, leaving phantom shares that
+            # diluted the ACB (audit R1-65).
+            reversals.append((sd_key, lineno, desc))
+            return []
+        sd_tx = {
+            'action': 'BUYSELL',
+            'date': date, 'time': '09:30:00',
+            'date_settle': date,
+            'symbol': sym,
+            'quantity': qty, 'currency': currency,
+            'price': 0.0, 'net_amount': 0.0,
+            'gross_amount': 0.0,
+            'account': self.DEFAULT_ACCOUNT,
+            'description': desc,
+            'type': STOCK_DIVIDEND,
+        }
+        _grp = [sd_tx]
+        rev_originals.setdefault(sd_key, []).append(_grp)
+        self._qt.orig_line[id(_grp)] = lineno
+        sd_notes.append((sd_tx,
+                         f"NOTE: {sym_raw}: stock dividend of "
+                         f"{qty:g} share(s) on {date} booked as a "
+                         f"stock-dividend event — the gains run "
+                         f"applies your country's rule to its cost "
+                         f"(`tjs tax-logic`)."))
+        return [sd_tx]
+
+    @builds("dividend", "dividend_in_lieu", "roc")
+    def _build_dividend(self, r) -> "List[Dict[str, Any]] | Outcome":
+        """A DIV row: a quantity-bearing DIS leg is corp-actions' (a non-event)
+        or unbooked (a skip); else the dividend (`_parse_dividend`), a
+        net-of-tax one noted, a book-cost adjustment a skip noted as
+        unbooked, a zero-net row a non-event."""
+        st = self._qt
+        row, lineno, desc = r.cells, r.line, r.desc
+        currency, action_raw = r.currency, r.action_raw
+        ca_legs, net_of_tax = st.ca_legs, st.net_of_tax
+        qty_col = self._num(row, 'Quantity', lineno)
+        net_col = self._num(row, 'Net Amount', lineno)
+        if abs(qty_col) > 1e-9 and abs(net_col) >= 1e-9:
+            # Shares AND cash on one income row (audit R1-72):
+            # the dividend branch booked the cash and silently
+            # dropped the delivered shares.
+            raise BrokerageParseError(
+                f"{self._where(lineno)}: a {action_raw or 'DIS'} "
+                f"row carries both a quantity ({qty_col:g}) and "
+                f"cash ({M.shown(net_col, 2):,.2f}; {desc[:50]!r}) — refusing "
+                f"to book the cash and drop the shares. Split it "
+                f"into a share row and a cash row, or book it in "
+                f"a .tt file.")
+        if abs(qty_col) > 1e-9:
+            # A quantity-bearing, zero-cash DIS row is a
+            # CORPORATE-ACTION leg (warrant spinoff / rights
+            # distribution chain: +100 / -100 / +100), not an
+            # informational dividend. taxjson-corp-actions
+            # books the spinoff chains (run by `tjs run`);
+            # anything else is unclassified — loud.
+            _sym = (row.get('Symbol') or '').strip() or '?'
+            if _QT_CA_LEG_RE.search(desc):
+                ca_legs.append(f"{_sym} {qty_col:+g}")
+                if _INTERNAL_CODE_RE.match(_sym.upper()):
+                    # Say it when nothing resolves the code
+                    # (audit R1-3): the chain would book on it.
+                    self._resolve_symbol(row, currency, lineno)
+                return Outcome.nonevent("DIS corporate-action leg (quantity-bearing; "
+                            "booked by taxjson-corp-actions)")
+            else:
+                return self._unbooked(
+                    lineno, f"DIS row moves {qty_col:g} {_sym} "
+                    f"with no cash ({desc[:60]!r}) — not a "
+                    f"dividend, split, stock dividend or spinoff "
+                    f"leg the parser knows; NOT booked. Book it "
+                    f"in a .tt file.", f"DIS row with a quantity and no cash "
+                    f"({_sym}) — not a dividend, not booked")
+        tx = self._parse_dividend(row, currency, desc, lineno)
+        if tx:
+            if (_NONRES_NET_RE.search(desc)
+                    and tx['action'] in ('DIVIDEND',
+                                         'DIVIDEND_IN_LIEU')
+                    and float(tx['net_amount']) > 0):
+                net_of_tax.append(
+                    f"{tx['symbol']} {tx['date']} "
+                    f"{M.shown(tx['net_amount'], 2):.2f}")
+            return [tx]
+        elif _QT_BOOK_COST_RE.search(desc):
+            # A zero-cash row that STATES a book-cost change
+            # (RBC's year-end ROC / notional distribution shape,
+            # re-audit A2-1062): the ACB moves and nothing here
+            # books it — not an informational row.
+            return self._unbooked(
+                lineno, f"{(row.get('Symbol') or '').strip() or '?'}"
+                f": the description states a book-cost adjustment "
+                f"({desc[:80]!r}) on a row with no cash — NOT "
+                f"booked; the ACB is wrong until it is. Book it as "
+                f"a .tt ADJUST (a return of capital lowers the "
+                f"ACB, a notional distribution raises it).",
+                "book-cost adjustment row (see warning)")
+        else:
+            # Zero-net informational row: was marked consumed
+            # with nothing emitted, which the lint reconciled
+            # but the skip summary never showed.
+            return Outcome.nonevent("zero-net dividend row "
+                                        "(informational)")
+
+    @builds("transfer")
+    def _build_transfer(self, r) -> "List[Dict[str, Any]] | Outcome":
+        """A TF6 row (`_parse_transfer`): a transfer-in at $0 noted; a
+        cash-only journal a non-event."""
+        st = self._qt
+        row, lineno, currency = r.cells, r.line, r.currency
+        no_book_value = st.no_book_value
+        tx = self._parse_transfer(row, currency, lineno)
+        if tx:
+            if (tx['quantity'] > 0 and not tx.get('_book_value')):
+                no_book_value.append(
+                    f"{tx['quantity']:g} {tx['symbol']} "
+                    f"({tx['date']})")
+            tx.pop('_book_value', None)
+            return [tx]
+        else:
+            return Outcome.nonevent("cash-only transfer journal")
+
+    @builds("fee")
+    def _build_fee(self, r) -> "List[Dict[str, Any]] | Outcome":
+        """An FCH row (`_parse_fee`); a zero-amount one a non-event."""
+        row, lineno, desc = r.cells, r.line, r.desc
+        currency = r.currency
+        tx = self._parse_fee(row, currency, desc, lineno)
+        if tx:
+            return [tx]
+        else:
+            return Outcome.nonevent("zero-amount fee row")
+
+    @builds("interest")
+    def _build_interest(self, r) -> "List[Dict[str, Any]] | Outcome":
+        """A cash-only INT row: the interest (a zero one a non-event)."""
+        row, lineno, desc = r.cells, r.line, r.desc
+        currency = r.currency
+        _net = self._num(row, 'Net Amount', lineno)
+        if abs(_net) < 0.005:
+            return Outcome.nonevent("zero interest row")
+        _d = self._date(row, 'Transaction Date', lineno)
+        return [{
+            'action': 'INTEREST',
+            'date': _d.strftime('%Y-%m-%d'),
+            'time': '09:30:00',
+            'date_settle': _d.strftime('%Y-%m-%d'),
+            'symbol': 'CASH', 'quantity': 0.0,
+            'currency': currency, 'net_amount': _net,
+            'type': 'interest',
+            'account': self.DEFAULT_ACCOUNT,
+            'description': desc,
+        }]
+
+    @builds("transfer")
+    def _build_journal(self, r) -> "List[Dict[str, Any]] | Outcome":
+        """A BRW journal row moving units between the CAD and USD lines of
+        one security: a TRANSFER leg, its pair and book value when the
+        description and the account context give them."""
+        st = self._qt
+        row, lineno, desc = r.cells, r.line, r.desc
+        currency, _q = r.currency, r.q
+        journals, journal_txs, key = st.journals, st.journal_txs, st.key
+        # A currency journal's leg (_plan_qt_journals): its
+        # line's listing — the website export names both
+        # legs by the bare symbol, and the USD leg is the
+        # security's US-dollar class (SAMPLF.U.TO), not a
+        # US listing. A leg with a blank Symbol takes its
+        # partner's security.
+        _jl = self._ctx.journal_legs.get(
+            (key, lineno)) or {}
+        if not (row.get('Symbol') or '').strip() and not _jl.get('symbol'):
+            # Booked as a TRANSFER of symbol '' (TJ-4541); a paired
+            # leg's partner names it (review round 1).
+            raise BrokerageParseError(
+                f"{self._where(lineno)}: a BRW journal row has no Symbol "
+                f"({desc[:60]!r}, {_q:+g}) — refusing to book a move of no "
+                f"security. Write the security's symbol in the cell (its "
+                f"partner row names it), or book the move in a .tt file.")
+        _bv = _BRW_BOOK_VALUE_RE.search(desc)
+        _date = self._date(row, 'Transaction Date', lineno)
+        _jtx = {
+            'action': 'TRANSFER',
+            'date': _date.strftime('%Y-%m-%d'),
+            'time': _date.strftime('%H:%M:%S'),
+            'date_settle': _date.strftime('%Y-%m-%d'),
+            'symbol': _jl.get('symbol')
+            or self.apply_currency_suffix(
+                (row.get('Symbol') or '').strip().upper(),
+                currency),
+            'quantity': _q, 'currency': currency,
+            'price': 0.0, 'net_amount': 0.0,
+            'gross_amount': 0.0,
+            'account': self.DEFAULT_ACCOUNT,
+            'description': desc,
+        }
+        if _jl.get('pair'):
+            # The pair's id: `tjs run` joins the two lines
+            # as a ticker.map JOURNAL line would (Canada,
+            # tax-logic CA-XLIST-03; lib/cross_listings).
+            _jtx['journal_pair'] = _jl['pair']
+        if _bv:
+            _jtx['book_value'] = parse_strict_number(
+                _bv.group(1), field='BOOK VALUE',
+                where=self._where(lineno))
+            _cnv = _BRW_CNV_RE.search(desc)
+            if _cnv:
+                _jtx['_cnv'] = desc_number(
+                    _cnv.group(1), where=self._where(lineno),
+                    field='CNV@ rate')
+        journals.append(f"{_jtx['symbol']} {_q:+g}")
+        journal_txs.append(_jtx)
+        return [_jtx]
+
+    @builds("trade")
+    def _build_cil(self, r) -> "List[Dict[str, Any]] | Outcome":
+        """A CIL row (`_parse_cash_in_lieu`): the legs, or the Outcome the
+        builder found (no fraction or cash: a skip; a reversal read into
+        the pairing: consumed, nothing booked)."""
+        st = self._qt
+        return self._parse_cash_in_lieu(r.cells, r.currency, r.desc, r.line,
+                                        st.rev_originals, st.reversals)
+
+    @builds("trade")
+    def _build_reinvestment(self, r) -> "List[Dict[str, Any]] | Outcome":
+        """An REI row (`_parse_reinvestment`): the reinvestment, or the Outcome
+        the builder found (no shares and no cash: a non-event; a reversal
+        read into the pairing: consumed, nothing booked)."""
+        st = self._qt
+        tx = self._parse_reinvestment(r.cells, r.currency, r.desc, r.line,
+                                      st.rev_originals, st.reversals)
+        return tx if isinstance(tx, Outcome) else [tx]
+
+    def _trade_shape(self, r) -> "_QtShape | Outcome":
+        """The row's date and time, the option parsed from the description
+        (none when the Symbol column names the underlying), the settle the
+        export gives, the quantity, the multiplier assumed for an option,
+        whether the row carries cash and what that makes of the expiry and
+        assignment flags (an expiry or an option leg carrying cash refused;
+        a zero-cash row that is no option leg a skip), a Buy with a
+        negative quantity refused, the quantity signed."""
+        row, lineno, desc = r.cells, r.line, r.desc
+        action_raw, activity_type = r.action_raw, r.activity_type
+        is_trade, code_expired = r.is_trade, r.code_expired
+        code_assigned, word_assigned = r.code_assigned, r.word_assigned
+        is_expired = r.is_expired
+        dt = self._date(row, 'Transaction Date', lineno)
+        date = dt.strftime("%Y-%m-%d")
+        time = dt.strftime("%H:%M:%S")
+
+        opt = self.parse_option_from_description(desc)
+        _sym_col = (row.get('Symbol') or '').strip().upper()
+        if opt and _sym_col and names_underlying(opt['base'],
+                                                  _sym_col):
+            # The Symbol column names the UNDERLYING's listed ticker:
+            # this is the stock leg of an assignment/exercise whose
+            # description quotes the contract ("ABC CORP ASSIGNMENT
+            # OF OPTION CALL ABC 05/16/25 50"). Taking the option
+            # identity from the text booked -100 contracts at $0
+            # and dropped the sale (audit S062-19).
+            opt = None
+        settle_dt = self._date(row, 'Settlement Date', lineno,
+                               required=False)
+        # A BLANK settlement cell falls back to the standard cycle,
+        # computed once the symbol (its listing) is known below.
+        date_settle = (settle_dt.strftime("%Y-%m-%d") if settle_dt
+                       else None)
+
+        qty = self._num(row, 'Quantity', lineno)
+        # The row's OWN money decides whether it is a zero-cash
+        # option leg (audit R1-63). A word in the description used
+        # to zero price, cash and commission on ANY row: an ASN
+        # stock leg (100 @ strike, Net -5000) was booked at $0 cost,
+        # a Buy/Sell of "ACME EXERCISE EQUIPMENT" vanished, and a
+        # "... RIGHTS - EXPIRED" sale lost its proceeds. Only a row
+        # with no cash is an expiry / assignment option leg; a row
+        # WITH cash keeps it (an ASN/EX stock leg stays the marked
+        # ASSIGN leg, which consumes the staged premium).
+        _where = self._where(lineno)
+        carries_cash = any(
+            abs(parse_strict_number(row.get(c), field=c, where=_where,
+                                    allow_blank=True, blank=0.0))
+            > 0.005 for c in ('Gross Amount', 'Net Amount'))
+        if carries_cash:
+            if code_expired:
+                raise BrokerageParseError(
+                    f"{_where}: an EXP (expiry) row carries cash "
+                    f"(Gross {row.get('Gross Amount')!r}, Net "
+                    f"{row.get('Net Amount')!r}; {desc[:50]!r}) — an "
+                    f"expiry has none; refusing to guess whether it "
+                    f"is a sale.")
+            if code_assigned and opt:
+                raise BrokerageParseError(
+                    f"{_where}: an {action_raw} option leg carries "
+                    f"cash ({desc[:50]!r}) — a cash-settled exercise "
+                    f"is not a shape this parser books; refusing to "
+                    f"guess.")
+            is_expired = False
+            is_assigned = code_assigned       # the marked stock leg
+            if is_assigned:
+                # Direction from the cash: shares bought (Net < 0)
+                # or delivered (Net > 0) on the assignment.
+                _net = parse_strict_number(
+                    row.get('Net Amount'), field='Net Amount',
+                    where=_where)
+                qty = abs(qty) if _net < 0 else -abs(qty)
+        else:
+            # A zero-cash row: an option's expiry/assignment leg, or
+            # an expiring right (EXP / "- EXPIRED") at $0.
+            is_assigned = code_assigned or (word_assigned and bool(opt))
+            if is_assigned and not opt:
+                raise BrokerageParseError(
+                    f"{_where}: an {action_raw} row for "
+                    f"{(row.get('Symbol') or '').strip()!r} is not an "
+                    f"option and carries no cash ({desc[:50]!r}) — "
+                    f"booking the shares at $0 would misstate the "
+                    f"ACB; refusing to guess.")
             if not (is_trade or is_expired or is_assigned):
-                _q = parse_strict_number(
-                    row.get('Quantity'), field='Quantity',
-                    where=self._where(lineno), allow_blank=True, blank=0.0)
-                if action_raw == 'BRW' and 'JOURNAL' in _du and abs(_q) > 1e-9:
-                    # "... JOURNAL POSITION TO USD" / "FROM CAD": units
-                    # journaled between the CAD and USD lines of ONE
-                    # security (Norbert's gambit, SAMPLF.TO <-> SAMPLF.U.TO).
-                    # Booked the way RBC's TFR journal legs are: a
-                    # TRANSFER per leg, the USD leg on its TSX listing
-                    # (SAMPLF.U.TO). A ticker.map JOURNAL rule makes the two
-                    # lines one pool and the pair nets out; the legs used
-                    # to be skipped, leaving the units on SAMPLF.TO.
-                    _bv = _BRW_BOOK_VALUE_RE.search(desc)
-                    _date = self._date(row, 'Transaction Date', lineno)
-                    # A currency journal's leg (_plan_qt_journals): its
-                    # line's listing — the website export names both
-                    # legs by the bare symbol, and the USD leg is the
-                    # security's US-dollar class (SAMPLF.U.TO), not a
-                    # US listing.
-                    _jl = self._ctx.journal_legs.get(
-                        (str(path.resolve()), lineno)) or {}
-                    _jtx = {
-                        'action': 'TRANSFER',
-                        'date': _date.strftime('%Y-%m-%d'),
-                        'time': _date.strftime('%H:%M:%S'),
-                        'date_settle': _date.strftime('%Y-%m-%d'),
-                        'symbol': _jl.get('symbol')
-                        or self.apply_currency_suffix(
-                            (row.get('Symbol') or '').strip().upper(),
-                            currency),
-                        'quantity': _q, 'currency': currency,
-                        'price': 0.0, 'net_amount': 0.0,
-                        'gross_amount': 0.0,
-                        'account': self.DEFAULT_ACCOUNT,
-                        'description': desc,
-                    }
-                    if _jl.get('pair'):
-                        # The pair's id: `tjs run` joins the two lines
-                        # as a ticker.map JOURNAL line would (Canada,
-                        # tax-logic CA-XLIST-03; lib/cross_listings).
-                        _jtx['journal_pair'] = _jl['pair']
-                    if _bv:
-                        _jtx['book_value'] = parse_strict_number(
-                            _bv.group(1), field='BOOK VALUE',
-                            where=self._where(lineno))
-                        _cnv = _BRW_CNV_RE.search(desc)
-                        if _cnv:
-                            _jtx['_cnv'] = desc_number(
-                                _cnv.group(1), where=self._where(lineno),
-                                field='CNV@ rate')
-                    self.note_row_consumed()
-                    transactions.append(_jtx)
-                    journals.append(f"{_jtx['symbol']} {_q:+g}")
-                    journal_txs.append(_jtx)
-                    continue
-                # Previously a silent drop — a new Questrade action code
-                # lost rows with zero signal. Count it; the summary at
-                # the end of the parse names every dropped category.
-                self.count_skip(f"action {action_raw or activity_type or '?'!s}")
-                if abs(_q) > 1e-9:
-                    # A row that moves shares and is not booked changes
-                    # the position: say so where `tjs run` shows it
-                    # (audit R1-71; the note reached only the .sum).
-                    self._unbooked(
-                        lineno, f"action {action_raw or '?'!r} moves "
-                        f"{_q:g} {(row.get('Symbol') or '').strip() or '?'}"
-                        f" ({desc[:60]!r}) — not an action the parser "
-                        f"knows; NOT booked. Book it in a .tt file.")
-                continue
-
-            dt = self._date(row, 'Transaction Date', lineno)
-            date = dt.strftime("%Y-%m-%d")
-            time = dt.strftime("%H:%M:%S")
-
-            opt = self.parse_option_from_description(desc)
-            _sym_col = (row.get('Symbol') or '').strip().upper()
-            from taxjson.lib.brokerages.rbc_direct import _names_underlying
-            if opt and _sym_col and _names_underlying(opt['base'],
-                                                      _sym_col):
-                # The Symbol column names the UNDERLYING's listed ticker:
-                # this is the stock leg of an assignment/exercise whose
-                # description quotes the contract ("ABC CORP ASSIGNMENT
-                # OF OPTION CALL ABC 05/16/25 50"). Taking the option
-                # identity from the text booked -100 contracts at $0
-                # and dropped the sale (audit S062-19).
-                opt = None
-            settle_dt = self._date(row, 'Settlement Date', lineno,
-                                   required=False)
-            # A BLANK settlement cell falls back to the standard cycle,
-            # computed once the symbol (its listing) is known below.
-            date_settle = (settle_dt.strftime("%Y-%m-%d") if settle_dt
-                           else None)
-
-            qty = self._num(row, 'Quantity', lineno)
-            mult = float(self.OPTION_MULTIPLIER) if opt else 1.0
-            # The export never states a contract's size: 100 is assumed
-            # unless the row's Gross shows a mini (B10).
-            size_basis = 'assumed' if opt else ''
-            # The row's OWN money decides whether it is a zero-cash
-            # option leg (audit R1-63). A word in the description used
-            # to zero price, cash and commission on ANY row: an ASN
-            # stock leg (100 @ strike, Net -5000) was booked at $0 cost,
-            # a Buy/Sell of "ACME EXERCISE EQUIPMENT" vanished, and a
-            # "... RIGHTS - EXPIRED" sale lost its proceeds. Only a row
-            # with no cash is an expiry / assignment option leg; a row
-            # WITH cash keeps it (an ASN/EX stock leg stays the marked
-            # ASSIGN leg, which consumes the staged premium).
-            _where = self._where(lineno)
-            carries_cash = any(
-                abs(parse_strict_number(row.get(c), field=c, where=_where,
-                                        allow_blank=True, blank=0.0))
-                > 0.005 for c in ('Gross Amount', 'Net Amount'))
-            if carries_cash:
-                if code_expired:
-                    raise BrokerageParseError(
-                        f"{_where}: an EXP (expiry) row carries cash "
-                        f"(Gross {row.get('Gross Amount')!r}, Net "
-                        f"{row.get('Net Amount')!r}; {desc[:50]!r}) — an "
-                        f"expiry has none; refusing to guess whether it "
-                        f"is a sale.")
-                if code_assigned and opt:
-                    raise BrokerageParseError(
-                        f"{_where}: an {action_raw} option leg carries "
-                        f"cash ({desc[:50]!r}) — a cash-settled exercise "
-                        f"is not a shape this parser books; refusing to "
-                        f"guess.")
-                is_expired = False
-                is_assigned = code_assigned       # the marked stock leg
-                if is_assigned:
-                    # Direction from the cash: shares bought (Net < 0)
-                    # or delivered (Net > 0) on the assignment.
-                    _net = parse_strict_number(
-                        row.get('Net Amount'), field='Net Amount',
-                        where=_where)
-                    qty = abs(qty) if _net < 0 else -abs(qty)
-            else:
-                # A zero-cash row: an option's expiry/assignment leg, or
-                # an expiring right (EXP / "- EXPIRED") at $0.
-                is_assigned = code_assigned or (word_assigned and bool(opt))
-                if is_assigned and not opt:
-                    raise BrokerageParseError(
-                        f"{_where}: an {action_raw} row for "
-                        f"{(row.get('Symbol') or '').strip()!r} is not an "
-                        f"option and carries no cash ({desc[:50]!r}) — "
-                        f"booking the shares at $0 would misstate the "
-                        f"ACB; refusing to guess.")
-                if not (is_trade or is_expired or is_assigned):
-                    self.count_skip(
-                        f"action {action_raw or activity_type or '?'!s} "
+                return Outcome.skip(f"action {action_raw or activity_type or '?'!s} "
                         f"(zero-cash, not an option leg)")
-                    continue
-            if is_trade:
-                if action_raw == 'Buy' and qty < 0:
-                    # Questrade signs a buy positive and a sale negative;
-                    # a Buy with a negative Quantity was flipped to a buy
-                    # silently (re-audit A2-1057). Refused, as the
-                    # generic importer does.
+        if is_trade:
+            if abs(qty) < QTY_ZERO:
+                # A trade of no units, with cash or without, stopped `tjs
+                # run` at the schema check, naming no row (TJ-4543).
+                raise zero_units_refusal(_where, action_raw,
+                                         row.get('Quantity'))
+            if action_raw == 'Buy' and qty < 0:
+                # Questrade signs a buy positive and a sale negative;
+                # a Buy with a negative Quantity was flipped to a buy
+                # silently (re-audit A2-1057). Refused, as the
+                # generic importer does.
+                raise BrokerageParseError(
+                    f"{self._where(lineno)}: a Buy row with a NEGATIVE "
+                    f"Quantity {qty:g} ({desc[:50]!r}) — the action "
+                    f"says purchase, the quantity says sale; refusing "
+                    f"to guess.")
+            qty = self.signed_quantity(qty, action_is_sell=(action_raw == 'Sell'))
+        return _QtShape(carries_cash=carries_cash, date=date, date_settle=date_settle,
+                        is_assigned=is_assigned, is_expired=is_expired, opt=opt, qty=qty,
+                        time=time)
+
+    def _trade_money(self, r, sh) -> "_QtMoney":
+        """The price, the net and the commission: none for an expiry or an
+        assignment without cash; else read from the row, the option size
+        fitted to the gross, the commission's sign from the cash against
+        the gross (an FX-settled row compared at its rate) and the money
+        checked; an FX-settled CAD row relisted in USD at the rate."""
+        row, lineno, desc = r.cells, r.line, r.desc
+        currency = r.currency
+        carries_cash, is_assigned = sh.carries_cash, sh.is_assigned
+        is_expired, opt, qty = sh.is_expired, sh.opt, sh.qty
+        mult = float(self.OPTION_MULTIPLIER) if opt else 1.0
+        # The export never states a contract's size: 100 is assumed
+        # unless the row's Gross shows a mini (B10).
+        size_basis = 'assumed' if opt else ''
+        if (is_expired or is_assigned) and not carries_cash:
+            price = 0.0
+            net = 0.0
+            comm = 0.0
+        else:
+            price = self._num(row, 'Price', lineno)
+            gross_signed = self._num(row, 'Gross Amount', lineno)
+            comm_signed = self._num(row, 'Commission', lineno)
+            net_signed = self._num(row, 'Net Amount', lineno)
+            gross = abs(gross_signed)
+            if opt and abs(price) > 0:
+                def _fits(m, _q=qty, _p=price, _g=gross):
+                    exp = abs(_q) * abs(_p) * m
+                    return money_close(_g, exp, abs_tol=0.02, rel_tol=0.002)
+                mult, size_basis = self.option_row_multiplier(
+                    (row.get('Symbol') or '').strip() or desc[:30],
+                    _fits)
+            # SIGNED commission. The old abs(Commission) made a
+            # REBATE a charge (2x the rebate wrong). The cash truth
+            # is Questrade's own Net Amount (a buy's negative, a
+            # sell's positive): the commission is a charge when a
+            # buy cost MORE than its gross / a sell brought in
+            # LESS, a rebate otherwise — and its size must be the
+            # Commission column's (checked in _check_trade_money).
+            cash = -net_signed if qty > 0 else net_signed
+            fx_settled = bool(_FX_SETTLED_RE.search(desc))
+            _rate = 1.0
+            if r.is_trade and not opt and not price and abs(gross) > 0.005:
+                # Shares bought or sold at Price 0 with a Gross: booked at
+                # price 0, the Gross unchecked (the check needs a price;
+                # TJ-4543). An assignment's or exercise's stock leg at
+                # Price 0 is booked at its cash, as before (review round 1).
+                raise BrokerageParseError(
+                    f"{self._where(lineno)}: {r.action_raw} {qty:g} "
+                    f"{(row.get('Symbol') or '').strip()} at Price 0 with "
+                    f"Gross Amount {M.shown(gross_signed, 2):,.2f} — a share "
+                    f"trade at Price 0 carrying cash: the Price cell is cut "
+                    f"or the columns are shifted; refusing to book it. Fill "
+                    f"the Price from the statement (the row is then checked "
+                    f"against its Gross), or delete the row and enter the "
+                    f"trade as a .tt line.")
+            if fx_settled:
+                # Net is CAD, Gross USD: compare in USD.
+                _fx = _FX_SETTLED_RE.search(desc)
+                _rtxt = _fx.group(1) if _fx else '0'
+                _rate = float(_rtxt)
+                if _rate <= 0:
+                    # Booked on the CAD listing at the USD price (TJ-4542).
                     raise BrokerageParseError(
-                        f"{self._where(lineno)}: a Buy row with a NEGATIVE "
-                        f"Quantity {qty:g} ({desc[:50]!r}) — the action "
-                        f"says purchase, the quantity says sale; refusing "
-                        f"to guess.")
-                qty = self.signed_quantity(qty, action_is_sell=(action_raw == 'Sell'))
-            # EXP / ASN / EX option legs: the CSV quantity is already
-            # signed to close the open position — a long option expires
-            # or is exercised with a NEGATIVE quantity, a short with a
-            # positive one. signed_quantity() would force it positive
-            # and add a phantom contract instead of netting it to zero.
-
-            if (is_expired or is_assigned) and not carries_cash:
-                price = 0.0
-                net = 0.0
-                comm = 0.0
+                        f"{self._where(lineno)}: a CAD-settled trade states "
+                        f"EXCHANGE RATE {_rtxt} ({desc[:60]!r}) — no "
+                        f"rate converts its USD price; refusing to book it. "
+                        f"Correct the rate and the Net Amount from the trade "
+                        f"confirmation.")
+                cash_cmp = cash / _rate
             else:
-                price = self._num(row, 'Price', lineno)
-                gross_signed = self._num(row, 'Gross Amount', lineno)
-                comm_signed = self._num(row, 'Commission', lineno)
-                net_signed = self._num(row, 'Net Amount', lineno)
-                gross = abs(gross_signed)
-                if opt and abs(price) > 0:
-                    def _fits(m, _q=qty, _p=price, _g=gross):
-                        exp = abs(_q) * abs(_p) * m
-                        return abs(_g - exp) <= max(0.02, 0.002 * max(exp,
-                                                                      _g))
-                    mult, size_basis = self.option_row_multiplier(
-                        (row.get('Symbol') or '').strip() or desc[:30],
-                        _fits)
-                # SIGNED commission. The old abs(Commission) made a
-                # REBATE a charge (2x the rebate wrong). The cash truth
-                # is Questrade's own Net Amount (a buy's negative, a
-                # sell's positive): the commission is a charge when a
-                # buy cost MORE than its gross / a sell brought in
-                # LESS, a rebate otherwise — and its size must be the
-                # Commission column's (checked in _check_trade_money).
-                cash = -net_signed if qty > 0 else net_signed
-                fx_settled = bool(_FX_SETTLED_RE.search(desc))
-                _rate = 1.0
-                if fx_settled:
-                    # Net is CAD, Gross USD: compare in USD.
-                    _fx = _FX_SETTLED_RE.search(desc)
-                    _rate = float(_fx.group(1)) or 1.0
-                    cash_cmp = cash / _rate
-                else:
-                    cash_cmp = cash
-                diff = (cash_cmp - gross) if qty > 0 else (gross - cash_cmp)
-                comm = (math.copysign(abs(comm_signed), diff)
-                        if abs(comm_signed) > 0 else 0.0)
-                net = (gross + comm) if qty > 0 else (gross - comm)
-                self._check_trade_money(lineno, desc, qty, price,
-                                        gross_signed, comm_signed,
-                                        diff, mult, fx_settled,
-                                        cash=cash, rate=_rate)
+                cash_cmp = cash
+            diff = (cash_cmp - gross) if qty > 0 else (gross - cash_cmp)
+            comm = (math.copysign(abs(comm_signed), diff)
+                    if abs(comm_signed) > 0 else 0.0)
+            net = (gross + comm) if qty > 0 else (gross - comm)
+            self._check_trade_money(lineno, desc, qty, price,
+                                    gross_signed, comm_signed,
+                                    diff, mult, fx_settled,
+                                    cash=cash, rate=_rate)
 
-            # CAD-settled US trade (see _FX_SETTLED_RE): the security is
-            # the US listing, and the ACB is the CAD the account paid —
-            # Net Amount — not the USD gross read as if it were CAD
-            # (which under-stated a Broadcom buy by the whole exchange
-            # rate and filed it as SAMPMF.TO, a CDR-shaped symbol the
-            # DISTINCT rule then kept apart from the real pool).
-            listing_currency = currency
-            fx_m = _FX_SETTLED_RE.search(desc) if carries_cash else None
-            if fx_m and currency.upper() == 'CAD' and float(fx_m.group(1)) > 0:
-                rate = float(fx_m.group(1))
-                listing_currency = 'USD'
-                price = round(price * rate, 8)
-                # SIGNED, like the non-FX branch (audit S014-06): a buy's
-                # cost is -Net, a sale's proceeds +Net — abs() turned a
-                # sale whose commission exceeded its gross (Net < 0)
-                # into positive proceeds.
-                if abs(net_signed) > 0:
-                    net = -net_signed if qty > 0 else net_signed
-                else:
-                    net = round(net * rate, 8)
-                # The commission in CAD too (re-audit A2-0615): it stayed
-                # the USD-sized figure on a row whose price, gross and
-                # net are CAD, so gross + commission != net and the fees
-                # report / Schedule 3 outlays were short by the rate.
-                # The CAD truth is the cash: the gap between Net and the
-                # CAD gross.
-                if comm:
-                    _gross_cad = abs(qty) * price * mult
-                    comm = round((net - _gross_cad) if qty > 0
-                                 else (_gross_cad - net), 2)
+        # CAD-settled US trade (see _FX_SETTLED_RE): the security is
+        # the US listing, and the ACB is the CAD the account paid —
+        # Net Amount — not the USD gross read as if it were CAD
+        # (which under-stated a Broadcom buy by the whole exchange
+        # rate and filed it as SAMPMF.TO, a CDR-shaped symbol the
+        # DISTINCT rule then kept apart from the real pool).
+        listing_currency = currency
+        fx_m = _FX_SETTLED_RE.search(desc) if carries_cash else None
+        if fx_m and currency.upper() == 'CAD' and float(fx_m.group(1)) > 0:
+            rate = float(fx_m.group(1))
+            listing_currency = 'USD'
+            price = M.units(price * rate, 8)
+            # SIGNED, like the non-FX branch (audit S014-06): a buy's
+            # cost is -Net, a sale's proceeds +Net — abs() turned a
+            # sale whose commission exceeded its gross (Net < 0)
+            # into positive proceeds.
+            if abs(net_signed) > 0:
+                net = -net_signed if qty > 0 else net_signed
+            else:
+                net = M.units(net * rate, 8)
+            # The commission in CAD too (re-audit A2-0615): it stayed
+            # the USD-sized figure on a row whose price, gross and
+            # net are CAD, so gross + commission != net and the fees
+            # report / Schedule 3 outlays were short by the rate.
+            # The CAD truth is the cash: the gap between Net and the
+            # CAD gross.
+            if comm:
+                _gross_cad = abs(qty) * price * mult
+                comm = M.units((net - _gross_cad) if qty > 0
+                               else (_gross_cad - net), 2)
+        return _QtMoney(comm=comm, listing_currency=listing_currency, mult=mult, net=net, price=price, size_basis=size_basis)
 
-            # Option symbol reconstruction from Description; fall back to
-            # the bare Symbol column (which is often non-OCC like SAMPLG.OPT).
+    @builds("trade", "expiry", "assign")
+    def _build_trade(self, r) -> "List[Dict[str, Any]] | Outcome":
+        """A Buy / Sell, an expiry or an assignment (the flags classify set):
+        its shape (`_trade_shape`; the skip it may find), its money
+        (`_trade_money`), then the symbol (an option's OCC form, an internal
+        code resolved), the settle the market gives when the export does
+        not, an expiry dated its booking day, the dates checked, the row
+        (an expiry kept for the template's clamp)."""
+        sh = self._trade_shape(r)
+        if isinstance(sh, Outcome):
+            return sh
+        m = self._trade_money(r, sh)
+        row, lineno, desc = r.cells, r.line, r.desc
+        currency = r.currency
+        code_assigned, word_assigned = r.code_assigned, r.word_assigned
+        date, date_settle = sh.date, sh.date_settle
+        is_assigned, is_expired = sh.is_assigned, sh.is_expired
+        opt, qty, time = sh.opt, sh.qty, sh.time
+        comm, listing_currency, mult, net = m.comm, m.listing_currency, m.mult, m.net
+        price, size_basis = m.price, m.size_basis
+        if opt:
+            symbol = self.format_occ_symbol(
+                opt['right'], opt['base'], opt['expiry'], opt['strike'],
+                where=self._where(lineno))
+        else:
+            # Upper-cased: 'sample.to' split the pool from SAMPLE.TO
+            # (audit R1-71).
+            symbol = (row.get('Symbol') or '').strip().upper()
+            if symbol.startswith('.') and set(
+                    symbol.strip('.').split('.')) <= known_suffixes() | {'U'}:
+                # '.TO' was booked as a symbol of its own (TJ-4543).
+                raise BrokerageParseError(
+                    f"{self._where(lineno)}: {r.action_raw} row's Symbol "
+                    f"{symbol!r} is a listing suffix with no ticker "
+                    f"(missing required field 'symbol') — refusing to book "
+                    f"it. Fill in the security's symbol from the statement.")
+            # An internal code the run resolved from the project's
+            # other exports (a later sale of transferred-in shares).
+            # Or one a BRW journal leg of the account names (the
+            # USD class of a security journaled from its CAD line).
+            _inf = (self._journal_code(symbol.lstrip('.'))
+                    or self._inferred_code(symbol.lstrip('.'))
+                    if _INTERNAL_CODE_RE.match(symbol.lstrip('.'))
+                    else None)
+            if _inf is not None:
+                symbol, listing_currency = _inf
+        symbol = self.apply_currency_suffix(symbol, listing_currency)
+        if date_settle is None:
+            # The LISTING's market decides the cycle and calendar,
+            # not the row currency (A2-1052 / A2-1054): SAMPLF.U.TO in
+            # USD settles through CDS (on the days both Canada and
+            # the US settle, TJ-0705), a CAD-settled US stock on the
+            # US calendar (lib/dates.settlement_calendar, the rule
+            # every parser shares).
+            from taxjson.lib.dates import settlement_calendar
+            _mkt = settlement_calendar(symbol, listing_currency)
+            if opt and not (code_assigned or word_assigned):
+                # Options settle T+1 in every era; the equity
+                # fallback (T+2 before the 2024 cutover) moved a
+                # Dec-28 option sale into the next tax year (audit
+                # R1-194). An exercise/assignment leg keeps its stock
+                # leg's cycle — the two rows are one event.
+                date_settle = self.settlement_date_t1(
+                    date, "%Y-%m-%d", currency=_mkt)
+            else:
+                # Era- and market-aware fallback for a BLANK
+                # settlement cell only (T+2 pre-cutover equities); a
+                # present but unparseable cell is an error above.
+                date_settle = self.equity_settlement_date(
+                    date, _mkt, "%Y-%m-%d")
+
+        if is_expired and not is_assigned:
+            # An expiry has no settlement cycle, and Questrade posts
+            # it the NEXT business day (a Friday expiry arrives
+            # dated Monday): book it on the contract's own expiry
+            # date, settle == date. The blank-settle fallback above
+            # also added T+1 on top — a Dec-31 expiry crossed into
+            # the next tax year either way.
             if opt:
-                symbol = self.format_occ_symbol(
-                    opt['right'], opt['base'], opt['expiry'], opt['strike'],
-                    where=self._where(lineno))
+                date = option_expiry_booking_date(
+                    date, opt['expiry'])
+                time = '16:00:00'
             else:
-                # Upper-cased: 'sample.to' split the pool from SAMPLE.TO
-                # (audit R1-71).
-                symbol = (row.get('Symbol') or '').strip().upper()
-                # An internal code the run resolved from the project's
-                # other exports (a later sale of transferred-in shares).
-                # Or one a BRW journal leg of the account names (the
-                # USD class of a security journaled from its CAD line).
-                _inf = (self._journal_code(symbol.lstrip('.'))
-                        or self._inferred_code(symbol.lstrip('.'))
-                        if _INTERNAL_CODE_RE.match(symbol.lstrip('.'))
-                        else None)
-                if _inf is not None:
-                    symbol, listing_currency = _inf
-            symbol = self.apply_currency_suffix(symbol, listing_currency)
-            self.note_row_consumed()
-            if date_settle is None:
-                # The LISTING's market decides the cycle and calendar,
-                # not the row currency (A2-1052 / A2-1054): SAMPLF.U.TO in
-                # USD settles through CDS (on the days both Canada and
-                # the US settle, TJ-0705), a CAD-settled US stock on the
-                # US calendar (lib/dates.settlement_calendar, the rule
-                # every parser shares).
-                from taxjson.lib.dates import settlement_calendar
-                _mkt = settlement_calendar(symbol, listing_currency)
-                if opt and not (code_assigned or word_assigned):
-                    # Options settle T+1 in every era; the equity
-                    # fallback (T+2 before the 2024 cutover) moved a
-                    # Dec-28 option sale into the next tax year (audit
-                    # R1-194). An exercise/assignment leg keeps its stock
-                    # leg's cycle — the two rows are one event.
-                    date_settle = self.settlement_date_t1(
-                        date, "%Y-%m-%d", currency=_mkt)
-                else:
-                    # Era- and market-aware fallback for a BLANK
-                    # settlement cell only (T+2 pre-cutover equities); a
-                    # present but unparseable cell is an error above.
-                    date_settle = self.equity_settlement_date(
-                        date, _mkt, "%Y-%m-%d")
+                # A right / warrant: its expiry date from the
+                # description too (audit S065-04).
+                date = non_option_expiry_booking_date(date, desc)
+            date_settle = date
+        self.check_settle_order(date, date_settle,
+                                where=self._where(lineno),
+                                what=repr(desc[:50]))
 
-            if is_expired and not is_assigned:
-                # An expiry has no settlement cycle, and Questrade posts
-                # it the NEXT business day (a Friday expiry arrives
-                # dated Monday): book it on the contract's own expiry
-                # date, settle == date. The blank-settle fallback above
-                # also added T+1 on top — a Dec-31 expiry crossed into
-                # the next tax year either way.
-                if opt:
-                    date = self.option_expiry_booking_date(
-                        date, opt['expiry'])
-                    time = '16:00:00'
-                else:
-                    # A right / warrant: its expiry date from the
-                    # description too (audit S065-04).
-                    date = self.non_option_expiry_booking_date(date, desc)
-                date_settle = date
-            self.check_settle_order(date, date_settle,
-                                    where=self._where(lineno),
-                                    what=repr(desc[:50]))
+        _tx = {
+            'action': 'ASSIGN' if is_assigned else 'BUYSELL',
+            'date': date,
+            'time': time,
+            'date_settle': date_settle,
+            'symbol': symbol,
+            'quantity': qty,
+            'currency': currency,
+            'price': price,
+            'commission': comm,
+            'net_amount': net,
+            # ×100 contract multiplier for options (mirrors RBC /
+            # Webull's theoretical_gross): qty*price alone carried a
+            # notional 100× too small into fee bucketing and per-row
+            # reports.
+            'gross_amount': self.theoretical_gross(
+                qty, price, is_option=bool(opt), multiplier=mult),
+            # Declared contract size: the schema notional check is
+            # an error, not a guess, for rows that carry it. Its
+            # basis says whether the export showed it (a mini's
+            # Gross) or 100 was assumed (the engine notes that).
+            'multiplier': mult,
+            'account': self.DEFAULT_ACCOUNT,
+            # Carry the raw description so a description-keyed
+            # --security-overrides rule can correct a mislabeled ticker —
+            # IB/RBC/Webull trade rows already do; Questrade's was the gap.
+            'description': desc,
+        }
+        if size_basis:
+            _tx['contract_size_basis'] = size_basis
+        if not opt and not is_expired and not is_assigned:
+            self.warn_zero_cost_buy(self._where(lineno), symbol, qty,
+                                    price, net)
+        if is_expired and not is_assigned:
+            self._expiries.append(_tx)
+        return [_tx]
 
-            _tx = {
-                'action': 'ASSIGN' if is_assigned else 'BUYSELL',
-                'date': date,
-                'time': time,
-                'date_settle': date_settle,
-                'symbol': symbol,
-                'quantity': qty,
-                'currency': currency,
-                'price': price,
-                'commission': comm,
-                'net_amount': net,
-                # ×100 contract multiplier for options (mirrors RBC /
-                # Webull's theoretical_gross): qty*price alone carried a
-                # notional 100× too small into fee bucketing and per-row
-                # reports.
-                'gross_amount': self.theoretical_gross(
-                    qty, price, is_option=bool(opt), multiplier=mult),
-                # Declared contract size: the schema notional check is
-                # an error, not a guess, for rows that carry it. Its
-                # basis says whether the export showed it (a mini's
-                # Gross) or 100 was assumed (the engine notes that).
-                'multiplier': mult,
-                'account': self.DEFAULT_ACCOUNT,
-                # Carry the raw description so a description-keyed
-                # --security-overrides rule can correct a mislabeled ticker —
-                # IB/RBC/Webull trade rows already do; Questrade's was the gap.
-                'description': desc,
-            }
-            if size_basis:
-                _tx['contract_size_basis'] = size_basis
-            if not opt and not is_expired and not is_assigned:
-                self.warn_zero_cost_buy(self._where(lineno), symbol, qty,
-                                        price, net)
-            transactions.append(_tx)
-            if is_expired and not is_assigned:
-                expiries.append(_tx)
-        for _t in transactions[_acct_from:]:
-            self.note_row_line(_t, _line)
+    def finish(self, transactions: List[Dict[str, Any]], path: Path
+               ) -> List[Dict[str, Any]]:
+        """After the loop: the reversals paired with their originals, the
+        stock-dividend notes of the rows kept, the corp-actions legs, the
+        net-of-tax dividends and the $0 transfer-ins noted, the journal
+        pairs noted (their costing follows the template's marks:
+        `after_marks`); the file's cash events (`cash_events`, or why not,
+        `cash_problem`: `_cash_events_of_rows`)."""
+        st = self._qt
+        rev_originals, reversals, sd_notes = st.rev_originals, st.reversals, st.sd_notes
+        ca_legs, net_of_tax, no_book_value = st.ca_legs, st.net_of_tax, st.no_book_value
+        journals, shown = st.journals, st.shown
         self._pair_reversals(transactions, rev_originals, reversals)
         _kept = {id(t) for t in transactions}
         for _tx, _msg in sd_notes:
             if id(_tx) in _kept:
                 emit_line(_msg)
-        self.clamp_settlement_to_expiry(transactions, expiries)
-        self.disambiguate_split_fills(transactions)
         if ca_legs:
-            emit_line(f"note: {shown_name(path)}: {len(ca_legs)} quantity-bearing DIS "
+            emit_line(f"note: {shown}: {len(ca_legs)} quantity-bearing DIS "
                   f"corporate-action leg(s) ({', '.join(ca_legs[:8])}"
                   f"{', ...' if len(ca_legs) > 8 else ''}) are not "
                   f"booked by the parser — taxjson-corp-actions books "
@@ -2294,7 +2409,7 @@ class QuestradeBrokerage(BaseBrokerage):
         if net_of_tax and taxable is not False:
             # ATTENTION (re-audit A2-0276 / A2-0282): income and the
             # foreign tax credit are wrong until the slip is used.
-            emit_line(f"warning: ATTENTION: {shown_name(path)}: {len(net_of_tax)} "
+            emit_line(f"warning: ATTENTION: {shown}: {len(net_of_tax)} "
                   f"dividend(s) "
                   f"marked NON-RES TAX WITHHELD are booked at the NET "
                   f"amount — the export gives neither the gross nor the "
@@ -2317,7 +2432,7 @@ class QuestradeBrokerage(BaseBrokerage):
             # account and there is no OPENING_BALANCE .tt action.
             # ATTENTION (re-audit A2-0276 / A2-0283): the sale reads
             # as a short and the year's gain is missing.
-            emit_line(f"warning: ATTENTION: {shown_name(path)}: {len(no_book_value)} "
+            emit_line(f"warning: ATTENTION: {shown}: {len(no_book_value)} "
                   f"transfer-in(s) carry no TRANSFER BOOK VALUE "
                   f"({'; '.join(no_book_value[:6])}"
                   f"{'; ...' if len(no_book_value) > 6 else ''}). In a "
@@ -2330,20 +2445,163 @@ class QuestradeBrokerage(BaseBrokerage):
                   f"cost=unknown line (`tjs find-missing-history "
                   f"--write-missing-history`)."
                   f"{'' if taxable else ' (Account type unknown — ignore in a registered account.)'}")
-        for _t in transactions[_acct_from:]:
-            if _acct:
-                _t.setdefault('broker_account', _acct)
-        self._cost_journal_pairs(journal_txs)
         if journals:
-            emit_line(f"note: {shown_name(path)}: {len(journals)} BRW journal row(s) "
+            emit_line(f"note: {shown}: {len(journals)} BRW journal row(s) "
                   f"move units between the CAD and USD lines of one "
                   f"security ({', '.join(journals[:6])}) — booked as "
                   f"TRANSFER legs; in a Canadian project `tjs run` "
                   f"joins a paired journal's two lines as one security, "
                   f"as a ticker.map TOBASE line (e.g. TOBASE "
                   f"SAMPLF.U.TO SAMPLF.TO) would, so the pair nets out.")
-        self.emit_skip_summary(shown_name(path))
+        self._cash_events_from(self._cash_events_of_rows)
         return transactions
+
+    def _cash_events_of_rows(self) -> List[Dict[str, Any]]:
+        """The file's cash events for the FX-on-cash ledger v2
+        (lib/cash_events, tax-logic CA-FX-07), from the cash rows classify
+        noted (`note_cash`): each FX conversion (FXT — Questrade prints its
+        two legs as two rows of one account and day, the currency left
+        negative and the one received positive) as one FXCONV; each
+        deposit, withdrawal or contribution (CON, DEP, EFT, EWD, WDR, CTR)
+        and each cash-only transfer journal (TF6 with no units) as a
+        CASHMOVE; stock-lending income (LFJ, which the books do not carry)
+        as a FLOW. A conversion leg with no other leg that day is a
+        CASHMOVE the user declares. The export carries no cash balance: a
+        CASHBAL .tt line gives the ledger one.
+
+        The rows were noted in the order they happened (`_qt_real_order`:
+        a newest-first export bottom-up), and the events keep that order —
+        v2 replays one day's events in intake order. The two legs of one
+        conversion are adjacent: a leg pairs with the account's previous
+        conversion leg that day when that one moved the other way in
+        another currency. Read in file order, a newest-first export
+        replayed two same-day conversions backward and paired a leg with
+        the wrong conversion (audit finding 75). A cash row whose Quantity
+        or Net Amount cannot be read (`_cash_amounts`), or whose
+        Transaction Date is not a date (`_cash_day`), raises
+        BrokerageParseError naming the line: the file's `cash_problem`
+        (`_cash_events_from`; the ledger computes nothing), never a refused
+        parse. Once lib/cash_readers/questrade.py read the export a second
+        time (PLAN step 16 commit 9)."""
+        from taxjson.lib.privacy import hash_broker_account
+        from taxjson.lib import cash_lines as CL
+        name = self._qt.shown
+        # One slot per event, in real order; a conversion takes the slot of
+        # its first leg and fills it when its second leg arrives.
+        out: List[Optional[Dict[str, Any]]] = []
+        # (account, day, settle) -> (slot, leg) of the leg awaiting its pair
+        pending: Dict[Tuple[str, str, str], Tuple[int, Dict[str, Any]]] = {}
+
+        def _lone(key, slot, leg):
+            acct, d, s = key
+            ev = CL.move(d, leg["cur"], leg["net"], settle=s, where=name,
+                         account=acct,
+                         desc="FXT conversion leg with no other leg")
+            ev['line_where'] = leg["where"]
+            out[slot] = ev
+
+        def _fx_leg(key, leg):
+            prev = pending.pop(key, None)
+            if prev is not None:
+                slot, first = prev
+                if (first["cur"] != leg["cur"]
+                        and (first["net"] < 0) != (leg["net"] < 0)):
+                    o, i = (first, leg) if first["net"] < 0 else (leg, first)
+                    acct, d, s = key
+                    ev = CL.conv(d, o["cur"], -o["net"], i["cur"], i["net"],
+                                 settle=s, where=name, account=acct,
+                                 desc="FXT")
+                    ev['line_where'] = o["where"]
+                    out[slot] = ev
+                    return
+                _lone(key, slot, first)
+            out.append(None)
+            pending[key] = (len(out) - 1, leg)
+
+        for r in self._cash_rows:
+            row, lineno = r.cells, r.line
+            action, atype = r.action_raw, r.activity_type
+            qty, net = self._cash_amounts(r)
+            cur = (row.get('Currency') or '').strip().upper()
+            if not cur or abs(net) < 0.005:
+                continue
+            is_fx = action == 'FXT' or atype == 'FX conversion'
+            is_move = (abs(qty) < 1e-9 and not (row.get('Symbol') or '').strip()
+                       and (atype in _QT_CASH_MOVE_TYPES
+                            or action in _QT_CASH_MOVE_CODES))
+            is_tf = (abs(qty) < 1e-9 and (action == 'TF6'
+                                          or atype == 'Transfers'))
+            is_lfj = action == 'LFJ'
+            if not (is_fx or is_move or is_tf or is_lfj):
+                continue
+            d = self._cash_day(row, 'Transaction Date', lineno)
+            s = self._cash_day(row, 'Settlement Date', lineno) or d
+            raw_acct = (row.get('Account #') or '').strip()
+            acct = hash_broker_account(raw_acct) if raw_acct else ''
+            where = f"{name}:{lineno}"
+            if is_fx:
+                _fx_leg((acct, d, s), {"cur": cur, "net": net, "where": where})
+                continue
+            if is_lfj:
+                ev = CL.flow(d, cur, net, settle=s, where=name, account=acct,
+                             desc="LFJ stock-lending income")
+            else:
+                ev = CL.move(d, cur, net, settle=s, where=name, account=acct,
+                             desc=action or atype)
+            ev['line_where'] = where
+            out.append(ev)
+        for key, (slot, leg) in list(pending.items()):
+            _lone(key, slot, leg)
+        return [ev for ev in out if ev is not None]
+
+    def _cash_amounts(self, r) -> Tuple[float, float]:
+        """A noted cash row's Quantity and Net Amount, a blank 0. One that
+        cannot be read is refused BY NAME: the parse counts a deposit,
+        withdrawal, conversion or cash-only journal as a non-event without
+        reading its Net Amount, so nothing else named it, and the row
+        vanished from a ledger that then computed (2026-10 audit C01). The
+        refusal is the file's `cash_problem`, never a refused parse."""
+        row, lineno, name = r.cells, r.line, self._qt.shown
+        try:
+            qty = parse_strict_number(row.get('Quantity'), field='Quantity',
+                                      where=f"{name} line {lineno}",
+                                      allow_blank=True, blank=0.0)
+            net = parse_strict_number(row.get('Net Amount'),
+                                      field='Net Amount',
+                                      where=f"{name} line {lineno}",
+                                      allow_blank=True, blank=0.0)
+        except (ValueError, BrokerageParseError) as e:
+            msg = str(e)
+            if not msg.startswith(name):
+                msg = f"{name} line {lineno}: {msg}"
+            raise BrokerageParseError(
+                f"{msg} — a {r.action_raw or r.activity_type} cash row the "
+                f"FX-on-cash ledger reads; fix the cell in the export") from None
+        return qty, net
+
+    def _cash_day(self, row: Dict[str, Any], col: str, lineno: int) -> Optional[str]:
+        """A cash row's day (YYYY-MM-DD) from `col`: None for a blank or
+        unreadable Settlement Date (the event settles on its trade day); a
+        Transaction Date that is not one raises BrokerageParseError (the
+        file's `cash_problem`: the parse never reads a conversion's or a
+        deposit's dates)."""
+        raw = (row.get(col) or '').strip()
+        dt = self.parse_date(raw, *_DATE_FMTS) if raw else None
+        if dt is None and col == 'Transaction Date':
+            raise BrokerageParseError(f"{self._qt.shown} line {lineno}: {col} "
+                                      f"{raw!r} is not a date")
+        return dt.strftime('%Y-%m-%d') if dt else None
+
+    def after_marks(self, transactions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """The journal pairs costed from their book values: after the
+        template's split-fill marks, as the one loop had it, so the marks
+        see the legs as the loop made them and the ids stay as they were
+        (TJ-2246)."""
+        self._cost_journal_pairs(self._qt.journal_txs)
+        return transactions
+
+    def release(self) -> None:
+        self._qt = None                 # the export's pairings and notes released
 
     def statement_accounts(self) -> set:
         """The `Account #` values of the last parsed export (audit
@@ -2365,7 +2623,7 @@ class QuestradeBrokerage(BaseBrokerage):
                 continue
             bv = float(i['book_value'])
             i['net_amount'] = i['gross_amount'] = bv
-            i['price'] = round(bv / i['quantity'], 8)
+            i['price'] = M.units(bv / i['quantity'], 8)
             # The SAME security's other line only (re-audit A2-1061: two
             # journals on one date swapped their costs): SAMPLF.U.TO and
             # SAMPLF.TO share the root SAMPLF.
@@ -2382,10 +2640,10 @@ class QuestradeBrokerage(BaseBrokerage):
             if out is None:
                 continue
             rate = rates.get(id(i))
-            o_bv = (round(bv * rate, 2)
+            o_bv = (M.units(bv * rate, 2)
                     if rate and out['currency'] != i['currency'] else bv)
             out['net_amount'] = out['gross_amount'] = o_bv
-            out['price'] = round(o_bv / abs(out['quantity']), 8)
+            out['price'] = M.units(o_bv / abs(out['quantity']), 8)
 
     def _check_trade_money(self, lineno, desc, qty, price, gross, comm,
                            diff, mult, fx_settled, *, cash=None,
@@ -2400,37 +2658,38 @@ class QuestradeBrokerage(BaseBrokerage):
         where = self._where(lineno)
         if abs(price) > 0:
             expected = abs(qty) * abs(price) * mult
-            if abs(abs(gross) - expected) > max(0.02, 0.002 * max(
-                    expected, abs(gross))):
+            if not money_close(gross, expected, abs_tol=0.02, rel_tol=0.002):
                 raise BrokerageParseError(
-                    f"{where}: |Gross Amount| {abs(gross):,.2f} is not "
+                    f"{where}: |Gross Amount| {M.shown(abs(gross), 2):,.2f} is not "
                     f"|Quantity| {abs(qty):g} x Price {price:g} x "
-                    f"{mult:g} = {expected:,.2f} ({desc[:50]!r}) — a "
+                    f"{mult:g} = {M.shown(expected, 2):,.2f} ({desc[:50]!r}) — a "
                     f"swapped or mislabelled column; refusing to book "
                     f"it.")
         if not fx_settled and abs(abs(diff) - abs(comm)) > 0.011:
             raise BrokerageParseError(
                 f"{where}: Net Amount differs from Gross Amount "
-                f"{gross:,.2f} by {abs(diff):,.2f}, not by the "
-                f"Commission {abs(comm):,.2f} ({desc[:50]!r}) — a "
+                f"{M.shown(gross, 2):,.2f} by {M.shown(abs(diff), 2):,.2f}, not by the "
+                f"Commission {M.shown(abs(comm), 2):,.2f} ({desc[:50]!r}) — a "
                 f"swapped or mislabelled column; refusing to book it.")
-        if fx_settled and cash is not None and abs(cash) > 0:
+        if fx_settled and cash is not None:
             # CAD-settled US trade (audit R1-73): the CAD cash (a buy's
             # cost, a sale's proceeds) must be the USD Gross at the
             # stated rate, give or take the Commission (Questrade's
             # column may carry it in either currency). The exemption
-            # above let a wrong or column-swapped CAD Net book.
+            # above let a wrong or column-swapped CAD Net book; so did
+            # a Net of 0, booked at Gross x rate (TJ-4542).
             expected = abs(gross) * rate
             resid = abs(cash - expected)
             tol = 0.011 + 1e-5 * abs(cash)
             if not any(abs(resid - c) <= tol
                        for c in (abs(comm), abs(comm) * rate)):
                 raise BrokerageParseError(
-                    f"{where}: CAD Net Amount {abs(cash):,.2f} is not the USD "
-                    f"Gross {abs(gross):,.2f} x EXCHANGE RATE {rate:g} = "
-                    f"{expected:,.2f} give or take the Commission "
-                    f"{abs(comm):,.2f} ({desc[:50]!r}) — a wrong or "
-                    f"swapped column; refusing to book it.")
+                    f"{where}: CAD Net Amount {M.shown(abs(cash), 2):,.2f} is not the USD "
+                    f"Gross {M.shown(abs(gross), 2):,.2f} x EXCHANGE RATE {rate:g} = "
+                    f"{M.shown(expected, 2):,.2f} give or take the Commission "
+                    f"{M.shown(abs(comm), 2):,.2f} ({desc[:50]!r}) — a wrong or "
+                    f"swapped column; refusing to book it. Correct the Net "
+                    f"Amount and the rate from the trade confirmation.")
 
     def _parse_cash_in_lieu(self, row, currency, desc, lineno,
                             rev_originals, reversals):
@@ -2445,15 +2704,13 @@ class QuestradeBrokerage(BaseBrokerage):
         net = self._num(row, 'Net Amount', lineno)
         cash = abs(net)
         if frac <= 0 or cash <= 0:
-            self.count_skip("CIL row with no fraction/cash")
-            return []
+            return Outcome.skip("CIL row with no fraction/cash")
         sym_raw, scur = self._resolve_symbol(row, currency, lineno)
         sym = self.apply_currency_suffix(sym_raw, scur)
-        key = ('CIL', sym, round(frac, 6), round(cash, 2))
+        key = ('CIL', sym, M.units(frac, 6), M.units(cash, 2))
         if net < 0:
             reversals.append((key, lineno, desc))
-            self.note_row_consumed()      # read into parser state
-            return []
+            return Outcome.consumed()     # read into parser state
         date = self._date(row, 'Transaction Date', lineno).strftime('%Y-%m-%d')
         base = {'date': date, 'date_settle': date, 'symbol': sym,
                 'currency': currency, 'commission': 0.0,
@@ -2463,11 +2720,11 @@ class QuestradeBrokerage(BaseBrokerage):
              'quantity': frac, 'price': 0.0, 'net_amount': 0.0,
              'gross_amount': 0.0},
             {**base, 'action': 'BUYSELL', 'time': '09:30:01',
-             'quantity': -frac, 'price': round(cash / frac, 8),
+             'quantity': -frac, 'price': M.units(cash / frac, 8),
              'net_amount': cash, 'gross_amount': cash},
         ]
         rev_originals.setdefault(key, []).append(legs)
-        self._orig_line[id(legs)] = lineno
+        self._qt.orig_line[id(legs)] = lineno
         return legs
 
     def _pair_reversals(self, transactions, rev_originals, reversals):
@@ -2479,7 +2736,7 @@ class QuestradeBrokerage(BaseBrokerage):
         reversal whose original is in no export of the account is
         REFUSED — booking it would either duplicate the event (the old
         abs()) or invent one."""
-        key_f = str(self._qt_path.resolve())
+        key_f = self._qt.key
         paired = self._ctx.rev_paired.get(key_f, set())
         dropped = self._ctx.rev_drop.get(key_f, set())
         for key, lineno, desc in reversals:
@@ -2487,7 +2744,7 @@ class QuestradeBrokerage(BaseBrokerage):
                 kind, sym, qty, amt = key
                 raise BrokerageParseError(
                     f"{self._where(lineno)}: a {kind} reversal "
-                    f"({sym} {qty:g}, {amt:,.2f}; {desc[:50]!r}) whose "
+                    f"({sym} {qty:g}, {M.shown(amt, 2):,.2f}; {desc[:50]!r}) whose "
                     f"original {kind} row (on or before it) is in no "
                     f"export of this account — refusing to book it as a "
                     f"second event. Add the export that holds the "
@@ -2495,7 +2752,7 @@ class QuestradeBrokerage(BaseBrokerage):
         drop = set()
         for groups in rev_originals.values():
             for grp in groups:
-                if self._orig_line.get(id(grp)) in dropped:
+                if self._qt.orig_line.get(id(grp)) in dropped:
                     drop.update(id(leg) for leg in grp)
         if drop:
             transactions[:] = [t for t in transactions
@@ -2515,8 +2772,10 @@ class QuestradeBrokerage(BaseBrokerage):
         date = dt.strftime('%Y-%m-%d')
         time = dt.strftime('%H:%M:%S')
         m = _FEE_SHARES_TICKER_RE.search(desc or '')
+        # Upper case, as every other row's symbol this parser reads (a fee
+        # row's alone kept the cell's: backlog TJ-4601, TJ-4605).
         sym_raw = (m.group(1) if m
-                   else (row.get('Symbol') or '').strip().lstrip('.'))
+                   else (row.get('Symbol') or '').strip().lstrip('.')).upper()
         symbol = self.apply_currency_suffix(sym_raw, currency) if sym_raw else 'CASH'
         return {
             'action': 'FEE',
@@ -2538,8 +2797,7 @@ class QuestradeBrokerage(BaseBrokerage):
         net_s = self._num(row, 'Net Amount', lineno)
         qty, net = abs(qty_s), abs(net_s)
         if qty <= 1e-12 and net < 0.005:
-            self.count_nonevent("REI row with no shares and no cash")
-            return None
+            return Outcome.nonevent("REI row with no shares and no cash")
         if qty <= 1e-12 or net < 0.005:
             # Units with no cash (an in-kind reinvestment: is there a
             # separate cash DIV row? the export does not say) or cash
@@ -2548,7 +2806,7 @@ class QuestradeBrokerage(BaseBrokerage):
             # row had no shares (audit S063-06). RBC refuses the same.
             raise BrokerageParseError(
                 f"{self._where(lineno)}: REI (reinvestment) row with "
-                f"Quantity {qty_s:g} and Net Amount {net_s:,.2f} "
+                f"Quantity {qty_s:g} and Net Amount {M.shown(net_s, 2):,.2f} "
                 f"({desc[:50]!r}) — a reinvestment buys units for cash; "
                 f"with {'no cash' if qty > 1e-12 else 'no units'} the "
                 f"parser cannot tell the purchase (and any income) apart. "
@@ -2557,31 +2815,27 @@ class QuestradeBrokerage(BaseBrokerage):
         if (qty_s > 0) == (net_s > 0):
             raise BrokerageParseError(
                 f"{self._where(lineno)}: REI row with Quantity {qty_s:g} "
-                f"and Net Amount {net_s:,.2f} of the same sign "
+                f"and Net Amount {M.shown(net_s, 2):,.2f} of the same sign "
                 f"({desc[:50]!r}) — a reinvestment buys shares for cash "
                 f"(or a reversal returns both); refusing to guess.")
         sym_raw, scur = self._resolve_symbol(row, currency, lineno,
                                              rei=True)
         key = ('REI', self.apply_currency_suffix(sym_raw, scur),
-               round(qty, 6), round(net, 2))
+               M.units(qty, 6), M.units(net, 2))
         if qty_s < 0:
             reversals.append((key, lineno, desc))
-            self.note_row_consumed()      # read into parser state
-            return None
+            return Outcome.consumed()     # read into parser state
         date = self._date(row, 'Transaction Date', lineno).strftime('%Y-%m-%d')
         sdt = self._date(row, 'Settlement Date', lineno, required=False)
         date_settle = sdt.strftime('%Y-%m-%d') if sdt else date
         self.check_settle_order(date, date_settle, where=self._where(lineno),
                                 what=repr(desc[:50]))
-        m = _REINV_PRICE_RE.search(desc)
+        m = REINV_PRICE_RE.search(desc)
         # 'REINV@C$1,234.56' is 1234.56, not 1 (audit S062-20); a  # pii-ok
         # decimal comma falls back to the cash / units.
         price = desc_number(m.group(1), strict=False) if m else None
-        from taxjson.lib.brokerages.rbc_direct import (
-            _REINV_CUR, _REINV_CUR_RE, reinvest_identity_error,
-            reinvest_row_price)
-        mc = _REINV_CUR_RE.search(desc)
-        price_cur = (_REINV_CUR.get(mc.group(1).upper(), '?') if mc
+        mc = REINV_CUR_RE.search(desc)
+        price_cur = (REINV_CUR.get(mc.group(1).upper(), '?') if mc
                      else currency)
         bad = reinvest_identity_error(qty, net, price, price_cur, currency)
         if bad:
@@ -2593,7 +2847,7 @@ class QuestradeBrokerage(BaseBrokerage):
         # currency's number: booked at the cash per unit instead.
         price = reinvest_row_price(qty, net, price, price_cur, currency)
         if not price:
-            price = round(net / qty, 8)
+            price = M.units(net / qty, 8)
         tx = {
             'action': 'BUYSELL',
             'date': date, 'time': '09:30:00', 'date_settle': date_settle,
@@ -2611,7 +2865,7 @@ class QuestradeBrokerage(BaseBrokerage):
             tx['listing_currency'] = scur
         _grp = [tx]
         rev_originals.setdefault(key, []).append(_grp)
-        self._orig_line[id(_grp)] = lineno
+        self._qt.orig_line[id(_grp)] = lineno
         return tx
 
     @staticmethod
@@ -2746,8 +3000,7 @@ class QuestradeBrokerage(BaseBrokerage):
         qty, price = _parse_div_qty_rate(desc, net)
         # A substitute payment ("SUBST PAY ... IN LIEU OF DIVIDEND") is
         # its own income kind, paid by a Canadian dealer (re-audit
-        # A2-0098; lib/income_dating applies CA-INC-03 / US-INC-01).
-        from taxjson.lib.brokerages.rbc_direct import PIL_DESC_RE
+        # A2-0098; characterize/income_dating applies CA-INC-03 / US-INC-01).
         pil = bool(PIL_DESC_RE.search(desc))
         tx = {
             'action': 'DIVIDEND_IN_LIEU' if pil else 'DIVIDEND',
@@ -2767,7 +3020,7 @@ class QuestradeBrokerage(BaseBrokerage):
         if pil:
             tx['dealer_country'] = 'CA'
         # "DIST ON ... REC mm/dd/yy": the record date and the
-        # distribution label, as neutral facts (lib/income_dating).
+        # distribution label, as neutral facts (characterize/income_dating).
         tx.update(income_facts_from_description(desc))
         return tx
 
@@ -2824,7 +3077,7 @@ class QuestradeBrokerage(BaseBrokerage):
             net = parse_strict_number(m.group(1), field='TRANSFER BOOK VALUE',
                                       where=self._where(lineno))
         mult = float(self.OPTION_MULTIPLIER) if opt else 1.0
-        price = (round(net / (abs(qty_signed) * mult), 8)
+        price = (M.units(net / (abs(qty_signed) * mult), 8)
                  if abs(qty_signed) > 1e-9 else 0.0)
         tx = {
             'action': 'TRANSFER',
@@ -2855,142 +3108,3 @@ class QuestradeBrokerage(BaseBrokerage):
             tx['multiplier'] = mult
             tx['contract_size_basis'] = 'assumed'
         return tx
-
-
-# ---------------------------------------------------------- cash events
-
-# The cash rows the position parser leaves out (recognized non-events):
-# deposits and withdrawals (pre-release review M8 — the FX-on-cash
-# ledger v2 computed a Questrade account's figure without them).
-_QT_CASH_MOVE_CODES = ('CON', 'DEP', 'EFT', 'EWD', 'WDR', 'CTR')
-_QT_CASH_MOVE_TYPES = ('Deposits', 'Withdrawals', 'Contributions')
-
-
-def questrade_cash_events(path) -> List[Dict[str, Any]]:
-    """The cash events of one Questrade activity export for the FX-on-
-    cash ledger v2 (lib/cash_events, tax-logic CA-FX-07): each FX
-    conversion (FXT — Questrade prints its two legs as two rows of one
-    account and day, the currency left negative and the one received
-    positive) as one FXCONV; each deposit, withdrawal or contribution
-    (CON, DEP, EFT, EWD, WDR, CTR) and each cash-only transfer journal
-    (TF6 with no units) as a CASHMOVE; stock-lending income (LFJ, which
-    the books do not carry) as a FLOW. A conversion leg with no other
-    leg that day is a CASHMOVE the user declares. The export carries no
-    cash balance: a CASHBAL .tt line gives the ledger one.
-
-    Rows are read in the order they happened (`_qt_real_order`: a
-    newest-first export bottom-up), and the events keep that order — v2
-    replays one day's events in intake order. The two legs of one
-    conversion are adjacent: a leg pairs with the account's previous
-    conversion leg that day when that one moved the other way in
-    another currency. Read in file order, a newest-first export replayed
-    two same-day conversions backward and paired a leg with the wrong
-    conversion (audit finding 75). A cash row whose Quantity or Net
-    Amount cannot be read raises BrokerageParseError naming the line
-    (lib/cash_events.collect lists it; the ledger computes nothing)."""
-    from taxjson.bin.taxjson_brokerage import hash_broker_account
-    from taxjson.lib import cash_events as CE
-    name = shown_name(path)
-    # One slot per event, in real order; a conversion takes the slot of
-    # its first leg and fills it when its second leg arrives.
-    out: List[Optional[Dict[str, Any]]] = []
-    # (account, day, settle) -> (slot, leg) of the leg awaiting its pair
-    pending: Dict[Tuple[str, str, str], Tuple[int, Dict[str, Any]]] = {}
-
-    def _lone(key, slot, leg):
-        acct, d, s = key
-        ev = CE.move(d, leg["cur"], leg["net"], settle=s, where=name,
-                     account=acct,
-                     desc="FXT conversion leg with no other leg")
-        ev['line_where'] = leg["where"]
-        out[slot] = ev
-
-    def _fx_leg(key, leg):
-        prev = pending.pop(key, None)
-        if prev is not None:
-            slot, first = prev
-            if (first["cur"] != leg["cur"]
-                    and (first["net"] < 0) != (leg["net"] < 0)):
-                o, i = (first, leg) if first["net"] < 0 else (leg, first)
-                acct, d, s = key
-                ev = CE.conv(d, o["cur"], -o["net"], i["cur"], i["net"],
-                             settle=s, where=name, account=acct,
-                             desc="FXT")
-                ev['line_where'] = o["where"]
-                out[slot] = ev
-                return
-            _lone(key, slot, first)
-        out.append(None)
-        pending[key] = (len(out) - 1, leg)
-
-    def _day(row, col, lineno):
-        raw = (row.get(col) or '').strip()
-        dt = BaseBrokerage.parse_date(raw, *_DATE_FMTS) if raw else None
-        if dt is None and col == 'Transaction Date':
-            raise BrokerageParseError(f"{name} line {lineno}: {col} "
-                                      f"{raw!r} is not a date")
-        return dt.strftime('%Y-%m-%d') if dt else None
-
-    for lineno, row in _qt_real_order(path, _read_qt_rows(Path(path)),
-                                      note=False):
-        action = _canon_action(row.get('Action'))
-        atype = (row.get('Activity Type') or '').strip()
-        sym = (row.get('Symbol') or '').strip()
-        try:
-            qty = parse_strict_number(row.get('Quantity'), field='Quantity',
-                                      where=f"{name} line {lineno}",
-                                      allow_blank=True, blank=0.0)
-            net = parse_strict_number(row.get('Net Amount'),
-                                      field='Net Amount',
-                                      where=f"{name} line {lineno}",
-                                      allow_blank=True, blank=0.0)
-        except (ValueError, BrokerageParseError) as e:
-            # A cash row whose amount cannot be read is refused BY NAME:
-            # the position parser counts a deposit, withdrawal,
-            # conversion or cash-only journal as a non-event without
-            # reading its Net Amount, so nothing else named it, and the
-            # row vanished from a ledger that then computed (2026-10
-            # audit C01). A row of any other kind is the position
-            # parser's to refuse.
-            if (action == 'FXT' or atype == 'FX conversion'
-                    or action in _QT_CASH_MOVE_CODES
-                    or atype in _QT_CASH_MOVE_TYPES
-                    or action in ('TF6', 'LFJ') or atype == 'Transfers'):
-                msg = str(e)
-                if not msg.startswith(name):
-                    msg = f"{name} line {lineno}: {msg}"
-                raise BrokerageParseError(
-                    f"{msg} — a {action or atype} cash row the FX-on-cash "
-                    f"ledger reads; fix the cell in the export") from None
-            continue            # the position parser names the row
-        cur = (row.get('Currency') or '').strip().upper()
-        if not cur or abs(net) < 0.005:
-            continue
-        is_fx = action == 'FXT' or atype == 'FX conversion'
-        is_move = (abs(qty) < 1e-9 and not sym
-                   and (atype in _QT_CASH_MOVE_TYPES
-                        or action in _QT_CASH_MOVE_CODES))
-        is_tf = (abs(qty) < 1e-9 and (action == 'TF6'
-                                      or atype == 'Transfers'))
-        is_lfj = action == 'LFJ'
-        if not (is_fx or is_move or is_tf or is_lfj):
-            continue
-        d = _day(row, 'Transaction Date', lineno)
-        s = _day(row, 'Settlement Date', lineno) or d
-        raw_acct = (row.get('Account #') or '').strip()
-        acct = hash_broker_account(raw_acct) if raw_acct else ''
-        where = f"{name}:{lineno}"
-        if is_fx:
-            _fx_leg((acct, d, s), {"cur": cur, "net": net, "where": where})
-            continue
-        if is_lfj:
-            ev = CE.flow(d, cur, net, settle=s, where=name, account=acct,
-                         desc="LFJ stock-lending income")
-        else:
-            ev = CE.move(d, cur, net, settle=s, where=name, account=acct,
-                         desc=action or atype)
-        ev['line_where'] = where
-        out.append(ev)
-    for key, (slot, leg) in list(pending.items()):
-        _lone(key, slot, leg)
-    return [ev for ev in out if ev is not None]

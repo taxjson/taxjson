@@ -1,0 +1,57 @@
+======================================================================
+ DIAGNOSTICS — qt  (parser/merge warnings; not part of the tax totals)
+======================================================================
+OK: <merged>: 2 transactions validated.
+NOTE: 1 unmatched TRANSFER row(s) in the --sheltered context kept as custody moves: their shares count as held; none is a purchase or a sale for the wash-sale walk (transfers_as_acquisitions = false).
+warning: ATTENTION: short: OLDCO.US (margin): the broker codes the sale on 2024-04-01 CLOSING (IB code C, IB Basis 600.00 USD), but the data holds no position to close — it is booked as a new short until the missing purchase is supplied (`tjs find-missing-history --write-missing-history` writes its .tt OPENING cost=unknown line).
+NOTE: 2 (symbol, account) pair(s) go short in this data: GHOSTQ.US/margin, OLDCO.US/margin. 0 are in retirement (IRA) accounts. If any of these are sales of shares bought before your files start (no purchase in the data) rather than real short trades, open the units held before the data with .tt OPENING cost=unknown lines: `tjs find-missing-history --write-missing-history` in a project writes them (`tjs run` reads them).
+note: KELPQ options: the export does not state the contract size, so 100 shares per contract is ASSUMED where it matters (an exercise or assignment, replacement shares); for a mini or an adjusted series add `MULT KELPQ N` to ticker.map.
+======================================================================
+
+
+TICKER SUMMARY — USD, year 2024, sorted by ticker
+
+SYMBOL                                 TOTAL        TOTAL_COST     TOTAL_PROCEED        TOTAL_GAIN          CAP_GAIN          OPT_GAIN          DIVIDEND               PIL   AVG_DAYS
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+KELPQ.US                              -36.25             36.25              0.00            -36.25              0.00            -36.25              0.00              0.00       18.0 [ST:   -36.25 LT:     0.00]
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+TOTAL                                 -36.25             36.25              0.00            -36.25              0.00            -36.25              0.00              0.00       18.0 [ST:   -36.25 LT:     0.00]
+
+ASSET: Options    | CURRENCY: USD   | TRADES: 1 | YEAR: 2024
+
+Total Realized Gain:                -36.25 USD
+Average Holding Period:                18.0 Days
+Avg Fee Per Trade:                    0.00 USD
+Avg Fee Per 100 Opt:                0.0000 USD
+----------------------------------------------------------------------------------------------------------------
+Positive Trades: 0 | Negative Trades: 1 | Win/Loss: 0.00 | Win Rate: 0.0%
+Average Positive:              0.00 USD | Average Negative:            -36.25 USD
+----------------------------------------------------------------------------------------------------------------
+
+CONSOLIDATED TOTALS — USD, year 2024
+
+TOTAL COST:                             36.25 USD
+TOTAL PROCEEDS:                          0.00 USD
+  (engine sign convention: shorts/written options negated — for Form 8949 proceeds and basis use `tjs form-export`)
+------------------------------------------------------
+TOTAL REALIZED NON-OPTION GAIN:          0.00 USD
+  (shares, units, futures and crypto — Form 8949 lines: `tjs form-export`)
+TOTAL REALIZED OPTION GAIN:            -36.25 USD
+TOTAL REALIZED GAIN:                   -36.25 USD
+------------------------------------------------------
+TOTAL DIVIDENDS / STAKING:               0.00 USD
+------------------------------------------------------
+GRAND TOTAL (GAIN+DIV+PIL):            -36.25 USD
+------------------------------------------------------
+TOTAL TRADING FEES PAID:                 1.25 USD
+  (OPTION TRADING FEES):                 1.25 USD
+
+INCOME SUMMARY — year 2024, sorted by ticker
+
+SYMBOL                            GROSS DIV              PIL          TAX W/H       NET INCOME
+----------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------
+SUBTOTAL                               0.00             0.00             0.00             0.00
+CASH INTEREST                                                                             0.00
+----------------------------------------------------------------------------------------------
+TOTAL NET INCOME                                                                          0.00

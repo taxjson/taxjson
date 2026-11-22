@@ -1,0 +1,15 @@
+DIVIDENDS — tax year 2024
+DIVIDEND rows; payments in lieu are in `dil-sum`.
+
+SYMBOL    CUR  DIVIDEND
+-----------------------
+ETH       USD     26.64
+MSFT.US   USD     75.00
+PARN.US   USD    250.00
+QZQ.US    USD     40.00
+SAMPA.US  USD     50.00
+USDC      USD     10.65
+
+TAXABLE (Form 1099-DIV):                                         415.00 USD
+TOTAL DIVIDEND (all accounts):                                   452.29 USD
+  of which staking rewards (crypto, other income, no 1099-DIV):  37.29 USD

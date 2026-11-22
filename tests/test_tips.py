@@ -15,62 +15,12 @@ import tempfile
 import unittest
 from pathlib import Path
 from tax_rules import rule, rule_absent
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
-
-def _run(root, *args):
-    return subprocess.run(
-        [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root),
-         "tips", *args],
-        cwd=REPO_ROOT, capture_output=True, text=True)
-
-
-def _suggest_json(root):
-    """`tjs ticker-map --suggest --json` of the project."""
-    r = subprocess.run(
-        [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root),
-         "ticker-map", "--suggest", "--json"],
-        cwd=REPO_ROOT, capture_output=True, text=True)
-    return r, json.loads(r.stdout)
-
-
-def _holdings_toml(*symbols):
-    out = ['schema_version = "1.2"']
-    for sym in symbols:
-        out.append(f'[[holding]]\nsymbol = "{sym}"\nquantity = 100.0\n'
-                   f'currency = "USD"\ntotal_cost = 1000.0\n'
-                   f'cost_per_share = 10.0')
-    return "\n".join(out) + "\n"
-
-
-def _raw_json(*div_symbols):
-    return json.dumps({"transactions": [
-        {"action": "DIVIDEND", "date": "2026-03-01", "symbol": s,
-         "quantity": 0, "gross_amount": 10.0, "net_amount": 10.0,
-         "currency": "USD"} for s in div_symbols]})
-
-
-def _project(tmp, *, accounts, holdings, raws, ticker_map=None):
-    root = Path(tmp)
-    (root / "work").mkdir()
-    (root / "reports").mkdir()
-    acct_toml = "".join(
-        f'[accounts.{n}]\ntype = "{t}"\n' for n, t in accounts)
-    (root / "taxjson.toml").write_text(
-        '[settings]\nyear = 2026\ncountry = "canada"\n'
-        'base_currency = "CAD"\n' + acct_toml)
-    for name, text in holdings.items():
-        (root / "reports" / f"{name}_holdings.toml").write_text(text)
-    for name, text in raws.items():
-        (root / "work" / f"{name}_raw.json").write_text(text)
-    if ticker_map:
-        (root / "ticker.map").write_text(ticker_map)
-    return root
+from taxjson.rules import ids as R
+from _support.planning_tips import REPO_ROOT, _run, _suggest_json, _holdings_toml, _raw_json, _project
 
 
 class TestTips(unittest.TestCase):
-    @rule("CA-SCAN-02")
+    @rule(R.CA_SCAN_02)
     def test_us_listing_of_canadian_issuer_in_taxable(self):
         # ENB.US held in margin; the map knows ENB.US == ENB.TO; pays divs.
         with tempfile.TemporaryDirectory() as tmp:
@@ -86,7 +36,7 @@ class TestTips(unittest.TestCase):
         self.assertIn("ENB.US", r.stdout)
         self.assertIn("ENB.TO", r.stdout)           # the recommendation
 
-    @rule("CA-SCAN-02")
+    @rule(R.CA_SCAN_02)
     def test_twin_detected_from_data_without_map(self):
         # No map entry, but the .TO line is held in another account —
         # still a Canadian issuer via US line, AND a MAP-GAP.
@@ -130,7 +80,7 @@ class TestTips(unittest.TestCase):
         # (audit S042-06; this line used to assert the opposite).
         self.assertNotIn("US-LISTING", r.stdout)
 
-    @rule("CA-SCAN-01")
+    @rule(R.CA_SCAN_01)
     def test_us_domiciled_payer_in_tfsa(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(
@@ -143,8 +93,8 @@ class TestTips(unittest.TestCase):
         self.assertIn("TFSA-US-DIV", r.stdout)
         self.assertIn("unrecoverable", r.stdout)
 
-    @rule("CA-SCAN-01")
-    @rule_absent("CA-SCAN-01", country="usa")
+    @rule(R.CA_SCAN_01)
+    @rule_absent(R.CA_SCAN_01, country="usa")
     def test_us_project_has_no_tfsa_or_listing_finding(self):
         # A2-1500: the same books in a US project: no TFSA, no treaty
         # advice, no Canadian-listing advice (the checks are Canada's).
@@ -166,7 +116,7 @@ class TestTips(unittest.TestCase):
         self.assertNotIn("US-LISTING", r.stdout)
         self.assertNotIn("treaty", r.stdout)
 
-    @rule("CA-SCAN-01")
+    @rule(R.CA_SCAN_01)
     def test_rrsp_is_exempt_no_finding(self):
         # Same US payer inside an RRSP: treaty-exempt — no tip.
         with tempfile.TemporaryDirectory() as tmp:
@@ -245,11 +195,14 @@ class TestTips(unittest.TestCase):
 
 class TestIssuerNameMatching(unittest.TestCase):
     """The pure helpers behind --online MAP-BAD?/different-root
-    MAP-GAP? findings (network calls stay in cmd_tips; these are the
-    decision rules)."""
+    MAP-GAP? findings (the network calls stay out of them: the probe in
+    _online_tips, and the issuer-name lookups through its _issuer_names
+    closure, which both _online_tips (its CDR check before MAP-GAP?) and
+    _name_cluster_tips, passed it, call; these are the decision
+    rules)."""
 
     def test_norm_strips_exchange_boilerplate(self):
-        from taxjson.bin.taxjson_run import _norm_issuer_name
+        from taxjson.cli.tips import _norm_issuer_name
         self.assertEqual(_norm_issuer_name("B2Gold Corp."), "B2GOLD")
         self.assertEqual(_norm_issuer_name("The Toronto-Dominion Bank"),
                          "TORONTO DOMINION BANK")
@@ -258,7 +211,7 @@ class TestIssuerNameMatching(unittest.TestCase):
             "AGNICO EAGLE MINES")
 
     def test_same_issuer_across_listing_styles(self):
-        from taxjson.bin.taxjson_run import _issuer_names_match
+        from taxjson.cli.tips import _issuer_names_match
         self.assertTrue(_issuer_names_match(
             "B2Gold Corp.", "B2GOLD CORP"))
         self.assertTrue(_issuer_names_match(
@@ -268,7 +221,7 @@ class TestIssuerNameMatching(unittest.TestCase):
             "Agnico Eagle", "Agnico Eagle Mines"))
 
     def test_different_issuers_do_not_match(self):
-        from taxjson.bin.taxjson_run import _issuer_names_match
+        from taxjson.cli.tips import _issuer_names_match
         self.assertFalse(_issuer_names_match(
             "B2Gold Corp.", "Barrick Gold Corporation"))
         # Shared FIRST token only is not enough — issuer families.
@@ -277,7 +230,7 @@ class TestIssuerNameMatching(unittest.TestCase):
             "Brookfield Renewable Partners LP"))
 
     def test_missing_name_never_accuses(self):
-        from taxjson.bin.taxjson_run import _issuer_names_match
+        from taxjson.cli.tips import _issuer_names_match
         self.assertTrue(_issuer_names_match("", "B2Gold Corp."))
         self.assertTrue(_issuer_names_match("Inc.", "B2Gold Corp."))
 
@@ -285,7 +238,7 @@ class TestIssuerNameMatching(unittest.TestCase):
         # A CDR is the SAME issuer but NOT a listing equivalent — the
         # tips must never suggest mapping one (the receipt ratio
         # floats, so no TOBASE ratio can ever be right).
-        from taxjson.bin.taxjson_run import _is_cdr_name
+        from taxjson.cli.tips import _is_cdr_name
         self.assertTrue(_is_cdr_name(
             "UnitedHealth Group CDR (CAD Hedged)"))
         self.assertTrue(_is_cdr_name(
@@ -300,7 +253,7 @@ class TestIssuerNameMatching(unittest.TestCase):
     def test_distinct_parses_into_map(self):
         import tempfile as _tf
         from pathlib import Path as _P
-        from taxjson.bin.taxjson_ticker_map import load_map_file
+        from taxjson.lib.map_file import load_map_file
         with _tf.TemporaryDirectory() as td:
             p = _P(td) / "ticker.map"
             p.write_text("TOBASE AEM.US AEM.TO\n"

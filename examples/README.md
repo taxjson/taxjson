@@ -17,7 +17,8 @@ To try taxjson on a whole project instead, `tjs init --demo ~/taxjson-demo` make
 ## Generic importer template
 
 `generic_wealthsimple.toml` is a starting mapping for the generic column-mapped
-importer (brokers without a dedicated parser). Copy it next to your export as
+importer (brokers without a dedicated parser or a shipped layout; Wealthsimple's
+activities export needs none: taxjson ships its layout). Copy it next to your export as
 `inputs/<account>/<file>.csv.toml` (a sidecar for that one file, any file name)
 or as `inputs/<account>/generic.toml` (shared by every `generic_*.csv` in the
 folder) and adjust the header names and action values to match your CSV. See

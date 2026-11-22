@@ -1,0 +1,15 @@
+{
+  "account": null,
+  "counts": {
+    "decided": 0,
+    "joined": 0,
+    "refused": 0,
+    "suggested": 0
+  },
+  "format": "taxjson-journals/1",
+  "journals": [],
+  "map": null,
+  "pending": 0,
+  "schema_version": 1,
+  "year": null
+}

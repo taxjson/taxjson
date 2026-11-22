@@ -1,0 +1,61 @@
+======================================================================
+ DIAGNOSTICS — crypto  (parser/merge warnings; not part of the tax totals)
+======================================================================
+note: FX: Bank of Canada Valet for <n> dates, Yahoo fallback for 0
+  NOTE: 1 crypto withdrawal/send(s) among them — if any left your ownership (gift or payment), each is a taxable DISPOSITION at fair market value: `tjs crypto-sends` lists them with the fair value and writes the .tt sale for each gift/payment (self-custody moves need nothing).
+  coinbase_demo.csv: 8 tax objects
+warning: Kraken trades kraken_demo.csv: the fee currency of 5 fill(s) can't be verified — no Kraken ledgers export (kr_ledgers*.csv) is in the same folder. Kraken's trades CSV states every fee in quote units even when Kraken took it in the traded coin, which books coins that were never received; add the ledgers export covering these dates beside the trades file.
+  kraken_demo.csv: 5 tax objects
+OK: crypto_base.json: 14 transactions validated.
+OK: Validation passed. No obvious issues found across 1 files.
+======================================================================
+
+
+TICKER SUMMARY — CAD, year 2024, sorted by ticker
+
+SYMBOL                                 TOTAL        TOTAL_COST     TOTAL_PROCEED        TOTAL_GAIN          CAP_GAIN          OPT_GAIN          DIVIDEND               PIL   AVG_DAYS
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+BTC                                   197.67          9,752.50          9,950.18            197.67            197.67              0.00              0.00              0.00      154.5
+ETH                                   345.85          4,148.56          4,470.85            322.29            322.29              0.00             23.56              0.00      117.0
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+TOTAL                                 543.52         13,901.06         14,421.02            519.97            519.97              0.00             23.56              0.00      132.0
+
+ASSET: Non-option | CURRENCY: CAD   | TRADES: 5 | YEAR: 2024
+
+Total Realized Gain:                519.97 CAD
+Average Holding Period:               132.0 Days
+Avg Fee Per Trade:                   14.43 CAD
+Avg Fee Per Share:                 64.1400 CAD
+----------------------------------------------------------------------------------------------------------------
+Positive Trades: 4 | Negative Trades: 1 | Win/Loss: 4.00 | Win Rate: 80.0%
+Average Positive:            167.63 CAD | Average Negative:           -150.57 CAD
+----------------------------------------------------------------------------------------------------------------
+
+CONSOLIDATED TOTALS — CAD, year 2024
+
+TOTAL COST:                         13,901.06 CAD
+TOTAL PROCEEDS:                     14,421.02 CAD
+  (engine sign convention: shorts/written options negated — for Schedule 3 proceeds and ACB use `tjs form-export`)
+------------------------------------------------------
+TOTAL REALIZED NON-OPTION GAIN:        519.97 CAD
+  (shares, units, futures and crypto — Schedule 3 lines: `tjs form-export`)
+TOTAL REALIZED OPTION GAIN:              0.00 CAD
+TOTAL REALIZED GAIN:                   519.97 CAD
+------------------------------------------------------
+TOTAL STAKING REWARDS:                  23.56 CAD  (ordinary income, not dividends)
+------------------------------------------------------
+GRAND TOTAL (GAIN+DIV+PIL):            543.52 CAD
+------------------------------------------------------
+TOTAL TRADING FEES PAID:               133.87 CAD
+  (OPTION TRADING FEES):                 0.00 CAD
+
+INCOME SUMMARY — CAD, year 2024, sorted by ticker
+
+SYMBOL                            GROSS DIV              PIL          TAX W/H       NET INCOME
+----------------------------------------------------------------------------------------------
+ETH                                   23.56             0.00             0.00            23.56
+----------------------------------------------------------------------------------------------
+SUBTOTAL                              23.56             0.00             0.00            23.56
+CASH INTEREST                                                                             0.00
+----------------------------------------------------------------------------------------------
+TOTAL NET INCOME                                                                         23.56

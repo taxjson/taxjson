@@ -1,0 +1,58 @@
+{
+  "account": "hand",
+  "basis": "wash-adjusted",
+  "gains": {
+    "manual_rows": [],
+    "option_fees": {},
+    "returns_by_asset": {
+      "Stocks": {
+        "CAD": {
+          "days": [
+            38
+          ],
+          "dollars": [
+            125.0
+          ],
+          "fee_shares": [],
+          "fees": []
+        }
+      }
+    },
+    "tainted_count": 0,
+    "tainted_routed": 0,
+    "ticker_stats": {
+      "SAMPQ.US": {
+        "CAD": {
+          "cap": 125.0,
+          "cost": 775.0,
+          "div": 0.0,
+          "hold_days": [
+            38
+          ],
+          "opt": 0.0,
+          "pil": 0.0,
+          "proceeds": 900.0,
+          "trade_count": 1
+        }
+      }
+    },
+    "total_fees": {},
+    "total_year": "2025",
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1
+  },
+  "generated_at": "<stamp>",
+  "income": {
+    "interest_paid_totals": {},
+    "interest_totals": {},
+    "missing_amount": [],
+    "ticker_stats": {},
+    "total_year": "2025"
+  },
+  "schema_version": 1,
+  "wash": {
+    "count": 0,
+    "total_disallowed": 0
+  },
+  "year": "2025"
+}

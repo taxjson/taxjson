@@ -1,0 +1,24 @@
+TRADING FEES BY ACCOUNT / BROKERAGE — tax year 2024, by TRADE date; all amounts in USD
+%NOTNL: fees / trade value; $/UNIT: per unit; $/CONTR: per option contract.
+BROKERAGE            CUR  TRADES   TOTAL   MEAN  MEDIAN  %NOTNL   $/UNIT  $/CONTR
+---------------------------------------------------------------------------------
+coinbase/crypto      USD       4   57.80  14.45   16.20  0.800%  68.0000        -
+manual (.tt)/margin  USD       4   39.80   9.95    9.95  0.346%   0.1171        -
+kraken/crypto        USD       5   38.26   7.65    8.40  0.219%  21.8629        -
+ib/margin            USD      14   16.00   1.14    1.00  0.024%   0.0128   1.0000
+manual (.tt)/roth    USD       1    4.95   4.95    4.95  0.404%   0.0990        -
+questrade/qt         USD       1    1.25   1.25    1.25  3.571%        -   1.2500
+---------------------------------------------------------------------------------
+TOTAL                USD      29  158.06   5.45    2.00  0.153%   0.1286   1.0357
+
+Non-option vs option fees
+BROKERAGE            NON-OPTION  OPTIONS
+----------------------------------------
+coinbase/crypto           57.80     0.00
+manual (.tt)/margin       39.80     0.00
+kraken/crypto             38.26     0.00
+ib/margin                 10.00     6.00
+manual (.tt)/roth          4.95     0.00
+questrade/qt               0.00     1.25
+
+More: tjs fees-sum --details (definitions, the files read)

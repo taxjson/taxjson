@@ -1,0 +1,60 @@
+{
+  "basis": "trade",
+  "calls_in_windows": [],
+  "country": "usa",
+  "futures_settle": "trade",
+  "margin": 3,
+  "missing_books": [],
+  "missing_history_openings": 0,
+  "renamed_late": [],
+  "schema_version": 1,
+  "window_basis": "trade",
+  "window_edges": [],
+  "year": 2024,
+  "year_boundary": {
+    "crypto_midnight": [],
+    "deferred_at_year_end": [
+      {
+        "account": "margin",
+        "as_of": "2024-12-31",
+        "deferred": 519.9,
+        "qty": 100.0,
+        "symbol": "SAMPA.US",
+        "why": "519.90 of denied losses sits in the cost of the 100 units still held at the end of 2024; it reduces the gain (or grows the loss) of the year they are sold"
+      },
+      {
+        "account": "margin",
+        "as_of": "2024-12-31",
+        "deferred": 201.0,
+        "qty": 100.0,
+        "symbol": "QZQ.US",
+        "why": "201.00 of denied losses sits in the cost of the 100 units still held at the end of 2024; it reduces the gain (or grows the loss) of the year they are sold"
+      },
+      {
+        "account": "margin",
+        "as_of": "2024-12-31",
+        "deferred": 82.0,
+        "qty": 10.0,
+        "symbol": "NVDA.US",
+        "why": "82.00 of denied losses sits in the cost of the 10 units still held at the end of 2024; it reduces the gain (or grows the loss) of the year they are sold"
+      }
+    ],
+    "income": [
+      {
+        "account": "margin",
+        "action": "INTEREST",
+        "amount": 12.34,
+        "date": "2024-12-31",
+        "lands_in": 2024,
+        "symbol": "CASH",
+        "tax_date": "2024-12-31",
+        "why": "income is taxed in the year it is paid (the date the broker books it, 2024-12-31): 2024"
+      }
+    ],
+    "last_days": [],
+    "loss_windows": [],
+    "option_expiries": [],
+    "straddles": [],
+    "written_options": []
+  }
+}

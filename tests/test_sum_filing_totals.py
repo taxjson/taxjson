@@ -8,9 +8,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from taxjson.bin.taxjson_form_export import build_schedule3, filing_totals
+from taxjson.lib.tax_forms import build_schedule3
+from taxjson.bin.taxjson_form_export import filing_totals
+import _paths
+from _support.filing_run_record import record_full_run
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 ENTRIES = [
     # long sale, net proceeds 995 after a 5 commission, gain 195
@@ -49,6 +52,7 @@ class TestSumCommand(unittest.TestCase):
                  "direction": "LONG", "date_settle": "2024-12-30"}]}          # other year: excluded
             (root / "work" / "margin_gains.json").write_text(json.dumps(doc))
             (root / "work" / "rrsp_gains.json").write_text(json.dumps(doc))
+            record_full_run(root)
             def cli(*a):
                 return subprocess.run([sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root), "sum", *a],
                                       cwd=REPO_ROOT, capture_output=True, text=True, stdin=subprocess.DEVNULL)

@@ -73,6 +73,7 @@ Or through the project wrapper (recommended):  `tjs t1135`
 
 from taxjson.lib.out import unwrapped as _unwrapped
 from taxjson.lib.stage_msg import emit_line
+from taxjson.lib.markets_data import known_suffixes as _known_sfx
 import argparse
 import contextlib
 import io
@@ -82,10 +83,13 @@ from decimal import Decimal
 from pathlib import Path
 from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.lib.futures import is_plain_future
-from taxjson.lib.numeric import positive_float_arg
-from taxjson.lib.report_model import fmt_money
-from taxjson.bin.taxjson_convert_currency import norm_currency
-from typing import Any, Dict, List, Optional, Tuple
+from taxjson.lib.numeric import positive_float_arg, round_half_up
+from taxjson.lib.report_fmt import fmt_money
+from taxjson.model import money as M
+from taxjson.model.result import GainRow
+from taxjson.lib.exchange_rates import norm_currency
+from taxjson.lib import out as _out
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # Filing threshold: ITA 233.3(1) "reporting entity" — SFP total cost more
 # than $100,000 CAD at any time in the year requires the form. The
@@ -102,15 +106,14 @@ DETAILED_THRESHOLD = 250_000.0
 # The market data's one venue table (lib/markets); a Canadian exchange
 # is None — not specified foreign property (.VN was a '??' REVIEW here,
 # audit A2-1077).
-from taxjson.lib.markets import (known_suffixes as _known_sfx,  # noqa: E402
-                                 suffix_country as _sfx_country)
+from taxjson.lib.markets import suffix_country as _sfx_country  # noqa: E402
 _SUFFIX_COUNTRY: Dict[str, Optional[str]] = {
     _s: (None if _sfx_country(_s) == "CAN" else _sfx_country(_s))
     for _s in _known_sfx()}
 
 # Actions that never move a position or its cost. Mirrors the engines'
-# non-capital skip list (core.py) minus ADJUST/SPLIT/OPENING_BALANCE which
-# we do consume.
+# non-capital skip list (engine/ca/walk.py, engine/us/wash.py) minus
+# ADJUST/SPLIT/OPENING_BALANCE which we do consume.
 _NON_CAPITAL = ("DIVIDEND", "DIVIDEND_IN_LIEU", "TAX", "INTEREST", "FEE",
                 "TRANSFER")
 
@@ -200,7 +203,7 @@ def load_transactions(paths: List[Path],
         cut = _pool_cut_ids(p, rows)
         rows = [t for t in rows if not cut or t.get("id") not in cut]
         if ph:
-            from taxjson.lib.core import coerce_transaction_row
+            from taxjson.lib.tx_load import coerce_transaction_row
             from taxjson.lib.missing_history import synthesize_openings
             objs = [coerce_transaction_row(t, i, str(p))
                     for i, t in enumerate(rows)]
@@ -305,7 +308,7 @@ def foreign_isin_symbols(rows: List[Dict[str, Any]],
     property wherever they are listed (tax-logic CA-RPT-02; backlog
     TJ-0455). A symbol a ticker.map T1135 line decides (`user_keys`)
     is the user's, never named."""
-    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.option_symbols import is_option_symbol
     from taxjson.lib.t1135_country import iso3_of
     out: Dict[str, str] = {}
     for t in rows:
@@ -320,6 +323,39 @@ def foreign_isin_symbols(rows: List[Dict[str, Any]],
     return out
 
 
+def issuer_mismatch_symbols(rows: List[Dict[str, Any]],
+                            overrides: Dict[str, Optional[str]],
+                            user_keys: Any = ()
+                            ) -> Dict[str, Tuple[str, Optional[str], str]]:
+    """{symbol: (the country it is counted under, the country its rows'
+    ISIN names as ISO alpha-3 or None when the prefix is no country's,
+    the prefix as stamped)} of the shares counted under one foreign
+    country whose rows carry another's ISIN (an Irish issuer on a US
+    exchange: `.US` says USA, IB's `issuer_country` IE; backlog
+    TJ-4958). Foreign property either way, so the total is the same:
+    what moves is the country its row is under. Named for a `T1135
+    SYMBOL COUNTRY` line, never reclassified from the ISIN (a prefix is
+    not a residence). Not named: a symbol a ticker.map T1135 line
+    decides (`user_keys`), a Canadian ISIN (canadian_issuer_symbols), a
+    symbol with no country (REVIEW, CRYPTO), an option, a futures
+    contract."""
+    from taxjson.lib.option_symbols import is_option_symbol
+    from taxjson.lib.t1135_country import iso3_of
+    out: Dict[str, Tuple[str, Optional[str], str]] = {}
+    for t in rows:
+        ic = str(t.get("issuer_country") or "").strip().upper()
+        sym = str(t.get("symbol") or "")
+        if (not ic or ic in ("CA", "CAN") or not sym or "." not in sym
+                or sym in out or sym in user_keys
+                or is_option_symbol(sym) or is_plain_future(sym)):
+            continue
+        counted = classify_country(sym, overrides)
+        if counted in (None, REVIEW, CRYPTO) or counted == iso3_of(ic):
+            continue
+        out[sym] = (counted, iso3_of(ic), ic)
+    return out
+
+
 def property_category(symbol: str, categories: Dict[str, int],
                       kinds: Dict[str, str]) -> Tuple[Optional[int], str]:
     """A property's T1135 category and where it comes from (tax-logic
@@ -329,7 +365,7 @@ def property_category(symbol: str, categories: Dict[str, int],
     master records as units or a fund (`kinds`, lib/tobase_map.
     t1135_kinds), named for the user to set; else 2, a listed security
     taken as a corporation's shares."""
-    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.option_symbols import is_option_symbol
     if symbol in categories:
         return categories[symbol], "ticker.map"
     if "." not in symbol:
@@ -438,7 +474,7 @@ class Custody:
 
     def canadian(self, symbol: str) -> bool:
         """A share whose holding in Canada is not foreign property."""
-        from taxjson.lib.core import is_option_symbol
+        from taxjson.lib.option_symbols import is_option_symbol
         return (bool(symbol) and "." in symbol
                 and classify_country(symbol, self.overrides) is None
                 and not is_option_symbol(symbol)
@@ -545,11 +581,11 @@ class Custody:
     def units(self, account: str, symbol: str, date: str,
               basis: str = "settle") -> float:
         """`account`'s units of `symbol` at the end of `date` (on
-        `basis`), from its books (taxjson_apply_distributions.
+        `basis`), from its books (unit_balance.
         balance_on, as taxjson-split-gains apportions a pooled
         inventory)."""
         from bisect import bisect_right
-        from taxjson.bin.taxjson_apply_distributions import balance_on
+        from taxjson.lib.unit_balance import balance_on
         rows, days = self._held_rows(account, symbol, basis)
         i = bisect_right(days, date) - 1
         if i < 0:
@@ -633,28 +669,37 @@ class _Pool:
 
     def eps(self, *scales: float) -> float:
         """The quantity under which this pool is flat: the engine's own
-        tolerance (core.pool_qty_eps) — 1e-6 for shares and options;
+        tolerance (pool_eps.pool_qty_eps) — 1e-6 for shares and options;
         for a coin only float noise, since a holding of a millionth of
         a coin is property with a cost amount (2026-10 filing audit F5:
         the share epsilon dropped it from the T1135)."""
-        from taxjson.lib.core import pool_qty_eps
+        from taxjson.lib.pool_eps import pool_qty_eps
         return pool_qty_eps(self.symbol, self.qty, *scales)
 
     def held_long(self) -> bool:
         """A long holding: more than the flat tolerance, or a sub-micro
-        position that carries a real cost (core.pool_is_flat,
+        position that carries a real cost (engine/ca/pools.pool_is_flat,
         CA-ACB-01; backlog TJ-0649: bought or consolidated into a
         fraction of a share, its cost amount was left out)."""
-        from taxjson.lib.core import pool_is_flat
+        from taxjson.engine.ca.pools import pool_is_flat
         return self.qty > 0 and not pool_is_flat(self.symbol, self.qty,
                                                  self.cost)
 
     def cost_amount(self) -> float:
         """Cost amount of PROPERTY HELD: a short position is a liability,
         not property, so only long cost counts."""
+        return float(self.cost_exact())
+
+    def cost_exact(self) -> Decimal:
+        """cost_amount, in Decimal: what the year's total adds, exactly,
+        the maximum rounded half up to the cent at the end. A float sum()
+        is compensated from Python 3.12 on, so a total of the floats, and
+        the cent the maximum rounded to, differed by Python version; and
+        round() of the float decided an exact half cent by its binary
+        value (TJ-2791, TJ-2795)."""
         if not self.held_long():
-            return 0.0
-        return max(float(self.cost), 0.0)
+            return Decimal(0)
+        return max(self.cost, Decimal(0))
 
 
 class _Ev:
@@ -700,7 +745,7 @@ def _engine_timeline(transactions: List[Dict[str, Any]],
     rows, one book of the taxable accounts): one full-history run, no
     registered context. build_report passes the project pass's own
     timeline instead (full_history_pass)."""
-    from taxjson.lib.core import coerce_transaction_row
+    from taxjson.lib.tx_load import coerce_transaction_row
     from taxjson.lib.pipeline import GainsRequest, run_gains
     # A row with no symbol moves no pool (and the engine refuses it).
     txs = [coerce_transaction_row(r, i, "taxjson-t1135")
@@ -721,6 +766,33 @@ def _pass_on_engine_errors(text: str) -> None:
     for line in text.splitlines():
         if "did not converge" in line:
             emit_line(line, file=sys.stderr)
+
+
+def _shorts_held_in_year(timeline: Dict[str, Any], year: int,
+                         overrides: Dict[str, Optional[str]]) -> set:
+    """The foreign symbols the timeline's `shorts` part holds short at
+    some point of `year`: its state at the prior Dec 31 and every row of
+    the year. A short beside a long, or beside a flat pool holding a
+    denied loss's waiting addition, has no row among the pools' (it is in
+    that part: lib/cost_timeline; backlog TJ-2712), and is an obligation
+    too (CA-RPT-19): walk_costs starts `short_in_year` from it, before
+    the walk, so a rename carries the symbol as it carries the pools'
+    (backlog TJ-3284). A plain future is a note of its own there."""
+    from taxjson.lib import cost_timeline as _CT
+    from taxjson.lib.pool_eps import pool_qty_eps
+    shorts = timeline.get("shorts")
+    if not isinstance(shorts, dict):
+        return set()
+    year_rows = [r for r in _CT.rows(shorts)
+                 if f"{year}-01-01" <= str(r.get("date") or "") <= f"{year}-12-31"]
+    out: set = set()
+    for r in list(_CT.pools_on(shorts, f"{year - 1}-12-31").values()) + year_rows:
+        s = str(r.get("symbol") or "")
+        q = float(r.get("qty") or 0.0)
+        if (s and q < -pool_qty_eps(s, q) and not is_plain_future(s)
+                and classify_country(s, overrides) is not None):
+            out.add(s)
+    return out
 
 
 def walk_costs(transactions: List[Dict[str, Any]], year: int,
@@ -763,7 +835,7 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
     counted twice inside the day. A row of unknown cost is a row even
     with no units."""
     from taxjson.lib import cost_timeline as _CT
-    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.option_symbols import is_option_symbol
     year_start = f"{year}-01-01"
     year_end = f"{year}-12-31"
     if timeline is None:
@@ -776,7 +848,7 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
     # Each pool's state per account (Canada's are pooled: account "");
     # a symbol's pool is their sum.
     states: Dict[str, Dict[str, Tuple[float, float, bool]]] = {}
-    max_total = 0.0
+    max_total = Decimal(0)
     max_total_date = ""
     baseline_taken = False
     # Plain futures contracts seen (S008-04): a futures position has no
@@ -799,11 +871,11 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
     # is an obligation, not property held (CA-RPT-19). Never cleared:
     # a rename carries both to the new symbol and keeps the old one's.
     long_in_year: set = set()
-    short_in_year: set = set()
+    short_in_year: set = _shorts_held_in_year(timeline, year, overrides)
 
-    def total_foreign_cost() -> float:
-        return sum(p.cost_amount() for s, p in pools.items()
-                   if classify_country(s, overrides) is not None)
+    def total_foreign_cost() -> Decimal:
+        return sum((p.cost_exact() for s, p in pools.items()
+                    if classify_country(s, overrides) is not None), Decimal(0))
 
     def snapshot(date: str) -> None:
         nonlocal max_total, max_total_date
@@ -848,7 +920,7 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
         shares: Dict[str, float] = {}
         if custody is not None and custody.custody \
                 and custody.canadian(symbol):
-            from taxjson.lib.core import pool_qty_eps
+            from taxjson.lib.pool_eps import pool_qty_eps
             if abs(q) > pool_qty_eps(symbol, q):
                 for acct in custody.custody:
                     u = custody.units_at(acct, symbol, date, basis,
@@ -994,7 +1066,7 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
     # books lack its expiry / exercise row, so its cost stays in the
     # pools — counted (the conservative side) but named, since the
     # contract stopped being property at expiry.
-    from taxjson.lib.core import parse_option_expiry
+    from taxjson.lib.option_symbols import parse_option_expiry
     # Expired by the year end when it expires ON Dec 31 too (re-audit
     # A2-1121, the R1-37 twin); in an unfinished year, only once its
     # expiry day has passed (it still trades that day).
@@ -1026,15 +1098,15 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
             continue
         per_symbol[s] = {
             "country": country,
-            "max_cost": round(p.max_cost_in_year, 2),
-            "year_end_cost": round(year_end_cost, 2),
+            "max_cost": round_half_up(p.max_cost_in_year, 2),
+            "year_end_cost": round_half_up(year_end_cost, 2),
             "unknown_acb": ((p.tainted or s in unknown_in_year) and not fut)
                            or cash_unknown,
             "futures": fut,
         }
     return {
         "per_symbol": per_symbol,
-        "max_total_cost": round(max_total, 2),
+        "max_total_cost": round_half_up(max_total, 2),
         "max_total_date": max_total_date,
         "futures_symbols": sorted(futures_seen),
         "expired_options_held": expired_held,
@@ -1208,7 +1280,7 @@ def paid_on_short(timeline: Optional[Dict[str, Any]]
     CA-RPT-14; backlog TJ-0837)."""
     from datetime import date as _d, timedelta as _td
     from taxjson.lib import cost_timeline as _CT
-    from taxjson.lib.core import pool_qty_eps
+    from taxjson.lib.pool_eps import pool_qty_eps
 
     def points(doc, keep_account):
         out: Dict[Any, List[Tuple[str, float]]] = {}
@@ -1302,9 +1374,12 @@ def join_income_gains(gains_paths: List[Path], year: int,
             if not symbol:
                 continue
             action = e.get("action") or ""
+            v = GainRow(e)
+            # A payment in lieu's income, read once (TJ-2946).
+            paid = (float(v.pil or 0.0) + float(v.dividend or 0.0)
+                    if action == "DIVIDEND_IN_LIEU" else 0.0)
             if (action == "DIVIDEND_IN_LIEU" and short_paid is not None
-                    and float(e.get("pil") or 0.0)
-                    + float(e.get("dividend") or 0.0) < 0
+                    and paid < 0
                     and short_paid(e.get("symbol") or "", date,
                                    e.get("account") or file_acct)):
                 # Dividend compensation paid on a short: an expense of
@@ -1313,14 +1388,13 @@ def join_income_gains(gains_paths: List[Path], year: int,
                 continue
             rec = out.setdefault(symbol, {"income": 0.0, "gain": 0.0})
             if action == "DIVIDEND":
-                rec["income"] += float(e.get("dividend") or 0.0)
+                rec["income"] += float(v.dividend or 0.0)
             elif action == "DIVIDEND_IN_LIEU":
                 # A Canadian dealer's payment in lieu on a Canadian
                 # issuer is a s.260 deemed dividend: the run carries it
                 # as 'dividend' with pil 0 (re-audit A2-0661; as
                 # sum-gains and filed read it).
-                rec["income"] += (float(e.get("pil") or 0.0)
-                                  + float(e.get("dividend") or 0.0))
+                rec["income"] += paid
             elif "gain" in e:
                 # Tainted dispositions (unknown cost, booked at zero) carry a
                 # fabricated gain — form-export and carryover exclude
@@ -1329,7 +1403,7 @@ def join_income_gains(gains_paths: List[Path], year: int,
                 if e.get("tainted"):
                     tainted_skipped += 1
                     continue
-                rec["gain"] += float(e.get("gain") or 0.0)
+                rec["gain"] += float(v.gain or 0.0)
         for e in data.get("manual_reporting_required") or []:
             date = _tx_date(e, tax_date)
             symbol = _gains_key(e, custody, file_acct)
@@ -1486,6 +1560,436 @@ def full_history_wash_sales(base_paths: List[Path],
 
 # ---------------------------------------------------------------- report
 
+def _custody_and_cash(custody: Optional[Dict[str, Optional[str]]],
+                      overrides: Dict[str, Optional[str]],
+                      txs: List[Dict[str, Any]],
+                      cash: Optional[Dict[str, Any]]
+                      ) -> Tuple["Custody", Dict[str, Dict[str, Any]]]:
+    """build_report's Custody over `overrides` (it adds its keys to
+    them) and the cash pools walk_costs reads: one of each per
+    classification walked (classification_check walks another)."""
+    # A custody account's part of a Canadian issuer's pool is a pool of
+    # its own: its units times the pool's cost per unit (Custody).
+    cust = Custody(custody, overrides, txs)
+    # The cash held outside Canada (CA-RPT-20): a pool per account and
+    # currency, at the cost lib/t1135_cash gives each day.
+    cash_pools: Dict[str, Dict[str, Any]] = {}
+    for s in (cash or {}).get("series") or []:
+        k = cust.cash(str(s["currency"]).upper(), str(s["account"]),
+                      str(s["country"]))
+        cash_pools[k] = {"points": s.get("points") or [],
+                         "unknown": bool(s.get("unknown")),
+                         "why": str(s.get("why") or "")}
+    if cash and cash.get("stablecoins"):
+        for acct, country in sorted((cash.get("accounts") or {}).items()):
+            k = cash_key("USD", acct)
+            if k not in cust.cash_rows:
+                cust.cash("USD", acct, str(country))
+            for coin in cash["stablecoins"]:
+                cust.cash_coins[(str(acct), str(coin).upper())] = k
+    return cust, cash_pools
+
+
+def _renames(timeline: Dict[str, Any]
+             ) -> Tuple[Dict[str, Set[str]], Dict[str, Set[str]]]:
+    """The ticker changes of the engine's timeline, the ones walk_costs
+    carries an override over: ({new symbol: the symbols renamed to
+    it}, {old symbol: the symbols it was renamed to})."""
+    from taxjson.lib import cost_timeline as _CT
+    preds: Dict[str, Set[str]] = {}
+    succs: Dict[str, Set[str]] = {}
+    for r in _CT.rows(timeline):
+        old, new = str(r.get("symbol") or ""), str(r.get("renamed_to") or "")
+        if old and new and old != new:
+            preds.setdefault(new, set()).add(old)
+            succs.setdefault(old, set()).add(new)
+    return preds, succs
+
+
+def _reach(symbol: str, edges: Dict[str, Set[str]]) -> Set[str]:
+    """`symbol` and every symbol `edges` lead to from it."""
+    seen, todo = {symbol}, [symbol]
+    while todo:
+        for n in edges.get(todo.pop(), ()):
+            if n not in seen:
+                seen.add(n)
+                todo.append(n)
+    return seen
+
+
+def _decided(user_keys: Any, succs: Dict[str, Set[str]]) -> Set[str]:
+    """The symbols a ticker.map T1135 line decides: the line's own and,
+    as the override follows a ticker change (walk_costs' carry), every
+    symbol it was renamed to afterwards. A line for the old symbol is
+    not reopened by an ISIN on the new one."""
+    out: Set[str] = set()
+    for k in user_keys:
+        out |= _reach(k, succs)
+    return out
+
+
+def _first_symbols(symbol: str, preds: Dict[str, Set[str]]) -> List[str]:
+    """The symbol(s) the security of `symbol` first had in the books: a
+    T1135 line for them reaches `symbol` through every ticker change
+    (itself when it never changed; every symbol of a loop of
+    changes)."""
+    back = _reach(symbol, preds)
+    first = sorted(x for x in back if not preds.get(x))
+    return first or sorted(back)
+
+
+def _isin_conflict(symbol: str, counted: Optional[str],
+                   issuer: Optional[str], stamp: str, affects: str,
+                   preds: Dict[str, Set[str]], succs: Dict[str, Set[str]],
+                   listed: Optional[Dict[str, Optional[str]]] = None
+                   ) -> Dict[str, Any]:
+    """One `classification_conflicts` entry: `symbol`, counted under
+    `counted` (None: not foreign property), whose rows' ISIN prefix
+    `stamp` names `issuer` (ISO alpha-3, "CAN", or None when it is no
+    country's). `listed`: how each symbol of the security is counted
+    ({symbol: country, None for Canadian}; its `symbols`).
+
+    `lines`, each one the ticker.map parser accepts. A conflict that
+    moves the total (`affects` "total"): `foreign` and `not_foreign`,
+    both on the symbol the security first had, so either line decides
+    the whole year through its ticker changes — as counted may be
+    neither, when a change crossed from a Canadian listing to a foreign
+    one (`foreign` None when the ISIN's prefix gives no country to
+    write). One that is foreign either way ("country"): `as_counted`
+    and `other`, on the symbol. `_foreign` / `_canadian`: the lines as
+    overrides, what walk_as walks; `_chain`: every symbol of the
+    security."""
+    here = "CA" if counted is None else counted
+    out: Dict[str, Any] = {
+        "symbol": symbol,
+        "counted_as": "CAN" if counted is None else counted,
+        "issuer_country": issuer,
+        "isin_country_code": stamp,
+        "affects": affects,
+        "held_in_year": affects != "total",
+        "_chain": _reach(symbol, preds) | _reach(symbol, succs),
+    }
+    if affects != "total":
+        out["lines"] = {
+            "as_counted": [f"T1135 {symbol} {here}"],
+            "other": (None if issuer is None
+                      else [f"T1135 {symbol} {issuer}"])}
+        return out
+    listed = listed or {symbol: counted}
+    first = _first_symbols(symbol, preds)
+    # The country a foreign reading is under: the ISIN's, else (a
+    # Canadian ISIN) the foreign listing's.
+    abroad = sorted(v for v in listed.values()
+                    if v not in (None, REVIEW, CRYPTO))
+    country = issuer if issuer != "CAN" else (abroad[0] if abroad else None)
+    out["symbols"] = {k: ("CAN" if v is None else v)
+                      for k, v in sorted(listed.items())}
+    out["lines"] = {
+        "foreign": (None if country is None
+                    else [f"T1135 {x} {country}" for x in first]),
+        "not_foreign": [f"T1135 {x} CA" for x in first]}
+    out["_foreign"] = {x: country or REVIEW for x in first}
+    out["_canadian"] = {x: None for x in first}
+    return out
+
+
+def _line(c: Dict[str, Any], which: str) -> str:
+    """A conflict's ticker.map line(s) `which` (a key of its `lines`) as
+    the text prints them; with no line to give, the line's shape
+    (`T1135 SYMBOL COUNTRY` is no line the parser takes, and is not
+    meant to be)."""
+    lines = (c.get("lines") or {}).get(which)
+    if lines:
+        return " and ".join(f"`{x}`" for x in lines)
+    return f"`T1135 {c['symbol']} COUNTRY`"
+
+
+def _line_note(c: Dict[str, Any], which: str) -> str:
+    """What a reader needs to use _line's text: what COUNTRY stands
+    for, or that the line names the security's earlier symbol."""
+    lines = (c.get("lines") or {}).get(which)
+    if not lines:
+        return (f"COUNTRY: the issuer's country, its three-letter code; "
+                f"the ISIN's prefix {c.get('isin_country_code') or '?'} "
+                f"names no country")
+    old = sorted({x.split()[1] for x in lines} - {c["symbol"]})
+    if old:
+        return (f"{', '.join(old)}: {c['symbol']} before its ticker "
+                f"change")
+    return ""
+
+
+def _noted(text: str, *notes: str) -> str:
+    kept = [n for n in notes if n]
+    return f"{text} ({'; '.join(kept)})" if kept else text
+
+
+def _issuer_conflicts(txs: List[Dict[str, Any]],
+                      overrides: Dict[str, Optional[str]], decided: Any,
+                      preds: Dict[str, Set[str]], succs: Dict[str, Set[str]]
+                      ) -> Tuple[List[str], Dict[str, str],
+                                 List[Dict[str, Any]]]:
+    """The symbols whose rows' ISIN (`issuer_country`) and listing
+    disagree on whether they are foreign property, each kind warned
+    about: (a Canadian ISIN on a foreign listing, counted as foreign;
+    {a foreign ISIN on a Canadian listing: its country}, counted as
+    Canadian; the `classification_conflicts` entries, one a security).
+    A security is a conflict too when its ISIN agrees with the symbol
+    that carries it and disagrees with a listing it had before or after
+    a ticker change. A symbol a ticker.map T1135 line decides
+    (`decided`: the line's, and what it was renamed to) is the
+    user's."""
+    from taxjson.lib.out import warn as _warn
+    from taxjson.lib.option_symbols import is_option_symbol
+    from taxjson.lib.t1135_country import iso3_of
+    stamps: Dict[str, str] = {}
+    for t in txs:
+        ic = str(t.get("issuer_country") or "").strip().upper()
+        sym = str(t.get("symbol") or "")
+        if ic and "." in sym and sym not in decided \
+                and not is_option_symbol(sym) and not is_plain_future(sym):
+            stamps.setdefault(sym, ic)
+    # A Canadian issuer on a foreign listing (its ISIN says CA — IB
+    # stamps issuer_country on the rows) is not specified foreign
+    # property, yet the listing suffix classifies it foreign. Named, not
+    # guessed: the user confirms with a `T1135 SYMBOL CA` line in ticker.map
+    # (re-audit A2-0332).
+    canadian_issuer = sorted({
+        str(t.get("symbol")) for t in txs
+        if str(t.get("issuer_country") or "").upper() == "CA"
+        and t.get("symbol") and t.get("symbol") not in decided
+        and classify_country(str(t.get("symbol")), overrides)
+        not in (None, CRYPTO)})
+    # The mirror case (backlog TJ-0455): a foreign issuer on a Canadian
+    # listing (its rows' ISIN names another country — a US corporation
+    # bought on the TSX) is specified foreign property wherever listed,
+    # yet the listing suffix classifies it Canadian, while the estimate
+    # takes its dividends as foreign from the same ISIN. Named with the
+    # line to add, not guessed; tobase.map's issuer country, when it
+    # knows the issuer, has already classified it (issuer_countries).
+    foreign_issuer = foreign_isin_symbols(txs, overrides, decided)
+    # One conflict a security: the symbol whose own listing disagrees
+    # first, then one whose ISIN disagrees with another listing of its
+    # chain only.
+    conflicts: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    own = set(canadian_issuer) | set(foreign_issuer)
+    for sym in sorted(stamps, key=lambda x: (x not in own, x)):
+        if sym in seen:
+            continue
+        home = stamps[sym] in ("CA", "CAN")
+        chain = (_reach(sym, preds) | _reach(sym, succs)) - set(decided)
+        listed = {x: classify_country(x, overrides) for x in chain | {sym}
+                  if "." in x}
+        if not any((v is None) != home for v in listed.values()):
+            continue
+        seen |= chain | {sym}
+        conflicts.append(_isin_conflict(
+            sym, listed[sym], "CAN" if home else iso3_of(stamps[sym]),
+            stamps[sym], "total", preds, succs, listed))
+    by = {c["symbol"]: c for c in conflicts}
+    down = [by[x] for x in canadian_issuer if x in by]
+    up = [by[x] for x in sorted(foreign_issuer) if x in by]
+    rest = [c for c in conflicts if c["symbol"] not in own]
+    if down:
+        _warn(f"{len(canadian_issuer)} symbol(s) on a foreign listing "
+              f"carry a Canadian ISIN: {', '.join(canadian_issuer[:6])}"
+              f"{' ...' if len(canadian_issuer) > 6 else ''}",
+              details=_dl(["Shares of a Canadian corporation are not "
+                           "specified foreign property (unless held with "
+                           "a custodian outside Canada: [accounts.NAME] "
+                           "custodian_country), but they are counted here "
+                           "by their listing — add "
+                           + _noted(_line(down[0], "not_foreign"),
+                                    _line_note(down[0], "not_foreign"))
+                           + f"{' (a line for each)' if len(down) > 1 else ''}"
+                           + " to ticker.map once confirmed."]))
+    if up:
+        _fi = sorted(foreign_issuer)
+        _warn(f"{len(_fi)} symbol(s) on a Canadian listing carry a "
+              f"foreign ISIN: "
+              + ", ".join(f"{x} ({_isin_words(by[x]) if x in by else foreign_issuer[x]})"
+                          for x in _fi[:6])
+              + f"{' ...' if len(_fi) > 6 else ''}",
+              details=_dl(["A non-resident corporation's shares are "
+                           "specified foreign property wherever they "
+                           "are listed, but they are counted here as "
+                           "Canadian by their listing — add "
+                           + _noted(_line(up[0], "foreign"),
+                                    _line_note(up[0], "foreign"))
+                           + f"{' (a line for each)' if len(up) > 1 else ''}"
+                           + " to ticker.map once confirmed, or "
+                           + _line(up[0], "not_foreign")
+                           + " for a corporation resident in Canada."]))
+    if rest:
+        _warn(f"{len(rest)} symbol(s) carry an ISIN that disagrees with "
+              f"a listing they had before or after a ticker change: "
+              + ", ".join(f"{c['symbol']} ({_isin_words(c)}; "
+                          + ", ".join(f"{k} counted under {v}" for k, v
+                                      in c["symbols"].items()) + ")"
+                          for c in rest[:6])
+              + f"{' ...' if len(rest) > 6 else ''}",
+              details=_dl(["One security through its ticker change, "
+                           "counted as foreign property under one symbol "
+                           "and not under the other — add "
+                           + _noted(_line(rest[0], "foreign"),
+                                    _line_note(rest[0], "foreign"))
+                           + " or " + _line(rest[0], "not_foreign")
+                           + f"{' (a line for each)' if len(rest) > 1 else ''}"
+                           + " to ticker.map once confirmed."]))
+    return canadian_issuer, foreign_issuer, conflicts
+
+
+def _isin_words(c: Dict[str, Any]) -> str:
+    """The country a conflict's ISIN names, or that its prefix names
+    none."""
+    return c.get("issuer_country") or (
+        f"ISIN prefix {c.get('isin_country_code') or '?'}: no country")
+
+
+def _mismatch_conflicts(mismatch: Dict[str, Tuple[str, Optional[str], str]]
+                        ) -> List[Dict[str, Any]]:
+    """issuer_mismatch_symbols' symbols as `classification_conflicts`
+    entries, and their warning (TJ-4958)."""
+    out = [_isin_conflict(s, c, i, stamp, "country", {}, {})
+           for s, (c, i, stamp) in sorted(mismatch.items())]
+    if out:
+        from taxjson.lib.out import warn as _warn
+        _warn(f"{len(out)} symbol(s) counted under one foreign country "
+              f"carry another's ISIN: "
+              + ", ".join(f"{c['symbol']} ({_isin_words(c)}, counted "
+                          f"under {c['counted_as']})" for c in out[:6])
+              + f"{' ...' if len(out) > 6 else ''}",
+              details=_dl(["Foreign property under either country, so "
+                           "the total is the same; the country its row "
+                           "is under is the one counted. Add "
+                           + _noted(_line(out[0], "other"),
+                                    _line_note(out[0], "other"))
+                           + f"{' (a line for each)' if len(out) > 1 else ''}"
+                           + " to ticker.map once confirmed, or "
+                           + _line(out[0], "as_counted")
+                           + " to keep it."]))
+    return out
+
+
+# `classification_status` (--json; backlog TJ-4956): whether the holdings
+# whose ISIN and listing disagree on being foreign property leave the
+# threshold test open.
+RESOLVED = "resolved"               # no such holding in the year
+VERDICT_HOLDS = "verdict_holds"     # some, and the test reads the same
+UNRESOLVED = "unresolved"           # some, and the test depends on them
+
+
+def classification_check(walk: Dict[str, Any], threshold: float,
+                         conflicts: List[Dict[str, Any]],
+                         walk_as: Any) -> Dict[str, Any]:
+    """Whether the threshold test stands while a holding's ISIN and its
+    listing disagree on its being foreign property (backlog TJ-4956,
+    TJ-4958): the report's `classification_*` and `max_total_cost_low`
+    / `_high` keys.
+
+    The books count a symbol by its listing. `walk_as({symbol:
+    country})` is the cost walk with ticker.map lines of `conflicts`
+    (_isin_conflict) added, exactly those: every conflicted security's
+    `foreign` line gives the highest maximum the conflicts allow, every
+    `not_foreign` line the lowest. Both are exact, and as counted lies
+    between them: a security's pools are its own, a cost amount is
+    never negative, and a line on the symbol the security first had
+    counts it one way through the whole year, so day by day the total
+    with every such security foreign is at least, and with every one
+    Canadian at most, the total under any other answer — as counted
+    included, which is neither reading when a ticker change crossed
+    from a Canadian listing to a foreign one. (A custodian abroad
+    counts its part either way, Custody: both walks do.)
+
+    The test is open (UNRESOLVED) when it reads "not over" as counted
+    and the highest is over the threshold or has a holding of a cost
+    the books do not give (`max_total_cost_high` None, `_at_least` what
+    is known of it), or reads "over" and the lowest is not. Nothing is
+    reclassified: the figures of the report stay as counted. A conflict
+    over a security with no row in the year under the foreign reading
+    is listed (`held_in_year` false) and decides nothing; so is one
+    that is foreign either way (`affects` "country")."""
+    counted = walk["max_total_cost"]
+    low: float = counted
+    at_least: float = counted
+    unknown: List[str] = []
+    total = [c for c in conflicts if c["affects"] == "total"]
+    if total:
+        hi = walk_as({k: v for c in total for k, v in c["_foreign"].items()})
+        for c in total:
+            c["held_in_year"] = bool(c["_chain"] & set(hi["per_symbol"]))
+        at_least = max(hi["max_total_cost"], counted)
+        # A row the foreign reading adds, of unknown cost: no figure.
+        unknown = sorted(k for k, v in hi["per_symbol"].items()
+                         if v["unknown_acb"] and k not in walk["per_symbol"])
+        low = min(counted, walk_as(
+            {k: v for c in total
+             for k, v in c["_canadian"].items()})["max_total_cost"])
+    held = [c["symbol"] for c in total if c["held_in_year"]]
+    # The ones a reading moves: counted as foreign somewhere (the
+    # Canadian reading lowers it), as Canadian somewhere (the foreign
+    # one raises it).
+    lowers = [c["symbol"] for c in total if c["held_in_year"]
+              and set(c["symbols"].values()) != {"CAN"}]
+    raises = [c["symbol"] for c in total if c["held_in_year"]
+              and "CAN" in c["symbols"].values()]
+    status, open_syms = RESOLVED, []
+    if counted > threshold:
+        if not low > threshold:
+            status, open_syms = UNRESOLVED, lowers or held
+    elif unknown or at_least > threshold:
+        status, open_syms = UNRESOLVED, raises or held
+    if status == RESOLVED and held:
+        status = VERDICT_HOLDS
+    return {"classification_status": status,
+            "classification_unresolved_symbols": open_syms,
+            "classification_unknown_cost_symbols": unknown,
+            "classification_conflicts": [
+                {k: v for k, v in c.items() if not k.startswith("_")}
+                for c in conflicts],
+            "max_total_cost_low": low,
+            "max_total_cost_high": None if unknown else at_least,
+            "max_total_cost_high_at_least": at_least}
+
+
+def verdict_keys(max_total: float, threshold: float, detailed: float,
+                 settled: bool, complete: bool, cls: Dict[str, Any],
+                 acb_known: bool = True) -> Dict[str, Any]:
+    """The report's verdict keys, each saying what the verdict line of
+    the text says (backlog TJ-4956):
+
+    `over_threshold_as_counted`: the plain comparison, always a
+    boolean. `filing_required`: True where "FILING REQUIRED" is
+    printed (over, and no conflict could take it back under), False
+    where "no T1135 required" is (below, the year complete, the cash
+    costed, every property's ACB known — `acb_known` —, no conflict
+    could take it over), None where the text gives no verdict: NOT
+    RESOLVED, NOT SETTLED, "so far". `simplified_method_available`:
+    None unless a filing is required; then True or False only when the
+    part is decided — not while the year is open or a cost is unknown
+    under the detailed threshold, nor while the conflicts' range
+    straddles it."""
+    over = max_total > threshold
+    low, high = cls["max_total_cost_low"], cls["max_total_cost_high"]
+    required: Optional[bool]
+    simplified: Optional[bool] = None
+    if cls["classification_status"] == UNRESOLVED:
+        required = None
+    elif over:
+        required = True
+    else:
+        required = False if settled and complete and acb_known else None
+    if required and max_total >= detailed:
+        simplified = False if low >= detailed else None
+    elif required:
+        simplified = (True if settled and complete and acb_known
+                      and high is not None and high < detailed else None)
+    return {"over_threshold_as_counted": over,
+            "filing_required": required,
+            "simplified_method_available": simplified}
+
+
 def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
                  overrides: Dict[str, Optional[str]],
                  base_currency: str,
@@ -1571,25 +2075,10 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         cats[nk] = v
     overrides = dict(issuer_countries or {})
     overrides.update(mapped)            # the walk adds rename targets
-    # A custody account's part of a Canadian issuer's pool is a pool of
-    # its own: its units times the pool's cost per unit (Custody).
-    cust = Custody(custody, overrides, txs)
-    # The cash held outside Canada (CA-RPT-20): a pool per account and
-    # currency, at the cost lib/t1135_cash gives each day.
-    cash_pools: Dict[str, Dict[str, Any]] = {}
-    for s in (cash or {}).get("series") or []:
-        k = cust.cash(str(s["currency"]).upper(), str(s["account"]),
-                      str(s["country"]))
-        cash_pools[k] = {"points": s.get("points") or [],
-                         "unknown": bool(s.get("unknown")),
-                         "why": str(s.get("why") or "")}
-    if cash and cash.get("stablecoins"):
-        for acct, country in sorted((cash.get("accounts") or {}).items()):
-            k = cash_key("USD", acct)
-            if k not in cust.cash_rows:
-                cust.cash("USD", acct, str(country))
-            for coin in cash["stablecoins"]:
-                cust.cash_coins[(str(acct), str(coin).upper())] = k
+    # Before the custody keys and the walk's rename targets are added:
+    # what another classification of a symbol starts from (TJ-4956).
+    listed = dict(overrides)
+    cust, cash_pools = _custody_and_cash(custody, overrides, txs, cash)
     # The cost amounts are the engine's pools, read from its cost
     # timeline (backlog TJ-0417): every superficial loss denied in any
     # year is in them where the engine put it (G7-0, S008-07).
@@ -1598,6 +2087,12 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         income_rules).get("cost_timeline") or {}
     walk = walk_costs(txs, year, overrides, tax_date, today=today,
                       timeline=timeline, custody=cust, cash=cash_pools)
+
+    def _walk_as(other: Dict[str, Optional[str]]) -> Dict[str, Any]:
+        ov = {**listed, **other}
+        c2, pools2 = _custody_and_cash(custody, ov, txs, cash)
+        return walk_costs(txs, year, ov, tax_date, today=today,
+                          timeline=timeline, custody=c2, cash=pools2)
     # A category follows its symbol through a rename, as the walk has
     # carried its country.
     for t in sorted((t for t in txs
@@ -1658,52 +2153,11 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
               f"the override is not applied",
               details=_dl(["Renamed, consolidated by ticker.map, or a "
                            "typo?"]))
-    # A Canadian issuer on a foreign listing (its ISIN says CA — IB
-    # stamps issuer_country on the rows) is not specified foreign
-    # property, yet the listing suffix classifies it foreign. Named, not
-    # guessed: the user confirms with a `T1135 SYMBOL CA` line in ticker.map
-    # (re-audit A2-0332).
-    canadian_issuer = sorted({
-        str(t.get("symbol")) for t in txs
-        if str(t.get("issuer_country") or "").upper() == "CA"
-        and t.get("symbol") and t.get("symbol") not in user_keys
-        and classify_country(str(t.get("symbol")), overrides)
-        not in (None, CRYPTO)})
-    if canadian_issuer:
-        from taxjson.lib.out import warn as _warn
-        _warn(f"{len(canadian_issuer)} symbol(s) on a foreign listing "
-              f"carry a Canadian ISIN: {', '.join(canadian_issuer[:6])}"
-              f"{' ...' if len(canadian_issuer) > 6 else ''}",
-              details=_dl(["Shares of a Canadian corporation are not "
-                           "specified foreign property (unless held with "
-                           "a custodian outside Canada: [accounts.NAME] "
-                           "custodian_country), but they are counted here "
-                           "by their listing — add `T1135 SYMBOL CA` to "
-                           "ticker.map once confirmed."]))
-    # The mirror case (backlog TJ-0455): a foreign issuer on a Canadian
-    # listing (its rows' ISIN names another country — a US corporation
-    # bought on the TSX) is specified foreign property wherever listed,
-    # yet the listing suffix classifies it Canadian, while the estimate
-    # takes its dividends as foreign from the same ISIN. Named with the
-    # line to add, not guessed; tobase.map's issuer country, when it
-    # knows the issuer, has already classified it (issuer_countries).
-    foreign_issuer = foreign_isin_symbols(txs, overrides, user_keys)
-    if foreign_issuer:
-        from taxjson.lib.out import warn as _warn
-        _fi = sorted(foreign_issuer)
-        _warn(f"{len(_fi)} symbol(s) on a Canadian listing carry a "
-              f"foreign ISIN: "
-              f"{', '.join(f'{s} ({foreign_issuer[s]})' for s in _fi[:6])}"
-              f"{' ...' if len(_fi) > 6 else ''}",
-              details=_dl([f"A non-resident corporation's shares are "
-                           f"specified foreign property wherever they "
-                           f"are listed, but they are counted here as "
-                           f"Canadian by their listing — add "
-                           f"`T1135 {_fi[0]} {foreign_issuer[_fi[0]]}` "
-                           f"{'(a line for each) ' if len(_fi) > 1 else ''}"
-                           f"to ticker.map once confirmed, or `T1135 "
-                           f"SYMBOL CA` for a corporation resident in "
-                           f"Canada."]))
+    # A T1135 line decides its symbol through every later ticker change.
+    preds, succs = _renames(timeline)
+    decided = _decided(user_keys, succs)
+    canadian_issuer, foreign_issuer, conflicts = _issuer_conflicts(
+        txs, overrides, decided, preds, succs)
     futures = set(walk.get("futures_symbols") or ())
 
     def _category(key: str) -> Tuple[Optional[int], str]:
@@ -1718,8 +2172,8 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
     def _money_cols(key: str, ig: Dict[str, float]) -> Dict[str, Any]:
         if not_given and (not gains_paths or key in unknown_inc):
             return {"income": None, "gain": None}
-        return {"income": round(ig.get("income", 0.0), 2),
-                "gain": round(ig.get("gain", 0.0), 2)}
+        return {"income": M.shown(ig.get("income", 0.0), 2),
+                "gain": M.shown(ig.get("gain", 0.0), 2)}
 
     def _custody_field(key: str) -> Dict[str, Any]:
         if key in cust.cash_rows:
@@ -1797,9 +2251,18 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
     for c in by_country.values():
         for k in c:
             if c[k] is not None:
-                c[k] = round(c[k], 2)
+                c[k] = M.shown(c[k], 2)
 
     max_total = walk["max_total_cost"]
+    # A foreign listing whose ISIN names a third country (TJ-4958): a
+    # row of the year's, to review.
+    mismatch = issuer_mismatch_symbols(txs, overrides, decided)
+    _taken = {x for c in conflicts for x in c["_chain"]}
+    mismatch = {r["symbol"]: mismatch[r["symbol"]] for r in rows
+                if r["symbol"] in mismatch and not r.get("cash")
+                and r["symbol"] not in _taken}
+    conflicts += _mismatch_conflicts(mismatch)
+    cls = classification_check(walk, threshold, conflicts, _walk_as)
     year_end = f"{year}-12-31"
     year_complete = today > year_end
     # The cash a ledger could not cost (CA-RPT-20): its rows, and the
@@ -1825,7 +2288,13 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         "max_total_cost": max_total,
         "max_total_date": walk["max_total_date"],
         "filing_threshold": threshold,
-        "filing_required": max_total > threshold,
+        # What the verdict line says (verdict_keys), and whether the
+        # classification leaves it open (TJ-4956).
+        **verdict_keys(max_total, threshold, detailed_threshold,
+                       total_settled, year_complete, cls,
+                       not any(r["unknown_acb"] and not r.get("cash")
+                               for r in rows)),
+        **cls,
         # The verdict covers these brokerage books only (S052-13): the
         # JSON carries the text report's qualification (A2-0682).
         "scope": "books_only",
@@ -1845,11 +2314,12 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         "cash_unknown_cost": [_cash_cell(r) for r in cash_unknown],
         "total_settled": total_settled,
         "detailed_threshold": detailed_threshold,
-        "simplified_method_available": max_total < detailed_threshold,
         "properties": rows,
         "by_country": by_country,
         "review_symbols": [r["symbol"] for r in rows
-                           if r["country"] in (REVIEW, CRYPTO)],
+                           if r["country"] in (REVIEW, CRYPTO)
+                           or (r["symbol"] in mismatch
+                               and not r.get("cash"))],
         "crypto_symbols": [r["symbol"] for r in rows
                            if r["country"] == CRYPTO],
         "unknown_acb_symbols": [r["symbol"] for r in rows if r["unknown_acb"]],
@@ -1956,7 +2426,7 @@ def _cash_acts(rep: Dict[str, Any]) -> List[Tuple[str, str]]:
     cash is not counted."""
     out: List[Tuple[str, str]] = []
     unk = rep.get("cash_unknown_cost") or []
-    if unk and rep.get("filing_required"):
+    if unk and _over(rep):
         out.append((f"{_few(unk, 1)}: cost unknown (fx-cash v2 refuses)",
                     "tjs fx-cash --ledger v2"))
     for n in rep.get("cash_not_counted") or []:
@@ -1997,6 +2467,209 @@ def _no_gains_note(rep: Dict[str, Any]) -> Optional[str]:
             f"{' +' + str(len(ng) - 2) + ' more' if len(ng) > 2 else ''}")
 
 
+def _over(rep: Dict[str, Any]) -> bool:
+    """Over the threshold as counted (a report from before the key:
+    its `filing_required`)."""
+    v = rep.get("over_threshold_as_counted")
+    return bool(rep.get("filing_required")) if v is None else bool(v)
+
+
+def _open_conflicts(rep: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The conflicts an UNRESOLVED test waits on, in the order named."""
+    by = {c["symbol"]: c for c in rep.get("classification_conflicts") or []}
+    return [by[s] for s in rep.get("classification_unresolved_symbols") or []
+            if s in by]
+
+
+def _acb_unknown(rep: Dict[str, Any]) -> List[str]:
+    """The properties (not cash) counted at an unknown ACB: their cost,
+    and so the total, is understated."""
+    return [r["symbol"] for r in rep.get("properties") or []
+            if r.get("unknown_acb") and not r.get("cash")]
+
+
+# What gives an unknown ACB its cost (docs/commands.md, find-missing-
+# history).
+_ACB_FIX = ("add its purchase (an older export, or an OPENING line with "
+            "its cost: tjs find-missing-history), then `tjs run`")
+
+
+def _cash_open(rep: Dict[str, Any]) -> str:
+    """Why the cash leaves the total open, with the command that says
+    more: its cost is unknown, or only where cash in transit at the
+    year end was held is (backlog TJ-1271)."""
+    if _only_transit_open(rep):
+        return ("where cash in transit at the year end was held is open "
+                "— tjs t1135 --details")
+    return "some cash's cost is unknown — tjs fx-cash --ledger v2"
+
+
+def _conflict_words(c: Dict[str, Any]) -> str:
+    """What disagrees in a conflict, in the verdict's parenthesis."""
+    counted = set((c.get("symbols") or {}).values())
+    if "CAN" in counted and len(counted) > 1:
+        return "ISIN and listings disagree through its ticker change"
+    if c.get("issuer_country") == "CAN":
+        return "a Canadian ISIN on a foreign listing"
+    return "a foreign ISIN on a Canadian listing"
+
+
+def _verdict_open(rep: Dict[str, Any], limit: int = 2
+                  ) -> Optional[Tuple[str, str]]:
+    """While the classification leaves the test open (UNRESOLVED;
+    backlog TJ-4956): (what could reverse it, the ticker.map lines that
+    settle it: those of `limit` symbols, the rest counted), else None.
+    A figure is "at least" where a cost behind it is not known."""
+    if rep.get("classification_status") != UNRESOLVED:
+        return None
+    cur = rep["base_currency"]
+    cs = _open_conflicts(rep)
+    syms = [c["symbol"] for c in cs]
+    it = "it" if len(syms) == 1 else "them"
+    what = _conflict_words(cs[0]) if cs else "ISIN and listing disagree"
+    complete = rep.get("year_complete", True)
+    so_far = "" if complete else " so far"
+    floor = (" at least" if _acb_unknown(rep)
+             or not rep.get("total_settled", True) else "")
+    if _over(rep):
+        why = (f"{_few(syms)} may not be foreign property ({what}): "
+               f"without {it} the maximum{so_far} is{floor} "
+               f"{_money(rep['max_total_cost_low'])} {cur}")
+        order = (("not_foreign", "not foreign property"),
+                 ("foreign", "foreign property"))
+    else:
+        unk = list(rep.get("classification_unknown_cost_symbols") or [])
+        why = (f"{_few(syms)} may be foreign property ({what}): with "
+               f"{it} the maximum{so_far} is"
+               f"{' at least' if unk else floor} "
+               f"{_money(rep['max_total_cost_high_at_least'])} {cur}"
+               + (f", plus {_few(unk)} at a cost the books do not give"
+                  if unk else ""))
+        order = (("foreign", "foreign property"),
+                 ("not_foreign", "not foreign property"))
+    parts = []
+    for c in cs[:limit]:
+        notes = [_line_note(c, k) for k, _ in order]
+        if notes[0] == notes[1]:        # the earlier symbol: said once
+            notes[1] = ""
+        parts.append(" or ".join(
+            _noted(_line(c, k), label, note)
+            for (k, label), note in zip(order, notes)))
+    more = len(cs) - limit
+    fix = ("Add " + "; ".join(parts)
+           + (f"; and the lines of {more} more (tjs t1135 --details)"
+              if more > 0 else "")
+           + " to ticker.map, then `tjs run` and `tjs t1135`"
+           + ("." if complete or _over(rep) else
+              "; the test runs to Dec 31, re-run after it."))
+    return why, fix
+
+
+def _verdict_head(rep: Dict[str, Any]) -> Optional[str]:
+    """The verdict line while the classification leaves the test open:
+    it replaces "FILING REQUIRED" and "no T1135 required" (below the
+    threshold with a cost unknown, NOT SETTLED keeps the line and
+    _verdict_tail says the rest; over it, this line says both)."""
+    open_ = _verdict_open(rep)
+    settled = rep.get("total_settled", True)
+    if not open_ or not (_over(rep) or (settled and not _acb_unknown(rep))):
+        return None
+    where = "over" if _over(rep) else "below"
+    as_of = rep.get("as_of") or f"{rep['year']}-12-31"
+    so_far = ("" if _over(rep) or rep.get("year_complete", True)
+              else f" so far (books through {as_of})")
+    return (f"=> NOT RESOLVED: {where} the "
+            f"{_money(rep['filing_threshold'])} {rep['base_currency']} "
+            f"threshold as counted{so_far}, but {open_[0]}"
+            + ("" if settled else f"; NOT SETTLED either: {_cash_open(rep)}"))
+
+
+def _verdict_tail(rep: Dict[str, Any], limit: int = 2) -> List[str]:
+    """The lines under the verdict about the holdings whose ISIN and
+    listing disagree (backlog TJ-4956): the lines to add while the test
+    is open; that the test reads the same either way when it does (the
+    holdings of the year only)."""
+    open_ = _verdict_open(rep, limit)
+    if open_:
+        return ([] if _verdict_head(rep)
+                else [f"Also not resolved: {open_[0]}."]) + [open_[1]]
+    if rep.get("classification_status") != VERDICT_HOLDS:
+        return []
+    cur = rep["base_currency"]
+    syms = [c["symbol"] for c in rep.get("classification_conflicts") or []
+            if c.get("affects") == "total" and c.get("held_in_year")]
+    low, high = rep.get("max_total_cost_low"), rep.get("max_total_cost_high")
+    if high is None:
+        span = ""
+    elif low == high:
+        span = f" (the maximum stays {_money(low)} {cur})"
+    else:
+        span = f" (the maximum is {_money(low)} to {_money(high)} {cur})"
+    return [f"Counting {_few(syms)} the other way (ISIN and listing "
+            f"disagree) does not change this{span}."]
+
+
+def _part(rep: Dict[str, Any]) -> Tuple[Optional[bool], str]:
+    """Where a filing is required: (`simplified_method_available`, why
+    the part is open when it is None)."""
+    simplified = rep.get("simplified_method_available")
+    if simplified is not None:
+        return bool(simplified), ""
+    cur = rep["base_currency"]
+    det = rep.get("detailed_threshold", DETAILED_THRESHOLD)
+    low = rep.get("max_total_cost_low", rep["max_total_cost"])
+    high = rep.get("max_total_cost_high", rep["max_total_cost"])
+    under = rep["max_total_cost"] < det
+    why = []
+    if under and not rep.get("year_complete", True):
+        why.append(f"under {_money(det)} {cur} so far")
+    if under and not rep.get("total_settled", True):
+        why.append(_cash_open(rep).split(" — ")[0])
+    if under and _acb_unknown(rep):
+        why.append(f"the cost of {_few(_acb_unknown(rep))} is unknown")
+    if low < det and (high is None or high >= det):
+        syms = [c["symbol"] for c in rep.get("classification_conflicts")
+                or [] if c.get("affects") == "total"
+                and c.get("held_in_year")]
+        why.append(f"it depends on how {_few(syms)} "
+                   f"{'is' if len(syms) == 1 else 'are'} counted")
+    return None, "; ".join(why) or "not decided"
+
+
+def _brief_verdict(rep: Dict[str, Any], thr: str, complete: bool,
+                   as_of: str) -> List[str]:
+    """render_brief's verdict line, and what follows it about the
+    classification (_verdict_tail)."""
+    lines: List[str] = []
+    settled = rep.get("total_settled", True)
+    head = _verdict_head(rep)
+    if head:
+        lines.append(head)
+    elif _over(rep):
+        simplified, why = _part(rep)
+        part = (f"Part A or Part B open ({why})" if simplified is None
+                else "simplified method (Part A)" if simplified
+                else "detailed method (Part B)")
+        lines.append(f"=> T1135 FILING REQUIRED (over {thr}): {part}")
+    elif not settled:
+        # Cash of unknown cost (CA-RPT-20): no verdict below the line.
+        lines.append(f"=> NOT SETTLED: below the {thr} threshold"
+                     f"{'' if complete else ' so far'}, but "
+                     + _cash_open(rep))
+    elif _acb_unknown(rep):
+        # A property at an unknown ACB: the total is understated.
+        lines.append(f"=> NOT SETTLED: below the {thr} threshold"
+                     f"{'' if complete else ' so far'}, but the cost of "
+                     f"{_few(_acb_unknown(rep))} is unknown — {_ACB_FIX}")
+    elif complete:
+        lines.append(f"=> below the {thr} threshold on these books: "
+                     f"no T1135 required")
+    else:
+        lines.append(f"=> below the {thr} threshold so far (books "
+                     f"through {as_of}): re-run after Dec 31")
+    return lines + _verdict_tail(rep)
+
+
 def render_brief(rep: Dict[str, Any]) -> str:
     """The default view: the filing verdict and its figure, the two
     tables under a legend, then one `! ` line per thing to act on and
@@ -2016,27 +2689,7 @@ def render_brief(rep: Dict[str, Any]) -> str:
                  f"{'' if complete else ' so far'}: "
                  f"{_money(rep['max_total_cost'])} {cur}{when}")
     thr = f"{_money(rep['filing_threshold'])} {cur}"
-    settled = rep.get("total_settled", True)
-    if rep["filing_required"]:
-        part = ("simplified method (Part A)"
-                if rep["simplified_method_available"]
-                else "detailed method (Part B)")
-        lines.append(f"=> T1135 FILING REQUIRED (over {thr}): {part}")
-    elif not settled:
-        # Cash of unknown cost (CA-RPT-20): no verdict below the line.
-        lines.append(f"=> NOT SETTLED: below the {thr} threshold"
-                     f"{'' if complete else ' so far'}, but "
-                     + ("where cash in transit at the year end was held is "
-                        "open — tjs t1135 --details"
-                        if _only_transit_open(rep) else
-                        "some cash's cost is unknown — tjs fx-cash --ledger "
-                        "v2"))
-    elif complete:
-        lines.append(f"=> below the {thr} threshold on these books: "
-                     f"no T1135 required")
-    else:
-        lines.append(f"=> below the {thr} threshold so far (books "
-                     f"through {as_of}): re-run after Dec 31")
+    lines.extend(_brief_verdict(rep, thr, complete, as_of))
     acts: List[str] = []
     cash_acts = _cash_acts(rep)
     if rep.get("expired_options_held"):
@@ -2054,6 +2707,13 @@ def render_brief(rep: Dict[str, Any]) -> str:
         acts.append(f"{len(_fi)} foreign-ISIN symbol(s) counted as "
                     f"Canadian: {', '.join(_fi[:2])}"
                     f"{' +' + str(len(_fi) - 2) + ' more' if len(_fi) > 2 else ''}")
+    _mm = [c for c in rep.get("classification_conflicts") or []
+           if c.get("affects") == "country"]
+    if _mm:
+        acts.append(f"{len(_mm)} symbol(s) with another country's ISIN "
+                    f"than counted: "
+                    + _few([f"{c['symbol']} ({_isin_words(c)})"
+                            for c in _mm]))
     _ng = _no_gains_note(rep)
     if _ng:
         acts.append(_ng)
@@ -2133,6 +2793,64 @@ def render_brief(rep: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _report_verdict(rep: Dict[str, Any], para: Any, complete: bool,
+                    as_of: str) -> None:
+    """render_report's verdict lines, and what follows them about the
+    classification (_verdict_tail)."""
+    cur = rep["base_currency"]
+    _head = _verdict_head(rep)
+    if _head:
+        para(_head, "  ", "     ")
+    elif _over(rep):
+        para(f"=> T1135 FILING REQUIRED "
+             f"(exceeds {_money(rep['filing_threshold'])} {cur})",
+             "  ", "     ")
+        _simplified, _why = _part(rep)
+        if _simplified is None:
+            para(f"=> Part A or Part B open ({_why}; the detailed method "
+                 f"from {_money(rep['detailed_threshold'])} {cur}; T1135 "
+                 f"instructions)", "  ", "     ")
+        elif _simplified:
+            para(f"=> Simplified method (Part A) available "
+                 f"(stayed under {_money(rep['detailed_threshold'])} "
+                 f"{cur}; T1135 instructions)", "  ", "     ")
+        else:
+            para(f"=> Detailed method (Part B) required "
+                 f"(reached {_money(rep['detailed_threshold'])} "
+                 f"{cur}; T1135 instructions)", "  ", "     ")
+    elif not rep.get("total_settled", True):
+        # Cash of unknown cost (CA-RPT-20): no verdict below the line.
+        para(f"=> NOT SETTLED: below the "
+             f"{_money(rep['filing_threshold'])} {cur} threshold "
+             f"{'on these books' if complete else f'so far (books through {as_of})'}"
+             + (", but where cash in transit at the year end was held is "
+                "open (see the notes) — the total may be higher"
+                if _only_transit_open(rep) else
+                ", but the cost of some cash in them is unknown (see the "
+                "notes) — the total may be higher"), "  ", "     ")
+    elif _acb_unknown(rep):
+        # A property at an unknown ACB: the total is understated.
+        para(f"=> NOT SETTLED: below the "
+             f"{_money(rep['filing_threshold'])} {cur} threshold "
+             f"{'on these books' if complete else f'so far (books through {as_of})'}"
+             f", but the cost of {', '.join(_acb_unknown(rep))} is "
+             f"unknown (bought before the data: the total is "
+             f"understated) — {_ACB_FIX}", "  ", "     ")
+    elif complete:
+        para(f"=> below the {_money(rep['filing_threshold'])} {cur} "
+             f"threshold on these books — no T1135 required this "
+             f"year unless foreign property outside them (see "
+             f"notes) takes the total over", "  ", "     ")
+    else:
+        # In-year (S051-22, S052-15): ITA 233.3 counts cost at ANY time
+        # up to Dec 31 — a mid-year 'not required' is not a verdict.
+        para(f"=> below the {_money(rep['filing_threshold'])} {cur} "
+             f"threshold so far (books through {as_of}) — the test "
+             f"runs to Dec 31; re-run after the year ends", "  ", "     ")
+    for _t in _verdict_tail(rep, limit=99):
+        para(_t, "  ", "    ")
+
+
 def render_report(rep: Dict[str, Any]) -> str:
     """The console report, in the house style (docs/output-style.md):
     the filing verdict, the per-property and per-country tables (fitted
@@ -2160,38 +2878,20 @@ def render_report(rep: Dict[str, Any]) -> str:
     para(f"Maximum total cost of specified foreign property during "
          f"{rep['year']}{so_far}: {_money(rep['max_total_cost'])} "
          f"{cur}{when}", "  ", "    ")
-    if rep["filing_required"]:
-        para(f"=> T1135 FILING REQUIRED "
-             f"(exceeds {_money(rep['filing_threshold'])} {cur})",
-             "  ", "     ")
-        if rep["simplified_method_available"]:
-            para(f"=> Simplified method (Part A) available "
-                 f"(stayed under {_money(rep['detailed_threshold'])} "
-                 f"{cur}{' so far' if not complete else ''}; "
-                 f"T1135 instructions)", "  ", "     ")
-        else:
-            para(f"=> Detailed method (Part B) required "
-                 f"(reached {_money(rep['detailed_threshold'])} "
-                 f"{cur}; T1135 instructions)", "  ", "     ")
-    elif not rep.get("total_settled", True):
-        # Cash of unknown cost (CA-RPT-20): no verdict below the line.
-        para(f"=> NOT SETTLED: below the "
-             f"{_money(rep['filing_threshold'])} {cur} threshold "
-             f"{'on these books' if complete else f'so far (books through {as_of})'}"
-             f", but the cost of some cash in them is unknown (see the "
-             f"notes) — the total may be higher", "  ", "     ")
-    elif complete:
-        para(f"=> below the {_money(rep['filing_threshold'])} {cur} "
-             f"threshold on these books — no T1135 required this "
-             f"year unless foreign property outside them (see "
-             f"notes) takes the total over", "  ", "     ")
-    else:
-        # In-year (S051-22, S052-15): ITA 233.3 counts cost at ANY time
-        # up to Dec 31 — a mid-year 'not required' is not a verdict.
-        para(f"=> below the {_money(rep['filing_threshold'])} {cur} "
-             f"threshold so far (books through {as_of}) — the test "
-             f"runs to Dec 31; re-run after the year ends", "  ", "     ")
+    _report_verdict(rep, para, complete, as_of)
     warns: List[str] = []
+    _mm = [c for c in rep.get("classification_conflicts") or []
+           if c.get("affects") == "country"]
+    if _mm:
+        warns.append(f"{len(_mm)} symbol(s) counted under one foreign "
+                     f"country carry another's ISIN ("
+                     + ", ".join(f"{c['symbol']}: {_isin_words(c)}, "
+                                 f"counted under {c['counted_as']}"
+                                 for c in _mm[:6])
+                     + f"{' ...' if len(_mm) > 6 else ''}) — foreign "
+                       f"property under either, the total is the same; "
+                       f"map them `T1135 SYMBOL COUNTRY` in ticker.map "
+                       f"once confirmed.")
     if rep.get("expired_options_held"):
         _ex = rep["expired_options_held"]
         warns.append(f"{len(_ex)} long option(s) still held after their "
@@ -2206,11 +2906,13 @@ def render_report(rep: Dict[str, Any]) -> str:
                      f" — a Canadian corporation's shares are not; map "
                      f"them `T1135 SYMBOL CA` in ticker.map once confirmed.")
     if rep.get("foreign_issuer_symbols"):
-        _fc = rep.get("foreign_issuer_countries") or {}
+        _fc = {c["symbol"]: _isin_words(c)
+               for c in rep.get("classification_conflicts") or []}
+        _fc = {**(rep.get("foreign_issuer_countries") or {}), **_fc}
         _fi = rep["foreign_issuer_symbols"]
         warns.append(f"{len(_fi)} symbol(s) with a foreign ISIN on a "
                      f"Canadian listing are counted as Canadian ("
-                     f"{', '.join(f'{s} {_fc.get(s, REVIEW)}' for s in _fi[:6])}"
+                     f"{', '.join(f'{s}: {_fc.get(s, REVIEW)}' for s in _fi[:6])}"
                      f"{' ...' if len(_fi) > 6 else ''}) — a non-resident "
                      f"corporation's shares are specified foreign property "
                      f"wherever listed; map them `T1135 SYMBOL COUNTRY` in "
@@ -2248,6 +2950,18 @@ def render_report(rep: Dict[str, Any]) -> str:
     # The column is the cost at the last date of the books while the year
     # is open — 'COST AT DEC 31' labelled a September figure (S051-22).
     end_col = "COST AT DEC 31" if complete else f"COST AT {as_of}"
+    _render_property_tables(rows, end_col, lines, item, rep)
+
+    _render_notes(lines, rep, item)
+    return "\n".join(lines)
+
+
+def _render_property_tables(rows: List[Dict[str, Any]], end_col: str, lines: List[str], item: Any,
+                            rep: Dict[str, Any]) -> None:
+    """t1135: the PER PROPERTY table with each property's notes under it,
+    and the PER COUNTRY table (or the line that no property was
+    found)."""
+    from taxjson.lib import out as _out
     if rows:
         header = ("SYMBOL", "COUNTRY", "CAT", "MAX COST IN YR", end_col,
                   "INCOME", "GAIN(LOSS)")
@@ -2325,6 +3039,9 @@ def render_report(rep: Dict[str, Any]) -> str:
         lines.append("No specified foreign property found in the inputs.")
         lines.append("")
 
+
+def _render_notes(lines: List[str], rep: Dict[str, Any], item: Any) -> None:
+    """t1135: the NOTES section."""
     lines.append("NOTES")
     _dated = ("trade-dated: tax_date = \"trade\""
               if rep.get("tax_date_basis") == "trade"
@@ -2397,7 +3114,6 @@ def render_report(rep: Dict[str, Any]) -> str:
          "property here.")
     item("Not tax advice; reconcile against broker statements before "
          "filing.")
-    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------- main
@@ -2418,6 +3134,135 @@ def _custodian_arg(text: str) -> Tuple[str, Optional[str]]:
 
 @guard_main("taxjson-t1135")
 def main(argv: Optional[List[str]] = None) -> int:
+    _lo_args, args = _parse_args(argv)
+    global _DETAILS
+    _DETAILS = not args.brief
+    if args.year_wash_only:
+        emit_line("taxjson-t1135: note: --year-wash-only is ignored — the "
+                  "cost amounts are the gains engine's own pools, every "
+                  "year's denied losses in them.", file=sys.stderr)
+
+    extra = [args.incomplete_history] if args.incomplete_history else []
+    extra += list(args.sheltered)
+    if args.cash is not None:
+        extra.append(args.cash)
+    for p in args.files + args.gains + extra:
+        if not p.exists():
+            _out.put(f"taxjson-t1135: no such file: {p}", file=sys.stderr)
+            return 2
+    if args.map is not None and not args.map.exists():
+        _out.put(f"taxjson-t1135: no such ticker.map: {args.map}",
+                 file=sys.stderr)
+        return 2
+
+    overrides = load_overrides(args.map)
+    categories = load_categories(args.map)
+    cash = load_cash(args.cash)
+    bad_cash = cash_mismatch(cash, args.year, args.base_currency,
+                             args.tax_date)
+    if bad_cash:
+        # Its days on another basis than the walk's: the cash that paid
+        # for shares counted with them (backlog TJ-0627); another year's
+        # points or another base currency's costs read as this year's
+        # Canadian dollars (backlog TJ-0772).
+        from taxjson.lib.out import error as _error
+        _error(f"{args.cash}: the T1135 cash document {bad_cash}",
+               prog="taxjson-t1135",
+               details=["`tjs t1135` writes it for the project's "
+                        "year, base currency and tax_date: rebuild it "
+                        "(`tjs t1135`) for the report you ask for."])
+        return 2
+    # The interlisted pairs (lib/tobase_map): a foreign issuer's country,
+    # the units and funds whose category is the user's, and the renames
+    # a user T1135 key follows.
+    issuer_countries: Dict[str, str] = {}
+    kinds: Dict[str, str] = {}
+    key_renames: Dict[str, str] = {}
+    if args.map is not None:
+        from taxjson.lib.tobase_map import t1135_countries, t1135_kinds
+        issuer_countries = t1135_countries(args.map)
+        kinds = t1135_kinds(args.map)
+        try:
+            from taxjson.lib.ticker_map_rules import merge_renames
+            from taxjson.lib.map_file import _parse_map_file
+            key_renames = {str(k).upper(): str(v).upper() for k, v in
+                           merge_renames(_parse_map_file(args.map)[0],
+                                         to_base=True).items()}
+        except Exception:                               # noqa: BLE001
+            key_renames = {}
+    if args.option_premium_timing is None:
+        # The T1135 test is Canadian; a Canada project's run uses grant
+        # timing from the project year — say so instead of silently
+        # disagreeing with it, as taxjson-gains does (re-audit A2-1361).
+        emit_line("taxjson-t1135: note: --option-premium-timing not given — "
+                  "using close timing. `tjs run` on a Canada project uses "
+                  "grant timing from the project year; pass "
+                  "--option-premium-timing grant --option-grant-since YEAR "
+                  "to match it.", file=sys.stderr)
+        args.option_premium_timing = "close"
+    if args.base_currency.upper() != "CAD":
+        # The thresholds are CAD amounts (ITA s.233.3): a USD book
+        # tested against "100,000 USD" read 80,000 USD (about 110,000
+        # CAD) as 'no T1135 required' at exit 0 (S052-17, re-audit
+        # A2-0660). Refused, never relabelled.
+        _out.put(f"taxjson-t1135: --base-currency "
+                 f"{args.base_currency.upper()}: the T1135 test is in CAD "
+                 f"(ITA s.233.3) — pass books converted to CAD (a Canada "
+                 f"project's work/<account>_base.json; `tjs t1135` "
+                 f"does).", file=sys.stderr)
+        return 2
+    try:
+        rep = build_report(args.files, args.gains, args.year, overrides,
+                           args.base_currency.upper(),
+                           threshold=args.threshold,
+                           detailed_threshold=args.detailed_threshold,
+                           phantoms=args.incomplete_history,
+                           tax_date=args.tax_date,
+                           sheltered_paths=args.sheltered,
+                           option_timing=dict(
+                               option_premium_timing=(
+                                   args.option_premium_timing),
+                               option_grant_since=args.option_grant_since,
+                               option_buyback_loss_superficial=(
+                                   args.option_buyback_wash),
+                               transfers_as_acquisitions=(
+                                   args.transfers_as_acquisitions)),
+                           issuer_countries=issuer_countries,
+                           key_renames=key_renames,
+                           categories=categories, kinds=kinds,
+                           custody=dict(args.custodian), cash=cash,
+                           income_rules=dict(corporate_distributions=tuple(
+                               args.corporate_distribution or ()),
+                               # The ALLOWLOSS positions the books took
+                               # (lib/loss_overrides): no ACB addition.
+                               loss_overrides=_lo_args(args)))
+    except (UnreadableGains, CurrencyMismatch, WrongCountryGains) as e:
+        print(e.code, file=sys.stderr)
+        return 2
+    except (OSError, ValueError) as e:
+        from taxjson.lib.out import error as _error
+        _error(f"could not read the base books: {e}",
+               prog="taxjson-t1135",
+               details=["Re-run `tjs run` to rebuild them."])
+        return 2
+    # A live exact Doc: each line printed when it is added, as the
+    # print() it replaces printed it.
+    d = _out.Doc(exact=True, width_=0, live=True)
+    if args.json:
+        from taxjson.lib.json_contract import versioned
+        from taxjson.lib.json_input import dump_filing_json
+        dump_filing_json(versioned(rep, "t1135"), sys.stdout)
+        d.blank()
+    elif args.brief:
+        d.line(render_brief(rep))
+    else:
+        d.line(render_report(rep))
+    return 0
+
+
+def _parse_args(argv: Optional[List[str]]) -> Tuple[Any, argparse.Namespace]:
+    """t1135: the command line, read, and the loss-override reader its
+    options feed."""
     _doc = __doc__ or ""
     _cav = _doc[_doc.find("Caveats printed"):_doc.find("Usage:")].rstrip()
     parser = argparse.ArgumentParser(
@@ -2520,125 +3365,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "without --details): the notes and each "
                              "message's detail are left out")
     args = parser.parse_args(argv)
-    global _DETAILS
-    _DETAILS = not args.brief
-    if args.year_wash_only:
-        emit_line("taxjson-t1135: note: --year-wash-only is ignored — the "
-                  "cost amounts are the gains engine's own pools, every "
-                  "year's denied losses in them.", file=sys.stderr)
-
-    extra = [args.incomplete_history] if args.incomplete_history else []
-    extra += list(args.sheltered)
-    if args.cash is not None:
-        extra.append(args.cash)
-    for p in args.files + args.gains + extra:
-        if not p.exists():
-            print(f"taxjson-t1135: no such file: {p}", file=sys.stderr)
-            return 2
-    if args.map is not None and not args.map.exists():
-        print(f"taxjson-t1135: no such ticker.map: {args.map}",
-              file=sys.stderr)
-        return 2
-
-    overrides = load_overrides(args.map)
-    categories = load_categories(args.map)
-    cash = load_cash(args.cash)
-    bad_cash = cash_mismatch(cash, args.year, args.base_currency,
-                             args.tax_date)
-    if bad_cash:
-        # Its days on another basis than the walk's: the cash that paid
-        # for shares counted with them (backlog TJ-0627); another year's
-        # points or another base currency's costs read as this year's
-        # Canadian dollars (backlog TJ-0772).
-        from taxjson.lib.out import error as _error
-        _error(f"{args.cash}: the T1135 cash document {bad_cash}",
-               prog="taxjson-t1135",
-               details=["`tjs t1135` writes it for the project's "
-                        "year, base currency and tax_date: rebuild it "
-                        "(`tjs t1135`) for the report you ask for."])
-        return 2
-    # The interlisted pairs (lib/tobase_map): a foreign issuer's country,
-    # the units and funds whose category is the user's, and the renames
-    # a user T1135 key follows.
-    issuer_countries: Dict[str, str] = {}
-    kinds: Dict[str, str] = {}
-    key_renames: Dict[str, str] = {}
-    if args.map is not None:
-        from taxjson.lib.tobase_map import t1135_countries, t1135_kinds
-        issuer_countries = t1135_countries(args.map)
-        kinds = t1135_kinds(args.map)
-        try:
-            from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
-                                                        merge_renames)
-            key_renames = {str(k).upper(): str(v).upper() for k, v in
-                           merge_renames(_parse_map_file(args.map)[0],
-                                         to_base=True).items()}
-        except Exception:                               # noqa: BLE001
-            key_renames = {}
-    if args.option_premium_timing is None:
-        # The T1135 test is Canadian; a Canada project's run uses grant
-        # timing from the project year — say so instead of silently
-        # disagreeing with it, as taxjson-gains does (re-audit A2-1361).
-        emit_line("taxjson-t1135: note: --option-premium-timing not given — "
-                  "using close timing. `tjs run` on a Canada project uses "
-                  "grant timing from the project year; pass "
-                  "--option-premium-timing grant --option-grant-since YEAR "
-                  "to match it.", file=sys.stderr)
-        args.option_premium_timing = "close"
-    if args.base_currency.upper() != "CAD":
-        # The thresholds are CAD amounts (ITA s.233.3): a USD book
-        # tested against "100,000 USD" read 80,000 USD (about 110,000
-        # CAD) as 'no T1135 required' at exit 0 (S052-17, re-audit
-        # A2-0660). Refused, never relabelled.
-        print(f"taxjson-t1135: --base-currency "
-              f"{args.base_currency.upper()}: the T1135 test is in CAD "
-              f"(ITA s.233.3) — pass books converted to CAD (a Canada "
-              f"project's work/<account>_base.json; `tjs t1135` "
-              f"does).", file=sys.stderr)
-        return 2
-    try:
-        rep = build_report(args.files, args.gains, args.year, overrides,
-                           args.base_currency.upper(),
-                           threshold=args.threshold,
-                           detailed_threshold=args.detailed_threshold,
-                           phantoms=args.incomplete_history,
-                           tax_date=args.tax_date,
-                           sheltered_paths=args.sheltered,
-                           option_timing=dict(
-                               option_premium_timing=(
-                                   args.option_premium_timing),
-                               option_grant_since=args.option_grant_since,
-                               option_buyback_loss_superficial=(
-                                   args.option_buyback_wash),
-                               transfers_as_acquisitions=(
-                                   args.transfers_as_acquisitions)),
-                           issuer_countries=issuer_countries,
-                           key_renames=key_renames,
-                           categories=categories, kinds=kinds,
-                           custody=dict(args.custodian), cash=cash,
-                           income_rules=dict(corporate_distributions=tuple(
-                               args.corporate_distribution or ()),
-                               # The ALLOWLOSS positions the books took
-                               # (lib/loss_overrides): no ACB addition.
-                               loss_overrides=_lo_args(args)))
-    except (UnreadableGains, CurrencyMismatch, WrongCountryGains) as e:
-        print(e.code, file=sys.stderr)
-        return 2
-    except (OSError, ValueError) as e:
-        from taxjson.lib.out import error as _error
-        _error(f"could not read the base books: {e}",
-               prog="taxjson-t1135",
-               details=["Re-run `tjs run` to rebuild them."])
-        return 2
-    if args.json:
-        from taxjson.lib.json_input import dump_filing_json
-        dump_filing_json(rep, sys.stdout)
-        print()
-    elif args.brief:
-        print(render_brief(rep))
-    else:
-        print(render_report(rep))
-    return 0
+    return _lo_args, args
 
 
 if __name__ == "__main__":

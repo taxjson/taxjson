@@ -1,0 +1,28 @@
+# purchases_draft.tt.txt — DRAFT purchase lines for account margin,
+# written by `tjs find-missing-history --write-purchases`.
+#
+# taxjson does NOT read this file (its name ends in .txt). For each line:
+#   1. check it against your records (statements, trade confirmations);
+#   2. replace every YYYY-MM-DD with the real purchase date (its settlement date: tax_date settle) and every COST with the real cost (total = qty x price + commission; price = total / qty);
+#   3. delete any line you cannot vouch for.
+# Then rename the file to purchases.tt (any name ending in .tt) in this folder and run `tjs run`.
+# A line still holding YYYY-MM-DD or COST is refused by the run.
+#
+# The broker's figure is evidence; once you keep a line, its cost is YOUR statement of what you paid (tax-logic CA-ACB-15).
+# Canada: your ACB is the average cost of every identical share you held in all taxable accounts — a broker's lot cost or book value is a start, not always your ACB. A non-CAD line is converted at the Bank of Canada rate of its date.
+
+# IB sale 2025-03-18 of 15 SAMPLA.US (code C, row 5b***, ib_2025.csv)
+# IB Basis 451.00 USD for the 15 sold; this lot: opened 2024-01-10, 10 units, cost 280.50 USD (IB Closed Lots)
+# dated 2024-01-12, the lot's settlement date: IB's lot date is the trade date, and under tax_date settle a .tt line's one date is its settlement date.
+# check: IB's Basis is the cost of the lots IB closed (FIFO), not your ACB: the ACB averages every identical share in all your taxable accounts (s.47). If you held more of it bought before the data (still held, or at another broker), add those purchases too.
+# check: the run converts this USD cost to CAD at the Bank of Canada rate of the line's date, so the date must be the real purchase date, its settlement date (tax_date settle: a .tt line's one date).
+# check: a purchase within 30 days (settlement dates) of a loss sale of the same stock is a replacement for the superficial-loss rule.
+BUYSELL  2024-01-12  09:30:00  SAMPLA.US  10  USD  28.050000  280.50  0
+
+# IB sale 2025-03-18 of 15 SAMPLA.US (code C, row 5b***, ib_2025.csv)
+# IB Basis 451.00 USD for the 15 sold; this lot: opened 2024-06-14, 5 units, cost 170.50 USD (IB Closed Lots)
+# dated 2024-06-17, the lot's settlement date: IB's lot date is the trade date, and under tax_date settle a .tt line's one date is its settlement date.
+# check: IB's Basis is the cost of the lots IB closed (FIFO), not your ACB: the ACB averages every identical share in all your taxable accounts (s.47). If you held more of it bought before the data (still held, or at another broker), add those purchases too.
+# check: the run converts this USD cost to CAD at the Bank of Canada rate of the line's date, so the date must be the real purchase date, its settlement date (tax_date settle: a .tt line's one date).
+# check: a purchase within 30 days (settlement dates) of a loss sale of the same stock is a replacement for the superficial-loss rule.
+BUYSELL  2024-06-17  09:30:00  SAMPLA.US  5  USD  34.100000  170.50  0

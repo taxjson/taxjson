@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import (Any, Iterable, Mapping, NamedTuple, Optional, Set,
                     Tuple)
 
+from taxjson.project.toml_io import decode_toml_bytes, parse_toml
+
 KEY = "requires_taxjson"
 
 
@@ -98,15 +100,16 @@ def running_version() -> Optional[str]:
         return None
 
 
-def problem(settings: Any, where: str = "this project") -> Optional[str]:
+def problem(table: Any, where: str = "this project") -> Optional[str]:
     """Why this taxjson cannot run a project whose [settings] are
-    `settings`: a requires_taxjson newer than the installed version, or
+    `table`: a requires_taxjson newer than the installed version, or
     one that is not `">=X.Y.Z"`. None when it may run (no key, or the
     installed version is unknown)."""
-    if not isinstance(settings, Mapping) or settings.get(KEY) is None:
+    v = table.get(KEY) if isinstance(table, Mapping) else getattr(table, KEY, None)
+    if v is None:
         return None
     try:
-        need = parse_spec(settings[KEY])
+        need = parse_spec(v)
     except RequiresError as e:
         return str(e)
     have_text = running_version()
@@ -117,17 +120,19 @@ def problem(settings: Any, where: str = "this project") -> Optional[str]:
             f"{have_text}) — {UPGRADE}")
 
 
-def features_of(settings: Mapping[str, Any],
+def features_of(table: Mapping[str, Any],
                 own_tobase: bool = False) -> Set[str]:
     """The layout features a project with these [settings] uses (and,
     `own_tobase`, a tobase.map of its own beside ticker.map)."""
     from taxjson.lib import project_layout as PL
+    if hasattr(table, "as_dict"):          # the typed object: its raw table
+        table = table.as_dict()
     out: Set[str] = set()
-    if any(settings.get(k) is not None for k in PL.FOLDER_KEYS):
+    if any(table.get(k) is not None for k in PL.FOLDER_KEYS):
         out.add("shared_exports")
-    if settings.get(PL.TOBASE_KEY) is not None:
+    if table.get(PL.TOBASE_KEY) is not None:
         out.add("shared_tobase_map")
-    elif own_tobase and _canada(settings):
+    elif own_tobase and _canada(table):
         out.add("tobase_map")
     return out
 
@@ -166,16 +171,15 @@ def raised_text(text: str, features: Iterable[str] = (),
     `since` (the text before a change), only the layout features the
     change added; the same text when the key already covers them."""
     from taxjson.lib import project_layout as PL
-    from taxjson.lib.tomlcompat import tomllib
 
     def _settings(t: str) -> Mapping[str, Any]:
-        s = tomllib.loads(t).get("settings") or {}
+        s = parse_toml(t).get("settings") or {}
         return s if isinstance(s, dict) else {}
-    settings = _settings(text)
-    feats = features_of(settings, own_tobase)
+    table = _settings(text)
+    feats = features_of(table, own_tobase)
     if since is not None:
         feats -= features_of(_settings(since), own_tobase)
-    new = raised(settings.get(KEY), feats | set(features))
+    new = raised(table.get(KEY), feats | set(features))
     if new is None:
         return text
     return PL.set_key_after(text, f"settings.{KEY}", new, "country")
@@ -190,14 +194,13 @@ def raise_requirement(root: Any, features: Iterable[str] = ()
     from taxjson.lib.safe_write import write_user_file
     root = Path(root)
     path = root / PL.CONFIG
-    text = path.read_bytes().decode("utf-8-sig")
+    text = decode_toml_bytes(path.read_bytes())
     new = raised_text(text, features,
                       own_tobase=(root / PL.TOBASE_MAP).is_file())
     if new == text:
         return None
     write_user_file(path, new, root, backup=False)
-    from taxjson.lib.tomlcompat import tomllib
-    return tomllib.loads(new)["settings"][KEY]
+    return parse_toml(new)["settings"][KEY]
 
 
 def lowers(key: str, here: Any, there: Any) -> bool:

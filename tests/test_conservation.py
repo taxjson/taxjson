@@ -5,16 +5,15 @@ warn; complex-but-correct scenarios must stay silent."""
 import io
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
-from decimal import Decimal
 
-from taxjson.lib.core import (
-    CanadaTaxRules,
-    TaxTransaction,
-    USATaxRules,
-    _verify_share_conservation,
-    _warn_stranded_basis,
-)
+from taxjson.engine.ca.taxrules import CanadaTaxRules
+from taxjson.engine.us.taxrules import USATaxRules
+from taxjson.engine.rows import _verify_share_conservation
+from taxjson.engine.ca.pools import _warn_stranded_basis
+from taxjson.model.transaction import TaxTransaction
 from tax_rules import rule
+from taxjson.rules import ids as R
+from _support.engine_ca_pool_books import pool_of
 
 
 def tx(action='BUYSELL', date='2025-03-10', symbol='X.US', qty=0.0,
@@ -39,13 +38,13 @@ class TestShareCountChecker(unittest.TestCase):
     def test_correct_inventory_is_silent(self):
         self.assertEqual(check(self.ROWS, {'X.US': 200.0}), '')
 
-    @rule("CA-CORP-01")
+    @rule(R.CA_CORP_01)
     def test_double_applied_split_warns(self):
         err = check(self.ROWS, {'X.US': 400.0})
         self.assertIn('conservation: test share-count mismatch', err)
         self.assertIn('X.US', err)
 
-    @rule("CA-CORP-02")
+    @rule(R.CA_CORP_02)
     def test_rename_chain_aliases_collapse(self):
         rows = [
             tx(symbol='OLD.TO', qty=100),
@@ -71,7 +70,7 @@ class TestShareCountChecker(unittest.TestCase):
 
 class TestStrandedBasisChecker(unittest.TestCase):
     def _pools(self, qty, cost):
-        return {'X.US': {'qty': qty, 'total_cost': Decimal(str(cost))}}
+        return {'X.US': pool_of(qty, cost)}
 
     def _run(self, pools):
         err = io.StringIO()
@@ -87,7 +86,7 @@ class TestStrandedBasisChecker(unittest.TestCase):
         self.assertEqual(self._run(self._pools(0.0, 0.001)), '')
 
     def test_shared_object_counted_once(self):
-        pool = {'qty': 0.0, 'total_cost': Decimal('500')}
+        pool = pool_of(0.0, 500)
         err = self._run({'OLD.TO': pool, 'NEW.TO': pool})
         self.assertEqual(err.count('stranded basis'), 1)
 

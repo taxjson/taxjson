@@ -1,0 +1,18 @@
+{
+  "basis": "wash-adjusted",
+  "currency": "CAD",
+  "rows": [
+    {
+      "contract": "ABCD270219C00045000.US",
+      "cost": 2105.6625,
+      "expiry": "2027-02-19",
+      "gain": 175.8375,
+      "proceeds": 2281.5,
+      "qty": 10.0
+    }
+  ],
+  "schema_version": 1,
+  "sheltered_gain": 0.0,
+  "taxable_gain": 175.84,
+  "total_gain": 175.84
+}

@@ -1,7 +1,7 @@
 """`tjs cash`: the cash events of the taxable accounts (conversions,
 deposits, withdrawals, the .tt cash lines) as the .tt lines that declare
 them, oldest first, with per-currency totals (lib/cash_events tt_line,
-tt_comment, apply_declarations; bin/taxjson_run cmd_cash). The fixture
+tt_comment, apply_declarations; cli/listings cmd_cash). The fixture
 is the FX-on-cash ledger v2 CLI test's synthetic project."""
 import json
 import os
@@ -11,11 +11,13 @@ import unittest
 from pathlib import Path
 
 from taxjson.lib import cash_events as CE
+from taxjson.lib import cash_lines as CL
 from taxjson.lib.dispatch import python_module_argv
 
-from test_fix_fx_cash_v2 import _ROWS_TT, _TOML, _rates
+from _support.fx_ledger import _ROWS_TT, _TOML, _rates
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 def _cli(root, *args):
@@ -29,7 +31,7 @@ def _cli(root, *args):
 
 def _move(amount, date="2025-01-15", decl=None, desc="Wire in",
           decl_where=None):
-    ev = CE.move(date, "USD", amount, where="x.csv", desc=desc)
+    ev = CL.move(date, "USD", amount, where="x.csv", desc=desc)
     ev.update(label="margin", book="margin/ib", broker="ib", file="x.csv")
     if decl is not None:
         ev["decl"] = decl
@@ -40,7 +42,7 @@ def _move(amount, date="2025-01-15", decl=None, desc="Wire in",
 
 class TestLines(unittest.TestCase):
     def test_each_kind_as_its_tt_line(self):
-        conv = CE.conv("2025-03-05", "USD", 5000, "CAD", 6780,
+        conv = CL.conv("2025-03-05", "USD", 5000, "CAD", 6780,
                        desc="Forex USD.CAD")
         self.assertEqual(CE.tt_line(conv),
                          "FXCONV 2025-03-05 USD 5,000.00 CAD 6,780.00")
@@ -54,25 +56,25 @@ class TestLines(unittest.TestCase):
         self.assertEqual(CE.tt_line(_move(10000.0, decl={"how": "cost",
                                                          "value": 13000.0})),
                          "CASHMOVE 2025-01-15 USD +10,000.00 cost=13,000.00")
-        opening = CE.parse_line("CASHOPEN 2025-01-01 USD 0 0", "a.tt:1")
+        opening = CL.parse_line("CASHOPEN 2025-01-01 USD 0 0", "a.tt:1")
         self.assertEqual(CE.tt_line(opening),
                          "CASHOPEN 2025-01-01 USD 0.00 0.00")
-        fee = CE.flow("2025-03-05", "USD", -2.0, desc="Forex commission")
+        fee = CL.flow("2025-03-05", "USD", -2.0, desc="Forex commission")
         self.assertEqual(CE.tt_line(fee), "#FEE 2025-03-05 USD -2.00")
         # A statement balance, a period, a note: not a line anyone writes.
-        self.assertIsNone(CE.tt_line(CE.balance("2025-12-31", "USD", 1.0)))
+        self.assertIsNone(CE.tt_line(CL.balance("2025-12-31", "USD", 1.0)))
         self.assertIsNone(CE.tt_line({"kind": "PERIOD", "date": "2025-01-01"}))
         self.assertIsNone(CE.tt_line({"kind": "NOTE", "text": "x"}))
 
     def test_a_declared_line_parses_back_as_the_same_event(self):
-        for ev in (CE.conv("2025-03-05", "USD", 5000, "CAD", 6780.5),
+        for ev in (CL.conv("2025-03-05", "USD", 5000, "CAD", 6780.5),
                    _move(10000.0, decl={"how": "cost", "value": 13000.0}),
                    _move(-1500.0, decl={"how": "kept", "value": None}),
                    _move(-700.25, decl={"how": "spot", "value": None}),
-                   CE.parse_line("CASHOPEN 2025-01-01 USD 1200 1600.5",
+                   CL.parse_line("CASHOPEN 2025-01-01 USD 1200 1600.5",
                                  "a.tt:1")):
             line = CE.tt_line(ev)
-            back = CE.parse_line(line, "copied.tt:1")
+            back = CL.parse_line(line, "copied.tt:1")
             self.assertIsNotNone(back, line)
             self.assertEqual(back["kind"], ev["kind"])
             for k in ("from_ccy", "from_amt", "to_ccy", "to_amt",
@@ -81,28 +83,28 @@ class TestLines(unittest.TestCase):
                     self.assertEqual(back[k], ev[k], (line, k))
         # An undeclared move is refused when copied: the `?` names what
         # to say.
-        with self.assertRaises(CE.CashLineError) as cm:
-            CE.parse_line(CE.tt_line(_move(2000.0)), "copied.tt:1")
+        with self.assertRaises(CL.CashLineError) as cm:
+            CL.parse_line(CE.tt_line(_move(2000.0)), "copied.tt:1")
         self.assertIn("say how the cash moved", str(cm.exception))
         # A #FEE line is a comment.
-        self.assertIsNone(CE.parse_line(
-            CE.tt_line(CE.flow("2025-03-05", "USD", -2.0)), "copied.tt:1"))
+        self.assertIsNone(CL.parse_line(
+            CE.tt_line(CL.flow("2025-03-05", "USD", -2.0)), "copied.tt:1"))
 
     def test_comment(self):
         self.assertEqual(CE.tt_comment(_move(2000.0)), "Wire in")
         self.assertEqual(CE.tt_comment(_move(2000.0, decl_where="inputs/margin/cash.tt:3")),
                          "Wire in; declared in inputs/margin/cash.tt:3")
-        ln = CE.parse_line("CASHMOVE 2025-01-15 USD 10000 cost=13000",
+        ln = CL.parse_line("CASHMOVE 2025-01-15 USD 10000 cost=13000",
                            "inputs/margin/cash.tt:2")
         self.assertEqual(CE.tt_comment(ln), "inputs/margin/cash.tt:2")
 
     def test_declarations_match_as_the_ledger_matches_them(self):
         m = _move(10000.0)
         other = _move(10000.0, date="2025-02-01")
-        ln = CE.parse_line("CASHMOVE 2025-01-15 USD 10000 cost=13000",
+        ln = CL.parse_line("CASHMOVE 2025-01-15 USD 10000 cost=13000",
                            "inputs/margin/cash.tt:2")
         ln.update(label="margin", file="cash.tt", book=None)
-        loose = CE.parse_line("CASHMOVE 2025-06-01 USD -50 kept",
+        loose = CL.parse_line("CASHMOVE 2025-06-01 USD -50 kept",
                               "inputs/margin/cash.tt:3")
         loose.update(label="margin", file="cash.tt", book=None)
         CE.apply_declarations([m, other], [ln, loose])
@@ -195,7 +197,7 @@ class TestCommand(unittest.TestCase):
             r = _cli(root, "cash")
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("tjs cash:", r.stderr)
-            self.assertIn("run `tjs run` first", r.stderr)
+            self.assertIn("run `tjs run` first", r.stderr.lower())
 
 
 if __name__ == "__main__":

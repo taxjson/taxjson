@@ -6,7 +6,7 @@ implementations computed on shared scenarios."""
 
 import unittest
 
-from taxjson.lib.core import TaxTransaction
+from taxjson.model.transaction import TaxTransaction
 from taxjson.lib.corporate_timeline import (
     SplitTimeline,
     cumulative_factor,
@@ -259,7 +259,7 @@ class TestRadarPriority(unittest.TestCase):
     and that wash_radar consumes THIS ladder, not a local one."""
 
     def _tx(self, action, qty):
-        from taxjson.lib.core import TaxTransaction
+        from taxjson.model.transaction import TaxTransaction
         return TaxTransaction(action=action, date="2026-01-05",
                               symbol="AAA.TO", quantity=qty, price=1.0,
                               net_amount=float(qty), account="margin")
@@ -289,7 +289,7 @@ class TestSameDayChainedRenameOrder(unittest.TestCase):
     depending on INPUT ORDER, corrupting §1091 unit conversion."""
 
     def _tl(self, order):
-        from taxjson.lib.core import TaxTransaction
+        from taxjson.model.transaction import TaxTransaction
         from taxjson.lib.corporate_timeline import SplitTimeline
         ab = TaxTransaction(action="SPLIT", date="2026-03-01",
                             time="09:00:00", symbol="A.US",

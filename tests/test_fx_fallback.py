@@ -2,9 +2,9 @@ import unittest
 from _tmpfiles import private_tmpfile
 import os
 import sys
-from pathlib import Path
 import subprocess
 import json
+import _paths
 
 class TestFxFallbackLogic(unittest.TestCase):
     def run_converter(self, tx_content, rates_content):
@@ -20,7 +20,7 @@ class TestFxFallbackLogic(unittest.TestCase):
         
         try:
             cmd = [sys.executable, "-m", "taxjson.bin.taxjson_convert_currency", fname, "--to", "CAD", "--rates", rates_name]
-            result = subprocess.run(cmd, capture_output=True, text=True, env=dict(os.environ, PYTHONPATH=str(Path(__file__).parent.parent)))
+            result = subprocess.run(cmd, capture_output=True, text=True, env=dict(os.environ, PYTHONPATH=str(_paths.SRC)))
             if result.returncode != 0:
                 print("STDOUT:", result.stdout)
                 print("STDERR:", result.stderr)
@@ -55,7 +55,7 @@ class TestFxFallbackLogic(unittest.TestCase):
         Fix is stage-then-commit: all fields convert into a scratch
         dict, only committed if every conversion succeeded."""
         from decimal import Decimal
-        from taxjson.lib.core import TaxTransaction
+        from taxjson.model.transaction import TaxTransaction
         from taxjson.bin.taxjson_convert_currency import convert_transaction
         tx = TaxTransaction(
             action='BUYSELL', date='2025-01-15', symbol='AAPL.US',

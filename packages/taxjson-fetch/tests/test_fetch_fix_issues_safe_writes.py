@@ -21,7 +21,7 @@ file named through $QUESTRADE_TOKEN_FILE. All data synthetic.
 """
 # First: puts the plugin, the core and its test helpers on sys.path and
 # registers the plugin's entry point when it is not pip-installed.
-import _support  # noqa: F401
+import _bootstrap  # noqa: F401
 import io
 import os
 import stat
@@ -33,6 +33,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from taxjson.lib import safe_write
 from taxjson_fetch import api as F
 from taxjson_fetch import command as C
 
@@ -44,21 +45,23 @@ def _mode(p: Path) -> int:
 
 
 class _Interleave:
-    """Pause the writer threads named A and B inside os.fdopen (their
-    temp file is open, nothing written yet) until released."""
+    """Pause the writer threads named A and B once safe_write has made
+    their temp file (open, nothing written yet) until released."""
 
     def __init__(self):
         self.opened = {"A": threading.Event(), "B": threading.Event()}
         self.go = {"A": threading.Event(), "B": threading.Event()}
-        self.real = os.fdopen
+        self.real = safe_write._create
 
-    def fdopen(self, fd, *a, **kw):
+    def create(self, path, *a, **kw):
+        f = self.real(path, *a, **kw)
         name = threading.current_thread().name
         if name in self.opened:
             self.opened[name].set()
             if not self.go[name].wait(_WAIT):
+                f.close()
                 raise RuntimeError(f"writer {name} never released")
-        return self.real(fd, *a, **kw)
+        return f
 
 
 class TestOverlappingWriters(unittest.TestCase):
@@ -77,7 +80,7 @@ class TestOverlappingWriters(unittest.TestCase):
 
         a = threading.Thread(target=run, args=("A", text_a), name="A")
         b = threading.Thread(target=run, args=("B", text_b), name="B")
-        with mock.patch("os.fdopen", il.fdopen):
+        with mock.patch.object(safe_write, "_create", il.create):
             a.start()
             self.assertTrue(il.opened["A"].wait(_WAIT))
             b.start()

@@ -2,7 +2,8 @@
 
 A parser that reads its folder's companions (a Kraken trades export
 indexes every Kraken ledger beside it, a Webull export reads its other
-years: brokerages/detect.same_broker_siblings) sees every CSV in the
+years: brokerages/detect.same_broker_siblings, the sibling finder a run's
+parse and tests/_siblings.py's with_siblings set) sees every CSV in the
 same directory. A test file written straight into the shared temp root
 (`tempfile.NamedTemporaryFile(...)` with no `dir=`) is therefore read by
 every other test, and every other run or agent on the machine, that
@@ -28,6 +29,15 @@ import shutil
 import tempfile
 
 _DIRS = []
+
+
+def isolate_layouts() -> None:
+    """No user layouts folder for this process (TAXJSON_LAYOUTS empty),
+    so the box's own ~/.config/taxjson/layouts never routes a test's CSV
+    (generic.layout_dirs_of). Called at import or in setUpModule by the
+    modules that detect or parse CSVs in temp folders."""
+    import os
+    os.environ.setdefault("TAXJSON_LAYOUTS", "")
 
 
 @atexit.register

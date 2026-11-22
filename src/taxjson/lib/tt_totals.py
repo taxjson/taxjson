@@ -5,9 +5,10 @@ TOTAL is what the engine books: a purchase's cost, a sale's proceeds.
 taxjson-convert-tt compares it with qty x price (x the contract size) +
 fee for a purchase, - fee for a sale, and warns when the two differ by
 more than 1% of qty x price, with a floor of 0.05 so a cent of rounding
-on a tiny line is never a typo (TOLERANCE). A line with no price (price
-0: the total alone states the amount) and a futures line without its
-size are not compared: the line has nothing to check the total against.
+on a tiny line is never a typo (lib/tt_format `tolerance`). A line with
+no price (price 0: the total alone states the amount) and a futures
+line without its size are not compared: the line has nothing to check
+the total against.
 A sale whose commission exceeds its gross written with a 0 total is
 said too (the loss would miss the excess commission).
 
@@ -30,17 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Tuple
 from taxjson.lib import project_layout as _PL
-
-# The 1% of qty x price (x size) a total may differ by, with its floor
-# in the line's currency: a cent of rounding on a tiny total is never a
-# typo, a 5x total always is.
-TOLERANCE_PCT = 0.01
-TOLERANCE_FLOOR = 0.05
-
-
-def tolerance(expected: float) -> float:
-    """How far a total may be from qty x price +/- fee (`expected`)."""
-    return max(TOLERANCE_FLOOR, TOLERANCE_PCT * max(abs(expected), 1.0))
+from taxjson.model import money as M
 
 
 # taxjson-convert-tt's captured lines (its _where(source) is
@@ -142,7 +133,7 @@ def _acquired(source: str, size: float = 1.0):
         return None
     if abs(qty) < 1e-12 or not size or size <= 0:
         return None
-    px = f"{abs(total / (qty * size)):.6f}".rstrip("0")
+    px = f"{M.shown(abs(total / (qty * size)), 6):.6f}".rstrip("0")
     whole, _dot, frac = px.partition(".")
     return f"{whole}.{frac.ljust(2, '0')}"
 
@@ -150,7 +141,7 @@ def _acquired(source: str, size: float = 1.0):
 def source_line(tt: Path, where: str) -> str:
     """The line of the .tt file `tt` that a .diag's `<file>:<line>`
     names, as written ("" when it cannot be read)."""
-    from taxjson.bin.taxjson_convert_tt import tt_lines
+    from taxjson.lib.tt_format import tt_lines
     try:
         n = int(str(where).rsplit(":", 1)[-1])
         lines = tt_lines(Path(tt).read_text(encoding="utf-8-sig",

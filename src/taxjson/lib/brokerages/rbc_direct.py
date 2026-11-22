@@ -23,29 +23,44 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, NamedTuple
 
-from taxjson.lib.core import STOCK_DIVIDEND
+from taxjson.lib.row_types import STOCK_DIVIDEND
+# The description helpers Questrade read through RBC's privates until
+# step 5f: the toolbox's now.
+from taxjson.parsers.toolbox.money import implied_commission_bounds
+from taxjson.model import money as M
+from taxjson.parsers.toolbox.descriptions import (
+    PIL_DESC_RE, REINV_CUR, REINV_CUR_RE, REINV_PRICE_RE,
+    reinvest_identity_error, reinvest_row_price, _parse_div_qty_rate)
+from taxjson.parsers.toolbox.expiry import (non_option_expiry_booking_date,
+                                            option_expiry_booking_date)
+from taxjson.parsers.protocol import Outcome, builds
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         names_underlying,
                                          ticker_map_joins,
                                          warrant_exercise_tt_hint,
+                                         pair_warrant_legs,
                                          answered_rename_note,
+                                         rename_how, rename_reach,
                                          declared_rename_where,
                                          combined_accounts_note,
                                          combined_accounts_refusal,
                                          DESC_NUMBER_RE, OPTION_STRIKE_RE,
                                          desc_number,
-                                         _parse_div_qty_rate,
                                          income_facts_from_description,
                                          is_roc_description,
                                          PASTED_EXPORTS_FIX,
-                                         shown_name)
+                                         shown_name, zero_units_refusal)
+from taxjson.parsers.toolbox.assets import QTY_ZERO
 from taxjson.lib.corp_actions import (
     RBC_REORG_CODES, RbcReorgPairing, pair_rbc_reorganizations,
     rbc_norm_company, rbc_row_company,
     rbc_is_temp_symbol, rbc_is_option_code, rbc_rights_key,
     rbc_name_similarity, _rbc_removal_names, _rbc_receipt_name,
 )
+from taxjson.parsers.toolbox.masking import mask_id
+from taxjson.lib.symbol_codes import _RBC_CODE_RE
 
 
 class RbcFormatError(BrokerageParseError):
@@ -72,9 +87,6 @@ _CANON = {c.lower(): c for c in _COLUMNS}
 REQUIRED_COLUMNS = ('Date', 'Activity', 'Symbol', 'Quantity', 'Price',
                     'Settlement Date', 'Currency', 'Description')
 
-# The RBC event code that prefixes a Description: "DIV - ...", "MGR -".
-_RBC_CODE_RE = re.compile(r'^\s*([A-Z]{2,4})\s*-(?=\s|$)')
-
 # Income is recognised by RBC's code/verb part of the description only —
 # never by words in the security name ("SAMPLE DIVIDEND SPLIT CORP").
 #   "DIV - <name> CASH DIV  ON  500 SHS ..."   "<name> DIST  ON  400 SHS"
@@ -87,41 +99,6 @@ _RBC_BOOK_COST_RE = re.compile(
     r'\bADJUSTMENT\s+TO\s+BOOK\s+COST\s+\$?\s*' + DESC_NUMBER_RE, re.I)
 _RBC_BOOK_VALUE_RE = re.compile(
     r'\bBOOK\s+VALUE\s+\$?\s*-?' + DESC_NUMBER_RE, re.I)
-_RBC_REINV_PRICE_RE = re.compile(
-    r'\bREINV\s*@\s*[A-Z]{0,2}\$?\s*' + DESC_NUMBER_RE, re.I)
-# The currency letters of the REINV@ marker: C$ = CAD, U$ = USD.
-_REINV_CUR_RE = re.compile(r'\bREINV\s*@\s*([A-Z]{1,2})\$', re.I)
-_REINV_CUR = {'C': 'CAD', 'U': 'USD', 'US': 'USD', 'CA': 'CAD'}
-
-
-def reinvest_identity_error(qty: float, cash: float, price: Optional[float],
-                            price_cur: str, row_cur: str) -> Optional[str]:
-    """A dividend reinvestment buys |qty| units at the stated price for
-    the cash: the money identity the trade path enforces (re-audit
-    A2-0268 — a 10x Value booked as ACB with only a schema ATTENTION).
-    Skipped when the price is in ANOTHER currency than the row (the
-    REINV@C$ marker on a USD row, U$ on a CAD row: real exports carry
-    those). None = fits (or cannot be judged)."""
-    if not price or price <= 0 or not qty or price_cur != row_cur:
-        return None
-    expect = abs(qty) * price
-    if abs(abs(cash) - expect) <= max(0.05, 0.05 * expect):
-        return None
-    return (f"the cash {abs(cash):,.2f} does not fit |Quantity| {abs(qty):g}"
-            f" x the reinvestment price {price:g} = {expect:,.2f}")
-
-def reinvest_row_price(qty: float, cash: float, price: Optional[float],
-                       price_cur: str, row_cur: str) -> Optional[float]:
-    """The per-unit price a reinvestment row is booked at, in the ROW's
-    currency: the stated price when it is in that currency, else the
-    cash per unit. A REINV@C$ price on a USD row (U$ on a CAD row) is
-    another currency's number: booked as the row's price it made the
-    row check (|qty| x price vs the cash) warn on every such DRIP, and
-    RBC's fee back-computed from it was nonsense (v0.24.1 leftovers, 8).
-    The cost is the cash either way; the description keeps the quote."""
-    if price and price_cur != row_cur and qty:
-        return round(abs(cash) / abs(qty), 8)
-    return price
 
 # A forward/reverse stock split booked as ONE 'Reorganization' row with the
 # net shares moved in Quantity and "... STK SPLIT ON <base> SHS ..." e.g.
@@ -169,10 +146,6 @@ _RBC_TRANSFER_OUT_RE = re.compile(
 # RBC's open/close marker at the end of an option trade's description:
 # "CALL .ABC.B 03/19/27 30 ABC COMMUNICATIONS INC CA CLOSE CONTRACT".
 _RBC_OPEN_CLOSE_RE = re.compile(r'\b(OPEN|CLOSE)\s+CONTRACT\b', re.I)
-# A payment in lieu of a dividend ("CASH IN LIEU OF DIVIDEND", "PAYMENT
-# IN LIEU OF DIVIDEND", Questrade's "SUBST PAY ... IN LIEU OF DIVIDEND"),
-# the same phrase IB's parser reads (re-audit A2-0098).
-PIL_DESC_RE = re.compile(r'\bIN\s+LIEU\s+OF\s+(?:A\s+)?DIV', re.I)
 _RBC_CIL_FRACTION_RE = re.compile(
     r'CASH\s+IN\s+LIEU\s+(?:OF\s+)?(?:A\s+)?FRAC', re.I)
 
@@ -211,6 +184,7 @@ class RbcRow:
     k: int = 0                # intra-day ordinal: 0 = the day's earliest row
     account: str = ''         # the Account column ('' when absent)
     value_blank: bool = False  # the Amount/Value cell was EMPTY (not "0")
+    qty_blank: bool = False    # the Quantity cell was EMPTY (not "0")
 
     def label(self) -> str:
         return (f"line {self.line}: {self.date_raw} {self.activity or '?'} "
@@ -571,7 +545,7 @@ def read_rbc_rows(path: Path) -> RbcExport:
             qty=num('Quantity'), price=num('Price'), value=value,
             date_raw=cell.get('Date', ''),
             account=cell.get('Account', ''),
-            value_blank=value_blank,
+            value_blank=value_blank, qty_blank=not cell.get('Quantity'),
         )
         r.settle_raw = cell.get('Settlement Date', '')
         if not r.date_raw:
@@ -848,6 +822,31 @@ def rbc_time(k: int) -> str:
 
 # ---------------------------------------------------------- classification
 
+def rbc_cash_move(r: 'RbcRow', name: str) -> Optional[Dict[str, Any]]:
+    """The cash event of one 'cash' row (`classify_rbc_row`: a deposit, a
+    withdrawal, a cash transfer — WIR, DEP, TFI ...) for the FX-on-cash
+    ledger v2 (lib/cash_events, tax-logic CA-FX-07): a CASHMOVE, signed,
+    dated by its settlement date; None for a row that moves no money or
+    names no currency. `name`: the export as diagnostics show it. RBC's
+    activity export carries no cash balance: a CASHBAL .tt line gives the
+    ledger one to reconcile against. The parse builds the file's events
+    from the rows it read (the finish, PLAN step 16 commit 7: once
+    lib/cash_readers/rbc.py read the export a second time)."""
+    from taxjson.lib.privacy import hash_broker_account
+    from taxjson.lib import cash_lines as CL
+    if abs(r.value) < 1e-9:
+        return None
+    cur = (r.currency or '').strip().upper()
+    if not cur:
+        return None
+    acct = hash_broker_account(r.account) if r.account.strip() else ''
+    desc = re.sub(r'\d', '#', (r.code or r.activity or '').strip())
+    ev = CL.move(r.date, cur, r.value, settle=r.settle or r.date,
+                 where=name, account=acct, desc=desc)
+    ev['line_where'] = f"{name}:{r.line}"
+    return ev
+
+
 def classify_rbc_row(r) -> str:
     """The one classification of an RBC row, by Activity label and RBC
     code (never by words in the security name). Returns one of:
@@ -954,41 +953,6 @@ def classify_rbc_row(r) -> str:
     return 'unknown'
 
 
-def strict_option_from_description(parser, desc: str):
-    """BaseBrokerage.parse_option_from_description, whose shared strike
-    reader refuses a strike it can only partly read ('2,50', '1,0000';
-    audit A2-0632 / re-audit A2-1041) — re-raised naming the file and
-    the description, for the Questrade and RBC consumers."""
-    try:
-        return BaseBrokerage.parse_option_from_description(parser, desc)
-    except BrokerageParseError as e:
-        where = (getattr(parser, '_fname', '')
-                 or getattr(parser, '_qt_name', ''))
-        raise BrokerageParseError(
-            f"{where}: option description {(desc or '')[:70]!r}: {e}"
-        ) from None
-
-
-def _names_underlying(root: str, symbol: str) -> bool:
-    """Does the Symbol column name the stock the option ROOT is on?
-    Exactly, or by the class / adjustment spelling the engine accepts
-    (core._root_matches_stock: SAMPLD for SAMPLD.B, SAMPLCB for SAMPLC.B) — the
-    stock leg of an assignment on a class share was refused (re-audit
-    A2-1059)."""
-    from taxjson.lib.core import _root_matches_stock
-    root = (root or '').strip().upper()
-    from taxjson.lib.markets import strip_listing_suffix
-    stock = strip_listing_suffix((symbol or '').strip().upper())
-    if not root:
-        return False
-    if root == stock:
-        return True
-    # Only a listed CLASS share (SAMPLD.B, SAMPLC.B): Questrade's option rows
-    # carry 'SAMPLG.OPT'-shaped symbols, which must stay the option.
-    return (bool(re.fullmatch(r'[A-Z]+\.[A-Z]{1,2}', stock))
-            and _root_matches_stock(root, stock))
-
-
 def _extract_words(symdesc: str, desc: str) -> str:
     """The words a suggested EXTRACT line names: the longest start (up to
     six words) of the security description that the row's Description —
@@ -1033,7 +997,7 @@ def _norm_account(acct: str) -> str:
 
 
 def _mask_account(acct: str) -> str:
-    return (acct[:2] + '***') if acct else '(no Account column)'
+    return mask_id(acct, empty='(no Account column)')
 
 
 def _squash(text: str) -> str:
@@ -1393,7 +1357,7 @@ def _plan_reinvest_reversals(ctx: RbcAccountContext, chrono) -> None:
                 or abs(r.value) < 0.005 or (r.qty > 0) == (r.value > 0):
             continue
         key = (_norm_account(r.account), r.symbol.strip().upper(),
-               r.currency, round(abs(r.qty), 6), round(abs(r.value), 2))
+               r.currency, M.units(abs(r.qty), 6), M.units(abs(r.value), 2))
         if r.qty > 0:
             opened.setdefault(key, []).append(r)
             continue
@@ -1478,24 +1442,6 @@ def _plan_overlaps(ctx: RbcAccountContext, name_of: Dict[str, str]) -> None:
                     f"sure.")
 
 
-def _short_reach(events) -> Tuple[float, str, float]:
-    """(deepest running short, the date it is first reached, the first
-    nonzero quantity) of one listing's event timeline — a new listing
-    whose first row is a BUY can still go short past its own buys
-    (re-audit A2-0270 / A2-0099)."""
-    run = low = 0.0
-    when = ''
-    first = 0.0
-    for e in events:
-        q = e[-1]
-        if not first and abs(q) > 1e-9:
-            first = q
-        run += q
-        if run < low - 1e-9:
-            low, when = run, e[0]
-    return low, when, first
-
-
 def _detect_ticker_changes(ctx: RbcAccountContext, helper) -> None:
     """A ticker change RBC applied WITHOUT a reorganization row
     (e.g. ABC → ABD): the old symbol stops with shares still open
@@ -1517,13 +1463,10 @@ def _detect_ticker_changes(ctx: RbcAccountContext, helper) -> None:
             for b in lis:
                 if a is b or (a.symbol, b.symbol, cur) in seen:
                     continue
-                if not a.events or not b.events or a.last > b.first:
+                reach = rename_reach(a.events, b.events)
+                if reach is None:
                     continue
-                open_a = a.position_on(a.last)
-                low_b, when_b, first_b = _short_reach(b.events)
-                if open_a <= 1e-9 or low_b >= -1e-9 \
-                        or -low_b > open_a + 1e-6:
-                    continue
+                open_a, low_b, when_b, first_b = reach
                 seen.add((a.symbol, b.symbol, cur))
                 sa = helper.apply_currency_suffix(a.symbol, cur)
                 sb = helper.apply_currency_suffix(b.symbol, cur)
@@ -1537,10 +1480,7 @@ def _detect_ticker_changes(ctx: RbcAccountContext, helper) -> None:
                         fb, "RBC", f"{a.symbol} ({cur})", b.symbol,
                         declared))
                     continue
-                how = (f"first appears on {b.first} with a SALE of "
-                       f"{-first_b:g}" if first_b < 0 else
-                       f"first appears on {b.first} and goes {-low_b:g} "
-                       f"short on {when_b}")
+                how = rename_how(b.first, low_b, when_b, first_b)
                 ctx.messages.append(
                     f"warning: ATTENTION: {fb}: RBC symbol {a.symbol} "
                     f"({cur}) looks renamed to {b.symbol} — if they are "
@@ -1554,6 +1494,23 @@ def _detect_ticker_changes(ctx: RbcAccountContext, helper) -> None:
                     f"short {sb}.")
 
 
+class _RbcParse(NamedTuple):
+    """What `read` hands the loop and the finish of one export (the
+    account context is `_ctx`, the builders' too): the file's key in it,
+    the duplicates another export already holds, the rows `read` returns,
+    the reorganization pairing's output by its removal's order, the legs
+    the pairing booked, and what corp-actions owns (the spin-off
+    cash-in-lieu rows, the merger legs). Reset by `read`, released by
+    `release` whatever happened."""
+    key: str
+    dups: Dict[str, str]
+    rows: list
+    reorg_out: Dict[int, List[Dict[str, Any]]]
+    leg_done: set
+    spinoff_cil: int
+    owned_by_corp_actions: int
+
+
 # ------------------------------------------------------------------ parser
 
 class RbcBrokerage(BaseBrokerage):
@@ -1563,7 +1520,7 @@ class RbcBrokerage(BaseBrokerage):
         return _RBC_OPTION_PATTERNS
 
     def parse_option_from_description(self, desc):
-        return strict_option_from_description(self, desc)
+        return self.strict_option_from_description(desc)
 
     # ----------------------------------------------------------- warnings
     def _warn(self, msg: str, *, lint: bool = False,
@@ -1598,8 +1555,8 @@ class RbcBrokerage(BaseBrokerage):
         return rbc_terms(self.country)
 
     @classmethod
-    def prepare_files(cls, paths, combined=False,
-                      taxable=None) -> RbcAccountContext:
+    def prepare_files(cls, paths, combined=False, taxable=None, *, tax_year=None,
+                      symbol_codes=None, project=None) -> RbcAccountContext:
         """Read ALL of one account's RBC exports once and build the
         identity maps every per-file parse shares (market currency per
         symbol, option code → contract, name → ticker) plus the overlap
@@ -1631,9 +1588,10 @@ class RbcBrokerage(BaseBrokerage):
             year, ctx.listings, today=today, country=country,
             year_end_posting=year_end_posting)
 
-    def parse_file(self, path: Path) -> List[Dict[str, Any]]:
+    def read(self, path: Path) -> list:
         path = Path(path)
         self._fname = path.name
+        self._spinoffs = 0
         self.lint_findings: List[str] = []
         self.zero_tx_reason = None
         key = str(path.resolve())
@@ -1650,12 +1608,20 @@ class RbcBrokerage(BaseBrokerage):
                               if r.account.strip()}
         for n in exp.notes:
             self._note(n)
-        self._rows_seen = len(exp.rows) + exp.n_footers
+        # The rows this read saw and the loop will not (the template adds
+        # every row it iterates): the footers, the duplicates another
+        # download holds; each counted as a non-event here.
+        self._rows_seen += exp.n_footers + len(dups)
         for _ in range(exp.n_footers):
             self.count_nonevent(_NONEVENT_CLASSES['footer'])
         for other in dups.values():
             self.count_nonevent(f"row already in the overlapping download "
                                 f"{other}")
+        # A dropped copy's cash is this file's event too (the ledger keeps
+        # one of the two, lib/cash_events dedup_across_files).
+        for r in exp.rows:
+            if r.order in dups and r.cls == 'cash':
+                self.note_cash(r)
 
         # Identity maps shared by every file of the account.
         self._occ_by_code = ctx.occ_by_code
@@ -1678,6 +1644,9 @@ class RbcBrokerage(BaseBrokerage):
                 owned_by_corp_actions += sum(1 for x in legs if x is not None)
                 continue
             out = self._emit_reorg_event(ev)
+            if ev.removal.account.strip():      # stamped once, where they are made
+                for tx in out:
+                    tx.setdefault('broker_account', ev.removal.account.strip())
             anchor = ev.removal.order
             reorg_out.setdefault(anchor, []).extend(out)
         leg_done |= ctx.foreign_legs.get(key, set())
@@ -1700,79 +1669,106 @@ class RbcBrokerage(BaseBrokerage):
                 f"{c.label()}. The cash was NOT booked; add the fractional "
                 f"disposition by hand.", unbooked=True)
 
-        transactions: List[Dict[str, Any]] = []
-        expiries: List[Dict[str, Any]] = []
-        spinoffs = 0
-        # Each transaction remembers its row's line (backlog TJ-0124).
-        for r in self.rows_noting_lines(transactions, rows,
-                                        lambda r: r.line):
-            cls = r.cls
-            if id(r) in leg_done:
-                self.note_row_consumed()
-                for _t in reorg_out.get(r.order, []):
-                    if r.account.strip():
-                        _t.setdefault('broker_account', r.account.strip())
-                transactions.extend(reorg_out.get(r.order, []))
-                continue
-            if cls in _NONEVENT_CLASSES:
-                self.count_nonevent(_NONEVENT_CLASSES[cls])
-                continue
-            if cls in ('reorg', 'cil'):
-                # Unmatched legs / CIL: warned above, nothing booked.
-                self.count_skip(f"unmatched {cls} row (see warning)")
-                continue
-            if cls == 'spinoff':
-                # A spin-off needs a TAX ELECTION (s.86.1 or an FMV
-                # dividend in kind): owned by taxjson-corp-actions, which
-                # prompts for it — booking the shares here at $0 cost was
-                # silently choosing neither.
-                self.note_row_consumed()
-                spinoffs += 1
-                continue
-            if cls == 'unknown':
-                self.count_skip(f"activity {r.activity.strip() or '?'}")
-                if (r.activity.strip().lower() == 'transfers'
-                        and r.symbol.strip()):
-                    # A security transfer with a BLANK quantity read as 0
-                    # and was dropped with no console line — and with it
-                    # the superficial-loss guard on the transfer-in
-                    # (audit S063-21).
-                    self._warn(
-                        f"Transfers row for {r.symbol} has no quantity — "
-                        f"{r.label()}. It was NOT booked; fix the "
-                        f"Quantity cell (a transfer always moves shares).",
-                        unbooked=True)
-                elif abs(r.qty) > 1e-12 or abs(r.value) > 0.005:
-                    self._warn(
-                        f"UNCLASSIFIED row that moves "
-                        f"{'shares' if abs(r.qty) > 1e-12 else 'cash'} — "
-                        f"{r.label()}. It was NOT booked. If it is a trade, "
-                        f"income or corporate action, the RBC parser needs a "
-                        f"new branch (see CONTRIBUTING).", unbooked=True)
-                continue
-            self.note_row_consumed()
-            out = self._dispatch(r)
-            tag = self._extra_tag.get(r.order)
-            for tx in out:
-                # The row's broker account (the Account column): cross-
-                # file dedup never collapses two accounts' identical
-                # rows (audit A2-0008, A2-0296).
-                if r.account.strip():
-                    tx.setdefault('broker_account', r.account.strip())
-                if not tx.get('description') and r.symdesc.strip():
-                    # A blank Description falls back to the Symbol
-                    # Description, so a name-keyed --security-overrides
-                    # rule reaches the row (audit S065-01).
-                    tx['description'] = r.symdesc.strip()
-                if tag:
-                    tx['description'] = f"{tx.get('description') or ''} {tag}"
-                if tx.pop('_expiry', False):
-                    expiries.append(tx)
-            transactions.extend(out)
+        # What the loop and the finish read of this export (the parse
+        # template calls them with the row alone); cleared by finish.
+        self._rbc = _RbcParse(key, dups, rows, reorg_out, leg_done,
+                              spinoff_cil, owned_by_corp_actions)
+        return rows
+
+    def classify(self, r) -> Outcome:
+        """What the template does with the row: a leg already booked with
+        its partner is consumed (its rows the pairing's), a non-event class
+        counted, an unmatched reorganization or cash-in-lieu skipped (warned
+        in read), a spin-off left to taxjson-corp-actions, an unknown row
+        skipped and warned when it moves shares or cash; the rest build. A
+        cash row (a non-event) is noted for the file's cash events first."""
+        st = self._rbc
+        cls = r.cls
+        if cls == 'cash':
+            self.note_cash(r)           # its event the finish's (cash_events)
+        if id(r) in st.leg_done:
+            return Outcome.consumed(st.reorg_out.get(r.order, ()))
+        if cls in _NONEVENT_CLASSES:
+            return Outcome.nonevent(_NONEVENT_CLASSES[cls])
+        if cls in ('reorg', 'cil'):
+            # Unmatched legs / CIL: warned above, nothing booked.
+            return Outcome.reported(f"unmatched {cls} row (see warning)")
+        if cls == 'spinoff':
+            # A spin-off needs a TAX ELECTION (s.86.1 or an FMV
+            # dividend in kind): owned by taxjson-corp-actions, which
+            # prompts for it — booking the shares here at $0 cost was
+            # silently choosing neither.
+            self._spinoffs += 1
+            return Outcome.consumed()
+        if cls == 'unknown':
+            if (r.activity.strip().lower() == 'transfers'
+                    and r.symbol.strip()):
+                # A security transfer with a BLANK quantity read as 0
+                # and was dropped with no console line — and with it
+                # the superficial-loss guard on the transfer-in
+                # (audit S063-21).
+                self._warn(
+                    f"Transfers row for {r.symbol} has no quantity — "
+                    f"{r.label()}. It was NOT booked; fix the "
+                    f"Quantity cell (a transfer always moves shares).",
+                    unbooked=True)
+            elif abs(r.qty) > 1e-12 or abs(r.value) > 0.005:
+                self._warn(
+                    f"UNCLASSIFIED row that moves "
+                    f"{'shares' if abs(r.qty) > 1e-12 else 'cash'} — "
+                    f"{r.label()}. It was NOT booked. If it is a trade, "
+                    f"income or corporate action, the RBC parser needs a "
+                    f"new branch (see CONTRIBUTING).", unbooked=True)
+            else:
+                return Outcome.skip(f"activity {r.activity.strip() or '?'}")
+            # Warned UNBOOKED above: counted, not listed again (TJ-2401).
+            return Outcome.reported(f"activity {r.activity.strip() or '?'}")
+        return Outcome.build()
+
+    def build(self, r) -> "List[Dict[str, Any]] | Outcome":
+        """The row's schema rows (_dispatch), each stamped with the row's
+        broker account, its description when the builder gave none and
+        the overlap tag; an expiry is kept for the template's settlement
+        clamp (`_expiries`). A row warned UNBOOKED while building is the
+        dispatcher's Outcome, passed to the template."""
+        out = self._dispatch(r)
+        if isinstance(out, Outcome):
+            return out
+        tag = self._extra_tag.get(r.order)
+        for tx in out:
+            # The row's broker account (the Account column): cross-
+            # file dedup never collapses two accounts' identical
+            # rows (audit A2-0008, A2-0296).
+            if r.account.strip():
+                tx.setdefault('broker_account', r.account.strip())
+            if not tx.get('description') and r.symdesc.strip():
+                # A blank Description falls back to the Symbol
+                # Description, so a name-keyed --security-overrides
+                # rule reaches the row (audit S065-01).
+                tx['description'] = r.symdesc.strip()
+            if tag:
+                tx['description'] = f"{tx.get('description') or ''} {tag}"
+            if tx.pop('_expiry', False):
+                self._expiries.append(tx)
+        return out
+
+    @builds("assign")
+    def finish(self, transactions: List[Dict[str, Any]], path: Path
+               ) -> List[Dict[str, Any]]:
+        """After the loop: the reinvestment reversals and warrant exercises
+        paired, the notes on what corp-actions owns, the zero-rows reason,
+        the untraded income, the emitted symbols, the file's cash events
+        (`cash_events`, one per cash row noted: `rbc_cash_move`; the
+        settlement clamp, the split fills and the skip summary are the
+        template's)."""
+        st = self._rbc
+        key, dups, rows, ctx = st.key, st.dups, st.rows, self._ctx
+        spinoff_cil = st.spinoff_cil
+        owned_by_corp_actions = st.owned_by_corp_actions
         self._pair_reinvest_reversals(transactions)
         self._pair_warrant_exercises(transactions)
 
-        if spinoffs:
+        if self._spinoffs:
             # Country-neutral (audit S064-20): corp-actions has election
             # rules for every supported country, and `tjs run` runs
             # it — the old text cited Canadian law and told a US project
@@ -1780,7 +1776,7 @@ class RbcBrokerage(BaseBrokerage):
             _cil = (f" and {spinoff_cil} cash-in-lieu row(s) for their "
                     f"fractions" if spinoff_cil else "")
             self._note(
-                f"{spinoffs} RBC spin-off row(s) (DIS - ... SPINOFF){_cil} are "
+                f"{self._spinoffs} RBC spin-off row(s) (DIS - ... SPINOFF){_cil} are "
                 f"left to taxjson-corp-actions, which asks for your "
                 f"country's tax election (`tjs run` runs it). Parsing "
                 f"outside `tjs run`, run taxjson-corp-actions on this "
@@ -1808,12 +1804,14 @@ class RbcBrokerage(BaseBrokerage):
                     f"export(s) ({', '.join(sorted(set(dups.values()))) or 'booked there'})")
         self._report_untraded_income()
         self._check_emitted_symbols(transactions)
-        self.clamp_settlement_to_expiry(transactions, expiries)
-        # Parser-level disambiguation so a downstream `taxjson-sort
-        # --dedup` can't collapse byte-identical split-fill rows.
-        self.disambiguate_split_fills(transactions)
-        self.emit_skip_summary(shown_name(path))
+        # The file's cash events, in its rows' order (`note_cash`).
+        name = shown_name(path)
+        self.cash_events = [ev for c in sorted(self._cash_rows, key=lambda c: c.order)
+                            if (ev := rbc_cash_move(c, name)) is not None]
         return transactions
+
+    def release(self) -> None:
+        self._rbc = None                # the export's rows and maps released
 
     def statement_accounts(self) -> set:
         """The Account column's values in the last parsed export (audit
@@ -1833,7 +1831,7 @@ class RbcBrokerage(BaseBrokerage):
             if opt:
                 sym = (r.symbol or '').strip().upper()
                 if sym and not rbc_is_option_code(sym) \
-                        and _names_underlying(opt['base'], sym):
+                        and names_underlying(opt['base'], sym):
                     return None
                 return self.format_occ_symbol(opt['right'], opt['base'],
                                               opt['expiry'], opt['strike'],
@@ -2045,7 +2043,7 @@ class RbcBrokerage(BaseBrokerage):
                 f"GLOBAL line once you know the real ticker.")
 
     # ---------------------------------------------------------- dispatch
-    def _dispatch(self, r) -> List[Dict[str, Any]]:
+    def _dispatch(self, r) -> "List[Dict[str, Any]] | Outcome":
         cls = r.cls
         if cls in ('trade', 'expiry', 'assignment', 'retraction'):
             tx = self._build_trade(r)
@@ -2061,7 +2059,7 @@ class RbcBrokerage(BaseBrokerage):
             self._warn(f"stock-split row {why} — {r.label()}. NOT booked; "
                        f"fix the row or book the split in a .tt file.",
                        unbooked=True)
-            return []
+            return Outcome.reported("stock-split row not understood (see warning)")
         if cls == 'stock-dividend':
             return [self._build_stock_dividend(r)]
         if cls == 'reinvest-in-kind':
@@ -2081,19 +2079,12 @@ class RbcBrokerage(BaseBrokerage):
                        f"says STK DIV / STOCK DIVIDEND, an in-kind "
                        f"reinvestment 'Reinvest @ $price') "
                        f"({r.desc[:80]!r}). Refusing to book "
-                       f"{r.value:,.2f} as {cls} and drop the shares; book "
+                       f"{M.shown(r.value, 2):,.2f} as {cls} and drop the shares; book "
                        f"the row in a .tt file.")
         if cls == 'book-adjust':
             return self._build_book_adjust(r)
         if cls == 'roc':
-            if abs(r.value) < 0.005:
-                self._warn(f"$0 return-of-capital row — {r.label()}; "
-                           f"nothing to book (check "
-                           f"{self._terms['roc_slip']}).")
-            return [self.tx_roc_adjust(
-                symbol=self._equity_symbol(r.symbol, r.currency, r, market=True),
-                currency=r.currency, date=r.date, desc=r.desc,
-                amount=r.value)]
+            return [self._build_roc(r)]
         if cls == 'dividend':
             if abs(r.value) < 0.005:
                 self._warn(f"$0 dividend row — {r.label()}; booked as a $0 "
@@ -2115,6 +2106,7 @@ class RbcBrokerage(BaseBrokerage):
     def _time(self, r) -> str:
         return rbc_time(r.k)
 
+    @builds("split")
     def _build_stock_split(self, r):
         """A stock split → SPLIT scaling the existing pool by
         (base + received) / base, where `received` is the net shares
@@ -2155,6 +2147,7 @@ class RbcBrokerage(BaseBrokerage):
             'description': r.desc,
         }
 
+    @builds("transfer")
     def _build_transfer(self, r):
         """An in-kind position transfer (TFI/TFO/TFR). The quantity moves;
         the transferred-in ACB is not booked here (the engine consumes the
@@ -2199,6 +2192,7 @@ class RbcBrokerage(BaseBrokerage):
                                            field='BOOK VALUE')
         return tx
 
+    @builds("trade", "expiry", "assign")
     def _build_trade(self, r):
         activity, desc = r.activity, r.desc
         opt = None
@@ -2251,29 +2245,21 @@ class RbcBrokerage(BaseBrokerage):
         # with settle == date, so a Dec-31 expiry stays in its year.
         is_expiry = bool(opt) and r.cls == 'expiry'
         if is_expiry:
-            date = self.option_expiry_booking_date(date, opt['expiry'])
+            date = option_expiry_booking_date(date, opt['expiry'])
             date_settle = date
         elif r.cls == 'expiry':
             # A right / warrant expiry has no settlement cycle either: it
             # kept RBC's next-business-day settle and a Dec-31 expiry's
             # loss moved into the next year (audit S065-04).
-            date = self.non_option_expiry_booking_date(date, desc)
+            date = non_option_expiry_booking_date(date, desc)
             date_settle = date
         self.check_settle_order(date, date_settle, where=self._at(r),
                                 what=repr(desc[:50]))
 
         qty = r.qty
         is_retraction = r.cls == 'retraction'
-        if activity.strip().lower() == 'buy' and qty < 0:
-            # A Buy whose quantity says SALE (re-audit A2-0097): it was
-            # booked as a sale with negative proceeds, a 4,880 swing,
-            # under --strict. RBC signs a buy positive; refuse, as the
-            # generic importer does.
-            raise _err(Path(self._fname), r.line,
-                       f"a Buy row with a NEGATIVE Quantity {qty:g} "
-                       f"({r.label()}) — the activity says purchase, the "
-                       f"quantity says sale; refusing to guess. Fix the "
-                       f"row (or book it in a .tt file).")
+        self._refuse_trade_qty(r, bool(is_assign_leg or occ and (
+            _RBC_OPTION_PATTERNS[1].search(desc))))
         if activity.strip().lower() == 'sell' or is_retraction:
             qty = -abs(qty)
         price = r.price
@@ -2291,7 +2277,7 @@ class RbcBrokerage(BaseBrokerage):
                        f"explicit 0 if there really was none).")
         if is_retraction and not price and qty:
             # RBC leaves Price blank on retractions; per-share = Value/Qty.
-            price = round(abs(net) / abs(qty), 6)
+            price = M.units(abs(net) / abs(qty), 6)
         # The export never states a contract's size: 100 is assumed
         # unless only a mini's 10 fits the row's Value (B10).
         opt_mult, size_basis = None, ''
@@ -2370,36 +2356,23 @@ class RbcBrokerage(BaseBrokerage):
         would become a capital loss."""
         legs = [t for t in transactions if t.get('_exercise')]
         shares = [t for t in legs if t['_exercise'][0] == 'shares']
-        used = set()
-        for w in legs:
-            role, line = w['_exercise']
-            if role != 'warrant':
-                continue
-            cands = [t for t in shares if id(t) not in used
-                     and t['date'] == w['date']
-                     and t.get('currency') == w.get('currency')]
-            if len(cands) > 1:
-                from taxjson.lib.markets import strip_listing_suffix
-                wr = strip_listing_suffix(w['symbol'])
-                cands = [t for t in cands if wr.replace('.', '').startswith(
-                    strip_listing_suffix(t['symbol']).replace('.', ''))]
-            if len(cands) != 1:
+        warrants = [t for t in legs if t['_exercise'][0] == 'warrant']
+        for w, st, cands in pair_warrant_legs(warrants, shares):
+            line = w['_exercise'][1]
+            if st is None:
                 # The .tt form that books it (backlog TJ-0590).
                 hint = warrant_exercise_tt_hint(
                     w, [t['symbol'] for t in cands])
                 raise _err(Path(self._fname), line,
                     f"an Exercise of {w['symbol']} (a warrant or right) "
-                    f"with {'no' if not cands else 'more than one'} "
-                    f"same-day Exercise share leg — refusing to book the "
+                    f"with no same-day Exercise share leg of its own (none "
+                    f"whose root is the warrant's, and not the day's one "
+                    f"exercise) — refusing to book the "
                     f"warrants as a sale at 0 (their cost belongs in the "
                     f"shares). Book the exercise in a .tt file of this "
                     f"account and remove the row from the export (the "
                     f"file is refused until it is gone): {hint}.")
-            st = cands[0]
-            used.add(id(st))
             w['action'] = 'ASSIGN'
-            w['exercise_of'] = st['symbol']
-            w['date_settle'] = st['date_settle']
             self._note(f"line {line}: warrant {w['symbol']} exercised into "
                        f"{st['symbol']} — no disposition; the warrant's "
                        f"cost goes into the shares' cost.")
@@ -2424,6 +2397,26 @@ class RbcBrokerage(BaseBrokerage):
         if r.cls in ('expiry', 'assignment') or r.code in ('EXP', 'ASN'):
             return 'C'
         return ''
+
+    def _refuse_trade_qty(self, r: RbcRow, assign_leg: bool) -> None:
+        """Refuse a trade row whose Quantity contradicts it: a Buy with a
+        negative Quantity (re-audit A2-0097: booked as a sale with negative
+        proceeds, a 4,880 swing, under --strict; RBC signs a buy positive,
+        refused as the generic importer does), and a trade of no units, a
+        blank or 0 Quantity, that is no assignment's or exercise's leg (it
+        reached `tjs run`'s row check, which stopped the account naming no
+        row; the twin of a blank Value, R1-82; backlog TJ-4536)."""
+        activity = r.activity.strip()
+        if activity.lower() == 'buy' and r.qty < 0:
+            raise _err(Path(self._fname), r.line,
+                       f"a Buy row with a NEGATIVE Quantity {r.qty:g} "
+                       f"({r.label()}) — the activity says purchase, the "
+                       f"quantity says sale; refusing to guess. Fix the "
+                       f"row (or book it in a .tt file).")
+        if abs(r.qty) < QTY_ZERO and not assign_leg:
+            raise RbcFormatError(str(zero_units_refusal(
+                f"{shown_name(Path(self._fname))}:{r.line}",
+                activity or r.cls, '' if r.qty_blank else f"{r.qty:g}")))
 
     def _check_trade_money(self, r, qty, price, net, is_option,
                            is_retraction, mult=None) -> None:
@@ -2452,18 +2445,17 @@ class RbcBrokerage(BaseBrokerage):
         act = (r.activity or '').strip().lower()
         sale = act != 'buy' and (act == 'sell' or is_retraction or qty < 0)
         fee = (gross - net) if sale else (abs(net) - gross)
-        low = -(0.05 + 0.005 * gross)
-        high = (max(250.0, 3.0 * abs(qty) if is_option else 0.0)
-                + 0.05 * gross)
+        low, high = implied_commission_bounds(gross, qty, is_option=is_option)
         if fee < low or (fee > high and not is_retraction):
-            return (f"Value {net:,.2f} does not fit |Quantity| "
+            return (f"Value {M.shown(net, 2):,.2f} does not fit |Quantity| "
                     f"{abs(qty):g} x Price {price:g}"
-                    f"{f' x {mult:g}' if is_option else ''} = {gross:,.2f} "
-                    f"(implied commission {fee:,.2f}) — a wrong or "
+                    f"{f' x {mult:g}' if is_option else ''} = {M.shown(gross, 2):,.2f} "
+                    f"(implied commission {M.shown(fee, 2):,.2f}) — a wrong or "
                     f"shifted column; refusing to book it "
                     f"({r.desc[:60]!r})")
         return ''
 
+    @builds("stock_dividend")
     def _build_stock_dividend(self, r):
         """A stock dividend paid in shares ("DIS - <name> STK DIV ON N
         SHS"): a NEUTRAL stock-dividend event (a $0 BUYSELL typed
@@ -2493,6 +2485,7 @@ class RbcBrokerage(BaseBrokerage):
             'type': STOCK_DIVIDEND,
         }
 
+    @builds("dividend", "trade")
     def _build_reinvest_in_kind(self, r) -> List[Dict[str, Any]]:
         """The RBC Dominion Securities vintage's reinvested distribution:
         ONE Dividends row with the units and "Reinvest @ $p" (no cash
@@ -2507,7 +2500,7 @@ class RbcBrokerage(BaseBrokerage):
         m = _RBC_REINVEST_AT_RE.search(r.desc)
         price = desc_number(m.group(1), where=self._at(r),
                             field="'Reinvest @' price")
-        amount = round(r.qty * price, 2)
+        amount = M.units(r.qty * price, 2)
         symbol = self._equity_symbol(r.symbol, r.currency, r, market=True)
         self._note(f"line {r.line}: in-kind reinvested distribution — "
                    f"income {amount:,.2f} {r.currency} and a purchase of "
@@ -2553,6 +2546,7 @@ class RbcBrokerage(BaseBrokerage):
                            f"holds the original, or book the correction in "
                            f"a .tt file.")
 
+    @builds("trade")
     def _build_rights(self, r):
         """Rights/warrants distributed to every shareholder ("DIS - RTS
         ... RTS DIST ON N SHS"): no income (ITA s.15(1)(c) excludes rights
@@ -2573,6 +2567,7 @@ class RbcBrokerage(BaseBrokerage):
             'account': self.DEFAULT_ACCOUNT, 'description': r.desc,
         }
 
+    @builds("trade")
     def _build_reinvest(self, r):
         """Dividend reinvestment ("REI - ... REINV@C$12.3456"): a PURCHASE
         of the reinvested units at the cash reinvested. The distribution
@@ -2588,12 +2583,12 @@ class RbcBrokerage(BaseBrokerage):
         if (r.qty > 0) == (r.value > 0):
             raise _err(Path(self._fname), r.line,
                        f"reinvestment row with Quantity {r.qty:g} and "
-                       f"Value {r.value:,.2f} of the same sign — a "
+                       f"Value {M.shown(r.value, 2):,.2f} of the same sign — a "
                        f"reinvestment buys units for cash (a reversal "
                        f"returns both); refusing to guess "
                        f"({r.desc[:60]!r})")
         rei_key = (self._equity_symbol(r.symbol, r.currency, r),
-                   round(qty, 6), round(net, 2))
+                   M.units(qty, 6), M.units(net, 2))
         if r.qty < 0:
             self._rei_reversals.append((rei_key, r))
             return []
@@ -2601,14 +2596,14 @@ class RbcBrokerage(BaseBrokerage):
             return []         # cancelled by a reversal (any file)
         self.check_settle_order(r.date, r.settle, where=self._at(r),
                                 what=repr(r.desc[:50]))
-        m = _RBC_REINV_PRICE_RE.search(r.desc)
+        m = REINV_PRICE_RE.search(r.desc)
         # 'REINV@C$1,234.56' is 1234.56, not 1 (audit S062-20 /  # pii-ok
         # S064-21); a decimal comma falls back to the cash / units.
         price = r.price or (desc_number(m.group(1), strict=False) if m
-                            else None) or round(net / qty, 6)
-        mc = _REINV_CUR_RE.search(r.desc)
+                            else None) or M.units(net / qty, 6)
+        mc = REINV_CUR_RE.search(r.desc)
         price_cur = (r.currency if r.price else
-                     _REINV_CUR.get(mc.group(1).upper(), '?') if mc
+                     REINV_CUR.get(mc.group(1).upper(), '?') if mc
                      else r.currency)
         bad = reinvest_identity_error(qty, net, price if (r.price or m)
                                       else None, price_cur, r.currency)
@@ -2631,6 +2626,7 @@ class RbcBrokerage(BaseBrokerage):
         }
         return [tx]
 
+    @builds("roc", "adjust")
     def _build_book_adjust(self, r) -> List[Dict[str, Any]]:
         """RBC's book-cost adjustments carry the amount in the description,
         not the Value column (Value is 0):
@@ -2667,7 +2663,7 @@ class RbcBrokerage(BaseBrokerage):
             # 0): the ACB comes down, and the income totals still hold
             # those dollars (re-audit A2-0094).
             self._warn(f"line {r.line}: year-end return of capital "
-                       f"{amount:,.2f} {r.currency} on {symbol} lowers "
+                       f"{M.shown(amount, 2):,.2f} {r.currency} on {symbol} lowers "
                        f"its {self._terms['cost']}; RBC posts no cash for "
                        f"it, so it is usually part of the cash "
                        f"distributions already in the income totals "
@@ -2681,7 +2677,7 @@ class RbcBrokerage(BaseBrokerage):
         # year as well as an ACB increase; the export carries only the
         # book-cost side and taxjson books only that (audit S063-17 —
         # whether to book the income is the owner's call).
-        self._warn(f"line {r.line}: notional distribution {amount:,.2f} "
+        self._warn(f"line {r.line}: notional distribution {M.shown(amount, 2):,.2f} "
                    f"{r.currency} on {symbol} raises its "
                    f"{self._terms['cost']}; the distribution itself is "
                    f"income reported on {self._terms['dist_income']} and "
@@ -2695,6 +2691,20 @@ class RbcBrokerage(BaseBrokerage):
             'account': self.DEFAULT_ACCOUNT, 'description': r.desc,
         }]
 
+    @builds("roc")
+    def _build_roc(self, r: RbcRow) -> Dict[str, Any]:
+        """A Distributions RETURN OF CAPITAL row: the cost reduction
+        (`tx_roc_adjust`); a $0 one warned."""
+        if abs(r.value) < 0.005:
+            self._warn(f"$0 return-of-capital row — {r.label()}; "
+                       f"nothing to book (check "
+                       f"{self._terms['roc_slip']}).")
+        return self.tx_roc_adjust(
+            symbol=self._equity_symbol(r.symbol, r.currency, r, market=True),
+            currency=r.currency, date=r.date, desc=r.desc,
+            amount=r.value)
+
+    @builds("dividend", "dividend_in_lieu", "tax")
     def _build_dividend(self, r) -> List[Dict[str, Any]]:
         # `currency` is the dividend's payment currency (stays on the
         # record); the suffix follows the symbol's MARKET currency so a
@@ -2708,8 +2718,8 @@ class RbcBrokerage(BaseBrokerage):
         out: List[Dict[str, Any]] = []
         if is_net_tax:
             # RBC doesn't expose the treaty rate; 15% is the common case.
-            gross_amount = round(net / 0.85, 2)
-            tax_withheld = round(gross_amount - net, 2)
+            gross_amount = M.units(net / 0.85, 2)
+            tax_withheld = M.units(gross_amount - net, 2)
         qty, rate = _parse_div_qty_rate(desc, gross_amount)
         if is_net_tax:
             out.append({
@@ -2723,7 +2733,7 @@ class RbcBrokerage(BaseBrokerage):
         # A payment in lieu of a dividend is its own income kind (re-
         # audit A2-0098: booked as a dividend, a PIL on a US issuer got a
         # foreign tax credit and the US engine called it qualified). RBC
-        # Direct is a Canadian dealer: lib/income_dating deems a PIL on
+        # Direct is a Canadian dealer: characterize/income_dating deems a PIL on
         # a Canadian issuer a dividend (CA-INC-03); the rest is
         # ordinary income (US-INC-01).
         pil = bool(PIL_DESC_RE.search(desc))
@@ -2740,11 +2750,12 @@ class RbcBrokerage(BaseBrokerage):
         if pil:
             div['dealer_country'] = 'CA'
         # "REC mm/dd/yy" and the "Distribution" activity / "DIST ON"
-        # label, as neutral facts (lib/income_dating dates the row).
+        # label, as neutral facts (characterize/income_dating dates the row).
         div.update(income_facts_from_description(desc, r.activity or ''))
         out.append(div)
         return out
 
+    @builds("tax")
     def _build_tax(self, r):
         if not r.symbol.strip():
             # A made-up 'UNKNOWN' symbol split the withholding from its
@@ -2765,6 +2776,7 @@ class RbcBrokerage(BaseBrokerage):
             'account': self.DEFAULT_ACCOUNT, 'description': r.desc,
         }
 
+    @builds("interest")
     def _build_interest(self, r):
         return {
             'action': 'INTEREST',
@@ -2775,6 +2787,7 @@ class RbcBrokerage(BaseBrokerage):
             'description': r.desc,
         }
 
+    @builds("fee")
     def _build_fee(self, r):
         """A fee charged against a holding (FCH: the depositary's ADR
         custody fee). Positive net_amount = fee charged, as Questrade's
@@ -2800,6 +2813,7 @@ class RbcBrokerage(BaseBrokerage):
             return self._emit_option_adjust(ev)
         return self._emit_stock_reorg(ev)
 
+    @builds("split", "rename")
     def _emit_option_adjust(self, ev) -> List[Dict[str, Any]]:
         """XCH on an option: RBC removes the contract under one code and
         re-adds it under another (special-dividend strike adjustment, the
@@ -2863,6 +2877,7 @@ class RbcBrokerage(BaseBrokerage):
                             f"{rem.desc} | {rc.desc}"),
         }]
 
+    @builds("split", "rename", "roc", "trade")
     def _emit_stock_reorg(self, ev) -> List[Dict[str, Any]]:
         """A name change / reverse or forward split / 1-for-1 exchange that
         RBC booked as a removal (often under a temporary code) plus a
@@ -2929,7 +2944,7 @@ class RbcBrokerage(BaseBrokerage):
             for leg in (rem, rc):
                 if abs(leg.value) > 0.005:
                     self._warn(f"reorganization leg carries cash "
-                               f"{leg.value:,.2f} that the parser does not "
+                               f"{M.shown(leg.value, 2):,.2f} that the parser does not "
                                f"understand — NOT booked: {leg.label()}",
                                unbooked=True)
 
@@ -2939,7 +2954,7 @@ class RbcBrokerage(BaseBrokerage):
         cil_total = sum(c.value for c in ev.cil)
         if ev.cil and cil_total < -0.005:
             self._warn(f"cash in lieu after the {rem.date} reorganization "
-                       f"of {rem.symbol} nets NEGATIVE ({cil_total:,.2f}) "
+                       f"of {rem.symbol} nets NEGATIVE ({M.shown(cil_total, 2):,.2f}) "
                        f"— a reversal with no posting; NOT booked.",
                        unbooked=True)
         frac = (removed * ratio - received) if ratio else 0.0
@@ -2953,8 +2968,8 @@ class RbcBrokerage(BaseBrokerage):
                 'date_settle': c0.settle or c0.date,
                 'symbol': tgt, 'quantity': -frac,
                 'currency': c0.currency,
-                'price': round(cil_total / frac, 6), 'fee': 0.0,
-                'net_amount': round(cil_total, 2), 'gross_amount': 0.0,
+                'price': M.units(cil_total / frac, 6), 'fee': 0.0,
+                'net_amount': M.units(cil_total, 2), 'gross_amount': 0.0,
                 'account': self.DEFAULT_ACCOUNT,
                 'description': (f"cash in lieu of {frac:.6g} fractional "
                                 f"share(s) of {tgt} after the {rem.date} "
@@ -2970,7 +2985,7 @@ class RbcBrokerage(BaseBrokerage):
                            f"{received:g} — booked what was delivered.",
                            lint=True)
             if cil_total > 0.005:
-                self._warn(f"cash in lieu {cil_total:,.2f} after the "
+                self._warn(f"cash in lieu {M.shown(cil_total, 2):,.2f} after the "
                            f"{rem.date} reorganization of {src} cannot be "
                            f"tied to a fractional share (no stated ratio) "
                            f"— NOT booked.", unbooked=True)
@@ -2997,30 +3012,3 @@ class RbcBrokerage(BaseBrokerage):
         if sell:
             out.append(sell)
         return out
-
-
-def rbc_cash_events(path) -> List[Dict[str, Any]]:
-    """The cash events of one RBC activity export for the FX-on-cash
-    ledger v2 (lib/cash_events, tax-logic CA-FX-07): one CASHMOVE per
-    cash row (`classify_rbc_row` 'cash': deposits, withdrawals and cash
-    transfers — WIR, DEP, TFI ...), signed, dated by its settlement date.
-    RBC's activity export carries no cash balance: a CASHBAL .tt line
-    gives the ledger one to reconcile against."""
-    from taxjson.bin.taxjson_brokerage import hash_broker_account
-    from taxjson.lib import cash_events as CE
-    ex = read_rbc_rows(Path(path))
-    name = shown_name(path)
-    out: List[Dict[str, Any]] = []
-    for r in ex.rows:
-        if classify_rbc_row(r) != 'cash' or abs(r.value) < 1e-9:
-            continue
-        cur = (r.currency or '').strip().upper()
-        if not cur:
-            continue
-        acct = hash_broker_account(r.account) if r.account.strip() else ''
-        desc = re.sub(r'\d', '#', (r.code or r.activity or '').strip())
-        ev = CE.move(r.date, cur, r.value, settle=r.settle or r.date,
-                     where=name, account=acct, desc=desc)
-        ev['line_where'] = f"{name}:{r.line}"
-        out.append(ev)
-    return out

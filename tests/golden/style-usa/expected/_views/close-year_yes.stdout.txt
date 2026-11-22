@@ -1,0 +1,12 @@
+==> Recording year-end positions and the 2024 dispositions for the 2025 hand-off
+
+CLOSED 2024 — wash-adjusted, 3 taxable account(s)
+  Realized:            329.25
+  Disallowed:          903.40
+  Income:              452.29
+  Lock:                filed/2024.json — commit it with your records
+  Frozen:              the project's own inputs/; reports as filed: filed/2024/reports/
+  Year-end positions:  equity 8, crypto 3; trades settling in 2025: 0
+
+CARRIED INTO 2025
+  Capital loss carryover into 2025:  short-term 0.00, long-term 0.00

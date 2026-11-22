@@ -1,0 +1,220 @@
+{
+  "accounts": [
+    {
+      "account": "hand",
+      "dividend": 0.0,
+      "fees": 0,
+      "option": 0.0,
+      "pil": 0.0,
+      "realized": 125.0,
+      "stock": 125.0,
+      "total": 125.0,
+      "type": "taxable"
+    },
+    {
+      "account": "margin",
+      "dividend": 0.0,
+      "fees": 4.73,
+      "option": 0.0,
+      "pil": 0.0,
+      "realized": 24.3,
+      "stock": 24.3,
+      "total": 24.3,
+      "type": "taxable"
+    },
+    {
+      "account": "margin2",
+      "dividend": 0.0,
+      "fees": 5.4,
+      "option": 0.0,
+      "pil": 2.7,
+      "realized": 32.4,
+      "stock": 32.4,
+      "total": 35.1,
+      "type": "taxable"
+    },
+    {
+      "account": "rbc",
+      "dividend": 0.0,
+      "fees": 0,
+      "option": 0.0,
+      "pil": 0.0,
+      "realized": 24.3,
+      "stock": 24.3,
+      "total": 24.3,
+      "type": "taxable"
+    }
+  ],
+  "basis": "wash-adjusted",
+  "currency": "CAD",
+  "filing": {
+    "accounts": [
+      {
+        "acb": 775.0,
+        "account": "hand",
+        "denied": 0.0,
+        "denied_contribution": 0.0,
+        "dispositions": 1,
+        "gain": 125.0,
+        "outlays": 0.0,
+        "proceeds": 900.0
+      },
+      {
+        "acb": 0.0,
+        "account": "margin",
+        "denied": 0.0,
+        "denied_contribution": 0.0,
+        "dispositions": 1,
+        "gain": 24.3,
+        "outlays": 0.0,
+        "proceeds": 24.3
+      },
+      {
+        "acb": 267.3,
+        "account": "margin2",
+        "denied": 0.0,
+        "denied_contribution": 0.0,
+        "dispositions": 2,
+        "gain": 32.4,
+        "outlays": 1.35,
+        "proceeds": 301.05
+      },
+      {
+        "acb": 324.0,
+        "account": "rbc",
+        "denied": 0.0,
+        "denied_contribution": 0.0,
+        "dispositions": 2,
+        "gain": 24.3,
+        "outlays": 0.0,
+        "proceeds": 348.3
+      }
+    ],
+    "date_basis": "date_settle",
+    "engine_denied_unrounded": 0.0,
+    "engine_gain_unrounded": 206.0,
+    "fx_cash": {
+      "active": true,
+      "currency": "CAD",
+      "headline": "FX on foreign cash: NOT RELIABLE for 2025 \u2014 1 in-year overdraft (201.00 USD); conversions, deposits/withdrawals and margin balances are not read; do not file this figure",
+      "ledger": "v1",
+      "line": "15300",
+      "overdrafts_in_year": {
+        "USD": {
+          "count": 1,
+          "units": 201.0
+        }
+      },
+      "reasons": [
+        "1 in-year overdraft(s): the ledger spent currency it never saw acquired (201.00 USD)",
+        "currency conversions (IB Forex, Kraken/Coinbase fiat trades, bank conversions) are not read",
+        "cash deposits and withdrawals are not read",
+        "foreign-currency margin balances (debt) are not modelled",
+        "each history starts with an empty pool (no opening balance carried from the year before)"
+      ],
+      "reliable": false,
+      "rule": "ITA s.39(1.1) (capital, $200 de minimis)",
+      "status": "unreliable",
+      "unreliable_raw": {
+        "net_gain": 0.0,
+        "reportable": 0.0
+      },
+      "year": 2025
+    },
+    "lines": [
+      {
+        "acb": 1366.3,
+        "denied": 0.0,
+        "denied_contribution": 0.0,
+        "dispositions": 4,
+        "gain": 164.15,
+        "gain_code": "13200",
+        "key": "shares",
+        "label": "Publicly traded shares, mutual fund units, deferral of eligible small business corporation shares, and other shares",
+        "line": "4",
+        "outlays": 1.35,
+        "period": null,
+        "proceeds": 1531.8,
+        "proceeds_code": "13199",
+        "rows": 4,
+        "short": "shares & fund units",
+        "title": "Part 3, line 4 (lines 13199/13200)"
+      },
+      {
+        "acb": 0.0,
+        "denied": 0.0,
+        "denied_contribution": 0.0,
+        "dispositions": 2,
+        "gain": 41.85,
+        "gain_code": "15300",
+        "key": "other",
+        "label": "Bonds, debentures, promissory notes, and other similar properties (options, futures, foreign currency)",
+        "line": "6",
+        "outlays": 0.0,
+        "period": null,
+        "proceeds": 41.85,
+        "proceeds_code": "15199",
+        "rows": 1,
+        "short": "options & other properties",
+        "title": "Part 3, line 6 (lines 15199/15300)"
+      }
+    ],
+    "totals": {
+      "acb": 1366.3,
+      "denied": 0.0,
+      "denied_contribution": 0.0,
+      "gain": 206.0,
+      "outlays": 1.35,
+      "permanently_denied": 0.0,
+      "proceeds": 1573.65
+    }
+  },
+  "no_purchase_in_totals": [],
+  "no_purchase_uncovered": [
+    {
+      "account": "margin",
+      "proceeds": 807.98,
+      "sales": 1,
+      "symbol": "SAMPLA.US"
+    }
+  ],
+  "readiness": {
+    "complete": false,
+    "issues": [
+      {
+        "count": 1,
+        "detail": "1 sale(s) with no purchase in the files are in no total",
+        "fix": "tjs find-missing-history",
+        "kind": "no-purchase"
+      }
+    ]
+  },
+  "run_state_problems": [],
+  "schema_version": 1,
+  "sheltered_included": [],
+  "subtotals": {
+    "taxable": {
+      "dividend": 0.0,
+      "fees": 10.13,
+      "option": 0.0,
+      "pil": 2.7,
+      "realized": 206.0,
+      "stock": 206.0,
+      "total": 208.7
+    }
+  },
+  "tainted_included": 0,
+  "tainted_routed": 0,
+  "totals": {
+    "dividend": 0.0,
+    "fees": 10.13,
+    "option": 0.0,
+    "pil": 2.7,
+    "realized": 206.0,
+    "stock": 206.0,
+    "total": 208.7
+  },
+  "unknown_cost_included": 0,
+  "unknown_cost_routed": 0,
+  "year": "2025"
+}

@@ -1,0 +1,51 @@
+==> Checking the project
+==> Loading currency rates
+==> Loading cached USD → CAD rates
+==> margin  (taxable, first pass: transfers between your accounts)
+  inputs/margin/ib_2023.csv → Interactive Brokers (content: "Statement,Header" preamble)
+  inputs/margin/ib_2024.csv → Interactive Brokers (content: "Statement,Header" preamble)
+==> Reading 2 files
+  ib_2023.csv: 3 tax objects
+  ib_2024.csv: 27 tax objects
+==> qt  (taxable, first pass: transfers between your accounts)
+  inputs/qt/questrade_2024.csv → Questrade (content: columns Transaction Date,Settlement Date,Action…)
+  inputs/qt/questrade_2025.csv → Questrade (content: columns Transaction Date,Settlement Date,Action…)
+==> Reading 2 files
+  questrade_2024.csv: 3 tax objects
+  questrade_2025.csv: 1 tax objects
+==> rbc  (taxable, first pass: transfers between your accounts)
+  inputs/rbc/rbc_direct_2024.csv → RBC Direct Investing (content: activity header Date,Activity,Symbol,Description…)
+==> Reading 1 file
+  rbc_direct_2024.csv: 4 tax objects
+==> margin  (taxable)
+==> Processing corporate actions
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/margin_holdings.toml
+==> Writing summary reports/margin.sum
+==> qt  (taxable)
+==> Processing corporate actions
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/qt_holdings.toml
+==> Writing summary reports/qt.sum
+==> rbc  (taxable)
+==> Processing corporate actions
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/rbc_holdings.toml
+==> Writing summary reports/rbc.sum
+==> Pooling cost and checking superficial losses across taxable accounts (margin, qt, rbc)
+==> Writing summary reports/margin_wash.sum
+==> Writing summary reports/qt_wash.sum
+==> Writing summary reports/rbc_wash.sum
+  warning: 1 option contract you wrote in 2023 and closed in 2024 is on transition close timing: 321.17 of premium is taxed in 2024
+    QZQ240119C00030000.US (option_grant_timing_since = 2024 keeps contracts written before 2024 on close timing).
+    Did your 2023 return report these premiums when the contracts were written? If yes, set option_grant_timing_since = 2023 in [settings]: the premiums then stay in 2023 and only the closes are 2024's (ITA s.49(1)).
+    If not, the transition is right: confirm it with `tjs checklist --done option-boundary`. `tjs option-boundary` lists each contract.
+==> Writing cross-account reports to reports/
+==> Writing fees report reports/fees.rpt
+==> Done. Reports are in reports/
+==> Before you trust these numbers (docs/getting-started.md, step 5)
+Info: 1 account with open positions and no holdings file to check them against: margin (4). Run `tjs sanity` with the broker's positions.
+Info: Then run `tjs checklist --run`: it checks every step and names the next one.

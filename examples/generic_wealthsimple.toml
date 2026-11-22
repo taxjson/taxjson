@@ -1,11 +1,14 @@
-# Column mapping template for a Wealthsimple activity CSV imported
-# through the GENERIC importer. Copy next to your export as
-#   inputs/<account>/generic_wealthsimple.csv.toml    (sidecar), or
-#   inputs/<account>/generic.toml                     (whole folder)
-# and adjust the header names/action values to match YOUR export —
-# Wealthsimple has shipped several layouts. When you've confirmed a
-# mapping works, consider contributing the sample so a dedicated
-# parser can be generated (taxjson-generate-parser).
+# Column mapping template for an activity CSV shaped like this one
+# (Date, Transaction type, Symbol, Quantity, Price, Amount), imported
+# through the GENERIC importer. Wealthsimple's activities export
+# (activity_type, activity_sub_type, net_cash_amount columns) needs no
+# mapping: taxjson reads it with the layout it ships (docs/brokers.md,
+# "Wealthsimple"). For another broker's export, copy this next to it as
+#   inputs/<account>/<export>.csv.toml    (sidecar), or
+#   inputs/<account>/generic.toml         (whole folder)
+# and adjust the header names/action values to match YOUR export.
+# When you've confirmed a mapping works, consider contributing the
+# sample so a dedicated parser can be generated (taxjson-generate-parser).
 
 [columns]
 date     = "Date"             # the TRADE date
@@ -13,6 +16,8 @@ date     = "Date"             # the TRADE date
 #                             # the standard T+1/T+2 cycle is computed
 action   = "Transaction type"
 symbol   = "Symbol"
+# description = "Description"  # the broker's text: what [[classify]] rules
+#                              # and [extract] patterns read (see below)
 quantity = "Quantity"
 price    = "Price"
 amount   = "Amount"           # signed, fee-inclusive total
@@ -43,6 +48,22 @@ currency = "CAD"
 #                              # for crypto: the generic importer books
 #                              # securities; coins go in a crypto = true
 #                              # account.
+
+# Optional: an action value that varies, or a value only the description
+# holds (docs/settings.md, "Generic importer mapping"). A rule's `match`
+# is a regular expression searched in the action cell (or the
+# description cell with over = "description"); the first rule that
+# matches names the target of an action value [actions] does not list.
+# [[classify]]
+# match = "^DIVIDEND"
+# target = "dividend"
+# [[classify]]
+# match = "REINVEST"
+# over = "description"
+# target = "buy"
+# [extract]
+# quantity = '([0-9.]+) SHARES'
+# price = '@ ([0-9.]+)'
 
 # Optional: the real broker. `tjs run` parses each named broker's
 # generic files on their own and the fees report shows them as

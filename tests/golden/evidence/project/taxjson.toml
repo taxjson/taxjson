@@ -1,0 +1,20 @@
+[settings]
+country                   = "canada"
+local_timezone            = "America/Toronto"
+tax_date                  = "settle"
+year                      = 2025
+base_currency             = "CAD"
+source_currencies         = ["USD"]
+option_grant_timing_since = 2025
+
+[accounts.margin]
+type = "taxable"
+
+[accounts.margin2]
+type = "taxable"
+
+[accounts.rbc]
+type = "taxable"
+
+[accounts.hand]
+type = "taxable"

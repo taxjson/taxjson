@@ -13,7 +13,7 @@ in the books (`transfers = true`) both legs were booked as a sale and a
 purchase at the rows' market value. Here the legs are paired
 (evidenced_journals) and written into the native books as two
 `listing_journal` TRANSFER rows on the journal's date (book_journals):
-the engines move the units with their cost (lib/core
+the engines move the units with their cost (lib/row_types
 LISTING_JOURNAL_TYPE), restated in the new listing's currency at the
 day's rate (the in-leg's `price`). Nothing here touches the tax books:
 they join the listings (a TOBASE line) and the legs cancel there.
@@ -138,7 +138,7 @@ def evidenced_journals(rows, same_class, note=None) -> List[Dict[str, Any]]:
 def _is_leg(t: Dict[str, Any]) -> bool:
     """A TRANSFER row of the book that may be a journal's leg: not a
     move the run already booked (an own-account move, a journal)."""
-    from taxjson.lib.core import LISTING_JOURNAL_TYPE, LOT_MOVE_TYPE
+    from taxjson.lib.row_types import LISTING_JOURNAL_TYPE, LOT_MOVE_TYPE
     return (t.get("action") == "TRANSFER" and bool(t.get("symbol"))
             and t.get("type") not in (LOT_MOVE_TYPE, LISTING_JOURNAL_TYPE))
 
@@ -187,7 +187,7 @@ def book_journals(txs: List[Dict[str, Any]], evidence: List[Dict[str, Any]],
     A book that already holds `listing_journal` rows was written here
     before (the native merge is rebuilt only when its inputs change):
     nothing is done. Returns the journals booked."""
-    from taxjson.lib.core import LISTING_JOURNAL_TYPE
+    from taxjson.lib.row_types import LISTING_JOURNAL_TYPE
     if any(t.get("type") == LISTING_JOURNAL_TYPE for t in txs):
         return []
     own = [t for t in txs if _is_leg(t)]

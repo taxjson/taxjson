@@ -1,0 +1,11 @@
+SUPERFICIAL LOSSES — CAD, tax year 2024, basis: wash-adjusted
+DENIED: the loss the superficial-loss rule (s.54) denies; ALLOWED: the loss you claim.
+ACCOUNT  DATE        SYMBOL    QTY  PROCEEDS      COST     GAIN  DENIED  ALLOWED
+--------------------------------------------------------------------------------
+margin   2024-09-10  QZQ.US    200  7,693.65  8,101.35  -407.70  305.78  -101.93
+margin   2024-11-01  SAMPA.TO  100  3,490.05  4,009.95  -519.90  519.90     0.00
+margin   2024-11-20  NVDA.US    10  1,881.90  1,999.35  -117.45  117.45     0.00
+
+DENIED:    943.13 CAD over 3 superficial loss(es) (101.93 permanently denied)
+DEFERRED:  841.20 CAD in open positions' cost — tjs list
+More: tjs wash-sales --details (what DENIED means); --explain: each denial's trace

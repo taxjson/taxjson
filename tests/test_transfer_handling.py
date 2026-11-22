@@ -17,18 +17,10 @@ import json
 import unittest
 from unittest.mock import patch
 
-from taxjson.lib.core import TaxTransaction
 from taxjson.bin.taxjson_gains import TransferValidationError, _handle_transfers
 from tax_rules import rule
-
-
-def _tx(action, date, symbol, qty, price=0.0, net=0.0, account='Margin',
-        currency='USD', **extra):
-    return TaxTransaction(
-        action=action, date=date, symbol=symbol, quantity=qty,
-        price=price, net_amount=net or abs(qty * price),
-        account=account, currency=currency, **extra,
-    )
+from taxjson.rules import ids as R
+from _support.transfer_rows import _tx
 
 
 def _tx_dict(action, date, symbol, qty, price=0.0, net=0.0, account='Margin', currency='USD'):
@@ -99,8 +91,8 @@ class TestHandleTransfersSheltered(unittest.TestCase):
 
 
 class TestHandleTransfersTaxable(unittest.TestCase):
-    @rule("CA-ACB-10")
-    @rule("US-BASIS-05")
+    @rule(R.CA_ACB_10)
+    @rule(R.US_BASIS_05)
     def test_taxable_with_transfer_exits(self):
         txs = [
             _tx('TRANSFER', '2024-01-15', 'AAPL.US', 100, net=15000.0, account='Margin'),
@@ -297,14 +289,14 @@ class TestNettingRefusalBypasses(unittest.TestCase):
             shel, main_transactions=main)
         self.assertEqual(len(out), 3, "all hops must survive the dropper")
 
-    @rule("CA-SL-17")
+    @rule(R.CA_SL_17)
     def test_surviving_pair_reaches_engine_guard(self):
         """transfers_as_acquisitions = true, end-to-end: the surviving
         sheltered pair is rewritten to type='transfer_rewrite' BUYSELLs
         and the engine refuses to guess whether the in-window leg was
         an acquisition."""
-        from taxjson.lib.core import AmbiguousTransferDateError, \
-            get_tax_rules
+        from taxjson.engine.rows import AmbiguousTransferDateError
+        from taxjson.engine.by_country import get_tax_rules
         main = [_tx('BUYSELL', '2026-05-01', 'Q.TO', +100, net=10000.0,
                     account='Margin', currency='CAD'),
                 _tx('BUYSELL', '2026-06-10', 'Q.TO', -100, net=8000.0,
@@ -329,8 +321,8 @@ class TestNettingRefusalBypasses(unittest.TestCase):
         near-trade refusal must stand down for it — otherwise the
         documented resolution path is a dead end (2026-09 audit,
         found while declaring a real custody move)."""
-        from taxjson.lib.pipeline import (MANUAL_TRANSFER_DECLARATION,
-                                          _drop_self_cancelling_transfers)
+        from taxjson.lib.pipeline import _drop_self_cancelling_transfers
+        from taxjson.lib.tt_format import MANUAL_TRANSFER_DECLARATION
         shel = [_tx('TRANSFER', '2026-06-15', 'Q.TO', +100, net=8000.0,
                     account='RRSP'),
                 _tx('TRANSFER', '2026-06-15', 'Q.TO', -100, net=8000.0,
@@ -367,8 +359,8 @@ class TestNettingRefusalBypasses(unittest.TestCase):
         the user's declared zero-net pair all net out together."""
         import io
         from contextlib import redirect_stderr
-        from taxjson.lib.pipeline import (MANUAL_TRANSFER_DECLARATION,
-                                          _drop_self_cancelling_transfers)
+        from taxjson.lib.pipeline import _drop_self_cancelling_transfers
+        from taxjson.lib.tt_format import MANUAL_TRANSFER_DECLARATION
         churn = [_tx('TRANSFER', '2026-06-15', 'Q.TO', -100, net=8000.0,
                      account='RRSP'),
                  _tx('TRANSFER', '2026-06-15', 'Q.TO', +100, net=8000.0,
@@ -399,8 +391,8 @@ class TestNettingRefusalBypasses(unittest.TestCase):
         the July legs survive to the rewrite + engine guard."""
         import io
         from contextlib import redirect_stderr
-        from taxjson.lib.pipeline import (MANUAL_TRANSFER_DECLARATION,
-                                          _drop_self_cancelling_transfers)
+        from taxjson.lib.pipeline import _drop_self_cancelling_transfers
+        from taxjson.lib.tt_format import MANUAL_TRANSFER_DECLARATION
         seg = [_tx('TRANSFER', '2026-06-15', 'Q.TO', -100, net=8000.0,
                    account='RRSP'),
                _tx('TRANSFER', '2026-06-15', 'Q.TO', +100, net=8000.0,
@@ -434,8 +426,8 @@ class TestNettingRefusalBypasses(unittest.TestCase):
         WHOLE segment rather than guess."""
         import io
         from contextlib import redirect_stderr
-        from taxjson.lib.pipeline import (MANUAL_TRANSFER_DECLARATION,
-                                          _drop_self_cancelling_transfers)
+        from taxjson.lib.pipeline import _drop_self_cancelling_transfers
+        from taxjson.lib.tt_format import MANUAL_TRANSFER_DECLARATION
         seg = [_tx('TRANSFER', '2026-06-15', 'Q.TO', +100, net=0.0,
                    account='RRSP',
                    description=MANUAL_TRANSFER_DECLARATION),
@@ -544,8 +536,8 @@ class TestNettingRefusalBypasses(unittest.TestCase):
         legs weeks later."""
         import io
         from contextlib import redirect_stderr
-        from taxjson.lib.pipeline import (MANUAL_TRANSFER_DECLARATION,
-                                          _drop_self_cancelling_transfers)
+        from taxjson.lib.pipeline import _drop_self_cancelling_transfers
+        from taxjson.lib.tt_format import MANUAL_TRANSFER_DECLARATION
         shel, main = [], []
         for sym in ('Q.TO', 'R.TO', 'S.TO'):
             shel += [_tx('TRANSFER', '2026-06-01', sym, -100,
@@ -673,8 +665,8 @@ class TestNettingRefusalBypasses(unittest.TestCase):
         special treatment — the bypass is only for a segment the user
         has fully cancelled; an unbalanced declaration still reaches
         the rewrite + engine guard."""
-        from taxjson.lib.pipeline import (MANUAL_TRANSFER_DECLARATION,
-                                          _drop_self_cancelling_transfers)
+        from taxjson.lib.pipeline import _drop_self_cancelling_transfers
+        from taxjson.lib.tt_format import MANUAL_TRANSFER_DECLARATION
         shel = [_tx('TRANSFER', '2026-06-15', 'Q.TO', +100, net=8000.0,
                     account='RRSP',
                     description=MANUAL_TRANSFER_DECLARATION)]
@@ -737,9 +729,8 @@ class TestShelteredTransferGainCalc(unittest.TestCase):
         record genuine in-kind moves as TRANSFER rows, and a
         json→tt→json round trip must never grant broker rows
         attestation (2026-09 round-four audit finding 2)."""
-        from taxjson.bin.taxjson_convert_tt import (parse_tt_line,
-                                                    tx_to_tt_line)
-        from taxjson.lib.pipeline import MANUAL_TRANSFER_DECLARATION
+        from taxjson.lib.tt_format import parse_tt_line, tx_to_tt_line
+        from taxjson.lib.tt_format import MANUAL_TRANSFER_DECLARATION
         decl = parse_tt_line("TRANSFER  2026-04-22  09:30:00  XYZ.US  "
                              "-500  CAD  96.40  48200.00  DECLARED",
                              "rrsp")
@@ -762,9 +753,8 @@ class TestShelteredTransferGainCalc(unittest.TestCase):
         for the lost-history resolution: a BUYSELL at the true
         acquisition (real cost, real date) + a DECLARED
         counter-TRANSFER at the arrival date netting the broker leg."""
-        from taxjson.bin.taxjson_convert_tt import (expand_acquired,
-                                                    parse_tt_line)
-        from taxjson.lib.pipeline import MANUAL_TRANSFER_DECLARATION
+        from taxjson.lib.tt_format import expand_acquired, parse_tt_line
+        from taxjson.lib.tt_format import MANUAL_TRANSFER_DECLARATION
         lines = expand_acquired(
             "ACQUIRED 2024-09-16 09:30:00 XYZ.US 500 CAD "
             "96.40 48200.00 ARRIVED 2025-04-22")
@@ -783,7 +773,7 @@ class TestShelteredTransferGainCalc(unittest.TestCase):
             "BUYSELL 2024-09-16 09:30:00 A.TO 1 CAD 1 1 0"))
 
     def test_acquired_sugar_malformed_raises(self):
-        from taxjson.bin.taxjson_convert_tt import expand_acquired
+        from taxjson.lib.tt_format import expand_acquired
         with self.assertRaises(ValueError):
             expand_acquired("ACQUIRED 2024-09-16 09:30:00 XYZ.US 500 "
                             "CAD 96.40 48200.00")     # no ARRIVED

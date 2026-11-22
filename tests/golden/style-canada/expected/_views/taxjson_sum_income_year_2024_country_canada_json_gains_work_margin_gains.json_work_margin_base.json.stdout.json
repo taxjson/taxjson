@@ -1,0 +1,39 @@
+{
+  "interest_paid_totals": {},
+  "interest_totals": {
+    "CAD": 12.34
+  },
+  "missing_amount": [],
+  "schema_version": 1,
+  "ticker_stats": {
+    "MSFT.US": {
+      "CAD": {
+        "div": 101.25,
+        "pil": 0.0,
+        "tax": 15.201
+      }
+    },
+    "PARN.US": {
+      "CAD": {
+        "div": 337.5,
+        "pil": 0.0,
+        "tax": 0.0
+      }
+    },
+    "QZQ.US": {
+      "CAD": {
+        "div": 54.0,
+        "pil": 0.0,
+        "tax": 8.1
+      }
+    },
+    "SAMPA.TO": {
+      "CAD": {
+        "div": 50.0,
+        "pil": 0.0,
+        "tax": 0.0
+      }
+    }
+  },
+  "total_year": 2024
+}

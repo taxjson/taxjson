@@ -47,11 +47,13 @@ securities it bought or sold have.
 from __future__ import annotations
 
 import math
-from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from taxjson.model import money as M
+from taxjson.model.evidence import parse_commission_refunds
+
 LABEL = "v2 (opt-in, under audit)"
-_COMPLETE = "complete"          # lib/cash_events.COMPLETE
+_COMPLETE = "complete"          # lib/cash_lines.COMPLETE
 # Units of the currency a statement balance may differ from the ledger's
 # by (IB rounds each line to the cent; a few hundred rows of rounding).
 TOL = 1.00
@@ -72,7 +74,7 @@ RateOf = Callable[[str, str], Optional[float]]
 def _p(kind: str, text: str, date: str = "", book: str = "",
        currency: str = "", amount: Optional[float] = None) -> Dict[str, Any]:
     return {"kind": kind, "date": date, "book": book or "",
-            "currency": currency, "amount": (round(amount, 2)
+            "currency": currency, "amount": (M.shown(amount, 2)
                                               if amount is not None
                                               else None),
             "text": text}
@@ -88,7 +90,7 @@ def close_problem(close: Any, year: Any) -> Optional[str]:
     opening pool, CA-FX-07), else None: the shape close-year writes — a
     table naming its year (the lock's), books that are tables of
     currencies, each with finite units and cost. The one lock check
-    (taxjson_filed.lock_damage) applies it, so check-filed no longer
+    (filed_locks.lock_damage) applies it, so check-filed no longer
     calls a lock OK whose close the next year's ledger refuses (backlog
     TJ-0068)."""
     if not isinstance(close, dict) or not isinstance(close.get("books"),
@@ -224,16 +226,16 @@ def _carry_openings(carry: Dict[str, Any],
     book and currency replaces its entry). Returns (books carried,
     notes). Refused, never guessed (2026-10 audit C02-C05): a record
     that could not be read (`carry["problem"]`, from
-    bin/taxjson_run._fx_cash_carry), costs in another base currency, a
+    pipeline/run._fx_cash_carry), costs in another base currency, a
     units or cost value that is not a finite number, or one a CASHOPEN
-    line could not give (lib/cash_events.opening_problem: a cost below
+    line could not give (lib/cash_lines.opening_problem: a cost below
     zero, a cost on no units), and a carried book this year's books
     cannot place (_carried_book) unless a CASHOPEN for one of the
     broker's books takes its place. `early_in` {(book, currency): units}:
     the units of an own move whose arrival the close walked and whose
     departure settles this year (the close's `early_out`; backlog
     TJ-1076)."""
-    from taxjson.lib.cash_events import opening_problem
+    from taxjson.lib.cash_lines import opening_problem
     notes: List[str] = []
     y0 = f"{year}-01-01"
     cy = carry.get("year")
@@ -293,9 +295,9 @@ def _carry_openings(carry: Dict[str, Any],
         if transit_in is not None and float(v["units"]) > _EPS:
             transit_in[cur] = {"units": float(v["units"]),
                                "cost": float(v["cost"])}
-            notes.append(f"{src}: {float(v['units']):,.2f} {cur} were "
+            notes.append(f"{src}: {M.shown(float(v['units']), 2):,.2f} {cur} were "
                          f"in transit between your own accounts (cost "
-                         f"{float(v['cost']):,.2f} {base}) — carried, to "
+                         f"{M.shown(float(v['cost']), 2):,.2f} {base}) — carried, to "
                          f"arrive this year")
     carried = 0
     for book, curs in cbooks.items():
@@ -330,8 +332,8 @@ def _carry_openings(carry: Dict[str, Any],
             unsound = opening_problem(units, cost)
             if unsound:
                 problems.append(_p(
-                    "carry", f"{src}: {book} {cur} carries {units:,.2f} "
-                    f"{cur} at a cost of {cost:,.2f} {base} — as on a "
+                    "carry", f"{src}: {book} {cur} carries {M.shown(units, 2):,.2f} "
+                    f"{cur} at a cost of {M.shown(cost, 2):,.2f} {base} — as on a "
                     f"CASHOPEN line, {unsound}; {repair}",
                     y0, book, cur, units))
                 continue
@@ -350,10 +352,10 @@ def _carry_openings(carry: Dict[str, Any],
                     continue
                 label = book.split("/", 1)[0]
                 problems.append(_p(
-                    "carry", f"{src} carries {units:,.2f} {cur} (cost "
-                    f"{cost:,.2f} {base}) for {book}, and {why} — which "
+                    "carry", f"{src} carries {M.shown(units, 2):,.2f} {cur} (cost "
+                    f"{M.shown(cost, 2):,.2f} {base}) for {book}, and {why} — which "
                     f"of them held it the record does not say: add "
-                    f"`CASHOPEN {y0} {cur} {units:.2f} {cost:.2f} "
+                    f"`CASHOPEN {y0} {cur} {M.shown(units, 2):.2f} {M.shown(cost, 2):.2f} "
                     f"at={book.split('/', 1)[1]}:<the first letters of its "
                     f"book>` to a .tt of {label} (it replaces the carried "
                     f"balance)", y0, book, cur, units))
@@ -410,7 +412,7 @@ def _carry_openings(carry: Dict[str, Any],
             units = float(v["units"])
             if target is None:
                 problems.append(_p(
-                    "carry", f"{src}: {units:,.2f} {cur} of {book} had "
+                    "carry", f"{src}: {M.shown(units, 2):,.2f} {cur} of {book} had "
                     f"already reached another of your accounts, and {why} "
                     f"— which of them sends them the record does not say; "
                     f"re-close {cy} with one book for it", y0, book, cur,
@@ -422,7 +424,7 @@ def _carry_openings(carry: Dict[str, Any],
                 # are not in them or the departure is refused, as said.
                 notes.append(f"{opening[k]['source']}: CASHOPEN for {target} "
                              f"{cur} replaces the prior year's carried "
-                             f"balance, and with it the {units:,.2f} {cur} "
+                             f"balance, and with it the {M.shown(units, 2):,.2f} {cur} "
                              f"of its move out that had already arrived")
                 continue
             if early_in is not None and units > _EPS:
@@ -532,7 +534,7 @@ def _on_trade_dates(points: List[List[Any]], net: List[List[Any]],
             c -= take * own
             u -= x
         held = u if u > _EPS else 0.0
-        pt = [d, round(held, 6), round(max(c, 0.0), 2) if held else 0.0]
+        pt = [d, M.units(held, 6), M.shown(max(c, 0.0), 2) if held else 0.0]
         if not out or out[-1][1:] != pt[1:]:
             out.append(pt)
     return out
@@ -584,11 +586,11 @@ def _trade_pool_cost(series: Dict[Tuple[str, str], List[List[Any]]],
                 pc = float(pool[3]) if pool and len(pool) > 3 else 0.0
                 tu, tc = pu + du, pc + dc
                 avg = tc / tu if tu > _EPS else 0.0
-                rows = {k: (u, round(u * avg, 2) if u > _EPS else 0.0)
+                rows = {k: (u, M.shown(u * avg, 2) if u > _EPS else 0.0)
                         for k, (u, _c) in rows.items()}
                 changed = True
             for k, (u, c) in rows.items():
-                pt = [d, round(u, 6), c]
+                pt = [d, M.units(u, 6), c]
                 if not new[k] or new[k][-1][1:] != pt[1:]:
                     new[k].append(pt)
         if changed:
@@ -689,15 +691,15 @@ def _base_holdings(ops: List[Dict[str, Any]], checks: List[Dict[str, Any]],
             bal = float(last["balance"]) - adj(last["date"]) + sum(
                 o["amount"] for o in mine
                 if last["date"] < o["sd"] <= prev_end)
-        pts: List[List[Any]] = [[prev_end, round(bal, 2)]]
+        pts: List[List[Any]] = [[prev_end, M.shown(bal, 2)]]
         for o in mine:
             if not y0 <= o["sd"] <= y1:
                 continue
             bal += o["amount"]
             if pts[-1][0] == o["sd"]:
-                pts[-1][1] = round(bal, 2)
+                pts[-1][1] = M.shown(bal, 2)
             else:
-                pts.append([o["sd"], round(bal, 2)])
+                pts.append([o["sd"], M.shown(bal, 2)])
         row["points"] = pts
 
         def bal_on(d: str) -> float:
@@ -713,8 +715,8 @@ def _base_holdings(ops: List[Dict[str, Any]], checks: List[Dict[str, Any]],
             led = bal_on(c["date"]) + adj(c["date"])
             if abs(float(c["balance"]) - led) > TOL:
                 bad = (f"the statement balance at the end of {c['date']} "
-                       f"is {float(c['balance']):,.2f}, the books' "
-                       f"{led:,.2f} ({c.get('where') or 'CASHBAL'})")
+                       f"is {M.shown(float(c['balance']), 2):,.2f}, the books' "
+                       f"{M.shown(led, 2):,.2f} ({c.get('where') or 'CASHBAL'})")
                 break
         active = [o["td"] for o in mine if y0 <= o["sd"] <= y1]
         if not bad and active:
@@ -748,7 +750,7 @@ def _base_on_trade_dates(pts: List[List[Any]], mine: List[Dict[str, Any]],
         while ip < len(pts) and pts[ip][0] <= d:
             v = float(pts[ip][1])
             ip += 1
-        t = round(v + sum(a if td < sd else -a for td, sd, a in act), 2)
+        t = M.shown(v + sum(a if td < sd else -a for td, sd, a in act), 2)
         if not out or out[-1][1] != t:
             out.append([d, t])
     return out
@@ -767,16 +769,8 @@ def _refund_legs(row: Dict[str, Any], legs: List[Tuple]) -> List[Tuple]:
     cur = str(row.get("currency") or "").upper()
     if not raw or not any(str(c or "").upper() == cur for c, *_ in legs):
         return legs
-    refunds: List[Tuple[str, float]] = []
-    for part in raw.split(";"):
-        bits = part.split()
-        if len(bits) != 2:
-            continue
-        try:
-            datetime.strptime(bits[0], "%Y-%m-%d")
-            refunds.append((bits[0], float(bits[1])))
-        except ValueError:
-            continue
+    refunds: List[Tuple[str, float]] = [
+        (r.date, float(r.amount)) for r in parse_commission_refunds(raw)]
     if not refunds:
         return legs
     total = sum(a for _d, a in refunds)
@@ -797,7 +791,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     `carry`: the prior year's close ({"year", "currency", "books": {book:
     {cur: {"units", "cost"}}}, "accounts": {book: hashed account}}; a
     "problem" text when the record exists but could not be read:
-    bin/taxjson_run._fx_cash_carry) — checked, never trusted
+    pipeline/run._fx_cash_carry) — checked, never trusted
     (_carry_openings). `inflow_spot`: [settings] fx_cash_inflow_cost
     = "spot" (an undeclared inflow costs the day's rate).
 
@@ -822,7 +816,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     has moved: _on_trade_dates; backlog TJ-0627) — the dates `tjs
     t1135` walks the securities on, so the cash that paid for shares is
     never counted with them, nor a sale's proceeds left out."""
-    from taxjson.bin.taxjson_fx_cash import _cash_leg_dates
+    from taxjson.lib.cash_legs import _cash_leg_dates
     if holdings_basis not in ("settle", "trade"):
         raise ValueError(f"holdings_basis {holdings_basis!r}: settle or "
                          f"trade")
@@ -875,8 +869,8 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     # a foreign currency moves none of it (backlog TJ-0493).
     stable_cash = cash.get("stablecoins_as_cash")
     if stable_cash is None:
-        from taxjson.lib.country import is_usa
-        stable_cash = not is_usa(country)
+        from taxjson.lib.country import stablecoin_model
+        stable_cash = stablecoin_model(country) == "cash"
     stable_cash = bool(stable_cash)
     # `holdings`: the year's interest rows naming no symbol (interest an
     # account pays on its cash), each with the currency it was paid in:
@@ -980,7 +974,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     # to the cost, CA-ACB-02), never a cash flow of its own — dropped
     # with the base currency's other flows, it left the currency bought
     # that much too cheap (backlog TJ-0456). Keyed by the conversion's
-    # book and row (`_fee_of`, the broker's cash reader).
+    # book and row (`_fee_of`, the broker's parse).
     conv_fee: Dict[Tuple[str, str], float] = {}
     # A commission in the currency the conversion sells or buys (a
     # Kraken fee of 10 USD on USD sold for CAD): the units it took are
@@ -1226,9 +1220,9 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                 continue
             problems.append(_p(
                 "opening", f"no opening pool for {book} {cur}: the "
-                f"statement holds {settled:,.2f} {cur} (settled) at the "
+                f"statement holds {M.shown(settled, 2):,.2f} {cur} (settled) at the "
                 f"start of {year} and nothing gives their cost — add "
-                f"`CASHOPEN {y0} {cur} {settled:.2f} <cost in {base}> "
+                f"`CASHOPEN {y0} {cur} {M.shown(settled, 2):.2f} <cost in {base}> "
                 f"at={book.split('/', 1)[1]}` to a .tt of "
                 f"{book.split('/', 1)[0]}{reclose}", y0, book, cur,
                 settled))
@@ -1309,7 +1303,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
         for k in sorted({k for k in held if k[1] == cur}
                         | {k for k in fser if k[1] == cur}):
             u = max(held.get(k, 0.0), 0.0)
-            _put(fser.setdefault(k, []), [d, round(u, 6), round(u * avg, 2)])
+            _put(fser.setdefault(k, []), [d, M.units(u, 6), M.shown(u * avg, 2)])
         # (and the pool itself, units and cost: _trade_pool_cost; its
         # average also costs the units in transit: _transit_spans)
         _put(favg.setdefault(cur, []), [d, avg, p[0], p[1]])
@@ -1317,7 +1311,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             for k in sorted({k for k in held if k[1] == cur}
                             | {k for k in owed if k[1] == cur}
                             | {k for k in fnet if k[1] == cur}):
-                _put(fnet.setdefault(k, []), [d, round(
+                _put(fnet.setdefault(k, []), [d, M.units(
                     held.get(k, 0.0) - (owed.get(k) or [0.0])[0], 6)])
 
     def record_op(o: Dict[str, Any]) -> None:
@@ -1376,7 +1370,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             d[1] += exc * r
             rel += exc * r
             borrowed.append({"date": o["sd"], "book": o["book"],
-                             "currency": cur, "units": round(exc, 2),
+                             "currency": cur, "units": M.shown(exc, 2),
                              "what": o.get("desc", "")})
         s = stat(cur)
         if mode == "spend":
@@ -1386,8 +1380,8 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             s["disposed"] += x
             s["gain"] += g
             gain_events.append({"date": o["sd"], "book": o["book"],
-                                "currency": cur, "units": round(x, 2),
-                                "rate": r, "gain": round(g, 2),
+                                "currency": cur, "units": M.shown(x, 2),
+                                "rate": r, "gain": M.shown(g, 2),
                                 "what": o.get("desc", "")})
         elif mode == "own":
             # Not a disposition: the units leave this account, not the
@@ -1400,9 +1394,9 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                 o.get("seq"), 0.0)
         elif mode == "kept":
             declared.append({"date": o["sd"], "book": o["book"],
-                             "currency": cur, "amount": round(-x, 2),
+                             "currency": cur, "amount": M.shown(-x, 2),
                              "how": "kept",
-                             "cost_left": round(rel, 2),
+                             "cost_left": M.shown(rel, 2),
                              "where": o.get("decl_where") or ""})
 
     def inflow(o, cur: str, x: float, cost: float) -> None:
@@ -1426,8 +1420,8 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                 owed.pop(k, None)
             s["debt_gain"] += g
             repaid.append({"date": o["sd"], "book": o["book"],
-                           "currency": cur, "units": round(rep, 2),
-                           "gain": round(g, 2)})
+                           "currency": cur, "units": M.shown(rep, 2),
+                           "gain": M.shown(g, 2)})
             rest = x - rep
         if rest > _EPS:
             held[k] = held.get(k, 0.0) + rest
@@ -1469,13 +1463,13 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             s["disposed"] += rep
             s["gain"] += cg
             gain_events.append({"date": o["sd"], "book": o["book"],
-                                "currency": cur, "units": round(rep, 2),
-                                "rate": r, "gain": round(cg, 2),
+                                "currency": cur, "units": M.shown(rep, 2),
+                                "rate": r, "gain": M.shown(cg, 2),
                                 "what": "repays a debt: "
                                         + (o.get("desc") or "own move")})
             repaid.append({"date": o["sd"], "book": o["book"],
-                           "currency": cur, "units": round(rep, 2),
-                           "gain": round(g, 2)})
+                           "currency": cur, "units": M.shown(rep, 2),
+                           "gain": M.shown(g, 2)})
             rest = x - rep
         if rest > _EPS:
             held[k] = held.get(k, 0.0) + rest
@@ -1677,7 +1671,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                                                  cur)])
                 if low + _EPS < -d["amount"]:
                     why = why or (f"{d['book']}'s move out of "
-                                  f"{-d['amount']:,.2f} {cur} settles "
+                                  f"{M.shown(-d['amount'], 2):,.2f} {cur} settles "
                                   f"later, on {d['sd']}, and {d['book']} "
                                   f"does not hold them until then")
                     continue
@@ -1686,7 +1680,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                     held.get((d["book"], cur), 0.0) + _EPS < take:
                 # Another arrival already took its units early.
                 why = why or (f"{d['book']} does not hold the "
-                              f"{take:,.2f} {cur} until its move out on "
+                              f"{M.shown(take, 2):,.2f} {cur} until its move out on "
                               f"{d['sd']}")
                 continue
             if d["book"] == o["book"]:
@@ -1731,17 +1725,17 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             led = bal(book, cur) + adj(book, cur, c["date"])
             gap = c["balance"] - led
             row = {"book": book, "currency": cur, "date": c["date"],
-                   "statement": round(c["balance"], 2),
-                   "ledger": round(led, 2), "gap": round(gap, 2),
+                   "statement": M.shown(c["balance"], 2),
+                   "ledger": M.shown(led, 2), "gap": M.shown(gap, 2),
                    "ok": abs(gap) <= TOL,
                    "source": c.get("where") or ""}
             recon.append(row)
             if not row["ok"]:
                 problems.append(_p(
                     "reconcile", f"{book} {cur}: the statement balance at "
-                    f"the end of {c['date']} is {c['balance']:,.2f}, the "
-                    f"ledger's {led:,.2f} (gap {gap:+,.2f}, over the "
-                    f"{TOL:.2f} tolerance) — a conversion, deposit or "
+                    f"the end of {c['date']} is {M.shown(c['balance'], 2):,.2f}, the "
+                    f"ledger's {M.shown(led, 2):,.2f} (gap {M.shown(gap, 2):+,.2f}, over the "
+                    f"{M.shown(TOL, 2):.2f} tolerance) — a conversion, deposit or "
                     f"withdrawal the ledger does not see ({row['source']})"
                     + _stable_bal_note(c), c["date"], book, cur, gap))
             continue
@@ -1791,7 +1785,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                     f"{o['book']}: the commission of the conversion of "
                     f"{o['sd']} ({o.get('where') or o.get('desc')}) took "
                     f"all the {tc} it bought"
-                    + (f" and {over:,.2f} {tc} more" if over > _EPS
+                    + (f" and {M.shown(over, 2):,.2f} {tc} more" if over > _EPS
                        else "")
                     + f": nothing acquired; what it paid in {fc} is the "
                     f"commission's cost, not a cost of the {tc}")
@@ -1825,16 +1819,16 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             if amt > 0 and inflow_spot:
                 how = "spot"
                 declared.append({"date": o["sd"], "book": o["book"],
-                                 "currency": cur, "amount": round(amt, 2),
+                                 "currency": cur, "amount": M.shown(amt, 2),
                                  "how": "spot (fx_cash_inflow_cost)",
                                  "where": o.get("where", "")})
             else:
                 problems.append(_p(
-                    "undeclared", f"{o['book']}: {amt:+,.2f} {cur} "
+                    "undeclared", f"{o['book']}: {M.shown(amt, 2):+,.2f} {cur} "
                     f"{'came in' if amt > 0 else 'went out'} on {o['sd']} "
                     f"({o.get('desc') or 'a cash move'}, "
                     f"{o.get('where')}) and nothing says what it was — "
-                    f"add `CASHMOVE {o['td']} {cur} {amt:.2f} "
+                    f"add `CASHMOVE {o['td']} {cur} {M.shown(amt, 2):.2f} "
                     + ("cost=<what it cost in " + base + ">` (or own / "
                        "spot)" if amt > 0 else
                        "kept` (still yours elsewhere; or proceeds=<"
@@ -1846,8 +1840,8 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                 how = "spot" if amt > 0 else "kept"
         elif how in ("spot", "cost", "proceeds"):
             declared.append({"date": o["sd"], "book": o["book"],
-                             "currency": cur, "amount": round(amt, 2),
-                             "how": how + (f"={val:,.2f}" if val is not None
+                             "currency": cur, "amount": M.shown(amt, 2),
+                             "how": how + (f"={M.shown(val, 2):,.2f}" if val is not None
                                            else ""),
                              "where": o.get("decl_where") or ""})
         if how == "own" and amt > 0:
@@ -1856,9 +1850,9 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             t = transit.get(cur, 0.0)
             if t + TOL < amt:
                 problems.append(_p(
-                    "own", f"{o['book']}: {amt:,.2f} {cur} came in on "
+                    "own", f"{o['book']}: {M.shown(amt, 2):,.2f} {cur} came in on "
                     f"{o['sd']} as a move between your own accounts, but "
-                    f"only {t:,.2f} {cur} had left one of them before "
+                    f"only {M.shown(t, 2):,.2f} {cur} had left one of them before "
                     f"it, and {why} — check the dates (the settlement "
                     f"dates of the two CASHMOVE lines), or declare it "
                     f"cost= / spot",
@@ -1895,7 +1889,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
 
     for (book, cur), units in sorted(early_missing.items()):
         problems.append(_p(
-            "own", f"{book}: {units:,.2f} {cur} reached another of your "
+            "own", f"{book}: {M.shown(units, 2):,.2f} {cur} reached another of your "
             f"accounts before {y0} (the close of {year - 1}), and its move "
             f"out of {book} is not in the books by {y1} — add its CASHMOVE "
             f"line, or re-close {year - 1}", y1, book, cur, units))
@@ -1908,8 +1902,8 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
         if pre > _EPS:
             row_ = close_early.setdefault(o["book"], {}).setdefault(
                 o["currency"], {"units": 0.0})
-            row_["units"] = round(row_["units"] + pre, 6)
-            notes.append(f"{pre:,.2f} {o['currency']} arrived in another of "
+            row_["units"] = M.units(row_["units"] + pre, 6)
+            notes.append(f"{M.shown(pre, 2):,.2f} {o['currency']} arrived in another of "
                          f"your accounts in {year} before leaving "
                          f"{o['book']} on {o['sd']}: owned once, by the "
                          f"account they reached, and matched next year")
@@ -1938,17 +1932,17 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
         if t > TOL and later + TOL >= t:
             p = pool.get(cur) or [0.0, 0.0]
             avg = p[1] / p[0] if p[0] > _EPS else 0.0
-            close_transit[cur] = {"units": round(t, 6),
-                                  "cost": round(t * avg, 6)}
-            notes.append(f"{t:,.2f} {cur} left an account as a move "
+            close_transit[cur] = {"units": M.units(t, 6),
+                                  "cost": M.units(t * avg, 6)}
+            notes.append(f"{M.shown(t, 2):,.2f} {cur} left an account as a move "
                          f"between your own accounts and arrive in "
                          f"another after {y1} ({when}): still yours, "
                          f"carried in transit at a cost of "
-                         f"{t * avg:,.2f} {base}")
+                         f"{M.shown(t * avg, 2):,.2f} {base}")
             continue
         if t > TOL:
             problems.append(_p(
-                "own", f"{t:,.2f} {cur} left an account as a move "
+                "own", f"{M.shown(t, 2):,.2f} {cur} left an account as a move "
                 f"between your own accounts and never arrived in another "
                 f"by {y1}", y1, "", cur, t))
         elif t > _EPS:
@@ -2001,7 +1995,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
         if (b["book"], b["currency"]) in bad_books:
             problems.append(_p(
                 "overdraft", f"{b['book']}: the balance went "
-                f"{b['units']:,.2f} {b['currency']} below zero on "
+                f"{M.shown(b['units'], 2):,.2f} {b['currency']} below zero on "
                 f"{b['date']} ({b['what']}) and the account does not "
                 f"reconcile, so it cannot be told from missing cash",
                 b["date"], b["book"], b["currency"], -b["units"]))
@@ -2013,11 +2007,11 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             p = pool.get(cur) or [0.0, 0.0]
             avg = p[1] / p[0] if p[0] > _EPS else 0.0
             close_books.setdefault(book, {})[cur] = {
-                "units": round(h, 6), "cost": round(h * avg, 6)}
+                "units": M.units(h, 6), "cost": M.units(h * avg, 6)}
     for (book, cur), d in owed.items():
         if d[0] > _EPS:
             close_books.setdefault(book, {})[cur] = {
-                "units": round(-d[0], 6), "cost": round(d[1], 6)}
+                "units": M.units(-d[0], 6), "cost": M.units(d[1], 6)}
     # A book the year walked that ends it at zero is recorded at zero:
     # left out, the next year asked for a `CASHOPEN ... 0 0` for it
     # (backlog TJ-0028).
@@ -2098,31 +2092,31 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
         "reliable": status == "computed", "under_audit": True,
         "year": year, "currency": base,
         "problems": problems,
-        "per_currency": {c: {k: round(v, 2) for k, v in s.items()}
+        "per_currency": {c: {k: M.shown(v, 2) for k, v in s.items()}
                          for c, s in sorted(per.items())},
-        "net_gain": round(net, 2),
+        "net_gain": M.shown(net, 2),
         "events": gain_events, "borrowed": borrowed, "repaid": repaid,
         "declared": [d for d in declared if d],
         "reconciliation": recon,
-        "opening": {f"{b} {c}": {"units": round(o["units"], 2),
-                                 "cost": round(o["cost"], 2),
+        "opening": {f"{b} {c}": {"units": M.shown(o["units"], 2),
+                                 "cost": M.shown(o["cost"], 2),
                                  "source": o["source"]}
                     for (b, c), o in sorted(opening.items())},
         "carried_in": carried,
         "close": {"year": year, "currency": base, "books": close_books,
                   "accounts": close_accounts},
-        "pools_year_end": {c: {"units": round(p[0], 2),
-                               "acb": round(p[1], 2)}
+        "pools_year_end": {c: {"units": M.shown(p[0], 2),
+                               "acb": M.shown(p[1], 2)}
                            for c, p in sorted(pool.items())
                            if p[0] > 0.005},
         "notes": notes,
         # lib/cash_events.collect's warnings (one event two files date
         # differently): said, never a refusal.
         "warnings": list(cash.get("warnings") or []),
-        # Books whose broker's export gives no cash event (READERS):
+        # Books whose broker's parse builds no cash event (`Books.unread`):
         # each with whether a CASHBOOK line declared its lines complete.
         "unread_books": unread,
-        "stablecoins_as_cash": bool(cash.get("stablecoins_as_cash")),
+        "stablecoins_as_cash": stable_cash,     # the model used (TJ-2614)
     }
     if close_transit:
         # Own moves in transit at the year end (TJ-0656).
@@ -2204,11 +2198,11 @@ def _transit_where(moves: List[Dict[str, Any]], cur: str, units: float,
                 continue
             start = max(q[1], prev_end)
             if q[2] and take > TOL and start < o["td"]:
-                spans.append({"currency": cur, "units": round(take, 6),
+                spans.append({"currency": cur, "units": M.units(take, 6),
                               "from": q[2], "to": o["book"], "since": start,
                               "until": o["td"],
-                              "points": [[start, round(take, 6),
-                                          round(take * avg, 2)],
+                              "points": [[start, M.units(take, 6),
+                                          M.shown(take * avg, 2)],
                                          [o["td"], 0.0, 0.0]]})
     # What no arrival covers: a tolerance's rounding stays with the last
     # leg of its departure; more has no arrival in the books.
@@ -2218,8 +2212,8 @@ def _transit_where(moves: List[Dict[str, Any]], cur: str, units: float,
             legs[same[-1]][0] += q[0]
         elif q[0] > TOL:
             to_leg(q[0], q, "", "")
-    return ([{"currency": cur, "units": round(u, 6),
-              "cost": round(u * avg, 6), "from": [frm] if frm else [],
+    return ([{"currency": cur, "units": M.units(u, 6),
+              "cost": M.units(u * avg, 6), "from": [frm] if frm else [],
               "to": [to] if to else [], "since": since, "arrives": arrives}
              for (frm, since, to), (u, arrives) in sorted(legs.items())],
             spans)
@@ -2256,8 +2250,8 @@ def _transit_spans(moves: List[Dict[str, Any]],
                 v = p[1]
             return float(v)
         days = [start] + [p[0] for p in series if start < p[0] < end]
-        return [[d, round(units, 6), round(units * avg(d), 2)] for d in days
-                ] + [[end, 0.0, 0.0]]
+        return [[d, M.units(units, 6), M.shown(units * avg(d), 2)]
+                for d in days] + [[end, 0.0, 0.0]]
 
     for cur in sorted({o["currency"] for o in moves} | set(transit_in)):
         mine = sorted((o for o in moves if o["currency"] == cur), key=order)
@@ -2298,7 +2292,7 @@ def _transit_spans(moves: List[Dict[str, Any]],
                     queue.pop(0)
                 start, end = max(q[1], prev_end), o[when]
                 if take > TOL and start < end and end >= y0:
-                    out.append({"currency": cur, "units": round(take, 6),
+                    out.append({"currency": cur, "units": M.units(take, 6),
                                 "from": q[2], "to": o["book"], "since": start,
                                 "until": end,
                                 "points": points(cur, start, end, take)})
@@ -2332,7 +2326,7 @@ def _base_transit(ops: List[Dict[str, Any]], y0: str, y1: str,
                 queue.pop(0)
             if (take > TOL and q[1] < o[when] and q[1] <= y1
                     and o[when] >= y0 and q[2] != o["book"]):
-                out.append({"units": round(take, 2), "from": q[2],
+                out.append({"units": M.shown(take, 2), "from": q[2],
                             "to": o["book"], "since": q[1],
                             "until": o[when]})
     return out
@@ -2351,8 +2345,8 @@ def headline(doc: Dict[str, Any], verdict: Optional[Dict[str, Any]]
                 + "; no reportable figure")
     rep = (verdict or {}).get("reportable")
     return (f"FX on foreign cash, ledger {LABEL}: computed for {y} — net "
-            f"{doc['net_gain']:,.2f} {doc['currency']}"
-            + (f", reportable {rep:,.2f}" if rep is not None else "")
+            f"{M.shown(doc['net_gain'], 2):,.2f} {doc['currency']}"
+            + (f", reportable {M.shown(rep, 2):,.2f}" if rep is not None else "")
             + "; review it before using it")
 
 
@@ -2362,7 +2356,7 @@ def render(doc: Dict[str, Any], verdict: Optional[Dict[str, Any]],
     """The v2 report in the house layout (docs/output-style.md)."""
     from taxjson.lib import out
     from taxjson.lib.country import is_usa
-    from taxjson.lib.report_model import fmt_money
+    from taxjson.lib.report_fmt import fmt_money
     w = out.width() if width_ is None else width_
     base, year = doc["currency"], doc["year"]
     lines = out.wrap(headline(doc, verdict) + ".", w, "", "  ")
@@ -2379,7 +2373,7 @@ def render(doc: Dict[str, Any], verdict: Optional[Dict[str, Any]],
                       "is a debt in that currency, realised when repaid; "
                       "each account reconciled to its statement balances.",
                       w)
-    if doc.get("stablecoins_as_cash") and not is_usa(country):
+    if doc.get("stablecoins_as_cash"):
         lines += out.wrap("Policy: USD stablecoins (USDC and the others) "
                           "are counted as US-dollar cash (CA-CRYPTO-02), "
                           "not as crypto-assets.", w)
@@ -2427,7 +2421,7 @@ def render(doc: Dict[str, Any], verdict: Optional[Dict[str, Any]],
     if doc.get("reconciliation"):
         lines.append("")
         lines.append("RECONCILIATION (statement vs ledger, trade-date "
-                     f"balance; tolerance {TOL:.2f})")
+                     f"balance; tolerance {M.shown(TOL, 2):.2f})")
         lines += out.fit_table(
             ["DATE", "BOOK", "CUR", "STATEMENT", "LEDGER", "GAP"],
             [[r["date"], r["book"], r["currency"],
@@ -2495,19 +2489,19 @@ def render(doc: Dict[str, Any], verdict: Optional[Dict[str, Any]],
 def _detail(e: Dict[str, Any]) -> str:
     k = e["kind"]
     if k == "FXCONV":
-        return (f"{e['from_amt']:,.2f} {e['from_ccy']} -> "
-                f"{e['to_amt']:,.2f} {e['to_ccy']}")
+        return (f"{M.shown(e['from_amt'], 2):,.2f} {e['from_ccy']} -> "
+                f"{M.shown(e['to_amt'], 2):,.2f} {e['to_ccy']}")
     if k == "CASHMOVE":
         d = e.get("decl") or {}
         how = d.get("how") or "undeclared"
         if d.get("value") is not None:
-            how += f"={d['value']:,.2f}"
-        return (f"{e['amount']:+,.2f} {e['currency']} {how} "
+            how += f"={M.shown(d['value'], 2):,.2f}"
+        return (f"{M.shown(e['amount'], 2):+,.2f} {e['currency']} {how} "
                 f"{e.get('desc') or ''}").strip()
     if k == "CASHBAL":
-        return f"{e['balance']:,.2f} {e['currency']} balance"
+        return f"{M.shown(e['balance'], 2):,.2f} {e['currency']} balance"
     if k == "CASHOPEN":
-        return f"{e['units']:,.2f} {e['currency']} cost {e['cost']:,.2f}"
+        return f"{M.shown(e['units'], 2):,.2f} {e['currency']} cost {M.shown(e['cost'], 2):,.2f}"
     if k == "FLOW":
-        return f"{e['amount']:+,.2f} {e['currency']} {e.get('desc') or ''}"
+        return f"{M.shown(e['amount'], 2):+,.2f} {e['currency']} {e.get('desc') or ''}"
     return e.get("text", "")

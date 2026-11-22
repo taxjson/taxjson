@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "spinoffs": [
+    {
+      "account": "margin",
+      "broker_currency": "USD",
+      "broker_fmv": 250.0,
+      "cash_in_lieu": "",
+      "child": "SPNC.US",
+      "currency": "USD",
+      "date": "2024-06-03",
+      "election": "taxable_distribution_301",
+      "event_id": "20240603-parn-spnc-9187",
+      "flags": [],
+      "fmv_currency": "USD",
+      "fmv_per_share": 25.0,
+      "held_now": 10.0,
+      "income": 250.0,
+      "new_cost": 250.0,
+      "new_qty": 10.0,
+      "parent": "PARN.US",
+      "ratio": "0.1 new per share (1 for 10)",
+      "sheltered": false,
+      "value_from_broker": true,
+      "why": [
+        "\u00a7301 distribution: income equal to the new shares' fair market value, which is also their cost"
+      ]
+    }
+  ],
+  "stale": []
+}

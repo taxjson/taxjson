@@ -17,9 +17,9 @@ import shutil
 import subprocess
 import sys
 import unittest
-from pathlib import Path
+import _paths
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = _paths.REPO
 DECK = ROOT / "docs" / "deck"
 HTML = DECK / "taxjson-deck.html"
 PDF = DECK / "taxjson-deck.pdf"
@@ -58,9 +58,9 @@ class TestDeckIsBuilt(unittest.TestCase):
         block = dc.render()
         for cmd in ("channels", "deploy", "promote"):
             self.assertNotIn(f"<code>{cmd}</code>", block)
-        from taxjson.bin import taxjson_run as R
-        shown = [(t, c) for t, c in R._COMMAND_GROUPS
-                 if t != R._MAINTAINER_GROUP]
+        from taxjson.cli import parser as cli_parser
+        shown = [(t, c) for t, c in cli_parser._COMMAND_GROUPS
+                 if t != cli_parser._MAINTAINER_GROUP]
         self.assertEqual(dc.groups(), [(t, tuple(c)) for t, c in shown])
 
 

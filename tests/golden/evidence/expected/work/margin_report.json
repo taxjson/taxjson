@@ -1,0 +1,66 @@
+{
+  "account": "margin",
+  "basis": "wash-adjusted",
+  "gains": {
+    "manual_rows": [],
+    "option_fees": {
+      "CAD": 0.0
+    },
+    "returns_by_asset": {
+      "Futures": {
+        "CAD": {
+          "days": [
+            21
+          ],
+          "dollars": [
+            24.3
+          ],
+          "fee_shares": [
+            1.0
+          ],
+          "fees": [
+            1.35
+          ]
+        }
+      }
+    },
+    "tainted_count": 0,
+    "tainted_routed": 0,
+    "ticker_stats": {
+      "F:SAMPLMH6.US": {
+        "CAD": {
+          "cap": 24.3,
+          "cost": 0.0,
+          "div": 0.0,
+          "hold_days": [
+            21
+          ],
+          "opt": 0.0,
+          "pil": 0.0,
+          "proceeds": 24.3,
+          "trade_count": 1
+        }
+      }
+    },
+    "total_fees": {
+      "CAD": 4.725
+    },
+    "total_year": "2025",
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1
+  },
+  "generated_at": "<stamp>",
+  "income": {
+    "interest_paid_totals": {},
+    "interest_totals": {},
+    "missing_amount": [],
+    "ticker_stats": {},
+    "total_year": "2025"
+  },
+  "schema_version": 1,
+  "wash": {
+    "count": 0,
+    "total_disallowed": 0
+  },
+  "year": "2025"
+}

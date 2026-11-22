@@ -1,0 +1,24 @@
+HAND-OFF CHECK — 2024 (closed) into 2025 (this project)
+Record: <project>/2024/filed/2024.json
+
+OPENING POSITIONS VS THE 2024 YEAR-END BOOKS (0)
+  OK.
+
+TRADES MADE IN 2024 THAT SETTLE IN 2025, MISSING HERE (0)
+  OK.
+
+SALES REPORTED IN BOTH YEARS (0)
+  OK.
+
+ROWS ON DIFFERENT SIDES OF DEC 31 IN THE TWO PROJECTS (0)
+  OK.
+
+WRITTEN OPTIONS ON ANOTHER PREMIUM TIMING THAN THE 2024 RECORD (0)
+  OK.
+
+CARRY-FORWARD INPUTS VS THE 2024 RECORD (0)
+  OK.
+
+note: The 2024 record holds taxjson's own dispositions. If that return was prepared with another tool, re-close 2024 with --filed-dispositions so doubles are checked against what was actually filed.
+
+Everything the closed year carried forward is here, once.

@@ -1,27 +1,31 @@
-"""Regression tests for `taxjson_run.needs_rebuild`.
+"""Regression tests for `pipeline/freshness.needs_rebuild`.
 
-The wrapper caches every intermediate stage by mtime to skip work on
-re-runs. The cache is dangerous if it can return STALE output —
+The wrapper caches every intermediate stage by content (a record per output
+of what it was built from; PLAN step 3a) to skip work on re-runs. The cache is dangerous if it can return STALE output —
 filing the wrong tax number is worse than re-running for 30 seconds.
 
 These tests pin the three implicit dependencies that make the cache
 safe-by-default:
 
   1. Declared inputs — passed as positional args.
-  2. `taxjson.toml` — via the module-level `_CONFIG_PATH`.
-  3. The `taxjson` package's own source — via `_package_mtime()`.
+  2. `taxjson.toml` — via `run_state.config_path`.
+  3. The `taxjson` package's own source — via `package_fingerprint()`.
 
 Without (3), a code fix would silently reuse pre-fix output until
 the user remembered to pass `--force`. That was the failure mode
 that hid the cycle-4 Webull `_find_header` regression.
 """
+import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
 
-from taxjson.bin import taxjson_run
-from taxjson.bin.taxjson_run import needs_rebuild, _package_mtime
+from taxjson.pipeline import diagnostics as pipeline_diagnostics
+from taxjson.pipeline.freshness import (
+    commit_records, mark_built, needs_rebuild, package_fingerprint,
+    record_now, unmark)
+from taxjson.pipeline import run_state
 from _style import CapturedWidth
 
 
@@ -39,70 +43,209 @@ def tearDownModule():
 
 
 class TestNeedsRebuild(unittest.TestCase):
+    """The content rule (PLAN step 3a): an output is fresh when a complete
+    run recorded what it was built from and nothing of that changed."""
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.tmpdir = Path(self.tmp.name)
-        # Reset module-level state so tests don't pollute each other.
-        taxjson_run._CONFIG_PATH = None
-        taxjson_run._PACKAGE_MTIME_CACHED = None
+        run_state.config_path = None
+        run_state.package_fingerprint = "code-A"
+        run_state.current.pending_records.clear()
 
     def tearDown(self):
         self.tmp.cleanup()
-        taxjson_run._CONFIG_PATH = None
-        taxjson_run._PACKAGE_MTIME_CACHED = None
+        run_state.config_path = None
+        run_state.package_fingerprint = None
+        run_state.current.pending_records.clear()
 
-    def _touch(self, name: str, mtime: float = None) -> Path:
+    def _file(self, name: str, text: str = "", mtime: float = None) -> Path:
         p = self.tmpdir / name
-        p.write_text('')
+        p.write_text(text)
         if mtime is not None:
             os.utime(p, (mtime, mtime))
         return p
 
+    def _built(self, out: Path, *inputs: Path) -> None:
+        """What a stage does: asks, builds, and the run vouches for it."""
+        self.assertTrue(needs_rebuild(out, *inputs))
+        out.write_text(out.read_text() if out.exists() else "built")
+        commit_records()
+
     def test_missing_output_triggers_rebuild(self):
-        out = self.tmpdir / 'nope.json'
-        self.assertTrue(needs_rebuild(out))
+        self.assertTrue(needs_rebuild(self.tmpdir / "nope.json"))
 
-    def test_newer_input_triggers_rebuild(self):
-        out = self._touch('out.json', mtime=1000.0)
-        inp = self._touch('in.csv', mtime=2000.0)
-        self.assertTrue(needs_rebuild(out, inp))
+    def test_an_output_no_run_vouched_for_is_rebuilt(self):
+        out = self._file("out.json", "x", mtime=10000.0)
+        inp = self._file("in.csv", "a", mtime=1000.0)
+        self.assertTrue(needs_rebuild(out, inp))        # no record: not vouched for
 
-    def test_older_input_does_not_trigger(self):
-        # Bake the package-mtime cache to something very old so it
-        # doesn't trigger this test on its own.
-        taxjson_run._PACKAGE_MTIME_CACHED = 100.0
-        out = self._touch('out.json', mtime=3000.0)
-        inp = self._touch('in.csv', mtime=2000.0)
+    def test_recorded_and_unchanged_is_fresh_whatever_the_mtimes(self):
+        inp = self._file("in.csv", "a")
+        out = self._file("out.json", "built")
+        self._built(out, inp)
+        os.utime(inp, (9e9, 9e9))                        # touched, same bytes
+        os.utime(out, (1.0, 1.0))                        # restored with an old mtime
         self.assertFalse(needs_rebuild(out, inp))
 
-    def test_newer_taxjson_toml_triggers_rebuild(self):
-        taxjson_run._PACKAGE_MTIME_CACHED = 100.0
-        cfg = self._touch('taxjson.toml', mtime=5000.0)
-        taxjson_run._CONFIG_PATH = cfg
-        out = self._touch('out.json', mtime=3000.0)
-        self.assertTrue(needs_rebuild(out))
+    def test_a_changed_or_deleted_input_triggers_rebuild(self):
+        inp = self._file("in.csv", "a")
+        out = self._file("out.json", "built")
+        self._built(out, inp)
+        st = inp.stat()
+        inp.write_text("b")
+        os.utime(inp, ns=(st.st_atime_ns, st.st_mtime_ns))   # cp -p: same mtime
+        run_state.current.hash_cache.clear()            # the next run is another process
+        self.assertTrue(needs_rebuild(out, inp))
+        self._built(out, inp)
+        inp.unlink()                                     # the deletion-blindness class
+        self.assertTrue(needs_rebuild(out, inp))
 
-    def test_newer_package_source_triggers_rebuild(self):
-        # Simulate "a code change was made AFTER the cached output was
-        # written" — the new mechanism must rebuild.
-        out = self._touch('out.json', mtime=1000.0)
-        taxjson_run._PACKAGE_MTIME_CACHED = 5000.0
-        self.assertTrue(needs_rebuild(out))
+    def test_an_input_that_appears_triggers_rebuild(self):
+        inp = self.tmpdir / "later.csv"
+        out = self._file("out.json", "built")
+        self._built(out, inp)                            # recorded as absent
+        inp.write_text("a")
+        self.assertTrue(needs_rebuild(out, inp))
 
-    def test_older_package_source_does_not_trigger(self):
-        # Cache state where package hasn't moved since the output was
-        # written. Output should be reused.
-        out = self._touch('out.json', mtime=10000.0)
-        taxjson_run._PACKAGE_MTIME_CACHED = 100.0
+    def test_taxjson_toml_and_the_code_are_implicit_inputs(self):
+        cfg = self._file("taxjson.toml", "year = 2025\n")
+        run_state.config_path = cfg
+        out = self._file("out.json", "built")
+        self._built(out)
         self.assertFalse(needs_rebuild(out))
+        cfg.write_text("year = 2026\n")
+        self.assertTrue(needs_rebuild(out))
+        self._built(out)
+        run_state.package_fingerprint = "code-B"        # an upgrade
+        self.assertTrue(needs_rebuild(out))
+
+    def test_an_output_rewritten_behind_the_record_is_rebuilt(self):
+        out = self._file("out.json", "built")
+        self._built(out)
+        out.write_text("someone else's")
+        self.assertTrue(needs_rebuild(out))
+
+    def test_an_input_no_longer_declared_triggers_rebuild(self):
+        # A map removed, the missing history withdrawn: the stage no longer
+        # declares it, and that alone is a change (no marker, no bump:
+        # TJ-1807).
+        inp = self._file("in.csv", "a")
+        stamp = self._file("missing_history.state", "x")
+        out = self._file("out.json", "built")
+        self._built(out, inp, stamp)
+        self.assertFalse(needs_rebuild(out, inp, stamp))
+        self._built(out, inp)
+        self.assertFalse(needs_rebuild(out, inp))
+
+    def test_force_rebuilds_and_still_records(self):
+        inp = self._file("in.csv", "a")
+        out = self._file("out.json", "built")
+        self._built(out, inp)
+        self.assertTrue(needs_rebuild(out, inp, force=True))
+        commit_records()
+        self.assertFalse(needs_rebuild(out, inp))
+
+    def test_a_run_that_stops_vouches_for_nothing(self):
+        inp = self._file("in.csv", "a")
+        out = self._file("out.json", "built")
+        self.assertTrue(needs_rebuild(out, inp))
+        run_state.current.pending_records.clear()       # the run died before commit
+        self.assertTrue(needs_rebuild(out, inp))
+
+    def test_the_inputs_are_read_when_the_stage_asks(self):
+        """A file saved while a later stage ran is a change the next --fast
+        sees: the record holds the input as it was built from."""
+        inp = self._file("in.csv", "a")
+        out = self._file("out.json", "built")
+        self.assertTrue(needs_rebuild(out, inp))
+        inp.write_text("b")                              # saved before the commit
+        commit_records()
+        self.assertTrue(needs_rebuild(out, inp))
+
+    def test_a_moved_project_keeps_its_records(self):
+        proj = self.tmpdir / "proj"
+        (proj / "work").mkdir(parents=True)
+        inp = proj / "inputs.csv"
+        inp.write_text("a")
+        out = proj / "work" / "out.json"
+        out.write_text("built")
+        self._built(out, inp)
+        moved = self.tmpdir / "proj2"
+        proj.rename(moved)
+        self.assertFalse(needs_rebuild(moved / "work" / "out.json", moved / "inputs.csv"))
+        rec = json.loads((moved / "work" / ".deps" / "out.json.json").read_text())
+        self.assertEqual(list(rec["inputs"]), ["inputs.csv"])     # relative, no home path
+
+    def test_a_build_decided_elsewhere_is_recorded_with_mark_built(self):
+        inp = self._file("in.csv", "a")
+        out = self._file("out.json", "built")
+        self._built(out, inp)
+        out.write_text("rebuilt on the stage's own ground")
+        mark_built(out, inp)
+        commit_records()
+        self.assertFalse(needs_rebuild(out, inp))
+        self.assertTrue(needs_rebuild(out, inp, force=True))
+        unmark(out)                                      # kept the old file after all
+        commit_records()
+        self.assertFalse(needs_rebuild(out, inp))        # the old record still holds
+
+    def test_a_record_that_cannot_be_written_is_reported_not_raised(self):
+        out = self._file("out.json", "built")
+        (self.tmpdir / ".deps").write_text("in the way")
+        self.assertTrue(needs_rebuild(out))
+        self.assertEqual(commit_records(), [out])
+        self.assertTrue(needs_rebuild(out))
+
+    def test_taxjson_toml_is_read_when_the_stage_asks_too(self):
+        cfg = self._file("taxjson.toml", "year = 2025\n")
+        run_state.config_path = cfg
+        out = self._file("out.json", "built")
+        self.assertTrue(needs_rebuild(out))
+        cfg.write_text("year = 2026\n")                   # saved during a later stage
+        commit_records()
+        self.assertTrue(needs_rebuild(out))
+
+    def test_an_older_taxjson_s_record_is_none(self):
+        # Format 1 (before TJ-4266): its output is built again, so the
+        # first run after the upgrade is a full rebuild.
+        inp = self._file("in.csv", "a")
+        out = self._file("out.json", "built")
+        self._built(out, inp)
+        rp = self.tmpdir / ".deps" / "out.json.json"
+        rec = json.loads(rp.read_text())
+        self.assertEqual(rec["format"], 2)
+        rp.write_text(json.dumps({**rec, "format": 1}))
+        self.assertTrue(needs_rebuild(out, inp))
+
+    def test_another_module_s_field_is_kept_when_the_run_vouches_again(self):
+        # A wash pass's own record (lib/report_model `wash`) is its wash
+        # file's record's (TJ-1804): a rebuild keeps it.
+        from taxjson.lib.records import read_record, set_record_field
+        inp = self._file("in.csv", "a")
+        out = self._file("out.json", "built")
+        self._built(out, inp)
+        set_record_field(out, "wash", {"blend": "blend"})
+        out.write_text("rebuilt")
+        self._built(out, inp)
+        self.assertEqual(read_record(out)["wash"], {"blend": "blend"})
+        self.assertFalse(needs_rebuild(out, inp))
+
+    def test_record_now_vouches_for_one_output(self):
+        inp = self._file("in.csv", "a")
+        out = self._file("out.json", "built")
+        self.assertTrue(needs_rebuild(out, inp))
+        record_now(out)
+        self.assertFalse(needs_rebuild(out, inp))
+        self.assertEqual(run_state.current.pending_records, {})
 
 
-class TestPackageMtime(unittest.TestCase):
-    def test_returns_recent_positive_float(self):
-        taxjson_run._PACKAGE_MTIME_CACHED = None
-        m = _package_mtime()
-        self.assertIsInstance(m, float)
-        self.assertGreater(m, 0.0)
+class TestPackageFingerprint(unittest.TestCase):
+    def test_once_per_process(self):
+        run_state.package_fingerprint = None
+        a = package_fingerprint()
+        self.assertEqual(len(a), 64)
+        self.assertIs(package_fingerprint(), a)
+        run_state.package_fingerprint = None
 
 
 class TestEchoParseStats(unittest.TestCase):
@@ -129,7 +272,7 @@ class TestEchoParseStats(unittest.TestCase):
             )
             buf = io.StringIO()
             with redirect_stdout(buf):
-                taxjson_run.echo_parse_stats(out)
+                pipeline_diagnostics.echo_parse_stats(out)
             lines = buf.getvalue().splitlines()
             self.assertIn("  margin_2025.csv: 142 tax objects", lines)
             self.assertIn("  margin_2026.csv: 28 tax objects", lines)
@@ -144,7 +287,7 @@ class TestEchoParseStats(unittest.TestCase):
             )
             buf = io.StringIO()
             with redirect_stdout(buf):
-                taxjson_run.echo_parse_stats(out)
+                pipeline_diagnostics.echo_parse_stats(out)
             output = buf.getvalue()
             self.assertIn("wb_2024.csv: 0 tax objects", output)
             self.assertIn("warning:", output)
@@ -162,7 +305,7 @@ class TestEchoParseStats(unittest.TestCase):
             )
             buf = io.StringIO()
             with redirect_stdout(buf):
-                taxjson_run.echo_parse_stats(out)
+                pipeline_diagnostics.echo_parse_stats(out)
             lines = buf.getvalue().splitlines()
             # Only the count line. The NOTE/OK/error are routed
             # elsewhere (collect_diagnostics → .sum) and shouldn't
@@ -177,7 +320,7 @@ class TestEchoParseStats(unittest.TestCase):
             out.write_text("{}")
             buf = io.StringIO()
             with redirect_stdout(buf):
-                taxjson_run.echo_parse_stats(out)
+                pipeline_diagnostics.echo_parse_stats(out)
             self.assertEqual(buf.getvalue(), "")
 
 

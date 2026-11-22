@@ -1,0 +1,4 @@
+note: the US engine is EXPERIMENTAL
+  Its rules are implemented and unit-tested but have not been validated against a real account. Treat the output as a draft, and consider contributing a redacted export (`tjs redact`) so it can be.
+  note: 1 crypto send(s) not yet classified as self / payment
+    `tjs crypto-sends crypto` lists them (a payment is a sale at fair value; a gift is not a sale for a US donor, and taxjson cannot book it yet).

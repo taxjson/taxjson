@@ -1,0 +1,41 @@
+TRADING FEES BY BROKERAGE — tax year 2024, by TRADE date; all amounts in CAD
+
+BROKERAGE     CUR  TRADES   TOTAL   MEAN  MEDIAN  %NOTNL   $/UNIT  $/CONTR
+--------------------------------------------------------------------------
+coinbase      CAD       4   80.73  20.18   21.87  0.800%  94.9765        -
+kraken        CAD       5   53.14  10.63   11.34  0.219%  30.3634        -
+manual (.tt)  CAD       5   46.48   9.30    9.95  0.353%   0.1192        -
+rbc_direct    CAD       4   39.80   9.95    9.95  0.088%   0.0884        -
+webull        CAD       4   38.30   9.57    9.92  0.150%   0.1108   1.3331
+questrade     CAD       5   31.68   6.34    6.68  0.042%   0.0960        -
+ib            CAD      14   21.60   1.54    1.35  0.024%   0.0173   1.3500
+--------------------------------------------------------------------------
+TOTAL         CAD      41  311.72   7.60    6.68  0.110%   0.1346   1.3370
+
+Non-option vs option fees
+BROKERAGE     NON-OPTION  OPTIONS
+---------------------------------
+coinbase           80.73     0.00
+kraken             53.14     0.00
+manual (.tt)       46.48     0.00
+rbc_direct         39.80     0.00
+webull             11.63    26.66
+questrade          31.68     0.00
+ib                 13.50     8.10
+
+Native fees folded into the CAD totals
+coinbase:      59.80 USD
+kraken:        39.36 USD
+manual (.tt):  39.80 CAD, 4.95 USD
+webull:        4.95 CAD, 24.70 USD
+questrade:     4.95 CAD, 19.80 USD
+ib:            16.00 USD
+
+Generated:  <stamp>
+Read:       9 file(s), 41 fee row(s), 0 duplicate(s) collapsed
+
+Definitions
+- TRADES: BUYSELL/ASSIGN rows with a non-zero fee (rebates included).
+- MEAN / MEDIAN: the fee per trade.
+- %NOTNL: fees as a percent of gross trade value (rows with notional > 0).
+- $/UNIT: the non-option fee per share or coin (a future's fee is in TOTAL and NON-OPTION, not per unit); $/CONTR: the option fee per contract.

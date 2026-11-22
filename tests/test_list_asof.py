@@ -11,8 +11,9 @@ import unittest
 from pathlib import Path
 
 from _runbooks import run_books
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 def _tx(d, q, p, sym="XYZ.TO"):

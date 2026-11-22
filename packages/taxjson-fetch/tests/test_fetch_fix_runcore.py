@@ -1,4 +1,4 @@
-"""Moved from the core's tests/test_fix_runcore.py with `tjs fetch` (now the
+"""Moved from the core's tests/features/configuration/test_run_core_settings_sidecars_and_rates.py with `tjs fetch` (now the
 taxjson-fetch plugin). Original module docstring:
 
 Regression pins for the run-core medium findings (2026-09 audit).
@@ -8,7 +8,7 @@ synthetic project: fake account numbers, all-CAD data, no FX fetch.
 """
 # First: puts the plugin, the core and its test helpers on sys.path and
 # registers the plugin's entry point when it is not pip-installed.
-import _support  # noqa: F401
+import _bootstrap  # noqa: F401
 import os
 import tempfile
 import unittest

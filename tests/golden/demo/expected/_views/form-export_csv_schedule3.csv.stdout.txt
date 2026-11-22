@@ -1,0 +1,34 @@
+SCHEDULE 3 — Capital Gains (or Losses), tax year 2024, CAD
+GAIN(LOSS) = PROCEEDS − ACB − OUTLAYS, the allowed amount; 100% amounts (the form applies the rate).
+
+PERIOD 1 (JANUARY 1 TO JUNE 24, 2024) — LINES 10689/10690
+UNITS  SYMBOL   ACQ. YEAR   PROCEEDS        ACB  OUTLAYS  GAIN(LOSS)
+--------------------------------------------------------------------
+  150  AAPL.US  2024       36,652.50  36,456.68    13.37      182.45
+   50  MSFT.US  2024       27,135.00  27,001.35     1.35      132.30
+  Line 10689 (proceeds of disposition):  63,787.50
+  Line 10690 (gain/loss):                   314.75
+
+PERIOD 2 (JUNE 25 TO DECEMBER 31, 2024) — LINES 13199/13200
+UNITS  SYMBOL    ACQ. YEAR   PROCEEDS        ACB  OUTLAYS  GAIN(LOSS)
+---------------------------------------------------------------------
+   75  AAPL.US   2024       18,225.00  18,228.34     6.68      -10.02
+   20  INTC.US   2024          553.50     552.15     1.35        0.00
+   10  NVDA.US   2024        1,883.25   1,881.90     1.35        0.00
+   25  SPNCO.US  2024          742.50     675.00     1.35       66.15
+  Line 13199 (proceeds of disposition):  21,404.25
+  Line 13200 (gain/loss):                    56.13
+
+PERIOD 2 (JUNE 25 TO DECEMBER 31, 2024) — LINES 15199/15300
+UNITS  SYMBOL                   ACQ. YEAR  PROCEEDS       ACB  OUTLAYS  GAIN(LOSS)
+----------------------------------------------------------------------------------
+   10  ABCD270219C00045000.US   2024       2,295.00  2,105.66    13.50      175.84
+ 0.15  BTC                      2024       9,990.00  9,752.50    39.83      197.67
+ 0.75  ETH                      2024       4,151.25  3,660.49    17.90      472.86
+    1  SAMPW250117C00030000.US  2024         202.50      0.00     1.42      201.08
+  Line 15199 (proceeds of disposition):  16,638.75
+  Line 15300 (gain/loss):                 1,047.45
+
+! 1 sale with no purchase in your files NOT in these rows — tjs find-missing-history
+2 row(s) with a denied superficial loss: the ACB shown is reduced by it — tjs wash-sales
+Not in the rows: FX on cash (15300), slip capital gains (17400, 17600) — tjs form-export --details

@@ -15,16 +15,18 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from taxjson.lib.core import TaxTransaction
+from taxjson.model.transaction import TaxTransaction
 from taxjson.lib.missing_history import (DATE_PLACEHOLDER, DRAFT_NAME,
-                                          draft_purchases,
-                                          format_purchase_drafts,
-                                          parse_broker_lots)
+                                          format_purchase_drafts)
+from taxjson.lib.purchase_drafts import broker_lot_floats, draft_purchases
 
 from _style import CapturedWidth
 from tax_rules import rule, rule_absent
 from tax_rules.dual import cli, projects_both
-from test_fix_ibparse import HEAD, TRADES_H, _parse_ib
+from taxjson.rules import ids as R
+from _support.ib_statement_rows import HEAD, TRADES_H
+from _support.ib_basis_drafts import _row, _sell, _lot, _parsed, _book, SINGLE
+import _paths
 
 # Captured output, unwrapped (TAXJSON_WIDTH=0): a message naming a long
 # temp path must not wrap inside a phrase a test looks for.
@@ -39,42 +41,12 @@ def tearDownModule():
     _WIDTH.stop()
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
-
-def _row(disc, sym, when, qty, price='', proceeds='', comm='', code='',
-         basis='', cur='USD', cat='Stocks'):
-    return (f'Trades,Data,{disc},{cat},{cur},U5550001,{sym},"{when}",'  # pii-ok
-            f'{qty},{price},0,{proceeds},{comm},{basis},0,0,{code}\n')
-
-
-def _sell(sym, when, qty, price, basis, code='C', cur='USD'):
-    gross = abs(qty) * price
-    return _row('Order', sym, when, qty, price, gross, -1, code,
-                -basis if basis else '', cur)
+REPO_ROOT = _paths.REPO
 
 
 def _buy(sym, when, qty, price, code='O', cur='USD'):
     return _row('Order', sym, when, qty, price, -qty * price, -1, code,
                 qty * price + 1, cur)
-
-
-def _lot(sym, opened, qty, price, basis, cur='USD'):
-    return _row('ClosedLot', sym, f'{opened}, 09:30:00', qty, price, '',
-                '', '', basis, cur)
-
-
-def _parsed(body, account='margin'):
-    _, txs, _ = _parse_ib(HEAD + TRADES_H + body)
-    for t in txs:
-        t['account'] = account
-    return txs
-
-
-def _book(rows):
-    keys = TaxTransaction.__dataclass_fields__
-    return [TaxTransaction(**{k: v for k, v in r.items() if k in keys})
-            for r in rows]
 
 
 def _lines(drafts):
@@ -86,7 +58,6 @@ def _lines(drafts):
 MULTI_LOT = (_sell('QZA', '2025-03-18, 10:00:00', -100, 50, 3001)
              + _lot('QZA', '2023-01-10', 60, 18, 1080.50)
              + _lot('QZA', '2023-06-15', 40, 48, 1920.50))
-SINGLE = _sell('QZB', '2025-04-01, 10:00:00', -10, 20, 150)
 
 
 class TestParserKeepsClosedLots(unittest.TestCase):
@@ -98,7 +69,7 @@ class TestParserKeepsClosedLots(unittest.TestCase):
         self.assertEqual(txs[0]['broker_lots'],
                          '2023-01-10 60 1080.50;2023-06-15 40 1920.50')
         self.assertNotIn('broker_lots', txs[1])
-        self.assertEqual(parse_broker_lots(txs[0]['broker_lots']),
+        self.assertEqual(broker_lot_floats(txs[0]['broker_lots']),
                          [('2023-01-10', 60.0, 1080.5),
                           ('2023-06-15', 40.0, 1920.5)])
 
@@ -118,10 +89,10 @@ class TestParserKeepsClosedLots(unittest.TestCase):
         t, = _parsed(_sell('QZB', '2025-04-01, 10:00:00', -10, 20, 150)
                      + _lot('QZB', '2024-02-01', 10, 14, 'n/a'))
         self.assertEqual(t['broker_lots'], 'invalid')
-        self.assertIsNone(parse_broker_lots('invalid'))
+        self.assertIsNone(broker_lot_floats('invalid'))
 
 
-@rule("US-BASIS-08")
+@rule(R.US_BASIS_08)
 class TestUsDrafts(unittest.TestCase):
 
     def test_one_line_per_ib_lot_with_its_date_and_cost(self):
@@ -238,7 +209,7 @@ class TestUsDrafts(unittest.TestCase):
         self.assertIn('sheltered', gaps[0].reason)
 
 
-@rule("CA-ACB-15")
+@rule(R.CA_ACB_15)
 class TestCanadaDrafts(unittest.TestCase):
 
     def test_usd_draft_keeps_the_currency_and_says_how_it_converts(self):
@@ -398,7 +369,7 @@ class TestPlaceholdersAreRefused(unittest.TestCase):
     """An unedited draft renamed to .tt cannot book a guess."""
 
     def _parse(self, line):
-        from taxjson.bin.taxjson_convert_tt import parse_tt_line
+        from taxjson.lib.tt_format import parse_tt_line
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             tx = parse_tt_line(line, 'margin', source='purchases.tt:3')
@@ -428,7 +399,7 @@ class TestPlaceholdersAreRefused(unittest.TestCase):
             self.assertAlmostEqual(tx['net_amount'], d.cost, places=2)
 
     def test_the_run_does_not_read_a_draft(self):
-        from taxjson.bin.taxjson_run import input_files
+        from taxjson.pipeline.config import input_files
         with tempfile.TemporaryDirectory() as td:
             (Path(td) / DRAFT_NAME).write_text('BUYSELL ...\n')
             (Path(td) / 'start.tt').write_text('# x\n')
@@ -444,10 +415,10 @@ def _project_files(rows, account='margin'):
 
 class TestWritePurchasesCommand(unittest.TestCase):
 
-    @rule("CA-ACB-15")
-    @rule_absent("CA-ACB-15", country="usa")
-    @rule("US-BASIS-08")
-    @rule_absent("US-BASIS-08", country="canada")
+    @rule(R.CA_ACB_15)
+    @rule_absent(R.CA_ACB_15, country="usa")
+    @rule(R.US_BASIS_08)
+    @rule_absent(R.US_BASIS_08, country="canada")
     def test_same_book_both_countries(self):
         with tempfile.TemporaryDirectory() as td:
             projects = projects_both(
@@ -485,7 +456,7 @@ class TestWritePurchasesCommand(unittest.TestCase):
             self.assertNotIn('s.47', out['usa'])
             self.assertNotIn('Bank of Canada', out['usa'])
 
-    @rule("US-BASIS-08")
+    @rule(R.US_BASIS_08)
     def test_never_overwrites_a_draft_without_force(self):
         with tempfile.TemporaryDirectory() as td:
             root = projects_both(td, files=_project_files(
@@ -505,7 +476,7 @@ class TestWritePurchasesCommand(unittest.TestCase):
             self.assertIn('# my edit', draft.with_name(
                 DRAFT_NAME + '.bak').read_text())
 
-    @rule("US-BASIS-08")
+    @rule(R.US_BASIS_08)
     def test_file_argument(self):
         with tempfile.TemporaryDirectory() as td:
             rows = (_parsed(SINGLE)
@@ -539,7 +510,7 @@ class TestWritePurchasesCommand(unittest.TestCase):
             self.assertIn('QZD.US', text)
             self.assertNotIn('QZB.US', text)
 
-    @rule("US-BASIS-08")
+    @rule(R.US_BASIS_08)
     def test_nothing_to_draft_writes_nothing(self):
         with tempfile.TemporaryDirectory() as td:
             root = projects_both(td, files=_project_files(_parsed(
@@ -551,7 +522,7 @@ class TestWritePurchasesCommand(unittest.TestCase):
             self.assertFalse((root / 'inputs' / 'margin' / DRAFT_NAME)
                              .exists())
 
-    @rule("US-BASIS-08")
+    @rule(R.US_BASIS_08)
     def test_end_to_end_through_the_run(self):
         # IB's Closed Lots survive the run into the books; the draft is
         # not read; renamed unedited it stops the run; filled in, the

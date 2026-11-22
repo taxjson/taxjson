@@ -35,16 +35,18 @@ them through `--loss-overrides` (`flags`).
 """
 from __future__ import annotations
 
+
 import json
-import math
-import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
-from taxjson.lib import project_layout as _PL
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from taxjson.lib.loss_override_note import KEYWORD, _money, parse_line
+from taxjson.lib.sale_groups import disposition_groups
+from taxjson.model import money as M
 
-KEYWORD = "ALLOWLOSS"
-FORM = 'ALLOWLOSS <sale date> <symbol> [<qty>] reason="<text>"'
+if TYPE_CHECKING:
+    from decimal import Decimal
+
 STATE = "loss_overrides.json"
 SCHEMA = 1
 
@@ -52,8 +54,6 @@ STATUS_APPLIED = "applied"
 STATUS_UNMATCHED = "unmatched"
 STATUS_AMBIGUOUS = "ambiguous"
 
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_REASON_RE = re.compile(r'reason\s*=\s*"([^"]*)"')
 # Units: the pool's own tolerance is far below this; a declared quantity
 # is what the broker printed. RELATIVE to the units: an absolute floor of
 # 0.000001 let a line naming 0.00010050 units of a coin name a sale of
@@ -72,100 +72,7 @@ class LossOverrideError(ValueError):
     """One or more ALLOWLOSS lines cannot be read (each named)."""
 
 
-# ------------------------------------------------------------- the line
-
-def parse_line(line: str, source: str = "") -> Optional[Dict[str, Any]]:
-    """`ALLOWLOSS <date> <symbol> [<qty>] reason="<text>"` -> {date,
-    symbol, qty (None when not given), reason, line}, or None when the
-    line is not an ALLOWLOSS line. Raises ValueError naming the form on
-    a malformed one. A `#` inside the quoted reason is text; after it, a
-    comment."""
-    where = f"{source}: " if source else ""
-    # The comment starts at the first `#` outside a quoted text: a
-    # reason="..." written after it is part of the comment, never the
-    # line's reason (pre-release review: `ALLOWLOSS ... # reason="x"`
-    # was accepted).
-    body = line[:_comment_start(line)]
-    m = _REASON_RE.search(body)
-    reason = m.group(1).strip() if m else None
-    rest = (body[:m.start()] + " " + body[m.end():]) if m else body
-    parts = rest.split()
-    if not parts or parts[0] != KEYWORD:
-        return None
-    shown = line.strip()
-    if '"' in rest:
-        raise ValueError(
-            f"{where}malformed {KEYWORD} line — the reason is one quoted "
-            f"text, reason=\"...\" (expected `{FORM}`): {shown!r}")
-    if not reason:
-        raise ValueError(
-            f"{where}{KEYWORD} needs a reason: say why you take this "
-            f"position, reason=\"...\" (expected `{FORM}`): {shown!r}")
-    toks = parts[1:]
-    if len(toks) >= 2 and not _is_date(toks[0]) and _is_date(toks[1]):
-        raise ValueError(
-            f"{where}malformed {KEYWORD} line — a .tt line is date first: "
-            f"`{KEYWORD} {toks[1]} {toks[0].upper()}"
-            f"{' ' + ' '.join(toks[2:]) if toks[2:] else ''} reason=...` "
-            f"(expected `{FORM}`): {shown!r}")
-    if len(toks) not in (2, 3):
-        raise ValueError(
-            f"{where}malformed {KEYWORD} line — expected `{FORM}`: "
-            f"{shown!r}")
-    date, symbol = toks[0], toks[1].upper()
-    if not _is_date(date):
-        raise ValueError(
-            f"{where}{KEYWORD} date {date!r} is not a valid YYYY-MM-DD "
-            f"date (expected `{FORM}`): {shown!r}")
-    from datetime import date as _date
-    if date > _date.today().isoformat():
-        raise ValueError(
-            f"{where}{KEYWORD} line is dated {date}, in the future — it "
-            f"names a sale that has happened (check the year): {shown!r}")
-    qty = None
-    if len(toks) == 3:
-        from taxjson.lib.brokerages.base import parse_strict_number
-        try:
-            # Strict, like a .tt row's quantity: `1,000` is a thousand,
-            # a decimal comma (`1,5`) is refused, never read as 15
-            # (2026-10 audit #87).
-            if not re.fullmatch(r"[0-9.,eE+-]+", toks[2]):
-                raise ValueError(toks[2])   # no `$`, no parentheses
-            qty = abs(parse_strict_number(toks[2], field="quantity"))
-        except ValueError:
-            qty = None
-        if qty is None or not math.isfinite(qty) or qty == 0:
-            raise ValueError(
-                f"{where}{KEYWORD} quantity {toks[2]!r} is not a number of "
-                f"units sold (expected `{FORM}`): {shown!r}")
-    from taxjson.lib.brokerages.base import canonical_ca_listing
-    from taxjson.lib.core import is_option_symbol
-    if not is_option_symbol(symbol):
-        symbol = canonical_ca_listing(symbol, "") or symbol
-    return {"date": date, "symbol": symbol, "qty": qty, "reason": reason,
-            "line": shown}
-
-
-def _comment_start(line: str) -> int:
-    """Index of the first `#` outside double quotes (len(line) when
-    none)."""
-    quoted = False
-    for i, ch in enumerate(line):
-        if ch == '"':
-            quoted = not quoted
-        elif ch == "#" and not quoted:
-            return i
-    return len(line)
-
-
-def _is_date(tok: str) -> bool:
-    if not _DATE_RE.match(tok or ""):
-        return False
-    try:
-        datetime.strptime(tok, "%Y-%m-%d")
-    except ValueError:
-        return False
-    return True
+# ---------------------------------------------------------- the project
 
 
 def read_project(root: Path, accounts: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -174,14 +81,22 @@ def read_project(root: Path, accounts: Dict[str, Any]) -> List[Dict[str, Any]]:
     Raises LossOverrideError listing each line that cannot be used: a
     malformed one, one in a sheltered account (its losses are not on
     the return), two lines naming the same sale."""
-    from taxjson.bin.taxjson_convert_tt import tt_lines
+    from taxjson.lib.tt_format import tt_lines
     from taxjson.lib.cli_diag import read_text_utf8
     from taxjson.lib.dated_events import _where, tt_files
+    # The project layer only here: the engine imports this module for the
+    # plan and the records and loads no project module (TJ-4069;
+    # tests/test_engine_layout.py).
+    from taxjson.lib import project_layout as _PL
+    from taxjson.project.accounts import configured_accounts
     out: List[Dict[str, Any]] = []
     problems: List[str] = []
     seen: Dict[Tuple, str] = {}
+    # An entry that is no table is no account: its lines are not "not
+    # taxable" (the config check names it).
+    tables = configured_accounts(accounts)
     for acct in sorted(accounts or {}):
-        acfg = accounts.get(acct) or {}
+        typed = tables.get(acct)
         for tt in tt_files(_PL.inputs_dir(Path(root)) / acct):
             try:
                 text = read_text_utf8(tt)
@@ -198,10 +113,10 @@ def read_project(root: Path, accounts: Dict[str, Any]) -> List[Dict[str, Any]]:
                     continue
                 if p is None:
                     continue
-                if isinstance(acfg, dict) and acfg.get("type") != "taxable":
+                if typed is not None and not typed.taxable:
                     problems.append(
                         f"{where}: {KEYWORD} names a loss on your return; "
-                        f"account {acct} is {acfg.get('type') or 'not taxable'}"
+                        f"account {acct} is {typed.type or 'not taxable'}"
                         f" (a registered account's losses are not on the "
                         f"return) — put the line in the taxable account that "
                         f"sold: {p['line']!r}")
@@ -228,7 +143,7 @@ def state_path(cache: Path) -> Path:
 
 def write_state(cache: Path, items: Sequence[Dict[str, Any]]) -> None:
     """work/loss_overrides.json: the run's lines. Rewritten only when
-    they change (so `run --fast` keeps its cache); a project that never
+    they change (a declared input of the gains); a project that never
     had a line never gets the file, one whose lines were deleted keeps
     an empty list (its mtime tells the cached gains to rebuild).
     Written through safe_write: a symlink at the name (to a file outside
@@ -311,15 +226,14 @@ class Plan:
         return bool(self.overrides)
 
 
-def plan(overrides: Sequence[Dict[str, Any]], rows_in_order) -> Plan:
+def plan(overrides: Sequence[Dict[str, Any]], rows_in_order: Iterable[Any]) -> Plan:
     """Resolve each override to the sales it can name in `rows_in_order`
     (the engine's processing order): rows of its account and symbol
     traded or settled on its date, grouped into sales the way Canada's
-    formula groups fills (core.disposition_groups: one account's
+    formula groups fills (lib/sale_groups.disposition_groups: one account's
     uninterrupted same-day sell-down is one sale), kept when the sale's
     total units equal the declared quantity (one fill's units name no
     sale: a line overrides a whole sale or none)."""
-    from taxjson.lib.core import disposition_groups
     pl = Plan(overrides)
     if not pl:
         return pl
@@ -403,7 +317,7 @@ def listing_root(sym: Any) -> str:
     """The root a share listing's spellings share (QZL.TO, QZL.US and a
     bare QZL: QZL; a class share keeps its letter, QZL.B.TO: QZL.B); ""
     for an option (its own contract, never a spelling of a share)."""
-    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.option_symbols import is_option_symbol
     from taxjson.lib.map_hygiene import symbol_root
     sym = str(sym or "").upper()
     if not sym or is_option_symbol(sym):
@@ -440,11 +354,31 @@ def _day_trades(symbol: str, rows: Sequence[Any]) -> List[Dict[str, Any]]:
 
 
 def new_record() -> Dict[str, Any]:
-    return {"qty": 0.0, "loss": 0.0, "disallowed": 0.0, "permanent": 0.0,
-            "replacements": []}
+    return {"qty": 0.0, "loss": M.of(0.0), "disallowed": M.of(0.0),
+            "permanent": M.of(0.0), "replacements": []}
 
 
-def add_replacement(rec: Dict[str, Any], trg, units: float, amount: float,
+# A gain row's own share of the denial the rule would have made, as the
+# US walk leaves it on the row ([disallowed, permanent]): a sale over
+# several lots is several rows with one id, each lot matched on its own,
+# so the fill's record (`rows`) is not each row's. stamp_entries reads
+# the keys and takes them off, so no gains file carries them. A Canadian
+# row is one per fill: its share is the fill's (TJ-3095).
+ROW_DISALLOWED = "_ov_disallowed"
+ROW_PERMANENT = "_ov_permanent"
+
+
+def row_share(e: Dict[str, Any]) -> Optional[List[Any]]:
+    """The share the walk left on gain row `e` (ROW_DISALLOWED,
+    ROW_PERMANENT), taken off the row and rounded like `rows`; None
+    when it left none."""
+    if ROW_DISALLOWED not in e:
+        return None
+    return [M.present(e.pop(k, M.of(0.0)), 6)
+            for k in (ROW_DISALLOWED, ROW_PERMANENT)]
+
+
+def add_replacement(rec: Dict[str, Any], trg: Any, units: float, amount: Decimal,
                     holder: str) -> None:
     """One replacement the denial would have used (merged per row)."""
     for r in rec["replacements"]:
@@ -467,7 +401,7 @@ def _days(a: str, b: str) -> Optional[int]:
         return None
 
 
-def summarize(pl: Plan, would: Dict[str, Dict[str, Any]], *,
+def summarize(pl: Plan, would: Dict[Optional[str], Dict[str, Any]], *,
               country: str) -> List[Dict[str, Any]]:
     """The gains file's `loss_overrides`: per override its status
     (applied | unmatched | ambiguous) and the sale(s) its line names
@@ -478,22 +412,22 @@ def summarize(pl: Plan, would: Dict[str, Dict[str, Any]], *,
         sales = []
         for s in pl.groups.get(i, []):
             recs = [(t, would[t.id]) for t in s if t.id in would]
-            if not any(r["disallowed"] > 0.005 for _t, r in recs):
+            if not any(r["disallowed"] > M.of(0.005) for _t, r in recs):
                 continue
             first = s[0]
             reps: Dict[str, Dict[str, Any]] = {}
             for _t, r in recs:
                 for rp in r["replacements"]:
                     cur = reps.setdefault(rp["id"], dict(rp, units=0.0,
-                                                         amount=0.0))
+                                                         amount=M.of(0.0)))
                     cur["units"] += rp["units"]
                     cur["amount"] += rp["amount"]
             for rp in reps.values():
                 rp["days_settle"] = _days(first.date_settle or first.date,
                                           rp["date_settle"])
                 rp["days_trade"] = _days(first.date, rp["date"])
-                rp["units"] = round(rp["units"], 9)
-                rp["amount"] = round(rp["amount"], 6)
+                rp["units"] = M.units(rp["units"], 9)
+                rp["amount"] = M.present(rp["amount"], 6)
             dis = sum(r["disallowed"] for _t, r in recs)
             perm = sum(r["permanent"] for _t, r in recs)
             sales.append({
@@ -501,18 +435,20 @@ def summarize(pl: Plan, would: Dict[str, Dict[str, Any]], *,
                 "account": first.account, "symbol": first.symbol,
                 "date": first.date,
                 "date_settle": first.date_settle or first.date,
-                "qty": round(abs(sum(float(t.quantity) for t in s)), 9),
-                "loss_units": round(sum(r["qty"] for _t, r in recs), 9),
-                "loss": round(sum(r["loss"] for _t, r in recs), 6),
-                "would_disallow": round(dis, 6),
-                "would_permanent": round(perm, 6),
-                "would_defer": round(dis - perm, 6),
+                "qty": M.units(abs(sum(float(t.quantity) for t in s)), 9),
+                "loss_units": M.units(sum(r["qty"] for _t, r in recs), 9),
+                "loss": M.present(sum(r["loss"] for _t, r in recs), 6),
+                "would_disallow": M.present(dis, 6),
+                "would_permanent": M.present(perm, 6),
+                "would_defer": M.present(dis - perm, 6),
                 "replacements": sorted(reps.values(),
                                        key=lambda r: (r["date"], r["id"])),
-                # Each row's own share (a several-fill sale's rows each
-                # carry theirs: a per-row note sums to the sale's).
-                "rows": {t.id: [round(r["disallowed"], 6),
-                                round(r["permanent"], 6)]
+                # Each fill's own share (a several-fill sale's rows
+                # each carry theirs: the per-row notes sum to the
+                # sale's). A US fill over several lots is several rows
+                # with one id: each carries its own (row_share).
+                "rows": {t.id: [M.present(x, 6) for x in (r["disallowed"],
+                                                          r["permanent"])]
                          for t, r in recs},
             })
         status = (STATUS_APPLIED if len(sales) == 1 else
@@ -523,8 +459,8 @@ def summarize(pl: Plan, would: Dict[str, Dict[str, Any]], *,
             "symbol": ov["symbol"], "qty": ov.get("qty"),
             "reason": ov.get("reason") or "", "country": country,
             "status": status, "sales": sales,
-            "fill_of": [round(q, 9) for q in pl.fill_of.get(i, [])],
-            "split_settle": [[d, round(q, 9)]
+            "fill_of": [M.units(q, 9) for q in pl.fill_of.get(i, [])],
+            "split_settle": [[d, M.units(q, 9)]
                              for d, q in pl.split_settle.get(i, [])],
             "day_trades": _day_trades(ov["symbol"],
                                       pl.day_rows.get(i, [])),
@@ -540,11 +476,15 @@ def summarize(pl: Plan, would: Dict[str, Dict[str, Any]], *,
 
 
 def entry_note(item: Dict[str, Any], sale: Dict[str, Any],
-               rid: Optional[str] = None) -> Dict[str, Any]:
+               rid: Optional[str] = None,
+               share: Optional[Sequence[Any]] = None) -> Dict[str, Any]:
     """The `loss_override` stamped on gain row `rid` of the sale: the
-    row's own share of the denial (`would_*`) and the sale's
+    row's own share of the denial (`would_*`: `share`, what the walk
+    left on the row, else the fill's from `rows`) and the sale's
     (`sale_would_*`)."""
-    if "rows" in sale:
+    if share is not None:
+        dis, perm = share
+    elif "rows" in sale:
         dis, perm = sale["rows"].get(rid) or (0.0, 0.0)
     else:
         dis, perm = sale["would_disallow"], sale["would_permanent"]
@@ -554,37 +494,28 @@ def entry_note(item: Dict[str, Any], sale: Dict[str, Any],
             "sale_would_permanent": sale["would_permanent"]}
 
 
-def note_text(note: Dict[str, Any], country: str) -> str:
-    """One sentence for a row carrying `loss_override` (entry_note):
-    the form-export rows, `tjs audit`, `wash-sales --explain`. The
-    figure is the row's own share of the sale's denial."""
-    us = country in ("us", "usa")
-    dis = float(note.get("would_disallow") or 0.0)
-    perm = float(note.get("would_permanent") or 0.0)
-    fate = ("" if perm < 0.005 else " for good" if dis - perm < 0.005
-            else f" ({_money(perm)} of it for good)")
-    return (f"filing position: {KEYWORD} {note.get('where')}, the "
-            f"{'wash-sale' if us else 'superficial-loss'} rule would "
-            f"{'disallow' if us else 'deny'} {_money(dis)}{fate}; the "
-            f"loss is claimed in full. Reason: \"{note.get('reason')}\"")
-
-
 def stamp_entries(entries: Iterable[Dict[str, Any]],
                   items: Sequence[Dict[str, Any]]) -> None:
-    """Mark the gain rows of every applied override's sale."""
-    by_id: Dict[str, Dict[str, Any]] = {}
+    """Mark the gain rows of every applied override's sale, each with
+    its own share (row_share), and take the walk's share keys off every
+    row (a line that matched no sale, or two, left them too)."""
+    if not items:
+        return      # no line: the walk left no share on any row
+    by_id: Dict[str, Tuple[Dict[str, Any], Dict[str, Any]]] = {}
     for it in items:
         if it["status"] != STATUS_APPLIED:
             continue
         for s in it["sales"]:
             for rid in s["ids"]:
-                by_id[rid] = entry_note(it, s, rid)
-    if not by_id:
-        return
+                by_id[rid] = (it, s)
     for e in entries:
-        n = by_id.get(e.get("id"))
-        if n is not None and "qty" in e and "gain" in e:
-            e["loss_override"] = n
+        share = row_share(e)
+        hit = by_id.get(e.get("id"))
+        if hit is None or "qty" not in e or "gain" not in e:
+            continue
+        if share is not None and not share[0] and e["gain"] >= 0:
+            continue    # a lot of the sale that gained: no loss claimed (TJ-3108)
+        e["loss_override"] = entry_note(hit[0], hit[1], e.get("id"), share)
 
 
 # ----------------------------------------------------- run-side views
@@ -611,10 +542,6 @@ def gather(files: Dict[str, Path]) -> List[Dict[str, Any]]:
     out.sort(key=lambda it: (str(it.get("date")), str(it.get("account")),
                              str(it.get("symbol")), str(it.get("where"))))
     return out
-
-
-def _money(x) -> str:
-    return f"{float(x or 0):,.2f}"
 
 
 def _units(x) -> str:
@@ -715,7 +642,7 @@ def map_view(root: Path) -> Tuple[Dict[str, str], set]:
     """(the renames the run's books were merged with — the effective map,
     else ticker.map —, ticker.map's DISTINCT pairs), upper-cased: the
     `spellings` problems() reads."""
-    from taxjson.lib.xlist_loss_radar import _map_rules
+    from taxjson.lib.map_file import _map_rules
     try:
         return _map_rules(Path(root), Path(root) / "work")
     except Exception:                                   # noqa: BLE001
@@ -866,10 +793,10 @@ def positions(items: Sequence[Dict[str, Any]], year=None,
             out.append({
                 "account": s["account"], "date": s["date"],
                 "date_settle": s["date_settle"], "symbol": s["symbol"],
-                "qty": s["qty"], "loss": round(s["loss"], 2),
-                "would_disallow": round(s["would_disallow"], 2),
-                "would_permanent": round(s["would_permanent"], 2),
-                "would_defer": round(s["would_defer"], 2),
+                "qty": s["qty"], "loss": M.shown(s["loss"], 2),
+                "would_disallow": M.shown(s["would_disallow"], 2),
+                "would_permanent": M.shown(s["would_permanent"], 2),
+                "would_defer": M.shown(s["would_defer"], 2),
                 "replacements": s["replacements"],
                 "why": _why(s, it.get("country") or "canada"),
                 "reason": it.get("reason"), "where": it.get("where"),

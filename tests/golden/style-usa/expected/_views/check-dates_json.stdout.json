@@ -1,0 +1,21 @@
+{
+  "checked": 57,
+  "counts": {},
+  "errors": 0,
+  "issues": [],
+  "later_frozen": false,
+  "later_years": 0,
+  "schema_version": 1,
+  "sources": {
+    "crypto: coinbase": 10,
+    "crypto: kraken": 13,
+    "margin: ib": 21,
+    "margin: ib corporate actions": 2,
+    "margin: margin_extra.tt": 7,
+    "qt: questrade": 2,
+    "qt: questrade corporate actions": 0,
+    "roth: roth_extra.tt": 2
+  },
+  "warnings": 0,
+  "year": 2024
+}

@@ -1,0 +1,97 @@
+======================================================================
+ DIAGNOSTICS — margin  (parser/merge warnings; not part of the tax totals)
+======================================================================
+note: FX: Bank of Canada Valet for <n> dates, Yahoo fallback for 0
+OK: <merged>: 30 transactions validated.
+warning: ATTENTION: short: OLDCO.US (margin): the broker codes the sale on 2024-04-01 CLOSING (IB code C, IB Basis 600.00 USD), but the data holds no position to close — it is booked as a new short until the missing purchase is supplied (`tjs find-missing-history --write-missing-history` writes its .tt OPENING cost=unknown line).
+NOTE: 2 (symbol, account) pair(s) go short in this data: GHOSTQ.TO/margin, OLDCO.US/margin. 0 are in registered accounts. If any of these are sales of shares bought before your files start (no purchase in the data) rather than real short trades, open the units held before the data with .tt OPENING cost=unknown lines: `tjs find-missing-history --write-missing-history` in a project writes them (`tjs run` reads them).
+warning: ATTENTION: ib_demo.csv: the statement has no Cash Report — parsed money is NOT reconciled against IB's own totals. Include the Cash Report section in the export (Flex: add it to the query).
+warning: ATTENTION: ib_extra.csv: the statement has no Cash Report — parsed money is NOT reconciled against IB's own totals. Include the Cash Report section in the export (Flex: add it to the query).
+note: ib_demo.csv: 5 recognized non-event row(s) not translated — Dividends subtotal row: 1, Statement metadata row: 2, section Account Information (not translated): 2.
+note: 1 merger/spin-off Corporate Action row(s) in ib_extra.csv are booked by taxjson-corp-actions after the tax election (`tjs run` runs it), not by this parser.
+note: ib_extra.csv: 9 recognized non-event row(s) not translated — Corporate Actions spin-off row (booked by taxjson-corp-actions after the election): 1, Dividends subtotal row: 1, Statement metadata row: 2, section Account Information (not translated): 2, section Financial Instrument Information (not translated): 3.
+  ib_demo.csv: 9 tax objects
+  ib_extra.csv: 1 TRANSFER row(s) kept aside (custody evidence, not tax events — view with `tjs transfers`)
+  ib_extra.csv: 12 tax objects
+======================================================================
+
+
+TICKER SUMMARY — CAD, year 2024, sorted by ticker
+
+SYMBOL                                 TOTAL        TOTAL_COST     TOTAL_PROCEED        TOTAL_GAIN          CAP_GAIN          OPT_GAIN          DIVIDEND               PIL   AVG_DAYS
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+MSFT.US                               233.55         27,001.35         27,133.65            132.30            132.30              0.00            101.25              0.00      127.0
+NVDA.US                                 0.00          1,881.90          1,881.90              0.00              0.00              0.00              0.00              0.00      133.0
+PARN.US                               337.50              0.00              0.00              0.00              0.00              0.00            337.50              0.00        0.0
+QZQ.US                                -90.45          8,240.40          8,095.95           -144.45           -203.85             59.40             54.00              0.00       71.2
+SAMPA.TO                               50.00          3,490.05          3,490.05              0.00              0.00              0.00             50.00              0.00      296.0
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+TOTAL                                 530.60         40,613.70         40,601.55            -12.15            -71.55             59.40            542.75              0.00      120.1
+
+ASSET: Non-option | CURRENCY: CAD   | TRADES: 4 | YEAR: 2024
+
+Total Realized Gain:                -71.55 CAD
+Average Holding Period:               187.2 Days
+Avg Fee Per Trade:                    3.50 CAD
+Avg Fee Per Share:                  0.0389 CAD
+----------------------------------------------------------------------------------------------------------------
+Positive Trades: 1 | Negative Trades: 1 | Win/Loss: 1.00 | Win Rate: 50.0%
+Average Positive:            132.30 CAD | Average Negative:           -203.85 CAD
+----------------------------------------------------------------------------------------------------------------
+
+ASSET: Options    | CURRENCY: CAD   | TRADES: 3 | YEAR: 2024
+
+Total Realized Gain:                 59.40 CAD
+Average Holding Period:                30.7 Days
+Avg Fee Per Trade:                    1.80 CAD
+Avg Fee Per 100 Opt:                1.3500 CAD
+----------------------------------------------------------------------------------------------------------------
+Positive Trades: 2 | Negative Trades: 1 | Win/Loss: 2.00 | Win Rate: 66.7%
+Average Positive:            234.90 CAD | Average Negative:           -410.40 CAD
+----------------------------------------------------------------------------------------------------------------
+
+CONSOLIDATED TOTALS — CAD, year 2024
+
+TOTAL COST:                         40,613.70 CAD
+TOTAL PROCEEDS:                     40,601.55 CAD
+  (engine sign convention: shorts/written options negated — for Schedule 3 proceeds and ACB use `tjs form-export`)
+------------------------------------------------------
+TOTAL REALIZED NON-OPTION GAIN:        -71.55 CAD
+  (shares, units, futures and crypto — Schedule 3 lines: `tjs form-export`)
+TOTAL REALIZED OPTION GAIN:             59.40 CAD
+TOTAL REALIZED GAIN:                   -12.15 CAD
+------------------------------------------------------
+TOTAL DIVIDENDS / STAKING:             542.75 CAD
+------------------------------------------------------
+GRAND TOTAL (GAIN+DIV+PIL):            530.60 CAD
+------------------------------------------------------
+TOTAL TRADING FEES PAID:                61.40 CAD
+  (OPTION TRADING FEES):                 8.10 CAD
+
+INCOME SUMMARY — CAD, year 2024, sorted by ticker
+
+SYMBOL                            GROSS DIV              PIL          TAX W/H       NET INCOME
+----------------------------------------------------------------------------------------------
+MSFT.US                              101.25             0.00            15.20            86.05
+PARN.US                              337.50             0.00             0.00           337.50
+QZQ.US                                54.00             0.00             8.10            45.90
+SAMPA.TO                              50.00             0.00             0.00            50.00
+----------------------------------------------------------------------------------------------
+SUBTOTAL                             542.75             0.00            23.30           519.45
+CASH INTEREST                                                                            12.34
+----------------------------------------------------------------------------------------------
+TOTAL NET INCOME                                                                        531.79
+
+====================================================================================================
+ HOLDINGS REPORT - open positions at the end of the data (not 2024-12-31 positions; `tjs list --date` gives a date) - Sorted by: ticker
+====================================================================================================
+TICKER                        QTY  COST/SHARE    TOTAL COST  CUR
+----------------------------------------------------------------
+GHOSTQ.TO                     -40     14.7512       -590.05  CAD
+NVDA.US                        10    194.1300       1941.30  CAD
+OLDCO.US                      -50     26.9730      -1348.65  CAD
+PARN.US                       100     67.5135       6751.35  CAD
+QZQ.US                        100     34.4520       3445.20  CAD
+QZQ250117C00040000.US          -1      2.0115       -201.15  CAD
+SAMPA.TO                      100     39.2985       3929.85  CAD
+SPNC.US                        10     33.7500        337.50  CAD

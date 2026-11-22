@@ -14,12 +14,13 @@ import unittest
 from unittest.mock import patch
 
 from taxjson.lib.brokerages.coinbase import CoinbaseBrokerage
-from taxjson.lib.core import coerce_transaction_row
+from taxjson.lib.tx_load import coerce_transaction_row
 from taxjson.lib.dispatch import python_module_argv
 from taxjson.bin.taxjson_convert_currency import convert_transaction
+import _paths
 
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = _paths.REPO
 CONFIG = '''[settings]
 country = "canada"
 year = 2025

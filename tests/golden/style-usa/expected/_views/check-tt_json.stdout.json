@@ -1,0 +1,29 @@
+{
+  "errors": 0,
+  "events": 0,
+  "files": [
+    {
+      "account": "margin",
+      "errors": 0,
+      "events": 0,
+      "file": "inputs/margin/margin_extra.tt",
+      "lines": 8,
+      "rows": 7,
+      "warnings": 0
+    },
+    {
+      "account": "roth",
+      "errors": 0,
+      "events": 0,
+      "file": "inputs/roth/roth_extra.tt",
+      "lines": 2,
+      "rows": 2,
+      "warnings": 0
+    }
+  ],
+  "lines": 10,
+  "problems": [],
+  "rows": 9,
+  "schema_version": 1,
+  "warnings": 0
+}

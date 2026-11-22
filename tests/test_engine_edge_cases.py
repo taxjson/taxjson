@@ -11,8 +11,11 @@ import unittest
 from _tmpfiles import private_tmpfile
 from decimal import Decimal
 
-from taxjson.lib.core import CanadaTaxRules, TaxTransaction, USATaxRules
+from taxjson.engine.ca.taxrules import CanadaTaxRules
+from taxjson.engine.us.taxrules import USATaxRules
+from taxjson.model.transaction import TaxTransaction
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 
 # ============================================================================
@@ -412,7 +415,7 @@ class TestFxRateLoaderHonorsToColumn(unittest.TestCase):
     def test_skips_rows_with_wrong_to_currency(self):
         import os
         from pathlib import Path
-        from taxjson.bin.taxjson_convert_currency import load_exchange_rates
+        from taxjson.lib.exchange_rates import load_exchange_rates
 
         # Rate file has both USD→CAD and USD→EUR. Target is CAD.
         content = (
@@ -437,7 +440,7 @@ class TestFxRateLoaderHonorsToColumn(unittest.TestCase):
         behavior (used by tests that build rate dicts directly)."""
         import os
         from pathlib import Path
-        from taxjson.bin.taxjson_convert_currency import load_exchange_rates
+        from taxjson.lib.exchange_rates import load_exchange_rates
 
         content = (
             "2025-01-04 12:00:00 USD CAD 1.35\n"
@@ -650,7 +653,7 @@ class TestConsumedReplacementsCannotWash(unittest.TestCase):
         self.assertAlmostEqual(result['summary']['total_gain'], -150.0,
                                places=2)
 
-    @rule("US-WASH-06")
+    @rule(R.US_WASH_06)
     def test_live_replacement_still_washes(self):
         """The normal wash is untouched: loss with a LIVE rebuy inside
         the window still defers into the replacement lot."""
@@ -771,7 +774,7 @@ class TestSplitRenamesPool(unittest.TestCase):
     depends on this rename working.
     """
 
-    @rule("CA-ACB-04")
+    @rule(R.CA_ACB_04)
     def test_canada_rollover_carries_acb_to_target(self):
         """Buy ABG.TO @ 80000, SPLIT to ABH.US at 0.0625, sell ABH.US
         @ 90000. Realized gain must reflect ABG.TO's original ACB

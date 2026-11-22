@@ -5,7 +5,8 @@ import tempfile
 import os
 from pathlib import Path
 
-from taxjson.lib.core import TaxTransaction, CanadaTaxRules
+from taxjson.engine.ca.taxrules import CanadaTaxRules
+from taxjson.model.transaction import TaxTransaction
 
 class TestPortedTT(unittest.TestCase):
     def setUp(self):
@@ -133,7 +134,7 @@ class TestPortedTT(unittest.TestCase):
 
     def test_currency_conversion_logic(self):
         """Test the underlying currency conversion logic used by taxjson_convert_currency.py"""
-        from taxjson.lib.core import convert_currency
+        from taxjson.engine.rows import convert_currency
         from decimal import Decimal
         
         rates = {'USD': Decimal('1.35')}

@@ -13,11 +13,14 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-from taxjson.lib.core import TaxTransaction
+from taxjson.project.settings import Settings
+from taxjson.model.transaction import TaxTransaction
 from taxjson.lib.option_boundary import straddling
 from tax_rules import rule
+from taxjson.rules import ids as R
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 OPT = "ZZZ260116C00050000.US"
 
 
@@ -102,8 +105,8 @@ class TestGrantSince(unittest.TestCase):
         key commented with its one-line explanation (the run warns when
         the books hold a written option and it is not set); a year
         folder added beside one that sets it keeps that value."""
-        from taxjson.bin.taxjson_run import cmd_init
-        from taxjson.lib.tomlcompat import tomllib
+        from taxjson.cli.setup import cmd_init
+        import tomllib
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "p"
             with redirect_stdout(io.StringIO()):
@@ -141,18 +144,18 @@ class TestGrantSince(unittest.TestCase):
             self.assertNotIn("option_grant_timing_since", doc["settings"])
 
     def test_warning_only_when_unset_on_canadian_grant_timing(self):
-        from taxjson.bin.taxjson_run import _grant_since_warning
-        w = _grant_since_warning({"year": 2026, "country": "canada"})
+        from taxjson.pipeline.run import _grant_since_warning
+        w = _grant_since_warning(Settings.from_table({"year": 2026, "country": "canada"}))
         self.assertIn("option_grant_timing_since is not set", w)
         self.assertIn("MOVES", w)
-        self.assertIsNone(_grant_since_warning(
+        self.assertIsNone(_grant_since_warning(Settings.from_table(
             {"year": 2026, "country": "canada",
-             "option_grant_timing_since": 2025}))
-        self.assertIsNone(_grant_since_warning(
+             "option_grant_timing_since": 2025})))
+        self.assertIsNone(_grant_since_warning(Settings.from_table(
             {"year": 2026, "country": "canada",
-             "option_premium_timing": "close"}))
-        self.assertIsNone(_grant_since_warning(
-            {"year": 2026, "country": "usa"}))
+             "option_premium_timing": "close"})))
+        self.assertIsNone(_grant_since_warning(Settings.from_table(
+            {"year": 2026, "country": "usa"})))
 
     def test_option_boundary_warns_when_unset(self):
         with tempfile.TemporaryDirectory() as td:
@@ -188,7 +191,7 @@ class TestBoundaryAttention(unittest.TestCase):
         rows = straddling(self.BOOK, 2026, "grant", 2026, set())
         self.assertFalse(rows[0]["attention"])
 
-    @rule("CA-OPT-04")
+    @rule(R.CA_OPT_04)
     def test_expired_without_expiry_row(self):
         book = [T("BUYSELL", "2025-03-03", "ZZZ250620P00040000.US", -2, 300.0)]
         rows = straddling(book, 2025, "grant", 2025)

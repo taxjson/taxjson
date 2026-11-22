@@ -12,6 +12,7 @@ highest fix-ratio failure mode).
 """
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from taxjson.lib.futures_prefixes import FUTURES_PREFIXES
 
 
 def date_to_epoch(date_str: str) -> float:
@@ -177,9 +178,10 @@ def market_of(symbol: str, row_currency=None):
     s = str(symbol or "").strip().upper()
     if s.endswith(CA_LISTING_SUFFIXES):
         return 'CAD'
-    if s.endswith(".US") or s.startswith(("F:", "/", "\\")):
+    if s.endswith(".US") or s.startswith(FUTURES_PREFIXES):
         return 'USD'
-    from taxjson.lib.markets import suffix_currency, suffix_of
+    from taxjson.lib.markets import suffix_currency
+    from taxjson.lib.markets_data import suffix_of
     return suffix_currency(suffix_of(s)) or row_currency
 
 
@@ -223,9 +225,9 @@ def last_trade_date_settling_by(deadline_iso: str, currency: str = 'USD',
                                 is_option: bool = False) -> str:
     """The LAST trading day whose settlement lands on or before
     `deadline_iso`. The superficial-loss rescue test is on the SETTLE
-    date (core.py: end_window_date = loss_settle + 30, rescue sale's
-    sort/settle date <= that), so a deadline quoted as a settle date
-    must be walked back through the lag, past weekends and holidays,
+    date (engine/ca/denial.py: end_window_date = loss_settle + 30, rescue
+    sale's sort/settle date <= that), so a deadline quoted as a settle
+    date must be walked back through the lag, past weekends and holidays,
     before it is safe to hand to a user as "sell by".
     Returns the input unchanged when it does not parse."""
     from taxjson.lib.market_calendar import is_trading_day

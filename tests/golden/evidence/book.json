@@ -1,0 +1,26 @@
+{
+ "kind": "project",
+ "source": "written for the golden ledgers before step 6's Decimal codecs: one run whose rows carry each money field packed into a string (an IB sale's ClosedLot broker_lots and its Commission Adjustments refund, a future held in two IB accounts with its settle_native legs and FX stamp, an RBC merger's cash in lieu paid three days late as corp_cash @paid, an OPENING snapshot whose opening_cut_legs name the exercised call's delivery it replaced; and, for roc-sum and dil-sum, which no other book fills, a return of capital and a payment in lieu on a stock in margin2), with the views that read or print them: events (the rows' fields as written), fx-cash (both ledgers; v2 with mid-year balances that date the refund and the cash in lieu), find-missing-history (it drafts the purchases from the lots), audit and the summaries; prices kept small so no amount in a trace's # lines reaches 1,000; and (TJ-4920, the --json contract) sanity and audit as --json views, last",
+ "views": [
+  "sum",
+  "sum --json",
+  "trades-sum",
+  "fees-sum",
+  "roc-sum",
+  "roc-sum --json",
+  "dil-sum",
+  "dil-sum --json",
+  "events all",
+  "events all --json",
+  "fx-cash",
+  "fx-cash --json",
+  "fx-cash --ledger v2 --cash-events",
+  "fx-cash --ledger v2 --events --json",
+  "audit",
+  "find-missing-history",
+  "find-missing-history --details",
+  "find-missing-history --write-purchases",
+  "sanity --json",
+  "audit --json"
+ ]
+}

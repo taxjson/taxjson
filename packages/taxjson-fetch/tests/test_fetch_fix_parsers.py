@@ -8,12 +8,13 @@ marked pii-ok, invented prices.
 """
 # First: puts the plugin, the core and its test helpers on sys.path and
 # registers the plugin's entry point when it is not pip-installed.
-import _support  # noqa: F401
+import _bootstrap  # noqa: F401
 import unittest
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 
-@rule("CA-ACB-04")
+@rule(R.CA_ACB_04)
 class TestCanadianListingIdentity(unittest.TestCase):
     """S010-05 / S014-07: one spelling per Canadian listing, whichever
     parser read it."""

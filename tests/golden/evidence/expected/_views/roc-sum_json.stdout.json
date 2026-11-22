@@ -1,0 +1,23 @@
+{
+  "other_adjustments": [],
+  "rows": [
+    {
+      "capital_returned": 3.0,
+      "currency": "USD",
+      "dist_rows": 0,
+      "manual_rows": 0,
+      "roc_rows": 1,
+      "symbol": "SAMPLD.US"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "tax year 2025",
+  "sheltered_included": [],
+  "totals": {
+    "USD": 3.0
+  },
+  "totals_sheltered": {},
+  "totals_taxable": {
+    "USD": 3.0
+  }
+}

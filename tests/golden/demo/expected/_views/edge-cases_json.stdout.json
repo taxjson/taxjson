@@ -1,0 +1,51 @@
+{
+  "basis": "settle",
+  "calls_in_windows": [],
+  "country": "canada",
+  "futures_settle": "trade",
+  "margin": 3,
+  "missing_books": [],
+  "missing_history_openings": 0,
+  "renamed_late": [],
+  "schema_version": 1,
+  "window_basis": "settle",
+  "window_edges": [],
+  "year": 2024,
+  "year_boundary": {
+    "crypto_midnight": [],
+    "deferred_at_year_end": [
+      {
+        "account": "ib",
+        "as_of": "2024-12-31",
+        "deferred": 117.45,
+        "qty": 10.0,
+        "symbol": "NVDA.US",
+        "why": "117.45 of denied losses sits in the cost of the 10 units still held at the end of 2024; it reduces the gain (or grows the loss) of the year they are sold"
+      }
+    ],
+    "income": [],
+    "last_days": [],
+    "loss_windows": [],
+    "option_expiries": [],
+    "straddles": [],
+    "written_options": [
+      {
+        "account": "margin",
+        "action": "if assigned in a later year after 2024 is filed: T1-ADJ 2024 to remove it (s.49(4)); if bought back: loss in that year; if it expires: nothing",
+        "attention": false,
+        "close_kind": "open",
+        "close_year": null,
+        "closed": "",
+        "paid": 0.0,
+        "premium": 201.08,
+        "question": false,
+        "symbol": "SAMPW250117C00030000.US",
+        "timing": "grant",
+        "units": 1.0,
+        "where": "premium 201.08 recognised in 2024; open",
+        "write_year": 2024,
+        "written": "2024-11-05"
+      }
+    ]
+  }
+}

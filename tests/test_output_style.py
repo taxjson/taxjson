@@ -19,8 +19,9 @@ from pathlib import Path
 from unittest import mock
 
 from taxjson.lib import out
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 SRC = str(REPO_ROOT / "src")
 
 
@@ -414,7 +415,7 @@ def _elect_project(tmp, manifest=None, pending=None):
 
 
 def _elect(root, **kw):
-    from taxjson.bin.taxjson_run import cmd_elect
+    from taxjson.cli.elect import cmd_elect
     ns = dict(dir=str(root), account=None, redo=False, reset=False,
               event=None, set=None, hint=None, pending=False, json=False)
     ns.update(kw)
@@ -484,7 +485,7 @@ class TestElectStyle(_NoWidthEnv):
     def test_set_errors_are_headline_and_detail(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _elect_project(tmp, pending=_pending_doc())
-            from taxjson.bin.taxjson_run import cmd_elect
+            from taxjson.cli.elect import cmd_elect
             ns = dict(dir=str(root), account="margin", redo=False,
                       reset=False, event=None, hint=None, pending=False,
                       json=False, set=[f"{_EV}=rollover_s_86_1"])

@@ -1,6 +1,8 @@
 import unittest
 
-from taxjson.lib.core import TaxTransaction, CanadaTaxRules, USATaxRules
+from taxjson.engine.ca.taxrules import CanadaTaxRules
+from taxjson.engine.us.taxrules import USATaxRules
+from taxjson.model.transaction import TaxTransaction
 
 class TestTaxRules(unittest.TestCase):
     def test_canada_acb_basic(self):

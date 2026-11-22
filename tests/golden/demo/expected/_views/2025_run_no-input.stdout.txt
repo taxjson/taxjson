@@ -1,0 +1,137 @@
+==> Checking the project
+==> Loading currency rates
+==> Loading cached USD → CAD rates
+==> margin  (taxable, first pass: transfers between your accounts)
+  inputs/margin/ib_scenarios_demo.csv → Interactive Brokers (content: "Statement,Header" preamble)
+==> Reading 1 file
+  warning: ATTENTION: ib_scenarios_demo.csv: the account's IB statements end 2024-12-31 — none covers 2025, so any 2025 trade or income is missing from the books. Download the 2025 statement.
+  ib_scenarios_demo.csv: 6 tax objects
+==> ib  (taxable, first pass: transfers between your accounts)
+  inputs/ib/ib_demo.csv → Interactive Brokers (content: "Statement,Header" preamble)
+==> Reading 1 file
+  warning: ATTENTION: ib_demo.csv: the account's IB statements end 2024-12-31 — none covers 2025, so any 2025 trade or income is missing from the books. Download the 2025 statement.
+  ib_demo.csv: 9 tax objects
+==> questrade  (taxable, first pass: transfers between your accounts)
+  inputs/questrade/questrade_demo.csv → Questrade (content: columns Transaction Date,Settlement Date,Action…)
+==> Reading 1 file
+  questrade_demo.csv: 6 tax objects
+==> webull  (taxable, first pass: transfers between your accounts)
+  inputs/webull/webull_demo.csv → Webull (content: Trading Summary header Currency,Date,Action Code…)
+==> Reading 1 file
+  webull_demo.csv: 6 tax objects
+==> tfsa  (sheltered, first pass: transfers between your accounts)
+  inputs/tfsa/rbc_direct_demo.csv → RBC Direct Investing (content: activity header Date,Activity,Symbol,Description…)
+==> Reading 1 file
+  rbc_direct_demo.csv: 7 tax objects
+==> lira  (sheltered, first pass: transfers between your accounts)
+  inputs/lira/questrade_lira_demo.csv → Questrade (content: columns Transaction Date,Settlement Date,Action…)
+==> Reading 1 file
+  questrade_lira_demo.csv: 11 tax objects
+==> rrsp  (sheltered, first pass: transfers between your accounts)
+  inputs/rrsp/ib_rrsp_demo.csv → Interactive Brokers (content: "Statement,Header" preamble)
+==> Reading 1 file
+  warning: ATTENTION: ib_rrsp_demo.csv: the account's IB statements end 2024-12-31 — none covers 2025, so any 2025 trade or income is missing from the books. Download the 2025 statement.
+  ib_rrsp_demo.csv: 7 tax objects
+==> tfsa  (sheltered)
+==> Processing corporate actions
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/tfsa_holdings.toml
+==> Writing summary reports/tfsa.sum
+==> lira  (sheltered)
+==> Processing corporate actions
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/lira_holdings.toml
+==> Writing summary reports/lira.sum
+==> rrsp  (sheltered)
+==> Processing corporate actions
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/rrsp_holdings.toml
+==> Writing summary reports/rrsp.sum
+==> Combining sheltered accounts
+==> margin  (taxable)
+==> Processing corporate actions
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/margin_holdings.toml
+==> Writing summary reports/margin.sum
+==> ib  (taxable)
+==> Processing corporate actions
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/ib_holdings.toml
+==> Writing summary reports/ib.sum
+==> questrade  (taxable)
+==> Processing corporate actions
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/questrade_holdings.toml
+==> Writing summary reports/questrade.sum
+==> webull  (taxable)
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/webull_holdings.toml
+==> Writing summary reports/webull.sum
+==> crypto  (taxable, crypto)
+  inputs/crypto/coinbase_demo.csv → Coinbase (content: columns Timestamp,Transaction Type,Asset…)
+  inputs/crypto/kraken_demo.csv → Kraken (content: trades columns txid,ordertxid,pair…)
+==> Reading 1 Coinbase file
+  coinbase_demo.csv: 8 tax objects
+==> Reading 1 Kraken file
+  kraken_demo.csv: 5 tax objects
+==> Merging the exports
+==> Sorting, de-duplicating
+==> Mapping tickers
+==> Looking up crypto prices
+==> Converting currency to CAD
+==> Calculating capital gains
+==> Writing holdings reports/crypto_holdings.toml
+==> Writing summary reports/crypto.sum
+==> Checking crypto for superficial losses with the sheltered accounts
+==> Writing summary reports/crypto_wash.sum
+==> Checking for missing purchase history
+  note: 1 position went short before 2025 with missing history; no effect on 2025's numbers
+    No purchase in your files and no 2025 activity. `tjs find-missing-history` lists it; `tjs find-missing-history --write-missing-history --outside-year` records it in inputs/<account>/missing_history.tt so the run stops listing it.
+==> Pooling cost and checking superficial losses across taxable accounts (4 accounts)
+==> Writing summary reports/margin_wash.sum
+==> Writing summary reports/ib_wash.sum
+==> Writing summary reports/questrade_wash.sum
+==> Writing summary reports/webull_wash.sum
+  warning: Interactive Brokers exports for ib end 2024-12-31 with open positions (NVDA.US 10); download the rest of 2025
+    The last statement's period ends 2024-12-31. Sales, expiries, assignments and income after 2024-12-31 are not in the books.
+    `tjs list ib 2024-12-31` lists the positions at the export's end.
+    No Interactive Brokers activity in ib after 2024-12-31? Mark `tjs checklist --done export-coverage` (it answers this end only: a later end, or another account or broker, asks again).
+  warning: Questrade exports for lira end 2024-12-17 with open positions (BCE.TO 150, XIU.TO 200, ZAG.TO 200); download the rest of 2025
+    The last row is dated 2024-12-17; the export itself names no end date. Sales, expiries, assignments and income after 2024-12-17 are not in the books.
+    `tjs list lira 2024-12-17` lists the positions at the export's end.
+    No Questrade activity in lira after 2024-12-17? Mark `tjs checklist --done export-coverage` (it answers this end only: a later end, or another account or broker, asks again).
+  warning: Interactive Brokers exports for margin end 2024-12-31 with open positions (PARNT.US 100) and an option that expired after it with no expiry row (SAMPW250117C00030000.US -1, expired 2025-01-17); download the rest of 2025
+    The last statement's period ends 2024-12-31. Sales, expiries, assignments and income after 2024-12-31 are not in the books.
+    Expired after 2024-12-31 and still open in the books: SAMPW250117C00030000.US — the missing export holds the expiry, assignment or buy-back row.
+    `tjs list margin 2024-12-31` lists the positions at the export's end.
+    No Interactive Brokers activity in margin after 2024-12-31? Mark `tjs checklist --done export-coverage` (it answers this end only: a later end, or another account or broker, asks again).
+  warning: Questrade exports for questrade end 2024-12-10 with open positions (SHOP.TO 30); download the rest of 2025
+    The last row is dated 2024-12-10; the export itself names no end date. Sales, expiries, assignments and income after 2024-12-10 are not in the books.
+    `tjs list questrade 2024-12-10` lists the positions at the export's end.
+    No Questrade activity in questrade after 2024-12-10? Mark `tjs checklist --done export-coverage` (it answers this end only: a later end, or another account or broker, asks again).
+  warning: Interactive Brokers exports for rrsp end 2024-12-31 with open positions (INTC.US 20); download the rest of 2025
+    The last statement's period ends 2024-12-31. Sales, expiries, assignments and income after 2024-12-31 are not in the books.
+    `tjs list rrsp 2024-12-31` lists the positions at the export's end.
+    No Interactive Brokers activity in rrsp after 2024-12-31? Mark `tjs checklist --done export-coverage` (it answers this end only: a later end, or another account or broker, asks again).
+  warning: RBC Direct Investing exports for tfsa end 2024-12-20 with open positions (ENB.TO 200, RY.TO 50); download the rest of 2025
+    The last row is dated 2024-12-20; the export itself names no end date. Sales, expiries, assignments and income after 2024-12-20 are not in the books.
+    `tjs list tfsa 2024-12-20` lists the positions at the export's end.
+    No RBC Direct Investing activity in tfsa after 2024-12-20? Mark `tjs checklist --done export-coverage` (it answers this end only: a later end, or another account or broker, asks again).
+  warning: Webull exports for webull end 2024-12-31 with open positions (AAPL.US 75, SHOP.TO 30); download the rest of 2025
+    The export's date range ends 2024-12-31. Sales, expiries, assignments and income after 2024-12-31 are not in the books.
+    `tjs list webull 2024-12-31` lists the positions at the export's end.
+    No Webull activity in webull after 2024-12-31? Mark `tjs checklist --done export-coverage` (it answers this end only: a later end, or another account or broker, asks again).
+==> Writing cross-account reports to reports/
+==> Writing fees report reports/fees.rpt
+  note: 20 file(s) for other tools -> ../exports/ (the newest year's)
+==> Done. Reports are in reports/
+==> Before you trust these numbers (docs/getting-started.md, step 5)
+Info: 8 accounts with open positions and no holdings file to check them against: crypto (2), ib (1), lira (3), margin (3), questrade (1), rrsp (1) +2 more. Run `tjs sanity` with the broker's positions.
+Info: Then run `tjs checklist --run`: it checks every step and names the next one.

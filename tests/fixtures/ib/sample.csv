@@ -1,8 +1,79 @@
 Statement,Header,Field Name,Field Value
 Statement,Data,BrokerName,Interactive Brokers
+Statement,Data,Title,Activity Statement
+Statement,Data,Period,"January 1, 2025 - December 31, 2025"
+Account Information,Header,Field Name,Field Value
+Account Information,Data,Account,U1234567
+Account Information,Data,Accounts Included,U1234567
+Cash Report,Header,Currency Summary,Currency,Total,Securities,Futures,
+Cash Report,Data,Starting Cash,USD,1000,1000,0,
+Cash Report,Data,Starting Cash,CAD,0,0,0,
+Cash Report,Data,Deposits,USD,20000,20000,0,
+Cash Report,Data,Commissions,USD,-5.49,-4.49,-1,
+Cash Report,Data,Transaction Fees,USD,-0.01,-0.01,0,
+Cash Report,Data,Dividends,USD,77.50,77.50,0,
+Cash Report,Data,Dividends,CAD,44.00,44.00,0,
+Cash Report,Data,Payment In Lieu of Dividends,USD,12.00,12.00,0,
+Cash Report,Data,Withholding Tax,USD,-5.63,-5.63,0,
+Cash Report,Data,Broker Interest Paid and Received,USD,1.25,1.25,0,
+Cash Report,Data,Other Fees,USD,-1.50,-1.50,0,
+Cash Report,Data,Trades (Sales),USD,23200,23200,0,
+Cash Report,Data,Trades (Purchase),USD,-23650,-23650,0,
+Cash Report,Data,Trades (Sales),CAD,700,700,0,
+Cash Report,Data,Ending Cash,USD,20628.12,20628.12,0,
+Cash Report,Data,Ending Cash,CAD,744.00,744.00,0,
+Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Cost Basis,Close Price,Value,Unrealized P/L,Code
+Open Positions,Data,Summary,Stocks,USD,SAMPLF,80,1,10,800,12,960,160,
+Open Positions,Data,Summary,Futures,USD,SAMPLMH6,1,5,100,500,102,510,10,
+Forex Balances,Header,Asset Category,Currency,Description,Quantity,Cost Price,Cost Basis in USD,Close Price,Value in USD,Unrealized P/L in USD,Code
+Forex Balances,Data,Forex,CAD,CAD,722,0.7143,515.73,0.72,519.84,4.11,
 Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
 Trades,Data,Order,Stocks,USD,MSFT,"2025-02-05, 09:31:00",50,400.00,0,-20000,-1,0,0,0,O
+Trades,Data,Order,Stocks,USD,MSFT,"2025-09-10, 10:00:00",-50,450.00,0,22500,-1,-20001,2498,0,C
+Trades,Data,ClosedLot,Stocks,USD,MSFT,"2025-02-05, 09:31:00",50,400.00,,,,20001,,,
+Trades,Data,Order,Equity and Index Options,USD,SAMPLF 20JUN25 20 C,"2025-03-03, 10:00:00",1,1.50,0,-150,-1,0,0,0,O
+Trades,Data,Order,Equity and Index Options,USD,QZAS 19SEP25 30 P,"2025-08-01, 10:00:00",-1,2.00,0,200,-1,0,0,0,O
+Trades,Data,Order,Equity and Index Options,USD,QZAS 19SEP25 30 P,"2025-09-19, 16:20:00",1,0,0,0,0,0,0,0,A;C
+Trades,Data,Order,Stocks,USD,QZAS,"2025-09-19, 16:20:00",100,30.00,0,-3000,0,0,0,0,A;O
+Trades,Data,Order,Stocks,USD,QZCX,"2025-10-06, 10:00:00",-20,25.00,0,500,1,0,0,0,Ca
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Notional Value,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Futures,USD,SAMPLMH6,"2025-04-07, 10:00:00",1,100,0,-500,-1,0,0,0,O
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm in USD,MTM in USD,Code
+Trades,Data,Order,Forex,CAD,USD.CAD,"2025-08-04, 10:00:00",-500,1.40,1.40,700,-2,0,
+Transaction Fees,Header,Asset Category,Currency,Account,Date/Time,Symbol,Description,Quantity,Trade Price,Amount,Code
+Transaction Fees,Data,Stocks,USD,U1234567,"2025-09-10, 10:00:00",MSFT,FINRA Trading Activity Fee,-50,450.00,-0.01,
+Commission Adjustments,Header,Currency,Date,Description,Amount
+Commission Adjustments,Data,USD,2025-09-15,"Refund (MSFT, -50, 2025-09-10)",0.50
+Corporate Actions,Header,Asset Category,Currency,Report Date,Date/Time,Description,Quantity,Proceeds,Value,Realized P/L,Code
+Corporate Actions,Data,Stocks,USD,2025-07-01,"2025-07-01, 20:25:00","SAMPLF(US9990000011) Split 2 for 1 (SAMPLF, SAMPLF CORP, US9990000011)",40,0,0,0,
+Corporate Actions,Data,Stocks,USD,2025-05-01,"2025-05-01, 20:25:00","QZSD(US9990000021) Stock Dividend US9990000021 1 for 20 (QZSD, QZSD CORP, US9990000021)",5,0,100,0,
+Corporate Actions,Data,Stocks,USD,2025-10-01,"2025-10-01, 20:25:00","QZOLD(US9990000031) Split 1 for 10 (QZOLD.OLD, QZOLD INC, US9990000031)",-100,0,0,0,
+Corporate Actions,Data,Stocks,USD,2025-10-01,"2025-10-01, 20:25:00","QZOLD(US9990000031) Split 1 for 10 (QZNEW, QZNEW INC, US9990000032)",10,0,0,0,
+Options Expirations,Header,Asset Category,Currency,Symbol,Date/Time,Quantity,Code
+Options Expirations,Data,Equity and Index Options,USD,SAMPLF 20JUN25 20 C,"2025-06-20, 16:20:00",-1,C;Ep
+Transfers,Header,Asset Category,Currency,Symbol,Date,Type,Direction,Xfer Company,Xfer Account,Qty,Xfer Price,Market Value,Realized P/L,Cash Amount,Code
+Transfers,Data,Stocks,USD,SAMPLF,2025-01-15,ACATS,In,Other Broker,12345,40,0,800,0,0,
+Deposits & Withdrawals,Header,Currency,Settle Date,Description,Amount
+Deposits & Withdrawals,Data,USD,2025-01-06,Electronic Fund Transfer,20000
+Fees,Header,Subtitle,Currency,Date,Description,Amount
+Fees,Data,Other Fees,USD,2025-03-03,Market Data Fee for Mar 2025,-1.50
 Dividends,Header,Currency,Account,Date,Description,Amount
-Dividends,Data,USD,U777,2025-06-12,MSFT(US5949181045) Cash Dividend USD 0.75 per Share,37.50
+Dividends,Data,USD,U1234567,2025-06-12,MSFT(US5949181045) Cash Dividend USD 0.75 per Share,37.50
+Dividends,Data,USD,U1234567,2025-12-15,QZPL(US9990000051) Payment in Lieu of Dividend (Ordinary Dividend),12.00
+Dividends,Data,CAD,U1234567,2025-11-28,QZRT(CA9990000041) Return of Capital CAD 0.12 per Share,24.00
+Dividends,Data,USD,U1234567,2025-08-15,QZRX(US0000000010) Return of Capital,30.00
+Dividends,Data,USD,U1234567,2025-08-15,QZRX(US0000000010) Cash Dividend (Ordinary Dividend),10.00
+Dividends,Data,CAD,U1234567,2025-08-15,QZRV(CA0000000012) Return of Capital,15.00
+Dividends,Data,CAD,U1234567,2025-08-15,QZRV(CA0000000012) Cash Dividend (Ordinary Dividend),5.00
 Withholding Tax,Header,Currency,Account,Date,Description,Amount
-Withholding Tax,Data,USD,U777,2025-06-12,MSFT(US5949181045) Cash Dividend USD 0.75 per Share - US Tax,-5.63
+Withholding Tax,Data,USD,U1234567,2025-06-12,MSFT(US5949181045) Cash Dividend USD 0.75 per Share - US Tax,-5.63
+Change in Dividend Accruals,Header,Asset Category,Currency,Account,Symbol,Date,Ex Date,Pay Date,Quantity,Tax,Fee,Gross Rate,Gross Amount,Net Amount,Code
+Change in Dividend Accruals,Data,Stocks,USD,U1234567,MSFT,2025-05-15,2025-05-15,2025-06-12,50,5.63,0,0.75,37.50,31.87,Po
+Change in Dividend Accruals,Data,Stocks,USD,U1234567,QZRX,2025-08-01,2025-08-01,2025-08-15,100,0,0,0.40,40.00,40.00,Po
+Change in Dividend Accruals,Data,Stocks,CAD,U1234567,QZRV,2025-08-01,2025-08-01,2025-08-15,50,0,0,0.40,20.00,20.00,Po
+Interest,Header,Currency,Date,Description,Amount
+Interest,Data,USD,2025-03-04,USD Credit Interest for Feb-2025,1.25
+Financial Instrument Information,Header,Asset Category,Symbol,Description,Conid,Security ID,Underlying,Listing Exch,Multiplier,Expiry,Delivery Month,Type,Strike,Code
+Financial Instrument Information,Data,Stocks,SAMPLF,SAMPLF CORP,99900001,US9990000011,,NASDAQ,1,,,COMMON,,
+Financial Instrument Information,Data,Equity and Index Options,SAMPLF250620C00020000,SAMPLF 20JUN25 20 C,99900002,,SAMPLF,CBOE,100,2025-06-20,2025-06,C,20,
+Financial Instrument Information,Data,Futures,SAMPLMH6,SAMPLM MAR26,99900003,,SAMPLM,CME,5,2026-03-20,2026-03,,,

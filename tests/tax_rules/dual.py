@@ -4,11 +4,12 @@ Every partition test (a rule that must fire in its country and must not
 fire in the other) uses these helpers, so the two runs can only differ
 by the country:
 
+    from taxjson.rules import ids as R
     from tax_rules import rule, rule_absent
     from tax_rules.dual import gains_both, tx
 
-    @rule("CA-SL-02")
-    @rule_absent("CA-SL-02", country="usa")
+    @rule(R.CA_SL_02)
+    @rule_absent(R.CA_SL_02, country="usa")
     def test_still_held(self):
         book = [tx("BUYSELL", "2025-01-02", "XYZ.US", 100, 1000), ...]
         r = gains_both(book, year=2025)
@@ -38,11 +39,12 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
-from taxjson.lib.core import TaxTransaction
+from taxjson.model.transaction import TaxTransaction
 from taxjson.lib.country import CANADA, COUNTRIES, HOME_CURRENCY, USA
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-SRC = REPO_ROOT / "src"
+REPO_ROOT = _paths.REPO
+SRC = _paths.SRC
 
 
 def tx(action: str, date: str, symbol: str, qty: float = 0.0,

@@ -68,10 +68,12 @@ from dataclasses import dataclass, field
 from datetime import date as _date, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from taxjson.project.accounts import accounts_of, account_of
+from taxjson.project.settings import settings_of
 from taxjson.lib import project_layout as _PL
+from taxjson.lib.map_file import _map_rules
+from taxjson.lib.xlist_state import FORMAT, _kind, _named, read_state
 
-STATE = "xlist_loss_radar.state"
-FORMAT = "xlist_loss_radar/1"
 # The rule's window, days before and after the loss.
 WINDOW = 30
 _EPS = 1e-9
@@ -143,7 +145,7 @@ def _qty(r: Dict[str, Any], key: str = "quantity") -> float:
 
 
 def _share_listing(sym: str) -> bool:
-    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.option_symbols import is_option_symbol
     from taxjson.lib.symbol_codes import _plain_listing
     return bool(sym) and _plain_listing(sym) and not is_option_symbol(sym)
 
@@ -208,7 +210,7 @@ def _source_brokers(cache: Path, accounts: Iterable[str]
     export's metadata: the books' rows carry the file they came from as
     the parse showed it (export_coverage.file_source_id: an account id
     in the name masked), never its real name."""
-    from taxjson.lib.brokerages.detect import DISPLAY_NAMES
+    from taxjson.lib.brokerages.base import DISPLAY_NAMES
     from taxjson.lib.export_coverage import add_source
     out: Dict[str, Dict[str, Optional[str]]] = {}
     for acct in accounts:
@@ -298,63 +300,29 @@ def _wording_only(na: Set[Tuple[str, ...]], nb: Set[Tuple[str, ...]],
     return None
 
 
-def _map_rules(root: Path, cache: Path
-               ) -> Tuple[Dict[str, str], Set[frozenset]]:
-    """(the base-stage renames of the map the run applied — the
-    effective map, else ticker.map —, the DISTINCT pairs of ticker.map)."""
-    from taxjson.lib import cross_listings as XL
-    renames: Dict[str, str] = {}
-    distinct: Set[frozenset] = set()
-    try:
-        from taxjson.bin.taxjson_ticker_map import (load_map_file,
-                                                    merge_renames)
-    except ImportError:                             # pragma: no cover
-        return renames, distinct
-    eff = cache / XL.EFFECTIVE_MAP
-    tm = _PL.ticker_map_path(root)
-    for p, what in ((eff if eff.is_file() else tm, "renames"),
-                    (tm, "distinct")):
-        if not p.is_file():
-            continue
-        try:
-            tmap = load_map_file(p)
-        except Exception:                           # noqa: BLE001
-            continue
-        if what == "renames":
-            try:
-                renames = {k.upper(): v.upper() for k, v in
-                           merge_renames(tmap, to_base=True).items()}
-            except Exception:                       # noqa: BLE001
-                renames = {}
-        else:
-            distinct = {frozenset(str(s).upper() for s in pair)
-                        for pair in getattr(tmap, "distinct", ()) or ()}
-    return renames, distinct
-
-
 def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
     """The project's possible superficial losses (wash sales) across
     listings (see the module docstring), from the last run's work/."""
     from taxjson.lib import cross_listings as XL
     from taxjson.lib.country import (home_currency, is_usa,
                                      settings_country, settings_tax_date)
-    from taxjson.lib.first_run import book_files
+    from taxjson.lib.project_layout import book_files
     from taxjson.lib.missing_history import loss_window_date
     from taxjson.lib.report_model import resolve_gains_files
     root = Path(root)
     cache = root / "work"
-    settings = cfg.get("settings") or {}
-    accounts = cfg.get("accounts") or {}
+    settings = settings_of(cfg)
+    accounts = accounts_of(cfg)
     country = settings_country(settings)
-    year = str(settings.get("year") or "")
+    year = str(settings.year or "")
     basis = settings_tax_date(settings)
-    base_cur = str(settings.get("base_currency")
+    base_cur = str(settings.base_currency
                    or home_currency(country)).upper()
-    equity = {str(n): a for n, a in accounts.items()
-              if isinstance(a, dict) and not a.get("crypto")
-              and a.get("type") in ("taxable", "sheltered")}
+    equity = {n: a for n, a in accounts.items()
+              if not a.crypto
+              and a.type in ("taxable", "sheltered")}
     taxable = sorted(n for n, a in equity.items()
-                     if a.get("type") == "taxable")
+                     if a.taxable)
     if not taxable or not cache.is_dir():
         return []
     renames, distinct = _map_rules(root, cache)
@@ -367,7 +335,7 @@ def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
     # The tax year's share losses in the taxable accounts.
     losses: List[Tuple[str, Dict[str, Any]]] = []
     try:
-        gains = resolve_gains_files(cache)
+        gains = resolve_gains_files(cache, accounts=taxable)    # TJ-4301
     except Exception:                               # noqa: BLE001
         gains = {}
     for acct in taxable:
@@ -514,8 +482,7 @@ def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
                 bi = {"account": ra, "date": str(r.get("date") or ""),
                       "date_settle": str(r.get("date_settle") or ""),
                       "quantity": _qty(r),
-                      "registered": (equity.get(ra) or {}).get("type")
-                      == "sheltered"}
+                      "registered": account_of(equity, ra).type == "sheltered"}
                 if bi not in f.buys:
                     f.buys.append(bi)
     out = sorted(found.values(), key=lambda f: (f.loss_symbol,
@@ -596,18 +563,6 @@ def state_text(findings: Iterable[Finding], country: str) -> str:
                       indent=2, sort_keys=True) + "\n"
 
 
-def read_state(cache: Path) -> List[Dict[str, Any]]:
-    """The findings the last run wrote ([] when none or unreadable)."""
-    try:
-        doc = json.loads((Path(cache) / STATE).read_text(encoding="utf-8"))
-    except (OSError, ValueError, RecursionError):
-        return []
-    if not isinstance(doc, dict) or doc.get("format") != FORMAT:
-        return []
-    return [f for f in doc.get("findings") or [] if isinstance(f, dict)
-            and f.get("loss_symbol") and f.get("other_symbol")]
-
-
 def answered(f: Dict[str, Any], root: Path) -> Optional[str]:
     """Why ticker.map now answers a finding (a DISTINCT line, a rule
     joining the two), else None — the map may have changed since the
@@ -623,13 +578,6 @@ def open_findings(root: Path) -> List[Dict[str, Any]]:
             if not answered(f, root)]
 
 
-def _kind(country: str, n: int = 1) -> str:
-    from taxjson.lib.country import is_usa
-    one, many = (("wash sale", "wash sales") if is_usa(country) else
-                 ("superficial loss", "superficial losses"))
-    return one if n == 1 else many
-
-
 def _when(items: List[Dict[str, Any]]) -> str:
     out = []
     for x in items[:4]:
@@ -638,17 +586,6 @@ def _when(items: List[Dict[str, Any]]) -> str:
     if len(items) > 4:
         out.append(f"+{len(items) - 4} more")
     return ", ".join(out)
-
-
-def _named(f: Dict[str, Any]) -> str:
-    """How the exports name the pair: the shared name, or the two names
-    that differ only in share wording."""
-    nm = f.get("names") or []
-    if len(nm) == 2 and (nm[0] or nm[1]):
-        return (f"named {nm[0]!r} and {nm[1]!r} — the same company; the "
-                f"names differ only in share wording, which may be a "
-                f"broker's style or two share classes")
-    return f"both named {f.get('name')!r}"
 
 
 def message(f: Dict[str, Any], country: str) -> Tuple[str, List[str]]:
@@ -682,11 +619,3 @@ def more_message(n: int, country: str) -> Tuple[str, List[str]]:
             f"listed here",
             ["`tjs ticker-map --suggest` lists every one with the "
              "TOBASE and DISTINCT lines that answer it."])
-
-
-def suggestion_reason(f: Dict[str, Any], country: str) -> str:
-    """The reason `tjs ticker-map --suggest` gives the TOBASE line."""
-    return (f"a loss on {f['loss_symbol']} and {f['other_symbol']} bought "
-            f"within 30 days, {_named(f)}: a possible "
-            f"{_kind(country)} across listings — add it if they are one "
-            f"security (`{f.get('distinct')}` if not)")

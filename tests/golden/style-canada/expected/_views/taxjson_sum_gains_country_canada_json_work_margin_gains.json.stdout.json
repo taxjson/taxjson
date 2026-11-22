@@ -1,0 +1,142 @@
+{
+  "manual_rows": [],
+  "option_fees": {
+    "CAD": 8.1
+  },
+  "returns_by_asset": {
+    "Options": {
+      "CAD": {
+        "days": [
+          92,
+          0,
+          0
+        ],
+        "dollars": [
+          -410.4,
+          268.65,
+          201.15
+        ],
+        "fee_shares": [
+          2.0,
+          1.0,
+          1.0
+        ],
+        "fees": [
+          2.7,
+          1.35,
+          1.35
+        ]
+      }
+    },
+    "Stocks": {
+      "CAD": {
+        "days": [
+          127,
+          193,
+          296,
+          133
+        ],
+        "dollars": [
+          132.3,
+          -203.85,
+          0.0,
+          0.0
+        ],
+        "fee_shares": [
+          50.0,
+          200.0,
+          100.0,
+          10.0
+        ],
+        "fees": [
+          1.35,
+          1.35,
+          9.95,
+          1.35
+        ]
+      }
+    }
+  },
+  "schema_version": 1,
+  "tainted_count": 0,
+  "tainted_routed": 0,
+  "ticker_stats": {
+    "MSFT.US": {
+      "CAD": {
+        "cap": 132.3,
+        "cost": 27001.35,
+        "div": 101.25,
+        "hold_days": [
+          127
+        ],
+        "opt": 0.0,
+        "pil": 0.0,
+        "proceeds": 27133.65,
+        "trade_count": 1
+      }
+    },
+    "NVDA.US": {
+      "CAD": {
+        "cap": 0.0,
+        "cost": 1999.35,
+        "div": 0.0,
+        "hold_days": [
+          133
+        ],
+        "opt": 0.0,
+        "pil": 0.0,
+        "proceeds": 1881.9,
+        "trade_count": 1
+      }
+    },
+    "PARN.US": {
+      "CAD": {
+        "cap": 0.0,
+        "cost": 0.0,
+        "div": 337.5,
+        "hold_days": [],
+        "opt": 0.0,
+        "pil": 0.0,
+        "proceeds": 0.0,
+        "trade_count": 0
+      }
+    },
+    "QZQ.US": {
+      "CAD": {
+        "cap": -203.85,
+        "cost": 8444.25,
+        "div": 54.0,
+        "hold_days": [
+          92,
+          193,
+          0,
+          0
+        ],
+        "opt": 59.4,
+        "pil": 0.0,
+        "proceeds": 8095.95,
+        "trade_count": 4
+      }
+    },
+    "SAMPA.TO": {
+      "CAD": {
+        "cap": 0.0,
+        "cost": 4009.95,
+        "div": 50.0,
+        "hold_days": [
+          296
+        ],
+        "opt": 0.0,
+        "pil": 0.0,
+        "proceeds": 3490.05,
+        "trade_count": 1
+      }
+    }
+  },
+  "total_fees": {
+    "CAD": 61.4
+  },
+  "total_year": "2024",
+  "wash_solver_converged": true,
+  "wash_solver_iterations": 2
+}

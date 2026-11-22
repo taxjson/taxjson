@@ -1,0 +1,72 @@
+======================================================================
+ DIAGNOSTICS — margin2  (parser/merge warnings; not part of the tax totals)
+======================================================================
+note: FX: Bank of Canada Valet for <n> dates, Yahoo fallback for 0
+OK: <merged>: 6 transactions validated.
+warning: ATTENTION: short: SAMPLA.US (margin): the broker codes the sale on 2025-03-18 CLOSING (IB code C, IB Basis 451.00 USD), but the data holds no position to close — it is booked as a new short until the missing purchase is supplied (`tjs find-missing-history --write-missing-history` writes its .tt OPENING cost=unknown line).
+NOTE: 1 (symbol, account) pair(s) go short in this data: SAMPLA.US/margin. 0 are in registered accounts. If any of these are sales of shares bought before your files start (no purchase in the data) rather than real short trades, open the units held before the data with .tt OPENING cost=unknown lines: `tjs find-missing-history --write-missing-history` in a project writes them (`tjs run` reads them).
+note: ib_2025.csv: 16 recognized non-event row(s) not translated — Statement metadata row: 2, section Account Information (not translated): 2, section Cash Report (not translated): 9, section Deposits & Withdrawals (not translated): 1, section Financial Instrument Information (not translated): 2.
+  ib_2025.csv: 6 tax objects
+======================================================================
+
+
+TICKER SUMMARY — CAD, year 2025, sorted by ticker
+
+SYMBOL                                 TOTAL        TOTAL_COST     TOTAL_PROCEED        TOTAL_GAIN          CAP_GAIN          OPT_GAIN          DIVIDEND               PIL   AVG_DAYS
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+F:SAMPLMH6.US                          17.55              0.00             17.55             17.55             17.55              0.00              0.00              0.00       28.0
+SAMPLD.US                              17.55            267.30            282.15             14.85             14.85              0.00              0.00              2.70      303.0
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+TOTAL                                  35.10            267.30            299.70             32.40             32.40              0.00              0.00              2.70      165.5
+
+ASSET: Non-option | CURRENCY: CAD   | TRADES: 1 | YEAR: 2025
+
+Total Realized Gain:                 14.85 CAD
+Average Holding Period:               303.0 Days
+Avg Fee Per Trade:                    1.35 CAD
+Avg Fee Per Share:                  0.1350 CAD
+----------------------------------------------------------------------------------------------------------------
+Positive Trades: 1 | Negative Trades: 0 | Win/Loss: inf | Win Rate: 100.0%
+Average Positive:             14.85 CAD | Average Negative:              0.00 CAD
+----------------------------------------------------------------------------------------------------------------
+
+ASSET: Futures    | CURRENCY: CAD   | TRADES: 1 | YEAR: 2025
+
+Total Realized Gain:                 17.55 CAD
+Average Holding Period:                28.0 Days
+Avg Fee Per Trade:                    1.35 CAD
+Avg Fee Per Contract:               1.3500 CAD
+----------------------------------------------------------------------------------------------------------------
+Positive Trades: 1 | Negative Trades: 0 | Win/Loss: inf | Win Rate: 100.0%
+Average Positive:             17.55 CAD | Average Negative:              0.00 CAD
+----------------------------------------------------------------------------------------------------------------
+
+CONSOLIDATED TOTALS — CAD, year 2025
+
+TOTAL COST:                            267.30 CAD
+TOTAL PROCEEDS:                        299.70 CAD
+  (engine sign convention: shorts/written options negated — for Schedule 3 proceeds and ACB use `tjs form-export`)
+------------------------------------------------------
+TOTAL REALIZED NON-OPTION GAIN:         32.40 CAD
+  (shares, units, futures and crypto — Schedule 3 lines: `tjs form-export`)
+TOTAL REALIZED OPTION GAIN:              0.00 CAD
+TOTAL REALIZED GAIN:                    32.40 CAD
+------------------------------------------------------
+TOTAL DIVIDENDS / STAKING:               0.00 CAD
+TOTAL PIL (PAY-IN-LIEU):                 2.70 CAD
+------------------------------------------------------
+GRAND TOTAL (GAIN+DIV+PIL):             35.10 CAD
+------------------------------------------------------
+TOTAL TRADING FEES PAID:                 5.40 CAD
+  (OPTION TRADING FEES):                 0.00 CAD
+
+INCOME SUMMARY — CAD, year 2025, sorted by ticker
+
+SYMBOL                            GROSS DIV              PIL          TAX W/H       NET INCOME
+----------------------------------------------------------------------------------------------
+SAMPLD.US                              0.00             2.70             0.00             2.70
+----------------------------------------------------------------------------------------------
+SUBTOTAL                               0.00             2.70             0.00             2.70
+CASH INTEREST                                                                             0.00
+----------------------------------------------------------------------------------------------
+TOTAL NET INCOME                                                                          2.70

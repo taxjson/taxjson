@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The deck's commands slide (docs/deck/taxjson-deck.html, slide 7),
 rendered from the help page's groups (`_COMMAND_GROUPS` in
-src/taxjson/bin/taxjson_run.py), the Maintainer group left out (the
+src/taxjson/cli/parser.py), the Maintainer group left out (the
 help page shows it only on a development checkout).
 
     scripts/deck_commands.py            print the slide's command cards
@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-RUN = ROOT / "src" / "taxjson" / "bin" / "taxjson_run.py"
+PARSER = ROOT / "src" / "taxjson" / "cli" / "parser.py"
 DECK = ROOT / "docs" / "deck" / "taxjson-deck.html"
 BEGIN = "<!-- commands:begin -->"
 END = "<!-- commands:end -->"
@@ -28,7 +28,7 @@ ROWS = (5, 5)
 
 
 def _literal(name: str):
-    tree = ast.parse(RUN.read_text(encoding="utf-8"))
+    tree = ast.parse(PARSER.read_text(encoding="utf-8"))
     for node in tree.body:
         target = None
         if isinstance(node, ast.AnnAssign) and isinstance(node.target,
@@ -39,7 +39,7 @@ def _literal(name: str):
             target = node.targets[0].id
         if target == name:
             return ast.literal_eval(node.value)
-    raise SystemExit(f"{RUN}: no {name} assignment")
+    raise SystemExit(f"{PARSER}: no {name} assignment")
 
 
 def groups():

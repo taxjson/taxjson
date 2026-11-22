@@ -1,0 +1,56 @@
+======================================================================
+ DIAGNOSTICS — hand  (parser/merge warnings; not part of the tax totals)
+======================================================================
+warning: ATTENTION: opening: hand: the opening snapshot (2024-12-31) replaces 2 earlier row(s) of SAMPQ.US — left out of the books so the shares are not counted twice (income rows stay).
+OK: <merged>: 5 transactions validated.
+warning: ATTENTION: short: SAMPLA.US (margin): the broker codes the sale on 2025-03-18 CLOSING (IB code C, IB Basis 451.00 USD), but the data holds no position to close — it is booked as a new short until the missing purchase is supplied (`tjs find-missing-history --write-missing-history` writes its .tt OPENING cost=unknown line).
+NOTE: 1 (symbol, account) pair(s) go short in this data: SAMPLA.US/margin. 0 are in registered accounts. If any of these are sales of shares bought before your files start (no purchase in the data) rather than real short trades, open the units held before the data with .tt OPENING cost=unknown lines: `tjs find-missing-history --write-missing-history` in a project writes them (`tjs run` reads them).
+======================================================================
+
+
+TICKER SUMMARY — CAD, year 2025, sorted by ticker
+
+SYMBOL                                 TOTAL        TOTAL_COST     TOTAL_PROCEED        TOTAL_GAIN          CAP_GAIN          OPT_GAIN          DIVIDEND               PIL   AVG_DAYS
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+SAMPQ.US                              125.00            775.00            900.00            125.00            125.00              0.00              0.00              0.00       38.0
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+TOTAL                                 125.00            775.00            900.00            125.00            125.00              0.00              0.00              0.00       38.0
+
+ASSET: Non-option | CURRENCY: CAD   | TRADES: 1 | YEAR: 2025
+
+Total Realized Gain:                125.00 CAD
+Average Holding Period:                38.0 Days
+Avg Fee Per Trade:                    0.00 CAD
+Avg Fee Per Share:                  0.0000 CAD
+----------------------------------------------------------------------------------------------------------------
+Positive Trades: 1 | Negative Trades: 0 | Win/Loss: inf | Win Rate: 100.0%
+Average Positive:            125.00 CAD | Average Negative:              0.00 CAD
+----------------------------------------------------------------------------------------------------------------
+
+CONSOLIDATED TOTALS — CAD, year 2025
+
+TOTAL COST:                            775.00 CAD
+TOTAL PROCEEDS:                        900.00 CAD
+  (engine sign convention: shorts/written options negated — for Schedule 3 proceeds and ACB use `tjs form-export`)
+------------------------------------------------------
+TOTAL REALIZED NON-OPTION GAIN:        125.00 CAD
+  (shares, units, futures and crypto — Schedule 3 lines: `tjs form-export`)
+TOTAL REALIZED OPTION GAIN:              0.00 CAD
+TOTAL REALIZED GAIN:                   125.00 CAD
+------------------------------------------------------
+TOTAL DIVIDENDS / STAKING:               0.00 CAD
+------------------------------------------------------
+GRAND TOTAL (GAIN+DIV+PIL):            125.00 CAD
+------------------------------------------------------
+TOTAL TRADING FEES PAID:                 0.00 CAD
+  (OPTION TRADING FEES):                 0.00 CAD
+
+INCOME SUMMARY — year 2025, sorted by ticker
+
+SYMBOL                            GROSS DIV              PIL          TAX W/H       NET INCOME
+----------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------
+SUBTOTAL                               0.00             0.00             0.00             0.00
+CASH INTEREST                                                                             0.00
+----------------------------------------------------------------------------------------------
+TOTAL NET INCOME                                                                          0.00

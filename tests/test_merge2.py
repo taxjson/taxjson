@@ -28,9 +28,10 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+import _paths
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 def _write_json(path: Path, transactions):
@@ -201,7 +202,7 @@ class TestMerge2DefaultRateWarnings(unittest.TestCase):
             # back to --default-rate for every field conversion. An
             # entirely-uncovered currency is fatal unless the fallback
             # is opted into with an EXPLICIT --default-rate (stage-tools
-            # audit; see test_stage_tools_audit), so pass it here.
+            # audit; see features.fx.test_convert_currency_codes_and_rates_file), so pass it here.
             rates = Path(tmp) / 'rates.txt'
             rates.write_text(
                 '2025-01-15 12:00:00 EUR CAD 1.5500\n',

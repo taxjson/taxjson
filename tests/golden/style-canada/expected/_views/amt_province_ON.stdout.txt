@@ -1,0 +1,32 @@
+MINIMUM TAX (AMT) — canada/ON, tax year 2024, CAD
+ESTIMATE ONLY, not filing numbers: rates vintage 2024; [ ] the law or the source.
+
+REGULAR TAX
+  Taxable income (line 26000)                        58,956.80
+  Federal tax after credits                           6,620.41  [BPA, dividend and foreign tax credits]
+  ON tax                                              3,252.21
+
+ADJUSTED TAXABLE INCOME — s.127.52
+  Capital gains at 100% (regular: 50%)                  694.38  s.127.52(1)(d)
+  Eligible dividends, actual amount (no gross-up)         50.00  s.127.52(1)
+  Foreign dividends                                     517.05
+  Payments in lieu and staking (ordinary)                23.56
+  Other income                                       58,000.00  [estimate] other_income
+  = Adjusted taxable income                          59,284.99
+  - Basic exemption (s.127.53)                     -173,205.00  [the start of the 29% bracket]
+  = Subject to minimum tax                                0.00
+  x 20.5% (s.127.51)                                      0.00
+  - Basic minimum tax credit (s.127.531)             -1,177.88  [basic personal amount 15,705.00: its credit at 50%]
+  - Special foreign tax credit (s.127.54)               -26.93  [the greater of the regular credit 26.93 and the lesser of 2/3 of the foreign tax (17.96) and 20.5% of the foreign income (106.00)]
+  = Federal minimum tax                                   0.00
+    Federal regular tax                               6,620.41
+  => AMT does not bind: regular tax over minimum      6,620.41  [a carryover can use 6,647.34]
+
+MINIMUM TAX CARRYOVER — s.120.2
+  From: nothing entered ([estimate] amt_carryover) and no earlier close-year record
+  Created this year (additional tax)                      0.00
+  Carried forward to 2025                                 0.00
+
+  Estimated tax on investment income                    239.49
+    with AMT and carryover                              239.49
+Not modelled: donations, the stock-option deduction; 1 note(s) — tjs amt --details

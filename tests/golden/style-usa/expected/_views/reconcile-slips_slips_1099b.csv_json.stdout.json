@@ -1,0 +1,55 @@
+{
+  "clean": false,
+  "counts": {
+    "ambiguous_listing": 0,
+    "mismatch": 1,
+    "missing_from_computed": 1,
+    "missing_from_slip": 3,
+    "no_slip_expected": 1,
+    "ok": 2,
+    "unknown_proceeds": 0
+  },
+  "rows": [
+    {
+      "detail": "computed 1.0 disposition(s) with nil proceeds (expired option) \u2014 brokers usually issue no slip row",
+      "status": "NO_SLIP_EXPECTED",
+      "symbol": "KELPQ240621C00008000.US"
+    },
+    {
+      "detail": "computed 1.0 disposition(s), proceeds 20,100.00 \u2014 no slip row (missing slip, or a non-slip disposition like a corp action)",
+      "status": "MISSING_FROM_SLIP",
+      "symbol": "MSFT.US"
+    },
+    {
+      "detail": "",
+      "status": "OK",
+      "symbol": "NVDA"
+    },
+    {
+      "detail": "proceeds off by +10.00 (slip 5,610.00 vs computed gross 5,600.00 / net 5,599.00)",
+      "status": "MISMATCH",
+      "symbol": "QZQ"
+    },
+    {
+      "detail": "computed 1.0 disposition(s), proceeds 300.00 \u2014 no slip row (missing slip, or a non-slip disposition like a corp action)",
+      "status": "MISSING_FROM_SLIP",
+      "symbol": "QZQ240920C00030000.US"
+    },
+    {
+      "detail": "computed 1.0 disposition(s), proceeds 199.00 \u2014 no slip row (missing slip, or a non-slip disposition like a corp action)",
+      "status": "MISSING_FROM_SLIP",
+      "symbol": "QZQ241220C00035000.US"
+    },
+    {
+      "detail": "matches NET proceeds (slip appears net of commissions)",
+      "status": "OK",
+      "symbol": "SAMPA"
+    },
+    {
+      "detail": "slip has 1.0 row(s), proceeds 120.00 \u2014 nothing computed (dropped CSV rows, a missing statement, or a symbol the books spell differently?)",
+      "status": "MISSING_FROM_COMPUTED",
+      "symbol": "ZZQX"
+    }
+  ],
+  "schema_version": 1
+}

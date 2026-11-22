@@ -1,0 +1,59 @@
+{
+  "by_ticker": {
+    "KELPQ240621C00008000.US": {
+      "hold_days": [
+        18
+      ],
+      "total_cost": 36.25,
+      "total_div": 0.0,
+      "total_gain": -36.25,
+      "total_pil": 0.0,
+      "total_proceeds": 0.0,
+      "trade_count": 1
+    }
+  },
+  "inventory": [],
+  "option_replacement_warnings": [],
+  "summary": {
+    "count": 1,
+    "total_disallowed": 0,
+    "total_fees_by_currency": {
+      "USD": {
+        "options": 1.25,
+        "stocks": 0.0,
+        "total": 1.25
+      }
+    },
+    "total_gain": -36.25
+  },
+  "transactions": [
+    {
+      "account": "qt",
+      "acquired_date": "2024-06-03",
+      "commission": 0.0,
+      "cost": 36.25,
+      "currency": "USD",
+      "date": "2024-06-21",
+      "date_settle": "2024-06-21",
+      "days_held": 18,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 0.0,
+      "gain": -36.25,
+      "id": "67d3f2a0f9d97b23",
+      "is_option": true,
+      "is_wash_sale": false,
+      "permanently_disallowed": 0.0,
+      "proceeds": 0.0,
+      "qty": 1.0,
+      "raw_gain": -36.25,
+      "replacement_lot_ids": [],
+      "symbol": "KELPQ240621C00008000.US",
+      "term": "SHORT_TERM",
+      "wash_replacements": null,
+      "wash_trigger": null,
+      "wash_window": null
+    }
+  ],
+  "wash_sales": []
+}

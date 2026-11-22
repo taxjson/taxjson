@@ -1,0 +1,119 @@
+{
+  "by_ticker": {
+    "AAPL.US": {
+      "hold_days": [
+        51
+      ],
+      "total_cost": 18225.0,
+      "total_div": 0.0,
+      "total_gain": 94.5675,
+      "total_pil": 0.0,
+      "total_proceeds": 18319.5675,
+      "trade_count": 1
+    },
+    "ABCD270219C00045000.US": {
+      "hold_days": [
+        21
+      ],
+      "total_cost": 2105.6625,
+      "total_div": 0.0,
+      "total_gain": 175.8375,
+      "total_pil": 0.0,
+      "total_proceeds": 2281.5,
+      "trade_count": 1
+    }
+  },
+  "inventory": [
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-03-18",
+      "last_acq_settle": "2024-03-20",
+      "position_start_date": "2024-01-10",
+      "qty": 75.0,
+      "symbol": "AAPL.US",
+      "total_cost": 18225.0
+    },
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-12-11",
+      "last_acq_settle": "2024-12-12",
+      "position_start_date": "2024-12-11",
+      "qty": 30.0,
+      "symbol": "SHOP.TO",
+      "total_cost": 2854.95
+    }
+  ],
+  "option_replacement_warnings": [],
+  "summary": {
+    "total_disallowed": 0,
+    "total_fees_by_currency": {
+      "CAD": {
+        "options": 26.6625,
+        "stocks": 11.6325,
+        "total": 38.295
+      }
+    },
+    "total_gain": 270.405,
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1
+  },
+  "transactions": [
+    {
+      "account": "rrsp",
+      "commission": 0.0,
+      "cost": 18225.0,
+      "currency": "CAD",
+      "date": "2024-05-08",
+      "date_settle": "2024-05-10",
+      "days_held": 51,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 6.6825,
+      "gain": 94.5675,
+      "grant": false,
+      "id": "b20a360eba0b1fbb",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 18319.5675,
+      "qty": 75.0,
+      "raw_gain": 94.5675,
+      "replacement_lot_ids": [],
+      "symbol": "AAPL.US",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "rrsp",
+      "commission": 0.0,
+      "cost": 2105.6625,
+      "currency": "CAD",
+      "date": "2024-12-12",
+      "date_settle": "2024-12-15",
+      "days_held": 21,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 13.5,
+      "gain": 175.8375,
+      "grant": false,
+      "id": "ac64c0c7fd8d4ab0",
+      "is_option": true,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 2281.5,
+      "qty": 10.0,
+      "raw_gain": 175.8375,
+      "replacement_lot_ids": [],
+      "symbol": "ABCD270219C00045000.US",
+      "term": null,
+      "wash_replacements": null
+    }
+  ],
+  "wash_sales": []
+}

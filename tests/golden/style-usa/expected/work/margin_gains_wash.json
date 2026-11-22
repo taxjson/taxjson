@@ -1,0 +1,527 @@
+{
+  "inventory": [
+    {
+      "account": "margin",
+      "currency": "USD",
+      "deferred_wash": 519.9,
+      "holding_start_date": "2024-01-29",
+      "last_acq_date": "2024-11-20",
+      "position_start_date": "2024-11-20",
+      "qty": 100.0,
+      "symbol": "SAMPA.US",
+      "total_cost": 3929.85
+    },
+    {
+      "account": "margin",
+      "currency": "USD",
+      "deferred_wash": 0.0,
+      "holding_start_date": "2024-02-01",
+      "last_acq_date": "2024-02-01",
+      "position_start_date": "2024-02-01",
+      "qty": 100.0,
+      "symbol": "PARN.US",
+      "total_cost": 5001.0
+    },
+    {
+      "account": "margin",
+      "currency": "USD",
+      "deferred_wash": 201.0,
+      "holding_start_date": "2024-03-11",
+      "last_acq_date": "2024-09-20",
+      "position_start_date": "2024-09-20",
+      "qty": 100.0,
+      "symbol": "QZQ.US",
+      "total_cost": 2602.0
+    },
+    {
+      "account": "margin",
+      "currency": "USD",
+      "deferred_wash": 0.0,
+      "holding_start_date": "2024-06-03",
+      "last_acq_date": "2024-06-03",
+      "position_start_date": "2024-06-03",
+      "qty": 10.0,
+      "symbol": "SPNC.US",
+      "total_cost": 250.0
+    },
+    {
+      "account": "margin",
+      "currency": "USD",
+      "deferred_wash": 82.0,
+      "holding_start_date": "2024-07-25",
+      "last_acq_date": "2024-12-05",
+      "position_start_date": "2024-12-05",
+      "qty": 10.0,
+      "symbol": "NVDA.US",
+      "total_cost": 1433.0
+    },
+    {
+      "account": "margin",
+      "currency": "USD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-04-01",
+      "position_start_date": "2024-04-01",
+      "qty": -50.0,
+      "symbol": "OLDCO.US",
+      "total_cost": -999.0
+    },
+    {
+      "account": "margin",
+      "currency": "USD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-04-15",
+      "position_start_date": "2024-04-15",
+      "qty": -40.0,
+      "symbol": "GHOSTQ.US",
+      "total_cost": -590.05
+    },
+    {
+      "account": "margin",
+      "currency": "USD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-11-15",
+      "multiplier": 100.0,
+      "position_start_date": "2024-11-15",
+      "qty": -1.0,
+      "symbol": "QZQ250117C00040000.US",
+      "total_cost": -149.0
+    }
+  ],
+  "inventory_year_end": [
+    {
+      "account": "margin",
+      "currency": "USD",
+      "deferred_wash": 519.9,
+      "holding_start_date": "2024-01-29",
+      "last_acq_date": "2024-11-20",
+      "position_start_date": "2024-11-20",
+      "qty": 100.0,
+      "symbol": "SAMPA.US",
+      "total_cost": 3929.85
+    },
+    {
+      "account": "margin",
+      "currency": "USD",
+      "deferred_wash": 0.0,
+      "holding_start_date": "2024-02-01",
+      "last_acq_date": "2024-02-01",
+      "position_start_date": "2024-02-01",
+      "qty": 100.0,
+      "symbol": "PARN.US",
+      "total_cost": 5001.0
+    },
+    {
+      "account": "margin",
+      "currency": "USD",
+      "deferred_wash": 201.0,
+      "holding_start_date": "2024-03-11",
+      "last_acq_date": "2024-09-20",
+      "position_start_date": "2024-09-20",
+      "qty": 100.0,
+      "symbol": "QZQ.US",
+      "total_cost": 2602.0
+    },
+    {
+      "account": "margin",
+      "currency": "USD",
+      "deferred_wash": 0.0,
+      "holding_start_date": "2024-06-03",
+      "last_acq_date": "2024-06-03",
+      "position_start_date": "2024-06-03",
+      "qty": 10.0,
+      "symbol": "SPNC.US",
+      "total_cost": 250.0
+    },
+    {
+      "account": "margin",
+      "currency": "USD",
+      "deferred_wash": 82.0,
+      "holding_start_date": "2024-07-25",
+      "last_acq_date": "2024-12-05",
+      "position_start_date": "2024-12-05",
+      "qty": 10.0,
+      "symbol": "NVDA.US",
+      "total_cost": 1433.0
+    },
+    {
+      "account": "margin",
+      "currency": "USD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-04-01",
+      "position_start_date": "2024-04-01",
+      "qty": -50.0,
+      "symbol": "OLDCO.US",
+      "total_cost": -999.0
+    },
+    {
+      "account": "margin",
+      "currency": "USD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-04-15",
+      "position_start_date": "2024-04-15",
+      "qty": -40.0,
+      "symbol": "GHOSTQ.US",
+      "total_cost": -590.05
+    },
+    {
+      "account": "margin",
+      "currency": "USD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-11-15",
+      "position_start_date": "2024-11-15",
+      "qty": -1.0,
+      "symbol": "QZQ250117C00040000.US",
+      "total_cost": -149.0
+    }
+  ],
+  "manual_reporting_required": [],
+  "metadata": {
+    "account": "margin",
+    "blended": true,
+    "split_from": "blended taxable pass"
+  },
+  "summary": {
+    "count": 11,
+    "tax_date_basis": "trade",
+    "total_disallowed": 903.4,
+    "total_fees_by_currency": {
+      "USD": {
+        "options": 6.0,
+        "stocks": 49.8,
+        "total": 55.8
+      }
+    },
+    "total_gain": -107.5,
+    "year": "2024"
+  },
+  "transactions": [
+    {
+      "account": "margin",
+      "acquired_date": "2024-02-12",
+      "commission": 0.0,
+      "cost": 20001.0,
+      "currency": "USD",
+      "date": "2024-06-18",
+      "date_settle": "2024-06-20",
+      "days_held": 127,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 1.0,
+      "gain": 98.0,
+      "id": "d702be1956cc8600",
+      "is_option": false,
+      "is_wash_sale": false,
+      "permanently_disallowed": 0.0,
+      "proceeds": 20099.0,
+      "qty": 50.0,
+      "raw_gain": 98.0,
+      "replacement_lot_ids": [],
+      "symbol": "MSFT.US",
+      "term": "SHORT_TERM",
+      "wash_replacements": null,
+      "wash_trigger": null,
+      "wash_window": null
+    },
+    {
+      "account": "margin",
+      "acquired_date": "2024-05-01",
+      "commission": 0.0,
+      "cost": 602.0,
+      "currency": "USD",
+      "date": "2024-08-01",
+      "date_settle": "2024-08-02",
+      "days_held": 92,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 2.0,
+      "gain": -304.0,
+      "id": "933971f820fd27b3",
+      "is_option": true,
+      "is_wash_sale": false,
+      "permanently_disallowed": 0.0,
+      "proceeds": 298.0,
+      "qty": 2.0,
+      "raw_gain": -304.0,
+      "replacement_lot_ids": [],
+      "symbol": "QZQ240920C00030000.US",
+      "term": "SHORT_TERM",
+      "wash_replacements": null,
+      "wash_trigger": null,
+      "wash_window": null
+    },
+    {
+      "account": "margin",
+      "acquired_date": "2024-03-01",
+      "commission": 0.0,
+      "cost": 6001.0,
+      "currency": "USD",
+      "date": "2024-09-10",
+      "date_settle": "2024-09-11",
+      "days_held": 193,
+      "direction": "LONG",
+      "disallowed_amount": 301.5,
+      "fee": 1.0,
+      "gain": -100.5,
+      "id": "0a78ef268cf7b162",
+      "is_option": false,
+      "is_wash_sale": true,
+      "permanently_disallowed": 100.5,
+      "proceeds": 5599.0,
+      "qty": 200.0,
+      "raw_gain": -402.0,
+      "replacement_lot_ids": [
+        "91282a350b6b2396",
+        "35e8d278ef88bbec"
+      ],
+      "symbol": "QZQ.US",
+      "term": "SHORT_TERM",
+      "wash_replacements": [
+        {
+          "account": "margin",
+          "basis_bump": 201.0,
+          "date": "2024-09-20",
+          "is_affiliated": false,
+          "is_sheltered": false,
+          "match_qty": 100.0,
+          "price": 24.0,
+          "qty_total": 100.0,
+          "tx_id": "91282a350b6b2396"
+        },
+        {
+          "account": "roth",
+          "basis_bump": 100.5,
+          "date": "2024-09-25",
+          "is_affiliated": false,
+          "is_sheltered": true,
+          "match_qty": 50.0,
+          "price": 24.5,
+          "qty_total": 50.0,
+          "tx_id": "35e8d278ef88bbec"
+        }
+      ],
+      "wash_trigger": null,
+      "wash_window": null
+    },
+    {
+      "account": "margin",
+      "acquired_date": "2024-01-10",
+      "commission": 0.0,
+      "cost": 4009.95,
+      "currency": "USD",
+      "date": "2024-11-01",
+      "date_settle": "2024-11-01",
+      "days_held": 296,
+      "direction": "LONG",
+      "disallowed_amount": 519.9,
+      "fee": 9.95,
+      "gain": 0.0,
+      "id": "64e284e899fcec7b",
+      "is_option": false,
+      "is_wash_sale": true,
+      "permanently_disallowed": 0.0,
+      "proceeds": 3490.05,
+      "qty": 100.0,
+      "raw_gain": -519.9,
+      "replacement_lot_ids": [
+        "6d7d81e91885cd7f"
+      ],
+      "symbol": "SAMPA.US",
+      "term": "SHORT_TERM",
+      "wash_replacements": [
+        {
+          "account": "margin",
+          "basis_bump": 519.9,
+          "date": "2024-11-20",
+          "is_affiliated": false,
+          "is_sheltered": false,
+          "match_qty": 100.0,
+          "price": 34.0,
+          "qty_total": 100.0,
+          "tx_id": "6d7d81e91885cd7f"
+        }
+      ],
+      "wash_trigger": null,
+      "wash_window": null
+    },
+    {
+      "account": "margin",
+      "acquired_date": "2024-07-10",
+      "commission": 0.0,
+      "cost": 1481.0,
+      "currency": "USD",
+      "date": "2024-11-20",
+      "date_settle": "2024-11-21",
+      "days_held": 133,
+      "direction": "LONG",
+      "disallowed_amount": 82.0,
+      "fee": 1.0,
+      "gain": 0.0,
+      "id": "c06c7e1ff627bebc",
+      "is_option": false,
+      "is_wash_sale": true,
+      "permanently_disallowed": 0.0,
+      "proceeds": 1399.0,
+      "qty": 10.0,
+      "raw_gain": -82.0,
+      "replacement_lot_ids": [
+        "a0a5b9bb717c0c05"
+      ],
+      "symbol": "NVDA.US",
+      "term": "SHORT_TERM",
+      "wash_replacements": [
+        {
+          "account": "margin",
+          "basis_bump": 82.0,
+          "date": "2024-12-05",
+          "is_affiliated": false,
+          "is_sheltered": false,
+          "match_qty": 10.0,
+          "price": 135.0,
+          "qty_total": 10.0,
+          "tx_id": "a0a5b9bb717c0c05"
+        }
+      ],
+      "wash_trigger": null,
+      "wash_window": null
+    },
+    {
+      "account": "margin",
+      "acquired_date": "2024-10-01",
+      "commission": 0.0,
+      "cost": -199.0,
+      "currency": "USD",
+      "date": "2024-12-20",
+      "date_settle": "2024-12-20",
+      "days_held": 80,
+      "direction": "SHORT",
+      "disallowed_amount": 0.0,
+      "fee": 0.0,
+      "gain": 199.0,
+      "id": "3e18b46a69119fcc",
+      "is_option": true,
+      "is_wash_sale": false,
+      "permanently_disallowed": 0.0,
+      "proceeds": 0.0,
+      "qty": 1.0,
+      "raw_gain": 199.0,
+      "replacement_lot_ids": [],
+      "symbol": "QZQ241220C00035000.US",
+      "term": "SHORT_TERM",
+      "wash_replacements": null,
+      "wash_trigger": null,
+      "wash_window": null
+    },
+    {
+      "account": "margin",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "USD",
+      "date": "2024-03-14",
+      "date_settle": "2024-03-14",
+      "dividend": 37.5,
+      "gain": 0.0,
+      "id": "da51fab0c2c04792",
+      "proceeds": 0.0,
+      "qty": 50.0,
+      "symbol": "MSFT.US"
+    },
+    {
+      "account": "margin",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "USD",
+      "date": "2024-03-28",
+      "date_settle": "2024-03-28",
+      "dividend": 50.0,
+      "gain": 0.0,
+      "id": "4786306f767cd5b2",
+      "proceeds": 0.0,
+      "qty": 100.0,
+      "symbol": "SAMPA.US"
+    },
+    {
+      "account": "margin",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "USD",
+      "date": "2024-06-03",
+      "date_settle": "2024-06-03",
+      "dividend": 250.0,
+      "gain": 0.0,
+      "id": "57de6b79c8c09141",
+      "proceeds": 0.0,
+      "qty": 0.0,
+      "symbol": "PARN.US"
+    },
+    {
+      "account": "margin",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "USD",
+      "date": "2024-06-13",
+      "date_settle": "2024-06-13",
+      "dividend": 37.5,
+      "gain": 0.0,
+      "id": "89ba77a07c76dad8",
+      "proceeds": 0.0,
+      "qty": 50.0,
+      "symbol": "MSFT.US"
+    },
+    {
+      "account": "margin",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "USD",
+      "date": "2024-09-12",
+      "date_settle": "2024-09-12",
+      "dividend": 40.0,
+      "gain": 0.0,
+      "id": "dfeeb985ad76cc20",
+      "proceeds": 0.0,
+      "qty": 200.0,
+      "symbol": "QZQ.US"
+    }
+  ],
+  "wash_sales": [
+    {
+      "date": "2024-09-10",
+      "date_settle": "2024-09-11",
+      "direction": "LONG",
+      "disallowed_amount": 301.5,
+      "loss_tx_id": "0a78ef268cf7b162",
+      "permanently_disallowed": 100.5,
+      "qty": 200.0,
+      "replacement_lot_ids": [
+        "91282a350b6b2396",
+        "35e8d278ef88bbec"
+      ],
+      "symbol": "QZQ.US"
+    },
+    {
+      "date": "2024-11-01",
+      "date_settle": "2024-11-01",
+      "direction": "LONG",
+      "disallowed_amount": 519.9,
+      "loss_tx_id": "64e284e899fcec7b",
+      "permanently_disallowed": 0.0,
+      "qty": 100.0,
+      "replacement_lot_ids": [
+        "6d7d81e91885cd7f"
+      ],
+      "symbol": "SAMPA.US"
+    },
+    {
+      "date": "2024-11-20",
+      "date_settle": "2024-11-21",
+      "direction": "LONG",
+      "disallowed_amount": 82.0,
+      "loss_tx_id": "c06c7e1ff627bebc",
+      "permanently_disallowed": 0.0,
+      "qty": 10.0,
+      "replacement_lot_ids": [
+        "a0a5b9bb717c0c05"
+      ],
+      "symbol": "NVDA.US"
+    }
+  ]
+}

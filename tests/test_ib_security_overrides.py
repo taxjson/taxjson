@@ -18,8 +18,9 @@ from _tmpfiles import private_tmpfile
 import unittest
 import json
 from pathlib import Path
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 _IB_TRADES_CSV = (

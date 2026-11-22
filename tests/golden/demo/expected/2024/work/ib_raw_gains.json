@@ -1,0 +1,139 @@
+{
+  "by_ticker": {
+    "MSFT.US": {
+      "hold_days": [
+        127
+      ],
+      "total_cost": 20001.0,
+      "total_div": 75.0,
+      "total_gain": 98.0,
+      "total_pil": 0.0,
+      "total_proceeds": 20099.0,
+      "trade_count": 1
+    },
+    "NVDA.US": {
+      "hold_days": [
+        133
+      ],
+      "total_cost": 1481.0,
+      "total_div": 0.0,
+      "total_gain": -87.0,
+      "total_pil": 0.0,
+      "total_proceeds": 1394.0,
+      "trade_count": 1
+    }
+  },
+  "inventory": [
+    {
+      "currency": "USD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-12-05",
+      "last_acq_settle": "2024-12-06",
+      "position_start_date": "2024-12-05",
+      "qty": 10.0,
+      "symbol": "NVDA.US",
+      "total_cost": 1351.0
+    }
+  ],
+  "option_replacement_warnings": [],
+  "summary": {
+    "total_disallowed": 0,
+    "total_fees_by_currency": {
+      "USD": {
+        "options": 0.0,
+        "stocks": 5.0,
+        "total": 5.0
+      }
+    },
+    "total_gain": 11.0,
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1
+  },
+  "transactions": [
+    {
+      "account": "ib",
+      "commission": 0.0,
+      "cost": 20001.0,
+      "currency": "USD",
+      "date": "2024-06-18",
+      "date_settle": "2024-06-20",
+      "days_held": 127,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 1.0,
+      "gain": 98.0,
+      "grant": false,
+      "id": "932d2d3e2d736e4e",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 20099.0,
+      "qty": 50.0,
+      "raw_gain": 98.0,
+      "replacement_lot_ids": [],
+      "symbol": "MSFT.US",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "ib",
+      "commission": 0.0,
+      "cost": 1481.0,
+      "currency": "USD",
+      "date": "2024-11-20",
+      "date_settle": "2024-11-21",
+      "days_held": 133,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 1.0,
+      "gain": -87.0,
+      "grant": false,
+      "id": "e0e829d223069bc8",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 1394.0,
+      "qty": 10.0,
+      "raw_gain": -87.0,
+      "replacement_lot_ids": [],
+      "symbol": "NVDA.US",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "ib",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "USD",
+      "date": "2024-03-14",
+      "date_settle": "2024-03-14",
+      "dividend": 37.5,
+      "gain": 0.0,
+      "id": "d38a45ca7cbd3e36",
+      "proceeds": 0.0,
+      "qty": 50.0,
+      "symbol": "MSFT.US",
+      "time": "09:30:00"
+    },
+    {
+      "account": "ib",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "USD",
+      "date": "2024-06-13",
+      "date_settle": "2024-06-13",
+      "dividend": 37.5,
+      "gain": 0.0,
+      "id": "0dfa25403addbb10",
+      "proceeds": 0.0,
+      "qty": 50.0,
+      "symbol": "MSFT.US",
+      "time": "09:30:00"
+    }
+  ],
+  "wash_sales": []
+}

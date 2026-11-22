@@ -13,7 +13,8 @@ from pathlib import Path
 from unittest import mock
 
 from taxjson.bin import taxjson_filed as F
-from taxjson.bin.taxjson_run import _closed_with
+from taxjson.lib import filed_locks
+from taxjson.pipeline.run import _closed_with
 from taxjson.lib import channels as CH
 
 OLD = {"version": "0.35.0", "commit": None, "release": None,
@@ -84,7 +85,7 @@ class TestTheLockRecordsIt(unittest.TestCase):
             doc = json.loads(p.read_text())
         self.assertEqual(doc["taxjson"], CH.running_build())
         # Still a lock the shape check accepts.
-        self.assertIsNone(F.lock_shape_problem(doc, 2025))
+        self.assertIsNone(filed_locks.lock_shape_problem(doc, 2025))
 
 
 class TestTheDriftNamesIt(unittest.TestCase):

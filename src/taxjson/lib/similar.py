@@ -30,7 +30,7 @@ TOBASE) is read under its booked symbol.
 
 The map is read leniently here (a line that cannot be parsed is
 skipped), so a reader that decides on the groups refuses a map with
-a problem line first, as `tjs run` does (taxjson_run
+a problem line first, as `tjs run` does (cli/plan
 `_strict_ticker_map`: buy-check, sell-check, rebuy, wash-radar,
 harvest); `open_findings` keeps the run's findings while the map has
 one (`map_problems`), backlog TJ-0352.
@@ -43,8 +43,13 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from taxjson.project.accounts import accounts_of, account_of
+from taxjson.project.settings import settings_of
 from taxjson.lib import project_layout as _PL
 from taxjson.lib import xlist_loss_radar as XR
+from taxjson.lib import xlist_state as XST
+from taxjson.lib import map_file as MF
+from taxjson.model import money as M
 
 STATE = "similar.state"
 FORMAT = "similar/1"
@@ -83,7 +88,7 @@ def booked_groups(root: Path) -> List[List[str]]:
     booked symbol (`SIMILAR ZZSP.US ZZVO.US` with `TOBASE ZZVO.US
     ZZVO.TO`: ZZVO.TO). Two members booked as one symbol are one."""
     root = Path(root)
-    renames, _distinct = XR._map_rules(root, root / "work")
+    renames, _distinct = MF._map_rules(root, root / "work")
     out = []
     for g in groups(root):
         booked: List[str] = []
@@ -117,7 +122,7 @@ def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
     """The project's losses with a similar fund bought in the window
     (see the module docstring), from the last run's work/."""
     from taxjson.lib.country import is_usa, settings_country, settings_tax_date
-    from taxjson.lib.first_run import book_files
+    from taxjson.lib.project_layout import book_files
     from taxjson.lib.missing_history import loss_window_date
     from taxjson.lib.report_model import resolve_gains_files
     from taxjson.lib.ticker_map import similar_groups, similar_where
@@ -126,21 +131,21 @@ def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
     side = rules(root)
     if side is None or not side.similar or not cache.is_dir():
         return []
-    settings = cfg.get("settings") or {}
-    accounts = cfg.get("accounts") or {}
+    settings = settings_of(cfg)
+    accounts = accounts_of(cfg)
     country = settings_country(settings)
-    year = str(settings.get("year") or "")
+    year = str(settings.year or "")
     basis = settings_tax_date(settings)
-    equity = {str(n): a for n, a in accounts.items()
-              if isinstance(a, dict) and not a.get("crypto")
-              and a.get("type") in ("taxable", "sheltered")}
+    equity = {n: a for n, a in accounts.items()
+              if not a.crypto
+              and a.type in ("taxable", "sheltered")}
     taxable = sorted(n for n, a in equity.items()
-                     if a.get("type") == "taxable")
+                     if a.taxable)
     if not taxable:
         return []
     # The groups as the books spell their members (the map's renames
     # applied), each booked symbol remembering how the line wrote it.
-    renames, _distinct = XR._map_rules(root, cache)
+    renames, _distinct = MF._map_rules(root, cache)
     written: Dict[str, str] = {}
     others: Dict[str, List[str]] = {}
     for g in similar_groups(side):
@@ -158,7 +163,7 @@ def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
 
     losses: List[Tuple[str, Dict[str, Any]]] = []
     try:
-        gains = resolve_gains_files(cache)
+        gains = resolve_gains_files(cache, accounts=taxable)    # TJ-4301
     except Exception:                               # noqa: BLE001
         gains = {}
     for acct in taxable:
@@ -231,7 +236,7 @@ def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
             item = {"account": acct, "date": str(loss.get("date") or ""),
                     "date_settle": str(loss.get("date_settle") or ""),
                     "quantity": abs(XR._qty(loss, "qty")),
-                    "gain": round(float(loss.get("gain") or 0.0), 2)}
+                    "gain": M.units(float(loss.get("gain") or 0.0), 2)}
             if item not in f.losses:
                 f.losses.append(item)
             for r in buys:
@@ -239,8 +244,7 @@ def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
                 bi = {"account": ra, "date": str(r.get("date") or ""),
                       "date_settle": str(r.get("date_settle") or ""),
                       "quantity": XR._qty(r),
-                      "registered": (equity.get(ra) or {}).get("type")
-                      == "sheltered"}
+                      "registered": account_of(equity, ra).type == "sheltered"}
                 if bi not in f.buys:
                     f.buys.append(bi)
     out = sorted(found.values(), key=lambda f: (f.loss_symbol,
@@ -277,7 +281,7 @@ def map_problems(root: Path) -> List[str]:
     if not p.is_file():
         return []
     try:
-        from taxjson.bin.taxjson_ticker_map import map_file_problems
+        from taxjson.lib.map_file import map_file_problems
         return list(map_file_problems(p))
     except Exception as e:                          # noqa: BLE001
         return [f"{p.name} cannot be read ({e})"]
@@ -307,7 +311,7 @@ def message(f: Dict[str, Any], country: str) -> Tuple[str, List[str]]:
     """(headline, details) of the run's console Warning for a finding."""
     from taxjson.lib.country import is_usa
     a, b = f["loss_symbol"], f["other_symbol"]
-    kind = XR._kind(country)
+    kind = XST._kind(country)
     law = ("§1091 reaches substantially identical securities, which the "
            "IRS has not defined for funds of different issuers"
            if is_usa(country) else

@@ -1,0 +1,10 @@
+SPIN-OFFS (1)
+
+2024-06-03  margin  PARN.US -> SPNC.US  0.1 new per share (1 for 10)
+  election:    taxable_distribution_301
+  value used:  25.00 USD/share (the broker's value)
+  booked:      income 250.00 USD, 10 new shares costing 250.00 USD
+  held now:    10
+  - §301 distribution: income equal to the new shares' fair market value, which is also their cost
+
+Every taxable spin-off is booked with a value.

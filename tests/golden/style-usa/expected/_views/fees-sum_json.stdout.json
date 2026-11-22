@@ -1,0 +1,203 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "generated_at": "<stamp>",
+    "year": "2024",
+    "since": null,
+    "until": null,
+    "base_currency": "USD",
+    "date_basis": "trade",
+    "group_by": "account_brokerage",
+    "files_read": 6,
+    "fee_rows": 29,
+    "dups_collapsed": 0,
+    "rows_without_id": 0,
+    "skipped_files": [],
+    "zero_fee_brokers": [],
+    "manual_tt_fees_unattributed": true
+  },
+  "brokerages": {
+    "coinbase/crypto": {
+      "total": 57.8,
+      "trades": 4,
+      "mean": 14.45,
+      "median": 16.2,
+      "pct_notional": 0.8,
+      "per_share": 68.0,
+      "per_contract": 0.0,
+      "stock_fee": 57.8,
+      "option_fee": 0.0,
+      "futures_fee": 0.0,
+      "by_currency": {
+        "USD": {
+          "total": 57.8,
+          "trades": 4,
+          "mean": 14.45,
+          "median": 16.2,
+          "pct_notional": 0.8,
+          "per_share": 68.0,
+          "per_contract": 0.0,
+          "stock_fee": 57.8,
+          "option_fee": 0.0,
+          "futures_fee": 0.0
+        }
+      }
+    },
+    "kraken/crypto": {
+      "total": 38.26,
+      "trades": 5,
+      "mean": 7.652,
+      "median": 8.4,
+      "pct_notional": 0.21918,
+      "per_share": 21.862857,
+      "per_contract": 0.0,
+      "stock_fee": 38.26,
+      "option_fee": 0.0,
+      "futures_fee": 0.0,
+      "by_currency": {
+        "USD": {
+          "total": 38.26,
+          "trades": 5,
+          "mean": 7.652,
+          "median": 8.4,
+          "pct_notional": 0.21918,
+          "per_share": 21.862857,
+          "per_contract": 0.0,
+          "stock_fee": 38.26,
+          "option_fee": 0.0,
+          "futures_fee": 0.0
+        }
+      }
+    },
+    "ib/margin": {
+      "total": 16.0,
+      "trades": 14,
+      "mean": 1.142857,
+      "median": 1.0,
+      "pct_notional": 0.024398,
+      "per_share": 0.012821,
+      "per_contract": 1.0,
+      "stock_fee": 10.0,
+      "option_fee": 6.0,
+      "futures_fee": 0.0,
+      "by_currency": {
+        "USD": {
+          "total": 16.0,
+          "trades": 14,
+          "mean": 1.142857,
+          "median": 1.0,
+          "pct_notional": 0.024398,
+          "per_share": 0.012821,
+          "per_contract": 1.0,
+          "stock_fee": 10.0,
+          "option_fee": 6.0,
+          "futures_fee": 0.0
+        }
+      }
+    },
+    "manual (.tt)/margin": {
+      "total": 39.8,
+      "trades": 4,
+      "mean": 9.95,
+      "median": 9.95,
+      "pct_notional": 0.346087,
+      "per_share": 0.117059,
+      "per_contract": 0.0,
+      "stock_fee": 39.8,
+      "option_fee": 0.0,
+      "futures_fee": 0.0,
+      "by_currency": {
+        "USD": {
+          "total": 39.8,
+          "trades": 4,
+          "mean": 9.95,
+          "median": 9.95,
+          "pct_notional": 0.346087,
+          "per_share": 0.117059,
+          "per_contract": 0.0,
+          "stock_fee": 39.8,
+          "option_fee": 0.0,
+          "futures_fee": 0.0
+        }
+      }
+    },
+    "questrade/qt": {
+      "total": 1.25,
+      "trades": 1,
+      "mean": 1.25,
+      "median": 1.25,
+      "pct_notional": 3.571429,
+      "per_share": 0.0,
+      "per_contract": 1.25,
+      "stock_fee": 0.0,
+      "option_fee": 1.25,
+      "futures_fee": 0.0,
+      "by_currency": {
+        "USD": {
+          "total": 1.25,
+          "trades": 1,
+          "mean": 1.25,
+          "median": 1.25,
+          "pct_notional": 3.571429,
+          "per_share": 0.0,
+          "per_contract": 1.25,
+          "stock_fee": 0.0,
+          "option_fee": 1.25,
+          "futures_fee": 0.0
+        }
+      }
+    },
+    "manual (.tt)/roth": {
+      "total": 4.95,
+      "trades": 1,
+      "mean": 4.95,
+      "median": 4.95,
+      "pct_notional": 0.404082,
+      "per_share": 0.099,
+      "per_contract": 0.0,
+      "stock_fee": 4.95,
+      "option_fee": 0.0,
+      "futures_fee": 0.0,
+      "by_currency": {
+        "USD": {
+          "total": 4.95,
+          "trades": 1,
+          "mean": 4.95,
+          "median": 4.95,
+          "pct_notional": 0.404082,
+          "per_share": 0.099,
+          "per_contract": 0.0,
+          "stock_fee": 4.95,
+          "option_fee": 0.0,
+          "futures_fee": 0.0
+        }
+      }
+    }
+  },
+  "total": {
+    "total": 158.06,
+    "trades": 29,
+    "mean": 5.450345,
+    "median": 2.0,
+    "pct_notional": 0.153425,
+    "per_share": 0.128612,
+    "per_contract": 1.035714,
+    "stock_fee": 150.81,
+    "option_fee": 7.25,
+    "futures_fee": 0.0,
+    "by_currency": {
+      "USD": {
+        "total": 158.06,
+        "trades": 29,
+        "mean": 5.450345,
+        "median": 2.0,
+        "pct_notional": 0.153425,
+        "per_share": 0.128612,
+        "per_contract": 1.035714,
+        "stock_fee": 150.81,
+        "option_fee": 7.25,
+        "futures_fee": 0.0
+      }
+    }
+  }
+}

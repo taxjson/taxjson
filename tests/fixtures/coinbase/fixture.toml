@@ -1,0 +1,21 @@
+# The rows the parser must count as skipped (TJ-2328). The header carries Subtotal, Notes and ID
+# (the first three rows leave them blank: no id, Total checked against quantity x price). The kinds:
+# a retail Buy and Sell (the Total checked against quantity x price +/- the fee);
+# a Receive and a Send: custody evidence, TRANSFER legs (+ and -) at the spot price;
+# an Advanced Trade Buy on a fiat pair (ETH-USD): one BUYSELL, the fee capitalized;
+# an Advanced Trade Sell on a crypto pair (ETH-ZZB): the ETH sale and the ZZB acquisition at the Total;
+# an Advanced Trade Buy priced in the quote coin: both legs at price 0 for fill-crypto, with swap_fee;
+# a coin-for-coin Convert: the sale at the Subtotal and the buy at Subtotal + fee;
+# a stablecoin-to-coin Convert (the buy alone) and a coin-to-stablecoin one (the sale, net of the fee);
+# Staking Income: the DIVIDEND at the Subtotal (the commission withheld) and the coins bought at it;
+# a Learning Reward with a blank fee (commission unknown); a Rewards Income in USDC (the DIVIDEND alone);
+# a Staking Income with a blank Subtotal: the DIVIDEND and the coins at |Quantity| x Price, its Total 0.50
+#   over that plus the fee (inside that band, 5%, though outside a Subtotal's, 1%);
+# skipped (7): non-events: a fiat Deposit, two Buys of USDC (stablecoin conversions: for USD, and
+#   for CAD, the cash reader's FXCONV), a USDC-to-USDT Convert, a Retail Staking Transfer, a fiat
+#   Withdrawal; a coin Deposit (reported UNBOOKED).
+expected_skips = 7
+# The kinds its rows and its broker's cash events have (parsers.protocol ROW_KINDS and
+# CASH_KINDS): the conformance kit asks for a row, or an event, of each.
+kinds = "trade, dividend, transfer"
+cash_kinds = "FXCONV, CASHMOVE, FLOW"

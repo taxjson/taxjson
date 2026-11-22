@@ -15,6 +15,7 @@ from taxjson.lib import out
 
 from _qa_project import console, gains, project, tj, toml
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 QT_HEAD = ("Transaction Date,Settlement Date,Action,Symbol,Description,"
            "Quantity,Price,Gross Amount,Commission,Net Amount,Currency,"
@@ -84,7 +85,7 @@ class TestRun(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    @rule("CA-SL-20")
+    @rule(R.CA_SL_20)
     def test_warning_names_the_pair_and_the_line(self):
         text = self.r.stdout
         self.assertIn("Warning: similar fund in a loss's window: ZZSP.US "
@@ -100,7 +101,7 @@ class TestRun(unittest.TestCase):
         self.assertIn("identical property", text)
         self.assertEqual(out.lint(self.r.stdout), [])
 
-    @rule("CA-SL-20")
+    @rule(R.CA_SL_20)
     def test_nothing_denied_and_strict_passes(self):
         loss, = zzsp_loss(self.root)
         self.assertLess(loss["gain"], -1000)
@@ -108,7 +109,7 @@ class TestRun(unittest.TestCase):
                                places=2)
         self.assertEqual(self.r.returncode, 0)
 
-    @rule("CA-SL-20")
+    @rule(R.CA_SL_20)
     def test_state_and_open_findings(self):
         from taxjson.lib import similar as SIM
         st = json.loads((self.root / "work" / SIM.STATE).read_text())
@@ -123,10 +124,10 @@ class TestRun(unittest.TestCase):
         self.assertEqual([f["other_symbol"] for f in SIM.open_findings(d)],
                          ["ZZVF.TO"])
 
-    @rule("CA-SL-20")
+    @rule(R.CA_SL_20)
     def test_checklist_wash_reviewed_is_manual(self):
         from taxjson.lib import checklist as cl
-        from taxjson.lib.tomlcompat import tomllib
+        import tomllib
         cfg = tomllib.loads((self.root / "taxjson.toml").read_text())
         ctx = cl.Ctx(root=self.root, cfg=cfg, year=2024,
                      today=date(2025, 3, 1),
@@ -137,7 +138,7 @@ class TestRun(unittest.TestCase):
                       "(ticker.map SIMILAR): ZZSP.US/ZZVF.TO, ZZSP.US/ZZVO.US",
                       res.detail)
 
-    @rule("CA-SL-20")
+    @rule(R.CA_SL_20)
     def test_concise_console_is_one_line(self):
         r = tj(self.root, "run", "--no-input")
         lines = [ln for ln in r.stdout.splitlines() if "similar fund" in ln]
@@ -145,7 +146,7 @@ class TestRun(unittest.TestCase):
         self.assertTrue(all(ln.endswith("`tjs run --details`")
                             for ln in lines), lines)
 
-    @rule("CA-SL-20")
+    @rule(R.CA_SL_20)
     def test_rebuy_names_the_flagged_listings(self):
         r = tj(self.root, "rebuy", "--date", "2024-03-21", "--details")
         self.assertIn("A buy of ZZVF.TO, ZZVO.US is flagged, not counted "
@@ -156,7 +157,7 @@ class TestRun(unittest.TestCase):
         self.assertEqual(row["similar"], ["ZZVF.TO", "ZZVO.US"])
         self.assertEqual(row["also"], [])
 
-    @rule("CA-SL-20")
+    @rule(R.CA_SL_20)
     def test_wash_radar_lists_the_group(self):
         r = tj(self.root, "wash-radar", "--date", "2024-03-21")
         self.assertIn("\nSIMILAR\n  - ZZSP.US COOLING, ZZVF.TO CLEAR, "
@@ -171,7 +172,7 @@ class TestRun(unittest.TestCase):
             "status": {"ZZSP.US": "COOLING", "ZZVF.TO": "CLEAR",
                        "ZZVO.US": "EXITABLE"}}])
 
-    @rule("CA-SL-20")
+    @rule(R.CA_SL_20)
     def test_without_the_line_nothing_is_said(self):
         root = make(self.tmp.name, "plain", ticker_map=None)
         r = tj(root, "run", "--no-input", "--details")
@@ -186,7 +187,7 @@ class TestVariants(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
 
-    @rule("CA-SL-20")
+    @rule(R.CA_SL_20)
     def test_sold_out_by_day_30_is_not_flagged(self):
         d = fixed
         files = {"margin/questrade_2024.csv": QT_HEAD + rows(d) + qt_row(
@@ -196,7 +197,7 @@ class TestVariants(unittest.TestCase):
         r = tj(root, "run", "--no-input", "--details")
         self.assertNotIn("similar fund", console(r))
 
-    @rule("CA-SL-20")
+    @rule(R.CA_SL_20)
     def test_a_buy_outside_the_window_is_not_flagged(self):
         d = fixed
         files = {"margin/questrade_2024.csv": QT_HEAD + qt_row(
@@ -209,7 +210,7 @@ class TestVariants(unittest.TestCase):
         r = tj(root, "run", "--no-input", "--details")
         self.assertNotIn("similar fund", console(r))
 
-    @rule("US-WASH-26")
+    @rule(R.US_WASH_26)
     def test_usa_wash_sale_wording(self):
         root = make(self.tmp.name, "us", country="usa", tfsa=False)
         r = tj(root, "run", "--no-input", "--details")
@@ -252,7 +253,7 @@ class TestVariants(unittest.TestCase):
         self.assertIn("SIMILAR A B [C ...]", r.text)
         self.assertIn("SIMILAR ZZSP.US ZZVO.US\n", r.text)
         # The members are symbols the user wrote a line for.
-        from taxjson.bin.taxjson_ticker_map import _parse_map_text, named_symbols
+        from taxjson.lib.ticker_map_rules import _parse_map_text, named_symbols
         tmap = _parse_map_text(text)[0]
         self.assertIn("ZZVF.TO", named_symbols(tmap, lookups=True))
         self.assertNotIn("ZZVF.TO", named_symbols(tmap))
@@ -275,7 +276,7 @@ class TestPlanning(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    @rule("CA-SL-20")
+    @rule(R.CA_SL_20)
     def test_buy_check_caveat_on_a_similar_loss(self):
         r = tj(self.root, "buy-check", "ZZVO.US", "ZZVF.TO", check=False)
         self.assertEqual(r.returncode, 0, console(r))
@@ -293,7 +294,7 @@ class TestPlanning(unittest.TestCase):
         self.assertTrue(any("similar to ZZVF.TO" in ln
                             for ln in doc["results"][0]["detail"]))
 
-    @rule("CA-SL-20")
+    @rule(R.CA_SL_20)
     def test_sell_check_caveat_on_a_similar_buy(self):
         r = tj(self.root, "sell-check", "ZZSP.US", check=False)
         self.assertEqual(r.returncode, 0, console(r))
@@ -305,7 +306,7 @@ class TestPlanning(unittest.TestCase):
                       "ZZSP.US stays allowed; it would not if you treat "
                       "them as identical property (s.54).", text)
 
-    @rule("CA-SL-20")
+    @rule(R.CA_SL_20)
     def test_the_similar_fund_itself_is_still_blocked(self):
         # The caveat never softens the real verdict on the loss's own
         # fund.
@@ -334,7 +335,7 @@ class TestBookedMembers(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    @rule("CA-SL-20")
+    @rule(R.CA_SL_20)
     def test_run_checklist_and_radar_agree(self):
         from taxjson.lib import similar as SIM
         self.assertIn("ZZSP.US sold at a loss, ZZVO.TO bought within 30 days",
@@ -345,7 +346,7 @@ class TestBookedMembers(unittest.TestCase):
         self.assertEqual(SIM.booked_groups(self.root),
                          [["ZZSP.US", "ZZVF.TO", "ZZVO.TO"]])
         from taxjson.lib import checklist as cl
-        from taxjson.lib.tomlcompat import tomllib
+        import tomllib
         cfg = tomllib.loads((self.root / "taxjson.toml").read_text())
         ctx = cl.Ctx(root=self.root, cfg=cfg, year=2024,
                      today=date(2025, 3, 1),

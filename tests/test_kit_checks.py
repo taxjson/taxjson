@@ -10,19 +10,17 @@ import re
 import subprocess
 import sys
 import unittest
-from pathlib import Path
 
-from taxjson.lib.tomlcompat import tomllib
+import tomllib
+import _paths
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = _paths.REPO
 TOML = REPO / "kit-checks.toml"
 SCRIPT = REPO / "scripts" / "kit_checks.py"
 WORKFLOW = REPO / ".github" / "workflows" / "kit-checks.yml"
 
 
 def _config():
-    if tomllib is None:                      # pragma: no cover
-        raise unittest.SkipTest("no TOML reader")
     return tomllib.loads(TOML.read_text(encoding="utf-8"))
 
 
@@ -86,9 +84,8 @@ class TestScriptAndWorkflow(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         r = subprocess.run([sys.executable, "-I", str(SCRIPT), "--help"],
                            capture_output=True, text=True)
-        if sys.version_info >= (3, 11):
-            self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("--only", r.stdout)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("--only", r.stdout)
 
     def test_the_workflow_runs_it_on_the_dev_repo_only(self):
         wf = WORKFLOW.read_text()

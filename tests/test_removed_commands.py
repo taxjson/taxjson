@@ -8,9 +8,9 @@ patterns below match the commands, not the other scans the project runs
 (the PII scan, a broker's listing scan, the CA-SCAN rule ids)."""
 import re
 import unittest
-from pathlib import Path
+import _paths
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = _paths.REPO
 
 # The places a user reads (CHANGELOG.md sits at the root, outside these).
 ROOTS = ("src", "docs", "packages")

@@ -1,4 +1,22 @@
+Account Number: 99900099
 "Currency","Date","Action Code","Symbol","Security Description","Type Code","Quantity","Price","Proceeds"
 USD,15-01-2025,BUY,NVDA,NVIDIA CORP,STK,10,120.00,"(1201.00)"
 USD,20-03-2025,SELL,NVDA,NVIDIA CORP,STK,4,150.00,"599.20"
 USD,15-12-2024,BUY,@ABCD,CALL ABCD02/19/27 45,OPC,1,2.50,"(251.00)"
+USD,16-12-2024,BUY,,,,1,2.40,"(241.00)"
+USD,20-12-2024,SELL,@ABCD,CALL ABCD02/19/27 45,OPC,-2,3.00,"598.70"
+USD,,,,,,,,
+"Currency","Date","Action Code","Symbol","Security Description","Type Code","Quantity","Price","Proceeds"
+USD,12-03-2025,DIV,NVDA,NVIDIA CORP,STK,,,1.20
+USD,06-06-2025,SELL,@ZZS,PUT ZZS06/20/25 5,OPC,-1,0.40,39.35
+USD,13-06-2025,BUY,,,,1,0.00,
+USD,16-06-2025,BUY,ZZS,ZZS INC,SHS,100,5.00,"(501.00)"
+CAD,12-12-2024,BUY,SAMPLD.B,SAMPLD CLASS B,SHS,30,9.50,"(286.95)"
+USD,01-08-2025,SELL,@QZWP,PUT QZWP08/15/25 20,OPC,-1,0.80,79.35
+USD,15-08-2025,BUY,,,,1,0.00,
+USD,15-08-2025,BUY,QZWP,QZWP INC,SHS,100,20.00,"(2005.00)"
+Account Number: 99900099
+"Currency","Date","Action Code","Symbol","Security Description","Type Code","Quantity","Price","Proceeds"
+USD,10-06-2025,BUY,@SAMPLF,PUT SAMPLF06/20/25 10,OPC,2,0.50,"(101.30)"
+USD,20-06-2025,SELL,,,,-2,0.00,
+Total,,,,,,,,"(42.00)"

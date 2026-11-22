@@ -11,9 +11,9 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from taxjson.bin.taxjson_run import (
-    _load_holdings_summary, print_holdings_diff, _fmt_qty,
-    maybe_print_holdings_diff,
+from taxjson.lib.report_fmt import fmt_qty6 as _fmt_qty
+from taxjson.pipeline.diagnostics import (
+    _load_holdings_summary, maybe_print_holdings_diff, print_holdings_diff,
 )
 from _style import CapturedWidth
 

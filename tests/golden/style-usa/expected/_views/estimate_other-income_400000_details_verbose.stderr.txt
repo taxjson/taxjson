@@ -1,0 +1,6 @@
+tjs estimate: warning: these books are not the clean result of the current inputs
+  - inputs changed since the last full run (added: filed/ (locked years))
+  The figures below may leave sales out or carry default FX; fix and re-run `tjs run` before using them. 2024 is filed (filed/2024.json) and its inputs changed since the last run: `tjs run` here recomputes the year and says whether the filed figures moved (DRIFTED).
+tjs estimate: warning: 2 position(s) sold in 2024 with no purchase in your files: their gain is NOT in these totals
+  No .tt OPENING cost=unknown line: GHOSTQ.US (margin), OLDCO.US (margin).
+  `tjs find-missing-history` lists them and the fixes (docs/getting-started.md, step 5).

@@ -13,9 +13,11 @@ import tempfile
 import unittest
 from pathlib import Path
 from tax_rules import rule, rule_absent
+from taxjson.rules import ids as R
+import _paths
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 HDR = ("txid,ordertxid,pair,time,type,ordertype,price,cost,fee,vol,margin,"
        "misc,ledgers\n")
 KR1 = (HDR + "TXA1,OA1,BTC/CAD,2025-01-15 10:00:00.1234,buy,limit,50000,"
@@ -48,7 +50,7 @@ def _cli(root, *a):
 
 
 class TestCryptoBlend(unittest.TestCase):
-    @rule("CA-SL-13")
+    @rule(R.CA_SL_13)
     def test_two_exchanges_blend_and_everything_ties(self):
         with tempfile.TemporaryDirectory() as td:
             root = _project(td, {"kr1": KR1, "kr2": KR2})
@@ -72,7 +74,7 @@ class TestCryptoBlend(unittest.TestCase):
             k = _cli(root, "check-filed")
             self.assertEqual(k.returncode, 0, k.stdout + k.stderr)
 
-    @rule("CA-SL-13")
+    @rule(R.CA_SL_13)
     def test_single_crypto_account_is_unchanged(self):
         with tempfile.TemporaryDirectory() as td:
             root = _project(td, {"kr1": KR1})
@@ -84,8 +86,8 @@ class TestCryptoBlend(unittest.TestCase):
             s = json.loads(_cli(root, "sum", "--json").stdout)["filing"]
             self.assertAlmostEqual(s["totals"]["gain"], -10000.0, places=2)
 
-    @rule("US-WASH-13")
-    @rule_absent("CA-SL-13", country="usa")
+    @rule(R.US_WASH_13)
+    @rule_absent(R.CA_SL_13, country="usa")
     def test_us_crypto_stays_per_account_without_the_false_note(self):
         with tempfile.TemporaryDirectory() as td:
             # A US book trades BTC/USD (a US project files in USD).

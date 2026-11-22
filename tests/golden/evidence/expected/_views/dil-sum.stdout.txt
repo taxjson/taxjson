@@ -1,0 +1,8 @@
+DIVIDENDS IN LIEU — tax year 2025
+Payments in lieu are ordinary income: no dividend gross-up/credit or qualified rate.
+
+SYMBOL     CUR  IN_LIEU  ROWS  TREATMENT
+----------------------------------------
+SAMPLD.US  USD     2.00     1  ordinary
+
+TOTAL DIVIDEND IN LIEU: 2.00 USD

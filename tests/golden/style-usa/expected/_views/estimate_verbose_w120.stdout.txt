@@ -1,0 +1,30 @@
+TAX ESTIMATE — usa (single, standard deduction), rates vintage 2024
+ESTIMATE ONLY, not filing numbers; taxable accounts only.
+
+  Other income                            0.00
+  Short-term gains (net)                329.25  [329.25 before carryovers; short-term carryover 0.00]
+  Long-term gains (net)                   0.00  [0.00 before carryovers; long-term carryover 0.00]
+  Qualified dividends                   415.00
+  Payments in lieu                        0.00  [ordinary]
+  Crypto staking                         37.29  [ordinary]
+
+  Tax with investments: 0.00 + NIIT 0.00
+  Tax on other income alone: 0.00
+  => ESTIMATED TAX ON INVESTMENT INCOME: 0.00 USD  (0.0% of 781.54)
+  Capital loss carryovers in: 0.00 — no close-year lock before 2024 and none entered: see `tjs carryover`
+
+  CALCULATION TRACE — BASE (other income only) vs WITH investments
+  Ordinary taxable: BASE 0.00 (0.00 - 14,600.00 std deduction) | WITH 0.00
+  ORDINARY                                      BASE          WITH
+    = ORDINARY                                  0.00          0.00
+  PREFERENTIAL — 0.00 (LT + qualified) STACKED from 0.00:
+  NIIT: 3.8% x min(investment income, MAGI 781.54 - 200,000.00) = 3.8% x 0.00 = 0.00
+    TOTAL (before NIIT)                         0.00          0.00
+    => WITH - BASE + NIIT = 0.00 estimated tax on investment income
+
+  Assumes:
+  - single filer, standard deduction, all dividends QUALIFIED, no foreign tax credit, no state tax
+  - §1256 contracts (futures, index options) split 60/40 long-/short-term (Form 6781), with no year-end marking or loss
+    carryback
+  - interest income and the §988 result on foreign currency (`tjs fx-cash`) not included
+! 2 sales with no purchase NOT in these totals, or a short — tjs find-missing-history

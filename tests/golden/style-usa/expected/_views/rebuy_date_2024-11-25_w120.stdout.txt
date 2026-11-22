@@ -1,0 +1,9 @@
+REBUY — wash sales (§1091, trade dates), as of 2024-11-25 (USD)
+REBUY ON: the first day a buy no longer cancels the loss; option series under their underlying.
+TICKER    SOLD ON       LOSS  ACCOUNTS  REBUY ON
+--------------------------------------------------------
+NVDA.US   2024-11-20   82.00  margin    2024-12-23 (28d)
+SAMPA.US  2024-11-01  519.90  margin    now (washed)
+
+A buy in ANY of your accounts counts, IRAs included; through an IRA the loss is lost for good.
+More: tjs rebuy --details; not checked: your spouse's or company's buys (IRS Pub. 550)

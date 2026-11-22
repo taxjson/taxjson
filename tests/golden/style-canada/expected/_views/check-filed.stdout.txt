@@ -1,0 +1,2 @@
+FILED-YEAR LOCK CHECK
+filed 2024: OK (matches 2024.json; interest, foreign tax withheld and the FX gain on foreign cash are not locked; the RETURN row (return_row) is not recomputed)

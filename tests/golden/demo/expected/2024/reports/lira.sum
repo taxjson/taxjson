@@ -1,0 +1,65 @@
+======================================================================
+ DIAGNOSTICS — lira  (parser/merge warnings; not part of the tax totals)
+======================================================================
+OK: <merged>: 11 transactions validated.
+======================================================================
+
+
+TICKER SUMMARY — CAD, year 2024, sorted by ticker
+
+SYMBOL                                 TOTAL        TOTAL_COST     TOTAL_PROCEED        TOTAL_GAIN          CAP_GAIN          OPT_GAIN          DIVIDEND               PIL   AVG_DAYS
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+TD.TO                                -105.90          8,204.95          7,895.05           -309.90           -309.90              0.00            204.00              0.00      245.0
+XIU.TO                                761.05          3,200.00          3,745.05            545.05            545.05              0.00            216.00              0.00      316.0
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+TOTAL                                 655.15         11,404.95         11,640.10            235.15            235.15              0.00            420.00              0.00      280.5
+
+ASSET: Non-option | CURRENCY: CAD   | TRADES: 2 | YEAR: 2024
+
+Total Realized Gain:                235.15 CAD
+Average Holding Period:               280.5 Days
+Avg Fee Per Trade:                    4.95 CAD
+Avg Fee Per Share:                  0.0495 CAD
+----------------------------------------------------------------------------------------------------------------
+Positive Trades: 1 | Negative Trades: 1 | Win/Loss: 1.00 | Win Rate: 50.0%
+Average Positive:            545.05 CAD | Average Negative:           -309.90 CAD
+----------------------------------------------------------------------------------------------------------------
+
+CONSOLIDATED TOTALS — CAD, year 2024
+
+TOTAL COST:                         11,404.95 CAD
+TOTAL PROCEEDS:                     11,640.10 CAD
+  (engine sign convention: shorts/written options negated — for Schedule 3 proceeds and ACB use `tjs form-export`)
+------------------------------------------------------
+TOTAL REALIZED NON-OPTION GAIN:        235.15 CAD
+  (shares, units, futures and crypto — Schedule 3 lines: `tjs form-export`)
+TOTAL REALIZED OPTION GAIN:              0.00 CAD
+TOTAL REALIZED GAIN:                   235.15 CAD
+------------------------------------------------------
+TOTAL DIVIDENDS / STAKING:             420.00 CAD
+------------------------------------------------------
+GRAND TOTAL (GAIN+DIV+PIL):            655.15 CAD
+------------------------------------------------------
+TOTAL TRADING FEES PAID:                19.80 CAD
+  (OPTION TRADING FEES):                 0.00 CAD
+
+INCOME SUMMARY — CAD, year 2024, sorted by ticker
+
+SYMBOL                            GROSS DIV              PIL          TAX W/H       NET INCOME
+----------------------------------------------------------------------------------------------
+TD.TO                                204.00             0.00             0.00           204.00
+XIU.TO                               216.00             0.00             0.00           216.00
+----------------------------------------------------------------------------------------------
+SUBTOTAL                             420.00             0.00             0.00           420.00
+CASH INTEREST                                                                             0.00
+----------------------------------------------------------------------------------------------
+TOTAL NET INCOME                                                                        420.00
+
+====================================================================================================
+ HOLDINGS REPORT - open positions at the end of the data (not 2024-12-31 positions; `tjs list --date` gives a date) - Sorted by: ticker
+====================================================================================================
+TICKER         QTY  COST/SHARE    TOTAL COST  CUR
+-------------------------------------------------
+BCE.TO         150     47.0330       7054.95  CAD
+XIU.TO         200     32.0000       6400.00  CAD
+ZAG.TO         200     13.8000       2760.00  CAD

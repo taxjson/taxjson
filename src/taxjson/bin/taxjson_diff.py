@@ -33,9 +33,11 @@ import os
 import sys
 from pathlib import Path
 
+from taxjson.lib import out as _out
 from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.report_model import load_report_json
 from typing import Any, Dict, List, Tuple
+from taxjson.model import money as M
 
 
 COLORS = {
@@ -117,7 +119,7 @@ def _key_float(v: float) -> float:
     change read as 'unchanged' (audit S029-18)."""
     if v != 0 and abs(v) < 1:
         return float(f"{v:.7g}")
-    return round(v, 6)
+    return M.units(v, 6)
 
 
 def make_key(rec: Dict[str, Any], fields: List[str]) -> Tuple:
@@ -238,6 +240,136 @@ def main():
                     if f.strip()]
     ignore_fields = {f.strip() for f in args.ignore.split(',') if f.strip()}
 
+    old_recs, new_recs = _diff_read(args)
+
+    # A --by field no record on either side carries keys every record
+    # as None and pairs rows by list order: 'modified' noise for a typo
+    # like --by symbl (audit R1-265).
+    present = set()
+    for r in old_recs + new_recs:
+        if isinstance(r, dict):
+            present.update(r.keys())
+    unknown = [f for f in match_fields if f not in present]
+    if explicit_by and unknown and (old_recs or new_recs):
+        emit_line(f"taxjson-diff: error: --by field(s) {', '.join(unknown)} "
+                  f"appear in no record of either file (fields present: "
+                  f"{', '.join(sorted(present))})", file=sys.stderr)
+        sys.exit(2)
+
+    added, removed, matched = _diff_pair(old_recs, new_recs, match_fields, ignore_fields)
+
+    # Split matched into modified vs unchanged.
+    modified: List[Tuple[Dict[str, Any], Dict[str, Any], List[Tuple[str, Any, Any]]]] = []
+    unchanged_count = 0
+    unchanged_samples: List[Dict[str, Any]] = []
+    for o, n in matched:
+        diffs = field_diffs(o, n, ignore_fields)
+        if diffs:
+            modified.append((o, n, diffs))
+        else:
+            unchanged_count += 1
+            if args.show_unchanged:
+                unchanged_samples.append(n)
+
+    # Stable sort each section for readable output. Coerce to '' because
+    # some records (TAX, INTEREST, FEE on a CASH symbol) may have None for
+    # symbol or other key fields, and Python 3 won't compare str < None.
+    def sort_key(r):
+        # The full match key breaks ties so same-day rows keep one order.
+        return (r.get('date') or '', r.get('symbol') or '',
+                r.get('action') or '', repr(make_key(r, match_fields)),
+                json.dumps(r, sort_keys=True, default=str))
+    added.sort(key=sort_key)
+    removed.sort(key=sort_key)
+    modified.sort(key=lambda t: sort_key(t[0]))
+    unchanged_samples.sort(key=sort_key)
+
+    use_color = (
+        sys.stdout.isatty()
+        and not args.no_color
+        and not os.environ.get('NO_COLOR')
+    )
+
+    # The report: a live exact Doc, each line written as it is added, as
+    # the raw print() wrote it (nothing here wraps, so no width is
+    # resolved). A record that stops the listing, or a reader that has
+    # gone, stops it where the prints did.
+    d = _out.Doc(exact=True, width_=0, live=True)
+    return _diff_lines(d, args, match_fields, ignore_fields, added, removed,
+                       modified, unchanged_count, unchanged_samples,
+                       use_color)
+
+
+def _diff_lines(d: _out.Doc, args: argparse.Namespace,
+                match_fields: List[str], ignore_fields: set[str],
+                added: List[Dict[str, Any]], removed: List[Dict[str, Any]],
+                modified: List[Tuple[Dict[str, Any], Dict[str, Any],
+                                     List[Tuple[str, Any, Any]]]],
+                unchanged_count: int, unchanged_samples: List[Dict[str, Any]],
+                use_color: bool):
+    """diff: the header, the counts and (unless --summary) each section,
+    through the live Doc `d`."""
+    # Header + summary.
+    d.line(colorize(f"# taxjson-diff: {args.old}  →  {args.new}", 'header', use_color))
+    d.line(colorize(
+        f"# match key: {','.join(match_fields)}    ignore: {','.join(sorted(ignore_fields)) or '(none)'}",
+        'dim', use_color,
+    ))
+    summary_parts = [
+        f"{len(added)} added",
+        f"{len(removed)} removed",
+        f"{len(modified)} modified",
+        f"{unchanged_count} unchanged",
+    ]
+    d.line(colorize(f"# {' | '.join(summary_parts)}", 'header', use_color))
+
+    if args.summary:
+        return
+
+    # The nested section printers make a live Doc each (a capture of `d`
+    # is not a conversion form); the row lambdas keep their print().
+    def print_section(title, items, color_key, render):
+        if not items:
+            return
+        d = _out.Doc(exact=True, width_=0, live=True)
+        d.blank()
+        shown = items[:args.limit] if args.limit > 0 else items
+        d.line(colorize(f"# === {title} ({len(items)}{', showing '+str(len(shown)) if args.limit and len(shown)<len(items) else ''}) ===", color_key, use_color))
+        for it in shown:
+            render(it)
+
+    print_section(
+        "REMOVED", removed, 'remove',
+        lambda r: print(colorize(f"- {short_label(r)}", 'remove', use_color)),
+    )
+    print_section(
+        "ADDED", added, 'add',
+        lambda r: print(colorize(f"+ {short_label(r)}", 'add', use_color)),
+    )
+
+    def render_mod(t):
+        old, new, diffs = t
+        d = _out.Doc(exact=True, width_=0, live=True)
+        d.blank()
+        d.line(colorize(f"~ {short_label(new)}", 'mod', use_color))
+        for field, ov, nv in diffs:
+            d.line(colorize(f"    - {field}: {fmt_val(ov)}", 'remove', use_color))
+            d.line(colorize(f"    + {field}: {fmt_val(nv)}", 'add', use_color))
+
+    print_section("MODIFIED", modified, 'mod', render_mod)
+
+    if args.show_unchanged and unchanged_samples:
+        shown = unchanged_samples[:args.limit] if args.limit > 0 else unchanged_samples
+        d.blank()
+        d.line(colorize(f"# === UNCHANGED ({unchanged_count}{', showing '+str(len(shown)) if args.limit and len(shown)<unchanged_count else ''}) ===", 'dim', use_color))
+        for r in shown:
+            d.line(colorize(f"  {short_label(r)}", 'dim', use_color))
+
+
+def _diff_read(args: argparse.Namespace) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """diff: OLD's and NEW's records. A file that is missing, unreadable or
+    not JSON, that has no "transactions" list, or whose section or entry
+    is malformed, exits 2 with one line naming it."""
     # A missing/unreadable/malformed input is a usage error, not a
     # traceback: name the file and exit 2 (the usage-error code every
     # sibling tool uses).
@@ -260,24 +392,19 @@ def main():
             except ValueError as e:
                 raise InputFileError(f"{path}: {e}") from None
     except InputFileError as e:
-        print(f"taxjson-diff: cannot read input {e}", file=sys.stderr)
+        _out.put(f"taxjson-diff: cannot read input {e}", sys.stderr)
         sys.exit(2)
     old_recs, new_recs = recs
+    return old_recs, new_recs
 
-    # A --by field no record on either side carries keys every record
-    # as None and pairs rows by list order: 'modified' noise for a typo
-    # like --by symbl (audit R1-265).
-    present = set()
-    for r in old_recs + new_recs:
-        if isinstance(r, dict):
-            present.update(r.keys())
-    unknown = [f for f in match_fields if f not in present]
-    if explicit_by and unknown and (old_recs or new_recs):
-        emit_line(f"taxjson-diff: error: --by field(s) {', '.join(unknown)} "
-                  f"appear in no record of either file (fields present: "
-                  f"{', '.join(sorted(present))})", file=sys.stderr)
-        sys.exit(2)
 
+def _diff_pair(old_recs: List[Dict[str, Any]], new_recs: List[Dict[str, Any]],
+               match_fields: List[str], ignore_fields: set[str]
+               ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]],
+                          List[Tuple[Dict[str, Any], Dict[str, Any]]]]:
+    """diff: the records paired by match key, identical ones first: those
+    only NEW has (added), those only OLD has (removed), and the pairs
+    (old, new), in the keys' sorted order."""
     # Bucket records by composite key (lists, to handle true duplicates).
     old_buckets: Dict[Tuple, List[Dict[str, Any]]] = {}
     for r in old_recs:
@@ -315,90 +442,7 @@ def main():
         # Surplus on either side.
         removed.extend(olds[n_match:])
         added.extend(rest_new[n_match:])
-
-    # Split matched into modified vs unchanged.
-    modified: List[Tuple[Dict[str, Any], Dict[str, Any], List[Tuple[str, Any, Any]]]] = []
-    unchanged_count = 0
-    unchanged_samples: List[Dict[str, Any]] = []
-    for o, n in matched:
-        diffs = field_diffs(o, n, ignore_fields)
-        if diffs:
-            modified.append((o, n, diffs))
-        else:
-            unchanged_count += 1
-            if args.show_unchanged:
-                unchanged_samples.append(n)
-
-    # Stable sort each section for readable output. Coerce to '' because
-    # some records (TAX, INTEREST, FEE on a CASH symbol) may have None for
-    # symbol or other key fields, and Python 3 won't compare str < None.
-    def sort_key(r):
-        # The full match key breaks ties so same-day rows keep one order.
-        return (r.get('date') or '', r.get('symbol') or '',
-                r.get('action') or '', repr(make_key(r, match_fields)),
-                json.dumps(r, sort_keys=True, default=str))
-    added.sort(key=sort_key)
-    removed.sort(key=sort_key)
-    modified.sort(key=lambda t: sort_key(t[0]))
-    unchanged_samples.sort(key=sort_key)
-
-    use_color = (
-        sys.stdout.isatty()
-        and not args.no_color
-        and not os.environ.get('NO_COLOR')
-    )
-
-    # Header + summary.
-    print(colorize(f"# taxjson-diff: {args.old}  →  {args.new}", 'header', use_color))
-    print(colorize(
-        f"# match key: {','.join(match_fields)}    ignore: {','.join(sorted(ignore_fields)) or '(none)'}",
-        'dim', use_color,
-    ))
-    summary_parts = [
-        f"{len(added)} added",
-        f"{len(removed)} removed",
-        f"{len(modified)} modified",
-        f"{unchanged_count} unchanged",
-    ]
-    print(colorize(f"# {' | '.join(summary_parts)}", 'header', use_color))
-
-    if args.summary:
-        return
-
-    def print_section(title, items, color_key, render):
-        if not items:
-            return
-        print()
-        shown = items[:args.limit] if args.limit > 0 else items
-        print(colorize(f"# === {title} ({len(items)}{', showing '+str(len(shown)) if args.limit and len(shown)<len(items) else ''}) ===", color_key, use_color))
-        for it in shown:
-            render(it)
-
-    print_section(
-        "REMOVED", removed, 'remove',
-        lambda r: print(colorize(f"- {short_label(r)}", 'remove', use_color)),
-    )
-    print_section(
-        "ADDED", added, 'add',
-        lambda r: print(colorize(f"+ {short_label(r)}", 'add', use_color)),
-    )
-
-    def render_mod(t):
-        old, new, diffs = t
-        print()
-        print(colorize(f"~ {short_label(new)}", 'mod', use_color))
-        for field, ov, nv in diffs:
-            print(colorize(f"    - {field}: {fmt_val(ov)}", 'remove', use_color))
-            print(colorize(f"    + {field}: {fmt_val(nv)}", 'add', use_color))
-
-    print_section("MODIFIED", modified, 'mod', render_mod)
-
-    if args.show_unchanged and unchanged_samples:
-        shown = unchanged_samples[:args.limit] if args.limit > 0 else unchanged_samples
-        print()
-        print(colorize(f"# === UNCHANGED ({unchanged_count}{', showing '+str(len(shown)) if args.limit and len(shown)<unchanged_count else ''}) ===", 'dim', use_color))
-        for r in shown:
-            print(colorize(f"  {short_label(r)}", 'dim', use_color))
+    return added, removed, matched
 
 
 if __name__ == "__main__":

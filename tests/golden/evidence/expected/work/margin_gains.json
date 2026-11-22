@@ -1,0 +1,86 @@
+{
+  "by_ticker": {
+    "F:SAMPLMH6.US": {
+      "hold_days": [
+        28
+      ],
+      "total_cost": 0.0,
+      "total_div": 0.0,
+      "total_gain": 37.8,
+      "total_pil": 0.0,
+      "total_proceeds": 37.8,
+      "trade_count": 1
+    }
+  },
+  "inventory": [
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2025-03-18",
+      "last_acq_settle": "2025-03-19",
+      "position_start_date": "2025-03-18",
+      "qty": -15.0,
+      "symbol": "SAMPLA.US",
+      "total_cost": -807.975
+    }
+  ],
+  "inventory_year_end": [
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "qty": -15.0,
+      "symbol": "SAMPLA.US",
+      "total_cost": -807.975
+    }
+  ],
+  "option_replacement_warnings": [],
+  "summary": {
+    "option_buyback_loss_superficial": false,
+    "option_grant_since": 2025,
+    "option_premium_timing": "grant",
+    "tax_date_basis": "settle",
+    "total_disallowed": 0,
+    "total_fees_by_currency": {
+      "CAD": {
+        "futures": 2.7,
+        "options": 0.0,
+        "stocks": 2.025,
+        "total": 4.725
+      }
+    },
+    "total_gain": 37.8,
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1,
+    "year": "2025"
+  },
+  "transactions": [
+    {
+      "account": "margin",
+      "commission": 0.0,
+      "cost": 0.0,
+      "currency": "CAD",
+      "date": "2025-03-03",
+      "date_settle": "2025-03-03",
+      "days_held": 28,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 1.35,
+      "gain": 37.8,
+      "grant": false,
+      "id": "3d9ef0e047f4b222",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 37.8,
+      "qty": 1.0,
+      "raw_gain": 37.8,
+      "replacement_lot_ids": [],
+      "symbol": "F:SAMPLMH6.US",
+      "term": null,
+      "wash_replacements": null
+    }
+  ],
+  "wash_sales": []
+}

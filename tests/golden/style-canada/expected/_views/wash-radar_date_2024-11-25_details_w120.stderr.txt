@@ -1,0 +1,1 @@
+Info: ABCD: 100 shares per option contract ASSUMED — `MULT <ROOT> N` in ticker.map if not

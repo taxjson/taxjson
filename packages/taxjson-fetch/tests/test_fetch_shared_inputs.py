@@ -3,7 +3,7 @@
 reads (with a note), `--positions` to the year's holdings folder.
 Offline: the downloads are faked."""
 # First: puts the plugin, the core and its test helpers on sys.path.
-import _support  # noqa: F401
+import _bootstrap  # noqa: F401
 import io
 import tempfile
 import unittest

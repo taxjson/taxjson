@@ -1,0 +1,1 @@
+NOTE: 1 unmatched TRANSFER row(s) in the --sheltered context kept as custody moves: their shares count as held; none is a purchase or a sale for the loss-denial walk (transfers_as_acquisitions = false).

@@ -1,4 +1,4 @@
-"""Moved from the core's tests/test_fix_a2_errb.py with `tjs fetch` (now the
+"""Moved from the core's tests/features/cli/test_one_line_errors_and_consistent_exit_codes.py with `tjs fetch` (now the
 taxjson-fetch plugin). Original module docstring:
 
 Regression pins for the re-audit-2 error-handling lists errors-02 and
@@ -15,7 +15,7 @@ TAXJSON_OFFLINE set): nothing here touches the network.
 """
 # First: puts the plugin, the core and its test helpers on sys.path and
 # registers the plugin's entry point when it is not pip-installed.
-import _support  # noqa: F401
+import _bootstrap  # noqa: F401
 import os
 import unittest
 from pathlib import Path
@@ -42,7 +42,7 @@ class TestFetchHelpers(unittest.TestCase):
                 "Trades,Header,DataDiscriminator,Asset Category\n")
         raw = b"\xef\xbb\xbf" + text.encode()
         self.assertTrue(F.looks_like_ib_statement(decode_broker_text(raw)))
-        src = (_support.PLUGIN_SRC / "command.py").read_text()
+        src = (_bootstrap.PLUGIN_SRC / "command.py").read_text()
         self.assertNotIn('text = raw.decode("utf-8", "replace")', src)
 
 

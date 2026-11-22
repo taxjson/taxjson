@@ -1,0 +1,463 @@
+{
+  "country": "canada",
+  "coverage": {
+    "acquisition_discrepancies": 0,
+    "income_discrepancies": 0,
+    "missing_valuation": 0,
+    "paired_acquisitions": 3,
+    "source_evidence": 3,
+    "unclassified": 0,
+    "unknown_commission": 0,
+    "unknown_gross": 0
+  },
+  "currency": "CAD",
+  "groups": [
+    {
+      "account_group": "taxable",
+      "accounts": [
+        "crypto"
+      ],
+      "acquisition_cost": {
+        "known_count": 3,
+        "known_total": 27.8775,
+        "total": 27.8775,
+        "unknown_count": 0
+      },
+      "asset": "ETH",
+      "broker": "coinbase",
+      "commission_amount": {
+        "known_count": 3,
+        "known_total": 0.0,
+        "total": 0.0,
+        "unknown_count": 0
+      },
+      "fee_quantities": {},
+      "gross_amount": {
+        "known_count": 3,
+        "known_total": 27.8775,
+        "total": 27.8775,
+        "unknown_count": 0
+      },
+      "gross_quantity": {
+        "known_count": 0,
+        "known_total": 0.0,
+        "total": null,
+        "unknown_count": 3
+      },
+      "income_amount": {
+        "known_count": 3,
+        "known_total": 27.8775,
+        "total": 27.8775,
+        "unknown_count": 0
+      },
+      "kind_counts": {
+        "other_reward": 1,
+        "staking": 2
+      },
+      "net_quantity": {
+        "known_count": 3,
+        "known_total": 0.0062,
+        "total": 0.0062,
+        "unknown_count": 0
+      },
+      "reward_count": 3,
+      "symbol": "ETH",
+      "unknown_fee_quantity_count": 3
+    }
+  ],
+  "local_timezone": "America/Toronto",
+  "notes": [
+    "Amounts disclose the existing books; this view does not change income, fees or acquisition cost.",
+    "Totals cover booked reward events; fully consumed or omitted dust rewards have no entries here.",
+    "Recorded income is after the commissions the importer netted: a commission shown is already out of it.",
+    "Gross and commission totals with missing evidence are known subtotals, not complete totals.",
+    "Quantities are per asset. Commission quantities in another asset are shown separately and never summed with reward units.",
+    "An absent acquisition can be intentional for rewards treated as cash; it does not prove a missing cost basis.",
+    "Source timestamps retain their original timezone; the book date/time use the project's configured local timezone.",
+    "Display cents are allocated within each money column to foot to its aggregate; JSON retains unrounded book values.",
+    "Software treatment: CA-INC-STAKING; see tjs tax-logic --ids for assumptions and country-specific authorities."
+  ],
+  "rewards": [
+    {
+      "account": "crypto",
+      "account_group": "taxable",
+      "acquisition_cost": 10.8,
+      "acquisition_difference": 0.0,
+      "acquisition_pairing": "paired transaction id",
+      "acquisition_transaction_id": "CB-GOLD-0007-buy",
+      "asset": "ETH",
+      "book_price": 4320.0,
+      "book_quantity": 0.0025,
+      "broker": "coinbase",
+      "commission_amount": 0.0,
+      "commission_known": true,
+      "commission_method": "withheld_from_reward",
+      "commission_provenance": "source commission value at book FX",
+      "currency": "CAD",
+      "date": "2024-04-22",
+      "expected_acquisition_cost": 10.8,
+      "fee_currency": "USD",
+      "fee_quantity": null,
+      "fx_date": "2024-04-22",
+      "fx_provenance": "recorded book conversion rate",
+      "fx_rate": 1.35,
+      "fx_source": "history exact date",
+      "gross_amount": 10.8,
+      "gross_provenance": "recorded income plus valued commission; same book valuation",
+      "gross_quantity": null,
+      "has_source_evidence": true,
+      "income_amount": 10.8,
+      "income_reconciliation_difference": 0.0,
+      "kind": "staking",
+      "local_timezone": "America/Toronto",
+      "native_currency": "USD",
+      "native_price": 3200.0,
+      "net_quantity": 0.0025,
+      "notes": [],
+      "source": {
+        "file": "coinbase_gold.csv",
+        "id": "CB-GOLD-0007",
+        "line": 8,
+        "timestamp": "2024-04-22 11:15:00 UTC",
+        "type": "Staking Income"
+      },
+      "source_evidence": {
+        "asset": "ETH",
+        "broker": "coinbase",
+        "commission_known": true,
+        "commission_method": "withheld_from_reward",
+        "fee_currency": "USD",
+        "fee_quantity": null,
+        "fee_value": 0.0,
+        "gross_quantity": null,
+        "gross_value": 8.0,
+        "kind": "staking",
+        "net_quantity": 0.0025,
+        "net_value": 8.0,
+        "price": 3200.0,
+        "schema_version": 1,
+        "source_file": "coinbase_gold.csv",
+        "source_id": "CB-GOLD-0007",
+        "source_line": 8,
+        "source_timestamp": "2024-04-22 11:15:00 UTC",
+        "source_type": "Staking Income",
+        "valuation": {
+          "currency": "USD",
+          "date": "2024-04-22",
+          "fx_date": "2024-04-22",
+          "fx_rate": 1.35,
+          "fx_source": "history exact date",
+          "price": 3200.0,
+          "source": "broker",
+          "target_currency": "CAD"
+        },
+        "valuation_currency": "USD"
+      },
+      "source_gross_base": 10.8,
+      "source_value_fx_rate": 1.35,
+      "symbol": "ETH",
+      "time": "07:15:00",
+      "transaction_id": "CB-GOLD-0007-div",
+      "valuation_date": "2024-04-22",
+      "valuation_market_symbol": "",
+      "valuation_missing": false,
+      "valuation_price_base": 4320.0,
+      "valuation_source": "broker"
+    },
+    {
+      "account": "crypto",
+      "account_group": "taxable",
+      "acquisition_cost": 12.7575,
+      "acquisition_difference": 0.0,
+      "acquisition_pairing": "paired transaction id",
+      "acquisition_transaction_id": "CB-GOLD-0008-buy",
+      "asset": "ETH",
+      "book_price": 4725.0,
+      "book_quantity": 0.0027,
+      "broker": "coinbase",
+      "commission_amount": 0.0,
+      "commission_known": true,
+      "commission_method": "withheld_from_reward",
+      "commission_provenance": "source commission value at book FX",
+      "currency": "CAD",
+      "date": "2024-07-12",
+      "expected_acquisition_cost": 12.7575,
+      "fee_currency": "USD",
+      "fee_quantity": null,
+      "fx_date": "2024-07-12",
+      "fx_provenance": "recorded book conversion rate",
+      "fx_rate": 1.35,
+      "fx_source": "history exact date",
+      "gross_amount": 12.7575,
+      "gross_provenance": "recorded income plus valued commission; same book valuation",
+      "gross_quantity": null,
+      "has_source_evidence": true,
+      "income_amount": 12.7575,
+      "income_reconciliation_difference": 0.0,
+      "kind": "staking",
+      "local_timezone": "America/Toronto",
+      "native_currency": "USD",
+      "native_price": 3500.0,
+      "net_quantity": 0.0027,
+      "notes": [],
+      "source": {
+        "file": "coinbase_gold.csv",
+        "id": "CB-GOLD-0008",
+        "line": 9,
+        "timestamp": "2024-07-12 14:02:50 UTC",
+        "type": "Staking Income"
+      },
+      "source_evidence": {
+        "asset": "ETH",
+        "broker": "coinbase",
+        "commission_known": true,
+        "commission_method": "withheld_from_reward",
+        "fee_currency": "USD",
+        "fee_quantity": null,
+        "fee_value": 0.0,
+        "gross_quantity": null,
+        "gross_value": 9.45,
+        "kind": "staking",
+        "net_quantity": 0.0027,
+        "net_value": 9.45,
+        "price": 3500.0,
+        "schema_version": 1,
+        "source_file": "coinbase_gold.csv",
+        "source_id": "CB-GOLD-0008",
+        "source_line": 9,
+        "source_timestamp": "2024-07-12 14:02:50 UTC",
+        "source_type": "Staking Income",
+        "valuation": {
+          "currency": "USD",
+          "date": "2024-07-12",
+          "fx_date": "2024-07-12",
+          "fx_rate": 1.35,
+          "fx_source": "history exact date",
+          "price": 3500.0,
+          "source": "broker",
+          "target_currency": "CAD"
+        },
+        "valuation_currency": "USD"
+      },
+      "source_gross_base": 12.7575,
+      "source_value_fx_rate": 1.35,
+      "symbol": "ETH",
+      "time": "10:02:50",
+      "transaction_id": "CB-GOLD-0008-div",
+      "valuation_date": "2024-07-12",
+      "valuation_market_symbol": "",
+      "valuation_missing": false,
+      "valuation_price_base": 4725.0,
+      "valuation_source": "broker"
+    },
+    {
+      "account": "crypto",
+      "account_group": "taxable",
+      "acquisition_cost": 4.32,
+      "acquisition_difference": 0.0,
+      "acquisition_pairing": "paired transaction id",
+      "acquisition_transaction_id": "CB-GOLD-0009-buy",
+      "asset": "ETH",
+      "book_price": 4320.0,
+      "book_quantity": 0.001,
+      "broker": "coinbase",
+      "commission_amount": 0.0,
+      "commission_known": true,
+      "commission_method": "withheld_from_reward",
+      "commission_provenance": "source commission value at book FX",
+      "currency": "CAD",
+      "date": "2024-08-01",
+      "expected_acquisition_cost": 4.32,
+      "fee_currency": "USD",
+      "fee_quantity": null,
+      "fx_date": "2024-08-01",
+      "fx_provenance": "recorded book conversion rate",
+      "fx_rate": 1.35,
+      "fx_source": "history exact date",
+      "gross_amount": 4.32,
+      "gross_provenance": "recorded income plus valued commission; same book valuation",
+      "gross_quantity": null,
+      "has_source_evidence": true,
+      "income_amount": 4.32,
+      "income_reconciliation_difference": 0.0,
+      "kind": "other_reward",
+      "local_timezone": "America/Toronto",
+      "native_currency": "USD",
+      "native_price": 3200.0,
+      "net_quantity": 0.001,
+      "notes": [],
+      "source": {
+        "file": "coinbase_gold.csv",
+        "id": "CB-GOLD-0009",
+        "line": 10,
+        "timestamp": "2024-08-01 10:00:00 UTC",
+        "type": "Rewards Income"
+      },
+      "source_evidence": {
+        "asset": "ETH",
+        "broker": "coinbase",
+        "commission_known": true,
+        "commission_method": "withheld_from_reward",
+        "fee_currency": "USD",
+        "fee_quantity": null,
+        "fee_value": 0.0,
+        "gross_quantity": null,
+        "gross_value": 3.2,
+        "kind": "other_reward",
+        "net_quantity": 0.001,
+        "net_value": 3.2,
+        "price": 3200.0,
+        "schema_version": 1,
+        "source_file": "coinbase_gold.csv",
+        "source_id": "CB-GOLD-0009",
+        "source_line": 10,
+        "source_timestamp": "2024-08-01 10:00:00 UTC",
+        "source_type": "Rewards Income",
+        "valuation": {
+          "currency": "USD",
+          "date": "2024-08-01",
+          "fx_date": "2024-08-01",
+          "fx_rate": 1.35,
+          "fx_source": "history exact date",
+          "price": 3200.0,
+          "source": "broker",
+          "target_currency": "CAD"
+        },
+        "valuation_currency": "USD"
+      },
+      "source_gross_base": 4.32,
+      "source_value_fx_rate": 1.35,
+      "symbol": "ETH",
+      "time": "06:00:00",
+      "transaction_id": "CB-GOLD-0009-div",
+      "valuation_date": "2024-08-01",
+      "valuation_market_symbol": "",
+      "valuation_missing": false,
+      "valuation_price_base": 4320.0,
+      "valuation_source": "broker"
+    }
+  ],
+  "rule": "CA-INC-STAKING",
+  "schema_version": 1,
+  "scope": "tax year 2024",
+  "totals": {
+    "acquisition_cost": {
+      "known_count": 3,
+      "known_total": 27.8775,
+      "total": 27.8775,
+      "unknown_count": 0
+    },
+    "commission_amount": {
+      "known_count": 3,
+      "known_total": 0.0,
+      "total": 0.0,
+      "unknown_count": 0
+    },
+    "gross_amount": {
+      "known_count": 3,
+      "known_total": 27.8775,
+      "total": 27.8775,
+      "unknown_count": 0
+    },
+    "income_amount": {
+      "known_count": 3,
+      "known_total": 27.8775,
+      "total": 27.8775,
+      "unknown_count": 0
+    },
+    "kind_counts": {
+      "other_reward": 1,
+      "staking": 2
+    },
+    "reward_count": 3
+  },
+  "totals_by_account_group": {
+    "sheltered": {
+      "acquisition_cost": {
+        "known_count": 0,
+        "known_total": 0.0,
+        "total": 0.0,
+        "unknown_count": 0
+      },
+      "commission_amount": {
+        "known_count": 0,
+        "known_total": 0.0,
+        "total": 0.0,
+        "unknown_count": 0
+      },
+      "gross_amount": {
+        "known_count": 0,
+        "known_total": 0.0,
+        "total": 0.0,
+        "unknown_count": 0
+      },
+      "income_amount": {
+        "known_count": 0,
+        "known_total": 0.0,
+        "total": 0.0,
+        "unknown_count": 0
+      },
+      "kind_counts": {},
+      "reward_count": 0
+    },
+    "taxable": {
+      "acquisition_cost": {
+        "known_count": 3,
+        "known_total": 27.8775,
+        "total": 27.8775,
+        "unknown_count": 0
+      },
+      "commission_amount": {
+        "known_count": 3,
+        "known_total": 0.0,
+        "total": 0.0,
+        "unknown_count": 0
+      },
+      "gross_amount": {
+        "known_count": 3,
+        "known_total": 27.8775,
+        "total": 27.8775,
+        "unknown_count": 0
+      },
+      "income_amount": {
+        "known_count": 3,
+        "known_total": 27.8775,
+        "total": 27.8775,
+        "unknown_count": 0
+      },
+      "kind_counts": {
+        "other_reward": 1,
+        "staking": 2
+      },
+      "reward_count": 3
+    },
+    "unknown": {
+      "acquisition_cost": {
+        "known_count": 0,
+        "known_total": 0.0,
+        "total": 0.0,
+        "unknown_count": 0
+      },
+      "commission_amount": {
+        "known_count": 0,
+        "known_total": 0.0,
+        "total": 0.0,
+        "unknown_count": 0
+      },
+      "gross_amount": {
+        "known_count": 0,
+        "known_total": 0.0,
+        "total": 0.0,
+        "unknown_count": 0
+      },
+      "income_amount": {
+        "known_count": 0,
+        "known_total": 0.0,
+        "total": 0.0,
+        "unknown_count": 0
+      },
+      "kind_counts": {},
+      "reward_count": 0
+    }
+  }
+}

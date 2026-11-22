@@ -1,0 +1,38 @@
+# The rows of sample.csv the parser must count as skipped (row accounting:
+# tests/parser_conformance.py, `tjs parser-check`).
+#
+# The row kinds the fixture covers (classify_rbc_row's class, the builder):
+# trade: Buy and Sell of a stock (_build_trade), a SHORT. sale and its COVER SHORT. buy
+# trade: an option opened and closed (OPEN / CLOSE CONTRACT, the OCC symbol, open_close)
+# expiry: an option's EXP row, dated the contract's expiry day (_build_trade)
+# expiry: a rights EXP row, a $0 disposition dated the description's EXP date
+# assignment: the ASN option leg (ASSIGN) and its ASSIGNMENT OF OPTION stock sale
+# retraction: a TEN row, priced from Value / Quantity
+# trade (Exercise): a warrant exercise, the warrant leg an ASSIGN naming the shares
+# split: DIS ... STK SPLIT ON N SHS (_build_stock_split)
+# stock-dividend: DIS ... STK DIV ON N SHS (_build_stock_dividend)
+# spinoff: DIS ... SPINOFF, consumed for taxjson-corp-actions (no row)
+# rights: DIS - RTS ... RTS DIST, a $0 acquisition (_build_rights)
+# reorg + cil: a REV consolidation under a temporary code with its cash in lieu (one SPLIT, the fraction sold)
+# reorg (merger): an MGR pair, consumed for taxjson-corp-actions (no row)
+# reorg (option adjustment): an XCH pair on a held put, the same contract (no row)
+# reorg (reversal): an NAC leg and its REVERSE ENTRY, netting to nothing (no row)
+# reorg (unmatched, skipped): a removal with no receipt, warned UNBOOKED
+# reorg (rename): an NAC pair whose receipt is another ticker (SAMPLO to SAMPLE: one SPLIT, renaming)
+# transfer: TFI with BOOK VALUE evidence, TFO (_build_transfer)
+# cash (non-event, skipped): a cash Transfers row, Deposits & Contributions, Withdrawals & De-registrations
+# mtm (non-event, skipped): Other MKT - MARK TO MARKET
+# reinvest: REI ... REINV@C$ (_build_reinvest), and an REI with its CANCEL reversal (both dropped)
+# reinvest-in-kind: a Dividends "Reinvest @ $" row (_build_reinvest_in_kind: DIVIDEND and BUYSELL)
+# book-adjust: a NOTIONAL DISTRIBUTION and a Return of Capital ADJUSTMENT TO BOOK COST (_build_book_adjust)
+# roc: a Distributions RETURN OF CAPITAL row (tx_roc_adjust)
+# dividend: a CASH DIST, a CASH DIV, a NON-RES TAX WITHHELD dividend (implied TAX), a CASH IN LIEU OF DIVIDEND (DIVIDEND_IN_LIEU)
+# dividend (fallback): an Activity the parser has never seen, read by its DIV - code
+# tax, interest, fee: Taxes, Interest, Fees (FCH) (_build_tax, _build_interest, _build_fee)
+# footer (non-event, skipped): the Disclaimers line
+# unknown (skipped): an invented Activity that moves cash
+expected_skips = 7
+# The kinds its rows and its broker's cash events have (parsers.protocol ROW_KINDS and
+# CASH_KINDS): the conformance kit asks for a row, or an event, of each.
+kinds = "trade, expiry, assign, split, rename, stock_dividend, dividend, dividend_in_lieu, tax, interest, fee, transfer, roc, adjust"
+cash_kinds = "CASHMOVE"

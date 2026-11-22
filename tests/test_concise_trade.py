@@ -183,7 +183,7 @@ class TestAudit(_Base):
 class TestHarvest(_Base):
     def _runs(self, *args):
         import shutil
-        from test_style_group_c import _copy, _price_every_holding
+        from _support.style_project import _copy, _price_every_holding
         out = {}
         for c in ("canada", "usa"):
             p = _copy(c)

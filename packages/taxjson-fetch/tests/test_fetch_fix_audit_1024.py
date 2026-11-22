@@ -5,7 +5,7 @@ touches the network. Synthetic account numbers (99900001, 99900002)
 and tickers (ZZQ) only; each test's files live in a folder of their own.
 """
 # First: puts the plugin, the core and its test helpers on sys.path.
-import _support  # noqa: F401
+import _bootstrap  # noqa: F401
 import csv
 import io
 import tempfile
@@ -146,7 +146,7 @@ class TestB02FlexStatementCount(unittest.TestCase):
     def test_b02_metadata_rows_are_one_statement(self):
         self.assertEqual(api.flex_statement_count(_FLEX_ONE), 1)
         # The demo IB statement users model their exports on.
-        demo = _support.REPO_ROOT / "examples" / "ib_demo.csv"
+        demo = _bootstrap.REPO_ROOT / "examples" / "ib_demo.csv"
         self.assertEqual(api.flex_statement_count(
             demo.read_text(encoding="utf-8", errors="replace")), 1)
 

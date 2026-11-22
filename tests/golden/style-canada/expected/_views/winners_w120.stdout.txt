@@ -1,0 +1,15 @@
+WINNERS — tax year 2024 (CAD, top 10)
+Realized dispositions, allowed amounts, basis: wash-adjusted; an option under its underlying; dividends and PIL: tjs
+divs-sum.
+TICKER   CLOSES   PROCEEDS       COST    GAIN
+---------------------------------------------
+RY.TO         1  13,990.05  13,346.60  643.45
+ETH           3   4,470.85   4,148.56  322.29
+BTC           2   9,950.18   9,752.50  197.67
+AAPL.US       3  54,867.58  54,688.37  179.21
+ABCD.US       1   2,281.50   2,105.66  175.84
+MSFT.US       1  27,133.65  27,001.35  132.30
+
+TAXABLE: 736.91 CAD   SHELTERED (rrsp, tfsa — not taxable events): 913.86 CAD
+WINNERS TOTAL:        1,650.76 CAD (all 6 shown)
+TOTAL REALIZED GAIN:  1,608.24 CAD (9 ticker(s), all accounts; the losers: tjs losers)

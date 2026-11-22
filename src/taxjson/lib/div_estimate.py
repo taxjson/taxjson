@@ -30,7 +30,7 @@ shares held), converted to the base currency at the books' latest rate
 currency, the one that account's latest payment was paid in (payments
 in another currency, another broker's conversion, are flagged and left
 out). Each projected payment is dated for the tax year by the same
-rule as divs-sum (lib/income_dating.IncomeRules.income_date on a copy
+rule as divs-sum (characterize/income_dating.IncomeRules.income_date on a copy
 of the payer's latest row moved to the projected date: a Canadian
 trust's distribution by its record date, a listed US RIC's January
 dividend in the year before). Withholding uses the rate the latest
@@ -38,7 +38,7 @@ payment in that account shows (its TAX rows over its gross, every
 broker account of a combined account together; a TAX row in another
 currency converted at the pay date's rate), where it has one.
 
-This module is pure: the command (taxjson_run.cmd_div_estimate) reads
+This module is pure: the command (cli/summaries.cmd_div_estimate) reads
 the books and hands the rows in.
 """
 from __future__ import annotations
@@ -49,8 +49,10 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from statistics import median
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from taxjson.lib.json_contract import SCHEMAS
+from taxjson.model import money as M
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = SCHEMAS["div-estimate"]
 
 # (name, months between payments (0: by days), days between payments)
 FREQUENCIES: Tuple[Tuple[str, int, int], ...] = (
@@ -171,7 +173,7 @@ class Payments(dict):
 
 
 def _money(v: float) -> str:
-    return f"{v:,.2f}"
+    return f"{M.shown(v, 2):,.2f}"
 
 
 def _held(rows: List[Tuple[str, Dict[str, Any]]],
@@ -242,6 +244,22 @@ def _held(rows: List[Tuple[str, Dict[str, Any]]],
         for k in [k for k in by_src if k[0] == acct and k[2] in mixed]:
             del by_src[k]
     return out, by_src
+
+
+def _said_no_count(d: str, e: Dict[str, Any],
+                   notes: Dict[Tuple[str, str], List[str]]) -> bool:
+    """Whether the payment `e` of `d` (`payments`: an entry with no share
+    count) is one the parser marks as having none (`no_share_count`: no
+    accrual in the broker's statements pays the row, so no neighbour's
+    count is its own). It then borrows none: it is left out of the
+    per-share figures, and `notes` says so."""
+    if not e["row"].get("no_share_count"):
+        return False
+    notes.setdefault(e["key"][:1] + (e["sym"],), []).append(
+        f"the {d} payment of {_money(e['gross'])} {e['currency']} has no "
+        f"share count in the broker's statements: left out of the "
+        f"per-share figures")
+    return True
 
 
 def payments(rows: Iterable[Tuple[str, Dict[str, Any]]],
@@ -503,10 +521,10 @@ def payments(rows: Iterable[Tuple[str, Dict[str, Any]]],
                 if left <= 0.005:
                     break
         for i, (d, src, e) in enumerate(ents):
-            if e["qty"] > 1e-9 or e["gross"] <= 0.005:
+            if (e["qty"] > 1e-9 or e["gross"] <= 0.005
+                    or _said_no_count(d, e, notes)):
                 continue
-            near = [(abs((date.fromisoformat(d)
-                          - date.fromisoformat(pd)).days), pe["qty"])
+            near = [(abs((date.fromisoformat(d) - date.fromisoformat(pd)).days), pe["qty"])
                     for pd, psrc, pe in ents
                     if pe["qty"] > 1e-9 and _same_src(src, psrc)]
             if near:
@@ -889,7 +907,7 @@ def estimate(positions: Iterable[Dict[str, Any]],
                     continue
                 td = _projected_tax_date(base_pay, d, income_date)
                 projected.append({"pay_date": d, "tax_date": td,
-                                  "amount": round(per_pay, 6)})
+                                  "amount": M.units(per_pay, 6)})
             if missed >= 2:
                 status = "stopped"
                 flags.append(f"{missed} expected payments not in the books")
@@ -916,7 +934,7 @@ def estimate(positions: Iterable[Dict[str, Any]],
                 roy = ttm * shares * max(0, left) / 365.0 if left > 0 \
                     else 0.0
         def _b(v):
-            return None if rate is None else round(v * rate, 2)
+            return None if rate is None else M.shown(v * rate, 2)
         nxt = projected[0] if projected else None
         rows.append({
             "account": acct, "group": pos.get("group") or "",
@@ -925,18 +943,18 @@ def estimate(positions: Iterable[Dict[str, Any]],
                                   else "irregular"),
             "median_gap_days": gap, "payments": len(sched),
             "last_pay_date": latest.pay_date,
-            "last_per_share": round(latest.per_share, 6),
-            "ttm_per_share": round(ttm, 6),
+            "last_per_share": M.shown(latest.per_share, 6),
+            "ttm_per_share": M.shown(ttm, 6),
             "next_pay_date": nxt["pay_date"] if nxt else None,
             "next_tax_date": nxt["tax_date"] if nxt else None,
-            "next_amount": round(nxt["amount"], 2) if nxt else None,
+            "next_amount": M.shown(nxt["amount"], 2) if nxt else None,
             "next_amount_base": _b(nxt["amount"]) if nxt else None,
-            "window_amount": round(win, 2),
+            "window_amount": M.shown(win, 2),
             "window_amount_base": _b(win),
-            "rest_of_year_amount": round(roy, 2),
+            "rest_of_year_amount": M.shown(roy, 2),
             "rest_of_year_base": _b(roy),
             "fx_rate": rate,
-            "withholding_rate": (round(wrate, 6) if wrate is not None
+            "withholding_rate": (M.units(wrate, 6) if wrate is not None
                                  else None),
             "withholding_window_base": (_b(win * wrate)
                                         if wrate is not None else None),
@@ -944,7 +962,7 @@ def estimate(positions: Iterable[Dict[str, Any]],
                                               if wrate is not None
                                               else None),
             "status": status, "flags": flags,
-            "projected": [dict(p, amount=round(p["amount"], 2),
+            "projected": [dict(p, amount=M.shown(p["amount"], 2),
                                amount_base=_b(p["amount"]))
                           for p in projected],
         })
@@ -955,7 +973,7 @@ def estimate(positions: Iterable[Dict[str, Any]],
             v = r.get(key)
             if v is not None and r["group"] in t:
                 t[r["group"]] += v
-        return {g: round(v, 2) for g, v in t.items()}
+        return {g: M.shown(v, 2) for g, v in t.items()}
     return {
         "schema_version": SCHEMA_VERSION, "planning_only": True,
         "as_of_date": as_of, "months": months, "window_end": horizon,
@@ -982,7 +1000,7 @@ def _few(names: List[str], n: int) -> str:
 
 
 def _ps(v: float) -> str:
-    return f"{v:,.4f}".rstrip("0").rstrip(".") if v else "0"
+    return f"{M.shown(v, 4):,.4f}".rstrip("0").rstrip(".") if v else "0"
 
 
 def render(doc: Dict[str, Any], details: bool = False,
@@ -993,7 +1011,7 @@ def render(doc: Dict[str, Any], details: bool = False,
     `country`: the project's, for the dating rule HOW IT IS ESTIMATED
     names (CA-PLAN-06 / US-PLAN-07)."""
     from taxjson.lib import out
-    from taxjson.lib.report_model import fmt_money
+    from taxjson.lib.report_fmt import fmt_money
     base = doc["currency"]
     n = doc["months"]
     d = out.Doc(f"DIVIDEND ESTIMATE — planning numbers, as of "

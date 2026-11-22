@@ -1,0 +1,159 @@
+{
+  "account": "margin",
+  "basis": "wash-adjusted",
+  "gains": {
+    "manual_rows": [],
+    "option_fees": {
+      "CAD": 29.767500000000005
+    },
+    "returns_by_asset": {
+      "Options": {
+        "CAD": {
+          "days": [
+            74,
+            28,
+            39,
+            28,
+            32,
+            21,
+            0
+          ],
+          "dollars": [
+            321.165,
+            204.93,
+            -152.6175,
+            0.0,
+            -521.505,
+            520.8299999999999,
+            187.5825
+          ],
+          "fee_shares": [
+            2.0,
+            2.0,
+            3.0,
+            1.0,
+            1.0
+          ],
+          "fees": [
+            2.835,
+            2.835,
+            4.2525,
+            1.4175,
+            1.4175
+          ]
+        }
+      },
+      "Stocks": {
+        "CAD": {
+          "days": [
+            263,
+            115,
+            39,
+            80
+          ],
+          "dollars": [
+            335.6325,
+            334.7325,
+            -394.2675,
+            31.6913
+          ],
+          "fee_shares": [
+            100.0,
+            50.0
+          ],
+          "fees": [
+            1.35,
+            1.35
+          ]
+        }
+      }
+    },
+    "tainted_count": 0,
+    "tainted_routed": 0,
+    "ticker_stats": {
+      "QZQ.US": {
+        "CAD": {
+          "cap": 335.6325,
+          "cost": 4861.3949999999995,
+          "div": 0.0,
+          "hold_days": [
+            74,
+            28,
+            39,
+            28,
+            32,
+            263,
+            0
+          ],
+          "opt": 39.555000000000035,
+          "pil": 0.0,
+          "proceeds": 4906.9125,
+          "trade_count": 7
+        }
+      },
+      "SAMPA.US": {
+        "CAD": {
+          "cap": 334.7325,
+          "cost": 4460.67,
+          "div": 0.0,
+          "hold_days": [
+            115,
+            21
+          ],
+          "opt": 520.8299999999999,
+          "pil": 0.0,
+          "proceeds": 5316.2325,
+          "trade_count": 2
+        }
+      },
+      "SAMPB.US": {
+        "CAD": {
+          "cap": 31.6913,
+          "cost": 3645.7088,
+          "div": 0.0,
+          "hold_days": [
+            80
+          ],
+          "opt": 0.0,
+          "pil": 0.0,
+          "proceeds": 3677.4,
+          "trade_count": 1
+        }
+      },
+      "XYZQ.US": {
+        "CAD": {
+          "cap": -394.2675,
+          "cost": 2701.35,
+          "div": 0.0,
+          "hold_days": [
+            39
+          ],
+          "opt": 0.0,
+          "pil": 0.0,
+          "proceeds": 2307.0825,
+          "trade_count": 1
+        }
+      }
+    },
+    "total_fees": {
+      "CAD": 33.81750000000001
+    },
+    "total_year": "2024",
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 2
+  },
+  "generated_at": "<stamp>",
+  "income": {
+    "interest_paid_totals": {},
+    "interest_totals": {},
+    "missing_amount": [],
+    "ticker_stats": {},
+    "total_year": "2024"
+  },
+  "schema_version": 1,
+  "wash": {
+    "count": 1,
+    "total_disallowed": 329.67
+  },
+  "year": "2024"
+}

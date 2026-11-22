@@ -1,0 +1,107 @@
+{
+  "accounts": [
+    "crypto",
+    "margin",
+    "qt"
+  ],
+  "complete": true,
+  "currency": "CAD",
+  "label": "canada/BC",
+  "months_total": 224.24,
+  "other_income": 58000.0,
+  "planning_only": true,
+  "rows": [
+    {
+      "cum_income": 0.0,
+      "cum_tax": 0.0,
+      "income": 0.0,
+      "month": "2024-01",
+      "tax": 0.0
+    },
+    {
+      "cum_income": 0.0,
+      "cum_tax": 0.0,
+      "income": 0.0,
+      "month": "2024-02",
+      "tax": 0.0
+    },
+    {
+      "cum_income": 100.63,
+      "cum_tax": 7.5,
+      "income": 100.63,
+      "month": "2024-03",
+      "tax": 7.5
+    },
+    {
+      "cum_income": 111.43,
+      "cum_tax": 10.54,
+      "income": 10.8,
+      "month": "2024-04",
+      "tax": 3.04
+    },
+    {
+      "cum_income": 199.31,
+      "cum_tax": 22.93,
+      "income": 87.88,
+      "month": "2024-05",
+      "tax": 12.39
+    },
+    {
+      "cum_income": 719.73,
+      "cum_tax": 143.45,
+      "income": 520.42,
+      "month": "2024-06",
+      "tax": 120.52
+    },
+    {
+      "cum_income": 732.49,
+      "cum_tax": 147.04,
+      "income": 12.76,
+      "month": "2024-07",
+      "tax": 3.59
+    },
+    {
+      "cum_income": 346.39,
+      "cum_tax": 119.21,
+      "income": -386.1,
+      "month": "2024-08",
+      "tax": -27.83
+    },
+    {
+      "cum_income": 147.9,
+      "cum_tax": 126.33,
+      "income": -198.49,
+      "month": "2024-09",
+      "tax": 7.12
+    },
+    {
+      "cum_income": 446.76,
+      "cum_tax": 126.33,
+      "income": 298.86,
+      "month": "2024-10",
+      "tax": 0.0
+    },
+    {
+      "cum_income": 812.14,
+      "cum_tax": 157.57,
+      "income": 365.38,
+      "month": "2024-11",
+      "tax": 31.24
+    },
+    {
+      "cum_income": 1284.99,
+      "cum_tax": 224.24,
+      "income": 472.85,
+      "month": "2024-12",
+      "tax": 66.67
+    }
+  ],
+  "schema_version": 1,
+  "tax_year": 2024,
+  "unknown_cost_included": 0,
+  "unknown_cost_routed": 0,
+  "year_adjustment": 0.0,
+  "year_estimate": 224.24,
+  "year_estimate_with_amt": 224.24,
+  "year_income": 1284.99
+}

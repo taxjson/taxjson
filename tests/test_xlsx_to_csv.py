@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+import _paths
 
 try:
     import openpyxl
@@ -19,7 +20,7 @@ try:
 except ImportError:
     _XLSX_AVAILABLE = False
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 def _write_xlsx(rows, path: Path, sheet_name='Sheet1'):

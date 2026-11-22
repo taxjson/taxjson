@@ -23,9 +23,10 @@ import unittest
 from pathlib import Path
 
 import _hermetic  # noqa: F401  (the synthetic HOME first)
-from test_fix_release_safeguards import _ReleaseRepo, _PY_STUB
+from _support.release_repo import _ReleaseRepo, _PY_STUB
+import _paths
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = _paths.REPO
 RUNNER = REPO / "scripts" / "run_tests_parallel.py"
 _BASH = shutil.which("bash")
 _GIT = shutil.which("git")
@@ -124,6 +125,25 @@ class TestPlan(unittest.TestCase):
                          (1, "OK"))
         self.assertEqual(R.parse_result("Segmentation fault\n"), (None, ""))
 
+    def test_a_parts_skips_are_read_from_its_last_status_line(self):
+        self.assertEqual(R.skipped_of("Ran 4 tests in 0.1s\n\nOK (skipped=3)\n"), 3)
+        self.assertEqual(R.skipped_of(
+            "FAILED (failures=1, skipped=2)\nRan 2 tests in 0.1s\n\nOK\n"), 0)
+        self.assertEqual(R.skipped_of("Ran 1 test in 0.1s\n\nFAILED (errors=1, skipped=1)\n"), 1)
+        self.assertEqual(R.skipped_of("Segmentation fault\n"), 0)
+
+    def test_a_parts_output_is_unbuffered(self):
+        # So what a test prints lands before unittest's summary (TJ-3729).
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(R.child_env(Path(d))["PYTHONUNBUFFERED"], "1")
+
+    def test_a_status_line_a_test_printed_after_the_summary_is_not_read(self):
+        # A part's stdout is buffered: what a test printed lands after
+        # unittest's stderr summary (TJ-3712).
+        out = "Ran 4 tests in 0.1s\n\nOK (skipped=1)\nOK (skipped=99)\nFAILED (errors=5)\n"
+        self.assertEqual(R.parse_result(out), (4, "OK (skipped=1)"))
+        self.assertEqual(R.skipped_of(out), 1)
+
 
 class TestRunner(unittest.TestCase):
     def setUp(self):
@@ -189,6 +209,50 @@ class TestRunner(unittest.TestCase):
         rec = json.loads(self.durations.read_text())["parts"]
         self.assertEqual(set(rec), {"test_ok"})
 
+    def test_a_class_named_runs_alone_and_every_class_named_runs_the_module(self):
+        # The no-extras stage names a split module's classes
+        # (`module.Class`; scripts/ci_no_extras.sh EXTRAS_TESTS).
+        self.write("test_two_kinds", """
+            import unittest
+            class TestA(unittest.TestCase):
+                def test_a1(self): pass
+                def test_a2(self): pass
+            class TestB(unittest.TestCase):
+                def test_b(self): pass
+            """)
+        r = self.run_it("-j", "1", "test_two_kinds.TestA")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("Ran 2 of 2 tests", r.stdout)
+        r = self.run_it("-j", "1", "test_two_kinds.TestA", "test_two_kinds.TestB")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("Ran 3 of 3 tests", r.stdout)
+        self.assertIn("1 processes", r.stdout)
+        r = self.run_it("-j", "1", "test_two_kinds.TestC")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("not test modules or classes here: test_two_kinds.TestC",
+                      r.stdout)
+
+    def test_select_reads_a_module_its_classes_and_nothing_else(self):
+        collected = {"test_m": {"count": 3, "classes": {"TestA": 2, "TestB": 1}},
+                     "pkg.test_p": {"count": 1, "classes": {"TestP": 1}},
+                     "test_lt": {"count": 2, "classes": {}}}
+        out, unknown = R.select(collected, ["test_m.TestB", "pkg.test_p",
+                                            "test_lt.TestX", "test_none"])
+        self.assertEqual(unknown, ["test_lt.TestX", "test_none"])
+        self.assertEqual(out["test_m"], {"count": 1, "classes": {"TestB": 1},
+                                         "only": True})
+        self.assertIs(out["pkg.test_p"], collected["pkg.test_p"])
+        # A module named whole wins over its classes, in either order.
+        out, _ = R.select(collected, ["test_m.TestA", "test_m"])
+        self.assertIs(out["test_m"], collected["test_m"])
+        out, _ = R.select(collected, ["test_m", "test_m.TestA"])
+        self.assertIs(out["test_m"], collected["test_m"])
+        parts = R.plan(out, Path("."), {}, 1e9)
+        self.assertEqual([p[0] for p in parts], ["test_m"])
+        out, _ = R.select(collected, ["test_m.TestA"])
+        parts = R.plan(out, Path("."), {}, 1e9)
+        self.assertEqual([(p[0], p[2]) for p in parts], [("test_m.TestA", 2)])
+
     def test_a_process_that_exits_0_short_of_its_tests_fails(self):
         # Exit status 0, but the module never reported its tests: the
         # count check catches what an exit code alone would not.
@@ -213,6 +277,212 @@ class TestRunner(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("COLLECT FAILED", r.stdout)
         self.assertIn("test_broken", r.stdout)
+
+    def test_a_bound_test_class_fails_the_collect(self):
+        # A class bound in a second module runs there too (TJ-3759,
+        # TJ-3772): the collect names the module that binds it, whatever
+        # the form, and a class whose tests are inherited too.
+        self.write("test_def", """
+            import unittest
+            class _Mixin:
+                def test_m(self): pass
+            class TestFoo(unittest.TestCase):
+                def test_a(self): pass
+            class TestBar(_Mixin, unittest.TestCase):
+                pass
+            """)
+        self.write("test_use", """
+            import test_def
+            Borrowed = test_def.TestFoo
+            from test_def import TestBar
+            """)
+        r = self.run_it()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("COLLECT FAILED — 2 TestCase class(es) with tests bound where they "
+                      "are not defined", r.stdout)
+        self.assertIn("  test_use.Borrowed: test_def.TestFoo\n", r.stdout)
+        self.assertIn("  test_use.TestBar: test_def.TestBar\n", r.stdout)
+
+    def test_an_alias_or_a_load_tests_module_fails_the_collect(self):
+        # TJ-3779: a second name in the defining module, and a module with
+        # load_tests, bind a class too.
+        self.write("test_alias", """
+            import unittest
+            class TestFoo(unittest.TestCase):
+                def test_a(self): pass
+            TestOld = TestFoo
+            """)
+        self.write("test_lt", """
+            import unittest
+            from test_other import TestO
+            def load_tests(loader, tests, pattern):
+                return tests
+            """)
+        self.write("test_other", """
+            import unittest
+            class TestO(unittest.TestCase):
+                def test_o(self): pass
+            """)
+        # And a helper's class, though one module binds it (TJ-3759).
+        self.write("_held", """
+            import unittest
+            class TestH(unittest.TestCase):
+                def test_h(self): pass
+            """)
+        self.write("test_hu", "from _held import TestH\n")
+        r = self.run_it()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("  test_hu.TestH: _held.TestH\n", r.stdout)
+        self.assertIn("  test_alias.TestOld: test_alias.TestFoo\n", r.stdout)
+        self.assertIn("  test_lt.TestO: test_other.TestO\n", r.stdout)
+
+    def test_a_load_tests_that_loads_another_module_fails_the_collect(self):
+        # TJ-3784: the collect reads what a module's suite runs.
+        self.write("test_other", """
+            import unittest
+            class TestO(unittest.TestCase):
+                def test_o(self): pass
+            """)
+        self.write("test_lt", """
+            def load_tests(loader, tests, pattern):
+                tests.addTests(loader.loadTestsFromName("test_other"))
+                return tests
+            """)
+        r = self.run_it()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("  test_lt.(load_tests): test_other.TestO\n", r.stdout)
+
+    def collect(self, files):
+        """The runner over a suite of FILES alone: (its exit code, its output)."""
+        shutil.rmtree(self.suite)
+        self.suite.mkdir()
+        for name, text in files.items():
+            (self.suite / name).write_text(text)
+        r = self.run_it()
+        return r.returncode, r.stdout + r.stderr
+
+    def test_a_load_tests_of_doctests_or_a_helpers_cases(self):
+        # TJ-3802, TJ-3803: a helper's class load_tests builds cases from
+        # (a doctest's too) fails only on the same ids from two modules; a
+        # helper named unittest_* is no library's.
+        doc = ('"""D."""\nimport doctest\n\n\ndef f():\n    """\n    >>> 1\n    1\n    """\n\n\n'
+               'def load_tests(loader, tests, pattern):\n'
+               '    tests.addTests(doctest.DocTestSuite(__name__))\n    return tests\n')
+        param = ('import unittest\n\n\nclass ParamCase(unittest.TestCase):\n'
+                 '    def __init__(self, name, p):\n        super().__init__(name)\n'
+                 '        self.p = p\n\n    def id(self):\n'
+                 '        return f"{super().id()}[{self.p}]"\n\n    def test_p(self):\n'
+                 '        pass\n')
+        def user(p):
+            return ('import _param\n\n\ndef load_tests(loader, tests, pattern):\n'
+                    f'    tests.addTest(_param.ParamCase("test_p", {p!r}))\n    return tests\n')
+        extra = ('import unittest\n\n\nclass TestE(unittest.TestCase):\n'
+                 '    def test_e(self):\n        pass\n')
+        cases = (
+            ("a doctest", {"test_doc.py": doc}, None),
+            ("a doctest twice", {"test_doc.py": doc, "test_doc2.py": doc.replace(
+                "DocTestSuite(__name__)", "DocTestSuite('test_doc')")},
+             "test_doc.(load_tests), test_doc2.(load_tests): doctest.DocTestCase "
+             "(the same test ids)"),
+            ("a helper's cases, two ids", {"_param.py": param, "test_pa.py": user("a"),
+                                           "test_pb.py": user("b")}, None),
+            ("a helper's cases, one id", {"_param.py": param, "test_pa.py": user("a"),
+                                          "test_pb.py": user("a")},
+             "test_pa.(load_tests), test_pb.(load_tests): _param.ParamCase (the same test ids)"),
+            ("a unittest_* helper", {"unittest_extra.py": extra,
+                                     "test_ua.py": "from unittest_extra import TestE\n",
+                                     "test_ub.py": "from unittest_extra import TestE\n"},
+             "test_ua.TestE, test_ub.TestE: unittest_extra.TestE"),
+        )
+        for why, files, bad in cases:
+            with self.subTest(why):
+                rc, out = self.collect(files)
+                if bad is None:
+                    self.assertEqual(rc, 0, out)
+                else:
+                    self.assertEqual(rc, 1, out)
+                    self.assertIn(f"  {bad}\n", out)
+
+    def test_a_class_its_home_holds_another_object_for(self):
+        # TJ-3809: at home means the home module holds this class under its
+        # name, not another object of that name.
+        home = ('import unittest\n\n\ndef make(n):\n    class Case(unittest.TestCase):\n'
+                '        def test_x(self):\n            pass\n    Case.n = n\n    return Case\n\n\n'
+                'Case = make(1)\n')
+        rc, out = self.collect({"test_home.py": home,
+                                "test_user.py": "from test_home import make\n\nBuilt = make(2)\n"})
+        self.assertEqual(rc, 0, out)
+
+    def test_a_load_tests_that_drops_a_bound_class_passes(self):
+        self.write("test_other", """
+            import unittest
+            class TestO(unittest.TestCase):
+                def test_o(self): pass
+            """)
+        self.write("test_lt", """
+            import unittest
+            from test_other import TestO
+            def load_tests(loader, tests, pattern):
+                return unittest.TestSuite()
+            """)
+        r = self.run_it()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_a_class_a_factory_builds_runs_once(self):
+        # TJ-3780: a helper's factory (or a decorator that subclasses)
+        # makes a class no module holds at its top: it runs once.
+        self.write("_factory", """
+            import unittest
+            def __getattr__(name):           # a lazy loader's (TJ-3786)
+                if name == "Case":
+                    raise ImportError(name)
+                raise AttributeError(name)
+            def make(value):
+                class Case(unittest.TestCase):
+                    def test_v(self):
+                        self.assertTrue(value)
+                return Case
+            """)
+        for name in ("test_f1", "test_f2"):
+            self.write(name, """
+                import _factory
+                TestMade = _factory.make(1)
+                """)
+        r = self.run_it()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("Ran 2 of 2 tests", r.stdout)
+        # One made class that two modules bind runs in both.
+        self.write("_made", "import _factory\nShared = _factory.make(1)\n")
+        for name in ("test_f1", "test_f2"):
+            self.write(name, "from _made import Shared\n")
+        r = self.run_it()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("  test_f1.Shared, test_f2.Shared: _factory.make.<locals>.Case\n", r.stdout)
+
+    def test_bound_classes_past_twenty_are_counted(self):
+        body = "import unittest\n" + "".join(
+            f"class TestC{i}(unittest.TestCase):\n    def test_a(self): pass\n" for i in range(22))
+        self.write("test_many", body)
+        self.write("test_borrow", "from test_many import *\n")
+        r = self.run_it()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("COLLECT FAILED — 22 TestCase class(es)", r.stdout)
+        self.assertIn("  ... and 2 more\n", r.stdout)
+
+    def test_ids_alike_are_no_bound_class(self):
+        # FunctionTestCase ids are the function's name, and a load_tests
+        # may run one case twice: neither is a class bound twice.
+        for name in ("test_lt1", "test_lt2"):
+            self.write(name, """
+                import unittest
+                def load_tests(loader, tests, pattern):
+                    s = unittest.TestSuite()
+                    s.addTest(unittest.FunctionTestCase(lambda: None))
+                    s.addTest(unittest.FunctionTestCase(lambda: None))
+                    return s
+                """)
+        r = self.run_it()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def test_named_modules_and_serial_fallback(self):
         self.write("test_a", """
@@ -250,7 +520,23 @@ class TestRunner(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("test_two_classes.A (1/1)", r.stdout)
         self.assertIn("test_two_classes.B (2/2)", r.stdout)
-        self.assertIn("Ran 3 of 3 tests", r.stdout)
+        self.assertIn("Ran 3 of 3 tests in", r.stdout)
+
+    def test_the_summary_sums_the_parts_skips(self):
+        self.write("test_skips", """
+            import unittest
+            class A(unittest.TestCase):
+                @unittest.skip("demo")
+                def test_1(self): pass
+                def test_2(self): pass
+            class B(unittest.TestCase):
+                @unittest.skip("demo")
+                def test_1(self): pass
+            """)
+        self.durations.write_text(json.dumps({"parts": {"test_skips": 100.0}}))
+        r = self.run_it("-v")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("Ran 3 of 3 tests (2 skipped) in", r.stdout)
 
 
 class TestGateWiring(unittest.TestCase):

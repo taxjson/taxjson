@@ -1,0 +1,49 @@
+{
+  "accounts": {
+    "crypto": {
+      "arrival_ids": [],
+      "arrival_orphans": [],
+      "arrivals": [],
+      "cross_account_moves": [],
+      "manifest": "<project>/inputs/crypto/sends.json",
+      "matched": 0,
+      "network_fees": [],
+      "orphans": [],
+      "overridden": [],
+      "repeated_hour": [],
+      "sends": [
+        {
+          "account": "crypto",
+          "auto": false,
+          "date": "2024-10-15",
+          "decision": "gift",
+          "exchange": "coinbase",
+          "fair_value": {
+            "currency": "CAD",
+            "price": 3510.0,
+            "source": "Coinbase spot price 2600 USD x Bank of Canada USD/CAD 1.35 (2024-10-15)",
+            "value": 1755.0
+          },
+          "fee_booked": 0.0,
+          "fx": null,
+          "id": "cb-20241015T110000-ETH-0.5",
+          "kind": "Send",
+          "note": "synthetic",
+          "quantity": 0.5,
+          "ref": "CB***",
+          "stable": false,
+          "summary": "Coinbase Send 2024-10-15 11:00:00 0.5 ETH",
+          "symbol": "ETH",
+          "time": "11:00:00",
+          "tt": "BUYSELL 2024-10-15 11:00:00 ETH -0.5 CAD 3510 1755.00 0",
+          "unpaired": false
+        }
+      ],
+      "tt_file": "<project>/inputs/crypto/crypto_sends.tt",
+      "undecided": 0
+    }
+  },
+  "base_currency": "CAD",
+  "country": "canada",
+  "schema_version": 1
+}

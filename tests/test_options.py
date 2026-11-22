@@ -1,6 +1,6 @@
 import unittest
-from taxjson.lib.core import CanadaTaxRules
-from test_ported_tt_helper import parse_tt_lines
+from taxjson.engine.ca.taxrules import CanadaTaxRules
+from _support.tt_ported import parse_tt_lines
 
 class TestOptionsLogic(unittest.TestCase):
     def setUp(self):

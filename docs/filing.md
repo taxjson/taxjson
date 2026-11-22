@@ -208,7 +208,7 @@ Canada; a US return: [A US return](#a-us-return).
       later.
 - [ ] `tjs close-year` **immediately after filing** (it lists the
       checklist items still open and asks before locking; `--force` when
-      re-filing). The lock is what `check-filed`, `option-boundary` and
+      re-filing, or to lock past a stop that names it). The lock is what `check-filed`, `option-boundary` and
       every later `run` use to detect drift, and what makes next year's
       T1-ADJ instructions accurate. It also records the year's
       carry-forwards (net capital loss; minimum tax carryover by year of

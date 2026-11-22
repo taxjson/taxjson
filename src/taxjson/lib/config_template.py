@@ -76,7 +76,6 @@ no entry here.
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 import textwrap
 from dataclasses import dataclass, field
@@ -86,11 +85,13 @@ from datetime import time as _time
 from typing import (Any, Dict, Iterable, List, Mapping, Optional, Sequence,
                     Set, Tuple, Union)
 
+from taxjson.project.toml_io import parse_toml, TOML_ERRORS
 from taxjson.lib import country as C
-from taxjson.lib.config_check import (ACCOUNT_KEYS, CARRYOVER_KEYS, CGD_KEYS,
-                                      DISTRIBUTION_KEYS, ESTIMATE_KEYS,
+from taxjson.lib.config_check import (ACCOUNT_KEYS, ESTIMATE_KEYS,
                                       INSTALMENTS_KEYS, RETIRED_SETTINGS)
-from taxjson.lib.tomlcompat import tomllib
+from taxjson.lib.project_tables import (CARRYOVER_ANSWER_KEYS, CARRYOVER_KEYS,
+                                        DISTRIBUTION_KEYS)
+from taxjson.lib.cg_dividends import CGD_KEYS
 
 # Comment lines that are prose (the file header, headings, descriptions,
 # notes) start with PROSE, `## `; a commented-out key or table (what a
@@ -166,7 +167,7 @@ def _plans(country: str) -> str:
 
 
 def _bases() -> str:
-    from taxjson.bin.taxjson_instalments import BASES
+    from taxjson.lib.instalment_rates import BASES
     return " | ".join(BASES)
 
 
@@ -485,6 +486,17 @@ def _sorted_keys(keys: Iterable[Key]) -> List[Key]:
     return sorted(keys, key=lambda k: k.name)
 
 
+# Keys that answer a question a command asked, laid out when the file sets
+# them and never offered by `tjs init` (docs/settings.md has their entries):
+# {table: keys}.
+ANSWER_KEYS: Dict[str, Tuple[Key, ...]] = {
+    "carryover": (
+        Key(CARRYOVER_ANSWER_KEYS[0], "{{ {prev_year} = 0 }}",
+            "What that year's return carried back (T1A), where `tjs "
+            "carryover` can't tell."),),
+}
+
+
 # ------------------------------------------------------------ ownership
 
 def key_owner(table: str, key: Optional[str] = None) -> str:
@@ -513,7 +525,7 @@ def validator_keys() -> Dict[str, Tuple[str, ...]]:
         "accounts": ACCOUNT_KEYS,
         "estimate": ESTIMATE_KEYS,
         "instalments": INSTALMENTS_KEYS,
-        "carryover": CARRYOVER_KEYS,
+        "carryover": CARRYOVER_KEYS + CARRYOVER_ANSWER_KEYS,
         "distributions": DISTRIBUTION_KEYS,
         "capital_gains_dividends": CGD_KEYS,
     }
@@ -526,64 +538,6 @@ def spec_keys() -> Dict[str, Tuple[str, ...]]:
     for t in TABLES:
         out[t.name] = tuple(k.name for k in t.keys)
     return out
-
-
-# ------------------------------------------------------------ timezone
-
-def system_timezone() -> Optional[str]:
-    """This machine's IANA zone name (TZ, /etc/timezone, the
-    /etc/localtime link), or None when none can be read or it is not a
-    zone name taxjson accepts."""
-    cands: List[str] = []
-    env = (os.environ.get("TZ") or "").strip().lstrip(":")
-    if env:
-        cands.append(env)
-    try:
-        with open("/etc/timezone", encoding="utf-8") as f:
-            cands.append(f.readline().strip())
-    except OSError:
-        pass
-    try:
-        link = os.readlink("/etc/localtime")
-        if "zoneinfo/" in link:
-            cands.append(link.split("zoneinfo/", 1)[1])
-    except OSError:
-        pass
-    # Servers, containers and WSL run on UTC whatever the user's zone
-    # is: a UTC zone never names where the user lives. TZ, when set, is
-    # the user's word and decides (UTC there: the key stays commented);
-    # among the files, a stale /etc/timezone saying Etc/UTC beside an
-    # /etc/localtime link to America/Toronto (2026-10 workflow audit)
-    # does not hide the link — the first real zone wins, and only UTC
-    # everywhere leaves the key commented.
-    if env:
-        return env if env not in _SERVER_DEFAULT_ZONES \
-            and valid_timezone(env) else None
-    for name in cands:
-        if name in _SERVER_DEFAULT_ZONES:
-            continue
-        if valid_timezone(name):
-            return name
-    return None
-
-
-_SERVER_DEFAULT_ZONES = frozenset({
-    "UTC", "Etc/UTC", "Etc/UCT", "UCT", "Etc/Universal", "Universal",
-    "Etc/Zulu", "Zulu", "GMT", "Etc/GMT", "Etc/GMT0", "Etc/GMT+0",
-    "Etc/GMT-0", "Etc/Greenwich", "Greenwich", "GMT0"})
-
-
-def valid_timezone(name: str) -> bool:
-    """An IANA Area/Location name (or UTC) the crypto dating accepts."""
-    if not name or ("/" not in name and name != "UTC") \
-            or name.startswith(("/", "posix/", "right/")):
-        return False
-    try:
-        from taxjson.lib.brokerages._crypto_common import utc_to_local
-        utc_to_local(_datetime(2025, 1, 1), name)
-    except Exception:  # noqa: BLE001 — any failure: not a usable zone
-        return False
-    return True
 
 
 # ------------------------------------------------------------ TOML values
@@ -650,8 +604,6 @@ def toml_value(v: Any, *, top: bool = False) -> str:
         return "{ " + ", ".join(f"{key_repr(str(k))} = {toml_value(x)}"
                                 for k, x in v.items()) + " }"
     raise FormatError(f"cannot write a {type(v).__name__} value as TOML")
-
-
 
 
 # ------------------------------------------------------------ comment text
@@ -1006,7 +958,7 @@ class _Renderer:
                 continue
             body = "\n".join(re.sub(r"^# ?", "", ln) for ln in lines[i:])
             try:
-                got = tomllib.loads(body)
+                got = parse_toml(body)
             except Exception:  # noqa: BLE001 — not one whole key
                 return None
             return lines[i:] if list(got) == [key] else None
@@ -1248,8 +1200,11 @@ class _Renderer:
         T = (t.name,)
         self.header(T, f"[{t.name}]", commented=not present,
                     doc=self.fill(_pick(t.doc, c)))
-        keys = _sorted_keys(k for k in t.keys if owned(c, t.name, k.name))
         vals = values if isinstance(values, dict) else {}
+        keys = _sorted_keys(
+            [k for k in t.keys if owned(c, t.name, k.name)]
+            + [k for k in ANSWER_KEYS.get(t.name, ()) if k.name in vals
+               and owned(c, t.name, k.name)])
         self.keys(T, [self.entry(k, vals) for k in keys]
                   + self.unknown_entries(vals, [k.name for k in keys],
                                          t.name, owner_table=t.name),
@@ -1519,7 +1474,7 @@ def _parse_keypath(s: str, i: int) -> Tuple[Tuple[str, ...], int]:
             while j < n and s[j] != '"':
                 j += 2 if s[j] == "\\" else 1
             q = s[i:j + 1]
-            parts.append(next(iter(tomllib.loads(f"{q} = 0"))))
+            parts.append(next(iter(parse_toml(f"{q} = 0"))))
             i = j + 1
         elif s[i] == "'":
             j = s.index("'", i + 1)
@@ -1679,7 +1634,7 @@ def _commented_header(st: str) -> Optional[Tuple[Tuple[str, ...], bool]]:
         return None
     try:
         path, aot, rest = _parse_header(body)
-    except (ValueError, KeyError, IndexError, tomllib.TOMLDecodeError):
+    except (ValueError, KeyError, IndexError, *TOML_ERRORS):
         return None
     rest = rest.strip()
     if rest and not rest.startswith("#"):
@@ -1712,14 +1667,14 @@ def _toml_code(text: str) -> bool:
     if not (b.startswith(("[", "{")) or _KEYISH.match(b)):
         return False
     try:
-        if tomllib.loads(text if "\n" in text else b):
+        if parse_toml(text if "\n" in text else b):
             return True
     except Exception:  # noqa: BLE001 — any parse failure: not a line
         pass
     if "\n" in text or not b.startswith(("[", "{")):
         return False
     try:
-        tomllib.loads(f"x = [\n{b}\n]")
+        parse_toml(f"x = [\n{b}\n]")
     except Exception:  # noqa: BLE001 — not an element either: prose
         return False
     return True
@@ -1846,13 +1801,11 @@ def format_config(text: str) -> FormatResult:
     Raises FormatError when it is not valid TOML, has no usable country,
     or cannot be formatted losslessly (the parsed result must equal the
     input's — checked here, before anything is returned)."""
-    if tomllib is None:  # pragma: no cover
-        raise FormatError("TOML support requires Python 3.11+ or tomli")
     if text.startswith("﻿"):
         text = text[1:]
     try:
-        doc = tomllib.loads(text)
-    except tomllib.TOMLDecodeError as e:
+        doc = parse_toml(text)
+    except TOML_ERRORS as e:
         raise FormatError(f"taxjson.toml is not valid TOML: {e}") from None
     settings = doc.get("settings")
     if not isinstance(settings, dict):
@@ -1895,8 +1848,8 @@ def format_config(text: str) -> FormatResult:
     out = r.render()
     # Lossless, or nothing: the effective config must not change.
     try:
-        after = tomllib.loads(out)
-    except tomllib.TOMLDecodeError as e:  # pragma: no cover
+        after = parse_toml(out)
+    except TOML_ERRORS as e:  # pragma: no cover
         raise FormatError(f"internal error: the formatted file is not "
                           f"valid TOML ({e}); nothing was written")
     if after != doc or list(after.get("accounts") or {}) != list(accts or {}):

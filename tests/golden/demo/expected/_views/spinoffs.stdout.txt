@@ -1,0 +1,10 @@
+SPIN-OFFS (1)
+
+2024-06-03  margin  PARNT.US -> SPNCO.US  0.25 new per share (1 for 4)
+  election:    taxable_deemed_dividend
+  value used:  20.00 USD/share (the broker's value)
+  booked:      income 675.00 CAD, 25 new shares costing 675.00 CAD
+  held now:    0
+  - default treatment: a dividend equal to the new shares' fair market value, which is also their cost
+
+Every taxable spin-off is booked with a value.

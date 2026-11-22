@@ -1,0 +1,709 @@
+[
+ {
+  "view": "sum",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "sum --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "estimate --province ON",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "estimate --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "carryover",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "carryover --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "form-export",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "form-export --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "wash-sales",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "wash-sales --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "fx-cash",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "fx-cash --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "cash all --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "fx-cash --ledger v2 --events --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "divs-sum",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "divs-sum --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "trades-sum",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "trades-sum --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "option-yield",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "option-yield --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "stats",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "stats --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "list",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "list --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "edge-cases",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "edge-cases --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "ccd-sum",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "ccd-sum --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "leaps-sum",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "leaps-sum --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "fees-sum",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "fees-sum --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "spinoffs",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "spinoffs --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "amt --province ON",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "amt --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "slip-audit",
+  "cwd": ".",
+  "exit": 1
+ },
+ {
+  "view": "slip-audit --json",
+  "cwd": ".",
+  "exit": 1
+ },
+ {
+  "view": "slip-audit --details",
+  "cwd": ".",
+  "exit": 1
+ },
+ {
+  "view": "t1135",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "t1135 --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "instalments",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "instalments --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "option-boundary",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "option-boundary --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "close-year --yes",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "check-filed",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "sum",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "sum --json",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "estimate --province ON",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "estimate --json",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "sanity margin=holdings.toml",
+  "cwd": ".",
+  "exit": 1
+ },
+ {
+  "view": "sanity margin=holdings.toml",
+  "cwd": ".",
+  "exit": 1,
+  "width": 120
+ },
+ {
+  "view": "sanity margin=holdings.toml --details",
+  "cwd": ".",
+  "exit": 1
+ },
+ {
+  "view": "sanity margin=holdings.toml --details",
+  "cwd": ".",
+  "exit": 1,
+  "width": 120
+ },
+ {
+  "view": "sanity margin=holdings.toml --json",
+  "cwd": ".",
+  "exit": 1
+ },
+ {
+  "view": "sanity margin=holdings.toml --json",
+  "cwd": ".",
+  "exit": 1,
+  "width": 120
+ },
+ {
+  "view": "wash-radar --date 2024-11-25",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "wash-radar --date 2024-11-25",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "wash-radar --date 2024-11-25 --details",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "wash-radar --date 2024-11-25 --details",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "wash-radar --date 2024-11-25 --all",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "wash-radar --date 2024-11-25 --all",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "wash-radar --date 2024-11-25 --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "wash-radar --date 2024-11-25 --json",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "rebuy --date 2024-11-25",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "rebuy --date 2024-11-25",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "rebuy --date 2024-11-25 --details",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "rebuy --date 2024-11-25 --details",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "rebuy --date 2024-11-25 --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "rebuy --date 2024-11-25 --json",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "sum --details",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "sum --details",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "sum --verbose",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "sum --verbose",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "sum --other-income 50000",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "sum --other-income 50000",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "estimate --province ON --details",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "estimate --province ON --details",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "estimate --province ON --verbose",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "estimate --province ON --verbose",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "estimate --province ON --other-income 400000 --details --verbose",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "estimate --province ON --other-income 400000 --details --verbose",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "tips",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "tips",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "tips --details",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "tips --details",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "tips --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "tips --json",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "transfers",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "transfers",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "transfers --details",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "transfers --details",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "transfers --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "transfers --json",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "shares",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "shares",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "shares --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "shares --json",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "winners",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "winners",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "winners --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "winners --json",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
+ },
+ {
+  "view": "checklist --json",
+  "cwd": ".",
+  "exit": 1
+ },
+ {
+  "view": "checklist --reset --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "update-tobase-map --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "ticker-map --suggest --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "elect --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "elect --pending --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "compare --save base --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "compare base --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "compare --list --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "compare --delete base --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "snapshot --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "plot-tax --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "div-estimate --date 2024-12-31 --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "win-rates --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "events all --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "divs all --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "dil all --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "roc all --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "trades all --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "leaps all --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "gains all --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "fees all --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "losers --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "check-dates --json",
+  "cwd": ".",
+  "exit": 1
+ },
+ {
+  "view": "check-tt --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "splits --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "journals --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "renames --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "audit --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "reconcile-slips slips/t5008.csv --json",
+  "cwd": ".",
+  "exit": 1
+ },
+ {
+  "view": "--country canada --json work/margin_gains.json",
+  "cwd": ".",
+  "exit": 0,
+  "tool": "taxjson_sum_gains"
+ },
+ {
+  "view": "--year 2024 --country canada --json --gains work/margin_gains.json work/margin_base.json",
+  "cwd": ".",
+  "exit": 0,
+  "tool": "taxjson_sum_income"
+ }
+]

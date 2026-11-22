@@ -1,0 +1,10 @@
+WINNERS — tax year 2024 (USD, top 10)
+Realized dispositions, allowed amounts, basis: wash-adjusted; an option under its underlying; dividends and PIL: tjs divs-sum.
+TICKER   CLOSES   PROCEEDS       COST    GAIN
+---------------------------------------------
+ETH           5   3,070.91   2,795.91  275.00
+BTC           2   6,573.60   6,375.60  198.00
+MSFT.US       1  20,099.00  20,001.00   98.00
+
+WINNERS TOTAL:        571.00 USD (all 3 shown)
+TOTAL REALIZED GAIN:  329.25 USD (8 ticker(s), all accounts; the losers: tjs losers)

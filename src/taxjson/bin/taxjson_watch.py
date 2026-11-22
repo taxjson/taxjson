@@ -20,6 +20,7 @@ break on a mere change report. The first run records a baseline and
 says so. State updates on every run (atomic write).
 """
 from taxjson.lib.out import exit_text
+from taxjson.model import money as M
 import json
 import math
 import sys
@@ -247,12 +248,12 @@ def diff_harvest(prev_now: Optional[float], cur_now: float,
     delta = cur_now - prev_now
     # Cents: with --threshold 0 ("any move") float noise below a cent
     # must not read as a change.
-    if abs(round(delta, 2)) <= threshold:
+    if abs(M.shown(delta, 2)) <= threshold:
         return None
-    return {"kind": "harvest_now", "was": round(prev_now, 2),
-            "now": round(cur_now, 2),
-            "line": f"harvestable-now losses: {prev_now:,.2f} -> "
-                    f"{cur_now:,.2f} ({delta:+,.2f})"}
+    return {"kind": "harvest_now", "was": M.shown(prev_now, 2),
+            "now": M.shown(cur_now, 2),
+            "line": f"harvestable-now losses: {M.shown(prev_now, 2):,.2f} -> "
+                    f"{M.shown(cur_now, 2):,.2f} ({M.shown(delta, 2):+,.2f})"}
 
 
 def harvest_left_out(hdoc: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -398,7 +399,7 @@ def save_state(path: Path, radar: Dict[str, Dict[str, Any]],
     doc: Dict[str, Any] = {"schema_version": STATE_VERSION,
                            "as_of": as_of, "radar": radar}
     if harvest_now is not None:
-        doc["harvest_now"] = round(harvest_now, 2)
+        doc["harvest_now"] = M.shown(harvest_now, 2)
         if harvest_omitted is not None:
             doc["harvest_omitted"] = sorted(harvest_omitted)
         if harvest_valued is not None:

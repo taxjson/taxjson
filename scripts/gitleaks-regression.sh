@@ -13,7 +13,7 @@
 # "secrets" job runs it with the pinned binary — on a pull request the
 # BASE commit's copy of this script, against the config the pull request
 # proposes, so a change cannot weaken the test its config must pass;
-# tests/test_fix_release_hardening.py runs it when a gitleaks binary is on
+# tests/features/repo_checks/test_release_and_ci_hardening.py runs it when a gitleaks binary is on
 # hand (TAXJSON_GITLEAKS, or gitleaks on PATH).
 # Exit 0: all as expected; 1: something is not reported (or a clean file
 # is); 2: usage.

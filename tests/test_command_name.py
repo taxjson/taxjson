@@ -9,9 +9,9 @@ import contextlib
 import io
 import re
 import unittest
-from pathlib import Path
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 TOP_FILES = ("README.md", "SECURITY.md", "CONTRIBUTING.md", "REFERENCES.md",
              "AGENTS.md", "install.sh")
 FOLDERS = ("src", "packages", "docs", "examples", ".github")
@@ -24,7 +24,7 @@ PROSE = re.compile(r"taxjson gains (?:engine|into)|not a taxjson gains")
 
 
 def _commands():
-    from taxjson.bin.taxjson_run import _build_parser
+    from taxjson.cli.parser import _build_parser
     _p, sub = _build_parser()
     return sorted(sub.choices, key=len, reverse=True)
 
@@ -68,7 +68,7 @@ class TestCommandName(unittest.TestCase):
 
     def test_version_output_keeps_the_projects_name(self):
         # `deploy` compares it with this exact text; old installs print it.
-        from taxjson.bin.taxjson_run import _build_parser
+        from taxjson.cli.parser import _build_parser
         text = (REPO_ROOT / "src/taxjson/lib/channels.py").read_text(
             encoding="utf-8")
         self.assertIn('if got != f"taxjson {want[1:]}":', text)

@@ -345,8 +345,10 @@ def qt_activities(session: Dict[str, str], number: str,
     from collections import Counter
     seg = qt_account_segment(number)
     out: List[Dict[str, Any]] = []
-    # Per activity identity, the MOST copies any earlier chunk held.
-    seen_prev: Counter = Counter()
+    # Per activity (its identity but for the symbol), the copies the
+    # earlier chunks left in `out`: where each sits and its symbol. As
+    # many as the chunk that held the most.
+    seen_prev: Dict[str, List[Tuple[int, str]]] = {}
     cur = start
     while cur <= end:
         chunk_end = min(cur + timedelta(days=_QT_CHUNK_DAYS), end)
@@ -369,18 +371,108 @@ def qt_activities(session: Dict[str, str], number: str,
         # side (audit 2026-10-24 A21: a set dropped both copies).
         # Identity by VALUE: a window that spelled 10 as 10.0 made the
         # boundary activity a second trade (backlog TJ-0735).
-        keys = [json.dumps(_qt_identity(act), sort_keys=True, default=str)
-                for act in _qt_activity_list(doc, path, session, seg)]
-        skipped: Counter = Counter()
-        for act, k in zip(doc["activities"], keys):
-            if skipped[k] < seen_prev[k]:
-                skipped[k] += 1
+        # A copy whose `symbol` came back blank is the same activity as
+        # the named one (backlog TJ-4955: the boundary option trade was
+        # booked twice): the count is kept over the copies of both
+        # spellings (`qt_blank_copies`) and the named copy is the one
+        # kept, in the place the blank one had.
+        acts = _qt_activity_list(doc, path, session, seg)
+        keys = [_qt_base_and_symbol(act) for act in acts]
+        named: Dict[str, Counter] = {}
+        blank: Counter = Counter()
+        for base, sym in keys:
+            if sym:
+                named.setdefault(base, Counter())[sym] += 1
+            else:
+                blank[base] += 1
+        skip: Dict[Tuple[str, str], int] = {}
+        slots: Dict[str, List[int]] = {}
+        for base in dict.fromkeys(b for b, _s in keys):
+            had = seen_prev.get(base, [])
+            had_named = Counter(s for _i, s in had if s)
+            had_blank = [i for i, s in had if not s]
+            now_named = named.get(base, Counter())
+            want_blank = qt_blank_copies(had_named, len(had_blank),
+                                         now_named, blank[base],
+                                         kept_exact=True)
+            for sym, n in now_named.items():
+                skip[(base, sym)] = min(n, had_named[sym])
+            skip[(base, "")] = blank[base] - max(
+                0, want_blank - len(had_blank))
+            # Blank copies kept from an earlier chunk that this chunk
+            # names: the named copy takes the blank one's place.
+            slots[base] = had_blank[:max(0, len(had_blank) - want_blank)]
+        for act, (base, sym) in zip(acts, keys):
+            if skip[(base, sym)] > 0:
+                skip[(base, sym)] -= 1
                 continue
+            rows = seen_prev.setdefault(base, [])
+            if sym and slots[base]:
+                at = slots[base].pop(0)
+                out[at] = act
+                rows[[i for i, _s in rows].index(at)] = (at, sym)
+                continue
+            rows.append((len(out), sym))
             out.append(act)
-        for k, n in Counter(keys).items():
-            seen_prev[k] = max(seen_prev[k], n)
         cur = chunk_end + timedelta(days=1)
     return out
+
+
+def qt_blank_copies(kept_named: Any, kept_blank: int, new_named: Any,
+                    new_blank: int, *, kept_exact: bool) -> int:
+    """How many blank-Symbol copies of one activity to keep when two
+    sides hold rows that are equal in everything but the Symbol, at
+    least one of them named. `kept_named` / `new_named`: {symbol:
+    copies} on each side; `kept_blank` / `new_blank`: the copies whose
+    Symbol is blank.
+
+    Each symbol keeps the most copies either side holds (two symbols
+    are two securities; a named row is never dropped). A blank copy is
+    the same activity as a named one (Questrade returns a re-fetched
+    activity with its symbol blank, backlog TJ-4955), so the blank
+    copies kept are what the group's count leaves after the named ones:
+
+    - the new side is one download, read as it is: named + blank;
+    - the kept side, when `kept_exact` (the earlier windows of the same
+      download), counts the same way, and the larger side decides;
+    - the kept side, when not (the existing fetch file, which may hold
+      a named row and its blank twin), does not count: the download's
+      count decides, so the file's blank rows beyond it go in this one
+      merge and merging the same download again changes nothing;
+    - a new side with no row of the activity says nothing about it:
+      every kept blank copy stays.
+
+    With no symbol named on either side there is no named copy to
+    compare with: the larger side's blank copies, as before. The result
+    is otherwise never more than the new side's blank copies, or the
+    larger side's when `kept_exact`."""
+    n_new = sum(new_named.values())
+    if not n_new + new_blank:
+        return kept_blank
+    if not n_new and not sum(kept_named.values()):
+        return max(kept_blank, new_blank)   # no symbol named: as before
+    names = sum(max(kept_named.get(s, 0), new_named.get(s, 0))
+                for s in set(kept_named) | set(new_named))
+    kept_says = sum(kept_named.values()) + kept_blank if kept_exact else 0
+    return max(names, n_new + new_blank, kept_says) - names
+
+
+def _qt_base_and_symbol(act: Any) -> Tuple[str, str]:
+    """An API activity as (its identity but for `symbol` and `symbolId`,
+    its symbol's own identity): the second is "" when the symbol is
+    blank, whatever the id (the copy compared with a named one must
+    still equal it in every other field: nothing is matched on the id
+    alone). Two named copies are one symbol when both fields agree."""
+    if not isinstance(act, dict):
+        return json.dumps(_qt_identity(act), sort_keys=True,
+                          default=str), "-"
+    rest = {k: v for k, v in act.items() if k not in ("symbol", "symbolId")}
+    base = json.dumps(_qt_identity(rest), sort_keys=True, default=str)
+    if not str(act.get("symbol") or "").strip():
+        return base, ""
+    return base, json.dumps(
+        _qt_identity([act.get("symbol"), act.get("symbolId")]),
+        default=str)
 
 
 def _qt_identity(value: Any) -> Any:
@@ -571,22 +663,64 @@ def _qt_read_beside_its_symbol(activity: Dict[str, Any],
     return len(rows) > 1 and not _qt_parser_refuses(*rows)
 
 
-def _qt_cash_reader_loses(activity: Dict[str, Any]) -> bool:
+def _qt_cash_amount_unread(activity: Dict[str, Any]) -> bool:
     """Whether the row qt_to_csv renders for `activity` is a cash row the
-    FX-on-cash ledger's reader (questrade_cash_events) refuses, or skips
-    only because its Net Amount or currency is missing. parse_file leaves
-    these rows out unread, so it cannot speak for them (backlog TJ-1291).
-    A real zero amount has no cash to lose. The stand-in values only ask
-    whether the row would be an event when whole."""
+    Questrade parse notes for the FX-on-cash ledger (`_qt_cash_kind`: an
+    FXT leg, a deposit, withdrawal or contribution, a transfer journal or
+    LFJ) whose Quantity or Net Amount is no number its cash events read
+    (`_cash_amounts`: a blank is 0). The ledger loses such a row's cash
+    whatever else stops the parse (TJ-4445)."""
+    from taxjson.lib.brokerages.questrade import _canon_action, _qt_cash_kind
+    from taxjson.lib.brokerages.base import parse_strict_number
+    row = next(csv.DictReader(io.StringIO(qt_to_csv([activity], "0"))))
+    if not _qt_cash_kind(_canon_action(row.get("Action")),
+                         (row.get("Activity Type") or "").strip()):
+        return False
+    try:
+        for col in ("Quantity", "Net Amount"):
+            parse_strict_number(row.get(col), field=col, where="activity",
+                                allow_blank=True, blank=0.0)
+    except ValueError:
+        return True
+    return False
+
+
+def _qt_cash_ledger_loses(activity: Dict[str, Any]) -> bool:
+    """Whether the row qt_to_csv renders for `activity` is a cash row the
+    FX-on-cash ledger loses: the Questrade parse's cash events (its
+    `cash_events`, built from the cash rows it read) cannot read it (its
+    `cash_problem`), or skip it only because its Net Amount or currency is
+    missing. parse_file counts these rows as non-events without reading
+    their cells, so its refusals cannot speak for them (backlog TJ-1291). A
+    real zero amount has no cash to lose. The stand-in values only ask
+    whether the row would be an event when whole. A row the parse refuses
+    is lost when it is a cash row whose Quantity or Net Amount the parse's
+    cash events could not read (`_qt_cash_amount_unread`), as the reader
+    refused it, whatever the parse refused first: the answer does not lean
+    on its caller to name the refusal (TJ-4445). Any other refused row is
+    the parser's to name (`_qt_parser_refuses`), not the ledger's (PLAN
+    step 16 commit 9: once lib/cash_readers/questrade.py's to answer)."""
     import contextlib
     import tempfile
     from pathlib import Path
-    from taxjson.lib.brokerages.questrade import questrade_cash_events
+    from taxjson.lib.brokerages.questrade import QuestradeBrokerage
 
     def events(row: Dict[str, Any]) -> List[Dict[str, Any]]:
         path = Path(td) / "activity.csv"
         path.write_text(qt_to_csv([row], "0"), encoding="utf-8")
-        return questrade_cash_events(path)
+        parser = QuestradeBrokerage()
+        try:
+            parser.parse_file(path)
+        except (ValueError, csv.Error):
+            # The parse refused the row (as taxjson-brokerage words a
+            # refusal): lost, if its cash cells are unreadable; else the
+            # parser's to name, not the ledger's.
+            if _qt_cash_amount_unread(row):
+                raise
+            return []
+        if parser.cash_problem:
+            raise ValueError(parser.cash_problem)
+        return parser.cash_events or []
     try:
         with tempfile.TemporaryDirectory() as td, \
                 contextlib.redirect_stdout(io.StringIO()), \
@@ -612,7 +746,7 @@ def qt_unusable_activities(activities: List[Dict[str, Any]],
     missing, null, blank or not a number, or a quantity or price that is
     no number, when the parser reads that cell on such a row
     (_qt_parser_refuses), or as a cash row the FX-on-cash ledger cannot
-    use (_qt_cash_reader_loses; such a line, when the parser reads the row,
+    use (_qt_cash_ledger_loses; such a line, when the parser reads the row,
     is also added to `ledger_only`). --trim-overlap retires a manual export's
     rows on the strength of the download, so it must not trust a download
     holding such a row: a null netAmount trimmed the manual purchase and
@@ -653,7 +787,7 @@ def qt_unusable_activities(activities: List[Dict[str, Any]],
             continue
         refused = (_qt_parser_refuses(a)
                    and not _qt_read_beside_its_symbol(a, activities))
-        if refused or _qt_cash_reader_loses(a):
+        if refused or _qt_cash_ledger_loses(a):
             what = " ".join(str(x) for x in (
                 day or "undated", a.get("type") or "activity",
                 a.get("symbol") or "") if x)
@@ -697,12 +831,12 @@ def _symbol_id(position: Dict[str, Any]) -> Optional[int]:
 def _declared_size(sym: str) -> Optional[float]:
     """The contract size a ticker.map `MULT` line declares for the
     option `sym` (the exact symbol, its root, then its underlying), the
-    way core.equity_option_size reads it — ahead of any size the books
+    way contract_size.equity_option_size reads it — ahead of any size the books
     or Questrade state. None when no line names it. The live snapshot
     read only the books' and the lookup's sizes, so a mini contract
     declared `MULT … 10` was costed at 100 shares (backlog TJ-0857)."""
     from taxjson.lib import markets
-    from taxjson.lib.core import parse_option_underlying
+    from taxjson.lib.option_symbols import parse_option_underlying
     und = str(parse_option_underlying(sym) or "")
     root = und.split(".", 1)[0]
     size = _finite(markets.contract_size(sym, root)
@@ -719,7 +853,7 @@ def qt_unbooked_option_ids(positions: List[Dict[str, Any]],
     give (qt_contract_sizes; backlog TJ-0614). One they hold only closed
     (`closed_symbols`) too: the listing open now may be another one
     (backlog TJ-1235)."""
-    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.option_symbols import is_option_symbol
     book = frozenset(str(b).upper() for b in book_symbols)
     out: List[int] = []
     for p in positions:
@@ -818,7 +952,7 @@ def _qt_closed_listing(sym: str, book_symbols, closed_symbols) -> bool:
 def _qt_option_root(sym: str) -> str:
     """The root of the option `sym` (taxjson spelling), '' when it reads
     as none."""
-    from taxjson.lib.core import parse_option_underlying
+    from taxjson.lib.option_symbols import parse_option_underlying
     try:
         return str(parse_option_underlying(sym) or "").rsplit(".", 1)[0]
     except Exception:
@@ -828,7 +962,7 @@ def _qt_option_root(sym: str) -> str:
 def _qt_book_to_roots(book_symbols) -> set:
     """The roots of the .TO options the books (upper case) ever held,
     open or closed."""
-    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.option_symbols import is_option_symbol
     return {r for r in (_qt_option_root(b) for b in book_symbols
                         if b.endswith(".TO") and is_option_symbol(b)) if r}
 
@@ -854,7 +988,7 @@ def qt_ambiguous_option_ids(positions: List[Dict[str, Any]],
     CDR says nothing about this contract (backlog TJ-1074, TJ-1108); and
     a contract they hold on one listing only closed (`closed_symbols`,
     backlog TJ-1235)."""
-    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.option_symbols import is_option_symbol
     book = frozenset(str(b).upper() for b in book_symbols)
     taught = _qt_book_to_roots(book) | _qt_payload_to_roots(positions)
     out: List[int] = []
@@ -1124,7 +1258,7 @@ def positions_to_holdings_toml(positions: List[Dict[str, Any]],
     # may be a CDR over a US name.
     book_symbols = frozenset(str(b).upper() for b in book_symbols)
     closed_symbols = frozenset(str(b).upper() for b in closed_symbols)
-    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.option_symbols import is_option_symbol
     book_to_roots = _qt_book_to_roots(book_symbols)
     live_to_roots = (_qt_payload_to_roots(positions)
                      | frozenset(extra_to_roots))
@@ -1438,7 +1572,7 @@ def looks_like_ib_statement(text: str) -> bool:
     download fetch accepts is one `tjs run` can read (audit R1-57:
     a 'Trades,Header' anywhere in the first 4 KB used to pass here and
     then stop the run with "cannot detect broker")."""
-    from taxjson.bin.taxjson_detect_brokerage import looks_like_ib_text
+    from taxjson.pipeline.plugin_api import looks_like_ib_text
     return looks_like_ib_text(text)
 
 

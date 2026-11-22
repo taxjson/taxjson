@@ -1,0 +1,25 @@
+LONG OPTIONS — ABCD.US
+
+DATE         SYMBOL                            QTY CUR          COST/QTY        PROC/QTY        GAIN/QTY            COST        PROCEEDS            GAIN   DAYS
+---------------------------------------------------------------------------------------------------------------------------------------------------------------
+2024-12-12   ABCD270219C00045000.US        10.0000 CAD          210.5663        228.1500         17.5838        2,105.66        2,281.50          175.84     21
+
+TOTAL ABCD.US LONG OPTION GAIN: 175.84
+
+LONG OPTIONS — QZQ.US
+
+DATE         SYMBOL                            QTY CUR          COST/QTY        PROC/QTY        GAIN/QTY            COST        PROCEEDS            GAIN   DAYS
+---------------------------------------------------------------------------------------------------------------------------------------------------------------
+2024-08-01   QZQ240920C00030000.US          2.0000 CAD          406.3500        201.1500       -205.2000          812.70          402.30         -410.40     92
+
+TOTAL QZQ.US LONG OPTION GAIN: -410.40
+
+LONG OPTIONS SUMMARY (every long option close, any tenor; `tjs leaps-sum` is the LEAPS-only view)
+
+SYMBOL                 LONG_OPT_GAIN
+------------------------------------
+ABCD.US                       175.84
+QZQ.US                       -410.40
+------------------------------------
+TOTAL                        -234.56
+(amounts in CAD)

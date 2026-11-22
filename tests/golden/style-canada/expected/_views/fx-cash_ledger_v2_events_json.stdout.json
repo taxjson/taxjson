@@ -1,0 +1,515 @@
+{
+  "borrowed": [
+    {
+      "book": "qt/questrade",
+      "currency": "USD",
+      "date": "2024-01-17",
+      "units": 18504.95,
+      "what": "BUYSELL AAPL.US"
+    },
+    {
+      "book": "crypto/coinbase",
+      "currency": "USD",
+      "date": "2024-01-18",
+      "units": 2167.2,
+      "what": "BUYSELL BTC"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-02-05",
+      "units": 5001.0,
+      "what": "BUYSELL PARN.US"
+    },
+    {
+      "book": "crypto/kraken",
+      "currency": "USD",
+      "date": "2024-02-10",
+      "units": 4208.4,
+      "what": "BUYSELL BTC"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-02-14",
+      "units": 20001.0,
+      "what": "BUYSELL MSFT.US"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-03-05",
+      "units": 6001.0,
+      "what": "BUYSELL QZQ.US"
+    },
+    {
+      "book": "crypto/coinbase",
+      "currency": "USD",
+      "date": "2024-03-05",
+      "units": 1915.2,
+      "what": "BUYSELL ETH"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-03-14",
+      "units": 5.63,
+      "what": "TAX MSFT.US"
+    },
+    {
+      "book": "qt/questrade",
+      "currency": "USD",
+      "date": "2024-03-22",
+      "units": 8504.95,
+      "what": "BUYSELL AAPL.US"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-05-02",
+      "units": 602.0,
+      "what": "BUYSELL QZQ240920C00030000.US"
+    },
+    {
+      "book": "crypto/kraken",
+      "currency": "USD",
+      "date": "2024-05-22",
+      "units": 3256.5,
+      "what": "BUYSELL BTC"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-06-13",
+      "units": 5.63,
+      "what": "TAX MSFT.US"
+    },
+    {
+      "book": "crypto/kraken",
+      "currency": "USD",
+      "date": "2024-06-15",
+      "units": 3509.1,
+      "what": "BUYSELL ETH"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-06-30",
+      "units": 10.0,
+      "what": "FEE CASH"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-07-11",
+      "units": 1481.0,
+      "what": "BUYSELL NVDA.US"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-09-12",
+      "units": 6.0,
+      "what": "TAX QZQ.US"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-09-23",
+      "units": 2401.0,
+      "what": "BUYSELL QZQ.US"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-12-06",
+      "units": 1351.0,
+      "what": "BUYSELL NVDA.US"
+    }
+  ],
+  "carried_in": 0,
+  "close": {
+    "accounts": {
+      "margin/ib": "4a8fee2110",
+      "qt/questrade": "ef797c8118"
+    },
+    "books": {
+      "crypto/coinbase": {
+        "USD": {
+          "cost": 924.48,
+          "units": -684.8
+        }
+      },
+      "crypto/kraken": {
+        "USD": {
+          "cost": 5318.136,
+          "units": -3939.36
+        }
+      },
+      "margin/ib": {
+        "USD": {
+          "cost": 10682.901,
+          "units": -7913.26
+        }
+      },
+      "qt/questrade": {
+        "USD": {
+          "cost": 108.945,
+          "units": 80.7
+        }
+      }
+    },
+    "currency": "CAD",
+    "year": 2024
+  },
+  "currency": "CAD",
+  "declared": [],
+  "events": [
+    {
+      "book": "qt/questrade",
+      "currency": "USD",
+      "date": "2024-01-17",
+      "gain": 0.0,
+      "rate": 1.35,
+      "units": 18504.95,
+      "what": "BUYSELL AAPL.US"
+    },
+    {
+      "book": "crypto/coinbase",
+      "currency": "USD",
+      "date": "2024-01-18",
+      "gain": 0.0,
+      "rate": 1.35,
+      "units": 2167.2,
+      "what": "BUYSELL BTC"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-02-05",
+      "gain": 0.0,
+      "rate": 1.35,
+      "units": 5001.0,
+      "what": "BUYSELL PARN.US"
+    },
+    {
+      "book": "crypto/kraken",
+      "currency": "USD",
+      "date": "2024-02-10",
+      "gain": 0.0,
+      "rate": 1.35,
+      "units": 4208.4,
+      "what": "BUYSELL BTC"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-02-14",
+      "gain": 0.0,
+      "rate": 1.35,
+      "units": 20001.0,
+      "what": "BUYSELL MSFT.US"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-03-05",
+      "gain": 0.0,
+      "rate": 1.35,
+      "units": 6001.0,
+      "what": "BUYSELL QZQ.US"
+    },
+    {
+      "book": "crypto/coinbase",
+      "currency": "USD",
+      "date": "2024-03-05",
+      "gain": 0.0,
+      "rate": 1.35,
+      "units": 1915.2,
+      "what": "BUYSELL ETH"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-03-14",
+      "gain": 0.0,
+      "rate": 1.35,
+      "units": 5.63,
+      "what": "TAX MSFT.US"
+    },
+    {
+      "book": "qt/questrade",
+      "currency": "USD",
+      "date": "2024-03-22",
+      "gain": 0.0,
+      "rate": 1.35,
+      "units": 8504.95,
+      "what": "BUYSELL AAPL.US"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-05-02",
+      "gain": 0.0,
+      "rate": 1.35,
+      "units": 602.0,
+      "what": "BUYSELL QZQ240920C00030000.US"
+    },
+    {
+      "book": "crypto/kraken",
+      "currency": "USD",
+      "date": "2024-05-22",
+      "gain": 0.0,
+      "rate": 1.35,
+      "units": 3256.5,
+      "what": "BUYSELL BTC"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-06-13",
+      "gain": 0.0,
+      "rate": 1.35,
+      "units": 5.63,
+      "what": "TAX MSFT.US"
+    },
+    {
+      "book": "crypto/kraken",
+      "currency": "USD",
+      "date": "2024-06-15",
+      "gain": 0.0,
+      "rate": 1.35,
+      "units": 3509.1,
+      "what": "BUYSELL ETH"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-06-30",
+      "gain": 0.0,
+      "rate": 1.35,
+      "units": 10.0,
+      "what": "FEE CASH"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-07-11",
+      "gain": 0.0,
+      "rate": 1.35,
+      "units": 1481.0,
+      "what": "BUYSELL NVDA.US"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-09-12",
+      "gain": 0.0,
+      "rate": 1.35,
+      "units": 6.0,
+      "what": "TAX QZQ.US"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-09-23",
+      "gain": 0.0,
+      "rate": 1.35,
+      "units": 2401.0,
+      "what": "BUYSELL QZQ.US"
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-12-06",
+      "gain": 0.0,
+      "rate": 1.35,
+      "units": 1351.0,
+      "what": "BUYSELL NVDA.US"
+    }
+  ],
+  "headline": "FX on foreign cash: NOT COMPUTED for 2024, ledger v2 (opt-in, under audit) \u2014 4 problems, first: no opening pool for crypto/coinbase USD \u2014 add `CASHOPEN 2024-01-01 USD <settled units> <cost in CAD> at=coinbase` (0 0 when it held none) to a .tt of crypto, or close 2023 with this ledger; no reportable figure",
+  "label": "v2 (opt-in, under audit)",
+  "ledger": "v2",
+  "net_gain": -0.0,
+  "notes": [],
+  "opening": {},
+  "per_currency": {
+    "USD": {
+      "acquired": 66474.84,
+      "debt_gain": -0.0,
+      "disposed": 78931.56,
+      "gain": 0.0
+    }
+  },
+  "pools_year_end": {
+    "USD": {
+      "acb": 108.94,
+      "units": 80.7
+    }
+  },
+  "problems": [
+    {
+      "amount": null,
+      "book": "crypto/coinbase",
+      "currency": "USD",
+      "date": "2024-01-01",
+      "kind": "opening",
+      "text": "no opening pool for crypto/coinbase USD \u2014 add `CASHOPEN 2024-01-01 USD <settled units> <cost in CAD> at=coinbase` (0 0 when it held none) to a .tt of crypto, or close 2023 with this ledger"
+    },
+    {
+      "amount": null,
+      "book": "crypto/kraken",
+      "currency": "USD",
+      "date": "2024-01-01",
+      "kind": "opening",
+      "text": "no opening pool for crypto/kraken USD \u2014 add `CASHOPEN 2024-01-01 USD <settled units> <cost in CAD> at=kraken` (0 0 when it held none) to a .tt of crypto, or close 2023 with this ledger"
+    },
+    {
+      "amount": null,
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-01-01",
+      "kind": "opening",
+      "text": "no opening pool for margin/ib USD \u2014 add `CASHOPEN 2024-01-01 USD <settled units> <cost in CAD> at=ib` (0 0 when it held none) to a .tt of margin, or close 2023 with this ledger"
+    },
+    {
+      "amount": null,
+      "book": "qt/questrade",
+      "currency": "USD",
+      "date": "2024-01-01",
+      "kind": "opening",
+      "text": "no opening pool for qt/questrade USD \u2014 add `CASHOPEN 2024-01-01 USD <settled units> <cost in CAD> at=questrade` (0 0 when it held none) to a .tt of qt, or close 2023 with this ledger"
+    }
+  ],
+  "reconciliation": [],
+  "reliable": false,
+  "repaid": [
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-03-14",
+      "gain": 0.0,
+      "units": 37.5
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-04-03",
+      "gain": 0.0,
+      "units": 999.0
+    },
+    {
+      "book": "qt/questrade",
+      "currency": "USD",
+      "date": "2024-05-14",
+      "gain": 0.0,
+      "units": 13570.05
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-06-13",
+      "gain": -0.0,
+      "units": 37.5
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-06-20",
+      "gain": -0.0,
+      "units": 20099.0
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-08-02",
+      "gain": -0.0,
+      "units": 298.0
+    },
+    {
+      "book": "qt/questrade",
+      "currency": "USD",
+      "date": "2024-08-15",
+      "gain": 0.0,
+      "units": 18.0
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-09-11",
+      "gain": 0.0,
+      "units": 5699.0
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-09-12",
+      "gain": -0.0,
+      "units": 40.0
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-10-02",
+      "gain": 0.0,
+      "units": 199.0
+    },
+    {
+      "book": "crypto/coinbase",
+      "currency": "USD",
+      "date": "2024-10-08",
+      "gain": 0.0,
+      "units": 2430.4
+    },
+    {
+      "book": "qt/questrade",
+      "currency": "USD",
+      "date": "2024-11-07",
+      "gain": 0.0,
+      "units": 13421.85
+    },
+    {
+      "book": "crypto/kraken",
+      "currency": "USD",
+      "date": "2024-11-08",
+      "gain": 0.0,
+      "units": 4940.1
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-11-18",
+      "gain": 0.0,
+      "units": 149.0
+    },
+    {
+      "book": "margin/ib",
+      "currency": "USD",
+      "date": "2024-11-21",
+      "gain": 0.0,
+      "units": 1394.0
+    },
+    {
+      "book": "crypto/kraken",
+      "currency": "USD",
+      "date": "2024-12-03",
+      "gain": 0.0,
+      "units": 2094.54
+    },
+    {
+      "book": "crypto/coinbase",
+      "currency": "USD",
+      "date": "2024-12-15",
+      "gain": 0.0,
+      "units": 967.2
+    }
+  ],
+  "schema_version": 1,
+  "stablecoins_as_cash": true,
+  "status": "not_computed",
+  "under_audit": true,
+  "unread_books": [],
+  "warnings": [],
+  "year": 2024
+}

@@ -10,13 +10,16 @@ from pathlib import Path
 
 from tax_rules import rule, rule_absent
 from tax_rules.dual import gains_both, tx
+from taxjson.rules import ids as R
 
-from taxjson.bin.taxjson_convert_tt import parse_tt_line, tx_to_tt_line
-from taxjson.lib.core import OPENING_TYPE, TaxTransaction, is_opening_row
+from taxjson.lib.tt_format import parse_tt_line, tx_to_tt_line
+from taxjson.model.transaction import TaxTransaction
+from taxjson.lib.row_types import OPENING_TYPE, is_opening_row
 from taxjson.lib.opening import (ATTENTION_OPENING, OpeningError,
                                  apply_opening_cutoff)
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 SRC = REPO_ROOT / "src"
 
 
@@ -95,8 +98,8 @@ class TestNotAPurchase(unittest.TestCase):
                  tx("BUYSELL", "2025-01-31", "SAMPX.US", 200, 2000))
         return [first, tx("BUYSELL", "2025-02-10", "SAMPX.US", -100, 800)]
 
-    @rule("CA-OPEN-01")
-    @rule("US-OPEN-01")
+    @rule(R.CA_OPEN_01)
+    @rule(R.US_OPEN_01)
     def test_opening_never_replaces_a_loss(self):
         bought = gains_both(self._book(False), year=2025)
         opened = gains_both(self._book(True), year=2025)
@@ -115,9 +118,9 @@ class TestNotAPurchase(unittest.TestCase):
             self.assertNotEqual(inv["SAMPX.US"].get("last_acq_date"),
                                 "2025-01-31")
 
-    @rule("CA-OPEN-01")
-    @rule_absent("CA-OPEN-01", country="usa")
-    @rule("US-OPEN-01")
+    @rule(R.CA_OPEN_01)
+    @rule_absent(R.CA_OPEN_01, country="usa")
+    @rule(R.US_OPEN_01)
     def test_canada_pools_the_opening_us_keeps_its_lot(self):
         book = [opening("2025-01-31", "SAMPX.US", 10, 1000,
                         lot="2020-05-01"),
@@ -134,9 +137,9 @@ class TestNotAPurchase(unittest.TestCase):
         self.assertEqual(us["acquired_date"], "2020-05-01")
         self.assertEqual(ca["days_held"] > 365, False)  # last purchase
 
-    @rule("US-OPEN-01")
-    @rule_absent("US-OPEN-01", country="canada")
-    @rule("CA-OPEN-01")
+    @rule(R.US_OPEN_01)
+    @rule_absent(R.US_OPEN_01, country="canada")
+    @rule(R.CA_OPEN_01)
     def test_us_lot_needs_its_date_canada_does_not(self):
         book = [opening("2025-01-31", "SAMPX.US", 10, 1000),
                 tx("BUYSELL", "2025-04-01", "SAMPX.US", -10, 1700)]
@@ -151,8 +154,8 @@ class TestNotAPurchase(unittest.TestCase):
                                        year=2025))
         self.assertIn("no lot date", str(cm.exception))
 
-    @rule("CA-OPEN-01")
-    @rule("US-OPEN-01")
+    @rule(R.CA_OPEN_01)
+    @rule(R.US_OPEN_01)
     def test_a_lot_bought_inside_the_window_is_flagged_not_denied(self):
         book = [opening("2025-01-31", "SAMPX.US", 100, 2000,
                         lot="2020-05-01"),
@@ -169,7 +172,7 @@ class TestNotAPurchase(unittest.TestCase):
             self.assertEqual(flags[0]["option_acquired"], "2025-01-20")
             self.assertIn("review it by hand", r[c]["_stderr"])
 
-    @rule("CA-OPEN-01")
+    @rule(R.CA_OPEN_01)
     def test_an_opening_call_does_not_replace_the_shares(self):
         # A long call held at the snapshot is not a call bought in the
         # window (CA-SL-05 would deny the share loss).
@@ -205,7 +208,7 @@ class TestCutoff(unittest.TestCase):
         out = apply_opening_cutoff(rows, report=err, **kw)
         return out, err.getvalue()
 
-    @rule("CA-OPEN-03")
+    @rule(R.CA_OPEN_03)
     def test_earlier_rows_of_snapshot_symbols_left_out(self):
         rows = self._rows()
         out, err = self._apply(rows, year=2025, country="canada")
@@ -225,7 +228,7 @@ class TestCutoff(unittest.TestCase):
         self.assertIn(ATTENTION_OPENING + "margin", err)
         self.assertIn("2 earlier row(s) of SAMPB.TO", err)
 
-    @rule("US-OPEN-03")
+    @rule(R.US_OPEN_03)
     def test_us_cutoff_is_the_same(self):
         rows = [r for r in self._rows() if not is_opening_row(r)] + [
             opening("2024-12-31", "SAMPB.TO", 5, 50, lot="2023-03-01",
@@ -234,7 +237,7 @@ class TestCutoff(unittest.TestCase):
                                 base_currency="USD")
         self.assertEqual(len(out), len(rows) - 2)
 
-    @rule("CA-OPEN-03")
+    @rule(R.CA_OPEN_03)
     def test_rename_into_the_symbol_is_left_out_too(self):
         rows = [tx("BUYSELL", "2023-03-01", "SAMPOLD.TO", 10, 100,
                    currency="CAD"),
@@ -245,7 +248,7 @@ class TestCutoff(unittest.TestCase):
         self.assertEqual([t.action for t in out], ["BUYSELL"])
         self.assertTrue(is_opening_row(out[0]))
 
-    @rule("CA-OPEN-03")
+    @rule(R.CA_OPEN_03)
     def test_a_ticker_reused_after_its_rename_is_kept(self):
         # SAMPOLD.TO became SAMPB.TO in February; a different holding
         # bought under the reused SAMPOLD.TO in March is not the
@@ -275,7 +278,7 @@ class TestCutoff(unittest.TestCase):
         self.assertAlmostEqual(_sale_gains(res)[0]["gain"], 200.0,
                                places=2)
 
-    @rule("CA-OPEN-03")
+    @rule(R.CA_OPEN_03)
     def test_sale_of_the_tax_year_refused(self):
         rows = [tx("BUYSELL", "2025-01-10", "SAMPB.TO", 10, 100,
                    currency="CAD"),
@@ -303,8 +306,8 @@ class TestCutoff(unittest.TestCase):
                 opening("2025-01-31", "SYNTH.US", 5, 50, lot=lot,
                         account="demo")]
 
-    @rule("CA-OPEN-03")
-    @rule("US-OPEN-03")
+    @rule(R.CA_OPEN_03)
+    @rule(R.US_OPEN_03)
     def test_short_cover_of_the_tax_year_refused(self):
         book = self._short_book(lot="2025-01-15")
         # Without the snapshot the cover realizes 20 in both countries.
@@ -328,8 +331,8 @@ class TestCutoff(unittest.TestCase):
             self.assertEqual(len(out), 1)
             self.assertTrue(is_opening_row(out[0]))
 
-    @rule("CA-OPEN-03")
-    @rule("US-OPEN-03")
+    @rule(R.CA_OPEN_03)
+    @rule(R.US_OPEN_03)
     def test_buy_crossing_from_short_to_long_refused(self):
         rows = [tx("BUYSELL", "2024-11-04", "SYNTH.US", -10, 100,
                    account="demo"),
@@ -344,7 +347,7 @@ class TestCutoff(unittest.TestCase):
             self.assertIn("2025-01-06 cover of 10 SYNTH.US",
                           str(cm.exception))
 
-    @rule("CA-OPEN-03")
+    @rule(R.CA_OPEN_03)
     def test_sale_and_cover_named_together(self):
         rows = [tx("BUYSELL", "2024-11-04", "SAMPB.TO", -10, 100,
                    currency="CAD"),
@@ -362,8 +365,8 @@ class TestCutoff(unittest.TestCase):
                       msg)
         self.assertIn("(first: 2025-01-06 cover of 10 SAMPB.TO", msg)
 
-    @rule("CA-OPEN-03")
-    @rule("US-OPEN-03")
+    @rule(R.CA_OPEN_03)
+    @rule(R.US_OPEN_03)
     def test_buy_after_a_sale_of_unrecorded_shares_is_not_a_cover(self):
         # The books start after the shares were bought: walked back from
         # the snapshot, the 2024 sale sold shares that were held, so the
@@ -380,7 +383,7 @@ class TestCutoff(unittest.TestCase):
             self.assertEqual(len(out), 1, country)
             self.assertIn("2 earlier row(s) of SYNTH.US", err)
 
-    @rule("CA-OPEN-03")
+    @rule(R.CA_OPEN_03)
     def test_cover_of_a_renamed_symbol_refused(self):
         rows = [tx("BUYSELL", "2024-11-04", "SAMPOLD.TO", -10, 100,
                    currency="CAD"),
@@ -395,8 +398,8 @@ class TestCutoff(unittest.TestCase):
             self._apply(rows, year=2025)
         self.assertIn("2025-01-06 cover of 20 SAMPB.TO", str(cm.exception))
 
-    @rule("CA-OPEN-03")
-    @rule("US-OPEN-03")
+    @rule(R.CA_OPEN_03)
+    @rule(R.US_OPEN_03)
     def test_cover_before_a_split_another_account_carries_refused(self):
         # A split is the security's event: carried only by another
         # account's rows it still turns the 2 left after the cover into
@@ -436,8 +439,8 @@ class TestCutoff(unittest.TestCase):
                         currency="CAD", account="demo")]
         return rows, snap
 
-    @rule("CA-OPEN-03")
-    @rule("US-OPEN-03")
+    @rule(R.CA_OPEN_03)
+    @rule(R.US_OPEN_03)
     def test_return_of_capital_beyond_the_cost_refused(self):
         rows, snap = self._roc_book()
         # Without the snapshot the excess (500) is a gain of 2025 in
@@ -463,8 +466,8 @@ class TestCutoff(unittest.TestCase):
                                  base_currency="CAD")
             self.assertEqual(len(out), 1)
 
-    @rule("CA-OPEN-03")
-    @rule("US-OPEN-03")
+    @rule(R.CA_OPEN_03)
+    @rule(R.US_OPEN_03)
     def test_return_of_capital_within_the_cost_is_history(self):
         # The snapshot's cost (400) shows the ROC (-600) stayed within
         # the cost: nothing realized, the snapshot replaces it.
@@ -479,8 +482,8 @@ class TestCutoff(unittest.TestCase):
         out, _ = self._apply(rows + snap, year=2025, country="canada")
         self.assertEqual(len(out), 1)
 
-    @rule("CA-OPEN-03")
-    @rule("US-OPEN-03")
+    @rule(R.CA_OPEN_03)
+    @rule(R.US_OPEN_03)
     def test_return_of_capital_to_nil_then_a_buy_refused(self):
         # After the ROC took the cost to nil, a buy of the year gave the
         # position cost again: walked back past the buy, the cost at the
@@ -506,8 +509,8 @@ class TestCutoff(unittest.TestCase):
             self.assertIn("2025-02-03 return of capital of 1500 CAD",
                           str(cm.exception))
 
-    @rule("CA-OPEN-03")
-    @rule("US-OPEN-03")
+    @rule(R.CA_OPEN_03)
+    @rule(R.US_OPEN_03)
     def test_return_of_capital_on_a_closed_position_refused(self):
         # Sold in 2024, ROC paid in 2025 with no shares held, bought back
         # before the snapshot: Canada books the whole ROC as a gain
@@ -530,8 +533,8 @@ class TestCutoff(unittest.TestCase):
             self.assertIn("2025-02-03 return of capital of 30 CAD",
                           str(cm.exception))
 
-    @rule("CA-OPEN-03")
-    @rule("US-OPEN-03")
+    @rule(R.CA_OPEN_03)
+    @rule(R.US_OPEN_03)
     def test_return_of_capital_beyond_one_us_lot_differs_by_country(self):
         # Two lots, 100 shares each, costing 10 and 1000; a ROC of 100.
         # Canada pools the cost (1010 -> 910: nothing realized); the US
@@ -560,7 +563,7 @@ class TestCutoff(unittest.TestCase):
         self.assertIn("2025-02-03 return of capital of 100 CAD",
                       str(cm.exception))
 
-    @rule("CA-OPEN-03")
+    @rule(R.CA_OPEN_03)
     def test_return_of_capital_in_another_currency_refused(self):
         # The snapshot's cost is in USD, the ROC in CAD: the walk cannot
         # compare them, so the refusal errs on the loud side.
@@ -570,7 +573,7 @@ class TestCutoff(unittest.TestCase):
         with self.assertRaises(OpeningError):
             self._apply(rows + snap, year=2025, country="canada")
 
-    @rule("CA-OPEN-03")
+    @rule(R.CA_OPEN_03)
     def test_a_row_without_a_time_is_at_midnight(self):
         # A consolidation (ratio 0.1) stamped 00:00:00, then a buy of the
         # same day with no time, in that order: the engines order the
@@ -590,7 +593,7 @@ class TestCutoff(unittest.TestCase):
             self._apply(rows, year=2025)
         self.assertIn("2025-01-06 cover of 5 SAMPB.TO", str(cm.exception))
 
-    @rule("CA-OPEN-03")
+    @rule(R.CA_OPEN_03)
     def test_two_snapshot_dates_for_one_symbol_refused(self):
         rows = [opening("2024-12-31", "SAMPB.TO", 5, 50, currency="CAD"),
                 opening("2025-06-30", "SAMPB.TO", 5, 50, currency="CAD")]
@@ -598,7 +601,7 @@ class TestCutoff(unittest.TestCase):
             self._apply(rows)
         self.assertIn("one snapshot date per symbol", str(cm.exception))
 
-    @rule("US-OPEN-01")
+    @rule(R.US_OPEN_01)
     def test_us_opening_without_lot_date_refused_before_the_engine(self):
         with self.assertRaises(OpeningError) as cm:
             self._apply([opening("2024-12-31", "SAMPB.US", 5, 50)],
@@ -631,9 +634,9 @@ def _merge2(rows, *args):
 
 
 class TestCurrency(unittest.TestCase):
-    @rule("CA-OPEN-02")
-    @rule_absent("CA-OPEN-02", country="usa")
-    @rule("US-OPEN-02")
+    @rule(R.CA_OPEN_02)
+    @rule_absent(R.CA_OPEN_02, country="usa")
+    @rule(R.US_OPEN_02)
     def test_foreign_cost_at_the_snapshot_rate_in_canada_only(self):
         row = opening("2024-12-31", "SAMPU.US", 10, 1000,
                       lot="2019-03-04")
@@ -676,8 +679,8 @@ class TestDistributionsBeforeASnapshot(unittest.TestCase):
                 country=country)
         return n, err.getvalue()
 
-    @rule("CA-OPEN-03")
-    @rule("US-OPEN-03")
+    @rule(R.CA_OPEN_03)
+    @rule(R.US_OPEN_03)
     def test_return_of_capital_before_the_snapshot_is_attention(self):
         for country, law in (("canada", "ITA s.40(3)"),
                              ("usa", "IRC §301(c)(3)")):
@@ -688,15 +691,15 @@ class TestDistributionsBeforeASnapshot(unittest.TestCase):
                           "opening snapshot of 2025-03-03", err)
             self.assertIn(f"gain of 2025 ({law})", err)
 
-    @rule("CA-OPEN-03")
+    @rule(R.CA_OPEN_03)
     def test_an_increase_before_the_snapshot_is_a_note(self):
         n, err = self._apply(0.5, "canada")
         self.assertEqual(n, 0)
         self.assertNotIn("ATTENTION", err)
         self.assertIn("(before its opening snapshot of 2025-03-03)", err)
 
-    @rule("CA-OPEN-03")
-    @rule("US-OPEN-03")
+    @rule(R.CA_OPEN_03)
+    @rule(R.US_OPEN_03)
     def test_one_on_the_snapshot_day_is_applied_and_said(self):
         """2026-10 audit #26: a distribution dated on the snapshot's
         own day is applied on top of its cost (a year-end statement's

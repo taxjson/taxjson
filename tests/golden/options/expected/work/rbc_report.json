@@ -1,0 +1,88 @@
+{
+  "account": "rbc",
+  "basis": "wash-adjusted",
+  "gains": {
+    "manual_rows": [],
+    "option_fees": {
+      "CAD": 11.2
+    },
+    "returns_by_asset": {
+      "Options": {
+        "CAD": {
+          "days": [
+            46
+          ],
+          "dollars": [
+            -61.2
+          ],
+          "fee_shares": [],
+          "fees": []
+        }
+      },
+      "Stocks": {
+        "CAD": {
+          "days": [
+            203
+          ],
+          "dollars": [
+            -29.95
+          ],
+          "fee_shares": [],
+          "fees": []
+        }
+      }
+    },
+    "tainted_count": 0,
+    "tainted_routed": 0,
+    "ticker_stats": {
+      "SAMPR.TO": {
+        "CAD": {
+          "cap": 0.0,
+          "cost": 61.2,
+          "div": 0.0,
+          "hold_days": [
+            46
+          ],
+          "opt": -61.2,
+          "pil": 0.0,
+          "proceeds": 0.0,
+          "trade_count": 1
+        }
+      },
+      "SAMPW.WT.TO": {
+        "CAD": {
+          "cap": -29.95,
+          "cost": 29.95,
+          "div": 0.0,
+          "hold_days": [
+            203
+          ],
+          "opt": 0.0,
+          "pil": 0.0,
+          "proceeds": 0.0,
+          "trade_count": 1
+        }
+      }
+    },
+    "total_fees": {
+      "CAD": 21.15
+    },
+    "total_year": "2024",
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 2
+  },
+  "generated_at": "<stamp>",
+  "income": {
+    "interest_paid_totals": {},
+    "interest_totals": {},
+    "missing_amount": [],
+    "ticker_stats": {},
+    "total_year": "2024"
+  },
+  "schema_version": 1,
+  "wash": {
+    "count": 0,
+    "total_disallowed": 0
+  },
+  "year": "2024"
+}

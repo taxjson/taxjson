@@ -24,22 +24,13 @@ from taxjson.bin.taxjson_t1135 import (
     walk_costs,
 )
 from tax_rules import rule
-
-
-
-def tx(action="BUYSELL", date="2025-01-15", symbol="AAPL.US", qty=0.0,
-       net=0.0, symbol_new="", time="09:30:00", **extra):
-    d = {
-        "action": action, "date": date, "date_settle": date, "time": time,
-        "symbol": symbol, "quantity": qty, "net_amount": net,
-        "symbol_new": symbol_new, "currency": "CAD",
-    }
-    d.update(extra)
-    return d
+from taxjson.rules import ids as R
+from _support.ca_t1135_row import tx
+from _support.filing_run_record import record_full_run
 
 
 class TestClassify(unittest.TestCase):
-    @rule("CA-RPT-02")
+    @rule(R.CA_RPT_02)
     def test_suffixes(self):
         self.assertEqual(classify_country("AAPL.US", {}), "USA")
         self.assertEqual(classify_country("BP.L", {}), "GBR")
@@ -51,7 +42,7 @@ class TestClassify(unittest.TestCase):
         self.assertEqual(classify_country("AAPL250117C00150000.US", {}), "USA")
         self.assertIsNone(classify_country("QFN270115P00023000.TO", {}))
 
-    @rule("CA-RPT-02")
+    @rule(R.CA_RPT_02)
     def test_no_suffix_is_crypto_bucket(self):
         # Suffix-less = crypto: its own "check where held" bucket
         # (counted toward the threshold), not the unclassified "??".
@@ -62,7 +53,7 @@ class TestClassify(unittest.TestCase):
     def test_unknown_suffix_is_review(self):
         self.assertEqual(classify_country("SAP.DE", {}), REVIEW)
 
-    @rule("CA-RPT-02")
+    @rule(R.CA_RPT_02)
     def test_overrides_win(self):
         ov = {"ENB.US": None, "GLXY.TO": "USA"}
         self.assertIsNone(classify_country("ENB.US", ov))
@@ -73,7 +64,7 @@ class TestOverridesFile(unittest.TestCase):
     def test_parse(self):
         # The overrides are ticker.map T1135 lines (once t1135.map); a
         # line that cannot be read stops the tool instead of being
-        # skipped (test_fix_t1135_tickermap).
+        # skipped (rules.ca.rpt.test_t1135_map_lines).
         from taxjson.lib.cli_diag import InputContentError
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "ticker.map"
@@ -96,7 +87,7 @@ class TestOverridesFile(unittest.TestCase):
 
 
 class TestWalkCosts(unittest.TestCase):
-    @rule("CA-RPT-12")
+    @rule(R.CA_RPT_12)
     def test_basic_buy_hold(self):
         txs = [tx(date="2024-06-01", qty=100, net=15000.0)]
         w = walk_costs(txs, 2025, {})
@@ -105,7 +96,7 @@ class TestWalkCosts(unittest.TestCase):
         self.assertAlmostEqual(s["year_end_cost"], 15000.0, places=2)
         self.assertAlmostEqual(w["max_total_cost"], 15000.0, places=2)
 
-    @rule("CA-RPT-12")
+    @rule(R.CA_RPT_12)
     def test_sell_reduces_year_end_but_not_max(self):
         txs = [
             tx(date="2024-06-01", qty=100, net=15000.0),
@@ -116,7 +107,7 @@ class TestWalkCosts(unittest.TestCase):
         self.assertAlmostEqual(s["max_cost"], 15000.0, places=2)
         self.assertAlmostEqual(s["year_end_cost"], 7500.0, places=2)
 
-    @rule("CA-RPT-01")
+    @rule(R.CA_RPT_01)
     def test_threshold_uses_simultaneous_total_not_sum_of_maxima(self):
         # Hold A ($90k), sell it entirely, THEN buy B ($90k): total never
         # exceeds $90k even though the per-symbol maxima sum to $180k.
@@ -130,7 +121,7 @@ class TestWalkCosts(unittest.TestCase):
         self.assertAlmostEqual(w["per_symbol"]["AAA.US"]["max_cost"], 90000.0, places=2)
         self.assertAlmostEqual(w["per_symbol"]["BBB.US"]["max_cost"], 90000.0, places=2)
 
-    @rule("CA-RPT-02")
+    @rule(R.CA_RPT_02)
     def test_canadian_symbols_do_not_count(self):
         txs = [
             tx(symbol="RY.TO", qty=100, net=14000.0),
@@ -140,7 +131,7 @@ class TestWalkCosts(unittest.TestCase):
         self.assertNotIn("RY.TO", w["per_symbol"])
         self.assertAlmostEqual(w["max_total_cost"], 1500.0, places=2)
 
-    @rule("CA-RPT-12")
+    @rule(R.CA_RPT_12)
     def test_split_keeps_cost(self):
         txs = [
             tx(date="2025-01-10", qty=100, net=10000.0),
@@ -150,7 +141,7 @@ class TestWalkCosts(unittest.TestCase):
         s = w["per_symbol"]["AAPL.US"]
         self.assertAlmostEqual(s["year_end_cost"], 10000.0, places=2)
 
-    @rule("CA-RPT-12")
+    @rule(R.CA_RPT_12)
     def test_split_in_two_accounts_applies_once(self):
         # Each account's parser emits its own SPLIT row for one
         # corporate event; the symbol-global walk applied it per row
@@ -171,7 +162,7 @@ class TestWalkCosts(unittest.TestCase):
         self.assertAlmostEqual(s["year_end_cost"], 0.0, places=2)
         self.assertAlmostEqual(w["max_total_cost"], 120000.0, places=2)
 
-    @rule("CA-RPT-12")
+    @rule(R.CA_RPT_12)
     def test_rename_carries_cost_and_max(self):
         txs = [
             tx(date="2025-01-10", symbol="FB.US", qty=100, net=20000.0),
@@ -184,7 +175,7 @@ class TestWalkCosts(unittest.TestCase):
         self.assertAlmostEqual(s["year_end_cost"], 20000.0, places=2)
         self.assertAlmostEqual(s["max_cost"], 20000.0, places=2)
 
-    @rule("CA-RPT-12")
+    @rule(R.CA_RPT_12)
     def test_phantom_opening_flags_unknown_acb(self):
         txs = [
             tx(action="OPENING_BALANCE", date="2024-01-01", qty=100, net=0.0),
@@ -195,7 +186,7 @@ class TestWalkCosts(unittest.TestCase):
         self.assertTrue(s["unknown_acb"])
         self.assertAlmostEqual(s["year_end_cost"], 2000.0, places=2)
 
-    @rule("CA-RPT-12")
+    @rule(R.CA_RPT_12)
     def test_phantom_only_holding_still_listed(self):
         # A foreign position made ENTIRELY of phantom shares has tracked
         # cost 0 but is still specified foreign property — it must appear
@@ -207,14 +198,14 @@ class TestWalkCosts(unittest.TestCase):
         self.assertTrue(s["unknown_acb"])
         self.assertAlmostEqual(s["year_end_cost"], 0.0, places=2)
 
-    @rule("CA-RPT-12")
+    @rule(R.CA_RPT_12)
     def test_short_position_is_not_property(self):
         txs = [tx(date="2025-01-10", qty=-100, net=15000.0)]
         w = walk_costs(txs, 2025, {})
         self.assertNotIn("AAPL.US", w["per_symbol"])
         self.assertAlmostEqual(w["max_total_cost"], 0.0, places=2)
 
-    @rule("CA-RPT-12")
+    @rule(R.CA_RPT_12)
     def test_adjust_reduces_cost(self):
         txs = [
             tx(date="2025-01-10", qty=100, net=10000.0),
@@ -225,7 +216,7 @@ class TestWalkCosts(unittest.TestCase):
         self.assertAlmostEqual(s["year_end_cost"], 9000.0, places=2)
         self.assertAlmostEqual(s["max_cost"], 10000.0, places=2)
 
-    @rule("CA-RPT-12")
+    @rule(R.CA_RPT_12)
     def test_events_after_year_end_ignored(self):
         txs = [
             tx(date="2025-06-01", qty=100, net=10000.0),
@@ -234,14 +225,14 @@ class TestWalkCosts(unittest.TestCase):
         w = walk_costs(txs, 2025, {})
         self.assertAlmostEqual(w["max_total_cost"], 10000.0, places=2)
 
-    @rule("CA-RPT-12")
+    @rule(R.CA_RPT_12)
     def test_standing_position_with_no_in_year_events(self):
         txs = [tx(date="2023-06-01", qty=100, net=120000.0)]
         w = walk_costs(txs, 2025, {})
         self.assertAlmostEqual(w["max_total_cost"], 120000.0, places=2)
         self.assertEqual(w["max_total_date"], "2025-01-01")
 
-    @rule("CA-RPT-12")
+    @rule(R.CA_RPT_12)
     def test_income_rows_do_not_move_cost(self):
         txs = [
             tx(date="2025-01-10", qty=100, net=10000.0),
@@ -313,7 +304,7 @@ class TestBuildReport(unittest.TestCase):
         self.assertIn("USA", rep["by_country"])
         self.assertIn("GBR", rep["by_country"])
 
-    @rule("CA-RPT-13")
+    @rule(R.CA_RPT_13)
     def test_detailed_method_threshold(self):
         with tempfile.TemporaryDirectory() as td:
             base = self._write(td, "base.json", {"transactions": [
@@ -331,7 +322,7 @@ class TestBuildReport(unittest.TestCase):
             self.assertEqual(rep["simplified_method_available"], simple,
                              cost)
 
-    @rule("CA-RPT-01")
+    @rule(R.CA_RPT_01)
     def test_below_threshold(self):
         with tempfile.TemporaryDirectory() as td:
             base = self._write(td, "base.json", {"transactions": [
@@ -373,7 +364,7 @@ class TestCli(unittest.TestCase):
             rc = main(["/nonexistent/base.json", "--year", "2025"])
         self.assertEqual(rc, 2)
 
-    @rule("CA-RPT-02")
+    @rule(R.CA_RPT_02)
     def test_map_override_excludes(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td) / "base.json"
@@ -394,15 +385,8 @@ class TestCli(unittest.TestCase):
 
 class TestRunWrapper(unittest.TestCase):
     def test_taxjson_t1135_subcommand(self):
-        try:
-            import tomllib  # noqa: F401  (availability check: TOML support)
-        except ImportError:
-            try:
-                import tomli  # noqa: F401  (availability check: TOML support)
-            except ImportError:
-                self.skipTest("no TOML support on this interpreter")
         import argparse
-        from taxjson.bin.taxjson_run import cmd_t1135
+        from taxjson.cli.file import cmd_t1135
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -438,6 +422,7 @@ class TestRunWrapper(unittest.TestCase):
                 "transactions": [
                     {"action": "DIVIDEND", "symbol": "AAPL.US",
                      "date": "2025-03-01", "dividend": 55.0, "gain": 0.0}]}))
+            record_full_run(root)       # (t1135 reads books a full run recorded)
 
             args = argparse.Namespace(dir=str(root), json=True)
             out, err = io.StringIO(), io.StringIO()

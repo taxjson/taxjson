@@ -14,13 +14,16 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+import _hermetic  # noqa: F401  (the synthetic HOME before taxjson's caches read it: TJ-3857)
 from taxjson.bin import to_base_curr as T
-from taxjson.bin.taxjson_convert_currency import (
-    load_exchange_rates, load_rate_sources,
-)
+from taxjson.lib import rate_cache
+from taxjson.lib.exchange_rates import load_exchange_rates
+from taxjson.bin.taxjson_convert_currency import load_rate_sources
 from taxjson.lib.offline import offline_enabled
 from tax_rules import rule
+from taxjson.rules import ids as R
 from _style import CapturedWidth
+import _paths
 
 
 # Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
@@ -35,7 +38,7 @@ def setUpModule():
 def tearDownModule():
     _WIDTH.stop()
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 TODAY = "2026-09-28"                                   # a Monday
 
 
@@ -43,7 +46,7 @@ def _days(a, b):
     out, d = [], a
     while d <= b:
         out.append(d)
-        d = T._shift(d, 1)
+        d = rate_cache._shift(d, 1)
     return out
 
 
@@ -59,7 +62,7 @@ class _CacheCase(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
         self.addCleanup(self.td.cleanup)
-        p = mock.patch.object(T, "CACHE_FILE",
+        p = mock.patch.object(rate_cache, "CACHE_FILE",
                               str(Path(self.td.name) / "fx.json"))
         p.start()
         self.addCleanup(p.stop)
@@ -89,7 +92,7 @@ class _CacheCase(unittest.TestCase):
 
 
 class TestBankOfCanadaPrimary(_CacheCase):
-    @rule("CA-FX-01")
+    @rule(R.CA_FX_01)
     def test_boc_from_2017_yahoo_only_before(self):
         rows, errors, _ = self.build()
         self.assertEqual(errors, [])
@@ -172,7 +175,7 @@ class TestBankOfCanadaPrimary(_CacheCase):
         self.assertEqual(src["2025-03-01"], "yahoo")
         self.assertEqual(src["2025-04-15"], "boc")
 
-    @rule("US-FX-02")
+    @rule(R.US_FX_02)
     def test_non_cad_target_is_yahoo_only(self):
         rows, _, _ = self.build(frm="CAD", to="USD", start="2025-01-01",
                                 end="2025-01-10")
@@ -208,14 +211,14 @@ class TestWindowAndCache(_CacheCase):
 
     def test_today_is_never_covered(self):
         self.build(start="2026-09-01")
-        cache = json.loads(Path(T.CACHE_FILE).read_text())
+        cache = json.loads(Path(rate_cache.CACHE_FILE).read_text())
         self.assertEqual(cache["_coverage"]["boc:USDCAD"][-1][1],
                          "2026-09-27")
 
     def test_legacy_cache_keys_still_serve(self):
         legacy = {f"USDCAD-{d}": 1.31 for d in _days("2016-06-01",
                                                     "2016-12-31")}
-        Path(T.CACHE_FILE).write_text(json.dumps(legacy))
+        Path(rate_cache.CACHE_FILE).write_text(json.dumps(legacy))
         rows, _, _ = self.build(start="2016-06-01", end="2017-01-05")
         self.assertEqual(self.yahoo_calls,
                          [("USDCAD=X", "2017-01-01", "2017-01-02")])
@@ -268,7 +271,7 @@ class TestOfflineFlag(unittest.TestCase):
         self.assertIn("not recognised", err.getvalue())
 
     def test_zero_does_not_block_crypto_lookup(self):
-        from taxjson.bin import fill_crypto_prices as fcp
+        from taxjson.lib import crypto_prices as fcp
 
         class _Resp:
             def read(self):
@@ -337,7 +340,7 @@ class TestNoPandasAtImport(unittest.TestCase):
                                                 "2025-01-03"]]}}))
             out, err = io.StringIO(), io.StringIO()
             with mock.patch.object(T, "yf", None), \
-                    mock.patch.object(T, "CACHE_FILE", str(cache)), \
+                    mock.patch.object(rate_cache, "CACHE_FILE", str(cache)), \
                     mock.patch.dict(os.environ, {"TAXJSON_OFFLINE": "1"}), \
                     redirect_stdout(out), redirect_stderr(err):
                 rc = T.main(["CAD", "USD", "--start", "2025-01-02",

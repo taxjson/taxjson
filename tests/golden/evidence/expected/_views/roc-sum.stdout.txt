@@ -1,0 +1,10 @@
+RETURN OF CAPITAL / ACB ADJUSTMENTS — tax year 2025
+
+SYMBOL     CUR  CAPITAL_RETURNED  ROC_ROWS  MANUAL_ROWS  MAP_ROWS
+-----------------------------------------------------------------
+SAMPLD.US  USD              3.00         1            0         0
+
+TOTAL CAPITAL RETURNED (ACB reduced): 3.00 USD
+
+- Positive = ACB reduced (capital returned). Negative rows are reversals or manual ACB increases (MAP_ROWS: [[distributions]] return-of-capital entries).
+- Enter fund ROC from your T3 box 42 as .tt ADJUST lines OR as [[distributions]] in taxjson.toml, never both — see docs/tax-rules.md, "Return of capital".

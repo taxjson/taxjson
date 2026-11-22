@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 
 from tax_rules import rule, rule_absent
+from taxjson.rules import ids as RID
 
 from _qa_project import project as qa_project, tj
 from _style import assert_concise, assert_legend_first, assert_styled
@@ -71,7 +72,7 @@ _CA_LOSS = [_row("2026-03-02", "ZZQ.TO", 100, 50.0, settle="2026-03-03"),
 
 
 class TestRebuyRows(unittest.TestCase):
-    @rule("CA-PLAN-05")
+    @rule(RID.CA_PLAN_05)
     def test_canada_date_is_the_radar_reentry_on_settlement(self):
         doc = _build("canada", _CA_LOSS)
         r = _by(doc)["ZZQ.TO"]
@@ -88,10 +89,10 @@ class TestRebuyRows(unittest.TestCase):
         radar = _radar("canada", _CA_LOSS)
         self.assertEqual(radar["ZZQ.TO"]["clears_at"], r["rebuy_at"])
 
-    @rule("CA-PLAN-05")
-    @rule_absent("CA-PLAN-05", country="usa")
-    @rule("US-PLAN-06")
-    @rule_absent("US-PLAN-06", country="canada")
+    @rule(RID.CA_PLAN_05)
+    @rule_absent(RID.CA_PLAN_05, country="usa")
+    @rule(RID.US_PLAN_06)
+    @rule_absent(RID.US_PLAN_06, country="canada")
     def test_same_book_settle_vs_trade_dates(self):
         """One book, two laws: Canada counts the window from the
         settlement date, the US from the trade date."""
@@ -101,7 +102,7 @@ class TestRebuyRows(unittest.TestCase):
         self.assertEqual(ca["rebuy_at"], "2026-06-03")   # settles after
         self.assertEqual(us["rebuy_at"], "2026-06-01")   # trade + 31
 
-    @rule("CA-PLAN-05")
+    @rule(RID.CA_PLAN_05)
     def test_option_series_under_underlying_with_own_date(self):
         opt = "ZZQ260619C00045000.TO"
         book = _CA_LOSS + [
@@ -120,7 +121,7 @@ class TestRebuyRows(unittest.TestCase):
         self.assertEqual(rows[opt]["rebuy_at"], "2026-06-12")
         self.assertEqual(rows["ZZQ.TO"]["rebuy_at"], "2026-06-03")
 
-    @rule("CA-PLAN-05")
+    @rule(RID.CA_PLAN_05)
     def test_registered_rebuy_is_flagged_rebought(self):
         shl = [_row("2026-05-08", "ZZQ.TO", 100, 39.0, acct="tfsa",
                     settle="2026-05-11")]
@@ -146,7 +147,7 @@ class TestRebuyRows(unittest.TestCase):
         doc = _build("canada", _CA_LOSS, as_of="2026-06-20")
         self.assertEqual(doc["cleared"], [])
 
-    @rule("US-PLAN-06")
+    @rule(RID.US_PLAN_06)
     def test_us_fully_washed_loss_needs_no_wait(self):
         book = [_row("2026-03-02", "ZZW.US", 100, 50.0, currency="USD"),
                 _row("2026-05-01", "ZZW.US", -100, 40.0, currency="USD"),
@@ -157,7 +158,7 @@ class TestRebuyRows(unittest.TestCase):
         from taxjson.lib import rebuy as RB
         self.assertEqual(RB._when(r), "now (washed)")
 
-    @rule("US-PLAN-06")
+    @rule(RID.US_PLAN_06)
     def test_us_ira_counts(self):
         from taxjson.lib import rebuy as RB
         self.assertIn("IRAs included", RB.any_account_line("usa"))
@@ -191,7 +192,7 @@ class TestRebuyCli(unittest.TestCase):
     """End to end: a project with a cross-listing (ticker.map TOBASE),
     a loss on one listing, a query by the other."""
 
-    @rule("CA-PLAN-05")
+    @rule(RID.CA_PLAN_05)
     def test_cross_listing_counts(self):
         tt = ("BUYSELL 2026-03-02 10:00:00 ZZX.US 100 USD 30.00 3000\n"
               "BUYSELL 2026-05-01 10:00:00 ZZX.US -100 USD 20.00 2000\n"

@@ -18,7 +18,9 @@ import unittest
 from decimal import Decimal
 
 from taxjson.bin.taxjson_convert_currency import process_transactions
-from taxjson.lib.core import CanadaTaxRules, TaxTransaction, USATaxRules
+from taxjson.engine.ca.taxrules import CanadaTaxRules
+from taxjson.engine.us.taxrules import USATaxRules
+from taxjson.model.transaction import TaxTransaction
 
 
 # FX rates calibrated so the swing between buy and sell dates is large enough

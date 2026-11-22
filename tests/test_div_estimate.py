@@ -6,38 +6,19 @@ import tempfile
 import unittest
 
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 from _qa_project import project as qa_project, tj
 from _style import assert_concise, assert_legend_first, assert_styled
 from _style import project as style_project
+from _support.view_div_estimate import _div, _est, _pos
 
 _W = {"TAXJSON_WIDTH": "100"}
-
-
-def _div(d, sym, qty, per, acct="margin", cur="CAD", **kw):
-    r = {"action": "DIVIDEND", "date": d, "symbol": sym,
-         "quantity": qty, "price": per, "gross_amount": qty * per,
-         "net_amount": qty * per, "currency": cur, "account": acct}
-    r.update(kw)
-    return r
 
 
 def _tax(d, sym, amt, acct="margin", cur="USD"):
     return {"action": "TAX", "date": d, "symbol": sym, "net_amount": amt,
             "currency": cur, "account": acct, "type": "tax"}
-
-
-def _est(rows, positions, as_of="2026-07-01", months=12, year=2026,
-         fx=None, rules=None):
-    from taxjson.lib import div_estimate as DE
-    return DE.estimate(positions, DE.payments(rows), as_of=as_of,
-                       months=months, tax_year=year, base="CAD",
-                       fx=fx or (lambda c: None),
-                       income_date=rules.income_date if rules else None)
-
-
-def _pos(sym, qty, acct="margin", group="taxable"):
-    return {"account": acct, "group": group, "symbol": sym, "qty": qty}
 
 
 _Q = ["2025-03-15", "2025-06-15", "2025-09-15", "2025-12-15",
@@ -282,7 +263,7 @@ class TestEstimate(unittest.TestCase):
         self.assertEqual(doc["rows"][0]["last_pay_date"], "2026-03-15")
         self.assertEqual(doc["rows"][0]["next_pay_date"], "2026-06-15")
 
-    @rule("CA-PLAN-06")
+    @rule(R.CA_PLAN_06)
     def test_canadian_trust_dated_by_record_date(self):
         """A trust's distribution paid in January with a December record
         date counts in the earlier tax year (CA-INC-DATE-TRUST), so the
@@ -306,7 +287,7 @@ class TestEstimate(unittest.TestCase):
         self.assertAlmostEqual(doc["totals"]["rest_of_year"]["taxable"],
                                20.0)
 
-    @rule("US-PLAN-07")
+    @rule(R.US_PLAN_07)
     def test_us_pay_date_and_listed_ric(self):
         from taxjson.lib.income_dating import IncomeRules
         rules = IncomeRules.from_settings({
@@ -340,7 +321,7 @@ class TestEstimate(unittest.TestCase):
 
 
 class TestDivEstimateCli(unittest.TestCase):
-    @rule("CA-PLAN-06")
+    @rule(R.CA_PLAN_06)
     def test_project_end_to_end(self):
         tt = ["BUYSELL 2025-01-02 10:00:00 ZZD.TO 100 CAD 20.00 2000"]
         tt += [f"DIVIDEND {d} 16:00:00 ZZD.TO 100 CAD 0.50 50.00"
@@ -401,6 +382,38 @@ class TestDivEstimateStyle(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("HOW IT IS ESTIMATED", r.stdout)
         self.assertIn("RY.TO (tfsa)", r.stdout)
+
+
+class TestARowTheParserSaysHasNoShareCount(unittest.TestCase):
+    """A row marked `no_share_count` (IB: no accrual in the statements
+    pays it, backlog TJ-2598) borrows no neighbour's count: it is left
+    out of the per-share figures, and the position says so."""
+
+    def _rows(self, **mark):
+        rows = [("margin", _div(d, "ZZD.TO", 100, 0.40)) for d in _Q]
+        late = _div("2026-06-22", "ZZD.TO", 0, 0, **mark)
+        late.update(gross_amount=15.0, net_amount=15.0)
+        return rows + [("margin", late)]
+
+    def test_left_out_and_said(self):
+        from taxjson.lib import div_estimate as DE
+        pays = DE.payments(self._rows(no_share_count="no-accrual"))
+        self.assertEqual([p.pay_date for p in pays["ZZD.TO"]], _Q)
+        self.assertEqual(pays.notes, {("margin", "ZZD.TO"): [
+            "the 2026-06-22 payment of 15.00 CAD has no share count in the broker's "
+            "statements: left out of the per-share figures"]})
+        doc = _est(self._rows(no_share_count="no-accrual"), [_pos("ZZD.TO", 100)])
+        row = doc["rows"][0]
+        self.assertEqual(row["flags"], pays.notes[("margin", "ZZD.TO")])
+        self.assertAlmostEqual(row["last_per_share"], 0.40)
+
+    def test_a_row_naming_no_count_still_borrows_the_nearest(self):
+        # Kept: quantity 0 alone is a description that names no count.
+        from taxjson.lib import div_estimate as DE
+        pays = DE.payments(self._rows())
+        late = [p for p in pays["ZZD.TO"] if p.pay_date == "2026-06-22"]
+        self.assertEqual([(p.qty, p.per_share) for p in late], [(100.0, 0.15)])
+        self.assertEqual(pays.notes, {})
 
 
 if __name__ == "__main__":

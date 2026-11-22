@@ -1,0 +1,21 @@
+EDGE CASES — tax year 2024; date basis: settle (settlement date, CRA); futures: trade date
+
+WRITTEN OPTIONS ACROSS A YEAR END (1)
+  ACCOUNT  SYMBOL                 WRITTEN     PREMIUM  CLOSED
+  -----------------------------------------------------------
+  margin   QZQ250117C00040000.US  2024-11-18   201.15  open
+
+DENIED LOSSES CARRIED IN POSITIONS HELD AT THE END OF 2024 (3)
+  DEFERRED: denied losses in the cost of units still held; they lower the gain when sold.
+  ACCOUNT  SYMBOL    UNITS  DEFERRED
+  ----------------------------------
+  margin   SAMPA.TO    100    519.90
+  margin   QZQ.US      100    203.85
+  margin   NVDA.US      10    117.45
+
+INCOME PAID AROUND NEW YEAR (1)
+  ACCOUNT  SYMBOL  ACTION    DATE        AMOUNT  LANDS IN
+  -------------------------------------------------------
+  margin   CASH    INTEREST  2024-12-31   12.34      2024
+
+None on the other 8 edges checked; the rules and each row's why: tjs edge-cases --details

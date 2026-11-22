@@ -16,6 +16,7 @@ from pathlib import Path
 
 from _radar_text import radar_rows
 from _style import CapturedWidth
+from _support.planning_radar_json import REPO_ROOT, _stx, _run_json
 
 
 # Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
@@ -29,8 +30,6 @@ def setUpModule():
 
 def tearDownModule():
     _WIDTH.stop()
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _tx(action, date, symbol, qty, net, time="09:30:00"):
@@ -247,29 +246,9 @@ class TestStillHeldTest(unittest.TestCase):
         self.assertNotIn("LOCKED", line)
 
 
-def _stx(action, date, settle, symbol, qty, price, **kw):
-    d = dict(action=action, date=date, time="09:30:00", date_settle=settle,
-             symbol=symbol, quantity=qty, currency="CAD", price=price,
-             net_amount=abs(qty) * price, fee=0.0, account="margin")
-    d.update(kw)
-    return d
-
-
-def _run_json(taxable, date):
-    with tempfile.TemporaryDirectory() as tmp:
-        t = Path(tmp) / "t.json"
-        t.write_text(json.dumps({"transactions": taxable}))
-        r = subprocess.run(
-            [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar", "--country", "canada",
-             "--taxable", str(t), "--date", date, "--json"],
-            cwd=REPO_ROOT, capture_output=True, text=True)
-        assert r.returncode == 0, r.stderr
-    doc = json.loads(r.stdout)
-    return {r["ticker"]: r for s in doc["sections"] for r in s["rows"]}
-
-
 def _disallowed(rows):
-    from taxjson.lib.core import CanadaTaxRules, TaxTransaction
+    from taxjson.engine.ca.taxrules import CanadaTaxRules
+    from taxjson.model.transaction import TaxTransaction
     res = CanadaTaxRules().compute_gains([TaxTransaction(**r) for r in rows])
     return float(res["summary"].get("total_disallowed", 0.0) or 0.0)
 

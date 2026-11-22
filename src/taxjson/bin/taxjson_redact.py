@@ -81,7 +81,11 @@ replaced only with --force. See the "project mode" section below.
 """
 from __future__ import annotations
 
+import collections.abc as _cabc
+
+from taxjson.project.toml_io import parse_toml, read_toml
 from taxjson.lib.out import exit_text
+from taxjson.lib import out as _out
 import argparse
 import csv
 import functools
@@ -518,8 +522,9 @@ class Report:
     # Every kind of identity finding a Report records, with how a count
     # of it reads. identity_counts() walks this table and the
     # generate-parser privacy gate reads identity_counts(), so a new
-    # kind is counted there too; tests/test_fix_privacy.py fails when an
-    # attribute is in neither this table nor NOT_IDENTITY (GitHub #80:
+    # kind is counted there too;
+    # tests/features/generic_import/test_generate_parser_privacy_gate.py
+    # fails when an attribute is in neither this table nor NOT_IDENTITY (GitHub #80:
     # the gate had its own list and missed identity rows and review).
     IDENTITY_KINDS = (
         ("accounts", "account id(s)"),
@@ -1016,6 +1021,20 @@ def _blank_cells(line: str) -> str:
             line = _replace_field(line, cells, i, "REDACTED")
             cells = _split(line.rstrip("\r\n")) or []
     return line
+
+
+def _blank_preamble(records: List[Tuple[int, str]], preamble: int,
+                    rep: "Report") -> Tuple[List[str], List[Tuple[int, str]]]:
+    """(the copy's lines of the first `preamble` records, every cell
+    REDACTED and counted as an identity row; the records after them).
+    Those are the records no parse reads, a generic export's above its
+    mapped header (generic.preamble_records; records, so a quoted cell
+    the two readers split into lines otherwise counts alike): a holder's
+    name or an account number there was kept when no `Label:` marked it
+    (backlog TJ-2612)."""
+    out = [_blank_cells(line) for _n, line in records[:preamble]]
+    rep.identity_rows += sum(new != old for new, (_n, old) in zip(out, records))
+    return out, records[preamble:]
 
 
 def _pseudo(v: str, shared: Dict[str, str], mine: Dict[str, str]) -> str:
@@ -1639,15 +1658,17 @@ def _redact_delimited_identity(text: str, rep: "Report"
 def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
                 known_ids: Optional[Dict[str, str]] = None,
                 pseudonyms: Optional[Pseudonyms] = None,
-                stand_ins: bool = False
+                stand_ins: bool = False, preamble: int = 0
                 ) -> Tuple[str, Report]:
-    """Redact one export. `known_ids` (original -> placeholder) and
-    `pseudonyms` (wallets, transaction ids) are shared by every file of
-    one invocation: a value seen in an earlier file keeps its stand-in,
-    and a new one gets the next number — two accounts' files used to
-    both become U9990001 (S036-18), two files' distinct txids both
-    ...0001 (A2-0454). `stand_ins`: the text is a redacted copy checked
-    again — its own placeholders and pseudonyms stay, uncounted."""
+    """Redact one export; its first `preamble` records, which no parse
+    reads, blanked whole (`_blank_preamble`). `known_ids` (original ->
+    placeholder) and `pseudonyms` (wallets, transaction ids) are
+    shared by every file of one invocation: a value seen in an earlier
+    file keeps its stand-in, and a new one gets the next number — two
+    accounts' files used to both become U9990001 (S036-18), two files'
+    distinct txids both ...0001 (A2-0454). `stand_ins`: the text is a
+    redacted copy checked again — its own placeholders and pseudonyms
+    stay, uncounted."""
     rep = Report()
     rep.stand_ins = stand_ins
     if known_ids is not None:
@@ -1694,12 +1715,12 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
                               stand_ins and _is_pseudonym(v)))
     txid_repl = _mapper(rep.pseudonyms.txids, rep.txids,
                         lambda v: not (stand_ins and _is_pseudonym(v)))
-    out: List[str] = []
+    out, rest = _blank_preamble(records, preamble, rep)
     # The copy's line numbers (a blanked cell that spanned lines is one
     # line there): what the review list names.
-    copy_line = 1
+    copy_line = 1 + sum(_line_breaks(x) for x in out)
     unbalanced_at = set(unbalanced)
-    for (src_line, line) in records:
+    for (src_line, line) in rest:
         lineno = copy_line
         if src_line in unbalanced_at:
             rep.review.append((lineno, UNBALANCED_REASON))
@@ -2059,7 +2080,8 @@ def load_denylist(path: Optional[str] = None) -> List[str]:
     never weaken silently. Only an ABSENT default path means 'no
     denylist'."""
     explicit = path or os.environ.get("TAXJSON_PII_DENYLIST")
-    p = Path(explicit or Path.home() / ".config" / "taxjson" / "pii-denylist")
+    from taxjson.lib.project_layout import user_config_dir
+    p = Path(explicit or user_config_dir() / "pii-denylist")
     if not p.exists() and not p.is_symlink():
         if explicit:
             raise DenylistMissing(str(p))
@@ -2123,6 +2145,30 @@ def name_only_ids(stem: str, accounts: Dict[str, str]) -> List[str]:
     return found
 
 
+def _detected(src: Path):
+    """The run's detection of `src` (lib/brokerages/detect), or None when
+    it cannot say (ambiguous, unreadable, a detector's own error): read
+    once per file, for the preamble and the numbers check alike."""
+    from taxjson.lib.brokerages.detect import detect
+    try:
+        return detect(src)
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+def _preamble(src: Path, text: str, det) -> int:
+    """The records above a generic export's header
+    (generic.preamble_records), for a file the run reads with a mapping
+    (`det`, detection's answer); 0 for a broker's own export, a folder's
+    generic.toml or a signature beside it notwithstanding: its parser
+    reads the lines above its header (Webull's account line), which the
+    redactor's own rules then keep or replace."""
+    if det is None or det.broker != "generic":
+        return 0
+    from taxjson.lib.brokerages import generic
+    return generic.preamble_records(src, text)
+
+
 def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
                 check_only: bool, force: bool = False,
                 known_ids: Optional[Dict[str, str]] = None,
@@ -2151,7 +2197,9 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
             f"{src.name} starts with a UTF-16 byte-order mark but is not "
             f"valid UTF-16 (byte {e.start}: {e.reason}; a truncated "
             f"file?) — nothing written. Re-export it.") from None
-    new, rep = redact_text(text, extra, known_ids, pseudonyms, stand_ins)
+    det = _detected(src)
+    new, rep = redact_text(text, extra, known_ids, pseudonyms, stand_ins,
+                           _preamble(src, text, det))
     # A denylisted string in the file NAME counts as a finding too.
     rep.patterns += sum(len(p.findall(src.stem)) for p in rep.name_patterns)
     # So does an account id that only the NAME carries: --check said
@@ -2170,7 +2218,7 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
         rep.notes.append(f"input was {enc}; the copy is written as UTF-8 "
                          f"(the strict UTF-8 parsers would refuse the original — say so in the report)")
     why = numbers_changed(src, text, new, bool(bom), redacted_name(
-        src, rep.accounts, rep.name_patterns, rep.known_ids)) \
+        src, rep.accounts, rep.name_patterns, rep.known_ids), det) \
         if new != text else None
     if why:
         raise InputRefused(f"{src.name}: a number would change in the "
@@ -2223,11 +2271,12 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
 def _parse_quiet(broker: str, path: Path) -> List[Dict[str, Any]]:
     """`path` read by the parser `broker` (its messages swallowed)."""
     import contextlib
-    from taxjson.bin import taxjson_brokerage  # noqa: F401  (registers)
-    from taxjson.lib.core import load_brokerage
+    from taxjson.parsers.registry import parser_class
+    # A bare parse, no sibling finder: numbers_changed writes each copy
+    # alone in a folder of its own, so a sibling is in neither.
     with contextlib.redirect_stdout(io.StringIO()), \
             contextlib.redirect_stderr(io.StringIO()):
-        rows = load_brokerage(broker)().parse_file(path)
+        rows = parser_class(broker)().parse_file(path)
     return [r if isinstance(r, dict) else getattr(r, "__dict__", {})
             for r in rows]
 
@@ -2266,7 +2315,7 @@ class _Unreadable(Exception):
 
 
 def numbers_changed(src: Path, orig: str, text: str, bom: bool,
-                    name: str) -> Optional[str]:
+                    name: str, det) -> Optional[str]:
     """Why the redacted `text` of the export `src` (its text `orig`;
     the copy named `name`) would not book as the original does, or
     None: each is written alone in a temporary folder under `name` (the
@@ -2277,12 +2326,9 @@ def numbers_changed(src: Path, orig: str, text: str, bom: bool,
     differ; numbers must not.
     An export no parser reads on its own (a generic mapping, a name-
     routed or undetected file, one the parser refuses as it is) is not
-    checked."""
+    checked. `det`: `src`'s detection (`_detected`; None: none)."""
     import tempfile
-    from taxjson.lib.brokerages.detect import detect
-    try:
-        det = detect(src)
-    except Exception:                                   # noqa: BLE001
+    if det is None:
         return None
     if not det.broker or det.broker == "generic" or det.positions \
             or det.how != "content":
@@ -2350,12 +2396,12 @@ def print_report(src: Path, dst: Optional[Path], rep: Report) -> None:
             f"occurrence(s) of {len(rep.unreplaced)} id(s) NOT replaced "
             f"(see REVIEW below; fix by hand or with --also)")
         for orig, ph in rep.accounts.items():
-            print(f"    {Report.masked(orig)} -> {ph}")
+            _out.put(f"    {Report.masked(orig)} -> {ph}")
     elif rep.accounts:
         say(f"account ids: {len(rep.accounts)} distinct, every occurrence "
             f"replaced")
         for orig, ph in rep.accounts.items():
-            print(f"    {Report.masked(orig)} -> {ph}")
+            _out.put(f"    {Report.masked(orig)} -> {ph}")
     else:
         say("account ids: none found")
     if rep.name_ids:
@@ -2388,7 +2434,7 @@ def print_report(src: Path, dst: Optional[Path], rep: Report) -> None:
         for lineno, why in rep.review[:_REVIEW_SHOWN]:
             say(f"line {lineno}: {why}", "    ", "      ")
         if len(rep.review) > _REVIEW_SHOWN:
-            print(f"    … and {len(rep.review) - _REVIEW_SHOWN} more")
+            _out.put(f"    … and {len(rep.review) - _REVIEW_SHOWN} more")
 
 
 def _diag(kind: str, text: str, details=(), file=None) -> None:
@@ -2468,6 +2514,8 @@ class _TreeFile:
         self.swept = 0
         # An export's text before redaction (its numbers are checked).
         self.orig: Optional[str] = None
+        # Its detection (`_detected`), read once for both checks.
+        self.det: Any = None
 
 
 def _inside(p: Path, folder: Path) -> bool:
@@ -2967,7 +3015,7 @@ def _copy_prior_record_setting(files: List[_TreeFile],
                 and f.text is not None), None)
     key = ("settings", "prior_year_record")
     try:
-        doc = _PL.parse_toml(cfg_tf.text)
+        doc = _PL.parse_config_text(cfg_tf.text)
     except _PL.LayoutError:
         return                      # (refused by _valid_copy_config)
     if rec is None and not (doc.get("settings") or {}).get(
@@ -3098,7 +3146,7 @@ def _copy_holdings_lists(root: Path, inputs: Path, files: List[_TreeFile],
     hold = _PL.holdings_folder(root)
     text = cfg_tf.text
     for name, acfg in accounts.items():
-        if not isinstance(acfg, dict) or "holdings" not in acfg:
+        if not isinstance(acfg, _cabc.Mapping) or "holdings" not in acfg:
             continue
         h = acfg["holdings"]
         listed = h if isinstance(h, list) else [h]
@@ -3147,10 +3195,8 @@ def config_ids(root: Path) -> Tuple[List[str], List[str]]:
     replaced in every file of the copy, like an export's —, the other
     values of an account's id keys — replaced in the configuration
     only: a 4-digit query id elsewhere is a quantity)."""
-    from taxjson.lib.tomlcompat import tomllib
     try:
-        doc = tomllib.loads((root / _PL.CONFIG).read_text(
-            encoding="utf-8-sig"))
+        doc = read_toml(root / _PL.CONFIG)
     except Exception:                                   # noqa: BLE001
         return [], []
     ids: List[str] = []
@@ -3262,9 +3308,8 @@ def plain_toml_strings(text: str) -> str:
     new = "".join(out)
     if new == text:
         return text
-    from taxjson.lib.tomlcompat import tomllib
     try:
-        same = tomllib.loads(new) == tomllib.loads(text)
+        same = parse_toml(new) == parse_toml(text)
     except Exception:                                   # noqa: BLE001
         same = False
     return new if same else text
@@ -3489,13 +3534,12 @@ def _valid_copy_config(files: List["_TreeFile"]) -> Optional[str]:
     """Why the copy's taxjson.toml would not read, or None (every edit
     of it — folder settings, holdings lists, placeholders, denylist /
     --also matches — is checked before anything is written)."""
-    from taxjson.lib.tomlcompat import tomllib
     cfg = next((f for f in files if f.rel == Path(_PL.CONFIG)
                 and f.text is not None), None)
-    if cfg is None or tomllib is None:
+    if cfg is None:
         return None
     try:
-        tomllib.loads(cfg.text)
+        parse_toml(cfg.text)
     except Exception as e:                              # noqa: BLE001
         return str(e)
     return None
@@ -3651,9 +3695,9 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
                 # The record's folder paths too (backlog TJ-0700).
                 f.text = redact_record_paths(f.text, f.rep)
             continue
-        f.orig = text
-        f.text, f.rep = redact_text(text, extra, known_ids, pseudonyms,
-                                    stand_ins)
+        f.orig, f.det = text, _detected(f.src or inputs / f.rel)
+        f.text, f.rep = redact_text(text, extra, known_ids, pseudonyms, stand_ins,
+                                    _preamble(f.src or inputs / f.rel, text, f.det))
         f.rep.patterns += sum(len(p.findall(f.rel.stem)) for p in compiled)
         if enc != "utf-8":
             f.rep.notes.append(f"The input was {enc}; the copy is UTF-8.")
@@ -3691,7 +3735,7 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
             continue
         src = f.src if f.src is not None else inputs / f.rel
         why = numbers_changed(src, f.orig, f.text, bool(f.bom),
-                              names[f.rel].name)
+                              names[f.rel].name, f.det)
         if why:
             changed.append((f, why))
     sys.stdout.flush()          # the step lines above the errors
@@ -3871,6 +3915,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     pseudonyms = Pseudonyms()
     written: set = set()
     reported = 0
+    # One blank line between two files' reports: a live exact Doc, the
+    # line written where the print() was.
+    d = _out.Doc(exact=True, width_=0, live=True)
     for f in args.files:
         src = Path(f)
         if not src.is_file():
@@ -3902,7 +3949,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             rc = 2
             continue
         if reported:
-            print()
+            d.blank()
         reported += 1
         print_report(src, dst, rep)
         if args.check and rep.found_anything():

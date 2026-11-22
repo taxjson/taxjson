@@ -19,12 +19,14 @@ from datetime import date
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from taxjson.lib.country import USA, canonical_country
+from taxjson.lib.json_contract import SCHEMAS
+from taxjson.model import money as M
 
 # The default view's tail: tickers whose re-entry date passed in the
 # last CLEARED_DAYS days (one line; --details lists them).
 CLEARED_DAYS = 7
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = SCHEMAS["rebuy"]
 
 
 def _days(a: str, b: str) -> int:
@@ -68,7 +70,7 @@ def build(radar: Dict[str, Dict[str, Any]], as_of: str, country: str, *,
     underlying = underlying or (lambda s: s)
     members = getattr(canon, "members", {}) or {}
     # {class root: the class roots ticker.map SIMILAR lines put beside
-    # it} (lib/similar; bin/taxjson_run._wash_class_context).
+    # it} (lib/similar; cli/plan._wash_class_context).
     similar = getattr(canon, "similar", {}) or {}
     want_set = set(want) if want is not None else None
     rows: List[Dict[str, Any]] = []
@@ -110,7 +112,7 @@ def build(radar: Dict[str, Dict[str, Any]], as_of: str, country: str, *,
                 if l.get("account"):
                     c["accounts"].add(l["account"])
     rows.sort(key=lambda x: (x["underlying"], x["is_option"], x["ticker"]))
-    clr = [dict(c, accounts=sorted(c["accounts"]), loss=round(c["loss"], 2))
+    clr = [dict(c, accounts=sorted(c["accounts"]), loss=M.shown(c["loss"], 2))
            for s, c in sorted(cleared.items()) if s not in open_syms]
     clr.sort(key=lambda c: (c["rebuy_at"], c["ticker"]), reverse=True)
     return {"schema_version": SCHEMA_VERSION,
@@ -121,7 +123,7 @@ def build(radar: Dict[str, Dict[str, Any]], as_of: str, country: str, *,
 
 def _row(sym, live, r, cat, as_of, usa, canon, underlying, members,
          similar=None, gone=()):
-    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.option_symbols import is_option_symbol
     last = max(live, key=lambda l: (l.get("trade_date") or "",
                                     l.get("window_date") or ""))
     rebuy_at = r.get("rebuy_at")
@@ -167,8 +169,8 @@ def _row(sym, live, r, cat, as_of, usa, canon, underlying, members,
         "underlying": underlying(sym),
         "is_option": opt,
         "sold_on": last.get("trade_date"),
-        "loss": round(sum(float(l.get("loss") or 0.0) for l in live), 2),
-        "qty": round(sum(float(l.get("qty") or 0.0) for l in live), 6),
+        "loss": M.shown(sum(float(l.get("loss") or 0.0) for l in live), 2),
+        "qty": M.units(sum(float(l.get("qty") or 0.0) for l in live), 6),
         "accounts": sorted({l.get("account") for l in live
                             if l.get("account")}),
         "rebuy_at": rebuy_at,
@@ -222,7 +224,7 @@ def _when(r: Dict[str, Any]) -> str:
 
 
 def _money(v: float) -> str:
-    from taxjson.lib.report_model import fmt_money
+    from taxjson.lib.report_fmt import fmt_money
     return fmt_money(v)
 
 

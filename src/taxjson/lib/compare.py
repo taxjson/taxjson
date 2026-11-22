@@ -4,7 +4,7 @@ earlier run.
 A snapshot is a copy of reports/ with a record of what the books were
 built from: the inputs fingerprint (lib/checklist.input_fingerprint,
 name and SHA-256 of every file `tjs run` reads) and each taxable
-account's filing aggregates (taxjson_filed.aggregates_from_gains).
+account's filing aggregates (filed_locks.aggregates_from_gains).
 Four kinds:
 
 - `prev` (work/compare/prev/): the run before. Every full `tjs run`
@@ -42,6 +42,10 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+from taxjson.project.accounts import accounts_of, account_of
+from taxjson.project.settings import settings_of
+from taxjson.model import money as M
 
 SNAP_ROOT = "compare"           # under work/
 PREV = "prev"
@@ -198,10 +202,10 @@ def aggregates(root: Path, cfg: Dict[str, Any], *, warn_stale: bool = True
     work/ (the figures close-year locks); {} when they cannot be read
     (the files that differ still tell). `warn_stale`: as
     report_model.resolve_gains_files."""
-    from taxjson.bin.taxjson_filed import aggregates_from_gains
+    from taxjson.lib.filed_locks import aggregates_from_gains
     from taxjson.lib.report_model import load_report_json, resolve_gains_files
-    accounts = cfg.get("accounts") or {}
-    year = (cfg.get("settings") or {}).get("year")
+    accounts = accounts_of(cfg)
+    year = settings_of(cfg).year
     out: Dict[str, Dict[str, Any]] = {}
     try:
         files = resolve_gains_files(Path(root) / "work",
@@ -209,14 +213,13 @@ def aggregates(root: Path, cfg: Dict[str, Any], *, warn_stale: bool = True
     except Exception:                                   # noqa: BLE001
         return out
     for acct, path in sorted(files.items()):
-        acfg = accounts.get(acct) if isinstance(accounts.get(acct), dict) \
-            else {}
-        if acfg.get("type") != "taxable":
+        acfg = account_of(accounts, acct)
+        if not acfg.taxable:
             continue
         try:
             doc = load_report_json(Path(path))
             agg = aggregates_from_gains(
-                doc, crypto=bool(acfg.get("crypto")),
+                doc, crypto=bool(acfg.crypto),
                 year=int(year) if isinstance(year, int) else None)
         except Exception:                               # noqa: BLE001
             continue
@@ -228,7 +231,8 @@ def aggregates(root: Path, cfg: Dict[str, Any], *, warn_stale: bool = True
 def _snapshot_doc(root: Path, cfg: Dict[str, Any], files: Dict[str, bytes],
                   kind: str, warn_stale: bool = True) -> Dict[str, Any]:
     """A snapshot's record of the reports in `files`."""
-    from taxjson.lib.checklist import input_fingerprint, recorded_fingerprint
+    from taxjson.lib.checklist import input_fingerprint
+    from taxjson.lib.fingerprint_record import recorded_fingerprint
     # What the reports were built from is what the last full run
     # recorded, not the inputs as they are now (an export dropped in
     # since belongs to the NEXT run's snapshot); its time is the run's.
@@ -239,7 +243,7 @@ def _snapshot_doc(root: Path, cfg: Dict[str, Any], files: Dict[str, bytes],
         fp, taken = input_fingerprint(root, cfg), datetime.now()
     doc = {"version": VERSION, "kind": kind,
            "taken": taken.isoformat(timespec="seconds"),
-           "year": (cfg.get("settings") or {}).get("year"),
+           "year": settings_of(cfg).year,
            "files": fp,
            "accounts": aggregates(root, cfg, warn_stale=warn_stale),
            "reports": sorted(files)}
@@ -252,11 +256,14 @@ def _snapshot_doc(root: Path, cfg: Dict[str, Any], files: Dict[str, bytes],
 
 
 def take(root: Path, cfg: Dict[str, Any], dest: Path, kind: str,
-         warn_stale: bool = True) -> Optional[Dict[str, Any]]:
+         warn_stale: bool = True, *, keep_same: bool = False) -> Optional[Dict[str, Any]]:
     """Snapshot reports/ into `dest` (replaced): dest/reports/<files>
     and dest/snapshot.json. None (nothing written, an old snapshot
     there kept) when reports/ holds no file; CompareError (nothing
-    written) when reports/ or a file in it cannot be read."""
+    written) when reports/ or a file in it cannot be read. `keep_same`:
+    a snapshot already at `dest` that holds these very bytes is kept, not
+    written again (the run's own: a run that changed nothing writes
+    nothing, backlog TJ-4260)."""
     root = Path(root)
     files = report_files(root / "reports")
     if not files:
@@ -264,6 +271,9 @@ def take(root: Path, cfg: Dict[str, Any], dest: Path, kind: str,
     doc = _snapshot_doc(root, cfg, files, kind, warn_stale)
     from taxjson.lib.safe_write import write_atomic
     dest = Path(dest)
+    text = json.dumps(doc, indent=1, sort_keys=True) + "\n"
+    if keep_same and _holds(dest, files, text):
+        return doc
     dest.parent.mkdir(parents=True, exist_ok=True)
     # Staged in a folder of this call's own, named outside the snapshot
     # namespace (a leading dot is no snapshot name, NAME_RE): the fixed
@@ -275,8 +285,7 @@ def take(root: Path, cfg: Dict[str, Any], dest: Path, kind: str,
         (stage / "reports").mkdir()
         for name, data in files.items():
             write_atomic(stage / "reports" / name, data)
-        write_atomic(stage / SNAPSHOT_FILE,
-                     json.dumps(doc, indent=1, sort_keys=True) + "\n")
+        write_atomic(stage / SNAPSHOT_FILE, text)
         _publish(stage, dest)
     except BaseException:
         shutil.rmtree(stage, ignore_errors=True)
@@ -285,6 +294,24 @@ def take(root: Path, cfg: Dict[str, Any], dest: Path, kind: str,
 
 
 _HIDDEN = "."       # a staging or holding folder's name starts with it
+
+
+def _holds(dest: Path, files: Dict[str, bytes], text: str) -> bool:
+    """`dest` is a real folder holding exactly these reports and this
+    snapshot record."""
+    try:
+        if dest.is_symlink() or not dest.is_dir() or (dest / "reports").is_symlink():
+            return False
+        have = {p.name for p in (dest / "reports").iterdir()}
+        if have != set(files) or sorted(p.name for p in dest.iterdir()) != sorted(
+                [SNAPSHOT_FILE, "reports"]):
+            return False
+        if (dest / SNAPSHOT_FILE).read_text(encoding="utf-8") != text:
+            return False
+        return all((dest / "reports" / n).is_file() and not (dest / "reports" / n).is_symlink()
+                   and (dest / "reports" / n).read_bytes() == data for n, data in files.items())
+    except (OSError, UnicodeDecodeError):
+        return False
 
 
 def _publish(stage: Path, dest: Path) -> None:
@@ -410,7 +437,7 @@ def take_full(root: Path, cfg: Dict[str, Any],
     from taxjson.lib.project_layout import LayoutError, snapshots_folder, years_layout
     from taxjson.lib.safe_write import write_atomic
     root = Path(root).resolve()
-    year = (cfg.get("settings") or {}).get("year")
+    year = settings_of(cfg).year
     if not isinstance(year, int):
         raise CompareError("[settings] year is required in taxjson.toml: a "
                            "snapshot is named for its year")
@@ -517,7 +544,7 @@ def rotate_previous(root: Path, cfg: Dict[str, Any],
     kept = True
     if not partial:
         kept = take(root, cfg, snap_dir(root, PREV), "previous run",
-                    warn_stale=False) is not None
+                    warn_stale=False, keep_same=True) is not None
     if account:
         from taxjson.lib.safe_write import write_atomic
         snapshots_dir(root).mkdir(parents=True, exist_ok=True)
@@ -576,7 +603,7 @@ def list_snapshots(root: Path, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     from taxjson.lib.project_layout import snapshots_folder
     store = snapshots_folder(root)
     if store.is_dir() and not store.is_symlink():
-        year = (cfg.get("settings") or {}).get("year")
+        year = settings_of(cfg).year
         names += sorted(p.name for p in store.iterdir()
                         if NAME_RE.match(p.name)
                         and p.name.startswith(f"{year}.")
@@ -616,7 +643,7 @@ def load(root: Path, cfg: Dict[str, Any], name: str
         return _read_snapshot(root, cfg, d, d.name, _shown_dir(root, d))
     name = check_name(name)
     if name == FILED:
-        year = (cfg.get("settings") or {}).get("year")
+        year = settings_of(cfg).year
         lock = root / "filed" / f"{year}.json"
         rep = filed_reports_dir(root, year)
         from taxjson.lib.project_layout import (lock_missing_frozen,
@@ -629,12 +656,12 @@ def load(root: Path, cfg: Dict[str, Any], name: str
             raise CompareError(f"{year} is not closed (no filed/{year}.json)"
                                f" — `tjs close-year` keeps the reports "
                                f"as filed")
-        from taxjson.bin.taxjson_filed import LockProblem, read_lock
+        from taxjson.lib.filed_locks import LockProblem, read_lock
         try:
             # The one check every reader of a lock applies: a damaged
             # lock, or one closed under the other country's law, is not
             # the reports as filed (backlog TJ-0069).
-            snap = read_lock(lock, cfg.get("settings") or {},
+            snap = read_lock(lock, settings_of(cfg),
                              label=f"filed/{year}.json")
         except LockProblem as e:
             raise CompareError(str(e))
@@ -677,7 +704,7 @@ def _read_snapshot(root: Path, cfg: Dict[str, Any], d: Path, name: str,
         raise CompareError(f"{label}{SNAPSHOT_FILE} cannot be read: {e}")
     _check_snapshot(doc, name, label)
     if d.resolve().parent != snapshots_dir(root).resolve():
-        year = (cfg.get("settings") or {}).get("year")
+        year = settings_of(cfg).year
         if doc.get("year") != year:
             # Year folders share snapshot/: another year's reports are
             # not a run before this year's.
@@ -879,7 +906,7 @@ def _against(doc: Dict[str, Any]) -> str:
 
 def _money(v: Any) -> str:
     f = _num(v)
-    return f"{f:,.2f}" if f is not None else str(v)
+    return f"{M.shown(f, 2):,.2f}" if f is not None else str(v)
 
 
 def _count(v: Any) -> str:
@@ -897,7 +924,7 @@ def _change(r: Dict[str, Any]) -> str:
     if a is None or b is None:
         return "-"
     d = b - a
-    return (f"{d:+,.2f}" if r.get("kind") == "money"
+    return (f"{M.shown(d, 2):+,.2f}" if r.get("kind") == "money"
             else f"{round(d):+d}")
 
 

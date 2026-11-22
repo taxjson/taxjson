@@ -18,7 +18,7 @@ FROM and an in-leg of TO, the same quantity. Where they come from:
     SOURCES names it or as it is;
   - the parsed exports in work/ (books and transfer sidecars): a broker
     journal the legs' own pair id marks (Questrade's `journal_pair`,
-    RBC's J~ reference: missing_history.journal_leg_key) that the state
+    RBC's J~ reference: cross_listings.journal_leg_key) that the state
     does not list;
   - the map the books were merged with (work/ticker.map.effective, else
     ticker.map): which line pools the two listings.
@@ -47,7 +47,11 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+from taxjson.project.accounts import accounts_of
+from taxjson.project.settings import settings_of
 from taxjson.lib import project_layout as _PL
+from taxjson.model import money as M
 
 FORMAT = "taxjson-journals/1"
 STATES = ("joined", "suggested", "refused")
@@ -86,7 +90,7 @@ class _Map:
     def __init__(self, root: Path):
         from taxjson.lib import cross_listings as XL
         cache = root / "work"
-        eff = cache / XL.EFFECTIVE_MAP
+        eff = cache / _PL.EFFECTIVE_MAP
         self.path: Optional[Path] = eff if eff.is_file() else (
             _PL.ticker_map_path(root) if (_PL.ticker_map_path(root)).is_file() else None)
         self.raw: Dict[str, str] = {}
@@ -102,7 +106,7 @@ class _Map:
         # The effective map is the project's ticker.map, then the run's
         # own lines (under EFFECTIVE_HEAD): a line above it is the
         # user's ticker.map line, with the same number.
-        own = self.path.name == XL.EFFECTIVE_MAP
+        own = self.path.name == _PL.EFFECTIVE_MAP
         in_head = False
         for n, raw in enumerate(text.splitlines(), 1):
             # Every block the run appends opens with a "# taxjson run:"
@@ -115,15 +119,14 @@ class _Map:
             if len(body) < 3:
                 continue
             kw = body[0].upper()
-            where = (f"work/{XL.EFFECTIVE_MAP}:{n}" if in_head
+            where = (f"work/{_PL.EFFECTIVE_MAP}:{n}" if in_head
                      else f"ticker.map:{n}")
             line = " ".join([kw] + [b.upper() for b in body[1:]])
             a, b = body[1].upper(), body[2].upper()
             if kw == "DISTINCT":
                 # Read as the map parser reads it (a bare US ticker
                 # beside a share listing is the US listing).
-                from taxjson.bin.taxjson_ticker_map import \
-                    distinct_spellings
+                from taxjson.lib.ticker_map_rules import distinct_spellings
                 for pair in distinct_spellings(a, b):
                     self.distinct.setdefault(pair, (where, line))
                 continue
@@ -212,7 +215,7 @@ def source_text(src: str) -> str:
 def _leg_key(acct: str, sym: str, date: str, in_sym: str,
              q: float) -> Tuple[str, str, str, str, float]:
     return (acct, sym.upper(), str(date)[:10], in_sym.upper(),
-            round(abs(q), 6))
+            M.units(abs(q), 6))
 
 
 def _obj(x: Any) -> Dict[str, Any]:
@@ -259,7 +262,7 @@ def _broker_journals(cache: Path, accounts: Iterable[str],
                      base_currency: Optional[str] = None
                      ) -> List[Dict[str, Any]]:
     """The broker journals the parsed exports mark (a Questrade
-    journal_pair, RBC's J~ reference: missing_history.journal_leg_key):
+    journal_pair, RBC's J~ reference: cross_listings.journal_leg_key):
     one out-leg and one in-leg of the same quantity in one account under
     one pair id, on two symbols."""
     from taxjson.lib import cross_listings as XL
@@ -271,7 +274,7 @@ def _broker_journals(cache: Path, accounts: Iterable[str],
     out = []
     for (acct, broker, ref), gl in sorted(groups.items()):
         # Overlapping exports repeat a row: one leg per (symbol, qty).
-        uniq = {(g.symbol, round(g.quantity, 6)): g for g in gl}
+        uniq = {(g.symbol, M.units(g.quantity, 6)): g for g in gl}
         o = [g for g in uniq.values() if g.quantity < 0]
         i = [g for g in uniq.values() if g.quantity > 0]
         if len(o) != 1 or len(i) != 1 or o[0].symbol == i[0].symbol \
@@ -400,8 +403,8 @@ def report(root: Path, cfg: Dict[str, Any], account: Optional[str] = None,
     if why:
         raise JournalsError(f"work/{XL.STATE} {why}")
     st = XL.read_state(state_path)
-    accts = [n for n, c in ((cfg.get("accounts") or {}).items())
-             if not (c or {}).get("crypto")]
+    accts = [n for n, c in (accounts_of(cfg).items())
+             if not c.crypto]
     found: List[Dict[str, Any]] = []
     # Journals listed per leg key, counted: two same-day journals of the
     # same size (two broker references) are two records the run already
@@ -420,7 +423,7 @@ def report(root: Path, cfg: Dict[str, Any], account: Optional[str] = None,
                 continue
             listed[k] = listed.get(k, 0) + 1
             found.append(j)
-    base = str((cfg.get("settings") or {}).get("base_currency")
+    base = str(settings_of(cfg).base_currency
                or "").upper() or None
     repeats = dict(listed)
     for rec in _broker_journals(cache, accts, base):

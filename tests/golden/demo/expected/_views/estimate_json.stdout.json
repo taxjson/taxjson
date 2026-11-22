@@ -1,0 +1,660 @@
+{
+  "accounts": [
+    {
+      "account": "crypto",
+      "dividend": 23.56,
+      "dividend_is_staking": true,
+      "fees": 133.87,
+      "option": 0.0,
+      "pil": 0.0,
+      "realized": 670.53,
+      "stock": 670.53,
+      "total": 694.09,
+      "type": "taxable"
+    },
+    {
+      "account": "ib",
+      "dividend": 101.25,
+      "fees": 6.75,
+      "option": 0.0,
+      "pil": 0.0,
+      "realized": 132.3,
+      "stock": 132.3,
+      "total": 233.55,
+      "type": "taxable"
+    },
+    {
+      "account": "lira",
+      "dividend": 420.0,
+      "fees": 19.8,
+      "option": 0.0,
+      "pil": 0.0,
+      "realized": 235.15,
+      "stock": 235.15,
+      "total": 655.15,
+      "type": "sheltered"
+    },
+    {
+      "account": "margin",
+      "dividend": 675.0,
+      "fees": 8.17,
+      "option": 201.08,
+      "pil": 0.0,
+      "realized": 267.23,
+      "stock": 66.15,
+      "total": 942.23,
+      "type": "taxable"
+    },
+    {
+      "account": "questrade",
+      "dividend": 24.3,
+      "fees": 31.68,
+      "option": 0.0,
+      "pil": 0.0,
+      "realized": 81.2,
+      "stock": 81.2,
+      "total": 105.5,
+      "type": "taxable"
+    },
+    {
+      "account": "rrsp",
+      "dividend": 131.22,
+      "fees": 7.56,
+      "option": -273.51,
+      "pil": 0.0,
+      "realized": 47.79,
+      "stock": 321.3,
+      "total": 179.01,
+      "type": "sheltered"
+    },
+    {
+      "account": "tfsa",
+      "dividend": 528.0,
+      "fees": 39.8,
+      "option": 0.0,
+      "pil": 0.0,
+      "realized": 643.45,
+      "stock": 643.45,
+      "total": 1171.45,
+      "type": "sheltered"
+    },
+    {
+      "account": "webull",
+      "dividend": 0.0,
+      "fees": 38.3,
+      "option": 175.83,
+      "pil": 0.0,
+      "realized": 267.06,
+      "stock": 91.23,
+      "total": 267.06,
+      "type": "taxable"
+    }
+  ],
+  "basis": "wash-adjusted",
+  "currency": "CAD",
+  "estimate": {
+    "amt": {
+      "additional_tax_s120_2": 0.0,
+      "additional_tax_sftc_part": 0.0,
+      "adjusted_income": 59167.44,
+      "ati_lines": [
+        {
+          "amount": 1418.33,
+          "label": "Capital gains at 100% (regular: 50%)",
+          "ref": "s.127.52(1)(d)"
+        },
+        {
+          "amount": 0.0,
+          "label": "Net capital losses of other years at 50%",
+          "ref": "s.127.52(1); regular line 25300"
+        },
+        {
+          "amount": 0.0,
+          "label": "Eligible dividends, actual amount (no gross-up)",
+          "ref": "s.127.52(1)"
+        },
+        {
+          "amount": 800.55,
+          "label": "Foreign dividends",
+          "ref": ""
+        },
+        {
+          "amount": 23.56,
+          "label": "Payments in lieu and staking (ordinary)",
+          "ref": ""
+        },
+        {
+          "amount": 61000.0,
+          "label": "Other income",
+          "ref": "[estimate] other_income"
+        },
+        {
+          "amount": -4000.0,
+          "label": "Deductions in full (RRSP, FHSA, RPP ...)",
+          "ref": "lines 20700-23500"
+        },
+        {
+          "amount": -75.0,
+          "label": "Carrying charges at 50%",
+          "ref": "s.127.52(1); line 22100"
+        }
+      ],
+      "base_topup": 0.0,
+      "basic_fed": 6540.14,
+      "binding": false,
+      "bpa_amount": 15705.0,
+      "bpa_credit": 1177.88,
+      "carryforward": 0.0,
+      "carryover": {
+        "attributed": 0.0,
+        "available": 0.0,
+        "available_by_year": {},
+        "base_recovered": 0.0,
+        "closing": 0.0,
+        "closing_by_year": {},
+        "created": 0.0,
+        "entered": false,
+        "expired_by_year": {},
+        "lapsing_by_year": {},
+        "last_year_by_origin": {},
+        "limit": 6540.14,
+        "recovered": 0.0,
+        "recovered_by_year": {},
+        "recovered_credits_reduced": 0.0,
+        "recovered_federal": 0.0,
+        "recovered_federal_tax": 0.0,
+        "recovered_provincial": 0.0,
+        "recovered_provincial_credit": 0.0,
+        "recovered_provincial_surtax": 0.0,
+        "remaining_by_year": {},
+        "source": null,
+        "year": 2024
+      },
+      "excess_fed": 0.0,
+      "exemption": 173205.0,
+      "foreign_tax_not_credited": 0.0,
+      "ftc": 18.83,
+      "ftc_foreign_taxes": 12.56,
+      "ftc_income_limit": 164.11,
+      "ftc_regular": 18.83,
+      "gross_minimum": 0.0,
+      "headroom": 6521.3,
+      "minimum_amount": 0.0,
+      "minimum_fed": 0.0,
+      "provincial_amt": 0.0,
+      "provincial_amt_base": 0.0,
+      "provincial_amt_base_kind": "excess",
+      "provincial_amt_basic": 0.0,
+      "provincial_amt_surtax": 0.0,
+      "provincial_factor": 0.2463,
+      "provincial_factor_assumed": false,
+      "provincial_ftc_change": 0.0,
+      "provincial_ftc_min_tax": 0.0,
+      "provincial_ftc_regular": 0.0,
+      "rate": 0.205,
+      "recovery_limit": 6540.14,
+      "regular_fed": 6521.3,
+      "subject": 0.0,
+      "topup": 0.0,
+      "topup_attributed": 0.0
+    },
+    "assumptions": "Assumes: Canadian issuers' dividends are all ELIGIBLE (non-eligible dividends would be taxed higher) \u2014 a Canadian trust's distribution (ETF, REIT or fund units) is grossed up as an eligible dividend too (its T3 split into eligible dividends, other income, capital gains and return of capital is not in the export; the T3 decides) \u2014 except the T5 box 18 capital-gains dividends named in [[capital_gains_dividends]] (taxed as capital gains); foreign withholding creditable up to 15% of each security's foreign dividends (its TAX rows paired with its dividends by symbol, across the taxable accounts; a TAX row that names no security, or one with no foreign dividend in the year, up to 15% of its account's foreign cash dividends that none of its TAX rows names, within each security's 15% that its paired withholding leaves) and up to the Canadian tax on their share of net income (forms T2209 and T2036, all foreign dividends as one country's and all foreign tax as non-business income tax); foreign tax that neither credit takes, and withholding above 15% of a security's dividends, is not deducted (either may be deductible on line 23200, ITA s.20(12) and s.20(11), in a minimum-tax year too: a deduction you claim goes in [estimate] deductions); crypto staking is ordinary income; no QC abatement or low-income reductions; interest income and interest paid are not included \u2014 each account's .sum shows interest earned ('CASH INTEREST') and interest charged ('INTEREST PAID') per currency, so take interest income from there (or the T5) and the margin interest paid to line 22100 (--carrying-charges); FX gains/losses on foreign cash (s.39(1.1), line 15300 \u2014 `tjs fx-cash`), T3 box 21 capital gains and T5 box 18 amounts not named in [[capital_gains_dividends]] are not included; deductions below line 15000 only as entered (--deductions, --carrying-charges); a prior-year minimum tax carryover only as entered ([estimate] amt_carryover) or carried by last year's close-year lock; the basic personal amount is the only non-refundable credit (no CPP/EI, Canada employment, age, pension or donation credits); no OAS recovery tax; the AMT sees only these books and other income (no stock-option deduction add-back or donated securities).",
+    "avg_rate_pct": 19.43,
+    "capital_gains_dividends": 0.0,
+    "carry_sources": {
+      "amt_carryover": null,
+      "long_term_losses": null,
+      "other_losses": null
+    },
+    "carrying_charges": 150.0,
+    "country": "canada",
+    "deductions": 4000.0,
+    "eligible_compensation_excess": 0.0,
+    "eligible_dividends": 0.0,
+    "estimated_tax": 435.78,
+    "estimated_tax_with_amt": 435.78,
+    "federal_only": false,
+    "foreign_div_noncash": 675.0,
+    "foreign_tax_by_assumption": 3.65,
+    "foreign_tax_creditable": 18.83,
+    "foreign_tax_from_rows": 15.18,
+    "foreign_tax_not_credited": 0.0,
+    "foreign_withholding_over_cap": 0.01,
+    "foreign_withholding_over_cap_by_security": {
+      "MSFT.US": 0.01
+    },
+    "foreign_withholding_unpaired": {
+      "accounts": [],
+      "counted": 0.0,
+      "withheld": 0.0
+    },
+    "ftc_assumed": 18.83,
+    "ftc_basis": "tax_rows_and_assumed",
+    "ftc_federal": 18.83,
+    "ftc_provincial": 0.0,
+    "ftc_source": "TAX rows 15.18 + 3.65 assumed (15% of the foreign dividends of accounts with no TAX row; none on 675.00 of spin-off deemed dividends, paid in shares), capped at 15% of each security's foreign divs",
+    "grossed_eligible": 0.0,
+    "investment_income": 2242.44,
+    "losses_applied": 0.0,
+    "losses_carried_back": 0.0,
+    "losses_carried_forward": 0.0,
+    "losses_created": 0.0,
+    "losses_opening": 0.0,
+    "losses_unused": 0.0,
+    "notes": [
+      "Included in the ON figure \u2014 ON surtax (20% over 5,554 + 36% over 7,108 of basic ON tax): 0.00 with investments, 0.00 on other income alone; Ontario Health Premium: 600.00 with investments, 600.00 on other income alone (max 900.00 over 200,600 taxable).",
+      "Foreign tax not credited: the 0.01 withheld above 15% of each security's foreign dividends (MSFT.US 0.01; ITA s.20(11)) may be deductible on line 23200 (form T2209); the estimate does not deduct it: a deduction you claim goes in [estimate] deductions.",
+      "If you paid minimum tax (AMT) in any of the 7 preceding years, its carryover (T691 Part 8, line 40427; ITA s.120.2) can reduce federal tax by up to 6,540.14 (basic federal tax less the minimum amount, s.120.2(1)(b)), plus the ON share \u2014 none is entered: put it in taxjson.toml's [estimate] amt_carryover = { YEAR = AMOUNT } (by year of origin, from your notice of assessment or T691), or close last year with `tjs close-year` so this year reads it from the lock.",
+      "Crypto staking rewards (23.56) are taxed as ordinary income \u2014 no withholding, no foreign tax credit."
+    ],
+    "province": "ON",
+    "staking": 23.56,
+    "tax_base": {
+      "federal": 6225.81,
+      "provincial": 3066.34,
+      "total": 9292.15
+    },
+    "tax_with": {
+      "federal": 6521.3,
+      "provincial": 3206.63,
+      "total": 9727.94
+    },
+    "taxable_gain": 709.17,
+    "trace_base": {
+      "fed_bpa": 2355.75,
+      "fed_bpa_amount": 15705.0,
+      "fed_dtc": 0.0,
+      "fed_ftc": 0.0,
+      "fed_ftc_limit": 0.0,
+      "fed_ftc_unused": 0.0,
+      "fed_gross": 8581.565,
+      "fed_mtc": 0.0,
+      "foreign_tax": 0.0,
+      "ftc_share": 0.0,
+      "net_income": 56850.0,
+      "prov_basic": 2466.3395,
+      "prov_before_ftc": 2466.3395,
+      "prov_bpa": 626.1495,
+      "prov_dtc": 0.0,
+      "prov_ftc": 0.0,
+      "prov_ftc_limit": 0.0,
+      "prov_gross": 3092.489,
+      "prov_mtc": 0.0,
+      "prov_ohp": 600.0,
+      "prov_otherwise": 2466.3395,
+      "prov_surtax": 0.0,
+      "surtax_parts": [
+        [
+          5554,
+          0.2,
+          0.0
+        ],
+        [
+          7108,
+          0.36,
+          0.0
+        ]
+      ],
+      "ti": 56850.0
+    },
+    "trace_with": {
+      "fed_bpa": 2355.75,
+      "fed_bpa_amount": 15705.0,
+      "fed_dtc": 0.0,
+      "fed_ftc": 18.8325,
+      "fed_ftc_limit": 89.678182,
+      "fed_ftc_unused": 0.0,
+      "fed_gross": 8895.885863,
+      "fed_mtc": 0.0,
+      "foreign_tax": 18.8325,
+      "ftc_share": 0.013712,
+      "net_income": 58383.2725,
+      "prov_basic": 2606.633934,
+      "prov_before_ftc": 2606.633934,
+      "prov_bpa": 626.1495,
+      "prov_dtc": 0.0,
+      "prov_ftc": 0.0,
+      "prov_ftc_limit": 35.742101,
+      "prov_gross": 3232.783434,
+      "prov_mtc": 0.0,
+      "prov_ohp": 600.0,
+      "prov_otherwise": 2606.633934,
+      "prov_surtax": 0.0,
+      "surtax_parts": [
+        [
+          5554,
+          0.2,
+          0.0
+        ],
+        [
+          7108,
+          0.36,
+          0.0
+        ]
+      ],
+      "ti": 58383.2725
+    },
+    "vintage": "2024"
+  },
+  "filing": {
+    "accounts": [
+      {
+        "acb": 13412.99,
+        "account": "crypto",
+        "denied": 0.0,
+        "denied_contribution": 0.0,
+        "dispositions": 4,
+        "gain": 670.53,
+        "outlays": 57.73,
+        "proceeds": 14141.25
+      },
+      {
+        "acb": 28883.25,
+        "account": "ib",
+        "denied": 117.45,
+        "denied_contribution": 0.0,
+        "dispositions": 2,
+        "gain": 132.3,
+        "outlays": 2.7,
+        "proceeds": 29018.25
+      },
+      {
+        "acb": 1227.15,
+        "account": "margin",
+        "denied": 394.2,
+        "denied_contribution": 0.0,
+        "dispositions": 3,
+        "gain": 267.23,
+        "outlays": 4.12,
+        "proceeds": 1498.5
+      },
+      {
+        "acb": 36456.68,
+        "account": "questrade",
+        "denied": 0.0,
+        "denied_contribution": 0.0,
+        "dispositions": 2,
+        "gain": 81.21,
+        "outlays": 13.36,
+        "proceeds": 36551.25
+      },
+      {
+        "acb": 20334.0,
+        "account": "webull",
+        "denied": 0.0,
+        "denied_contribution": 0.0,
+        "dispositions": 2,
+        "gain": 267.07,
+        "outlays": 20.18,
+        "proceeds": 20621.25
+      }
+    ],
+    "date_basis": "date_settle",
+    "engine_denied_unrounded": 511.65,
+    "engine_gain_unrounded": 1418.33,
+    "fx_cash": {
+      "active": true,
+      "currency": "CAD",
+      "headline": "FX on foreign cash: NOT RELIABLE for 2024 \u2014 10 in-year overdrafts (86,602.83 USD); conversions, deposits/withdrawals and margin balances are not read; do not file this figure",
+      "ledger": "v1",
+      "line": "15300",
+      "overdrafts_in_year": {
+        "USD": {
+          "count": 10,
+          "units": 86602.83
+        }
+      },
+      "reasons": [
+        "10 in-year overdraft(s): the ledger spent currency it never saw acquired (86,602.83 USD)",
+        "currency conversions (IB Forex, Kraken/Coinbase fiat trades, bank conversions) are not read",
+        "cash deposits and withdrawals are not read",
+        "foreign-currency margin balances (debt) are not modelled",
+        "each history starts with an empty pool (no opening balance carried from the year before)"
+      ],
+      "reliable": false,
+      "rule": "ITA s.39(1.1) (capital, $200 de minimis)",
+      "status": "unreliable",
+      "unreliable_raw": {
+        "net_gain": -0.0,
+        "reportable": 0.0
+      },
+      "year": 2024
+    },
+    "lines": [
+      {
+        "acb": 63458.03,
+        "denied": 0.0,
+        "denied_contribution": 0.0,
+        "dispositions": 3,
+        "gain": 314.75,
+        "gain_code": "10690",
+        "key": "shares_p1",
+        "label": "Publicly traded shares, mutual fund units, deferral of eligible small business corporation shares, and other shares \u2014 Period 1 (January 1 to June 24, 2024)",
+        "line": "",
+        "outlays": 14.72,
+        "period": 1,
+        "proceeds": 63787.5,
+        "proceeds_code": "10689",
+        "rows": 2,
+        "short": "shares & fund units (P1)",
+        "title": "Period 1 (January 1 to June 24, 2024), lines 10689/10690"
+      },
+      {
+        "acb": 21337.39,
+        "denied": 511.65,
+        "denied_contribution": 0.0,
+        "dispositions": 4,
+        "gain": 56.13,
+        "gain_code": "13200",
+        "key": "shares",
+        "label": "Publicly traded shares, mutual fund units, deferral of eligible small business corporation shares, and other shares \u2014 Period 2 (June 25 to December 31, 2024)",
+        "line": "",
+        "outlays": 10.73,
+        "period": 2,
+        "proceeds": 21404.25,
+        "proceeds_code": "13199",
+        "rows": 4,
+        "short": "shares & fund units (P2)",
+        "title": "Period 2 (June 25 to December 31, 2024), lines 13199/13200"
+      },
+      {
+        "acb": 15518.65,
+        "denied": 0.0,
+        "denied_contribution": 0.0,
+        "dispositions": 6,
+        "gain": 1047.45,
+        "gain_code": "15300",
+        "key": "other",
+        "label": "Bonds, debentures, promissory notes, crypto-assets, and other similar properties (options, futures, foreign currency) \u2014 Period 2 (June 25 to December 31, 2024)",
+        "line": "",
+        "outlays": 72.65,
+        "period": 2,
+        "proceeds": 16638.75,
+        "proceeds_code": "15199",
+        "rows": 4,
+        "short": "options, crypto & other properties (P2)",
+        "title": "Period 2 (June 25 to December 31, 2024), lines 15199/15300"
+      }
+    ],
+    "totals": {
+      "acb": 100314.07,
+      "denied": 511.65,
+      "denied_contribution": 0.0,
+      "gain": 1418.33,
+      "outlays": 98.1,
+      "permanently_denied": 394.2,
+      "proceeds": 101830.5
+    }
+  },
+  "instalments": {
+    "annual_rate": null,
+    "as_of": "2025-04-30",
+    "basis": "current_year",
+    "charge_interest": 275.74,
+    "credit_interest": 50.47,
+    "current_net_tax": 9727.94,
+    "due_to_date": 9727.94,
+    "governing_required_total": 4200.0,
+    "governing_schedule": [
+      {
+        "amount": 975.0,
+        "date": "2024-03-15"
+      },
+      {
+        "amount": 975.0,
+        "date": "2024-06-17"
+      },
+      {
+        "amount": 1125.0,
+        "date": "2024-09-16"
+      },
+      {
+        "amount": 1125.0,
+        "date": "2024-12-16"
+      }
+    ],
+    "interest_bases_considered": [
+      "cra_reminder",
+      "current_year",
+      "prior_year"
+    ],
+    "interest_basis": "cra_reminder",
+    "interest_if_unpaid": 275.74,
+    "net_interest": 225.27,
+    "net_interest_computed": 225.27,
+    "paid_total": 550.0,
+    "payments": [
+      {
+        "amount": 300.0,
+        "date": "2024-03-15"
+      },
+      {
+        "amount": 250.0,
+        "date": "2024-07-02",
+        "note": "late"
+      }
+    ],
+    "penalty": 0.0,
+    "penalty_floor": 1000.0,
+    "per_remaining_date": 0.0,
+    "prior_year_net_tax": 4200.0,
+    "prior_year_test": "met",
+    "rate_configured": false,
+    "rate_extrapolated": false,
+    "rate_extrapolated_after": false,
+    "rate_extrapolated_before": false,
+    "rate_schedule": [
+      {
+        "from": "2024-01-01",
+        "rate": 0.1
+      },
+      {
+        "from": "2024-07-01",
+        "rate": 0.09
+      },
+      {
+        "from": "2025-01-01",
+        "rate": 0.08
+      }
+    ],
+    "rate_source": "published",
+    "remaining_dates": [],
+    "remaining_total": 0.0,
+    "required": [
+      {
+        "amount": 2431.99,
+        "cumulative_paid": 300.0,
+        "cumulative_required": 2431.99,
+        "date": "2024-03-15",
+        "status": "missed"
+      },
+      {
+        "amount": 2431.98,
+        "cumulative_paid": 300.0,
+        "cumulative_required": 4863.97,
+        "date": "2024-06-17",
+        "status": "missed"
+      },
+      {
+        "amount": 2431.99,
+        "cumulative_paid": 550.0,
+        "cumulative_required": 7295.96,
+        "date": "2024-09-16",
+        "status": "missed"
+      },
+      {
+        "amount": 2431.98,
+        "cumulative_paid": 550.0,
+        "cumulative_required": 9727.94,
+        "date": "2024-12-16",
+        "status": "missed"
+      }
+    ],
+    "required_at_all": true,
+    "required_total": 9727.94,
+    "second_prior_net_tax": 3900.0,
+    "shortfall": 9177.94,
+    "year": 2024
+  },
+  "no_purchase_in_totals": [],
+  "no_purchase_uncovered": [
+    {
+      "account": "margin",
+      "proceeds": 498.15,
+      "sales": 1,
+      "symbol": "SAMPG.US"
+    }
+  ],
+  "readiness": {
+    "complete": false,
+    "issues": [
+      {
+        "count": 1,
+        "detail": "1 sale(s) with no purchase in the files are in no total",
+        "fix": "tjs find-missing-history",
+        "kind": "no-purchase"
+      }
+    ]
+  },
+  "run_state_problems": [],
+  "schema_version": 1,
+  "sheltered_included": [
+    "lira",
+    "rrsp",
+    "tfsa"
+  ],
+  "subtotals": {
+    "sheltered": {
+      "dividend": 1079.22,
+      "fees": 67.16,
+      "option": -273.51,
+      "pil": 0.0,
+      "realized": 926.39,
+      "stock": 1199.9,
+      "total": 2005.61
+    },
+    "taxable": {
+      "dividend": 824.11,
+      "fees": 218.77,
+      "option": 376.91,
+      "pil": 0.0,
+      "realized": 1418.32,
+      "stock": 1041.41,
+      "total": 2242.43
+    }
+  },
+  "tainted_included": 0,
+  "tainted_routed": 0,
+  "totals": {
+    "dividend": 1903.33,
+    "fees": 285.93,
+    "option": 103.4,
+    "pil": 0.0,
+    "realized": 2344.71,
+    "stock": 2241.31,
+    "total": 4248.04
+  },
+  "unknown_cost_included": 0,
+  "unknown_cost_routed": 0,
+  "year": "2024"
+}

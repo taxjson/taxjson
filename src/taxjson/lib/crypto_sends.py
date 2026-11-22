@@ -38,7 +38,8 @@ line selling the shortfall at fair value (audit R1-26).
 """
 from __future__ import annotations
 
-from taxjson.lib.stage_msg import emit_line
+from taxjson.project.accounts import accounts_of
+from taxjson.project.settings import settings_of
 import copy
 import csv
 import json
@@ -49,6 +50,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from taxjson.lib import project_layout as _PL
+from taxjson.lib.privacy import mask_id
+from taxjson.lib.base_rates import Rates, load_rates
+from taxjson.model import money as M
 
 MANIFEST_NAME = "sends.json"
 TT_NAME = "crypto_sends.tt"
@@ -135,7 +139,7 @@ def mask_ref(ref: Any) -> str:
     s = str(ref or "").strip()
     if s.endswith("-xfer"):
         s = s[:-len("-xfer")]
-    return (s[:2] + "***") if s else ""
+    return mask_id(s)
 
 
 def fmt_qty(q: float) -> str:
@@ -150,7 +154,7 @@ def fmt_price(p: float) -> str:
     if p == 0 or not math.isfinite(p):
         return "0"
     decimals = max(6 - int(math.floor(math.log10(abs(p)))) - 1, 0)
-    s = f"{round(p, decimals):.{decimals}f}"
+    s = f"{M.units(p, decimals):.{decimals}f}"
     if "." in s:
         s = s.rstrip("0").rstrip(".")
     return s
@@ -692,7 +696,7 @@ def price_problem(price: Any) -> Optional[str]:
         return f"{price!r} is not a finite number"
     if price < MIN_PRICE:
         return (f"{price!r} is not a positive value of at least "
-                f"{MIN_PRICE:.8f} per coin")
+                f"{M.shown(MIN_PRICE, 8):.8f} per coin")
     return None
 
 
@@ -925,148 +929,6 @@ def clear_decision(path: Path, sid: str) -> bool:
     return True
 
 
-# ---------------------------------------------------------------- rates
-class RateTable(dict):
-    """load_rates' {currency: {date: (rate, source)}}, with `target`:
-    the currency every rate is TO (the file's TO column; None for an
-    empty file) — `Rates` refuses a table whose target is not its base —
-    and `published`: {currency: {date: the date the rate was published}}
-    for a date the file filled from an earlier day (its seventh column;
-    backlog TJ-0462)."""
-    target: Optional[str] = None
-
-    def __init__(self, *a, **k):
-        super().__init__(*a, **k)
-        self.published: Dict[str, Dict[str, str]] = {}
-
-
-def load_rates(path: Path, base: Optional[str] = None) -> RateTable:
-    """{currency: {date: (rate, source)}} from work/to_base.csv
-    (`DATE TIME FROM TO RATE [SOURCE]`), read like convert-currency
-    reads it (re-audit A2-0999): a rate that parses but is not a
-    positive finite number (NaN, 0, a negative) is refused — it used to
-    be skipped and the send priced at an earlier day's rate without a
-    word; an unreadable rate is skipped with a warning; the FIRST row of
-    a currency and date wins (the noon row, not today's spot row).
-    Every rate is to one currency: `base` when given, else the first
-    row's; a row TO another is refused, naming it — read by its FROM
-    currency alone, a USD rate to EUR priced a CAD project's send
-    (backlog TJ-0502)."""
-    out = RateTable()
-    if base:
-        out.target = base.upper()
-    if not path.exists() and not path.is_symlink():
-        return out
-    # An unreadable rates file is one line naming it (re-audit A2-0790);
-    # a BOM no longer hides the first rate (A2-1411).
-    try:
-        if not path.is_file():
-            raise IsADirectoryError(0, "not a regular file")
-        text = path.read_text(encoding="utf-8-sig")
-    except (OSError, UnicodeDecodeError) as e:
-        why = (e.strerror if isinstance(e, OSError) else None) or e
-        raise ValueError(f"cannot read the rates file {path} ({why}) — "
-                         f"re-run `tjs run` to rebuild it.") from None
-    bad: List[str] = []
-    for n, line in enumerate(text.splitlines(), 1):
-        parts = line.split()
-        if len(parts) < 5 or not re.match(r"^\d{4}-\d{2}-\d{2}$", parts[0]):
-            continue
-        try:
-            rate = float(parts[4])
-        except ValueError:
-            bad.append(f"line {n}: {line.strip()!r}")
-            continue
-        if not (rate > 0 and math.isfinite(rate)):
-            raise ValueError(
-                f"rates file {path}, line {n}: rate {parts[4]!r} for "
-                f"{parts[2]}->{parts[3]} on {parts[0]} is not a positive "
-                f"finite number — refusing to value a send with it. Fix "
-                f"or regenerate the rates file (`tjs run`).")
-        to = parts[3].upper()
-        if out.target is None:
-            out.target = to
-        elif to != out.target:
-            raise ValueError(
-                f"rates file {path}, line {n}: the {parts[2]} rate on "
-                f"{parts[0]} is to {to}, and "
-                + (f"this project's base currency is {out.target}"
-                   if base else f"the file's rates are to {out.target}")
-                + " — refusing to value a send with it. Regenerate the "
-                  "rates file (`tjs run`).")
-        day = out.setdefault(parts[2].upper(), {})
-        if parts[0] not in day:
-            day[parts[0]] = (rate, parts[5].lower() if len(parts) > 5
-                             else "")
-            if len(parts) > 6 and re.match(r"^\d{4}-\d{2}-\d{2}$",
-                                           parts[6]) \
-                    and parts[6] < parts[0]:
-                out.published.setdefault(parts[2].upper(), {})[
-                    parts[0]] = parts[6]
-    if bad:
-        emit_line(f"tjs crypto-sends: warning: {path.name}: skipped "
-                  f"{len(bad)} line(s) with an unreadable rate (e.g. "
-                  f"{bad[0]}).", file=sys.stderr)
-    return out
-
-
-# The days before a send's date a rate row may come from: the
-# conversion stage's own lookback (taxjson_convert_currency, 5 days on
-# top of the rates file's 7-day carry-forward).
-RATE_LOOKBACK_DAYS = 5
-
-
-class Rates:
-    def __init__(self, table, base: str):
-        self.table = table
-        self.base = base.upper()
-        self._sorted: Dict[str, List[str]] = {}
-        # A table load_rates read names the currency its rates are to:
-        # one to another currency than the base would price every send
-        # in it (backlog TJ-0502).
-        target = getattr(table, "target", None)
-        if target and target != self.base:
-            raise ValueError(
-                f"the rates file's rates are to {target}, and this "
-                f"project's base currency is {self.base} — refusing to "
-                f"value a send with them. Regenerate the rates file "
-                f"(`tjs run`).")
-
-    def get(self, cur: str, on: str) -> Optional[Tuple[float, str, str]]:
-        """(rate, rate date, label) of the latest rate on `on` or in the
-        RATE_LOOKBACK_DAYS before it — convert-currency's lookback
-        (CA-FX-02 / US-FX-02). None (the send stays unpriced, the pool
-        row unrated) when there is none: an unbounded "latest before"
-        priced a June send at a January rate (re-audit A2-0414)."""
-        cur = cur.upper()
-        if cur == self.base:
-            return 1.0, on, ""
-        days = self.table.get(cur) or {}
-        if cur not in self._sorted:
-            self._sorted[cur] = sorted(days)
-        keys = self._sorted[cur]
-        import bisect
-        i = bisect.bisect_right(keys, on)
-        if i == 0:
-            return None
-        d = keys[i - 1]
-        try:
-            oldest = (datetime.strptime(on[:10], "%Y-%m-%d")
-                      - timedelta(days=RATE_LOOKBACK_DAYS)
-                      ).strftime("%Y-%m-%d")
-        except ValueError:
-            return None
-        if d < oldest:
-            return None
-        rate, src = days[d]
-        label = {"boc": "Bank of Canada", "irs": "IRS"}.get(src, src or "")
-        # The day the rate was published, when the file filled `d` from
-        # it (backlog TJ-0462: a Sunday showed as the Bank's own date).
-        pub = ((getattr(self.table, "published", None) or {}).get(cur)
-               or {}).get(d)
-        return rate, pub or d, label
-
-
 def _rate_text(cur: str, base: str, r: Tuple[float, str, str],
                on: str) -> str:
     rate, d, label = r
@@ -1083,9 +945,9 @@ def yahoo_usd_price(project_root: Path) -> Callable[[str, str],
     (the project's ticker.map CRYPTO lines; no built-in ids). Offline
     (TAXJSON_OFFLINE) it answers from the cache only. `.attention`
     collects a message per coin priced under its default id while the
-    cache holds a numbered id of its ticker (fill_crypto_prices.
+    cache holds a numbered id of its ticker (crypto_prices.
     ids_seen_in_cache)."""
-    from taxjson.bin import fill_crypto_prices as F
+    from taxjson.lib import crypto_prices as F
     from taxjson.lib.offline import offline_enabled
     # The same folders, in the same order, as `tjs run` gives
     # fill-crypto: the project root, then the folder of its input file
@@ -1157,7 +1019,7 @@ def fair_value(send: Dict[str, Any], rates: Rates,
         r = rates.get(manual_currency, day)
         if r is None:
             return None
-        price = float(manual) * r[0]
+        price = M.of(float(manual)) * M.of(r[0])
         src = (f"entered by hand (--price {fmt_price(float(manual))} "
                f"{manual_currency}) x "
                f"{_rate_text(manual_currency, base, r, day)}")
@@ -1184,7 +1046,7 @@ def fair_value(send: Dict[str, Any], rates: Rates,
             r = rates.get(cur, day)
             if r is None:
                 return None
-            price = send["price"] * r[0]
+            price = M.of(send["price"]) * M.of(r[0])
             src = (f"{ex} spot price {fmt_price(send['price'])} {cur} x "
                    f"{_rate_text(cur, base, r, day)}")
     else:
@@ -1200,15 +1062,16 @@ def fair_value(send: Dict[str, Any], rates: Rates,
             r = rates.get("USD", day)
             if r is None:
                 return None
-            price = usd * r[0]
+            price = M.of(usd) * M.of(r[0])
             src = (f"Yahoo {ysym}-USD daily close {fmt_price(usd)} USD "
                    f"({day}) x {_rate_text('USD', base, r, day)}")
     # The value is the full-precision price x the units, only the money
     # rounded; fmt_price's six digits are for showing the price (a value
     # of the shown price was cents off on a five-figure send: 2026-10
-    # audit #47).
+    # audit #47). A price at the day's rate is the exact product (the
+    # float product printed its binary error in --json, TJ-4930).
     p = float(price)
-    return {"price": p, "value": round(qty * p, 2), "currency": base,
+    return {"price": p, "value": M.shown(qty * p, 2), "currency": base,
             "source": src}
 
 
@@ -1219,7 +1082,7 @@ def tt_line(send: Dict[str, Any], fv: Dict[str, Any], base: str) -> str:
     qty = -send["quantity"]
     return (f"BUYSELL {send['date']} {send['time']} {send['symbol']} "
             f"-{fmt_qty(qty)} {base} {fmt_price(fv['price'])} "
-            f"{round(qty * float(fv['price']), 2):.2f} 0")
+            f"{M.units(qty * float(fv['price']), 2):.2f} 0")
 
 
 def _shown_price_line(line: str) -> str:
@@ -1230,7 +1093,7 @@ def _shown_price_line(line: str) -> str:
         qty, price = abs(float(parts[4])), float(parts[6])
     except (IndexError, ValueError):
         return line
-    parts[7] = f"{round(qty * price, 2):.2f}"
+    parts[7] = f"{M.units(qty * price, 2):.2f}"
     return " ".join(parts)
 
 
@@ -1240,7 +1103,7 @@ def keep_written_lines(entries: Iterable[Dict[str, Any]],
     shown price (written before the full-precision value) stays as
     written: the same send at the same price is not rewritten for a
     rounding cent."""
-    from taxjson.bin.taxjson_convert_tt import tt_lines
+    from taxjson.lib.tt_format import tt_lines
     try:
         have = set(tt_lines(read_tt(path) or ""))
     except ValueError:
@@ -1347,8 +1210,8 @@ def _kraken_pool_rows(path: Path) -> List[Dict[str, Any]]:
     from taxjson.lib.brokerages.kraken import (
         _classify_header, _fee_ccy, _ledger_identity, _lower_row,
         _STAKING_WALLET_MOVES, _EARN_WALLET_MOVES, _FIAT_CURRENCIES)
-    from taxjson.lib.brokerages._crypto_common import (strict_money,
-                                                       utc_to_local)
+    from taxjson.lib.brokerages._crypto_common import strict_money
+    from taxjson.lib.timezones import utc_to_local
     import io
     from taxjson.lib.brokerages.base import read_broker_text
     from taxjson.lib.brokerages.kraken import _dict_rows
@@ -1370,7 +1233,7 @@ def _kraken_pool_rows(path: Path) -> List[Dict[str, Any]]:
                     if prev != ident:
                         raise ValueError(
                             f"Kraken ledger {path.name} line {line}: "
-                            f"ledger txid {tx_id[:2]}*** appears twice "
+                            f"ledger txid {mask_id(tx_id)} appears twice "
                             f"with DIFFERENT content — the file is "
                             f"corrupt or two accounts' exports were "
                             f"merged; fix it before parsing.")
@@ -1428,8 +1291,8 @@ def coinbase_pool_flows(path: Path) -> List[Dict[str, Any]]:
     ID column, else the row's cells): `build_report` reads a row once
     across overlapping exports."""
     from taxjson.lib.brokerages import coinbase as C
-    from taxjson.lib.brokerages._crypto_common import (strict_money,
-                                                       utc_to_local)
+    from taxjson.lib.brokerages._crypto_common import strict_money
+    from taxjson.lib.timezones import utc_to_local
     out: List[Dict[str, Any]] = []
     import io
     from taxjson.lib.brokerages.base import read_broker_text
@@ -1717,7 +1580,7 @@ def usd_pool(flows: List[Dict[str, Any]], transfers: List[Dict[str, Any]],
             returns.append({"date": day, "account": e.get("account"),
                             "exchange": e.get("exchange"),
                             "symbol": e["symbol"],
-                            "units": round(back, 6),
+                            "units": M.units(back, 6),
                             **({"id": e["aid"]} if e.get("aid") else {})})
             if e.get("fee"):
                 dispose(e["fee"], day)
@@ -1775,9 +1638,9 @@ def usd_pool(flows: List[Dict[str, Any]], transfers: List[Dict[str, Any]],
                     acb = (covered * cost / units if covered > 0
                            else 0.0) + short * r
                     results[sid] = {"units": q, "rate": r,
-                                    "value": round(q * r, 2),
-                                    "acb": round(acb, 2),
-                                    "gain": round(q * r - acb, 2),
+                                    "value": M.shown(q * r, 2),
+                                    "acb": M.shown(acb, 2),
+                                    "gain": M.shown(q * r - acb, 2),
                                     "overdrawn": short > 1e-6}
             else:
                 acb, short = dispose(q, day)
@@ -1787,9 +1650,9 @@ def usd_pool(flows: List[Dict[str, Any]], transfers: List[Dict[str, Any]],
                     acb += short * r      # overdraft: zero gain on it
                     value = q * r
                     results[sid] = {"units": q, "rate": r,
-                                    "value": round(value, 2),
-                                    "acb": round(acb, 2),
-                                    "gain": round(value - acb, 2),
+                                    "value": M.shown(value, 2),
+                                    "acb": M.shown(acb, 2),
+                                    "gain": M.shown(value - acb, 2),
                                     "overdrawn": short > 1e-6}
             if e.get("fee"):
                 dispose(e["fee"], day)
@@ -1815,8 +1678,8 @@ def usd_pool(flows: List[Dict[str, Any]], transfers: List[Dict[str, Any]],
         res["superficial"] = held > 1e-9
     return {"results": results, "overdrafts": overdrafts,
             "returns": returns,
-            "unrated": unrated, "units_now": round(units, 6),
-            "avg_cost": (round(cost / units, 6) if units > 1e-9 else None),
+            "unrated": unrated, "units_now": M.units(units, 6),
+            "avg_cost": (M.shown(cost / units, 6) if units > 1e-9 else None),
             "base": base}
 
 
@@ -1848,8 +1711,8 @@ def _decision(decisions: Dict[str, Any], s: Dict[str, Any]
 
 
 def crypto_accounts(cfg: Dict[str, Any]) -> List[str]:
-    return [n for n, a in (cfg.get("accounts") or {}).items()
-            if (a or {}).get("crypto")]
+    return [n for n, a in accounts_of(cfg).items()
+            if a.crypto]
 
 
 def build_report(root: Path, cfg: Dict[str, Any],
@@ -1863,10 +1726,10 @@ def build_report(root: Path, cfg: Dict[str, Any],
     None skips it (the checklist needs only the decisions).
     `exports_only`: `broker_files` lists EVERY export in inputs/, and a
     sidecar left by a removed export is ignored (re-audit A2-1026)."""
-    settings = cfg.get("settings") or {}
+    settings = settings_of(cfg)
     from taxjson.lib.country import home_currency, settings_country
     country = settings_country(settings)
-    base = str(settings.get("base_currency")
+    base = str(settings.base_currency
                or home_currency(country)).upper()
     cache = root / "work"
     accts = crypto_accounts(cfg)
@@ -1990,7 +1853,7 @@ def build_report(root: Path, cfg: Dict[str, Any],
             "cross_account_moves": cross,
             "network_fees": fees,
             "repeated_hour": repeated_hour_decisions(
-                decisions, settings.get("local_timezone")),
+                decisions, settings.local_timezone),
             **_arrivals_doc(rows, paired_in, acct, all_arrivals[acct], pool),
             "manifest": str(man_path),
             "tt_file": str(tt_path(root, acct)),
@@ -2036,7 +1899,7 @@ def repeated_hour_decisions(saved: Iterable[str], tz_name: Any) -> List[str]:
     """The saved ids in `saved` of a send in the repeated hour, from before
     that change. Nothing maps them: the sidecar keeps only local times, and
     an id does not say which clock it was saved under (backlog TJ-1145)."""
-    from taxjson.lib.brokerages._crypto_common import _ambiguous
+    from taxjson.lib.timezones import _ambiguous
     from zoneinfo import ZoneInfo
     try:
         tz = ZoneInfo(str(tz_name))
@@ -2148,7 +2011,7 @@ def network_fees(pairs, acct: str, rates: "Rates", usd_price,
         if is_cash_stablecoin(o["symbol"], o["exchange"]) \
                 and country != "usa":
             continue
-        gap = round(-o["quantity"] - i["quantity"], 12)
+        gap = M.units(-o["quantity"] - i["quantity"], 12)
         if gap <= 1e-12:
             continue
         fee_send = dict(o, quantity=-gap)
@@ -2319,7 +2182,7 @@ def tt_ids(path: Path) -> Optional[set]:
     """Send ids recorded in a generated crypto_sends.tt (None: no file)."""
     if not path.is_file():
         return None
-    from taxjson.bin.taxjson_convert_tt import tt_lines
+    from taxjson.lib.tt_format import tt_lines
     ids = set()
     for ln in tt_lines(read_tt(path) or ""):
         m = re.match(r"^# ((?:kr|cb|[a-z]{2})-\d{8}T\d{6}-\S+): ", ln)
@@ -2337,7 +2200,7 @@ def tt_stale_ids(acct_doc: Dict[str, Any], path: Path) -> List[str]:
     want = tt_want_ids(acct_doc)
     have = tt_ids(path) or set()
     stale = set(want ^ have)
-    from taxjson.bin.taxjson_convert_tt import tt_lines
+    from taxjson.lib.tt_format import tt_lines
     try:
         lines = set(tt_lines(read_tt(path) or ""))
     except ValueError:
@@ -2385,7 +2248,7 @@ def duplicate_lines(acct_dir: Path, entries: List[Dict[str, Any]]
     "line": 1-based, "id": send id, "timestamp": the send's date and
     time, "same_time": the .tt line has the send's exact time}. Nothing
     is deleted: which line to keep is the owner's call."""
-    from taxjson.bin.taxjson_convert_tt import _tt_num
+    from taxjson.lib.tt_format import _tt_num
     hits: List[Dict[str, Any]] = []
     inputs = acct_dir.parent
     if not inputs.is_dir() or not entries:
@@ -2411,7 +2274,7 @@ def duplicate_lines(acct_dir: Path, entries: List[Dict[str, Any]]
             except (OSError, UnicodeDecodeError):
                 continue
             lines = []
-            from taxjson.bin.taxjson_convert_tt import tt_lines
+            from taxjson.lib.tt_format import tt_lines
             for n, ln in enumerate(tt_lines(text), 1):
                 tok = ln.split("#", 1)[0].split()
                 if len(tok) < 5 or tok[0].upper() != "BUYSELL":
@@ -2478,13 +2341,13 @@ def prompt_undecided(sends: List[Dict[str, Any]], manifest: Path,
         if fv:
             cur = fv.get("currency", "")
             say(f"      fair value {fmt_price(fv['price'])} {cur} per "
-                f"{s.get('symbol', '')} = {fv['value']:.2f} {cur} "
+                f"{s.get('symbol', '')} = {M.shown(fv['value'], 2):.2f} {cur} "
                 f"[{fv['source']}]")
         if s.get("stable"):
             fx = s.get("fx")
             say("      stablecoin (US-dollar cash in the books): a gift "
                 "or payment is a currency disposition — no sale line"
-                + (f"; FX gain {fx['gain']:+.2f}"
+                + (f"; FX gain {M.shown(fx['gain'], 2):+.2f}"
                    + (" (likely superficial)" if fx.get("superficial")
                       else "") if fx else ""))
         while True:

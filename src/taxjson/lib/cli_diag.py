@@ -13,12 +13,15 @@ problem), 2 = usage/environment error.
 
 These helpers cover only bin/ CLI diagnostics. Parser-layer warnings in
 lib/brokerages/ keep their bare ``warning:`` shape — they feed the
-.diag/DIAGNOSTICS machinery in taxjson_run.py, whose marker matcher
+.diag/DIAGNOSTICS machinery in pipeline/diagnostics.py, whose marker matcher
 accepts both the bare and the prog-prefixed form.
 """
 
+import contextlib
 import re
 import sys
+from typing import (Any, Callable, Dict, Iterable, Iterator, Optional,
+                    Tuple)
 
 
 def warn(prog: str, msg: str, details=()) -> None:
@@ -214,26 +217,6 @@ class InputContentError(ValueError):
     (re-audit A2-0770 / A2-0793)."""
 
 
-# Console-script names whose module name is not taxjson_<x> -> taxjson-<x>.
-_PROG_ALIASES = {
-    "taxjson_fees": "taxjson-fees-sum",
-    "to_base_curr": "taxjson-to-base-curr",
-    "fill_crypto_prices": "taxjson-fill-crypto",
-    "xlsx_to_csv": "taxjson-xlsx-to-csv",
-}
-
-
-def console_prog(module: str) -> str:
-    """The console-script name of a bin module (`taxjson.bin.taxjson_corp_
-    actions` or `taxjson_corp_actions` -> `taxjson-corp-actions`)."""
-    name = str(module).rsplit(".", 1)[-1]
-    if name in _PROG_ALIASES:
-        return _PROG_ALIASES[name]
-    if name.startswith("taxjson_"):
-        name = name[len("taxjson_"):]
-    return "taxjson-" + name.replace("_", "-")
-
-
 # Exit status of a tool whose reader went away (`taxjson-x | head`): the
 # shell's 128 + SIGPIPE, with no traceback (re-audit A2-1426 / A2-1417).
 BROKEN_PIPE_EXIT = 141
@@ -267,10 +250,15 @@ def _stdout_closed_exit() -> None:
     raise SystemExit(BROKEN_PIPE_EXIT)
 
 
-def _flush_stdout(prog=None) -> None:
-    """Flush stdout at the top of the process. `prog`: the command
-    succeeded, so output a full disk refused is its error (exit 2);
-    without it the command is already failing and has said why."""
+def _flush_stdout(prog=None, *, outermost: bool = False,
+                  failed: bool = False) -> None:
+    """Flush stdout at the top of the process. Output a full disk
+    refused is said in one line naming `prog` (none given: not said):
+    the command's error, exit 2, when it ended well; `failed`, it ends
+    with an exit of its own other than 0 (an error, a finding), which it
+    keeps (backlog TJ-4831). `outermost`: no command runs this one, so
+    output its guard sent to /dev/null (_RoomGuard) is said too; a
+    command run inside another leaves that to the outer one."""
     try:
         sys.stdout.flush()
     except BrokenPipeError:
@@ -282,21 +270,172 @@ def _flush_stdout(prog=None) -> None:
             _stdout_to_devnull()
             if prog is not None:
                 error(prog, describe_input_error(e))
-                raise SystemExit(2)
+                if not failed:
+                    raise SystemExit(2)
     except (ValueError, AttributeError):
         pass
+    guard = _GUARDS.get("stdout")
+    if prog is not None and outermost and guard is not None \
+            and guard.lost is not None:
+        lost, guard.lost = guard.lost, None     # said once
+        error(prog, describe_input_error(lost))
+        if not failed:
+            raise SystemExit(2)
 
 
 def _stdout_to_devnull() -> None:
     """Point this process's stdout at /dev/null (top of the process
     only: run_top_level)."""
+    _to_devnull(sys.stdout)
+
+
+def _to_devnull(stream: Any) -> None:
+    """Point `stream`'s file descriptor at /dev/null: the interpreter's
+    flush at exit, and a tool this process starts, write there."""
     import os
     try:
         devnull = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(devnull, sys.stdout.fileno())
-        os.close(devnull)
+        try:
+            os.dup2(devnull, stream.fileno())
+        finally:
+            os.close(devnull)
     except (OSError, ValueError, AttributeError):
         pass
+
+
+class _RoomGuard:
+    """sys.stdout or sys.stderr at the top of the process (run_top_level)
+    when a full device refuses its writes (`>/dev/full`, `2>/dev/full`, a
+    full disk or quota: is_no_space): the refused bytes and all that
+    follow go to /dev/null, and the first refusal is kept (`lost`)
+    instead of raised in the middle of the command. stdout's loss is
+    said once the command has run (_flush_stdout: one line; exit 2 for
+    one that ended well, another exit kept); stderr's is said nowhere,
+    as there is nowhere to say it, and the command keeps its own exit. Never a traceback, nor the interpreter's
+    exit 120 at its own flush (backlog TJ-4831). Any other error is
+    raised as before (a closed reader: BrokenPipeError)."""
+
+    def __init__(self, inner: Any) -> None:
+        self._tj_inner = inner          # lib/out.real_stream reads it
+        self.lost: Optional[OSError] = None
+
+    def _refused(self, exc: OSError) -> None:
+        if self.lost is None:
+            self.lost = exc
+        _to_devnull(self._tj_inner)
+        try:
+            self._tj_inner.flush()      # the refused bytes, to /dev/null
+        except (OSError, ValueError):
+            pass
+
+    def write(self, s: str) -> Any:
+        try:
+            return self._tj_inner.write(s)      # (what the stream returns)
+        except OSError as e:
+            if not is_no_space(e):
+                raise
+            self._refused(e)
+            return len(s)
+
+    def writelines(self, lines: Iterable[str]) -> None:
+        try:
+            self._tj_inner.writelines(lines)
+        except OSError as e:
+            if not is_no_space(e):
+                raise
+            self._refused(e)
+
+    def flush(self) -> None:
+        try:
+            self._tj_inner.flush()
+        except OSError as e:
+            if not is_no_space(e):
+                raise
+            self._refused(e)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._tj_inner, name)
+
+
+# The guards of the process's standard streams while run_top_level runs
+# a command: {"stdout": _RoomGuard, "stderr": _RoomGuard}.
+_GUARDS: Dict[str, _RoomGuard] = {}
+
+
+@contextlib.contextmanager
+def _guarded_streams() -> Iterator[None]:
+    """Within it, sys.stdout and sys.stderr are _RoomGuard proxies (once:
+    a command run inside another keeps the outer's), each flushed through
+    its guard at the end. The process's own standard streams stay guarded
+    after it: what the interpreter writes once the command is over (the
+    text of a `SystemExit("...")`, as lib/out.fail raises; an atexit
+    handler's note, lib/markets.flush_notes) and its own flush at exit go
+    through the guard too, never exit 120 (backlog TJ-4831). Any other
+    stream found at entry (a test's buffer) is put back."""
+    saved, outer = (sys.stdout, sys.stderr), dict(_GUARDS)
+    owned = []
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name)
+        if stream is None or name in _GUARDS:
+            continue
+        if isinstance(stream, _RoomGuard):
+            stream.lost = None          # an earlier command's, left here
+        else:
+            stream = _RoomGuard(stream)
+            setattr(sys, name, stream)
+        _GUARDS[name] = stream
+        owned.append(name)
+    try:
+        yield
+    finally:
+        for name, was in zip(("stdout", "stderr"), saved):
+            if name not in owned:
+                continue
+            guard = _GUARDS[name]
+            try:
+                guard.flush()
+            except (OSError, ValueError):
+                pass
+            if not (getattr(sys, name) is guard
+                    and guard._tj_inner is getattr(sys, f"__{name}__")):
+                setattr(sys, name, was)
+        _GUARDS.clear()
+        _GUARDS.update(outer)
+
+
+def _closed_streams_to_devnull() -> None:
+    """A standard stream the process started without (`>&-`, `2>&-`:
+    Python sets sys.stdout or sys.stderr to None) is /dev/null, as with
+    `>/dev/null`: its descriptor is pointed there (a tool this process
+    starts inherits /dev/null, not a closed descriptor that the next
+    file opened would take) and the stream (and sys.__stdout__ /
+    __stderr__) is a text stream on it, so `sys.stdout.write`,
+    `json.dump(..., sys.stdout)` or `isatty()` writes or answers nothing
+    instead of raising AttributeError (backlog TJ-4831). The top of the
+    process only (run_top_level)."""
+    import os
+    for fd, name in ((1, "stdout"), (2, "stderr")):
+        if getattr(sys, name) is not None:
+            continue
+        try:
+            os.fstat(fd)
+            free = False
+        except OSError:
+            free = True                 # closed: the descriptor is ours
+        try:
+            nul = os.open(os.devnull, os.O_WRONLY)
+            if free and nul != fd:
+                os.dup2(nul, fd)
+                os.close(nul)
+                nul = fd
+            # (stderr line-buffered, as Python opens it)
+            stream = open(nul, "w", buffering=1 if fd == 2 else -1,
+                          encoding="utf-8", closefd=nul != fd)
+        except OSError:
+            continue
+        setattr(sys, name, stream)
+        if getattr(sys, f"__{name}__") is None:
+            setattr(sys, f"__{name}__", stream)
 
 
 def _argparse_error(self, message: str) -> None:
@@ -318,35 +457,54 @@ def labelled_usage_errors() -> None:
     argparse.ArgumentParser.error = _argparse_error
 
 
-def run_top_level(prog, fn, *a, interrupt_note="", **kw):
+def run_top_level(prog, fn, *a, interrupt_note="", nested=False, **kw):
     """Run a command's main at the top of the process (the `taxjson`
     entry point and every `taxjson-*` console script): Ctrl-C is one
     `<prog>: interrupted` line with exit 130 (re-audit A2-0782 /
     A2-1425: a 25-50 line KeyboardInterrupt traceback), and a closed
     stdout pipe exits 141 quietly (A2-0785), and a usage error carries
-    the house label (labelled_usage_errors). Never used around a tool
-    run in-process by another: its Ctrl-C must stop the whole run."""
+    the house label (labelled_usage_errors). A standard stream closed at
+    the start is /dev/null, and one a full device refuses is guarded
+    (_closed_streams_to_devnull, _RoomGuard: backlog TJ-4831). Around a
+    tool run in-process by another, `nested`: its Ctrl-C must stop the
+    whole run, so it goes on to the caller (backlog TJ-1413)."""
+    if not nested:
+        _closed_streams_to_devnull()
     tolerant_stdout()
     labelled_usage_errors()
     from taxjson.lib import out as _out
+    with (contextlib.nullcontext() if nested else _guarded_streams()):
+        return _run_guarded(prog, fn, a, kw, interrupt_note, nested, _out)
+
+
+def _run_guarded(prog: Any, fn: Callable[..., Any], a: Tuple[Any, ...],
+                 kw: Dict[str, Any], interrupt_note: Any, nested: bool,
+                 _out: Any) -> Any:
+    """run_top_level's command, its streams set up."""
     try:
         # A message of more than one line shown to a person owes one
         # blank line before whatever is printed next, a raw print()
         # included (lib/out.show, docs/output-style.md).
         with _out.settling_streams():
             r = fn(*a, **kw)
-        _flush_stdout(prog() if callable(prog) else prog)
+        _flush_stdout(prog() if callable(prog) else prog,
+                      outermost=not nested, failed=r not in (None, 0))
         return r
     except SystemExit as e:
         if e.code is not None and not isinstance(e.code, int):
             # The interpreter prints the exit text to stderr: after the
             # blank line a message there owes.
             _out.settle(sys.stderr)
-        _flush_stdout()
+        # Output a full device refused: said, as when it returns (exit
+        # 2 for one that ended well; another exit is kept).
+        _flush_stdout(prog() if callable(prog) else prog,
+                      outermost=not nested, failed=e.code not in (None, 0))
         raise
     except BrokenPipeError:
         _stdout_closed_exit()
     except KeyboardInterrupt:
+        if nested:
+            raise
         try:
             sys.stdout.flush()
         except Exception:                                # noqa: BLE001
@@ -441,6 +599,23 @@ def _is_symlink_loop(exc: BaseException) -> bool:
     return isinstance(exc, RuntimeError) and "symlink loop" in str(exc).lower()
 
 
+def input_error_text(exc: BaseException) -> Optional[str]:
+    """The one line guard_main reports with exit 2 for `exc`, an input
+    or output that cannot be read or written (an OSError but a closed
+    pipe, a symlink loop, not UTF-8, not JSON, an InputContentError);
+    None for anything else. For a command that must add to it before it
+    stops (close-year: nothing was written, backlog TJ-4627)."""
+    import json
+    if isinstance(exc, BrokenPipeError):
+        return None
+    if (isinstance(exc, _INPUT_ERRORS + (json.JSONDecodeError, OSError))
+            or _is_symlink_loop(exc)):
+        return describe_input_error(exc)
+    if isinstance(exc, InputContentError):
+        return str(exc)
+    return None
+
+
 def _guard_flush() -> None:
     # A BrokenPipeError propagates to guard_main's handler.
     try:
@@ -455,7 +630,9 @@ def guard_main(prog: str, *, value_errors: bool = False):
     (and, with `value_errors`, any engine/loader ValueError — the
     refusals taxjson-gains already reports this way) becomes
     ``<prog>: error: <one line>`` with exit 2 instead of a traceback.
-    A reader that goes away (`| head`) is a quiet exit 141."""
+    An engine stopped at a money site (model/money `MoneySiteError`, a
+    bug) is the one line naming the site, with exit 1. A reader that goes
+    away (`| head`) is a quiet exit 141."""
     import functools
     import json
 
@@ -489,6 +666,14 @@ def guard_main(prog: str, *, value_errors: bool = False):
             except InputContentError as e:
                 error(prog, str(e))
                 raise SystemExit(2)
+            except TypeError as e:
+                from taxjson.model import money as M
+                if not isinstance(e, M.MoneySiteError):
+                    raise
+                # Exact money's stop: the site, to report, not a
+                # traceback (TJ-3104).
+                error(prog, M.stopped_text(e.site, e.cause))
+                raise SystemExit(1)
             except ValueError as e:
                 if not value_errors:
                     raise

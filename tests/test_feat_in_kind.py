@@ -18,7 +18,9 @@ import unittest
 from pathlib import Path
 
 from tax_rules import rule, rule_absent
-from tax_rules.dual import cli, settings_for
+from tax_rules.dual import cli
+from _support.transfer_in_kind import _ib, _QT, _qt, _xfer_qt, _project, _run, _flat, _filing
+from taxjson.rules import ids as R
 
 
 def setUpModule():
@@ -26,86 +28,6 @@ def setUpModule():
 
 
 # ---------------------------------------------------------------- fixtures
-
-def _ib(trades=(), xfers=(), *, cur="CAD", exch="TSE", sym="QZK",
-        acct="U5550001"):                                       # pii-ok
-    """A synthetic IB activity statement: `trades` (date, qty, price),
-    `xfers` (date, qty, market value)."""
-    head = ('Statement,Header,Field Name,Field Value\n'
-            'Statement,Data,BrokerName,Interactive Brokers\n'
-            'Statement,Data,Title,Activity Statement\n'
-            'Statement,Data,Period,"January 1, 2025 - December 31, 2025"\n'
-            'Financial Instrument Information,Header,Asset Category,'
-            'Symbol,Description,Conid,Security ID,Underlying,Listing Exch,'
-            'Multiplier,Expiry,Delivery Month,Type,Strike,Code\n'
-            f'Financial Instrument Information,Data,Stocks,{sym},'
-            f'"{sym} SAMPLE CORP",999000101,,,{exch},1,,,COMMON,,\n')
-    out = head
-    if trades:
-        out += ('Trades,Header,DataDiscriminator,Asset Category,Currency,'
-                'Account,Symbol,Date/Time,Quantity,T. Price,C. Price,'
-                'Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code\n')
-        for d, q, p in trades:
-            out += (f'Trades,Data,Order,Stocks,{cur},{acct},{sym},'
-                    f'"{d}, 10:00:00",{q},{p},0,{-q * p},0,0,0,0,'
-                    f'{"O" if q > 0 else "C"}\n')
-    if xfers:
-        out += ('Transfers,Header,Asset Category,Currency,Symbol,Date,Type,'
-                'Direction,Xfer Company,Xfer Account,Qty,Xfer Price,'
-                'Market Value,Realized P/L,Cash Amount,Code\n')
-        for d, q, mv in xfers:
-            out += (f'Transfers,Data,Stocks,{cur},{sym},{d},ACATS,'
-                    f'{"Out" if q < 0 else "In"},Other Broker,5550009,'  # pii-ok
-                    f'{q},0,{mv if q > 0 else -mv},0,0,\n')
-    return out
-
-
-_QT = ("Transaction Date,Settlement Date,Action,Symbol,Description,"
-       "Quantity,Price,Gross Amount,Commission,Net Amount,Currency,"
-       "Account #,Activity Type,Account Type\n")
-
-
-def _qt(date, action, qty, price=0.0, *, cur="CAD", acct="55500002",
-        act="Trades", sym="QZK", desc="QZK SAMPLE CORP"):    # pii-ok
-    net = -qty * price
-    return (f"{date} 09:30:00 AM,{date} 12:00:00 AM,{action},{sym},{desc},"
-            f"{qty},{price:.2f},{abs(qty) * price:.2f},0.00,{net:.2f},"
-            f"{cur},{acct},{act},Individual\n")
-
-
-def _xfer_qt(date, qty, **kw):
-    return _qt(date, "TF6", qty, act="Transfers",
-               desc="QZK SAMPLE CORP TRANSFER", **kw)
-
-
-def _project(td, files, *, accounts=None, country="canada", name="p"):
-    root = Path(td) / name
-    root.mkdir(parents=True)
-    (root / "taxjson.toml").write_text(
-        settings_for(country, year=2025, source_currencies=[])
-        + (accounts or ('[accounts.margin]\ntype = "taxable"\n'
-                        '[accounts.rrsp]\ntype = "sheltered"\n'
-                        'transfers = true\n')))
-    for rel, text in files.items():
-        p = root / rel
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text)
-    return root
-
-
-def _run(test, root, *args, ok=True):
-    r = cli(root, "run", "--no-input", *args)
-    if ok:
-        test.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-3000:])
-    return r
-
-
-def _flat(r):
-    return " ".join((r.stdout + r.stderr).split())
-
-
-def _filing(root):
-    return json.loads(cli(root, "sum", "--json").stdout)["filing"]["totals"]
 
 
 def _contribution(td, mv, *, trades=((("2025-01-10", 100, 10.0)),),
@@ -125,7 +47,7 @@ def _contribution(td, mv, *, trades=((("2025-01-10", 100, 10.0)),),
 
 class TestCanadaContribution(unittest.TestCase):
 
-    @rule("CA-INKIND-01", "CA-INKIND-02", "CA-INKIND-06")
+    @rule(R.CA_INKIND_01, R.CA_INKIND_02, R.CA_INKIND_06)
     def test_gain_is_booked_at_the_ib_market_value(self):
         with tempfile.TemporaryDirectory() as td:
             root = _contribution(td, 1500)
@@ -151,7 +73,7 @@ class TestCanadaContribution(unittest.TestCase):
             self.assertEqual(sorted({t["arrival"] for t in j["transfers"]}),
                              ["in-kind contribution"])
 
-    @rule("CA-INKIND-03")
+    @rule(R.CA_INKIND_03)
     def test_loss_is_denied_for_good_and_never_added_to_an_acb(self):
         with tempfile.TemporaryDirectory() as td:
             # A repurchase in June and its sale in August: their gain is
@@ -178,7 +100,7 @@ class TestCanadaContribution(unittest.TestCase):
             self.assertEqual(row["denied_contribution"], 400.0)
             self.assertIn("s.40(2)(g)(iv)", row["notes"])
 
-    @rule("CA-INKIND-04")
+    @rule(R.CA_INKIND_04)
     def test_a_loss_ten_days_before_is_superficial_and_lost(self):
         with tempfile.TemporaryDirectory() as td:
             # 200 bought; 100 sold at a loss on 03-04; the other 100 go
@@ -194,7 +116,7 @@ class TestCanadaContribution(unittest.TestCase):
             self.assertEqual(t["permanently_denied"], 400.0)
             self.assertEqual(t["denied_contribution"], 400.0)
 
-    @rule("CA-INKIND-06")
+    @rule(R.CA_INKIND_06)
     def test_an_inkind_line_wins(self):
         with tempfile.TemporaryDirectory() as td:
             root = _contribution(
@@ -205,7 +127,7 @@ class TestCanadaContribution(unittest.TestCase):
                           "200.00 CAD", _flat(r))
             self.assertEqual(_filing(root)["gain"], 200.0)
 
-    @rule("CA-INKIND-01")
+    @rule(R.CA_INKIND_01)
     def test_a_move_between_two_taxable_accounts_is_not_in_kind(self):
         with tempfile.TemporaryDirectory() as td:
             # margin -> rrsp and margin -> cash on the same day: the
@@ -228,7 +150,7 @@ class TestCanadaContribution(unittest.TestCase):
 
 class TestCanadaDeclaredMove(unittest.TestCase):
 
-    @rule("CA-INKIND-01", "CA-INKIND-04")
+    @rule(R.CA_INKIND_01, R.CA_INKIND_04)
     def test_a_plan_outside_the_project_is_declared_by_its_line(self):
         with tempfile.TemporaryDirectory() as td:
             # One taxable account; its 03-14 transfer-out went to a TFSA
@@ -266,7 +188,7 @@ class TestCanadaWithdrawal(unittest.TestCase):
             '[accounts.margin]\ntype = "taxable"\n'
             f'[accounts.{plan}]\ntype = "sheltered"\ntransfers = true\n'))
 
-    @rule("CA-INKIND-05")
+    @rule(R.CA_INKIND_05)
     def test_rrsp_withdrawal_costs_its_fair_market_value(self):
         with tempfile.TemporaryDirectory() as td:
             root = self._root(td, "rrsp")
@@ -283,7 +205,7 @@ class TestCanadaWithdrawal(unittest.TestCase):
             self.assertNotIn("no cost", flat)
             self.assertNotIn("Short position", flat)
 
-    @rule("CA-INKIND-05")
+    @rule(R.CA_INKIND_05)
     def test_tfsa_withdrawal_is_not_taxed(self):
         with tempfile.TemporaryDirectory() as td:
             root = self._root(td, "tfsa")
@@ -305,7 +227,7 @@ class TestCanadaYahooValue(unittest.TestCase):
                  + _xfer_qt("2025-03-14", 100)}
         return _project(td, files)
 
-    @rule("CA-INKIND-06")
+    @rule(R.CA_INKIND_06)
     def test_cached_close_is_an_estimate(self):
         with tempfile.TemporaryDirectory() as td:
             root = self._root(td)
@@ -321,7 +243,7 @@ class TestCanadaYahooValue(unittest.TestCase):
                           "cache): gain 300.00 CAD", _flat(r))
             self.assertEqual(_filing(root)["gain"], 300.0)
 
-    @rule("CA-INKIND-06")
+    @rule(R.CA_INKIND_06)
     def test_offline_with_no_cached_close_stops_and_names_the_line(self):
         with tempfile.TemporaryDirectory() as td:
             root = self._root(td)
@@ -359,10 +281,10 @@ class TestContributionByCountry(unittest.TestCase):
                                   '[accounts.plan]\ntype = "sheltered"\n'
                                   'transfers = true\n'))
 
-    @rule("CA-INKIND-02")
-    @rule_absent("CA-INKIND-02", country="usa")
-    @rule("US-INKIND-01")
-    @rule_absent("US-INKIND-01", country="canada")
+    @rule(R.CA_INKIND_02)
+    @rule_absent(R.CA_INKIND_02, country="usa")
+    @rule(R.US_INKIND_01)
+    @rule_absent(R.US_INKIND_01, country="canada")
     def test_contribution(self):
         with tempfile.TemporaryDirectory() as td:
             ca = self._root(td, "canada")
@@ -390,7 +312,7 @@ class TestContributionByCountry(unittest.TestCase):
 
 class TestUsDistribution(unittest.TestCase):
 
-    @rule("US-INKIND-02", "US-INKIND-03")
+    @rule(R.US_INKIND_02, R.US_INKIND_03)
     def test_ira_distribution_in_kind_has_its_fair_value_basis(self):
         with tempfile.TemporaryDirectory() as td:
             files = {"inputs/ira/ib.csv": _ib(
@@ -426,7 +348,7 @@ class TestPairing(unittest.TestCase):
                    row={"action": "TRANSFER", "symbol": "QZK.TO",
                         "quantity": qty, "date": date})
 
-    @rule("CA-INKIND-01")
+    @rule(R.CA_INKIND_01)
     def test_closest_leg_of_the_same_quantity_wins(self):
         from taxjson.lib import in_kind as IK
         legs = [self._leg("margin", -100, "2025-03-14"),
@@ -444,7 +366,7 @@ class TestPairing(unittest.TestCase):
                           if m.problem],
                          [("withdrawal", 19, "slow")])
 
-    @rule("CA-INKIND-01")
+    @rule(R.CA_INKIND_01)
     def test_a_journal_inside_each_account_is_not_a_move(self):
         # ticker.map joins two listings: each account journals its own
         # units out of one and into the other on the same day. The two
@@ -456,7 +378,7 @@ class TestPairing(unittest.TestCase):
         from taxjson.lib import in_kind as IK
         self.assertEqual(IK.pair(legs), [])
 
-    @rule("CA-INKIND-01")
+    @rule(R.CA_INKIND_01)
     def test_inkind_line_declares_a_move_to_a_plan_outside(self):
         from taxjson.lib import in_kind as IK
         legs = [self._leg("margin", -100, "2025-03-14")]
@@ -486,9 +408,9 @@ class TestPairing(unittest.TestCase):
 
 class TestInkindLine(unittest.TestCase):
 
-    @rule("CA-INKIND-06")
+    @rule(R.CA_INKIND_06)
     def test_line_forms(self):
-        from taxjson.bin.taxjson_convert_tt import parse_inkind_line as p
+        from taxjson.lib.tt_format import parse_inkind_line as p
         self.assertIsNone(p("BUYSELL 2025-01-01 09:30:00 A.TO 1 CAD 1 1"))
         ln = p("INKIND 2025-03-14 qzk.to -100 cad 0 1250.50 plan=rrsp")
         self.assertEqual((ln["symbol"], ln["quantity"], ln["currency"],
@@ -505,9 +427,9 @@ class TestInkindLine(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad):
                 p(bad)
 
-    @rule("CA-INKIND-06")
+    @rule(R.CA_INKIND_06)
     def test_the_books_never_see_the_line(self):
-        from taxjson.bin.taxjson_convert_tt import tt_to_json
+        from taxjson.lib.tt_format import tt_to_json
         with tempfile.TemporaryDirectory() as td:
             f = Path(td) / "a.tt"
             f.write_text("INKIND 2025-03-14 QZK.TO -100 CAD 12\n"
@@ -519,7 +441,7 @@ class TestInkindLine(unittest.TestCase):
 
 class TestCloseLookup(unittest.TestCase):
 
-    @rule("CA-INKIND-06")
+    @rule(R.CA_INKIND_06)
     def test_last_close_on_or_before_the_day_and_cached(self):
         from taxjson.lib import price_chain as PC
         calls = []
@@ -543,7 +465,7 @@ class TestCloseLookup(unittest.TestCase):
                 PC.close_on("QZK.TO", "QZK.TO", "2025-04-16",
                             cache_path=cp, offline=True)
 
-    @rule("CA-INKIND-06")
+    @rule(R.CA_INKIND_06)
     def test_two_spellings_two_closes(self):
         # Keyed by the Yahoo spelling too (pre-release review F4).
         from taxjson.lib import price_chain as PC

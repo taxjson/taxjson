@@ -146,7 +146,7 @@ class TestRbcParser(unittest.TestCase):
 def _rbc_row(activity, desc, symbol='QZL', qty=0.0):
     """A row as read_rbc_rows builds it, for the live classifier."""
     from types import SimpleNamespace
-    from taxjson.lib.brokerages.rbc_direct import _RBC_CODE_RE
+    from taxjson.lib.symbol_codes import _RBC_CODE_RE
     m = _RBC_CODE_RE.match(desc)
     return SimpleNamespace(activity=activity, desc=desc, symbol=symbol,
                            qty=qty, code=m.group(1).upper() if m else '')

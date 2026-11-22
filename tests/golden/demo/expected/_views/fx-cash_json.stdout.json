@@ -1,0 +1,52 @@
+{
+  "active": true,
+  "currency": "CAD",
+  "events": null,
+  "headline": "FX on foreign cash: NOT RELIABLE for 2024 \u2014 10 in-year overdrafts (86,602.83 USD); conversions, deposits/withdrawals and margin balances are not read; do not file this figure",
+  "ledger": "v1",
+  "open_pools": {
+    "USD": {
+      "acb": 86737.31,
+      "units": 64249.86
+    }
+  },
+  "overdrafts": {
+    "USD": 10
+  },
+  "overdrafts_in_year": {
+    "USD": {
+      "count": 10,
+      "units": 86602.83
+    }
+  },
+  "per_currency": {
+    "USD": {
+      "acquired": 75819.34,
+      "disposed": 98172.31,
+      "gain": -0.0
+    }
+  },
+  "pools_year_end": {
+    "USD": {
+      "acb": 86737.31,
+      "units": 64249.86
+    }
+  },
+  "reasons": [
+    "10 in-year overdraft(s): the ledger spent currency it never saw acquired (86,602.83 USD)",
+    "currency conversions (IB Forex, Kraken/Coinbase fiat trades, bank conversions) are not read",
+    "cash deposits and withdrawals are not read",
+    "foreign-currency margin balances (debt) are not modelled",
+    "each history starts with an empty pool (no opening balance carried from the year before)"
+  ],
+  "reliable": false,
+  "rule": "ITA s.39(1.1) (capital, $200 de minimis)",
+  "schema_version": 1,
+  "status": "unreliable",
+  "unrated": {},
+  "unreliable_raw": {
+    "net_gain": -0.0,
+    "reportable": 0.0
+  },
+  "year": 2024
+}

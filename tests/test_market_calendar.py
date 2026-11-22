@@ -15,9 +15,9 @@ from taxjson.lib.dates import (last_trade_date_settling_by, settlement_date,
 from taxjson.lib.brokerages.base import BaseBrokerage
 from taxjson.lib.brokerages.ib_extractor import IbBrokerage, get_ib_settlement
 
-from test_parser_audit_2026_09b import (IB_TRADES_HDR, _ib_fii_futures,
-                                        _ib_trade, _parse)
+from _support.ib_trades import IB_TRADES_HDR, _ib_fii_futures, _ib_trade, _parse
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 
 def _iso(ds):
@@ -25,8 +25,8 @@ def _iso(ds):
 
 
 class TestHolidayLists(unittest.TestCase):
-    @rule("CA-DATE-05")
-    @rule("US-DATE-05")
+    @rule(R.CA_DATE_05)
+    @rule(R.US_DATE_05)
     def test_nyse_2025_2026(self):
         self.assertEqual(_iso(mc.nyse_holidays(2025)), [
             '2025-01-01', '2025-01-20', '2025-02-17', '2025-04-18',
@@ -37,8 +37,8 @@ class TestHolidayLists(unittest.TestCase):
             '2026-05-25', '2026-06-19', '2026-07-03', '2026-09-07',
             '2026-11-26', '2026-12-25'])
 
-    @rule("CA-DATE-05")
-    @rule("US-DATE-05")
+    @rule(R.CA_DATE_05)
+    @rule(R.US_DATE_05)
     def test_tsx_2025_2026(self):
         self.assertEqual(_iso(mc.tsx_holidays(2025)), [
             '2025-01-01', '2025-02-17', '2025-04-18', '2025-05-19',
@@ -66,8 +66,8 @@ class TestHolidayLists(unittest.TestCase):
         # New Year's Day on a Saturday moves to Monday on the TSX.
         self.assertIn(date(2022, 1, 3), mc.tsx_holidays(2022))
 
-    @rule("CA-DATE-05")
-    @rule("US-DATE-05")
+    @rule(R.CA_DATE_05)
+    @rule(R.US_DATE_05)
     def test_us_bank_holidays_trade_but_do_not_settle(self):
         for d in ('2025-10-13', '2025-11-11'):    # Columbus, Veterans
             self.assertTrue(mc.is_trading_day(d, 'USD'), d)
@@ -76,8 +76,8 @@ class TestHolidayLists(unittest.TestCase):
         # settlement) although the Federal Reserve is open.
         self.assertFalse(mc.is_settlement_day('2026-07-03', 'USD'))
 
-    @rule("CA-DATE-05")
-    @rule("US-DATE-05")
+    @rule(R.CA_DATE_05)
+    @rule(R.US_DATE_05)
     def test_canadian_bank_holidays_trade_but_do_not_settle(self):
         for d in ('2025-11-11', '2023-11-13', '2025-09-30', '2023-10-02'):
             self.assertTrue(mc.is_trading_day(d, 'CAD'), d)
@@ -95,8 +95,8 @@ class TestHolidayLists(unittest.TestCase):
 
 
 class TestSettlementDates(unittest.TestCase):
-    @rule("CA-DATE-05")
-    @rule("US-DATE-05")
+    @rule(R.CA_DATE_05)
+    @rule(R.US_DATE_05)
     def test_holiday_inside_the_lag(self):
         cases = [('2025-04-17', 'USD', '2025-04-21'),   # Good Friday
                  ('2025-01-17', 'USD', '2025-01-21'),   # MLK
@@ -110,8 +110,8 @@ class TestSettlementDates(unittest.TestCase):
             self.assertEqual(settlement_date(trade, cur), want,
                              (trade, cur))
 
-    @rule("CA-DATE-04")
-    @rule("US-DATE-04")
+    @rule(R.CA_DATE_04)
+    @rule(R.US_DATE_04)
     def test_settlement_eras(self):
         self.assertEqual(settlement_lag_days('2017-09-01', 'USD'), 3)
         self.assertEqual(settlement_lag_days('2017-09-05', 'USD'), 2)
@@ -159,8 +159,8 @@ class TestIbSettlement(unittest.TestCase):
         self.assertEqual(get_ib_settlement('2025-12-24', 'Stocks', 'CAD'),
                          '2025-12-29')
 
-    @rule("CA-DATE-09")
-    @rule("US-DATE-09")
+    @rule(R.CA_DATE_09)
+    @rule(R.US_DATE_09)
     def test_futures_default_trade_date(self):
         for cat in ('Futures', 'Options On Futures'):
             self.assertEqual(get_ib_settlement('2025-12-31', cat, 'USD'),
@@ -169,8 +169,8 @@ class TestIbSettlement(unittest.TestCase):
                                                futures_settle='next_day'),
                              '2026-01-02')
 
-    @rule("CA-DATE-10")
-    @rule("US-DATE-12")
+    @rule(R.CA_DATE_10)
+    @rule(R.US_DATE_12)
     def test_parser_uses_the_setting(self):
         body = (IB_TRADES_HDR
                 + _ib_trade('Futures', 'QZFH6', '2025-12-31, 10:00:00',
@@ -186,14 +186,14 @@ class TestIbSettlement(unittest.TestCase):
 
 class TestFuturesSettleConfig(unittest.TestCase):
     def test_validation(self):
-        from taxjson.bin import taxjson_run as tr
+        from taxjson.pipeline import config as pipeline_config
         cfg = {'settings': {'year': 2025, 'futures_settle': 'next_day', 'country': 'canada'},
                'accounts': {'m': {'type': 'taxable'}}}
-        warnings = tr.validate_config(cfg)
+        warnings = pipeline_config.validate_config(cfg)
         self.assertFalse(any('futures_settle' in w for w in warnings))
         cfg['settings']['futures_settle'] = 'settle'
         with self.assertRaises(SystemExit):
-            tr.validate_config(cfg)
+            pipeline_config.validate_config(cfg)
 
     def test_init_template_documents_it_with_its_default(self):
         from taxjson.lib.config_template import render_init

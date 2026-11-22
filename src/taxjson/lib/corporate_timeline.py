@@ -28,9 +28,13 @@ Backward conversions use the reciprocal, guarded so a zero product falls
 back to 1.0 (preserving both engines' `if f else` guards).
 """
 
+from __future__ import annotations
+
+from taxjson.lib.once import said_set
 from taxjson.lib.stage_msg import emit_line
 from enum import IntEnum
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
+from taxjson.model import money as M
 
 
 # --------------------------------------------------------------- ordering
@@ -67,10 +71,10 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 #
 # The key is the MOMENT and its rung; rows tied on it keep their input
 # order (a stable sort). The engines take each input book with its
-# accounts' rows in NAME order (`account_tie`, core._by_account_name), so
-# rows of two accounts at one moment never depend on the order the
-# books were merged in (issue #31) — while "same moment" stays a
-# moment, whatever the accounts' names.
+# accounts' rows in NAME order (`account_tie`,
+# engine/rows._by_account_name), so rows of two accounts at one moment
+# never depend on the order the books were merged in (issue #31) — while
+# "same moment" stays a moment, whatever the accounts' names.
 
 class Phase(IntEnum):
     """Canada execution-order phase at a shared sort date. A row that
@@ -144,7 +148,7 @@ def _is_option_leg(tx: Any) -> bool:
     exercise leg the parser marked (`exercise_of`) — it must sort before
     its stock leg like an option's."""
     # Lazy: core imports this module at load time.
-    from taxjson.lib.core import exercise_target, is_option_symbol
+    from taxjson.lib.option_symbols import exercise_target, is_option_symbol
     return (is_option_symbol(getattr(tx, 'symbol', '') or '')
             or bool(exercise_target(tx)))
 
@@ -207,9 +211,9 @@ def _walk_rest(tx: Any) -> Tuple:
     after their trade date — ordered among themselves by clock, so a
     trade executed before an evening-batch split (IB 20:25) comes first,
     exactly the trades the engine re-denominates through the split
-    (core.py settle-lag rule; audit S021-00: the walk applied the split
-    first and invented a short). group 1: every other same-day
-    execution (post-split: splits are effective at market open).
+    (engine/ca/taxrules.py settle-lag rule; audit S021-00: the walk
+    applied the split first and invented a short). group 1: every other
+    same-day execution (post-split: splits are effective at market open).
     Rung: at one moment a SPLIT first, then buys before sells, so no
     walk depends on the order of tied rows (audit S075-12 / S076-04).
     DELIBERATE divergence from the engines, which take tied trades in
@@ -227,7 +231,7 @@ def _walk_rest(tx: Any) -> Tuple:
     rung = 1 if q > 0 else 2
     if act == 'TRANSFER' and getattr(tx, 'type', '') == 'lot_move' and q > 0:
         # The in leg of a move between two of your own accounts
-        # (core.LOT_MOVE_TYPE) reads the units held from the start of
+        # (row_types.LOT_MOVE_TYPE) reads the units held from the start of
         # its day, as the books do: a sale of them that day settling
         # later is no short (backlog TJ-0093). The out leg keeps its
         # place after the day's trades — never a false short either.
@@ -399,7 +403,7 @@ def split_event_key(symbol: str, date: str, ratio: Any, symbol_new: Any,
     at the original core site): two brokers reporting slightly different
     ratios for the same event won't collapse."""
     new_sym = normalize_symbol_new(symbol, symbol_new)
-    rounded = round(float(ratio or 0), 9)
+    rounded = M.units(float(ratio or 0), 9)
     if account is None:
         return (symbol, date, rounded, new_sym)
     return (symbol, account, date, rounded, new_sym)
@@ -414,8 +418,8 @@ def split_event_key(symbol: str, date: str, ratio: Any, symbol_new: Any,
 # happen.
 SPLIT_DATE_WINDOW_DAYS = 7
 
-# Events already noted, so the note prints once per event per process.
-_SPLIT_DATE_NOTES: Set[Tuple] = set()
+# Events already noted, so the note prints once per event (lib/once).
+_SPLIT_DATE_NOTES = said_set()
 
 
 def _shift_date(date: str, days: int) -> Optional[str]:
@@ -576,7 +580,7 @@ def note_split_ratio_conflict(symbol: str, kept: str, dropped: str,
     """One stderr note per event: the same split was booked twice with
     ratios that differ only by rounding, and is applied once."""
     import sys
-    k = ('ratio', symbol, round(kept_ratio, 6), min(kept, dropped),
+    k = ('ratio', symbol, M.units(kept_ratio, 6), min(kept, dropped),
          max(kept, dropped))
     if k in _SPLIT_DATE_NOTES:
         return
@@ -596,7 +600,7 @@ def note_split_date_conflict(symbol: str, kept: str, dropped: str,
     import sys
     if kept == dropped:
         return
-    k = (symbol, round(float(ratio or 0), 9), min(kept, dropped),
+    k = (symbol, M.units(float(ratio or 0), 9), min(kept, dropped),
          max(kept, dropped))
     if k in _SPLIT_DATE_NOTES:
         return
@@ -647,11 +651,15 @@ class SplitTimeline:
         self._renames: List[Tuple[str, str, str]] = []
         self._away: Optional[Dict[str, List[str]]] = None
         self._eparent: Dict[str, str] = {}
+        # Each kept rename (old, date) -> [(new, the first day of new's
+        # split window before the date)], for `identical` (a source
+        # renamed into two targets on one date lists both: TJ-3296).
+        self._target: Dict[Tuple[str, str], List[Tuple[str, str]]] = {}
 
     # ------------------------------------------------------------ build
 
     @classmethod
-    def from_transactions(cls, txs, *,
+    def from_transactions(cls, txs: Iterable[Any], *,
                           date_of: Optional[Callable[[Any], str]] = None
                           ) -> "SplitTimeline":
         """Build from transactions IN THE GIVEN ORDER (migration semantics
@@ -725,12 +733,18 @@ class SplitTimeline:
     # user declares which in ticker.map). Each symbol therefore has one
     # identity per "epoch": epoch 0 before its first rename away, epoch
     # k after its k-th. A rename at date d joins OLD's identity just
-    # before d with NEW's identity at d.
+    # before d with NEW's identity at d — NEW's rows before d included:
+    # the class is the coarse grouping (the US engine's wash-sale key,
+    # the radar, the Canadian pass's indexes). The Canadian pass then
+    # asks `identical` row by row (owner ruling 2026-11-11, backlog
+    # TJ-2699): NEW's own rows before d are another security (shares
+    # held before a merger brought OLD into them), except within the
+    # split window before d (a broker booking the new ticker early).
 
     def _epoch_build(self) -> None:
         if self._away is not None:
             return
-        from datetime import datetime
+        from datetime import datetime, timedelta
         kept: List[Tuple[str, str, str]] = []
         last: Dict[Tuple[str, str], str] = {}
         # Copies of one rename (two brokers, two dates within the split
@@ -755,6 +769,15 @@ class SplitTimeline:
         for k in away:
             away[k].sort()
         self._away = away
+        for d, o, n in kept:
+            try:
+                early = (datetime.strptime(d[:10], '%Y-%m-%d')
+                         - timedelta(days=SPLIT_DATE_WINDOW_DAYS)
+                         ).strftime('%Y-%m-%d')
+            except ValueError:
+                early = d[:10]
+            if (n, early) not in self._target.setdefault((o, d), []):
+                self._target[(o, d)].append((n, early))
         for d, o, n in kept:
             ra = self._efind(self._node(o, self._epoch(o, d, before=True)))
             rb = self._efind(self._node(n, self._epoch(n, d, before=True)))
@@ -809,6 +832,64 @@ class SplitTimeline:
                              (getattr(t, 'date', '') or
                               getattr(t, 'date_settle', '') or None),
                              before=getattr(t, 'action', '') == 'SPLIT')
+
+    def _chain(self, sym: str, date: str) -> List[Tuple[str, str, str]]:
+        """The renames the shares `sym` booked on `date` (a trade date) go
+        through: (rename date, target, the first day of the target's
+        split window), every target of a source on one date followed
+        (TJ-3296). A rename at d carries the rows dated on or before d
+        (class_at's boundary); a chain (A to B, then B to C) is followed,
+        a rename and back too (the guard is the step, a symbol and its
+        rename date: TJ-3291)."""
+        import bisect
+        self._epoch_build()
+        out: List[Tuple[str, str, str]] = []
+        seen: Set[Tuple[str, str]] = set()
+        todo = [(sym, str(date or '')[:10])]
+        while todo:
+            cur, since = todo.pop()
+            dates = (self._away or {}).get(cur, [])
+            i = bisect.bisect_left(dates, since)
+            if i >= len(dates) or (cur, dates[i]) in seen:
+                continue
+            d = dates[i]
+            seen.add((cur, d))
+            for n, early in self._target.get((cur, d), ()):
+                out.append((d, n, early))
+                todo.append((n, d))
+        return out
+
+    def identical(self, sym_a: str, date_a: Any, sym_b: str,
+                  date_b: Any) -> bool:
+        """Whether the shares `sym_a` booked on `date_a` and `sym_b` on
+        `date_b` (trade dates) are identical property in the Canadian
+        reading of a ticker change (CA-ACB-RENAME; owner ruling
+        2026-11-11, backlog TJ-2699), the superficial-loss pass's test
+        over a class's rows: rows of one symbol in one epoch are; a
+        row of a rename's source (dated on or before the rename) and a
+        row of its target are, unless the target's row is dated before
+        the split window of the rename (its own shares before a merger
+        brought the source into them — another security; one inside
+        the window is the broker booking the new ticker early); two
+        sources of one target are not. A chain is followed, so a
+        target's target counts as a target. `class_at` is the coarser
+        grouping this test refines."""
+        self._epoch_build()
+        a, b = str(date_a or '')[:10], str(date_b or '')[:10]
+        if sym_a == sym_b and self._epoch(sym_a, a) == self._epoch(sym_b, b):
+            return True
+        # Both chains, whatever the order of the arguments: a symbol
+        # renamed away and back joins its own later epoch (TJ-3291).
+        return (self._reaches(sym_a, a, sym_b, b)
+                or self._reaches(sym_b, b, sym_a, a))
+
+    def _reaches(self, src: str, date: str, tgt: str, when: str) -> bool:
+        """Whether `src`'s shares of `date` become `tgt` by a rename whose
+        target rows on `when` are the same security (on or after the
+        split window's first day, in the target's epoch of the rename)."""
+        return any(n == tgt and when >= early
+                   and self._epoch(n, when) == self._epoch(n, d)
+                   for d, n, early in self._chain(src, date))
 
     def renamed_away(self) -> Dict[str, List[str]]:
         """{old symbol: [rename dates]} (trade dates, copies merged)."""
@@ -898,6 +979,16 @@ class SplitTimeline:
         f, _sym = self._lineage_end_state(symbol, from_date,
                                           inclusive=inclusive)
         return f or 1.0
+
+    def created_on(self, symbol: str, date: str) -> bool:
+        """Whether a SPLIT row placed on `date` (the date basis this timeline
+        was built with) created `symbol`: a rename's or an option split's
+        target, normalized. A balance stated in it that day is the restated
+        post-event position, not one the day opened with (the Canadian
+        denial pass's phase boundary, backlog TJ-2314); a symbol created
+        twice (two sources renamed into it) is created on each day."""
+        return any(d == date and target == symbol
+                   for d, _sym, _ratio, target in self._events)
 
     def lineage_factor(self, symbol: str, from_date: str,
                        ref_symbol: str, ref_date: str, *,

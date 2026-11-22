@@ -1,0 +1,801 @@
+{
+  "country": "usa",
+  "coverage": {
+    "acquisition_discrepancies": 0,
+    "income_discrepancies": 0,
+    "missing_valuation": 0,
+    "paired_acquisitions": 5,
+    "source_evidence": 5,
+    "unclassified": 0,
+    "unknown_commission": 0,
+    "unknown_gross": 0
+  },
+  "currency": "USD",
+  "groups": [
+    {
+      "account_group": "taxable",
+      "accounts": [
+        "crypto"
+      ],
+      "acquisition_cost": {
+        "known_count": 2,
+        "known_total": 17.45,
+        "total": 17.45,
+        "unknown_count": 0
+      },
+      "asset": "ETH",
+      "broker": "coinbase",
+      "commission_amount": {
+        "known_count": 2,
+        "known_total": 0.0,
+        "total": 0.0,
+        "unknown_count": 0
+      },
+      "fee_quantities": {},
+      "gross_amount": {
+        "known_count": 2,
+        "known_total": 17.45,
+        "total": 17.45,
+        "unknown_count": 0
+      },
+      "gross_quantity": {
+        "known_count": 0,
+        "known_total": 0.0,
+        "total": null,
+        "unknown_count": 2
+      },
+      "income_amount": {
+        "known_count": 2,
+        "known_total": 17.45,
+        "total": 17.45,
+        "unknown_count": 0
+      },
+      "kind_counts": {
+        "staking": 2
+      },
+      "net_quantity": {
+        "known_count": 2,
+        "known_total": 0.0052,
+        "total": 0.0052,
+        "unknown_count": 0
+      },
+      "reward_count": 2,
+      "symbol": "ETH",
+      "unknown_fee_quantity_count": 2
+    },
+    {
+      "account_group": "taxable",
+      "accounts": [
+        "crypto"
+      ],
+      "acquisition_cost": {
+        "known_count": 1,
+        "known_total": 3.4,
+        "total": 3.4,
+        "unknown_count": 0
+      },
+      "asset": "USDC",
+      "broker": "coinbase",
+      "commission_amount": {
+        "known_count": 1,
+        "known_total": 0.0,
+        "total": 0.0,
+        "unknown_count": 0
+      },
+      "fee_quantities": {},
+      "gross_amount": {
+        "known_count": 1,
+        "known_total": 3.4,
+        "total": 3.4,
+        "unknown_count": 0
+      },
+      "gross_quantity": {
+        "known_count": 0,
+        "known_total": 0.0,
+        "total": null,
+        "unknown_count": 1
+      },
+      "income_amount": {
+        "known_count": 1,
+        "known_total": 3.4,
+        "total": 3.4,
+        "unknown_count": 0
+      },
+      "kind_counts": {
+        "other_reward": 1
+      },
+      "net_quantity": {
+        "known_count": 1,
+        "known_total": 3.4,
+        "total": 3.4,
+        "unknown_count": 0
+      },
+      "reward_count": 1,
+      "symbol": "USDC",
+      "unknown_fee_quantity_count": 1
+    },
+    {
+      "account_group": "taxable",
+      "accounts": [
+        "crypto"
+      ],
+      "acquisition_cost": {
+        "known_count": 1,
+        "known_total": 9.46,
+        "total": 9.46,
+        "unknown_count": 0
+      },
+      "asset": "ETH",
+      "broker": "kraken",
+      "commission_amount": {
+        "known_count": 1,
+        "known_total": 0.27,
+        "total": 0.27,
+        "unknown_count": 0
+      },
+      "fee_quantities": {
+        "USDC": {
+          "known_count": 1,
+          "known_total": 0.27,
+          "total": 0.27,
+          "unknown_count": 0
+        }
+      },
+      "gross_amount": {
+        "known_count": 1,
+        "known_total": 9.46,
+        "total": 9.46,
+        "unknown_count": 0
+      },
+      "gross_quantity": {
+        "known_count": 1,
+        "known_total": 0.0031,
+        "total": 0.0031,
+        "unknown_count": 0
+      },
+      "income_amount": {
+        "known_count": 1,
+        "known_total": 9.19,
+        "total": 9.19,
+        "unknown_count": 0
+      },
+      "kind_counts": {
+        "staking": 1
+      },
+      "net_quantity": {
+        "known_count": 1,
+        "known_total": 0.0031,
+        "total": 0.0031,
+        "unknown_count": 0
+      },
+      "reward_count": 1,
+      "symbol": "ETH",
+      "unknown_fee_quantity_count": 0
+    },
+    {
+      "account_group": "taxable",
+      "accounts": [
+        "crypto"
+      ],
+      "acquisition_cost": {
+        "known_count": 1,
+        "known_total": 7.25,
+        "total": 7.25,
+        "unknown_count": 0
+      },
+      "asset": "USDC",
+      "broker": "kraken",
+      "commission_amount": {
+        "known_count": 1,
+        "known_total": 0.0,
+        "total": 0.0,
+        "unknown_count": 0
+      },
+      "fee_quantities": {
+        "USDC": {
+          "known_count": 1,
+          "known_total": 0.0,
+          "total": 0.0,
+          "unknown_count": 0
+        }
+      },
+      "gross_amount": {
+        "known_count": 1,
+        "known_total": 7.25,
+        "total": 7.25,
+        "unknown_count": 0
+      },
+      "gross_quantity": {
+        "known_count": 1,
+        "known_total": 7.25,
+        "total": 7.25,
+        "unknown_count": 0
+      },
+      "income_amount": {
+        "known_count": 1,
+        "known_total": 7.25,
+        "total": 7.25,
+        "unknown_count": 0
+      },
+      "kind_counts": {
+        "other_reward": 1
+      },
+      "net_quantity": {
+        "known_count": 1,
+        "known_total": 7.25,
+        "total": 7.25,
+        "unknown_count": 0
+      },
+      "reward_count": 1,
+      "symbol": "USDC",
+      "unknown_fee_quantity_count": 0
+    }
+  ],
+  "local_timezone": "America/New_York",
+  "notes": [
+    "Amounts disclose the existing books; this view does not change income, fees or acquisition cost.",
+    "Totals cover booked reward events; fully consumed or omitted dust rewards have no entries here.",
+    "Recorded income is after the commissions the importer netted: a commission shown is already out of it.",
+    "Gross and commission totals with missing evidence are known subtotals, not complete totals.",
+    "Quantities are per asset. Commission quantities in another asset are shown separately and never summed with reward units.",
+    "An absent acquisition can be intentional for rewards treated as cash; it does not prove a missing cost basis.",
+    "Source timestamps retain their original timezone; the book date/time use the project's configured local timezone.",
+    "Display cents are allocated within each money column to foot to its aggregate; JSON retains unrounded book values.",
+    "Software treatment: US-INC-STAKING; see tjs tax-logic --ids for assumptions and country-specific authorities."
+  ],
+  "rewards": [
+    {
+      "account": "crypto",
+      "account_group": "taxable",
+      "acquisition_cost": 8.0,
+      "acquisition_difference": 0.0,
+      "acquisition_pairing": "paired transaction id",
+      "acquisition_transaction_id": "CB-DEMO-0003-buy",
+      "asset": "ETH",
+      "book_price": 3200.0,
+      "book_quantity": 0.0025,
+      "broker": "coinbase",
+      "commission_amount": 0.0,
+      "commission_known": true,
+      "commission_method": "withheld_from_reward",
+      "commission_provenance": "source commission value at book FX",
+      "currency": "USD",
+      "date": "2024-04-22",
+      "expected_acquisition_cost": 8.0,
+      "fee_currency": "USD",
+      "fee_quantity": null,
+      "fx_date": "",
+      "fx_provenance": "recorded book conversion rate",
+      "fx_rate": 1.0,
+      "fx_source": "identity",
+      "gross_amount": 8.0,
+      "gross_provenance": "recorded income plus valued commission; same book valuation",
+      "gross_quantity": null,
+      "has_source_evidence": true,
+      "income_amount": 8.0,
+      "income_reconciliation_difference": 0.0,
+      "kind": "staking",
+      "local_timezone": "America/New_York",
+      "native_currency": "USD",
+      "native_price": 3200.0,
+      "net_quantity": 0.0025,
+      "notes": [],
+      "source": {
+        "file": "coinbase_demo.csv",
+        "id": "CB-DEMO-0003",
+        "line": 4,
+        "timestamp": "2024-04-22 11:15:00 UTC",
+        "type": "Staking Income"
+      },
+      "source_evidence": {
+        "asset": "ETH",
+        "broker": "coinbase",
+        "commission_known": true,
+        "commission_method": "withheld_from_reward",
+        "fee_currency": "USD",
+        "fee_quantity": null,
+        "fee_value": 0.0,
+        "gross_quantity": null,
+        "gross_value": 8.0,
+        "kind": "staking",
+        "net_quantity": 0.0025,
+        "net_value": 8.0,
+        "price": 3200.0,
+        "schema_version": 1,
+        "source_file": "coinbase_demo.csv",
+        "source_id": "CB-DEMO-0003",
+        "source_line": 4,
+        "source_timestamp": "2024-04-22 11:15:00 UTC",
+        "source_type": "Staking Income",
+        "valuation": {
+          "currency": "USD",
+          "date": "2024-04-22",
+          "fx_date": "",
+          "fx_rate": 1.0,
+          "fx_source": "identity",
+          "price": 3200.0,
+          "source": "broker",
+          "target_currency": "USD"
+        },
+        "valuation_currency": "USD"
+      },
+      "source_gross_base": 8.0,
+      "source_value_fx_rate": 1.0,
+      "symbol": "ETH",
+      "time": "07:15:00",
+      "transaction_id": "CB-DEMO-0003-div",
+      "valuation_date": "2024-04-22",
+      "valuation_market_symbol": "",
+      "valuation_missing": false,
+      "valuation_price_base": 3200.0,
+      "valuation_source": "broker"
+    },
+    {
+      "account": "crypto",
+      "account_group": "taxable",
+      "acquisition_cost": 9.45,
+      "acquisition_difference": 0.0,
+      "acquisition_pairing": "paired transaction id",
+      "acquisition_transaction_id": "CB-DEMO-0004-buy",
+      "asset": "ETH",
+      "book_price": 3500.0,
+      "book_quantity": 0.0027,
+      "broker": "coinbase",
+      "commission_amount": 0.0,
+      "commission_known": true,
+      "commission_method": "withheld_from_reward",
+      "commission_provenance": "source commission value at book FX",
+      "currency": "USD",
+      "date": "2024-07-12",
+      "expected_acquisition_cost": 9.45,
+      "fee_currency": "USD",
+      "fee_quantity": null,
+      "fx_date": "",
+      "fx_provenance": "recorded book conversion rate",
+      "fx_rate": 1.0,
+      "fx_source": "identity",
+      "gross_amount": 9.45,
+      "gross_provenance": "recorded income plus valued commission; same book valuation",
+      "gross_quantity": null,
+      "has_source_evidence": true,
+      "income_amount": 9.45,
+      "income_reconciliation_difference": 0.0,
+      "kind": "staking",
+      "local_timezone": "America/New_York",
+      "native_currency": "USD",
+      "native_price": 3500.0,
+      "net_quantity": 0.0027,
+      "notes": [],
+      "source": {
+        "file": "coinbase_demo.csv",
+        "id": "CB-DEMO-0004",
+        "line": 5,
+        "timestamp": "2024-07-12 14:02:50 UTC",
+        "type": "Staking Income"
+      },
+      "source_evidence": {
+        "asset": "ETH",
+        "broker": "coinbase",
+        "commission_known": true,
+        "commission_method": "withheld_from_reward",
+        "fee_currency": "USD",
+        "fee_quantity": null,
+        "fee_value": 0.0,
+        "gross_quantity": null,
+        "gross_value": 9.45,
+        "kind": "staking",
+        "net_quantity": 0.0027,
+        "net_value": 9.45,
+        "price": 3500.0,
+        "schema_version": 1,
+        "source_file": "coinbase_demo.csv",
+        "source_id": "CB-DEMO-0004",
+        "source_line": 5,
+        "source_timestamp": "2024-07-12 14:02:50 UTC",
+        "source_type": "Staking Income",
+        "valuation": {
+          "currency": "USD",
+          "date": "2024-07-12",
+          "fx_date": "",
+          "fx_rate": 1.0,
+          "fx_source": "identity",
+          "price": 3500.0,
+          "source": "broker",
+          "target_currency": "USD"
+        },
+        "valuation_currency": "USD"
+      },
+      "source_gross_base": 9.45,
+      "source_value_fx_rate": 1.0,
+      "symbol": "ETH",
+      "time": "10:02:50",
+      "transaction_id": "CB-DEMO-0004-div",
+      "valuation_date": "2024-07-12",
+      "valuation_market_symbol": "",
+      "valuation_missing": false,
+      "valuation_price_base": 3500.0,
+      "valuation_source": "broker"
+    },
+    {
+      "account": "crypto",
+      "account_group": "taxable",
+      "acquisition_cost": 7.25,
+      "acquisition_difference": 0.0,
+      "acquisition_pairing": "paired transaction id",
+      "acquisition_transaction_id": "LQ9DEM-AAAAA-000001-buy",
+      "asset": "USDC",
+      "book_price": 1.0,
+      "book_quantity": 7.25,
+      "broker": "kraken",
+      "commission_amount": 0.0,
+      "commission_known": true,
+      "commission_method": "withheld_from_reward",
+      "commission_provenance": "source commission value at book FX",
+      "currency": "USD",
+      "date": "2024-08-01",
+      "expected_acquisition_cost": 7.25,
+      "fee_currency": "USDC",
+      "fee_quantity": 0.0,
+      "fx_date": "",
+      "fx_provenance": "recorded book conversion rate",
+      "fx_rate": 1.0,
+      "fx_source": "identity",
+      "gross_amount": 7.25,
+      "gross_provenance": "recorded income plus valued commission; same book valuation",
+      "gross_quantity": 7.25,
+      "has_source_evidence": true,
+      "income_amount": 7.25,
+      "income_reconciliation_difference": 0.0,
+      "kind": "other_reward",
+      "local_timezone": "America/New_York",
+      "native_currency": "USD",
+      "native_price": 1.0,
+      "net_quantity": 7.25,
+      "notes": [],
+      "source": {
+        "file": "kraken_ledgers_demo.csv",
+        "id": "LQ9DEM-AAAAA-000001",
+        "line": 2,
+        "timestamp": "2024-08-01 15:00:00",
+        "type": "earn/reward"
+      },
+      "source_evidence": {
+        "asset": "USDC",
+        "broker": "kraken",
+        "commission_known": true,
+        "commission_method": "withheld_from_reward",
+        "fee_currency": "USDC",
+        "fee_quantity": 0.0,
+        "fee_value": 0.0,
+        "gross_quantity": 7.25,
+        "gross_value": 7.25,
+        "kind": "other_reward",
+        "net_quantity": 7.25,
+        "net_value": 7.25,
+        "price": 1.0,
+        "schema_version": 1,
+        "source_file": "kraken_ledgers_demo.csv",
+        "source_id": "LQ9DEM-AAAAA-000001",
+        "source_line": 2,
+        "source_timestamp": "2024-08-01 15:00:00",
+        "source_type": "earn/reward",
+        "valuation": {
+          "currency": "USD",
+          "date": "2024-08-01",
+          "fx_date": "",
+          "fx_rate": 1.0,
+          "fx_source": "identity",
+          "price": 1.0,
+          "source": "stablecoin par assumption",
+          "target_currency": "USD"
+        },
+        "valuation_currency": "USD"
+      },
+      "source_gross_base": 7.25,
+      "source_value_fx_rate": 1.0,
+      "symbol": "USDC",
+      "time": "11:00:00",
+      "transaction_id": "LQ9DEM-AAAAA-000001-div",
+      "valuation_date": "2024-08-01",
+      "valuation_market_symbol": "",
+      "valuation_missing": false,
+      "valuation_price_base": 1.0,
+      "valuation_source": "stablecoin par assumption"
+    },
+    {
+      "account": "crypto",
+      "account_group": "taxable",
+      "acquisition_cost": 9.46,
+      "acquisition_difference": 0.0,
+      "acquisition_pairing": "paired transaction id",
+      "acquisition_transaction_id": "LQ9DEM-AAAAA-000004-buy",
+      "asset": "ETH",
+      "book_price": 3051.61290323,
+      "book_quantity": 0.0031,
+      "broker": "kraken",
+      "commission_amount": 0.27,
+      "commission_known": true,
+      "commission_method": "paid_in_other_asset",
+      "commission_provenance": "source commission value at book FX",
+      "currency": "USD",
+      "date": "2024-10-15",
+      "expected_acquisition_cost": 9.46,
+      "fee_currency": "USDC",
+      "fee_quantity": 0.27,
+      "fx_date": "",
+      "fx_provenance": "recorded book conversion rate",
+      "fx_rate": 1.0,
+      "fx_source": "identity",
+      "gross_amount": 9.46,
+      "gross_provenance": "recorded income plus valued commission; same book valuation",
+      "gross_quantity": 0.0031,
+      "has_source_evidence": true,
+      "income_amount": 9.19,
+      "income_reconciliation_difference": 0.0,
+      "kind": "staking",
+      "local_timezone": "America/New_York",
+      "native_currency": "USD",
+      "native_price": 3051.61290323,
+      "net_quantity": 0.0031,
+      "notes": [],
+      "source": {
+        "file": "kraken_ledgers_demo.csv",
+        "id": "LQ9DEM-AAAAA-000004",
+        "line": 5,
+        "timestamp": "2024-10-15 15:00:00",
+        "type": "earn/reward"
+      },
+      "source_evidence": {
+        "asset": "ETH",
+        "broker": "kraken",
+        "commission_known": true,
+        "commission_method": "paid_in_other_asset",
+        "fee_currency": "USDC",
+        "fee_quantity": 0.27,
+        "fee_value": 0.27,
+        "gross_quantity": 0.0031,
+        "gross_value": 9.46,
+        "kind": "staking",
+        "net_quantity": 0.0031,
+        "net_value": 9.19,
+        "price": 3051.61290323,
+        "schema_version": 1,
+        "source_file": "kraken_ledgers_demo.csv",
+        "source_id": "LQ9DEM-AAAAA-000004",
+        "source_line": 5,
+        "source_timestamp": "2024-10-15 15:00:00",
+        "source_type": "earn/reward",
+        "valuation": {
+          "currency": "USD",
+          "date": "2024-10-15",
+          "fx_date": "",
+          "fx_rate": 1.0,
+          "fx_source": "identity",
+          "price": 3051.61290323,
+          "source": "broker amount / reward quantity",
+          "target_currency": "USD"
+        },
+        "valuation_currency": "USD"
+      },
+      "source_gross_base": 9.46,
+      "source_value_fx_rate": 1.0,
+      "symbol": "ETH",
+      "time": "11:00:00",
+      "transaction_id": "LQ9DEM-AAAAA-000004-div",
+      "valuation_date": "2024-10-15",
+      "valuation_market_symbol": "",
+      "valuation_missing": false,
+      "valuation_price_base": 3051.61290323,
+      "valuation_source": "broker amount / reward quantity"
+    },
+    {
+      "account": "crypto",
+      "account_group": "taxable",
+      "acquisition_cost": 3.4,
+      "acquisition_difference": 0.0,
+      "acquisition_pairing": "paired transaction id",
+      "acquisition_transaction_id": "CB-DEMO-0007-buy",
+      "asset": "USDC",
+      "book_price": 1.0,
+      "book_quantity": 3.4,
+      "broker": "coinbase",
+      "commission_amount": 0.0,
+      "commission_known": true,
+      "commission_method": "withheld_from_reward",
+      "commission_provenance": "source commission value at book FX",
+      "currency": "USD",
+      "date": "2024-11-04",
+      "expected_acquisition_cost": 3.4,
+      "fee_currency": "USD",
+      "fee_quantity": null,
+      "fx_date": "",
+      "fx_provenance": "recorded book conversion rate",
+      "fx_rate": 1.0,
+      "fx_source": "identity",
+      "gross_amount": 3.4,
+      "gross_provenance": "recorded income plus valued commission; same book valuation",
+      "gross_quantity": null,
+      "has_source_evidence": true,
+      "income_amount": 3.4,
+      "income_reconciliation_difference": 0.0,
+      "kind": "other_reward",
+      "local_timezone": "America/New_York",
+      "native_currency": "USD",
+      "native_price": 1.0,
+      "net_quantity": 3.4,
+      "notes": [],
+      "source": {
+        "file": "coinbase_demo.csv",
+        "id": "CB-DEMO-0007",
+        "line": 8,
+        "timestamp": "2024-11-04 15:20:00 UTC",
+        "type": "Rewards Income"
+      },
+      "source_evidence": {
+        "asset": "USDC",
+        "broker": "coinbase",
+        "commission_known": true,
+        "commission_method": "withheld_from_reward",
+        "fee_currency": "USD",
+        "fee_quantity": null,
+        "fee_value": 0.0,
+        "gross_quantity": null,
+        "gross_value": 3.4,
+        "kind": "other_reward",
+        "net_quantity": 3.4,
+        "net_value": 3.4,
+        "price": 1.0,
+        "schema_version": 1,
+        "source_file": "coinbase_demo.csv",
+        "source_id": "CB-DEMO-0007",
+        "source_line": 8,
+        "source_timestamp": "2024-11-04 15:20:00 UTC",
+        "source_type": "Rewards Income",
+        "valuation": {
+          "currency": "USD",
+          "date": "2024-11-04",
+          "fx_date": "",
+          "fx_rate": 1.0,
+          "fx_source": "identity",
+          "price": 1.0,
+          "source": "broker",
+          "target_currency": "USD"
+        },
+        "valuation_currency": "USD"
+      },
+      "source_gross_base": 3.4,
+      "source_value_fx_rate": 1.0,
+      "symbol": "USDC",
+      "time": "10:20:00",
+      "transaction_id": "CB-DEMO-0007-div",
+      "valuation_date": "2024-11-04",
+      "valuation_market_symbol": "",
+      "valuation_missing": false,
+      "valuation_price_base": 1.0,
+      "valuation_source": "broker"
+    }
+  ],
+  "rule": "US-INC-STAKING",
+  "schema_version": 1,
+  "scope": "tax year 2024",
+  "totals": {
+    "acquisition_cost": {
+      "known_count": 5,
+      "known_total": 37.56,
+      "total": 37.56,
+      "unknown_count": 0
+    },
+    "commission_amount": {
+      "known_count": 5,
+      "known_total": 0.27,
+      "total": 0.27,
+      "unknown_count": 0
+    },
+    "gross_amount": {
+      "known_count": 5,
+      "known_total": 37.56,
+      "total": 37.56,
+      "unknown_count": 0
+    },
+    "income_amount": {
+      "known_count": 5,
+      "known_total": 37.29,
+      "total": 37.29,
+      "unknown_count": 0
+    },
+    "kind_counts": {
+      "other_reward": 2,
+      "staking": 3
+    },
+    "reward_count": 5
+  },
+  "totals_by_account_group": {
+    "sheltered": {
+      "acquisition_cost": {
+        "known_count": 0,
+        "known_total": 0.0,
+        "total": 0.0,
+        "unknown_count": 0
+      },
+      "commission_amount": {
+        "known_count": 0,
+        "known_total": 0.0,
+        "total": 0.0,
+        "unknown_count": 0
+      },
+      "gross_amount": {
+        "known_count": 0,
+        "known_total": 0.0,
+        "total": 0.0,
+        "unknown_count": 0
+      },
+      "income_amount": {
+        "known_count": 0,
+        "known_total": 0.0,
+        "total": 0.0,
+        "unknown_count": 0
+      },
+      "kind_counts": {},
+      "reward_count": 0
+    },
+    "taxable": {
+      "acquisition_cost": {
+        "known_count": 5,
+        "known_total": 37.56,
+        "total": 37.56,
+        "unknown_count": 0
+      },
+      "commission_amount": {
+        "known_count": 5,
+        "known_total": 0.27,
+        "total": 0.27,
+        "unknown_count": 0
+      },
+      "gross_amount": {
+        "known_count": 5,
+        "known_total": 37.56,
+        "total": 37.56,
+        "unknown_count": 0
+      },
+      "income_amount": {
+        "known_count": 5,
+        "known_total": 37.29,
+        "total": 37.29,
+        "unknown_count": 0
+      },
+      "kind_counts": {
+        "other_reward": 2,
+        "staking": 3
+      },
+      "reward_count": 5
+    },
+    "unknown": {
+      "acquisition_cost": {
+        "known_count": 0,
+        "known_total": 0.0,
+        "total": 0.0,
+        "unknown_count": 0
+      },
+      "commission_amount": {
+        "known_count": 0,
+        "known_total": 0.0,
+        "total": 0.0,
+        "unknown_count": 0
+      },
+      "gross_amount": {
+        "known_count": 0,
+        "known_total": 0.0,
+        "total": 0.0,
+        "unknown_count": 0
+      },
+      "income_amount": {
+        "known_count": 0,
+        "known_total": 0.0,
+        "total": 0.0,
+        "unknown_count": 0
+      },
+      "kind_counts": {},
+      "reward_count": 0
+    }
+  }
+}

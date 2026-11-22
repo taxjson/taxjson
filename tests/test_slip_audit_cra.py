@@ -16,12 +16,13 @@ from pathlib import Path
 import _cra_pdf as CRA
 from _style import CapturedWidth
 from tax_rules import rule
-from test_slip_audit import (HOLDER, IB_ACCT, _home, _ib_project, tj)
+from taxjson.rules import ids as R
+from taxjson.lib.json_contract import SCHEMAS
+from _support.ca_slip_books import HOLDER, IB_ACCT, _home, _ib_project, tj
+from _support.ca_slip_ib_payer import IB_NAME
 
 _WIDTH = CapturedWidth()
 HAVE_PDFTOTEXT = shutil.which("pdftotext") is not None
-IB_NAME = ["INTERACTIVE BROKERS CANADA INC. INTERACTIVE",
-           "COURTAGE CANADA INC."]
 
 
 def setUpModule():
@@ -56,7 +57,7 @@ _TEXT = """10/8/26, 9:00 AM                           2025 T5 Statement of Inves
 
 class TestParse(unittest.TestCase):
 
-    @rule("CA-SLIP-04")
+    @rule(R.CA_SLIP_04)
     def test_text_layout(self):
         from taxjson.lib.cra_slips import parse_text
         s = parse_text(_TEXT, "x.pdf")
@@ -112,7 +113,7 @@ class TestPlace(unittest.TestCase):
     """One broker's slips shared out among its broker accounts by the
     books' payments; a T3 to its fund by amount."""
 
-    @rule("CA-SLIP-04")
+    @rule(R.CA_SLIP_04)
     def test_share_out(self):
         from taxjson.lib.cra_slips import CraSlip, Group, place
         from taxjson.lib.slip_audit import BookRow
@@ -158,7 +159,7 @@ class TestImportEndToEnd(unittest.TestCase):
     double count), a bank's T5 is listed unplaced, a receipt skipped;
     --write appends once."""
 
-    @rule("CA-SLIP-04", "CA-SLIP-01")
+    @rule(R.CA_SLIP_04, R.CA_SLIP_01)
     def test_import_write_audit(self):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
@@ -189,12 +190,18 @@ class TestImportEndToEnd(unittest.TestCase):
             self.assertNotIn("Somewhere", r.stdout)
             self.assertFalse((root / "inputs" / "slips" / "slips.toml")
                              .exists())
+            # The import's own document: its number is the registry's.
+            doc = json.loads(tj(root, home, "slip-audit", "--import-cra",
+                                str(cra), "--json").stdout)
+            self.assertEqual(doc["schema_version"],
+                             SCHEMAS["slip-audit --import-cra"])
+            self.assertEqual(doc["written"], False)
             r = tj(root, home, "slip-audit", "--import-cra", str(cra),
                    "--write")
             self.assertEqual(r.returncode, 0, r.stderr)
-            from taxjson.bin.taxjson_brokerage import hash_broker_account
+            from taxjson.lib.privacy import hash_broker_account
             from taxjson.lib import slip_audit as SA
-            from taxjson.lib.tomlcompat import tomllib
+            import tomllib
             text = (root / "inputs" / "slips" / "slips.toml").read_text()
             doc = tomllib.loads(text)
             got = {(s["type"], s.get("security"), s["broker_key"],
@@ -283,7 +290,7 @@ class TestAuditFixes(unittest.TestCase):
     its pay date, a T3 split net of the trust's foreign tax, a CDR's
     dividends, and no box-18 table for a trust's box 21."""
 
-    @rule("CA-SLIP-03")
+    @rule(R.CA_SLIP_03)
     def test_tt_roc_of_a_fund_at_two_brokers_is_never_suggested_again(self):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
@@ -316,7 +323,7 @@ class TestAuditFixes(unittest.TestCase):
             self.assertTrue(any("already hold" in n for n in
                                 rep["suggestions"]["notes"]))
 
-    @rule("CA-SLIP-01", "CA-SLIP-03", "CA-INC-DATE-ROC-TRUST")
+    @rule(R.CA_SLIP_01, R.CA_SLIP_03, R.CA_INC_DATE_ROC_TRUST)
     def test_prior_year_roc_box34_split_and_cdr(self):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)

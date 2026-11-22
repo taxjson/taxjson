@@ -31,11 +31,15 @@ folder: a later year's snapshot belongs in the later year's.
 """
 from __future__ import annotations
 
+
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from taxjson.project.accounts import configured_accounts, typed_account, typed_accounts
+from taxjson.project.toml_io import read_toml
 from taxjson.lib import project_layout as _PL
+from taxjson.lib.privacy import mask_ids
 
 HOLDINGS_DIR = "holdings"
 
@@ -65,50 +69,30 @@ def _norm(x: Any) -> str:
 def mask(text: str) -> str:
     """Broker-account-like ids in `text` shown as their first 2
     characters + *** (U1234567 -> U1***)."""
-    return re.sub(r"(?<![A-Za-z0-9])(U\d{5,}|\d{5,})(?!\d)",
-                  lambda m: m.group(1)[:2] + "***", str(text))
+    return mask_ids(text)
 
 
 def broker_ids(acfg: Any) -> List[str]:
     """The broker account ids an account declares: `account` and
     `broker_accounts`, normalised (letters and digits, upper case)."""
-    if not isinstance(acfg, dict):
-        return []
+    acfg = typed_account(acfg)
     out = []
-    one = acfg.get("account")
+    one = acfg.account
     if isinstance(one, str) and _norm(one):
         out.append(_norm(one))
-    many = acfg.get("broker_accounts")
+    many = acfg.broker_accounts
     if isinstance(many, list):
         out += [_norm(x) for x in many if isinstance(x, str) and _norm(x)]
     return out
 
 
 def _meta(path: Path) -> Dict[str, Any]:
-    from taxjson.lib.tomlcompat import tomllib
     try:
-        doc = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+        doc = read_toml(path)
     except Exception:                                   # noqa: BLE001
         return {}
     m = doc.get("meta") if isinstance(doc, dict) else None
     return m if isinstance(m, dict) else {}
-
-
-def empty_snapshot(doc: Any) -> bool:
-    """A snapshot of an account that holds nothing (#46): no
-    `[[holding]]` table, a `[meta]` table and nothing else (a
-    top-level `schema_version` aside), and no `holdings_count` above 0
-    — what taxjson-fetch --positions writes after every position is
-    closed. A `[[holdings]]` typo, another tool's file or a count with
-    no rows is not one."""
-    if not isinstance(doc, dict) or "holding" in doc:
-        return False
-    meta = doc.get("meta")
-    if not isinstance(meta, dict) or set(doc) - {"meta", "schema_version"}:
-        return False
-    count = meta.get("holdings_count", 0)
-    return (isinstance(count, int) and not isinstance(count, bool)
-            and count == 0)
 
 
 # A broker's positions report (lib/positions_reports) is a .csv; the
@@ -220,8 +204,8 @@ def listed_files(root: Path, accounts_cfg: Dict[str, Any]) -> set:
     resolved as the sanity check reads them (`~` expanded, relative to
     the project)."""
     out = set()
-    for a in (accounts_cfg or {}).values():
-        raw = a.get("holdings") if isinstance(a, dict) else None
+    for a in typed_accounts(accounts_cfg).values():
+        raw = a.holdings
         if isinstance(raw, str):
             raw = [raw]
         if not isinstance(raw, (list, tuple)):
@@ -246,11 +230,10 @@ def discover(folder: Path, accounts_cfg: Dict[str, Any],
     takes the notes that leave nothing unchecked instead — a snapshot
     of an account whose own setting names its files: that account is
     compared with those (backlog TJ-0020)."""
-    every = {str(n): a for n, a in (accounts_cfg or {}).items()
-             if isinstance(a, dict)}
-    accts = {n: a for n, a in every.items() if not a.get("holdings")}
+    every = configured_accounts(accounts_cfg)
+    accts = {n: a for n, a in every.items() if not a.holdings}
     listed = listed_files(Path(root) if root is not None
-                          else Path(folder).parent, accounts_cfg)
+                          else Path(folder).parent, every)
     # Ownership by broker id is settled against EVERY account, the ones
     # with their own `holdings = [...]` included: a snapshot stating
     # such an account's id used to fall through to the file-name rule

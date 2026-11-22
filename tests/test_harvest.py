@@ -8,24 +8,24 @@ import io
 import json
 import tempfile
 import unittest
+from unittest import mock
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import date, timedelta
 from pathlib import Path
 
 from taxjson.bin.taxjson_harvest import main as harvest_main
+from taxjson.lib.json_contract import SCHEMAS
 from tax_rules import rule
+from taxjson.rules import ids as R
 from _style import CapturedWidth
+from _support.planning_harvest import (
+    _TODAY, _AAA_TX_ADD, _BBB_TX_ADD, GAINS, USD_CAD, _fake_fetcher, _project, _run,
+)
 
 
 # Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
 # the module passes run alone too (_style.CapturedWidth).
 _WIDTH = CapturedWidth()
-
-
-# One "today" for the whole module: the fixtures below are dated from it
-# at import, and the harvest code reads today again later — a run that
-# crossed midnight saw two different days and failed (gate 2026-10-05).
-_TODAY = date.today()
 
 
 class _FrozenDate(date):
@@ -44,62 +44,6 @@ def tearDownModule():
     _WIDTH.stop()
     import taxjson.bin.taxjson_harvest as _h
     _h.date = date
-
-
-# margin: AAA.TO underwater (cost 1,240 vs value 1,085), BBB.US ahead,
-# one OCC option row (must be skipped — unpriceable by the chain).
-# last_acq_date is dynamic (TX_ADD renders signed days from today).
-_AAA_TX_ADD = (_TODAY - timedelta(days=100)).isoformat()
-_BBB_TX_ADD = (_TODAY - timedelta(days=400)).isoformat()
-GAINS = {
-    "summary": {"year": 2026},
-    "transactions": [],
-    "inventory": [
-        {"symbol": "AAA.TO", "qty": 100, "total_cost": 1240.0,
-         "position_start_date": "2026-01-15",
-         "last_acq_date": _AAA_TX_ADD},
-        {"symbol": "BBB.US", "qty": 50, "total_cost": 4005.0,
-         "position_start_date": "2024-03-01",
-         "last_acq_date": _BBB_TX_ADD},
-        {"symbol": "AAA.TO260116C00010000", "qty": 2, "total_cost": 300.0},
-        {"symbol": "CLOSED.TO", "qty": 0, "total_cost": 0.0},
-    ],
-}
-
-PRICES = {"AAA.TO": 10.85, "BBB.US": 95.20, "ETN.US": 380.00}
-
-USD_CAD = 1.25
-
-
-def _fake_fetcher(remaining):
-    return {s: (PRICES[s], "fake") for s in remaining if s in PRICES}
-
-
-def _radar_doc(clears_at):
-    return {"sections": [{"title": "LOCKED", "rows": [{
-        "ticker": "AAA.TO", "category": "LOCKED",
-        "advisory": "LOCKED: Recent buy ...", "clears_at": clears_at}]}]}
-
-
-def _project(td, *, wash=True, radar_clears=None, rates=True):
-    root = Path(td)
-    name = "margin_gains_wash.json" if wash else "margin_gains.json"
-    (root / name).write_text(json.dumps(GAINS))
-    if rates:
-        (root / "to_base.csv").write_text(
-            f"{_TODAY.isoformat()} 12:00:00 USD CAD {USD_CAD}\n")
-    radar = None
-    if radar_clears is not None:
-        radar = root / "wash_radar_margin.json"
-        radar.write_text(json.dumps(_radar_doc(radar_clears)))
-    return root / name, radar
-
-
-def _run(argv):
-    out, err = io.StringIO(), io.StringIO()
-    with redirect_stdout(out), redirect_stderr(err):
-        rc = harvest_main(argv, fetchers=[_fake_fetcher])
-    return rc, out.getvalue(), err.getvalue()
 
 
 class TestHarvest(unittest.TestCase):
@@ -182,8 +126,8 @@ class TestHarvest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("No open positions for X.TO, Y.US.", out)
 
-    @rule("US-HOLD-01")
-    @rule("CA-PLAN-01")
+    @rule(R.US_HOLD_01)
+    @rule(R.CA_PLAN_01)
     def test_usa_shows_days_to_long_term(self):
         with tempfile.TemporaryDirectory() as td:
             gains, _ = _project(td)
@@ -306,6 +250,7 @@ class TestHarvest(unittest.TestCase):
                                "--country", "canada", "--json"])
         self.assertEqual(rc, 0)
         doc = json.loads(out)
+        self.assertEqual(doc["schema_version"], SCHEMAS["harvest"])
         self.assertEqual(doc["totals"]["positions"], 2)
         self.assertAlmostEqual(doc["totals"]["unrealized"], 1790.0)
         bbb = next(r for r in doc["rows"] if r["symbol"] == "BBB.US")
@@ -326,6 +271,38 @@ class TestHarvest(unittest.TestCase):
         self.assertIn("NOPRICE.TO", err)
         self.assertIn("warning:", err)
         self.assertNotIn("NOPRICE.TO", out)
+
+    def test_json_a_nan_figure_is_null(self):
+        # A made-up NaN in a money figure (the schedule's `now`) is null,
+        # as `_json_out` writes it: json.dumps' bare NaN is not JSON.
+        import taxjson.bin.taxjson_harvest as H
+        real = H._recovery_schedule
+
+        def nan_now(rows, today=None):
+            return dict(real(rows, today), now=float("nan"))
+
+        def no_token(token):
+            raise AssertionError(f"{token} is no JSON value")
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(H, "_recovery_schedule", nan_now):
+            gains, _ = _project(td)
+            rc, out, _ = _run([str(gains), "--no-ibkr",
+                               "--country", "canada", "--json"])
+        self.assertEqual(rc, 0)
+        doc = json.loads(out, parse_constant=no_token)
+        self.assertEqual(doc["schema_version"], SCHEMAS["harvest"])
+        self.assertIsNone(doc["totals"]["harvestable"]["now"])
+        self.assertAlmostEqual(doc["totals"]["unrealized"], 1790.0)
+
+    def test_json_no_positions_carries_its_number(self):
+        with tempfile.TemporaryDirectory() as td:
+            gains = Path(td) / "margin_gains.json"
+            gains.write_text(json.dumps({"inventory": []}))
+            rc, out, _ = _run([str(gains), "--no-ibkr",
+                               "--country", "canada", "--json"])
+        self.assertEqual(rc, 0)
+        doc = json.loads(out)
+        self.assertEqual((doc["schema_version"], doc["rows"]), (SCHEMAS["harvest"], []))
 
     def test_no_positions_exit_0(self):
         with tempfile.TemporaryDirectory() as td:

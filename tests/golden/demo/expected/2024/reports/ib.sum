@@ -1,0 +1,65 @@
+======================================================================
+ DIAGNOSTICS — ib  (parser/merge warnings; not part of the tax totals)
+======================================================================
+note: FX: Bank of Canada Valet for <n> dates, Yahoo fallback for 0
+OK: <merged>: 9 transactions validated.
+note: ib_demo.csv: 12 recognized non-event row(s) not translated — Dividends subtotal row: 1, Statement metadata row: 2, section Account Information (not translated): 2, section Cash Report (not translated): 7.
+  ib_demo.csv: 9 tax objects
+======================================================================
+
+
+TICKER SUMMARY — CAD, year 2024, sorted by ticker
+
+SYMBOL                                 TOTAL        TOTAL_COST     TOTAL_PROCEED        TOTAL_GAIN          CAP_GAIN          OPT_GAIN          DIVIDEND               PIL   AVG_DAYS
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+MSFT.US                               233.55         27,001.35         27,133.65            132.30            132.30              0.00            101.25              0.00      127.0
+NVDA.US                                 0.00          1,881.90          1,881.90              0.00              0.00              0.00              0.00              0.00      133.0
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+TOTAL                                 233.55         28,883.25         29,015.55            132.30            132.30              0.00            101.25              0.00      130.0
+
+ASSET: Non-option | CURRENCY: CAD   | TRADES: 2 | YEAR: 2024
+
+Total Realized Gain:                132.30 CAD
+Average Holding Period:               130.0 Days
+Avg Fee Per Trade:                    1.35 CAD
+Avg Fee Per Share:                  0.0450 CAD
+----------------------------------------------------------------------------------------------------------------
+Positive Trades: 1 | Negative Trades: 0 | Win/Loss: inf | Win Rate: 100.0%
+Average Positive:            132.30 CAD | Average Negative:              0.00 CAD
+----------------------------------------------------------------------------------------------------------------
+
+CONSOLIDATED TOTALS — CAD, year 2024
+
+TOTAL COST:                         28,883.25 CAD
+TOTAL PROCEEDS:                     29,015.55 CAD
+  (engine sign convention: shorts/written options negated — for Schedule 3 proceeds and ACB use `tjs form-export`)
+------------------------------------------------------
+TOTAL REALIZED NON-OPTION GAIN:        132.30 CAD
+  (shares, units, futures and crypto — Schedule 3 lines: `tjs form-export`)
+TOTAL REALIZED OPTION GAIN:              0.00 CAD
+TOTAL REALIZED GAIN:                   132.30 CAD
+------------------------------------------------------
+TOTAL DIVIDENDS / STAKING:             101.25 CAD
+------------------------------------------------------
+GRAND TOTAL (GAIN+DIV+PIL):            233.55 CAD
+------------------------------------------------------
+TOTAL TRADING FEES PAID:                 6.75 CAD
+  (OPTION TRADING FEES):                 0.00 CAD
+
+INCOME SUMMARY — CAD, year 2024, sorted by ticker
+
+SYMBOL                            GROSS DIV              PIL          TAX W/H       NET INCOME
+----------------------------------------------------------------------------------------------
+MSFT.US                              101.25             0.00            15.20            86.05
+----------------------------------------------------------------------------------------------
+SUBTOTAL                             101.25             0.00            15.20            86.05
+CASH INTEREST                                                                             0.00
+----------------------------------------------------------------------------------------------
+TOTAL NET INCOME                                                                         86.05
+
+====================================================================================================
+ HOLDINGS REPORT - open positions at the end of the data (not 2024-12-31 positions; `tjs list --date` gives a date) - Sorted by: ticker
+====================================================================================================
+TICKER          QTY  COST/SHARE    TOTAL COST  CUR
+--------------------------------------------------
+NVDA.US          10    194.1300       1941.30  CAD

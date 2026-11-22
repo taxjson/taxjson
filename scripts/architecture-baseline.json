@@ -1,0 +1,1199 @@
+{
+ "_": "Written by scripts/check_architecture.py; see its docstring. Do not edit by hand.",
+ "max_function_lines": 150,
+ "ruff_version": "0.17.4",
+ "ruff_config": {
+  "pyproject.toml": [
+   "[tool.ruff.lint]",
+   "select = [\"E4\", \"E7\", \"E9\", \"F\", \"BLE001\"]"
+  ]
+ },
+ "import_edges": [
+  "taxjson.cli.checklist_run -> taxjson.bin.taxjson_run (by name)",
+  "taxjson.pipeline.dispatch -> taxjson.bin._entry (by name)"
+ ],
+ "ruff": {
+  "BLE001": {
+   "packages/taxjson-fetch/src/taxjson_fetch/api.py": 5,
+   "packages/taxjson-fetch/src/taxjson_fetch/command.py": 3,
+   "packages/taxjson-fetch/tests/_questrade_fetch.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_issues_safe_writes.py": 2,
+   "scripts/mutation_audit.py": 1,
+   "src/taxjson/bin/taxjson_audit.py": 4,
+   "src/taxjson/bin/taxjson_convert_currency.py": 1,
+   "src/taxjson/bin/taxjson_detect_brokerage.py": 1,
+   "src/taxjson/bin/taxjson_fees.py": 1,
+   "src/taxjson/bin/taxjson_gains.py": 1,
+   "src/taxjson/bin/taxjson_harvest.py": 1,
+   "src/taxjson/bin/taxjson_merge.py": 1,
+   "src/taxjson/bin/taxjson_merge2.py": 1,
+   "src/taxjson/bin/taxjson_missing_history.py": 5,
+   "src/taxjson/bin/taxjson_redact.py": 8,
+   "src/taxjson/bin/taxjson_t1135.py": 1,
+   "src/taxjson/bin/taxjson_validate.py": 1,
+   "src/taxjson/bin/taxjson_wash_radar.py": 2,
+   "src/taxjson/bin/to_base_curr.py": 5,
+   "src/taxjson/bin/xlsx_to_csv.py": 1,
+   "src/taxjson/cli/books.py": 5,
+   "src/taxjson/cli/common.py": 5,
+   "src/taxjson/cli/elect.py": 1,
+   "src/taxjson/cli/estimate.py": 1,
+   "src/taxjson/cli/listings.py": 1,
+   "src/taxjson/cli/main.py": 5,
+   "src/taxjson/cli/parser.py": 1,
+   "src/taxjson/cli/plan.py": 1,
+   "src/taxjson/cli/positions.py": 1,
+   "src/taxjson/cli/setup.py": 1,
+   "src/taxjson/cli/tips.py": 8,
+   "src/taxjson/lib/brokerages/base.py": 1,
+   "src/taxjson/lib/brokerages/ib_extractor.py": 5,
+   "src/taxjson/lib/channels.py": 1,
+   "src/taxjson/lib/checklist.py": 24,
+   "src/taxjson/lib/cli_diag.py": 1,
+   "src/taxjson/lib/compare.py": 2,
+   "src/taxjson/lib/config_template.py": 3,
+   "src/taxjson/lib/corp_actions.py": 1,
+   "src/taxjson/lib/corp_views.py": 1,
+   "src/taxjson/lib/crypto_prices.py": 1,
+   "src/taxjson/lib/crypto_sends.py": 1,
+   "src/taxjson/lib/dated_events.py": 1,
+   "src/taxjson/lib/div_estimate.py": 1,
+   "src/taxjson/lib/edge_cases.py": 1,
+   "src/taxjson/lib/export_coverage.py": 4,
+   "src/taxjson/lib/fetchers.py": 3,
+   "src/taxjson/lib/first_run.py": 4,
+   "src/taxjson/lib/handoff.py": 3,
+   "src/taxjson/lib/history_migration.py": 1,
+   "src/taxjson/lib/holdings_dir.py": 2,
+   "src/taxjson/lib/listing_suffix.py": 2,
+   "src/taxjson/lib/loss_overrides.py": 1,
+   "src/taxjson/lib/map_file.py": 2,
+   "src/taxjson/lib/map_hygiene.py": 5,
+   "src/taxjson/lib/markets.py": 2,
+   "src/taxjson/lib/missing_history.py": 6,
+   "src/taxjson/lib/option_boundary.py": 3,
+   "src/taxjson/lib/out.py": 1,
+   "src/taxjson/lib/positions_check.py": 1,
+   "src/taxjson/lib/price_chain.py": 12,
+   "src/taxjson/lib/project_layout.py": 3,
+   "src/taxjson/lib/rbc_corp_actions.py": 1,
+   "src/taxjson/lib/rename_migration.py": 1,
+   "src/taxjson/lib/renames.py": 1,
+   "src/taxjson/lib/requires.py": 1,
+   "src/taxjson/lib/similar.py": 3,
+   "src/taxjson/lib/slip_audit.py": 3,
+   "src/taxjson/lib/timezones.py": 3,
+   "src/taxjson/lib/tobase_map.py": 1,
+   "src/taxjson/lib/trade_stats.py": 1,
+   "src/taxjson/lib/xlist_loss_radar.py": 1,
+   "src/taxjson/lib/years_report.py": 1,
+   "src/taxjson/pipeline/config.py": 2,
+   "src/taxjson/pipeline/diagnostics.py": 1,
+   "src/taxjson/pipeline/dispatch.py": 1,
+   "src/taxjson/pipeline/inputs.py": 1,
+   "src/taxjson/pipeline/run.py": 17,
+   "src/taxjson/pipeline/sanity.py": 2,
+   "src/taxjson/pipeline/stages.py": 21,
+   "tests/_money_oracle.py": 2,
+   "tests/rules/ca/xlist/test_shared_tobase_retracted_and_receipts_apart.py": 1,
+   "tests/test_crypto_parse_hardening.py": 1,
+   "tests/test_model_evidence_corp_settle.py": 1,
+   "tests/test_settle_straddle_fuzz.py": 5,
+   "tests/test_transfer_fuzz.py": 4
+  },
+  "E401": {
+   "scripts/style/measure.py": 1,
+   "tests/features/discovery/test_ib_broker_detection.py": 1,
+   "tests/features/listings/test_transfers_view_in_book_value.py": 1,
+   "tests/features/merge/test_conflicting_split_ratios.py": 1,
+   "tests/features/missing_history/test_incomplete_history_openings.py": 1,
+   "tests/features/parse/test_brokerage_cli_refusals.py": 1,
+   "tests/features/run/test_impossible_shorts_and_base_currency_default.py": 1,
+   "tests/rules/ca/inc/test_trust_roc_record_date_and_withholding_year.py": 1,
+   "tests/rules/ca/stkdiv/test_stock_dividend_note.py": 3,
+   "tests/rules/us/inc/test_listed_ric_dividend_named.py": 1,
+   "tests/test_corp_actions.py": 1,
+   "tests/test_elect.py": 1,
+   "tests/test_harvest.py": 1,
+   "tests/test_parser_activity_coverage.py": 2,
+   "tests/test_rbc_parser.py": 1,
+   "tests/test_run_wash_radar_no_sheltered.py": 1
+  },
+  "E402": {
+   "scripts/check_tax_rules.py": 3,
+   "scripts/style/survey.py": 1,
+   "src/taxjson/bin/taxjson_export.py": 4,
+   "src/taxjson/bin/taxjson_form_export.py": 1,
+   "src/taxjson/bin/taxjson_harvest.py": 2,
+   "src/taxjson/bin/taxjson_lint_crosslistings.py": 1,
+   "src/taxjson/bin/taxjson_t1135.py": 1,
+   "src/taxjson/lib/brokerages/base.py": 1,
+   "src/taxjson/lib/brokerages/generic.py": 1,
+   "src/taxjson/lib/brokerages/ib_extractor.py": 5,
+   "src/taxjson/lib/brokerages/rbc_direct.py": 1,
+   "src/taxjson/lib/brokerages/schema.py": 1,
+   "src/taxjson/lib/check_dates.py": 2,
+   "src/taxjson/lib/corp_actions.py": 1,
+   "src/taxjson/lib/crypto_sends.py": 1,
+   "src/taxjson/lib/dates.py": 1,
+   "src/taxjson/lib/fetchers.py": 2,
+   "src/taxjson/lib/missing_history.py": 2,
+   "src/taxjson/lib/out.py": 1,
+   "src/taxjson/lib/positions_check.py": 1,
+   "src/taxjson/lib/price_chain.py": 3,
+   "src/taxjson/lib/ticker_map.py": 1,
+   "tests/features/checks/test_rbc_coverage_boundary_days.py": 1,
+   "tests/features/corporate_actions/test_split_copy_date_window.py": 1,
+   "tests/features/discovery/test_detection_precedence.py": 2,
+   "tests/features/discovery/test_ib_broker_detection.py": 1,
+   "tests/features/engines/test_assign_marked_leg_lag_window.py": 1,
+   "tests/features/explain/test_tax_logic_stablecoin_and_fx_cash_wording.py": 1,
+   "tests/features/forms/test_reconcile_slips_and_form_inputs_refused.py": 2,
+   "tests/features/forms/test_reconcile_unreadable_cell_and_schedule3_short_note.py": 1,
+   "tests/features/listings/test_transfers_view_in_book_value.py": 1,
+   "tests/features/merge/test_cross_file_dedup.py": 2,
+   "tests/features/merge/test_dedup_per_broker_account_and_parser_checks.py": 1,
+   "tests/features/merge/test_json_input_contract.py": 1,
+   "tests/features/output/test_closed_standard_streams.py": 1,
+   "tests/features/output/test_help_and_run_note_wording.py": 4,
+   "tests/features/parse/test_brokerage_cli_refusals.py": 1,
+   "tests/features/parsers/test_decimal_comma_refusals_and_parser_windows.py": 1,
+   "tests/features/parsers/test_ib_statement_rows_and_refusals.py": 1,
+   "tests/features/parsers/test_rbc_questrade_symbols_row_shapes_and_income_rows.py": 1,
+   "tests/features/parsers/test_undone_corporate_event_notes_silenced.py": 2,
+   "tests/features/parsers/test_webull_trading_summary_rows.py": 1,
+   "tests/features/partition/test_cited_law_by_country.py": 1,
+   "tests/features/planning/test_us_radar_blocked_definition.py": 1,
+   "tests/features/repo_checks/test_ci_scripts_and_workflows.py": 1,
+   "tests/features/reports/test_fees_non_option_label.py": 2,
+   "tests/features/transfers/test_journal_candidate_date_window.py": 1,
+   "tests/rules/ca/acb/test_ib_temporary_symbol_map_line.py": 6,
+   "tests/rules/ca/crypto/test_stablecoin_depeg_in_other_currencies.py": 2,
+   "tests/rules/ca/date/test_blank_settle_by_listing_market.py": 1,
+   "tests/rules/ca/date/test_form_export_carryover_fx_cash_settle_keys.py": 1,
+   "tests/rules/ca/fx/test_foreign_cash_from_corporate_actions.py": 3,
+   "tests/rules/ca/fx/test_futures_settlement_pl_t1135_cost_and_valet_404.py": 3,
+   "tests/rules/ca/fx/test_no_hard_coded_rates_spellings_twins_or_dealer_names.py": 2,
+   "tests/rules/ca/plan/test_radar_per_holder_rule.py": 1,
+   "tests/rules/ca/xlist/test_broker_journal_needs_no_map_line.py": 1,
+   "tests/rules/ca/xlist/test_listing_suffix_lookup_lines.py": 3,
+   "tests/test_positions_reports.py": 3
+  },
+  "E701": {
+   "scripts/style/measure.py": 1,
+   "src/taxjson/bin/taxjson_sum_gains.py": 5,
+   "src/taxjson/engine/ca/denial.py": 1,
+   "src/taxjson/engine/ca/solve.py": 1,
+   "src/taxjson/engine/ca/walk.py": 2,
+   "src/taxjson/lib/gain_summary.py": 4,
+   "tests/_support/tt_ported.py": 1
+  },
+  "E702": {
+   "scripts/style/measure.py": 3,
+   "src/taxjson/bin/taxjson_redact.py": 11,
+   "src/taxjson/lib/option_boundary.py": 3,
+   "tests/features/checks/test_checklist_done_over_question_findings.py": 10,
+   "tests/features/checks/test_checklist_kept_verdicts.py": 23,
+   "tests/features/checks/test_checklist_marks_and_project_scope.py": 5,
+   "tests/features/explain/test_wash_window_detection_fx_rows_and_explain_parity.py": 1,
+   "tests/features/fx/test_rates_staleness_safe_writes_and_corp_guards.py": 4,
+   "tests/features/lock/test_close_year_gate_and_check_filed.py": 1,
+   "tests/features/missing_history/test_incomplete_history_openings.py": 2,
+   "tests/features/parsers/test_ib_split_rounding_and_rbc_cash_in_lieu.py": 1,
+   "tests/rules/ca/sl/test_consumed_replacements_covers_and_allocation.py": 2,
+   "tests/test_checklist.py": 24,
+   "tests/test_checklist_run.py": 12,
+   "tests/test_checklist_view.py": 5,
+   "tests/test_engine_edge_cases.py": 2,
+   "tests/test_kit_checks.py": 1,
+   "tests/test_option_boundary.py": 4,
+   "tests/test_option_premium_timing.py": 20,
+   "tests/test_parser_activity_coverage.py": 6,
+   "tests/test_staking_evidence.py": 3,
+   "tests/test_sum_filing_totals.py": 2
+  },
+  "E713": {
+   "tests/rules/ca/sl/test_allowloss_lines.py": 1
+  },
+  "E731": {
+   "src/taxjson/bin/to_base_curr.py": 1,
+   "src/taxjson/cli/common.py": 1,
+   "src/taxjson/lib/brokerages/rbc_direct.py": 1,
+   "src/taxjson/lib/corp_actions.py": 2,
+   "src/taxjson/lib/fx_cash_v2.py": 2,
+   "src/taxjson/lib/map_hygiene.py": 1,
+   "src/taxjson/lib/out.py": 1,
+   "tests/_support/planning_watch_harvest.py": 1,
+   "tests/features/engines/test_engine_pool_wash_and_gain_paths.py": 3,
+   "tests/features/fx/test_rate_cache_coverage_and_damaged_values.py": 6,
+   "tests/features/merge/test_stage_tools_shared_loader_and_sort.py": 1,
+   "tests/features/missing_history/test_staleness_diagnostics_and_artifact_findings.py": 1,
+   "tests/features/partition/test_country_gates_in_radar_and_recomputes.py": 1,
+   "tests/features/partition/test_partition_rbc_notes_phantoms_and_brokerage.py": 1,
+   "tests/features/planning/test_cross_tool_flow_consistency.py": 8,
+   "tests/features/planning/test_harvest_notes_and_breakeven.py": 1,
+   "tests/features/planning/test_planning_radars_open_phantom_positions.py": 1,
+   "tests/features/repo_checks/test_release_and_ci_hardening.py": 1,
+   "tests/features/transfers/test_crypto_send_gates_arrival_band_and_pool_fee.py": 2,
+   "tests/rules/ca/acb/test_own_move_legs_in_each_accounts_books.py": 1,
+   "tests/rules/ca/corp/test_event_copies_and_values.py": 1,
+   "tests/rules/ca/fx/test_foreign_cash_ledger_v2.py": 2,
+   "tests/rules/ca/fx/test_futures_settlement_pl_t1135_cost_and_valet_404.py": 3,
+   "tests/rules/ca/fx/test_fx_cash_ledger_v2_and_crypto_sends.py": 1,
+   "tests/rules/ca/inc/test_corporate_distributions_and_settings_forwarded.py": 1,
+   "tests/rules/ca/opt/test_engine_options_denials_and_opening_paths.py": 3,
+   "tests/rules/ca/plan/test_radar_calendar_source_and_harvest_registered_window.py": 1,
+   "tests/rules/ca/plan/test_radar_per_holder_rule.py": 4,
+   "tests/rules/ca/plan/test_radar_unsettled_trades_and_engine_losses.py": 1,
+   "tests/rules/ca/plan/test_radar_window_edges_and_wording.py": 1,
+   "tests/rules/ca/rpt/test_fx_on_cash_ledgers_t1135_cash_and_coinbase_hours.py": 2,
+   "tests/rules/us/wash/test_affiliated_replacement_permanent.py": 1,
+   "tests/test_config_template.py": 1,
+   "tests/test_corp_action_fractional_cash_in_lieu.py": 1,
+   "tests/test_corp_actions.py": 1,
+   "tests/test_knowledge_pack.py": 1,
+   "tests/test_pipeline.py": 1,
+   "tests/test_wash_checks.py": 1,
+   "tests/test_watch.py": 1
+  },
+  "E741": {
+   "packages/taxjson-fetch/tests/test_fix_a2_ib_fetch.py": 1,
+   "scripts/style/measure.py": 8,
+   "src/taxjson/bin/taxjson_audit.py": 7,
+   "src/taxjson/bin/taxjson_missing_history.py": 4,
+   "src/taxjson/bin/taxjson_wash_radar.py": 58,
+   "src/taxjson/cli/plan.py": 3,
+   "src/taxjson/engine/assign.py": 1,
+   "src/taxjson/engine/ca/denial.py": 2,
+   "src/taxjson/engine/ca/pool.py": 8,
+   "src/taxjson/engine/ca/pools.py": 3,
+   "src/taxjson/engine/ca/taxrules.py": 1,
+   "src/taxjson/engine/ca/walk.py": 3,
+   "src/taxjson/engine/premium_ledger.py": 5,
+   "src/taxjson/engine/us/lot_store.py": 3,
+   "src/taxjson/engine/us/lots.py": 9,
+   "src/taxjson/engine/us/option_scan.py": 1,
+   "src/taxjson/engine/us/prepare.py": 14,
+   "src/taxjson/engine/us/taxrules.py": 3,
+   "src/taxjson/engine/us/walk.py": 22,
+   "src/taxjson/lib/brokerages/kraken.py": 1,
+   "src/taxjson/lib/corp_actions.py": 19,
+   "src/taxjson/lib/first_run.py": 2,
+   "src/taxjson/lib/market_calendar.py": 1,
+   "src/taxjson/lib/missing_history.py": 1,
+   "src/taxjson/lib/option_boundary.py": 1,
+   "src/taxjson/lib/option_yield.py": 1,
+   "src/taxjson/lib/positions_reports.py": 1,
+   "src/taxjson/lib/rebuy.py": 22,
+   "src/taxjson/lib/trace_format.py": 3,
+   "tests/features/checks/test_checklist_state_and_tolerances.py": 1,
+   "tests/features/discovery/test_detection_precedence.py": 2,
+   "tests/features/discovery/test_ib_broker_detection.py": 2,
+   "tests/features/engines/test_engine_pool_wash_and_gain_paths.py": 2,
+   "tests/features/explain/test_trace_check_files_event_labels_and_totals.py": 1,
+   "tests/features/forms/test_reconcile_slips_and_form_inputs_refused.py": 1,
+   "tests/features/merge/test_stage_tools_shared_loader_and_sort.py": 1,
+   "tests/features/parsers/test_broker_row_kinds_read.py": 1,
+   "tests/features/parsers/test_webull_trading_summary_rows.py": 1,
+   "tests/features/partition/test_country_wording_in_filing_views.py": 1,
+   "tests/features/planning/test_option_yield_and_boundary_book_walks.py": 6,
+   "tests/features/planning/test_option_yield_negative_premium_and_intraday_split.py": 1,
+   "tests/features/planning/test_radar_across_clock_change.py": 5,
+   "tests/features/planning/test_radar_rebuy_buy_check_sell_check_and_watch.py": 1,
+   "tests/features/planning/test_year_end_written_options_walk.py": 2,
+   "tests/features/reports/test_holdings_export_evidence_and_history.py": 1,
+   "tests/features/summaries/test_stats_long_option_splits_and_exercise_window.py": 1,
+   "tests/rules/ca/date/test_holiday_lists_easter_and_era_gates.py": 1,
+   "tests/rules/ca/date/test_trade_settle_or_pay_date_by_consumer.py": 1,
+   "tests/rules/ca/fx/test_futures_pooled_across_accounts.py": 1,
+   "tests/rules/ca/opt/test_engine_options_denials_and_opening_paths.py": 4,
+   "tests/rules/ca/plan/test_forward_settlement_and_buy_check_money.py": 1,
+   "tests/rules/ca/plan/test_radar_several_losses_and_short_direction.py": 5,
+   "tests/rules/ca/plan/test_radar_violation_window.py": 3,
+   "tests/rules/ca/sl/test_denial_bump_branches.py": 2,
+   "tests/rules/ca/sl/test_engine_area_denials_locks_and_forms.py": 3,
+   "tests/rules/ca/sl/test_replacement_units_and_same_moment.py": 2,
+   "tests/test_audit_command.py": 1,
+   "tests/test_basis_drafts.py": 5,
+   "tests/test_conservation.py": 1,
+   "tests/test_filed_year_lock.py": 2,
+   "tests/test_missing_history.py": 2,
+   "tests/test_option_replacement.py": 2,
+   "tests/test_option_yield.py": 2,
+   "tests/test_transactions_cmd.py": 2
+  },
+  "F401": {
+   "packages/taxjson-fetch/tests/_bootstrap.py": 2,
+   "packages/taxjson-fetch/tests/test_fetch.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_1029_r2.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_1029_r3.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_batch_c.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_issues_safe_writes.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_l_parsers2.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_l_runcore_a.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_m_parsers2_map.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_parsers.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_prerelease_security.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_privacy.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_runcore.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_security_audit_2026_09.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_security_hardening.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_shared_inputs.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_wash_checks.py": 1,
+   "packages/taxjson-fetch/tests/test_fix_1029_r7_fetch.py": 1,
+   "packages/taxjson-fetch/tests/test_fix_1029_r7d_fetch.py": 1,
+   "packages/taxjson-fetch/tests/test_fix_1029_r7e_fetch.py": 1,
+   "packages/taxjson-fetch/tests/test_fix_1029_r7f_misc.py": 1,
+   "packages/taxjson-fetch/tests/test_fix_a2_ib_fetch.py": 1,
+   "packages/taxjson-fetch/tests/test_fix_r8_parsers_fetch.py": 1,
+   "src/taxjson/bin/taxjson_detect_brokerage.py": 5,
+   "tests/_golden.py": 1,
+   "tests/_money_oracle.py": 1,
+   "tests/_planted_rates.py": 1,
+   "tests/_style.py": 1,
+   "tests/_support/__init__.py": 1,
+   "tests/features/engines/test_engine_pool_wash_and_gain_paths.py": 1,
+   "tests/features/explain/test_sale_trace_moneyless_splits_late_roc_and_joined_listings.py": 1,
+   "tests/features/forms/test_filing_commands_refuse_missing_books.py": 1,
+   "tests/features/fx/test_bad_intraday_quotes_ignored.py": 1,
+   "tests/features/fx/test_concurrent_rate_repair_and_cleanup.py": 1,
+   "tests/features/fx/test_damaged_currency_cache_blocks_and_rates_files.py": 1,
+   "tests/features/fx/test_rate_cache_coverage_and_damaged_values.py": 1,
+   "tests/features/parsers/test_coinbase_fees_and_kraken_cross_export_legs.py": 1,
+   "tests/features/parsers/test_crypto_price_cache_damaged_entries.py": 1,
+   "tests/features/run/test_written_folder_linked_out_of_the_project.py": 1,
+   "tests/features/summaries/test_fx_cash_one_line_refusals.py": 1,
+   "tests/features/ticker_map/test_close_year_project_files_and_filed_years.py": 1,
+   "tests/features/transfers/test_crypto_sends_files_and_transfer_sidecar_shapes.py": 1,
+   "tests/rules/ca/crypto/test_fill_crypto_row_prices_and_swap_values.py": 1,
+   "tests/rules/ca/fx/test_futures_settlement_pl_t1135_cost_and_valet_404.py": 1,
+   "tests/rules/ca/fx/test_yahoo_fill_age_and_futures_reconversion.py": 1,
+   "tests/tax_rules/__init__.py": 1,
+   "tests/test_cache_paths.py": 1,
+   "tests/test_checklist_items.py": 1,
+   "tests/test_fast_gate.py": 1,
+   "tests/test_fx_boc.py": 1,
+   "tests/test_staking_evidence.py": 1,
+   "tests/test_xlsx_to_csv.py": 1
+  },
+  "F402": {
+   "tests/test_us_corp_actions.py": 1
+  },
+  "F541": {
+   "src/taxjson/bin/taxjson_apply_distributions.py": 2,
+   "src/taxjson/bin/taxjson_instalments.py": 2,
+   "src/taxjson/bin/taxjson_missing_history.py": 1,
+   "src/taxjson/bin/taxjson_redact.py": 2,
+   "src/taxjson/cli/books.py": 1,
+   "src/taxjson/cli/elect.py": 1,
+   "src/taxjson/cli/estimate.py": 4,
+   "src/taxjson/cli/file.py": 2,
+   "src/taxjson/cli/maps.py": 1,
+   "src/taxjson/cli/migrate.py": 2,
+   "src/taxjson/cli/plan.py": 6,
+   "src/taxjson/cli/positions.py": 1,
+   "src/taxjson/cli/setup.py": 2,
+   "src/taxjson/cli/totals.py": 2,
+   "src/taxjson/engine/ca/denial.py": 4,
+   "src/taxjson/engine/us/walk.py": 4,
+   "src/taxjson/lib/amt_report.py": 1,
+   "src/taxjson/lib/brokerages/webull.py": 2,
+   "src/taxjson/lib/checklist.py": 4,
+   "src/taxjson/lib/cra_slips.py": 3,
+   "src/taxjson/lib/edge_cases.py": 1,
+   "src/taxjson/lib/handoff.py": 1,
+   "src/taxjson/lib/journals.py": 1,
+   "src/taxjson/lib/option_boundary.py": 1,
+   "src/taxjson/lib/pipeline.py": 5,
+   "src/taxjson/lib/tax_logic.py": 2,
+   "src/taxjson/lib/tax_plot.py": 3,
+   "src/taxjson/pipeline/run.py": 5,
+   "src/taxjson/pipeline/stages.py": 2,
+   "tests/_cra_pdf.py": 1,
+   "tests/_support/qt_gambit_rows.py": 2,
+   "tests/_support/symbols_listing_suffix.py": 2,
+   "tests/features/forms/test_reconcile_slips_nil_closes_and_futures_closes.py": 2,
+   "tests/rules/ca/acb/test_symbol_code_kind_read_over_all_descriptions.py": 2,
+   "tests/rules/ca/inc/test_corporate_distributions_and_settings_forwarded.py": 1,
+   "tests/rules/ca/rpt/test_fx_on_cash_ledgers_t1135_cash_and_coinbase_hours.py": 2
+  },
+  "F811": {
+   "tests/rules/ca/date/test_form_export_carryover_fx_cash_settle_keys.py": 1,
+   "tests/rules/ca/disp/test_schedule3_units_amounts_and_render.py": 1,
+   "tests/rules/ca/inst/test_instalment_threshold_boundaries.py": 1,
+   "tests/rules/ca/rpt/test_t1135_walk_report_thresholds_and_map_validation.py": 1
+  },
+  "F841": {
+   "scripts/style/measure.py": 1,
+   "src/taxjson/lib/brokerages/rbc_direct.py": 1,
+   "src/taxjson/lib/compare.py": 1,
+   "src/taxjson/lib/trace_format.py": 1,
+   "src/taxjson/pipeline/sanity.py": 1,
+   "tests/features/corporate_actions/test_corp_action_rows_by_broker.py": 1,
+   "tests/rules/ca/sl/test_engine_area_denials_locks_and_forms.py": 2,
+   "tests/test_engine_edge_cases.py": 1,
+   "tests/test_installer_fetch.py": 1,
+   "tests/test_missing_history_lib.py": 1,
+   "tests/test_transactions_cmd.py": 1
+  }
+ },
+ "noqa": {
+  "BLE001": {
+   "src/taxjson/bin/taxjson_audit.py": 2,
+   "src/taxjson/bin/taxjson_gains.py": 1,
+   "src/taxjson/bin/taxjson_missing_history.py": 5,
+   "src/taxjson/bin/taxjson_redact.py": 8,
+   "src/taxjson/bin/taxjson_t1135.py": 1,
+   "src/taxjson/bin/taxjson_wash_radar.py": 3,
+   "src/taxjson/cli/books.py": 5,
+   "src/taxjson/cli/common.py": 5,
+   "src/taxjson/cli/estimate.py": 1,
+   "src/taxjson/cli/listings.py": 1,
+   "src/taxjson/cli/main.py": 5,
+   "src/taxjson/cli/plan.py": 1,
+   "src/taxjson/cli/positions.py": 1,
+   "src/taxjson/cli/setup.py": 1,
+   "src/taxjson/cli/tips.py": 2,
+   "src/taxjson/lib/brokerages/base.py": 1,
+   "src/taxjson/lib/channels.py": 1,
+   "src/taxjson/lib/checklist.py": 21,
+   "src/taxjson/lib/cli_diag.py": 1,
+   "src/taxjson/lib/compare.py": 2,
+   "src/taxjson/lib/config_template.py": 3,
+   "src/taxjson/lib/crypto_sends.py": 1,
+   "src/taxjson/lib/dated_events.py": 1,
+   "src/taxjson/lib/div_estimate.py": 1,
+   "src/taxjson/lib/export_coverage.py": 4,
+   "src/taxjson/lib/first_run.py": 4,
+   "src/taxjson/lib/handoff.py": 3,
+   "src/taxjson/lib/history_migration.py": 1,
+   "src/taxjson/lib/holdings_dir.py": 2,
+   "src/taxjson/lib/listing_suffix.py": 2,
+   "src/taxjson/lib/loss_overrides.py": 1,
+   "src/taxjson/lib/map_file.py": 2,
+   "src/taxjson/lib/map_hygiene.py": 5,
+   "src/taxjson/lib/missing_history.py": 6,
+   "src/taxjson/lib/option_boundary.py": 3,
+   "src/taxjson/lib/out.py": 1,
+   "src/taxjson/lib/positions_check.py": 1,
+   "src/taxjson/lib/price_chain.py": 5,
+   "src/taxjson/lib/project_layout.py": 3,
+   "src/taxjson/lib/rename_migration.py": 1,
+   "src/taxjson/lib/renames.py": 1,
+   "src/taxjson/lib/requires.py": 1,
+   "src/taxjson/lib/similar.py": 3,
+   "src/taxjson/lib/slip_audit.py": 3,
+   "src/taxjson/lib/timezones.py": 2,
+   "src/taxjson/lib/tobase_map.py": 1,
+   "src/taxjson/lib/trade_stats.py": 1,
+   "src/taxjson/lib/xlist_loss_radar.py": 1,
+   "src/taxjson/lib/years_report.py": 1,
+   "src/taxjson/pipeline/config.py": 1,
+   "src/taxjson/pipeline/dispatch.py": 1,
+   "src/taxjson/pipeline/run.py": 9,
+   "src/taxjson/pipeline/stages.py": 19,
+   "tests/_money_oracle.py": 3,
+   "tests/rules/ca/xlist/test_shared_tobase_retracted_and_receipts_apart.py": 1,
+   "tests/test_settle_straddle_fuzz.py": 5,
+   "tests/test_transfer_fuzz.py": 4
+  },
+  "E402": {
+   "scripts/build_interlisted.py": 1,
+   "scripts/check_tax_rules.py": 3,
+   "scripts/style/survey.py": 1,
+   "src/taxjson/bin/taxjson_export.py": 1,
+   "src/taxjson/bin/taxjson_form_export.py": 1,
+   "src/taxjson/bin/taxjson_harvest.py": 1,
+   "src/taxjson/bin/taxjson_t1135.py": 1,
+   "src/taxjson/bin/taxjson_wash_radar.py": 1,
+   "src/taxjson/lib/brokerages/base.py": 1,
+   "src/taxjson/lib/brokerages/generic.py": 1,
+   "src/taxjson/lib/brokerages/rbc_direct.py": 1,
+   "src/taxjson/lib/brokerages/schema.py": 1,
+   "src/taxjson/lib/check_dates.py": 2,
+   "src/taxjson/lib/corp_actions.py": 1,
+   "src/taxjson/lib/crypto_sends.py": 1,
+   "src/taxjson/lib/dates.py": 1,
+   "src/taxjson/lib/fetchers.py": 2,
+   "src/taxjson/lib/out.py": 1,
+   "src/taxjson/lib/positions_check.py": 1,
+   "src/taxjson/lib/price_chain.py": 3,
+   "src/taxjson/lib/transfer_in.py": 2,
+   "tests/features/calendars/test_no_hard_coded_security_data_in_the_flow.py": 3,
+   "tests/features/checks/test_t1135_step_in_an_open_year.py": 1,
+   "tests/features/discovery/test_detection_precedence.py": 1,
+   "tests/features/explain/test_trace_check_files_event_labels_and_totals.py": 1,
+   "tests/features/forms/test_reconcile_slips_and_form_inputs_refused.py": 2,
+   "tests/features/lock/test_partial_lock_hashes_and_thaws.py": 1,
+   "tests/features/merge/test_cross_file_dedup.py": 2,
+   "tests/features/merge/test_dedup_per_broker_account_and_parser_checks.py": 1,
+   "tests/features/merge/test_json_input_contract.py": 1,
+   "tests/features/output/test_closed_standard_streams.py": 1,
+   "tests/features/parsers/test_rbc_questrade_symbols_row_shapes_and_income_rows.py": 1,
+   "tests/features/partition/test_cited_law_by_country.py": 1,
+   "tests/features/ticker_map/test_symbol_collisions_never_joined.py": 3,
+   "tests/features/year_folders/test_filed_year_frozen_inputs.py": 1,
+   "tests/rules/ca/acb/test_ib_temporary_symbol_map_line.py": 6,
+   "tests/rules/ca/date/test_form_export_carryover_fx_cash_settle_keys.py": 2,
+   "tests/rules/ca/date/test_no_owner_defaults_zone_leaps_and_province.py": 1,
+   "tests/rules/ca/disp/test_schedule3_units_amounts_and_render.py": 3,
+   "tests/rules/ca/est/test_law_constants_stated.py": 6,
+   "tests/rules/ca/fx/test_futures_settlement_pl_t1135_cost_and_valet_404.py": 3,
+   "tests/rules/ca/fx/test_no_hard_coded_rates_spellings_twins_or_dealer_names.py": 5,
+   "tests/rules/ca/inc/test_trust_listing_suffixes_and_january_roc_warning.py": 1,
+   "tests/rules/ca/inst/test_instalment_threshold_boundaries.py": 2,
+   "tests/rules/ca/plan/test_radar_per_holder_rule.py": 1,
+   "tests/rules/ca/rpt/test_edge_cases_window_edges_and_stock_dividends.py": 1,
+   "tests/rules/ca/rpt/test_t1135_walk_report_thresholds_and_map_validation.py": 2,
+   "tests/rules/ca/xlist/test_broker_journal_needs_no_map_line.py": 1,
+   "tests/rules/ca/xlist/test_listing_suffix_lookup_lines.py": 3,
+   "tests/rules/us/inc/test_ric_warning_window.py": 1,
+   "tests/test_checklist_items.py": 2,
+   "tests/test_positions_reports.py": 2
+  },
+  "E731": {
+   "src/taxjson/bin/to_base_curr.py": 1,
+   "src/taxjson/lib/map_hygiene.py": 1,
+   "tests/_support/planning_watch_harvest.py": 1,
+   "tests/features/engines/test_engine_pool_wash_and_gain_paths.py": 3,
+   "tests/features/missing_history/test_staleness_diagnostics_and_artifact_findings.py": 1,
+   "tests/features/partition/test_country_gates_in_radar_and_recomputes.py": 1,
+   "tests/features/planning/test_cross_tool_flow_consistency.py": 8,
+   "tests/features/planning/test_harvest_notes_and_breakeven.py": 1,
+   "tests/features/planning/test_planning_radars_open_phantom_positions.py": 1,
+   "tests/features/repo_checks/test_release_and_ci_hardening.py": 1,
+   "tests/features/transfers/test_crypto_send_gates_arrival_band_and_pool_fee.py": 2,
+   "tests/rules/ca/acb/test_own_move_legs_in_each_accounts_books.py": 1,
+   "tests/rules/ca/inc/test_corporate_distributions_and_settings_forwarded.py": 1,
+   "tests/rules/ca/plan/test_radar_calendar_source_and_harvest_registered_window.py": 1,
+   "tests/rules/ca/plan/test_radar_per_holder_rule.py": 4,
+   "tests/rules/ca/plan/test_radar_unsettled_trades_and_engine_losses.py": 1,
+   "tests/rules/ca/plan/test_radar_window_edges_and_wording.py": 1,
+   "tests/rules/ca/rpt/test_fx_on_cash_ledgers_t1135_cash_and_coinbase_hours.py": 1,
+   "tests/test_config_template.py": 1,
+   "tests/test_knowledge_pack.py": 1,
+   "tests/test_pipeline.py": 1,
+   "tests/test_wash_checks.py": 1,
+   "tests/test_watch.py": 1
+  },
+  "F401": {
+   "packages/taxjson-fetch/tests/_bootstrap.py": 2,
+   "packages/taxjson-fetch/tests/test_fetch.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_1029_r2.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_1029_r3.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_a2_errb.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_audit_1024.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_batch_c.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_issues_safe_writes.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_l_ibparse.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_l_parsers2.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_l_runcore_a.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_l_runcore_b.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_m_parsers2_map.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_parsers.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_prerelease_security.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_privacy.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_fix_runcore.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_security_audit_2026_09.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_security_hardening.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_shared_inputs.py": 1,
+   "packages/taxjson-fetch/tests/test_fetch_wash_checks.py": 1,
+   "packages/taxjson-fetch/tests/test_fix_1029_r7_fetch.py": 1,
+   "packages/taxjson-fetch/tests/test_fix_1029_r7d_fetch.py": 1,
+   "packages/taxjson-fetch/tests/test_fix_1029_r7e_fetch.py": 1,
+   "packages/taxjson-fetch/tests/test_fix_1029_r7f_misc.py": 1,
+   "packages/taxjson-fetch/tests/test_fix_a2_ib_fetch.py": 1,
+   "packages/taxjson-fetch/tests/test_fix_r8_parsers_fetch.py": 1,
+   "src/taxjson/bin/taxjson_detect_brokerage.py": 1,
+   "src/taxjson/bin/taxjson_gains.py": 1,
+   "src/taxjson/bin/taxjson_wash_radar.py": 1,
+   "src/taxjson/lib/missing_history.py": 1,
+   "tests/_golden.py": 1,
+   "tests/_money_oracle.py": 1,
+   "tests/_planted_rates.py": 1,
+   "tests/_style.py": 1,
+   "tests/_support/__init__.py": 1,
+   "tests/features/engines/test_engine_pool_wash_and_gain_paths.py": 1,
+   "tests/features/explain/test_sale_trace_moneyless_splits_late_roc_and_joined_listings.py": 1,
+   "tests/features/forms/test_filing_commands_refuse_missing_books.py": 1,
+   "tests/features/fx/test_bad_intraday_quotes_ignored.py": 1,
+   "tests/features/fx/test_concurrent_rate_repair_and_cleanup.py": 1,
+   "tests/features/fx/test_damaged_currency_cache_blocks_and_rates_files.py": 1,
+   "tests/features/fx/test_rate_cache_coverage_and_damaged_values.py": 1,
+   "tests/features/parsers/test_coinbase_fees_and_kraken_cross_export_legs.py": 1,
+   "tests/features/parsers/test_crypto_price_cache_damaged_entries.py": 1,
+   "tests/features/run/test_written_folder_linked_out_of_the_project.py": 1,
+   "tests/features/summaries/test_fx_cash_one_line_refusals.py": 1,
+   "tests/features/ticker_map/test_close_year_project_files_and_filed_years.py": 1,
+   "tests/features/transfers/test_crypto_sends_files_and_transfer_sidecar_shapes.py": 1,
+   "tests/rules/ca/crypto/test_fill_crypto_row_prices_and_swap_values.py": 1,
+   "tests/rules/ca/fx/test_futures_settlement_pl_t1135_cost_and_valet_404.py": 1,
+   "tests/rules/ca/fx/test_yahoo_fill_age_and_futures_reconversion.py": 1,
+   "tests/rules/ca/rpt/test_t1135_cash_in_transit_arrivals_and_income_lines.py": 1,
+   "tests/tax_rules/__init__.py": 1,
+   "tests/test_cache_paths.py": 1,
+   "tests/test_checklist_items.py": 1,
+   "tests/test_fast_gate.py": 1,
+   "tests/test_fx_boc.py": 1,
+   "tests/test_staking_evidence.py": 1,
+   "tests/test_xlsx_to_csv.py": 1
+  },
+  "S310": {
+   "scripts/kit_checks.py": 1
+  },
+  "SLF001": {
+   "src/taxjson/cli/main.py": 3,
+   "src/taxjson/lib/checklist.py": 1,
+   "src/taxjson/lib/compare.py": 1
+  },
+  "blanket": {
+   "tests/features/cli/test_ui_findings_minimal_repros.py": 1,
+   "tests/rules/ca/fx/test_futures_settlement_pl_t1135_cost_and_valet_404.py": 3
+  }
+ },
+ "function_length": {
+  "packages/taxjson-fetch/src/taxjson_fetch/api.py::positions_to_holdings_toml": [
+   173
+  ],
+  "packages/taxjson-fetch/src/taxjson_fetch/command.py::_qt_live_holdings": [
+   195
+  ],
+  "packages/taxjson-fetch/src/taxjson_fetch/command.py::_run_locked": [
+   360
+  ],
+  "scripts/build_interlisted.py::build": [
+   324
+  ],
+  "scripts/check_tax_rules.py::main": [
+   176
+  ],
+  "src/taxjson/bin/fill_crypto_prices.py::_fill": [
+   198
+  ],
+  "src/taxjson/bin/taxjson_carryover.py::build_canada_ledger": [
+   417
+  ],
+  "src/taxjson/bin/taxjson_export.py::_holdings_toml_to_inventory": [
+   243
+  ],
+  "src/taxjson/bin/taxjson_export.py::_load_trade_events": [
+   201
+  ],
+  "src/taxjson/bin/taxjson_fx_cash.py::build_ledger": [
+   157
+  ],
+  "src/taxjson/bin/taxjson_gains.py::_parse_args": [
+   238
+  ],
+  "src/taxjson/bin/taxjson_harvest.py::_harvest_rows": [
+   199
+  ],
+  "src/taxjson/bin/taxjson_missing_history.py::_write_purchases": [
+   230
+  ],
+  "src/taxjson/bin/taxjson_reconcile_slips.py::load_slip": [
+   157
+  ],
+  "src/taxjson/bin/taxjson_redact.py::redact_text": [
+   283
+  ],
+  "src/taxjson/bin/taxjson_redact.py::redact_tree": [
+   287
+  ],
+  "src/taxjson/bin/taxjson_sort.py::plan_dedup": [
+   237
+  ],
+  "src/taxjson/bin/taxjson_split_gains.py::split_for_account": [
+   164
+  ],
+  "src/taxjson/bin/taxjson_t1135.py::build_report": [
+   366
+  ],
+  "src/taxjson/bin/taxjson_t1135.py::walk_costs": [
+   318
+  ],
+  "src/taxjson/bin/taxjson_validate.py::validate_transactions": [
+   214
+  ],
+  "src/taxjson/cli/common.py::_leaps_contracts": [
+   164
+  ],
+  "src/taxjson/cli/explain.py::_explain_wash_sales": [
+   168
+  ],
+  "src/taxjson/cli/file.py::_freeze_inputs": [
+   179
+  ],
+  "src/taxjson/cli/migrate.py::_migrate_to_years": [
+   359
+  ],
+  "src/taxjson/cli/plan.py::_wash_class_context": [
+   260
+  ],
+  "src/taxjson/cli/slips.py::_slip_audit_import_cra": [
+   215
+  ],
+  "src/taxjson/engine/ca/denial.py::_sl_allocate": [
+   261
+  ],
+  "src/taxjson/engine/ca/denial.py::_superficial_loss_pass": [
+   185
+  ],
+  "src/taxjson/engine/ca/solve.py::_ca_solve": [
+   325
+  ],
+  "src/taxjson/engine/ca/taxrules.py::CanadaTaxRules._finish": [
+   414
+  ],
+  "src/taxjson/engine/ca/taxrules.py::CanadaTaxRules._prepare": [
+   346
+  ],
+  "src/taxjson/engine/ca/walk.py::_walk_adjust": [
+   258
+  ],
+  "src/taxjson/engine/ca/walk.py::_walk_rows": [
+   316
+  ],
+  "src/taxjson/engine/ca/walk.py::_walk_trade": [
+   420
+  ],
+  "src/taxjson/engine/us/option_scan.py::detect_option_replacement_matches": [
+   151
+  ],
+  "src/taxjson/engine/us/prepare.py::_us_scan_events": [
+   281
+  ],
+  "src/taxjson/engine/us/taxrules.py::USATaxRules._finish": [
+   197
+  ],
+  "src/taxjson/engine/us/taxrules.py::USATaxRules._prepare": [
+   370
+  ],
+  "src/taxjson/engine/us/trades.py::_us_walk_buy": [
+   458
+  ],
+  "src/taxjson/engine/us/trades.py::_us_walk_sell": [
+   333
+  ],
+  "src/taxjson/engine/us/walk.py::_us_walk_adjust": [
+   181
+  ],
+  "src/taxjson/engine/us/walk.py::_us_walk_rows": [
+   262
+  ],
+  "src/taxjson/engine/us/walk.py::_us_walk_spinoff": [
+   173
+  ],
+  "src/taxjson/engine/us/walk.py::_us_walk_stock_dividend": [
+   180
+  ],
+  "src/taxjson/lib/brokerages/coinbase.py::CoinbaseBrokerage._build_convert": [
+   198
+  ],
+  "src/taxjson/lib/brokerages/ib_extractor.py::IbBrokerage.prepare_files": [
+   167
+  ],
+  "src/taxjson/lib/brokerages/ib_extractor.py::_ib_prescan": [
+   223
+  ],
+  "src/taxjson/lib/brokerages/ib_extractor.py::_warn_stock_aliases": [
+   225
+  ],
+  "src/taxjson/lib/brokerages/kraken.py::KrakenBrokerage._build_instant_trade": [
+   205
+  ],
+  "src/taxjson/lib/brokerages/rbc_direct.py::RbcBrokerage._build_trade": [
+   152
+  ],
+  "src/taxjson/lib/brokerages/rbc_direct.py::build_rbc_account_context": [
+   192
+  ],
+  "src/taxjson/lib/brokerages/rbc_direct.py::read_rbc_rows": [
+   207
+  ],
+  "src/taxjson/lib/brokerages/schema.py::validate_transactions": [
+   217
+  ],
+  "src/taxjson/lib/brokerages/webull.py::WebullBrokerage._mark_assignments": [
+   165
+  ],
+  "src/taxjson/lib/check_dates.py::analyze": [
+   250
+  ],
+  "src/taxjson/lib/checklist.py::_spec": [
+   431
+  ],
+  "src/taxjson/lib/checklist.py::d_run_clean": [
+   185
+  ],
+  "src/taxjson/lib/config_template.py::_associate": [
+   274
+  ],
+  "src/taxjson/lib/corp_actions.py::pair_rbc_reorganizations": [
+   182
+  ],
+  "src/taxjson/lib/corp_actions.py::parse_ib_corporate_actions": [
+   337
+  ],
+  "src/taxjson/lib/corp_actions.py::parse_questrade_corporate_actions": [
+   427
+  ],
+  "src/taxjson/lib/corp_views.py::spinoffs": [
+   206
+  ],
+  "src/taxjson/lib/cra_slips.py::place": [
+   252
+  ],
+  "src/taxjson/lib/cra_slips.py::plan_import": [
+   205
+  ],
+  "src/taxjson/lib/cross_listings.py::analyze": [
+   403
+  ],
+  "src/taxjson/lib/crypto_sends.py::coinbase_pool_flows": [
+   158
+  ],
+  "src/taxjson/lib/crypto_sends.py::match_transfers": [
+   151
+  ],
+  "src/taxjson/lib/crypto_sends.py::usd_pool": [
+   192
+  ],
+  "src/taxjson/lib/div_estimate.py::estimate": [
+   213
+  ],
+  "src/taxjson/lib/div_estimate.py::payments": [
+   299
+  ],
+  "src/taxjson/lib/edge_cases.py::option_expiries": [
+   155
+  ],
+  "src/taxjson/lib/fx_cash_v2.py::_carry_openings": [
+   215
+  ],
+  "src/taxjson/lib/fx_cash_v2.py::build": [
+   1346
+  ],
+  "src/taxjson/lib/gain_summary.py::summarize_gains": [
+   215
+  ],
+  "src/taxjson/lib/handoff.py::_boundary_issues": [
+   167
+  ],
+  "src/taxjson/lib/handoff.py::check": [
+   503
+  ],
+  "src/taxjson/lib/ib_dividends.py::read_report": [
+   160
+  ],
+  "src/taxjson/lib/in_kind.py::pair_all": [
+   199
+  ],
+  "src/taxjson/lib/listing_suffix.py::resolve": [
+   182
+  ],
+  "src/taxjson/lib/migrate.py::plan": [
+   186
+  ],
+  "src/taxjson/lib/missing_history.py::detect_missing_history": [
+   191
+  ],
+  "src/taxjson/lib/missing_history.py::detect_zero_basis_acquisitions": [
+   229
+  ],
+  "src/taxjson/lib/missing_history.py::synthesize_openings": [
+   431
+  ],
+  "src/taxjson/lib/opening.py::_realizations_left_out": [
+   184
+  ],
+  "src/taxjson/lib/option_boundary.py::straddling": [
+   369
+  ],
+  "src/taxjson/lib/option_boundary.py::write_lots": [
+   154
+  ],
+  "src/taxjson/lib/option_yield.py::analyze": [
+   178
+  ],
+  "src/taxjson/lib/option_yield.py::contracts": [
+   240
+  ],
+  "src/taxjson/lib/pipeline.py::_drop_self_cancelling_transfers": [
+   488
+  ],
+  "src/taxjson/lib/pipeline.py::_handle_transfers": [
+   232
+  ],
+  "src/taxjson/lib/pipeline.py::_net_cross_account_transfers": [
+   163
+  ],
+  "src/taxjson/lib/pipeline.py::prepare_books": [
+   212
+  ],
+  "src/taxjson/lib/pipeline.py::run_gains": [
+   494
+  ],
+  "src/taxjson/lib/positions_reports.py::_read_ib": [
+   190
+  ],
+  "src/taxjson/lib/positions_reports.py::_read_rbc": [
+   152
+  ],
+  "src/taxjson/lib/positions_reports.py::_read_toml": [
+   216
+  ],
+  "src/taxjson/lib/positions_reports.py::_read_toml._row": [
+   160
+  ],
+  "src/taxjson/lib/price_chain.py::fetch_prices": [
+   216
+  ],
+  "src/taxjson/lib/purchase_drafts.py::_draft_transfers": [
+   207
+  ],
+  "src/taxjson/lib/purchase_drafts.py::draft_purchases": [
+   260
+  ],
+  "src/taxjson/lib/rbc_corp_actions.py::parse_rbc_corporate_actions": [
+   380
+  ],
+  "src/taxjson/lib/rename_migration.py::plan_migration": [
+   177
+  ],
+  "src/taxjson/lib/renames.py::apply_dated_renames": [
+   182
+  ],
+  "src/taxjson/lib/slip_audit.py::_audit_account": [
+   193
+  ],
+  "src/taxjson/lib/slip_audit.py::_audit_group": [
+   271
+  ],
+  "src/taxjson/lib/slip_audit.py::_match_payments": [
+   155
+  ],
+  "src/taxjson/lib/slip_audit.py::_securities": [
+   246
+  ],
+  "src/taxjson/lib/slip_audit.py::_suggest_roc": [
+   279
+  ],
+  "src/taxjson/lib/slip_audit.py::audit": [
+   195
+  ],
+  "src/taxjson/lib/slip_symbols.py::load_computed": [
+   222
+  ],
+  "src/taxjson/lib/staking_report.py::_reward": [
+   153
+  ],
+  "src/taxjson/lib/symbol_codes.py::resolve": [
+   296
+  ],
+  "src/taxjson/lib/tax_estimate.py::_amt_canada": [
+   207
+  ],
+  "src/taxjson/lib/tax_estimate.py::_canada_notes": [
+   197
+  ],
+  "src/taxjson/lib/tax_estimate.py::estimate_canada": [
+   393
+  ],
+  "src/taxjson/lib/tax_forms.py::build_8949": [
+   181
+  ],
+  "src/taxjson/lib/tax_forms.py::build_schedule3": [
+   215
+  ],
+  "src/taxjson/lib/tax_logic.py::_canada": [
+   2775
+  ],
+  "src/taxjson/lib/tax_logic.py::_usa": [
+   2017
+  ],
+  "src/taxjson/lib/ticker_map_rules.py::_parse_map_text": [
+   255
+  ],
+  "src/taxjson/lib/tobase_map.py::plan_update": [
+   172
+  ],
+  "src/taxjson/lib/trade_stats.py::closed_trades": [
+   343
+  ],
+  "src/taxjson/lib/trade_stats.py::pooled_put_credits": [
+   274
+  ],
+  "src/taxjson/lib/trade_stats.py::share_credits": [
+   395
+  ],
+  "src/taxjson/lib/trade_stats.py::written_option_trades": [
+   297
+  ],
+  "src/taxjson/lib/transfer_in.py::arrivals": [
+   266
+  ],
+  "src/taxjson/lib/tt_format.py::parse_tt_line": [
+   321
+  ],
+  "src/taxjson/lib/tx_load.py::coerce_transaction_row": [
+   163
+  ],
+  "src/taxjson/lib/xlist_loss_radar.py::analyze": [
+   191
+  ],
+  "src/taxjson/pipeline/config.py::validate_config": [
+   211
+  ],
+  "src/taxjson/pipeline/run.py::_check_filed_years": [
+   449
+  ],
+  "src/taxjson/pipeline/run.py::_shared_inputs_moved": [
+   153
+  ],
+  "src/taxjson/pipeline/stages.py::_stage_crypto_sends": [
+   151
+  ],
+  "src/taxjson/pipeline/stages.py::stage_account": [
+   497
+  ],
+  "src/taxjson/pipeline/stages.py::stage_cross_listings": [
+   166
+  ]
+ },
+ "print_calls": {
+  "print": {
+   "src/taxjson/bin/taxjson_audit.py": 1,
+   "src/taxjson/bin/taxjson_corp_actions.py": 1,
+   "src/taxjson/bin/taxjson_detect_brokerage.py": 3,
+   "src/taxjson/bin/taxjson_diff.py": 2,
+   "src/taxjson/bin/taxjson_form_export.py": 1,
+   "src/taxjson/bin/taxjson_missing_history.py": 1,
+   "src/taxjson/bin/taxjson_reconcile_slips.py": 1,
+   "src/taxjson/bin/taxjson_redact.py": 1,
+   "src/taxjson/bin/taxjson_t1135.py": 1,
+   "src/taxjson/bin/taxjson_wash_radar.py": 2,
+   "src/taxjson/cli/elect.py": 1,
+   "src/taxjson/cli/estimate.py": 10,
+   "src/taxjson/cli/maps.py": 2,
+   "src/taxjson/cli/migrate.py": 1,
+   "src/taxjson/cli/slips.py": 1,
+   "src/taxjson/lib/checklist.py": 1,
+   "src/taxjson/lib/cli_diag.py": 1,
+   "src/taxjson/lib/country.py": 1,
+   "src/taxjson/lib/crypto_sends.py": 1,
+   "src/taxjson/lib/out.py": 1,
+   "src/taxjson/lib/stage_msg.py": 2
+  }
+ },
+ "money": {
+  "float": {
+   "src/taxjson/bin/_option_gains_report.py": 7,
+   "src/taxjson/bin/taxjson_apply_distributions.py": 2,
+   "src/taxjson/bin/taxjson_audit.py": 21,
+   "src/taxjson/bin/taxjson_carryover.py": 13,
+   "src/taxjson/bin/taxjson_corp_actions.py": 1,
+   "src/taxjson/bin/taxjson_explain.py": 7,
+   "src/taxjson/bin/taxjson_export.py": 6,
+   "src/taxjson/bin/taxjson_fees.py": 2,
+   "src/taxjson/bin/taxjson_filed.py": 1,
+   "src/taxjson/bin/taxjson_form_export.py": 1,
+   "src/taxjson/bin/taxjson_fx_cash.py": 2,
+   "src/taxjson/bin/taxjson_gains.py": 2,
+   "src/taxjson/bin/taxjson_harvest.py": 2,
+   "src/taxjson/bin/taxjson_merge2.py": 1,
+   "src/taxjson/bin/taxjson_reconcile_slips.py": 1,
+   "src/taxjson/bin/taxjson_split_gains.py": 7,
+   "src/taxjson/bin/taxjson_sum_gains.py": 5,
+   "src/taxjson/bin/taxjson_t1135.py": 6,
+   "src/taxjson/bin/taxjson_wash_radar.py": 18,
+   "src/taxjson/characterize/foreign_roc.py": 1,
+   "src/taxjson/characterize/income_dating.py": 10,
+   "src/taxjson/cli/books.py": 1,
+   "src/taxjson/cli/common.py": 7,
+   "src/taxjson/cli/elect.py": 1,
+   "src/taxjson/cli/estimate.py": 15,
+   "src/taxjson/cli/explain.py": 2,
+   "src/taxjson/cli/file.py": 14,
+   "src/taxjson/cli/listings.py": 21,
+   "src/taxjson/cli/plan.py": 3,
+   "src/taxjson/cli/positions.py": 2,
+   "src/taxjson/cli/summaries.py": 18,
+   "src/taxjson/cli/tips.py": 2,
+   "src/taxjson/cli/totals.py": 13,
+   "src/taxjson/engine/ca/taxrules.py": 2,
+   "src/taxjson/engine/rows.py": 1,
+   "src/taxjson/lib/amt_report.py": 4,
+   "src/taxjson/lib/brokerages/_crypto_common.py": 1,
+   "src/taxjson/lib/brokerages/generic.py": 1,
+   "src/taxjson/lib/brokerages/ib_extractor.py": 5,
+   "src/taxjson/lib/brokerages/questrade.py": 2,
+   "src/taxjson/lib/brokerages/schema.py": 4,
+   "src/taxjson/lib/brokerages/webull.py": 7,
+   "src/taxjson/lib/carryforward.py": 13,
+   "src/taxjson/lib/carryover_inputs.py": 1,
+   "src/taxjson/lib/cash_events.py": 1,
+   "src/taxjson/lib/cash_legs.py": 7,
+   "src/taxjson/lib/cg_dividends.py": 4,
+   "src/taxjson/lib/check_dates.py": 5,
+   "src/taxjson/lib/checklist.py": 5,
+   "src/taxjson/lib/corp_actions.py": 21,
+   "src/taxjson/lib/corp_views.py": 5,
+   "src/taxjson/lib/cost_timeline.py": 2,
+   "src/taxjson/lib/crypto_sends.py": 5,
+   "src/taxjson/lib/div_estimate.py": 3,
+   "src/taxjson/lib/edge_cases.py": 10,
+   "src/taxjson/lib/filed_locks.py": 5,
+   "src/taxjson/lib/first_run.py": 2,
+   "src/taxjson/lib/futures.py": 1,
+   "src/taxjson/lib/fx_cash_v2.py": 40,
+   "src/taxjson/lib/gain_summary.py": 7,
+   "src/taxjson/lib/handoff.py": 33,
+   "src/taxjson/lib/in_kind.py": 8,
+   "src/taxjson/lib/income_summary.py": 1,
+   "src/taxjson/lib/migrate.py": 1,
+   "src/taxjson/lib/missing_history.py": 8,
+   "src/taxjson/lib/opening.py": 4,
+   "src/taxjson/lib/option_boundary.py": 4,
+   "src/taxjson/lib/option_yield.py": 7,
+   "src/taxjson/lib/pipeline.py": 17,
+   "src/taxjson/lib/positions_check.py": 5,
+   "src/taxjson/lib/price_chain.py": 1,
+   "src/taxjson/lib/purchase_drafts.py": 3,
+   "src/taxjson/lib/rebuy.py": 5,
+   "src/taxjson/lib/renames.py": 7,
+   "src/taxjson/lib/similar.py": 2,
+   "src/taxjson/lib/slip_audit.py": 12,
+   "src/taxjson/lib/slip_symbols.py": 8,
+   "src/taxjson/lib/staking_report.py": 3,
+   "src/taxjson/lib/t1135_cash.py": 1,
+   "src/taxjson/lib/tax_estimate.py": 22,
+   "src/taxjson/lib/tax_forms.py": 12,
+   "src/taxjson/lib/tax_plot.py": 5,
+   "src/taxjson/lib/trace_format.py": 13,
+   "src/taxjson/lib/trade_cancel.py": 2,
+   "src/taxjson/lib/tt_format.py": 14,
+   "src/taxjson/lib/xlist_loss_radar.py": 1,
+   "src/taxjson/model/evidence.py": 7,
+   "src/taxjson/model/money.py": 2,
+   "src/taxjson/model/transaction.py": 3,
+   "src/taxjson/pipeline/config.py": 1,
+   "src/taxjson/pipeline/diagnostics.py": 1,
+   "src/taxjson/pipeline/inputs.py": 1,
+   "src/taxjson/pipeline/sanity.py": 2,
+   "src/taxjson/pipeline/stages.py": 1
+  },
+  "round": {
+   "src/taxjson/bin/taxjson_carryover.py": 1,
+   "src/taxjson/bin/taxjson_wash_radar.py": 1,
+   "src/taxjson/lib/brokerages/ib_extractor.py": 1,
+   "src/taxjson/lib/compare.py": 2,
+   "src/taxjson/lib/corp_actions.py": 1,
+   "src/taxjson/lib/corp_views.py": 2,
+   "src/taxjson/lib/div_estimate.py": 2,
+   "src/taxjson/lib/report_fmt.py": 2,
+   "src/taxjson/model/money.py": 1,
+   "src/taxjson/parsers/toolbox/descriptions.py": 1
+  }
+ }
+}

@@ -27,8 +27,11 @@ Canada:
 
 import unittest
 
-from taxjson.lib.core import CanadaTaxRules, TaxTransaction, USATaxRules
+from taxjson.engine.ca.taxrules import CanadaTaxRules
+from taxjson.engine.us.taxrules import USATaxRules
+from taxjson.model.transaction import TaxTransaction
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 
 # ============================================================================
@@ -56,7 +59,7 @@ class TestUSAHoldingPeriod(unittest.TestCase):
         g = self._gain_of('2024-03-15', '2025-03-16')
         self.assertEqual(g['term'], 'LONG_TERM')
 
-    @rule("US-HOLD-01", "US-HOLD-02")
+    @rule(R.US_HOLD_01, R.US_HOLD_02)
     def test_end_of_month_acquisition_rev_rul_66_7(self):
         """Rev. Rul. 66-7: property acquired on the LAST day of a month
         starts its holding period on the 1st of the next month and is
@@ -111,7 +114,7 @@ class TestUSAHoldingPeriod(unittest.TestCase):
         self.assertAlmostEqual(inv[0]['total_cost'], 2000.0)
 
 
-@rule("US-WASH-02")
+@rule(R.US_WASH_02)
 class TestUSAWashSalePartialCoverage(unittest.TestCase):
     """Replacement BUY smaller than the loss qty → only partial disallowance."""
 
@@ -141,7 +144,7 @@ class TestUSAWashSalePartialCoverage(unittest.TestCase):
 class TestUSAShelteredReplacement(unittest.TestCase):
     """Rev. Rul. 2008-5: replacement bought in an IRA = permanent disallowance."""
 
-    @rule("US-WASH-04")
+    @rule(R.US_WASH_04)
     def test_sheltered_replacement_is_permanent(self):
         rules = USATaxRules()
         taxable = [
@@ -168,7 +171,7 @@ class TestUSAShelteredReplacement(unittest.TestCase):
         self.assertTrue(any(r['is_sheltered'] for r in g.get('wash_replacements', [])))
 
 
-@rule("US-WASH-10")
+@rule(R.US_WASH_10)
 class TestUSAHoldingPeriodInheritance(unittest.TestCase):
     """§1223(3): wash-sale replacement inherits the loss lot's holding period."""
 
@@ -392,7 +395,7 @@ class TestCanadaPoolResetAtZero(unittest.TestCase):
 class TestCanadaSplit(unittest.TestCase):
     """SPLIT multiplies pool qty (cost basis stays the same → acb/share falls)."""
 
-    @rule("CA-CORP-01")
+    @rule(R.CA_CORP_01)
     def test_two_for_one_split(self):
         rules = CanadaTaxRules()
         txs = [
@@ -586,7 +589,7 @@ class TestPaymentInLieuOfDividend(unittest.TestCase):
         regular DIVIDEND and a PIL row; check that PIL lands in its own
         per-ticker `pil` column, not in `div` (which feeds the T5 dividend
         total). Cash interest bucket stays untouched."""
-        from taxjson.bin.taxjson_sum_income import summarize_income
+        from taxjson.lib.income_summary import summarize_income
         tx_list = [
             {'action': 'DIVIDEND', 'date': '2025-03-15', 'symbol': 'X',
              'currency': 'USD', 'gross_amount': 100.0, 'net_amount': 100.0,

@@ -15,8 +15,9 @@ from pathlib import Path
 from taxjson.lib import ticker_map_format as F
 from taxjson.lib.ticker_map import (RENAME_KEYWORDS, RETIRED_KEYWORDS,
                                     SIDE_KEYWORDS)
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = _paths.REPO
 
 MESSY = """\
 # My notes for this project: every line here was checked by hand.
@@ -395,7 +396,7 @@ class TestCommand(unittest.TestCase):
                 # (A Canadian project's tobase.map adds the interlisted
                 # pairs — every one of them `generated`, none the
                 # user's: lib/tobase_map.)
-                from taxjson.bin.taxjson_ticker_map import _parse_map_file
+                from taxjson.lib.map_file import _parse_map_file
                 tm, problems, notes = _parse_map_file(root / "ticker.map")
                 self.assertEqual((problems, notes), ([], []))
                 self.assertFalse(tm.glob or tm.delete)

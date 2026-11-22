@@ -32,11 +32,12 @@ import tempfile
 from pathlib import Path
 
 import _hermetic  # noqa: F401  (a synthetic HOME, offline: tests/_hermetic)
+import _paths
 from _qa_project import Text
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 SRC = REPO_ROOT / "src"
-FIXTURES = Path(__file__).resolve().parent / "fixtures" / "style"
+FIXTURES = _paths.FIXTURES / "style"
 
 # The default elections the builder saves (the countries' taxable ones).
 _ELECTION = {"canada": "taxable_deemed_dividend",
@@ -58,7 +59,9 @@ def env(**extra) -> dict:
     e = dict(os.environ)
     e.pop("TAXJSON_WIDTH", None)
     e["TAXJSON_OFFLINE"] = "1"
-    e["PYTHONPATH"] = str(SRC) + os.pathsep + e.get("PYTHONPATH", "")
+    # No empty entry: Python reads one as the cwd, a project folder's json.py.
+    e["PYTHONPATH"] = os.pathsep.join(
+        [str(SRC)] + [p for p in e.get("PYTHONPATH", "").split(os.pathsep) if p])
     e.update({k: str(v) for k, v in extra.items()})
     return e
 
@@ -131,7 +134,7 @@ def quote_spelling(root: Path, sym: str) -> str:
     QUOTE / CRYPTO lines, else the derived one; an option contract is
     its own): a price-cache entry serves only that spelling (#82)."""
     from taxjson.lib import price_chain as PC
-    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.option_symbols import is_option_symbol
     if is_option_symbol(sym):
         return sym
     quote = PC.load_yf_map([root])

@@ -1,0 +1,9 @@
+OPTION YEAR-BOUNDARY REVIEW — tax year 2024
+Premium timing: grant (from 2024); filed-year locks: none.
+
+KIND: how it closed (open: still open at year end); PAID: the cost to close it.
+ACCOUNT  SYMBOL                 WRITTEN     UNITS  PREMIUM  CLOSED  KIND  PAID
+------------------------------------------------------------------------------
+margin   QZQ250117C00040000.US  2024-11-18      1   201.15       -  open     -
+
+No amended return is required by these contracts under the timing in force.

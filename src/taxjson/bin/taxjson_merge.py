@@ -3,9 +3,9 @@ import json
 import sys
 import argparse
 from pathlib import Path
-from datetime import datetime, timezone
 
 from taxjson.lib import cli_diag
+from taxjson.lib import out as _out
 
 PROG = "taxjson-merge"
 
@@ -32,8 +32,9 @@ def main():
 
     merged_transactions = []
     opening_cut = []
+    # No time stamp: the same books merge to the same bytes (a merge the
+    # run asks for again writes nothing new; backlog TJ-4267).
     metadata = {
-        "merged_at": datetime.now(timezone.utc).isoformat(),
         "sources": []
     }
 
@@ -101,7 +102,7 @@ def main():
     }
 
     json.dump(output, sys.stdout, indent=2, sort_keys=True)
-    print()
+    _out.put("")  # the document's closing newline, as print() wrote it
 
 if __name__ == "__main__":
     main()

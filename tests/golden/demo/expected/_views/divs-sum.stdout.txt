@@ -1,0 +1,19 @@
+DIVIDENDS — tax year 2024
+DIVIDEND rows; payments in lieu are in `dil-sum`.
+
+SYMBOL    CUR  DIVIDEND
+-----------------------
+AAPL.US   USD     18.00
+ENB.TO    CAD    183.00
+ETH       USD     17.45
+JNJ.US    USD     97.20
+MSFT.US   USD     75.00
+PARNT.US  USD    500.00
+RY.TO     CAD    345.00
+TD.TO     CAD    204.00
+XIU.TO    CAD    216.00
+
+TAXABLE (T5/T3 slips):                                       593.00 USD
+SHELTERED (lira, rrsp, tfsa, not taxable):                   948.00 CAD, 97.20 USD
+TOTAL DIVIDEND (all accounts):                               948.00 CAD, 707.65 USD
+  of which staking rewards (crypto, other income, no slip):  17.45 USD

@@ -54,7 +54,6 @@ Usage:
 
 Or through the project wrapper: `tjs reconcile-slips t5008.csv`.
 """
-
 from taxjson.lib.out import exit_text
 from taxjson.lib.stage_msg import emit_line
 import argparse
@@ -63,13 +62,22 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from taxjson.bin.taxjson_form_export import (grant_buyback_units, load_json,
-                                              short_carried_loss)
+from taxjson.lib.tax_forms import load_json
 from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.lib.country import CANADA, USA
-from taxjson.lib.futures import is_plain_future, section_1256_kind
+from taxjson.model import money as M
+from taxjson.lib.numeric import nonneg_float_arg
+from taxjson.lib.brokerages.base import is_ca_pref_series
+from taxjson.lib.slip_symbols import (
+    UnrepresentableStrike,
+    _SUFFIX_RE,
+    _bump,
+    load_computed,
+    slip_symbol,
+    split_listing,
+)
 
 
 # The slip wording each country's run prints (re-audit A2-0423, A2-0744,
@@ -93,12 +101,7 @@ _WORDS = {
                      "across accounts or a transfer-in",
     },
 }
-from taxjson.lib.numeric import nonneg_float_arg
 
-# Every known listing suffix (lib/markets; .VN was missing here).
-from taxjson.lib.brokerages.base import is_ca_pref_series  # noqa: E402
-from taxjson.lib.markets import listing_suffix_re  # noqa: E402
-_SUFFIX_RE = listing_suffix_re()
 
 _HEADER_SYNONYMS = {
     "symbol": ("symbol", "ticker", "security symbol", "security", "sym",
@@ -125,93 +128,6 @@ _HEADER_SYNONYMS = {
 # Spellings of a currency cell -> ISO code.
 _CURRENCY_ALIASES = {"CDN": "CAD", "C$": "CAD", "CA$": "CAD", "CAN": "CAD",
                      "US$": "USD", "US": "USD", "U.S.": "USD"}
-
-# Broker option descriptions -> OCC (R1-209): IB prints
-# "SAMPLE 21MAR25 50 C", Webull "CALL SAMPLE03/21/25 50"; the books carry
-# SAMPLE250321C00050000.
-_MONTHS = {m: i for i, m in enumerate(
-    ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT",
-     "NOV", "DEC"), 1)}
-# A strike with or without thousands separators ('5,000.00', R1-170 /  # pii-ok
-# A2-1113 — the parsers' OPTION_STRIKE_RE accepts it); a decimal comma
-# ('2,50') does not match and the cell stays a plain (unmatched) symbol.
-_STRIKE = r"((?:[1-9]\d{0,2}(?:,\d{3})+|\d+)(?:\.\d+)?)"
-_IB_OPT_RE = re.compile(
-    r"^([A-Z][A-Z0-9.]*)\s+(\d{1,2})([A-Z]{3})(\d{2})\s+"
-    + _STRIKE + r"\s+([CP])$")
-_WB_OPT_RE = re.compile(
-    r"^(CALL|PUT)\s+([A-Z][A-Z0-9.]*?)\s*(\d{2})/(\d{2})/(\d{2})\s+"
-    + _STRIKE + r"$")
-_PADDED_OCC_RE = re.compile(r"^([A-Z][A-Z0-9.]*)\s+(\d{6}[CP]\d{8})$")
-
-
-class UnrepresentableStrike(ValueError):
-    """An option description whose strike the OCC symbol cannot hold."""
-
-
-def _occ(root: str, yy: str, mm: int, dd: int, cp: str,
-         strike: str) -> str:
-    """The OCC symbol of a broker option description. The OCC strike
-    field holds thousandths in 8 digits: a strike finer than 0.001
-    ('1.0004') or above 99999.999 raises UnrepresentableStrike — rounding
-    it named another contract (strike 1.000) and certified the slip
-    against it (backlog TJ-0902)."""
-    from decimal import Decimal, InvalidOperation
-    try:
-        milli = Decimal(strike.replace(',', '')) * 1000
-    except InvalidOperation:
-        raise UnrepresentableStrike(strike)
-    if milli != milli.to_integral_value() or not 0 <= milli < 10 ** 8:
-        raise UnrepresentableStrike(strike)
-    return f"{root}{yy}{mm:02d}{dd:02d}{cp}{int(milli):08d}"
-
-
-def split_listing(sym: str) -> Tuple[str, str]:
-    """(root, market suffix or '') of a normalized symbol. A dotted
-    preferred series has no market suffix: the L of SYN.PR.L is its series
-    (backlog TJ-1203)."""
-    m = None if is_ca_pref_series(sym) else _SUFFIX_RE.search(sym or "")
-    if not m:
-        return sym, ""
-    return sym[:m.start()], m.group(1).upper()
-
-
-def slip_symbol(raw: str, strict: bool = False) -> str:
-    """A slip cell as a book-style symbol, KEEPING any listing suffix
-    the slip wrote (SAMPLB.TO stays apart from SAMPLB.US — R1-292): upper-
-    cased, broker option descriptions rewritten to OCC and share-class
-    separators ('SAMPLC B', 'SAMPLC/B', 'SAMPLC-B') to the books' dot form.
-    An option description whose strike OCC cannot hold raises
-    UnrepresentableStrike with `strict`; otherwise it stays a plain
-    (unmatched) symbol."""
-    s = (raw or "").replace("\ufeff", "").strip().upper().lstrip(".")
-    s = re.sub(r"\s+", " ", s)
-    if not s:
-        return ""
-    try:
-        m = _IB_OPT_RE.match(s)
-        if m and m.group(3) in _MONTHS:
-            return _occ(m.group(1), m.group(4), _MONTHS[m.group(3)],
-                        int(m.group(2)), m.group(6), m.group(5))
-        m = _WB_OPT_RE.match(s)
-        if m:
-            return _occ(m.group(2), m.group(5), int(m.group(3)),
-                        int(m.group(4)), m.group(1)[0], m.group(6))
-    except UnrepresentableStrike:
-        if strict:
-            raise
-        return s
-    m = _PADDED_OCC_RE.match(s)
-    if m:
-        return m.group(1) + m.group(2)
-    root, sfx = split_listing(s)
-    if re.fullmatch(r"[A-Z0-9]+(?:[ /\-.][A-Z0-9]+)+", root):
-        root = re.sub(r"[ /\-.]", ".", root)
-    return f"{root}.{sfx}" if sfx else root
-
-
-def norm_symbol(sym: str) -> str:
-    return split_listing((sym or "").strip().upper().lstrip("."))[0]
 
 
 def _clean_amount(raw: str) -> Optional[float]:
@@ -340,7 +256,7 @@ def _rename_fn(renames: Optional[Dict[str, str]]):
     options included). A bare slip symbol is tried as .US then .TO."""
     if not renames:
         return lambda sym: sym
-    from taxjson.bin.taxjson_ticker_map import map_symbol
+    from taxjson.lib.ticker_map_rules import map_symbol
 
     def _fn(sym: str) -> str:
         root, sfx = split_listing(sym)
@@ -353,20 +269,6 @@ def _rename_fn(renames: Optional[Dict[str, str]]):
                 return split_listing(got)[0]
         return sym
     return _fn
-
-
-def _bump(rec: Dict[str, Any], sfx: str, **vals) -> None:
-    """Add vals to rec and to rec['listings'][sfx]."""
-    sub = rec["listings"].setdefault(
-        sfx, {k: (None if k == "cost" else 0.0) for k in rec
-              if k != "listings"})
-    for tgt in (rec, sub):
-        for k, v in vals.items():
-            if k == "cost":
-                if v is not None:
-                    tgt["cost"] = (tgt["cost"] or 0.0) + v
-            else:
-                tgt[k] += v
 
 
 def _norm_currency(raw: str) -> str:
@@ -578,270 +480,6 @@ def check_computed_currency(gains_paths: List[Path],
                 f"*_raw_gains.json (`tjs reconcile-slips` does)")
 
 
-def _computed_record() -> Dict[str, Any]:
-    return {"qty": 0.0, "proceeds_net": 0.0, "proceeds_gross": 0.0,
-            "cost": 0.0, "rows": 0, "tainted_rows": 0,
-            "open_grant_qty": 0.0, "open_grant": 0.0, "open_grant_net": 0.0,
-            "prior_grant": 0.0, "unknown_proceeds_rows": 0,
-            "capitalized_263h": 0.0, "future_loss_rows": 0, "listings": {}}
-
-
-def _open_units(writes: List[Tuple], closed: Dict[str, float]) -> List[float]:
-    """The units of each write (in write order) still open after
-    `closed` {account: units}: as the engine closes a short option's
-    lots (_short_lot_close), FIFO within the closing account, another's
-    earliest only when its own run out (a contract moved). The latest
-    writes of all accounts were taken for the open ones: another
-    account's write, at its premium, was left closed (backlog TJ-1092)."""
-    left = [float(w[1]) for w in writes]
-    moved = 0.0
-    for account, units in sorted(closed.items()):
-        for i, w in enumerate(writes):
-            if w[4] == account and units > 1e-12:
-                take = min(units, left[i])
-                left[i] -= take
-                units -= take
-        moved += units
-    for i in range(len(left)):
-        take = min(moved, left[i])
-        left[i] -= take
-        moved -= take
-    return left
-
-
-def _future_on_slip(symbol: str, country: str) -> bool:
-    """A plain future whose close form-export shows on a slip's shape:
-    every one on Schedule 3, on Form 8949 only one off §1256 (the other
-    goes to Form 6781 by hand, US-FUT-02)."""
-    if not is_plain_future(symbol):
-        return False
-    return country == CANADA or not section_1256_kind(symbol)
-
-
-def load_computed(gains_paths: List[Path],
-                  year: Optional[int],
-                  date_basis: str = "settle",
-                  country: str = CANADA) -> Dict[str, Dict[str, Any]]:
-    """Aggregate computed dispositions per symbol root:
-    {ROOT: {qty, proceeds_net, proceeds_gross, cost, rows, tainted_rows,
-    listings}} (listings: the same per listing suffix — SAMPLB.TO and
-    SAMPLB.US are different securities, R1-292).
-    Tainted rows are INCLUDED in the counts here (the broker's slip will
-    include those sales too) but flagged so a basis mismatch on a tainted
-    symbol reads as expected, not alarming."""
-    out: Dict[str, Dict[str, Any]] = {}
-    ystr = str(year) if year else None
-    # This year's grant-timing writes per listing, in write order:
-    # (order, units, gross premium, net premium, account).
-    grant_writes: Dict[Tuple[str, str],
-                       List[Tuple[Tuple[str, str, int], float, float,
-                                  float, str]]] = {}
-    # The units of this year's writes closed, per listing and account.
-    short_close_qty: Dict[Tuple[str, str], Dict[str, float]] = {}
-
-    def _closed(key: Tuple[str, str], account: str, units: float) -> None:
-        by = short_close_qty.setdefault(key, {})
-        by[account] = by.get(account, 0.0) + units
-    for p in gains_paths:
-        data = load_json(p)
-        # The grant-timed closes the engine leaves out of the gains rows
-        # (nil proceeds and gain: a worthless expiry). The contract
-        # closed, so the broker's slip of this year reports it at the
-        # write's premium: an earlier year's write as a buy-back's
-        # prior_grant, this year's with its write's row below (backlog
-        # TJ-1091; a file without the key: the expiry date below).
-        for c in data.get("grant_nil_closes") or []:
-            if date_basis == "trade":
-                date = c.get("date") or c.get("date_settle") or ""
-            else:
-                date = c.get("date_settle") or c.get("date") or ""
-            if ystr and not date.startswith(ystr):
-                continue
-            root, sfx = split_listing((c.get("symbol") or "").strip().upper()
-                                      .lstrip("."))
-            if not root:
-                continue
-            rec = out.setdefault(root, _computed_record())
-            for y, v in (c.get("grant_closed") or {}).items():
-                units = abs(float((v or {}).get("units") or 0.0))
-                if ystr and str(y) < ystr:
-                    # cost: a listing with no other row of the year starts
-                    # at None, and _compare subtracts it from the slip's
-                    # (backlog TJ-1181).
-                    _bump(rec, sfx, qty=units, rows=1, cost=0.0,
-                          prior_grant=float((v or {}).get("premium") or 0.0))
-                elif not ystr or str(y) == ystr:
-                    _bump(rec, sfx, qty=units, cost=0.0)
-                    _closed((root, sfx), str(c.get("account") or p), units)
-        # Tainted (unknown-cost) dispositions live in
-        # manual_reporting_required, NOT transactions — the pipeline
-        # strips them there before writing the gains file, which made
-        # every tainted_rows counter in this tool a permanent no-op
-        # and a real broker-reported sale show as
-        # MISSING_FROM_COMPUTED with the wrong diagnosis (2026-09
-        # audit). Fold them back in, flagged.
-        _manual = [dict(e, tainted=True)
-                   for e in data.get("manual_reporting_required", [])
-                   if e.get("qty")]
-        for e in list(data.get("transactions", [])) + _manual:
-            if e.get("action") in ("DIVIDEND", "DIVIDEND_IN_LIEU"):
-                continue
-            # Manual (unknown-cost) rows carry qty and proceeds but no
-            # `gain` (the pipeline strips it); requiring `gain` dropped
-            # every one of them again (R1-206).
-            if "qty" not in e or ("gain" not in e and not e.get("tainted")):
-                continue
-            # Year-scope on the same basis the gains files (and the
-            # broker's slip) use: the IRS recognizes on TRADE date, so a
-            # 1099-B includes a Dec-31 sale settling in January — the
-            # unconditional settle-first read excluded it and produced
-            # spurious MISMATCH rows against the tool's own form-export.
-            # CRA times dispositions on SETTLEMENT date (the default).
-            if date_basis == "trade":
-                date = e.get("date") or e.get("date_settle") or ""
-            else:
-                date = e.get("date_settle") or e.get("date") or ""
-            if ystr and not date.startswith(ystr):
-                continue
-            full = (e.get("symbol") or "").strip().upper().lstrip(".")
-            root, sfx = split_listing(full)
-            if not root:
-                continue
-            # open_grant*: this year's grant-timing writes still open at
-            # the year end (premium reported now, s.49(1); the broker's
-            # slip reports it at the close). prior_grant: the premium of
-            # an EARLIER year's grant write this year's buy-back closed —
-            # the broker's close-year slip carries it as proceeds
-            # (A2-0657).
-            rec = out.setdefault(root, _computed_record())
-            proceeds = float(e.get("proceeds") or 0.0)
-            cost = float(e.get("cost") or 0.0)
-            outlays = float(e.get("commission") or 0.0) + \
-                float(e.get("fee") or 0.0)
-            short = (e.get("direction") or "LONG") == "SHORT"
-            # An unknown-cost cover of a short sale made before the data
-            # (form-export's is_short_cover): the cover cost is known,
-            # what the short sale brought in is NOT — the row has no
-            # `cost`. Reading it as 0 certified a zero-proceeds slip and
-            # called an absent one a worthless expiry (backlog TJ-0906).
-            unknown_proceeds = bool(short and e.get("tainted")
-                                    and e.get("cost") is None)
-            if short:
-                # Engine short convention: `cost` holds the (negated)
-                # short-sale proceeds and `proceeds` the (negated)
-                # cover cost — the SWAP form-export performs. Merely
-                # stripping signs compared the slip's proceeds against
-                # the COVER COST, a false MISMATCH equal to the gain
-                # (2026-09 audit). Un-negated, never abs(): a write whose
-                # commission exceeds its premium brought in a net DEBIT
-                # (cost +7 is proceeds -7), which abs() made +7 and
-                # certified a wrong-signed slip (backlog TJ-0780; form-
-                # export's build_8949 swaps the same way).
-                proceeds, cost = -cost + 0.0, -proceeds + 0.0
-                # A US re-short's carried wash-sale loss is basis on the
-                # 1099-B, not a cut of its proceeds (backlog TJ-0465;
-                # form-export's (d) and (e) the same).
-                _carried = short_carried_loss(e)
-                proceeds, cost = proceeds + _carried, cost + _carried
-                if e.get("grant") and -float(e.get("cost") or 0.0) \
-                        + outlays >= 0:
-                    # A grant-timing WRITE: the row's commission is the
-                    # write's own, so the gross premium is the net plus
-                    # it (form-export's Schedule 3 shows the same gross,
-                    # R1-40). A buy-back's fee is a cost, never proceeds.
-                    proceeds = -float(e.get("cost") or 0.0)
-                else:
-                    outlays = 0.0
-            _fut_loss = 0
-            if not unknown_proceeds and _future_on_slip(full, country):
-                # Booked on its settled P/L (lib/futures): form-export
-                # shows it as the T5008 does, a gain as proceeds, a loss
-                # as cost (before any denial, commissions inside: its
-                # build_schedule3, build_8949). The generic short swap
-                # and long reading compared neither (backlog TJ-1093). A
-                # tainted row's raw_gain is the engine's made-up figure.
-                if country == CANADA:
-                    _pl = (float(e["raw_gain"])
-                           if e.get("raw_gain") is not None
-                           and not e.get("tainted") else proceeds - cost)
-                    proceeds, cost = max(_pl, 0.0) + 0.0, max(-_pl, 0.0) + 0.0
-                else:
-                    # Form 8949 reshapes only a negative figure: a row of
-                    # carried §1091(d) basis keeps its (d) and (e)
-                    # (build_8949; backlog TJ-1252).
-                    _pl = proceeds - cost
-                    if proceeds < 0 or cost < 0:
-                        proceeds, cost = (max(_pl, 0.0) + 0.0,
-                                          max(-_pl, 0.0) + 0.0)
-                outlays = 0.0
-                _fut_loss = 1 if _pl < -0.005 else 0
-            q = abs(float(e.get("qty") or 0.0))
-            # Grant timing books a written option twice — the WRITE
-            # record and its buy-back/expiry — while the slip reports
-            # ONE disposition of those contracts: quantity counts once
-            # (R1-18). Settled after the loop.
-            key = (root, sfx)
-            if e.get("grant"):
-                _ws = grant_writes.setdefault(key, [])
-                _ws.append(((str(e.get("date") or ""),
-                             str(e.get("date_settle") or ""), len(_ws)),
-                            q, proceeds + outlays, proceeds,
-                            str(e.get("account") or p)))
-                q = 0.0
-            elif short:
-                _closed(key, str(e.get("account") or p),
-                        grant_buyback_units(e, year))
-                if ystr:
-                    _prior = sum(
-                        float((v or {}).get("premium") or 0.0)
-                        for y, v in (e.get("grant_closed") or {}).items()
-                        if str(y) < ystr)
-                    if _prior:
-                        _bump(rec, sfx, prior_grant=_prior)
-            if unknown_proceeds:
-                proceeds = outlays = 0.0
-            _bump(rec, sfx, qty=q, proceeds_net=proceeds,
-                  proceeds_gross=proceeds + outlays, cost=cost, rows=1,
-                  tainted_rows=(1 if e.get("tainted")
-                                and not unknown_proceeds else 0),
-                  unknown_proceeds_rows=1 if unknown_proceeds else 0,
-                  capitalized_263h=float(e.get("capitalized_263h") or 0.0),
-                  future_loss_rows=_fut_loss)
-    from datetime import date as _date
-    from taxjson.lib.core import parse_option_expiry
-    _today = _date.today().isoformat()
-    for (root, sfx), writes in grant_writes.items():
-        writes.sort(key=lambda w: w[0])
-        gq = sum(w[1] for w in writes)
-        _by_acct = short_close_qty.get((root, sfx), {})
-        extra = max(0.0, gq - sum(_by_acct.values()))
-        if extra <= 1e-9:
-            continue
-        _exp = parse_option_expiry(root)
-        if ystr and _exp and _exp <= f"{ystr}-12-31" and _exp < _today:
-            # The contract expired by the year end, so none of it is
-            # open then: the units no buy-back closed expired, a close
-            # the engine leaves out of the gains file when it is worth
-            # nil (zero proceeds and gain). The broker's slip reports
-            # them, at the write's premium, in THIS year — they are not
-            # "still open" (backlog TJ-0781).
-            _bump(out[root], sfx, qty=extra)
-            continue
-        # Written this year, still open (or closed next year): the
-        # write itself is the year's disposition, at its own premium — an
-        # average of every write's put a closed write's premium on the
-        # open contract (backlog TJ-0779).
-        og = ogn = 0.0
-        for left, (_order, units, gross, net, _a) in zip(
-                _open_units(writes, _by_acct), writes):
-            if units > 1e-12:
-                og += gross * left / units
-                ogn += net * left / units
-        _bump(out[root], sfx, qty=extra, open_grant_qty=extra,
-              open_grant=og, open_grant_net=ogn)
-    return out
-
-
 def _sum_listings(recs: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not recs:
         return None
@@ -875,12 +513,12 @@ def _compare(label: str, s: Dict[str, Any], c: Dict[str, Any],
     d_net_t = d_net + _open_net - _prior
     grant_note = []
     if abs(_open) > 0.005:
-        grant_note.append(f"{_open:,.2f} premium of written option(s) "
+        grant_note.append(f"{M.shown(_open, 2):,.2f} premium of written option(s) "
                           f"still open at the year end is reported this "
                           f"year (grant timing, s.49(1)) but not on this "
                           f"year's slip")
     if abs(_prior) > 0.005:
-        grant_note.append(f"slip proceeds include {_prior:,.2f} premium "
+        grant_note.append(f"slip proceeds include {M.shown(_prior, 2):,.2f} premium "
                           f"of earlier-year write(s) already reported in "
                           f"the write year (grant timing, s.49(1)) — not "
                           f"income again")
@@ -893,8 +531,8 @@ def _compare(label: str, s: Dict[str, Any], c: Dict[str, Any],
         unknown_note.append(
             f"proceeds not compared: {_unk} short cover(s) whose short "
             f"sale is not in your files — the books do not know what it "
-            f"brought in (slip {s['proceeds']:,.2f}; the other "
-            f"disposition(s) computed {c['proceeds_gross']:,.2f})")
+            f"brought in (slip {M.shown(s['proceeds'], 2):,.2f}; the other "
+            f"disposition(s) computed {M.shown(c['proceeds_gross'], 2):,.2f})")
     if _unk:
         pass
     elif abs(d_gross) <= tolerance:
@@ -911,10 +549,10 @@ def _compare(label: str, s: Dict[str, Any], c: Dict[str, Any],
     else:
         cands = [d_gross, d_net] + ([d_gross_t, d_net_t] if _timed else [])
         closer = min(cands, key=abs)
-        problems.append(f"proceeds off by {closer:+,.2f} "
-                        f"(slip {s['proceeds']:,.2f} vs computed "
-                        f"gross {c['proceeds_gross']:,.2f} / net "
-                        f"{c['proceeds_net']:,.2f})")
+        problems.append(f"proceeds off by {M.shown(closer, 2):+,.2f} "
+                        f"(slip {M.shown(s['proceeds'], 2):,.2f} vs computed "
+                        f"gross {M.shown(c['proceeds_gross'], 2):,.2f} / net "
+                        f"{M.shown(c['proceeds_net'], 2):,.2f})")
         if _timed:
             problems.extend(grant_note)
     _oq = float(c.get("open_grant_qty") or 0.0)
@@ -956,8 +594,8 @@ def _compare(label: str, s: Dict[str, Any], c: Dict[str, Any],
         # does not exist (backlog TJ-0892).
         notes.append(f"cost not compared: {_cost_blank} of "
                      f"{int(s['rows'])} slip row(s) state no cost (the "
-                     f"others state {s['cost']:,.2f}; computed "
-                     f"{c['cost']:,.2f})")
+                     f"others state {M.shown(s['cost'], 2):,.2f}; computed "
+                     f"{M.shown(c['cost'], 2):,.2f})")
     elif s.get("cost") is not None:
         d_cost = s["cost"] - c["cost"]
         # Dividend compensation capitalized into a cover's cost is in no
@@ -965,16 +603,16 @@ def _compare(label: str, s: Dict[str, Any], c: Dict[str, Any],
         # US-INC-04, backlog TJ-1066).
         _cap263 = float(c.get("capitalized_263h") or 0.0)
         if _cap263 and abs(d_cost + _cap263) <= tolerance:
-            notes.append(f"slip cost differs by {d_cost:+,.2f}, §263(h) "
+            notes.append(f"slip cost differs by {M.shown(d_cost, 2):+,.2f}, §263(h) "
                          f"compensation — the dividend compensation added "
                          f"to the cover's cost, which the broker's slip "
                          f"does not show")
         elif abs(d_cost) > tolerance:
             if _cap263:
-                notes.append(f"{_cap263:,.2f} of the cost difference is "
+                notes.append(f"{M.shown(_cap263, 2):,.2f} of the cost difference is "
                              f"dividend compensation added to the cover's "
                              f"cost (§263(h))")
-            notes.append(f"slip cost differs by {d_cost:+,.2f} — often "
+            notes.append(f"slip cost differs by {M.shown(d_cost, 2):+,.2f} — often "
                          f"legitimate ({_WORDS[country]['cost_note']}); "
                          f"document the reason")
     if c.get("tainted_rows"):
@@ -1013,7 +651,7 @@ def _missing_from_slip(label: str, c: Dict[str, Any],
         # closes.
         return {"symbol": label, "status": "NO_SLIP_EXPECTED",
                 "detail": f"written option(s) still open at the year end: "
-                          f"the {_open:,.2f} premium is reported this year "
+                          f"the {M.shown(_open, 2):,.2f} premium is reported this year "
                           f"without a slip (grant timing, s.49(1)); the "
                           f"broker's slip reports it when the contract "
                           f"closes"}
@@ -1030,14 +668,14 @@ def _missing_from_slip(label: str, c: Dict[str, Any],
         _slip = c["proceeds_gross"] - _open + _prior
         return {"symbol": label, "status": "MISSING_FROM_SLIP",
                 "detail": f"computed {c['rows']} disposition(s), "
-                          f"proceeds {c['proceeds_gross']:,.2f} — no slip "
+                          f"proceeds {M.shown(c['proceeds_gross'], 2):,.2f} — no slip "
                           f"row; the broker's slip would report "
-                          f"{_slip:,.2f}, with {_prior:,.2f} premium of "
+                          f"{M.shown(_slip, 2):,.2f}, with {M.shown(_prior, 2):,.2f} premium of "
                           f"earlier-year write(s) this year's buy-back or "
                           f"expiry closed (grant timing, s.49(1))"}
     return {"symbol": label, "status": "MISSING_FROM_SLIP",
             "detail": f"computed {c['rows']} disposition(s), "
-                      f"proceeds {c['proceeds_gross']:,.2f} — "
+                      f"proceeds {M.shown(c['proceeds_gross'], 2):,.2f} — "
                       f"no slip row (missing slip, or a "
                       f"non-slip disposition like a corp action)"}
 
@@ -1090,7 +728,7 @@ def reconcile(slip: Dict[str, Dict[str, Any]],
         if c is None:
             rows.append({"symbol": root, "status": "MISSING_FROM_COMPUTED",
                          "detail": f"slip has {s['rows']} row(s), proceeds "
-                                   f"{s['proceeds']:,.2f} — nothing "
+                                   f"{M.shown(s['proceeds'], 2):,.2f} — nothing "
                                    f"computed (dropped CSV rows, a "
                                    f"missing statement, or a symbol the "
                                    f"books spell differently?)"})
@@ -1108,7 +746,7 @@ def reconcile(slip: Dict[str, Dict[str, Any]],
                              "status": "MISSING_FROM_COMPUTED",
                              "detail": f"slip has {s_list[sfx]['rows']} "
                                        f"row(s), proceeds "
-                                       f"{s_list[sfx]['proceeds']:,.2f} — "
+                                       f"{M.shown(s_list[sfx]['proceeds'], 2):,.2f} — "
                                        f"nothing computed for this "
                                        f"listing"})
         rest = {x: v for x, v in c_list.items() if x not in named}
@@ -1120,7 +758,7 @@ def reconcile(slip: Dict[str, Dict[str, Any]],
                              "detail": f"slip has {s_list['']['rows']} "
                                        f"row(s) without a listing "
                                        f"suffix, proceeds "
-                                       f"{s_list['']['proceeds']:,.2f} — "
+                                       f"{M.shown(s_list['']['proceeds'], 2):,.2f} — "
                                        f"nothing computed"})
                 continue
             row = _compare(root, s_list[""], agg, tolerance, country)
@@ -1187,7 +825,7 @@ def _counts_text(c: Dict[str, Any], tolerance: float) -> str:
             + (f", {c['no_slip_expected']} with no slip row "
                f"expected (not a failure)"
                if c.get("no_slip_expected") else "")
-            + f" (tolerance ±{tolerance:,.2f}).")
+            + f" (tolerance ±{M.shown(tolerance, 2):,.2f}).")
 
 
 def render_brief(rep: Dict[str, Any], tolerance: float,
@@ -1220,7 +858,7 @@ def render_brief(rep: Dict[str, Any], tolerance: float,
                     if c.get("unknown_proceeds") else "")
                  + (f", {c['no_slip_expected']} no slip expected"
                     if c.get("no_slip_expected") else "")
-                 + f" (tolerance ±{tolerance:,.2f})")
+                 + f" (tolerance ±{M.shown(tolerance, 2):,.2f})")
     cmd = "tjs reconcile-slips --details"
     bad = c["mismatch"] + c["missing_from_computed"] \
         + c.get("ambiguous_listing", 0) + c.get("unknown_proceeds", 0)
@@ -1306,14 +944,23 @@ def render(rep: Dict[str, Any], tolerance: float,
     return "\n".join(lines)
 
 
+def _dump_json(rep: Dict[str, Any]) -> None:
+    """The `--json` document on stdout: its schema_version (lib/
+    json_contract), a non-finite figure as null as every `--json` writes
+    it (out.clean_json; a bare NaN token is not JSON: REVIEW #41)."""
+    from taxjson.lib import out as _out
+    from taxjson.lib.json_contract import versioned
+    json.dump(_out.clean_json(versioned(rep, "reconcile-slips")), sys.stdout,
+              indent=2, sort_keys=True)
+
+
 # Guarded here as well as by the console script: `tjs reconcile-slips`
 # calls this main directly, and an unreadable ticker.map was a traceback
 # there while `taxjson-reconcile-slips` printed one line (A2-0161).
 @guard_main("taxjson-reconcile-slips")
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="taxjson-reconcile-slips",
-        description=__doc__,
+        prog="taxjson-reconcile-slips", description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("slip_csv", type=Path, nargs="+",
                         help="Slip CSV(s) (accepted column spellings: "
@@ -1391,8 +1038,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     # reported every other broker's sales as MISSING_FROM_SLIP.
     renames = None
     if args.ticker_map is not None:
-        from taxjson.bin.taxjson_ticker_map import (load_map_file,
-                                                    merge_renames)
+        from taxjson.lib.ticker_map_rules import merge_renames
+        from taxjson.lib.map_file import load_map_file
         renames = merge_renames(load_map_file(args.ticker_map),
                                 to_base=True)
     from taxjson.lib.country import default_tax_date, home_currency
@@ -1444,21 +1091,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         # (REVIEW #21).
         rep["clean"] = False
         rep["unreadable_rows"] = dropped_rows
+    d = _out.Doc(exact=True, width_=0, live=True)  # each line written where its print() was
     if args.json:
-        json.dump(rep, sys.stdout, indent=2, sort_keys=True)
-        print()
+        _dump_json(rep)
+        d.blank()
     else:
-        print(render_brief(rep, args.tolerance, args.country)
-              if args.brief else render(rep, args.tolerance, args.country))
+        d.line(render_brief(rep, args.tolerance, args.country)
+               if args.brief else render(rep, args.tolerance, args.country))
         if dropped_rows and not args.brief:
             from taxjson.lib.out import fill
-            print()
-            print(fill(f"NOT RECONCILED: {dropped_rows} slip row(s) had "
-                       f"an unreadable cell (see the warnings above)."))
+            d.blank()
+            d.line(fill(f"NOT RECONCILED: {dropped_rows} slip row(s) had "
+                        f"an unreadable cell (see the warnings above)."))
         elif dropped_rows:
             from taxjson.lib.out import act
-            print(act(f"NOT RECONCILED: {dropped_rows} slip row(s) had an "
-                      f"unreadable cell (warnings above)"))
+            d.line(act(f"NOT RECONCILED: {dropped_rows} slip row(s) had an unreadable cell (warnings above)"))
     return 0 if rep["clean"] else 1
 
 

@@ -14,7 +14,7 @@ differ only by what is dated to the year rather than to a month: a T5
 box 18 reclassification; a US month splits its own §1256 P/L 60/40, as
 the year does).
 
-This module is pure: the command (taxjson_run.cmd_plot_tax) runs the
+This module is pure: the command (cli/summaries.cmd_plot_tax) runs the
 estimator and hands the monthly points in.
 """
 from __future__ import annotations
@@ -22,8 +22,10 @@ from __future__ import annotations
 import calendar
 import math
 from typing import Any, Dict, Iterable, List, Optional
+from taxjson.lib.json_contract import SCHEMAS
+from taxjson.model import money as M
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = SCHEMAS["plot-tax"]
 MONTH_NAMES = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug",
                "Sep", "Oct", "Nov", "Dec")
 # The chart: at most this many rows above the axis, cells this wide.
@@ -70,22 +72,22 @@ def build(points: Iterable[Dict[str, Any]], *, year: int, base: str,
     prev_t = prev_i = 0.0
     for p in points:
         ct, ci = float(p["cum_tax"]), float(p["cum_income"])
-        rows.append({"month": p["month"], "tax": round(ct - prev_t, 2),
-                     "income": round(ci - prev_i, 2),
-                     "cum_tax": round(ct, 2), "cum_income": round(ci, 2)})
+        rows.append({"month": p["month"], "tax": M.shown(ct - prev_t, 2),
+                     "income": M.shown(ci - prev_i, 2),
+                     "cum_tax": M.shown(ct, 2), "cum_income": M.shown(ci, 2)})
         prev_t, prev_i = ct, ci
-    through = round(prev_t, 2)
-    gap = round(float(year_estimate) - through, 2)
+    through = M.shown(prev_t, 2)
+    gap = M.shown(float(year_estimate) - through, 2)
     return {
         "schema_version": SCHEMA_VERSION, "planning_only": True,
         "tax_year": int(year), "currency": base.upper(), "label": label,
-        "accounts": sorted(accounts), "other_income": round(other_income, 2),
+        "accounts": sorted(accounts), "other_income": M.shown(other_income, 2),
         "rows": rows,
         "months_total": through,
-        "year_estimate": round(float(year_estimate), 2),
-        "year_income": round(float(year_income), 2),
+        "year_estimate": M.shown(float(year_estimate), 2),
+        "year_income": M.shown(float(year_income), 2),
         "year_estimate_with_amt": (None if with_amt is None
-                                   else round(float(with_amt), 2)),
+                                   else M.shown(float(with_amt), 2)),
         # What is dated to the year rather than to a month.
         "year_adjustment": gap if abs(gap) > 0.005 else 0.0,
         # The sales with an unknown cost: left out of every figure
@@ -120,8 +122,8 @@ def _fmt_level(v: float, step: float = 1.0) -> str:
     """An axis label at the chart step's precision (cents on a
     cent-sized step: twelve months of 0.04 are not twelve rows of 0)."""
     if step >= 1:
-        return f"{v:,.0f}"
-    return f"{v:,.2f}"
+        return f"{M.shown(v, 0):,.0f}"
+    return f"{M.shown(v, 2):,.2f}"
 
 
 def chart(rows: List[Dict[str, Any]], estimate: float,
@@ -192,7 +194,7 @@ def render(doc: Dict[str, Any], width: int = 120, cmd: str = "tjs plot-tax"):
     table with the running total, the year's figures and what to
     check."""
     from taxjson.lib import out
-    from taxjson.lib.report_model import fmt_money
+    from taxjson.lib.report_fmt import fmt_money
     base = doc["currency"]
     yr = doc["tax_year"]
     d = out.Doc(f"TAX BY MONTH — planning numbers, tax year {yr} "

@@ -1,0 +1,1318 @@
+{
+  "schema_version": 3,
+  "in_project": true,
+  "year": 2024,
+  "country": "usa",
+  "all_passed": false,
+  "counts": {
+    "done": 0,
+    "forced": 0,
+    "attention": 0,
+    "todo": 44,
+    "blocked": 0,
+    "manual": 0,
+    "review": 0,
+    "n/a": 3
+  },
+  "checked": null,
+  "checked_oldest": null,
+  "stale": [],
+  "next": null,
+  "steps": [
+    {
+      "step": 1,
+      "id": "install",
+      "section": "Set up",
+      "title": "Install or upgrade taxjson",
+      "check": false,
+      "command": "bash -c \"$(curl -fsSL https://taxjson.com/install.sh)\"",
+      "commands": [
+        {
+          "command": "bash -c \"$(curl -fsSL https://taxjson.com/install.sh)\"",
+          "note": "installs, or upgrades in place",
+          "country": null
+        },
+        {
+          "command": "bash -c \"$(curl -fsSL https://taxjson.com/install.sh)\" _ --channel beta",
+          "note": "stable (the default), beta, latest or dev",
+          "country": null
+        },
+        {
+          "command": "bash -c \"$(curl -fsSL https://taxjson.com/install.sh)\" _ --without-fetch",
+          "note": "leave out the taxjson-fetch plugin",
+          "country": null
+        },
+        {
+          "command": "tjs --version",
+          "note": "what is installed; where each channel points: `tjs channels` (a maintainer command: `tjs help --all` lists it)",
+          "country": null
+        },
+        {
+          "command": "tjs help",
+          "note": "every command by group; `tjs COMMAND -h` explains one",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "The same line upgrades: the fix for a problem you hit starts with the newest release.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 2,
+      "id": "init",
+      "section": "Set up",
+      "title": "Create the year's project",
+      "check": false,
+      "command": "tjs init --country usa --year 2024 ~/taxes",
+      "commands": [
+        {
+          "command": "tjs init --country usa --year 2024 ~/taxes",
+          "note": "or --country canada; then cd ~/taxes/2024",
+          "country": null
+        },
+        {
+          "command": "tjs new-year 2024",
+          "note": "the year's folder, from last year's (in the folder holding the years)",
+          "country": null
+        },
+        {
+          "command": "tjs years",
+          "note": "the year folders and their state",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "One folder of exports for every year: inputs/<account>/ (each with a README.txt naming the export to download) shared by the year folders, each a complete project with its own taxjson.toml, ticker.map and holdings/.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 3,
+      "id": "configure",
+      "section": "Set up",
+      "title": "Make taxjson.toml match your accounts",
+      "check": false,
+      "command": "",
+      "commands": [],
+      "how": "One [accounts.NAME] section per account you have (type = \"taxable\" or \"sheltered\"; crypto = true for Coinbase or Kraken), the others deleted; with a crypto account, [settings] local_timezone (e.g. \"America/Toronto\").",
+      "why": "Sheltered accounts count too: a purchase there can deny a loss in a taxable account. Crypto rows are dated in local_timezone.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 4,
+      "id": "inputs-frozen",
+      "section": "Get your files",
+      "title": "Each account's broker exports, through January of the next year",
+      "check": true,
+      "command": "tjs fetch / broker exports",
+      "commands": [
+        {
+          "command": "tjs check-filed",
+          "note": "recomputes the filed year from its inputs and shows any drift",
+          "country": null
+        }
+      ],
+      "how": "Filed: the books are the exports as they were at close-year; an export added now is an amendment.",
+      "why": "A sale's cost comes from its purchase, which may be years back; December trades settle in January.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 5,
+      "id": "export-coverage",
+      "section": "Get your files",
+      "title": "Each broker's exports reach the year end wherever it still holds positions",
+      "check": true,
+      "command": "tjs run (its export-coverage warnings)",
+      "commands": [
+        {
+          "command": "tjs run",
+          "note": "its Warning names a broker whose exports stop while it holds positions",
+          "country": null
+        },
+        {
+          "command": "tjs checklist --done export-coverage",
+          "note": "the broker had no later activity: answers the gaps shown",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "A broker whose exports stop while it holds positions leaves its later sales, option expiries and income out of the books \u2014 nothing else says so.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 6,
+      "id": "sheltered-inputs",
+      "section": "Get your files",
+      "title": "Retirement accounts' activity present",
+      "check": true,
+      "command": "inputs/<sheltered>/",
+      "commands": [],
+      "how": "Each IRA / Roth / 401(k) account's exports in its inputs/<account>/ folder too.",
+      "why": "An IRA/401(k) purchase within 30 days of a loss is a wash sale (Rev. Rul. 2008-5) \u2014 the loss is gone for good.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 7,
+      "id": "crypto-inputs",
+      "section": "Get your files",
+      "title": "Crypto ledgers and trades for the full year",
+      "check": true,
+      "command": "inputs/<crypto>/",
+      "commands": [],
+      "how": "The Coinbase / Kraken ledgers and trade files for the whole year in the crypto account's inputs/<account>/.",
+      "why": "Every disposition of a coin, including swaps and fees, is a capital event.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 8,
+      "id": "run-clean",
+      "section": "Build the books",
+      "title": "Full run with zero validation errors and nothing pending",
+      "check": true,
+      "command": "tjs run",
+      "commands": [
+        {
+          "command": "tjs run",
+          "note": "every file read, reports/ written; asks about mergers and spin-offs",
+          "country": null
+        },
+        {
+          "command": "tjs run --no-input",
+          "note": "never asks: an open election exits 3 (next step)",
+          "country": null
+        },
+        {
+          "command": "tjs compare",
+          "note": "what moved since the run before: figures, reports, inputs",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "Its closing list names what the books show is still incomplete, each with the command that fixes it.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 9,
+      "id": "elections",
+      "section": "Build the books",
+      "title": "No unresolved merger or spin-off election",
+      "check": true,
+      "command": "tjs elect --pending",
+      "commands": [
+        {
+          "command": "tjs elect --pending",
+          "note": "what is open, with ready --set lines",
+          "country": null
+        },
+        {
+          "command": "tjs elect ACCOUNT --set ID=ELECTION",
+          "note": "record one",
+          "country": null
+        },
+        {
+          "command": "tjs spinoffs",
+          "note": "each spin-off's election, value and cost; `tjs splits`: splits and consolidations",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "An account with an open election is left out of the run; a spin-off valued at $0 books no income and a $0 cost.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 10,
+      "id": "missing-history",
+      "section": "Fill the gaps",
+      "title": "No position with missing cost basis affects the year",
+      "check": true,
+      "command": "tjs find-missing-history",
+      "commands": [
+        {
+          "command": "tjs find-missing-history",
+          "note": "sales with no purchase, $0-cost shares, and the fixes in order",
+          "country": null
+        },
+        {
+          "command": "tjs opening ACCOUNT FILE",
+          "note": "an opening balance from a positions report at the start of your history",
+          "country": null
+        },
+        {
+          "command": "tjs find-missing-history --write-purchases",
+          "note": "drafts IB purchases from the broker's cost, as .tt lines to review",
+          "country": null
+        },
+        {
+          "command": "tjs find-missing-history --write-missing-history",
+          "note": "only for what cannot be recovered",
+          "country": null
+        },
+        {
+          "command": "tjs find-missing-history --write-missing-history --outside-year",
+          "note": "positions short in an earlier year that do not touch this one",
+          "country": null
+        },
+        {
+          "command": "tjs list --negative",
+          "note": "the same positions in the holdings view",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "Exports rarely reach back to every purchase: a sale with no purchase is left out of the year, and a $0 cost overstates the gain.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 11,
+      "id": "transfers",
+      "section": "Fill the gaps",
+      "title": "Shares moved in from another broker",
+      "check": false,
+      "command": "tjs transfers",
+      "commands": [
+        {
+          "command": "tjs transfers",
+          "note": "the custody moves the books leave out",
+          "country": null
+        }
+      ],
+      "how": "A transfer-in with no cost is kept out of the books: enter its purchase as a .tt line (docs/getting-started.md, 5c).",
+      "why": "Their cost is the original purchase, not the day they arrived.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 12,
+      "id": "ticker-map",
+      "section": "Fill the gaps",
+      "title": "Symbol spellings and listings (ticker.map)",
+      "check": false,
+      "command": "tjs ticker-map --suggest",
+      "commands": [
+        {
+          "command": "tjs ticker-map --suggest",
+          "note": "the lines the last run suggested, each with its reason, and the listing pairs to verify (one security or two)",
+          "country": null
+        },
+        {
+          "command": "tjs ticker-map --suggest --write",
+          "note": "adds them, one by one (--all: every line the evidence names; a pair to verify is asked on a terminal)",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "Two spellings or listings of one security must be one position for its cost to be right.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 13,
+      "id": "tobase-map",
+      "section": "Fill the gaps",
+      "title": "Interlisted pairs up to date (tobase.map)",
+      "check": false,
+      "command": "",
+      "commands": [],
+      "how": "",
+      "why": "A US project does not read tobase.map: two listings of one share are one position only through your ticker.map lines, a transfer journal or a .tt JOURNAL line (tax-logic US-XLIST-05).",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 14,
+      "id": "journals",
+      "section": "Fill the gaps",
+      "title": "Every journal between two listings joined or settled",
+      "check": true,
+      "command": "tjs journals --pending",
+      "commands": [
+        {
+          "command": "tjs journals --pending",
+          "note": "the journals not joined or settled",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "A journal the books do not pool leaves a long on one listing and a short on the other.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 15,
+      "id": "renames",
+      "section": "Fill the gaps",
+      "title": "Every ticker change dated; no undeclared trade in an old ticker after its rename",
+      "check": true,
+      "command": "tjs renames",
+      "commands": [
+        {
+          "command": "tjs renames --pending",
+          "note": "the renames to declare or resolve",
+          "country": null
+        },
+        {
+          "command": "tjs renames",
+          "note": "every rename with its date and source",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "A rename carries the position and its cost on its date; a later trade in the old ticker is another security unless ticker.map says otherwise.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 16,
+      "id": "crypto-sends",
+      "section": "Fill the gaps",
+      "title": "Crypto sends classified (own wallet or payment)",
+      "check": true,
+      "command": "tjs crypto-sends",
+      "commands": [
+        {
+          "command": "tjs crypto-sends",
+          "note": "the sends that did not arrive in another of your accounts",
+          "country": null
+        },
+        {
+          "command": "tjs crypto-sends ACCOUNT --set ID=self",
+          "note": "or payment; self keeps the coins and their basis (a US gift cannot be booked yet)",
+          "country": "usa"
+        }
+      ],
+      "how": "",
+      "why": "Paying with crypto is a sale at fair value. taxjson cannot book a US gift yet: `self` keeps the coins and their basis (docs/limits.md).",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 17,
+      "id": "tt-lines",
+      "section": "Fill the gaps",
+      "title": "Anything no export holds: .tt lines",
+      "check": false,
+      "command": "tjs check-tt",
+      "commands": [
+        {
+          "command": "tjs check-tt",
+          "note": "every .tt line read as the run reads it, each problem named with its file and line",
+          "country": null
+        },
+        {
+          "command": "tjs events",
+          "note": "the books' rows in the same .tt format, to copy from",
+          "country": null
+        }
+      ],
+      "how": "A purchase from before your downloads, a dividend from a slip (Webull), a return of capital (ADJUST): a line in a .tt file in inputs/<account>/ (docs/settings.md, \".tt files\"). Non-cash fund distributions go in [[distributions]] in taxjson.toml.",
+      "why": "The run reads a .tt file like a broker file; `tjs run --strict` refuses a line whose total is not quantity x price +/- fee.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 18,
+      "id": "roc-entered",
+      "section": "Fill the gaps",
+      "title": "Nondividend distributions (1099-DIV box 3) entered before trusting any basis",
+      "check": true,
+      "command": "ADJUST lines / [[distributions]] in taxjson.toml",
+      "commands": [
+        {
+          "command": "tjs roc-sum",
+          "note": "the year's return of capital per security, as the books hold it",
+          "country": null
+        }
+      ],
+      "how": "An ADJUST line in a .tt file, or [[distributions]] in taxjson.toml, per fund that published one (docs/tax-rules.md, \"Non-cash and reinvested distributions\"); then confirm with `tjs checklist --done roc-entered`.",
+      "why": "Return of capital reduces basis; funds often reclassify after year end.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 19,
+      "id": "format",
+      "section": "Tidy the config",
+      "title": "Lay out the config files",
+      "check": false,
+      "command": "tjs format",
+      "commands": [
+        {
+          "command": "tjs format",
+          "note": "taxjson.toml as the template lays it out: shows the diff",
+          "country": null
+        },
+        {
+          "command": "tjs format --write",
+          "note": "applies it (keeps taxjson.toml.bak)",
+          "country": null
+        },
+        {
+          "command": "tjs format-map --write",
+          "note": "ticker.map in keyword groups; dated events move to .tt lines (`tjs format-map` shows the diff)",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "The same layout every year, so a diff of two years' projects shows only what changed; no number changes.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 20,
+      "id": "inputs-committed",
+      "section": "Tidy the config",
+      "title": "Inputs, config, maps and manifests committed",
+      "check": true,
+      "command": "git status",
+      "commands": [
+        {
+          "command": "git status",
+          "note": "what is not committed yet",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "The filed books must be rebuildable years later.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 21,
+      "id": "tips",
+      "section": "Check",
+      "title": "Tax-efficiency tips for next year",
+      "check": false,
+      "command": "tjs tips",
+      "commands": [
+        {
+          "command": "tjs tips",
+          "note": "e.g. a dividend payer held where its withholding is lost",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "Advice on where you hold what; it changes no number of this year.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 22,
+      "id": "sanity",
+      "section": "Check",
+      "title": "Positions tie to the broker holdings",
+      "check": true,
+      "command": "tjs sanity",
+      "commands": [
+        {
+          "command": "tjs sanity",
+          "note": "against the positions snapshots in the year's holdings/ and the files named in taxjson.toml (holdings = [...])",
+          "country": null
+        },
+        {
+          "command": "tjs sanity ACCOUNT=FILE",
+          "note": "against one positions report: an IB statement, an RBC Holdings Export or a [[holding]] .toml",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "Missing history in a position you still hold shows only here: the books cannot see a purchase that is not in the files.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 23,
+      "id": "edge-cases",
+      "section": "Check",
+      "title": "Trades on a boundary",
+      "check": false,
+      "command": "tjs edge-cases",
+      "commands": [
+        {
+          "command": "tjs edge-cases",
+          "note": "each one, with where it lands and why",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "A trade a day either side of Dec 31, or of a loss's 30-day window, changes the year or the denial.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 24,
+      "id": "option-boundary",
+      "section": "Check",
+      "title": "No option left open past its expiry",
+      "check": true,
+      "command": "tjs list (option positions)",
+      "commands": [
+        {
+          "command": "tjs list",
+          "note": "the option positions: one past its expiry needs its expiry, exercise or assignment row",
+          "country": "usa"
+        }
+      ],
+      "how": "",
+      "why": "Under \u00a71234 an expired written option's premium is a short-term gain, and an expired long option's cost a loss, in the expiry year; a missing expiry, exercise or assignment row leaves either out of the return.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 25,
+      "id": "wash-reviewed",
+      "section": "Check",
+      "title": "Every wash-sale disallowance reviewed",
+      "check": true,
+      "command": "tjs wash-sales",
+      "commands": [
+        {
+          "command": "tjs wash-sales",
+          "note": "each loss denied this year, and why",
+          "country": null
+        },
+        {
+          "command": "tjs wash-sales --explain",
+          "note": "with the matching purchases",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "A wash sale triggered by an IRA purchase is permanently disallowed.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 26,
+      "id": "filing-positions",
+      "section": "Check",
+      "title": "Every filing position against the wash-sale rule confirmed",
+      "check": true,
+      "command": "tjs sum (FILING POSITIONS)",
+      "commands": [
+        {
+          "command": "tjs sum",
+          "note": "FILING POSITIONS lists each ALLOWLOSS line with the loss it claims",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "An ALLOWLOSS line claims a loss \u00a71091 would disallow: it is your position, not the rule's test. Keep its reason and be ready to support it; delete the line to apply the rule.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 27,
+      "id": "check-dates",
+      "section": "Check",
+      "title": "Every trade and settlement date is possible for its market",
+      "check": true,
+      "command": "tjs check-dates",
+      "commands": [
+        {
+          "command": "tjs check-dates",
+          "note": "every date against its market's calendar",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "A date on a closed day, or a settlement before the trade, moves a sale to the wrong rate or year.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 28,
+      "id": "audit",
+      "section": "Check",
+      "title": "Every disposition traced and tied",
+      "check": true,
+      "command": "tjs audit",
+      "commands": [
+        {
+          "command": "tjs audit",
+          "note": "every disposition traced and tied out; `tjs audit SYMBOL`: one security",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "The audit walks each sale from the broker row to the reported gain.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 29,
+      "id": "handoff",
+      "section": "Check",
+      "title": "Last year's closing positions carried in exactly once",
+      "check": true,
+      "command": "tjs handoff",
+      "commands": [
+        {
+          "command": "tjs handoff",
+          "note": "this year's opening against last year's close-year record",
+          "country": null
+        }
+      ],
+      "how": "Set [settings] prior_year_record to last year's filed/<year>.json (your first year: confirm with `tjs checklist --done handoff`).",
+      "why": "A Dec 31 trade settling in January, or a dropped lot, makes a gain vanish or count twice.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 30,
+      "id": "sum",
+      "section": "Results",
+      "title": "Read the year's numbers",
+      "check": false,
+      "command": "tjs sum",
+      "commands": [
+        {
+          "command": "tjs sum",
+          "note": "the year's gains, ending with the lines for your return",
+          "country": null
+        },
+        {
+          "command": "tjs list",
+          "note": "what the books hold, with book cost (`tjs list margin 2026-04-28`: as of a date); `tjs shares`: per symbol across accounts",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "`Done.` does not mean right: read them once the gaps are filled.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 31,
+      "id": "explore",
+      "section": "Results",
+      "title": "Look closer at any number",
+      "check": false,
+      "command": "tjs audit SYMBOL",
+      "commands": [
+        {
+          "command": "tjs audit SYMBOL",
+          "note": "each gain traced to its broker row",
+          "country": null
+        },
+        {
+          "command": "tjs tax-logic",
+          "note": "every rule taxjson applies, a bullet each",
+          "country": null
+        },
+        {
+          "command": "tjs staking --details",
+          "note": "reward quantities, commissions, valuation and acquisition cost; `tjs staking-sum`: totals by exchange and coin",
+          "country": null
+        },
+        {
+          "command": "tjs gains",
+          "note": "rows; also `tjs trades`, `tjs events`, `tjs divs`, `tjs dil`, `tjs roc`, `tjs fees`, `tjs leaps`",
+          "country": null
+        },
+        {
+          "command": "tjs divs-sum",
+          "note": "totals; also `tjs dil-sum`, `tjs roc-sum`, `tjs fees-sum`, `tjs leaps-sum`, `tjs ccd-sum`, `tjs trades-sum`, `tjs winners`, `tjs losers`, `tjs stats`",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "Every figure traces back to a broker row and a stated rule.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 32,
+      "id": "t5008",
+      "section": "Results",
+      "title": "1099-B (and, for crypto from 2025, 1099-DA) slips reconcile to the computed dispositions",
+      "check": true,
+      "command": "tjs reconcile-slips inputs/slips/*.csv",
+      "commands": [
+        {
+          "command": "tjs reconcile-slips inputs/slips/*.csv",
+          "note": "the 1099-B / 1099-DA CSVs against the dispositions",
+          "country": "usa"
+        }
+      ],
+      "how": "",
+      "why": "The IRS matches Form 8949 / Schedule D to the 1099-Bs and 1099-DAs \u2014 this step prevents a CP2000.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 33,
+      "id": "t5-t3",
+      "section": "Results",
+      "title": "1099-DIV / 1099-INT slips agree with the dividend and ROC totals",
+      "check": true,
+      "command": "tjs divs-sum, tjs roc-sum (the TAXABLE lines)",
+      "commands": [
+        {
+          "command": "tjs divs-sum",
+          "note": "with `tjs roc-sum`: compare the TAXABLE lines with the 1099-DIV by hand",
+          "country": "usa"
+        }
+      ],
+      "how": "",
+      "why": "Qualified vs ordinary dividends and nondividend distributions come from the slips.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 34,
+      "id": "foreign-tax",
+      "section": "Results",
+      "title": "Foreign tax paid taken from the 1099-DIV (box 7) for the credit (Form 1116)",
+      "check": true,
+      "command": "1099-DIV box 7",
+      "commands": [],
+      "how": "Form 1116 from the 1099-DIV, box 7.",
+      "why": "The credit is limited to what the slips show.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 35,
+      "id": "form-export",
+      "section": "Results",
+      "title": "Form 8949 rows exported and their totals equal the report",
+      "check": true,
+      "command": "tjs form-export",
+      "commands": [
+        {
+          "command": "tjs form-export",
+          "note": "the Form 8949 rows and Schedule D",
+          "country": "usa"
+        },
+        {
+          "command": "tjs form-export --form txf --out gains.txf",
+          "note": "a TurboTax import",
+          "country": "usa"
+        }
+      ],
+      "how": "",
+      "why": "The export is what goes on Form 8949 / Schedule D; the .sum is what the engine computed \u2014 they must agree.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 36,
+      "id": "t1135",
+      "section": "Results",
+      "title": "Not applicable to a US project",
+      "check": true,
+      "command": "-",
+      "commands": [],
+      "how": "",
+      "why": "US project (T1135 is a Canadian form)",
+      "status": "n/a",
+      "effective": "n/a",
+      "detail": "US project (T1135 is a Canadian form)",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 37,
+      "id": "carryover",
+      "section": "Results",
+      "title": "Capital loss carryover applied and recorded (Schedule D line 21 deduction)",
+      "check": true,
+      "command": "tjs carryover, [carryover] claimed in taxjson.toml",
+      "commands": [
+        {
+          "command": "tjs carryover",
+          "note": "capital-loss carryforward across years",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "The ledger only knows what was claimed if you write it down \u2014 record each year's Schedule D line 21 deduction, not the line 6 / 14 carryover.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 38,
+      "id": "fx-cash",
+      "section": "Results",
+      "title": "FX gain on foreign cash reviewed (\u00a7988)",
+      "check": true,
+      "command": "tjs fx-cash",
+      "commands": [
+        {
+          "command": "tjs fx-cash",
+          "note": "currency gains on foreign cash",
+          "country": null
+        },
+        {
+          "command": "tjs cash",
+          "note": "the deposits, withdrawals and conversions it reads, as .tt lines",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "\u00a7988 currency gains on investment cash are ordinary income; `tjs fx-cash`'s default ledger is NOT RELIABLE and the opt-in ledger v2 is under audit (the \u00a7988(e) personal-transaction exclusion is not modelled).",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 39,
+      "id": "fees",
+      "section": "Results",
+      "title": "Margin interest collected (Form 4952, if itemizing)",
+      "check": true,
+      "command": "broker statements (`tjs events` lists the INTEREST rows)",
+      "commands": [
+        {
+          "command": "tjs events",
+          "note": "lists the INTEREST rows",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "Investment interest is deductible only when itemizing; the account .sum's CASH INTEREST line is interest earned and its INTEREST PAID line the interest charged, per currency; trade commissions are not investment interest.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 40,
+      "id": "estimate",
+      "section": "Results",
+      "title": "Tax estimate and estimated payments checked",
+      "check": true,
+      "command": "tjs estimate",
+      "commands": [
+        {
+          "command": "tjs estimate",
+          "note": "tax on the year's investment income ([estimate] other_income in taxjson.toml)",
+          "country": null
+        },
+        {
+          "command": "tjs plot-tax",
+          "note": "the tax each month's income generated, as a chart",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "A sanity check on the tax owed.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 41,
+      "id": "amt",
+      "section": "Results",
+      "title": "Not applicable to a US project",
+      "check": true,
+      "command": "-",
+      "commands": [],
+      "how": "",
+      "why": "US project (the US alternative minimum tax, Form 6251, is not modelled)",
+      "status": "n/a",
+      "effective": "n/a",
+      "detail": "US project (the US alternative minimum tax, Form 6251, is not modelled)",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 42,
+      "id": "trading",
+      "section": "Through the year",
+      "title": "Before you trade",
+      "check": false,
+      "command": "tjs wash-radar",
+      "commands": [
+        {
+          "command": "tjs wash-radar",
+          "note": "the loss windows open today",
+          "country": null
+        },
+        {
+          "command": "tjs buy-check SYMBOL",
+          "note": "would buying today cancel a recent loss?",
+          "country": null
+        },
+        {
+          "command": "tjs sell-check SYMBOL",
+          "note": "would selling at a loss today keep the loss?",
+          "country": null
+        },
+        {
+          "command": "tjs rebuy",
+          "note": "when each ticker sold at a loss can be bought back",
+          "country": null
+        },
+        {
+          "command": "tjs harvest",
+          "note": "unrealized gains and losses at current prices (looks them up)",
+          "country": null
+        },
+        {
+          "command": "tjs watch",
+          "note": "what changed since the last watch (cron)",
+          "country": null
+        },
+        {
+          "command": "tjs div-estimate",
+          "note": "the dividends your holdings' own history points to (planning)",
+          "country": null
+        },
+        {
+          "command": "tjs option-yield",
+          "note": "premiums, profit or loss and yield of your option trades on an underlying (planning)",
+          "country": null
+        },
+        {
+          "command": "tjs win-rates",
+          "note": "the win rate of your closed trades per ticker, account, month or class",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "The loss rules look 30 days both ways: check before the trade, not after.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 43,
+      "id": "redact",
+      "section": "Share safely",
+      "title": "Share a sample, never the exports",
+      "check": false,
+      "command": "tjs redact",
+      "commands": [
+        {
+          "command": "tjs redact",
+          "note": "copies inputs/ to inputs_redact/ with account numbers and names replaced",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "For a bug report or a broker taxjson does not read yet; the redactor works from patterns, so read the copy first.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 44,
+      "id": "filed-lock",
+      "section": "Year end",
+      "title": "Return filed and the year locked",
+      "check": true,
+      "command": "tjs close-year",
+      "commands": [
+        {
+          "command": "tjs close-year",
+          "note": "after filing: filed/<year>.json (commit it)",
+          "country": null
+        },
+        {
+          "command": "tjs check-filed",
+          "note": "later: recomputes filed years and shows any drift",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "The lock is what check-filed uses to detect drift after filing.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 45,
+      "id": "lock-committed",
+      "section": "Year end",
+      "title": "The filed/<year>.json lock committed",
+      "check": true,
+      "command": "git status filed/",
+      "commands": [
+        {
+          "command": "git status filed/",
+          "note": "the lock not committed yet",
+          "country": null
+        }
+      ],
+      "how": "",
+      "why": "The lock is the record of what was filed.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 46,
+      "id": "next-year",
+      "section": "Year end",
+      "title": "Start next year's project",
+      "check": false,
+      "command": "tjs new-year 2025",
+      "commands": [
+        {
+          "command": "tjs new-year 2025",
+          "note": "one folder of exports for every year: the next year's folder beside this one, with copies of this year's taxjson.toml and ticker.map",
+          "country": null
+        },
+        {
+          "command": "tjs migrate --to-years",
+          "note": "a single-folder project, first: makes it the year folder 2024/, its exports shared by every year (then `tjs new-year 2025`)",
+          "country": null
+        },
+        {
+          "command": "tjs align --from 2024",
+          "note": "later, in the new year: the map lines and settings that differ, to bring over",
+          "country": null
+        }
+      ],
+      "how": "With shared exports the new year reads the same inputs/; new-year sets its prior_year_record to this year's lock. A single-folder project: `tjs migrate --to-years` first (`--dry-run` shows the plan), then `tjs new-year 2025` in 2024/. Then `tjs handoff` in the new year. Keep a broker positions snapshot taken at (or just after) the year end in this year's holdings/.",
+      "why": "Next year's cost comes from this year's books.",
+      "status": "todo",
+      "effective": "todo",
+      "detail": "not checked yet: `tjs checklist --run`",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    },
+    {
+      "step": 47,
+      "id": "noa",
+      "section": "Year end",
+      "title": "Not applicable to a US project",
+      "check": true,
+      "command": "-",
+      "commands": [],
+      "how": "",
+      "why": "US project (no Notice of Assessment)",
+      "status": "n/a",
+      "effective": "n/a",
+      "detail": "US project (no Notice of Assessment)",
+      "override": null,
+      "note": "",
+      "finding": "",
+      "next": false
+    }
+  ]
+}

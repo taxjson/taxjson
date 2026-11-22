@@ -24,20 +24,30 @@ The docs another change may not have added yet (OPTIONAL: tax-rules,
 settings and the user pages brokers, commands, glossary, limits, upgrading)
 are checked when present.
 """
+import ast
 import datetime
+import io
 import re
 import shutil
 import subprocess
+import tempfile
+import tokenize
 import unittest
+from functools import lru_cache
 from pathlib import Path
+from unittest import mock
+import _paths
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = _paths.REPO
 
 REQUIRED = ("AGENTS.md", "docs/troubleshooting.md", "docs/architecture-map.md")
 OPTIONAL = ("docs/tax-rules.md", "docs/settings.md",
             # The user pages (v0.28.0 docs rework): checked like the pack.
             "docs/brokers.md", "docs/commands.md", "docs/glossary.md",
             "docs/limits.md", "docs/upgrading.md")
+# Files outside the pack whose code references and commands are checked
+# like its own (TJ-3561): the known problems a release ships with.
+REFERENCED = ("KNOWN_ISSUES.md",)
 
 # A repository path: relative, no spaces or placeholders, a file with an
 # extension or a directory ending in '/'.
@@ -53,6 +63,9 @@ _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 # `path` — `a`, `b`  (also -- or a plain hyphen between them).
 _REF = re.compile(r"`([^`\s]+)`\s+(?:—|--|-)\s+((?:`[^`]+`(?:,\s*|\s+and\s+)?)+)")
 _TICKS = re.compile(r"`([^`]+)`")
+# `path` `name`: a path and one name with no dash between them (the map's
+# parenthetical lists: "the readers (`src/x.py` `fn`, ...)"; TJ-3608).
+_BARE_REF = re.compile(r"`([^`\s]+)`\s+`([A-Za-z_][A-Za-z0-9_]*)(?:\(\))?`")
 
 
 def _read(rel):
@@ -61,6 +74,10 @@ def _read(rel):
 
 def _pack_files():
     return [p for p in REQUIRED + OPTIONAL if (ROOT / p).is_file()]
+
+
+def _referencing_files():
+    return _pack_files() + [p for p in REFERENCED if (ROOT / p).is_file()]
 
 
 # Public files the pack points people to: scanned for personal data too.
@@ -120,6 +137,13 @@ def check_refs(where, text, bad):
                 syms.append(tok)
         seen.add(m.start(1))
         _check_one(where, path, syms, bad)
+    for m in _BARE_REF.finditer(text):
+        if m.start(1) in seen:
+            continue
+        path, sym0 = _split_path_symbol(m.group(1))
+        if _is_repo_path(path) and not sym0:
+            seen.add(m.start(1))
+            _check_one(where, path, [m.group(2)], bad)
     for m in _TICKS.finditer(text):
         if m.start(1) in seen:
             continue
@@ -166,11 +190,108 @@ def _check_one(where, path, syms, bad):
     for s in syms:
         if not _has_symbol(src, s):
             bad.append(f"{where}: `{s}` is not in {path}")
+        elif full.suffix == ".py":
+            home = _moved_to(path, s)
+            if home:
+                bad.append(f"{where}: `{s}` is only in {path}'s comments or "
+                           f"imports; it is defined in {home}")
+            elif _engine_prose_only(path, s):
+                bad.append(f"{where}: `{s}` is only in {path}'s comments, "
+                           f"docstrings or imports: name the engine module "
+                           f"whose code holds it")
+
+
+@lru_cache(maxsize=None)
+def _top_defs():
+    """Every top-level function, class and assigned name in src/, with
+    the files that define it."""
+    out = {}
+    for p in sorted((ROOT / "src").rglob("*.py")):
+        rel = p.relative_to(ROOT).as_posix()
+        for n in ast.parse(p.read_text(encoding="utf-8")).body:
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names = [n.name]
+            elif isinstance(n, ast.Assign):
+                names = [t.id for t in n.targets if isinstance(t, ast.Name)]
+            elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name):
+                names = [n.target.id]
+            else:
+                names = []
+            for name in names:
+                out.setdefault(name, set()).add(rel)
+    return out
+
+
+@lru_cache(maxsize=None)
+def _code_text(path):
+    """The file's source without its comments, docstrings, import
+    statements (a name it only imports is defined elsewhere: TJ-3530) and
+    module-level `__all__` (a shim lists the names it imports: PLAN.md
+    step 10's lib/core.py), with the names it re-exports (`import X as X`,
+    the explicit form)."""
+    src = (ROOT / path).read_text(encoding="utf-8")
+    docs, imports, reexports = set(), set(), []
+    tree = ast.parse(src)
+    for n in tree.body:
+        targets = n.targets if isinstance(n, ast.Assign) else [getattr(n, "target", None)]
+        if isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign)) and any(
+                isinstance(t, ast.Name) and t.id == "__all__" for t in targets):
+            imports.update(range(n.lineno, n.end_lineno + 1))
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Import, ast.ImportFrom)):
+            imports.update(range(n.lineno, n.end_lineno + 1))
+            reexports += [a.name for a in n.names if a.asname == a.name]
+        body = getattr(n, "body", None)
+        if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                          ast.ClassDef)) and body:
+            b = body[0]
+            if (isinstance(b, ast.Expr) and isinstance(b.value, ast.Constant)
+                    and isinstance(b.value.value, str)):
+                docs.add((b.lineno, b.col_offset))
+    return " ".join([t.string for t in tokenize.generate_tokens(io.StringIO(src).readline)
+                     if t.type != tokenize.COMMENT
+                     and not (t.type == tokenize.STRING and t.start in docs)
+                     and t.start[0] not in imports] + reexports)
+
+
+# The engine package (PLAN step 10): one file moved into many, each module's
+# comments still naming what the others hold.
+ENGINE_PREFIX = "src/taxjson/engine/"
+
+
+def _engine_prose_only(path, sym):
+    """True when a name the reference gives to a module of the engine
+    package is only in its comments, docstrings or imports. A local, a
+    parameter or a key has no top-level home, so `_moved_to` passes it
+    (TJ-4075: `_suppress_record` under ca/solve.py, a local of
+    ca/walk.py)."""
+    sym = sym.strip()
+    if sym.endswith("()"):
+        sym = sym[:-2]
+    if not path.startswith(ENGINE_PREFIX) or not _IDENT.match(sym) or "." in sym:
+        return False
+    return not _has_symbol(_code_text(path), sym)
+
+
+def _moved_to(path, sym):
+    """Where a code name the reference gives to `path` is defined, when
+    `path` has it only in comments and docstrings and another module
+    defines it: moved code whose old home still mentions it (step 5's
+    cash-events readers, TJ-2559; a plain lowercase name too, TJ-2570)."""
+    sym = sym.strip()
+    if sym.endswith("()"):
+        sym = sym[:-2]
+    if not _IDENT.match(sym) or "." in sym:
+        return None
+    homes = _top_defs().get(sym)
+    if not homes or path in homes or _has_symbol(_code_text(path), sym):
+        return None
+    return ", ".join(sorted(homes))
 
 
 def _commands():
-    from taxjson.bin import taxjson_run
-    return {name for _, names in taxjson_run._COMMAND_GROUPS for name in names}
+    from taxjson.cli import parser as cli_parser
+    return {name for _, names in cli_parser._COMMAND_GROUPS for name in names}
 
 
 def _released():
@@ -206,15 +327,102 @@ class TestPackFilesExist(unittest.TestCase):
 class TestReferences(unittest.TestCase):
     def test_every_path_and_symbol_exists(self):
         bad = []
-        for p in _pack_files():
+        for p in _referencing_files():
             for n, line in enumerate(_read(p).splitlines(), 1):
                 check_refs(f"{p}:{n}", line, bad)
         self.assertEqual(bad, [])
 
+    def test_an_engine_module_names_only_what_its_code_holds(self):
+        # TJ-4075: a local the walk sets, named under the solver, which
+        # only mentions it in a comment.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            eng = root / "src" / "taxjson" / "engine"
+            eng.mkdir(parents=True)
+            (eng / "solve.py").write_text(
+                '"""The loop; see walk_local."""\n# reads deferred_key\n'
+                'def loop():\n    return {"real_key": 1}\n')
+            (eng / "walk.py").write_text(
+                'def walk():\n    walk_local = 1\n    return {"deferred_key": walk_local}\n')
+            (root / "src" / "other.py").write_text("# walk_local\n")
+            _top_defs.cache_clear()
+            _code_text.cache_clear()
+            try:
+                with mock.patch(f"{__name__}.ROOT", root):
+                    bad = []
+                    check_refs("x.md:1", "`src/taxjson/engine/solve.py` — `loop`, "
+                                         "`real_key`, `walk_local`, `deferred_key`", bad)
+                    self.assertEqual(bad, [
+                        "x.md:1: `walk_local` is only in src/taxjson/engine/solve.py's "
+                        "comments, docstrings or imports: name the engine module whose "
+                        "code holds it",
+                        "x.md:1: `deferred_key` is only in src/taxjson/engine/solve.py's "
+                        "comments, docstrings or imports: name the engine module whose "
+                        "code holds it"])
+                    bad = []
+                    check_refs("x.md:1", "`src/taxjson/engine/walk.py` — `walk_local`, "
+                                         "`deferred_key`", bad)
+                    self.assertEqual(bad, [])
+                    # Outside the engine the text match stands.
+                    bad = []
+                    check_refs("x.md:1", "`src/other.py` — `walk_local`", bad)
+                    self.assertEqual(bad, [])
+            finally:
+                _top_defs.cache_clear()
+                _code_text.cache_clear()
+
+    def test_a_moved_name_its_old_home_only_mentions_fails(self):
+        # TJ-2559: `ib_cash_events` moved to lib/cash_readers/ib.py while
+        # the parser still named it in a comment, which the text match
+        # passed.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "src" / "pkg").mkdir(parents=True)
+            (root / "src" / "pkg" / "old.py").write_text(
+                '"""Was home to moved_fn."""\n# moved_fn now lives in new.py\n'
+                'from pkg.new import imported_fn\n'
+                'from pkg.new import reexported_fn as reexported_fn\n'
+                'from pkg.new import listed_fn\n'
+                '__all__ = ["listed_fn"]\n__all__ += ["listed_fn"]\n'
+                'def kept_fn():\n    return used_fn()\n')
+            (root / "src" / "pkg" / "new.py").write_text(
+                "def moved_fn():\n    pass\n\ndef used_fn():\n    pass\n\n"
+                "def imported_fn():\n    pass\n\ndef reexported_fn():\n    pass\n\n"
+                "def listed_fn():\n    pass\n")
+            _top_defs.cache_clear()
+            _code_text.cache_clear()
+            try:
+                with mock.patch(f"{__name__}.ROOT", root):
+                    bad = []
+                    check_refs("x.md:1", "`src/pkg/old.py` — `kept_fn`, `used_fn`, `moved_fn`, "
+                                         "`imported_fn`, `reexported_fn`, `listed_fn`", bad)
+                    # A name a shim only imports and lists in `__all__`
+                    # (step 10's lib/core.py) is not defined there either.
+                    self.assertEqual(bad, [
+                        "x.md:1: `moved_fn` is only in src/pkg/old.py's comments or "
+                        "imports; it is defined in src/pkg/new.py",
+                        "x.md:1: `imported_fn` is only in src/pkg/old.py's comments or "
+                        "imports; it is defined in src/pkg/new.py",
+                        "x.md:1: `listed_fn` is only in src/pkg/old.py's comments or "
+                        "imports; it is defined in src/pkg/new.py"])
+                    bad = []
+                    check_refs("x.md:1", "`src/pkg/new.py` — `moved_fn`", bad)
+                    self.assertEqual(bad, [])
+                    # TJ-3608: the form with no dash, `path` `name`.
+                    bad = []
+                    check_refs("x.md:1", "the readers (`src/pkg/old.py` `moved_fn`, "
+                                         "`src/pkg/new.py` `used_fn`)", bad)
+                    self.assertEqual(bad, [
+                        "x.md:1: `moved_fn` is only in src/pkg/old.py's comments or "
+                        "imports; it is defined in src/pkg/new.py"])
+            finally:
+                _top_defs.cache_clear()
+                _code_text.cache_clear()
+
     def test_every_quoted_command_exists(self):
         cmds = _commands()
         bad = []
-        for p in _pack_files():
+        for p in _referencing_files():
             for n, line in enumerate(_read(p).splitlines(), 1):
                 # A reference's symbols are code text, not commands.
                 line = _REF.sub(lambda m: "`" + m.group(1) + "`", line)

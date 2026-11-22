@@ -1,0 +1,26 @@
+WASH RADAR — superficial losses (s.54, settlement dates), as of <stamp>
+STATUS: what a loss sale or a buy does today; CLEARS: window closes (VIOLATION: last day to sell).
+STATUS     TICKER                  TAXABLE  SHELTERED  CLEARS
+-----------------------------------------------------------------------
+VIOLATION  SAMPA.TO                    100          0  2024-11-28 (3d)
+BLOCKED    AAPL.US                       0         75  2024-12-06 (11d)
+COOLING    NVDA.US                       0          0  2024-12-20 (25d)
+RISK       QZQ.US                      100         50  -
+CLEAR      ABCD270219C00045000.US        0         10  -
+CLEAR      BTC                        0.05          0  -
+CLEAR      ENB.TO                        0        200  -
+CLEAR      ETH                      1.4052          0  -
+CLEAR      GHOSTQ.TO                   -40          0  -
+CLEAR      OLDCO.US                    -50          0  -
+CLEAR      PARN.US                     100          0  -
+CLEAR      QZQ241220C00035000.US        -1          0  -
+CLEAR      QZQ250117C00040000.US        -1          0  -
+CLEAR      RY.TO                         0         50  -
+CLEAR      SPNC.US                      10          0  -
+OTHER      MSFT.US                       0          0  -
+OTHER      QZQ240920C00030000.US         0          0  -
+
+! VIOLATION: sell all of SAMPA.TO by its CLEARS date to keep the loss — tjs wash-radar --details
+! BLOCKED: do not buy AAPL.US before its CLEARS date — tjs wash-radar --details
+! RISK: QZQ.US: no sheltered buy (DRIP) 30 days after a loss sale — tjs wash-radar --details
+More: tjs wash-radar --details; not checked: affiliated persons' buys (ITA s.251.1)

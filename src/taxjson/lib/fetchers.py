@@ -49,6 +49,7 @@ sends no `inputs`: fall back to root/"inputs" then).
 """
 from __future__ import annotations
 
+from taxjson.project.accounts import accounts_of
 from taxjson.lib.stage_msg import emit_line
 import argparse
 import sys
@@ -68,6 +69,23 @@ INSTALL_HINT = (f"install it by re-running the installer, which installs "
                 f"`_ --with-fetch` if it was installed --without-fetch), "
                 f"or, from a checkout, `pip install --no-deps -e packages/taxjson-fetch` "
                 f"into taxjson's own environment — {_NOT_ON_PYPI}")
+# The fetcher distribution released with this core (packages/taxjson-fetch):
+# scripts/release.sh gives both one version, and the installer installs both
+# from one release. It runs only at the core's own X.Y.Z (a dev or local
+# suffix aside: version_tuple): an older one imports core names since moved
+# or removed (0.41.0: brokerages.questrade's `questrade_cash_events`, lib/
+# core's `parse_option_underlying` and `is_option_symbol`, an ImportError in
+# `tjs fetch` once the core alone was upgraded), and a newer one may
+# import names this core does not have yet. Neither is loaded
+# (lockstep_problem): `tjs fetch --list` names it with the reason
+# (not_loaded), and a fetch it would serve refuses in one line. Another
+# broker's fetcher, in a distribution of its own, is not held to it.
+LOCKSTEP_DISTRIBUTION = "taxjson-fetch"
+# How the two get one version again: INSTALL_HINT's two ways.
+UPGRADE_HINT = (f"upgrade both by re-running the installer (`{_INSTALLER}`), "
+                f"or, from a checkout, `pip install --no-deps -e packages/taxjson-fetch` "
+                f"into taxjson's own environment after the core, from the same "
+                f"checkout — {_NOT_ON_PYPI}")
 # Keys the core always accepts under [accounts.<name>] for a fetcher
 # (the ones taxjson-fetch reads), installed or not: a project that used
 # `tjs fetch` keeps validating when the plugin is absent.
@@ -120,11 +138,55 @@ class Fetcher:
 
 
 _CACHE: Optional[Tuple[List[Fetcher], List[str]]] = None
+# Each installed LOCKSTEP_DISTRIBUTION of another version, not loaded
+# (discover): {"name": its entry point, "distribution": "NAME VERSION",
+# "problem": lockstep_problem's line}.
+_MISMATCHED: List[Dict[str, str]] = []
 
 
 def _entry_points() -> List[Any]:
     from importlib import metadata
     return list(metadata.entry_points(group=ENTRY_POINT_GROUP))
+
+
+def _normal_name(name: Any) -> str:
+    """A distribution's name as packaging compares them (PEP 503)."""
+    import re
+    return re.sub(r"[-_.]+", "-", str(name or "")).lower()
+
+
+def lockstep_problem(version: Optional[str],
+                     core: Optional[str] = None) -> Optional[str]:
+    """Why an installed taxjson-fetch of `version` cannot run with this
+    taxjson (LOCKSTEP_DISTRIBUTION; `core`: this taxjson's version, by
+    default the installed one): one line naming the upgrade, or None when
+    their X.Y.Z are the same. A version that cannot be read is no match:
+    whether the two agree cannot be told."""
+    from taxjson.lib.requires import running_version, version_tuple
+    core = running_version() if core is None else core
+    ours = version_tuple(core) if core else None
+    theirs = version_tuple(version) if version else None
+    if ours is not None and ours == theirs:
+        return None
+    return (f"{LOCKSTEP_DISTRIBUTION} {version or '(version unknown)'} is "
+            f"installed with taxjson {core or '(version unknown)'}: the two "
+            f"are released together and run only at the same version, so "
+            f"it is not loaded — {UPGRADE_HINT}")
+
+
+def mismatched() -> List[str]:
+    """The line of each installed taxjson-fetch whose version is not this
+    taxjson's (lockstep_problem): [] when none. It is not loaded, so it
+    serves no brokerage and adds no option."""
+    discover()
+    return [r["problem"] for r in _MISMATCHED]
+
+
+def not_loaded() -> List[Dict[str, str]]:
+    """The `fetch --list` rows of the installed fetchers not loaded for
+    their version (mismatched): name, distribution, problem."""
+    discover()
+    return [dict(r) for r in _MISMATCHED]
 
 
 def discover(refresh: bool = False) -> Tuple[List[Fetcher], List[str]]:
@@ -136,18 +198,26 @@ def discover(refresh: bool = False) -> Tuple[List[Fetcher], List[str]]:
         return _CACHE
     found: List[Fetcher] = []
     problems: List[str] = []
+    stale: List[Dict[str, str]] = []
     seen = set()
     for ep in _entry_points():
         if ep.name in seen:
             continue
         seen.add(ep.name)
-        dist = ""
+        dist, name, version = "", "", None
         try:
             d = getattr(ep, "dist", None)
             if d is not None:
-                dist = f"{d.metadata['Name']} {d.version}"
+                name, version = d.metadata['Name'], d.version
+                dist = f"{name} {version}"
         except Exception:
             dist = ""
+        if _normal_name(name) == LOCKSTEP_DISTRIBUTION:
+            why = lockstep_problem(version)
+            if why is not None:          # never loaded (its imports)
+                stale.append({"name": ep.name, "distribution": dist,
+                              "problem": why})
+                continue
         try:
             obj = ep.load()
             impl = obj() if isinstance(obj, type) else obj
@@ -161,6 +231,7 @@ def discover(refresh: bool = False) -> Tuple[List[Fetcher], List[str]]:
             continue
         found.append(Fetcher(ep.name, dist, impl))
     _CACHE = (found, problems)
+    _MISMATCHED[:] = stale
     return _CACHE
 
 
@@ -182,9 +253,8 @@ def declared_brokerages(cfg: Dict[str, Any]) -> Dict[str, str]:
     """{account: brokerage} for every [accounts.<name>] with a
     non-empty `brokerage` key, in config order."""
     out: Dict[str, str] = {}
-    for name, ac in (cfg.get("accounts") or {}).items():
-        b = str((ac or {}).get("brokerage") or "").strip() \
-            if isinstance(ac, dict) else ""
+    for name, ac in accounts_of(cfg).items():
+        b = str(ac.brokerage or "").strip()
         if b:
             out[str(name)] = b
     return out

@@ -1,0 +1,95 @@
+{
+  "basis": "wash-adjusted",
+  "currency": "CAD",
+  "rows": [
+    {
+      "closes": 3,
+      "cost": 8914.05,
+      "denied": 305.775,
+      "gain": -42.525,
+      "proceeds": 8565.75,
+      "ticker": "QZQ.US"
+    },
+    {
+      "closes": 1,
+      "cost": 4009.95,
+      "denied": 519.9,
+      "gain": 0.0,
+      "proceeds": 3490.05,
+      "ticker": "SAMPA.TO"
+    },
+    {
+      "closes": 1,
+      "cost": 1999.35,
+      "denied": 117.45,
+      "gain": 0.0,
+      "proceeds": 1881.9,
+      "ticker": "NVDA.US"
+    },
+    {
+      "closes": 1,
+      "cost": 27001.35,
+      "denied": 0.0,
+      "gain": 132.3,
+      "proceeds": 27133.65,
+      "ticker": "MSFT.US"
+    },
+    {
+      "closes": 1,
+      "cost": 2105.6625,
+      "denied": 0.0,
+      "gain": 175.8375,
+      "proceeds": 2281.5,
+      "ticker": "ABCD.US"
+    },
+    {
+      "closes": 3,
+      "cost": 54688.365,
+      "denied": 0.0,
+      "gain": 179.2125,
+      "proceeds": 54867.5775,
+      "ticker": "AAPL.US"
+    },
+    {
+      "closes": 2,
+      "cost": 9752.5013,
+      "denied": 0.0,
+      "gain": 197.6738,
+      "proceeds": 9950.175,
+      "ticker": "BTC"
+    },
+    {
+      "closes": 3,
+      "cost": 4148.557,
+      "denied": 0.0,
+      "gain": 322.292,
+      "proceeds": 4470.849,
+      "ticker": "ETH"
+    },
+    {
+      "closes": 1,
+      "cost": 13346.6,
+      "denied": 0.0,
+      "gain": 643.45,
+      "proceeds": 13990.05,
+      "ticker": "RY.TO"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "tax year 2024",
+  "sheltered_included": [
+    "rrsp",
+    "tfsa"
+  ],
+  "side": "losers",
+  "side_tickers": [
+    "QZQ.US"
+  ],
+  "side_total_gain": -42.52,
+  "side_total_gain_sheltered": 0.0,
+  "side_total_gain_taxable": -42.52,
+  "tainted_skipped": 0,
+  "total_gain": 1608.24,
+  "total_gain_sheltered": 913.86,
+  "total_gain_taxable": 694.39
+}

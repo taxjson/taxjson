@@ -176,7 +176,8 @@ def prod_dir(env: Optional[Mapping[str, str]] = None) -> Path:
 
 def channel_file() -> Path:
     """Where the installer remembers this machine's channel."""
-    return Path.home() / ".config" / "taxjson" / "channel"
+    from taxjson.lib.project_layout import user_config_dir
+    return user_config_dir() / "channel"
 
 
 def remembered_channel() -> Optional[str]:

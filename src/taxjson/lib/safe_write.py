@@ -7,17 +7,22 @@ through here (pre-release security review M1). A plain
 overwrites whatever it points at — a file outside the project too.
 
 - atomic_open / write_atomic stage each write in a temp file of its OWN:
-  a new, uniquely named sibling `<out>.<random><suffix>` (tempfile.mkstemp
-  in the final file's folder: O_CREAT | O_EXCL | O_NOFOLLOW, mode 0600),
-  owner-only from the first byte (tax data) and never shared. One fixed
+  a new, uniquely named sibling `<out>.<random><suffix>` (an exclusive
+  create in the final file's folder: O_CREAT | O_EXCL, which never
+  follows a link at the name, mode 0600), owner-only from the first byte
+  (tax data) and never shared. One fixed
   `<out><suffix>` name let two overlapping writers of one file (two
   processes, or a nested write) share it: the first rename published the
   other's unfinished data and the second failed (GitHub issue #9). A
   planted symlink or a stale temp at any name is never opened or reused.
+  The temp's removal is in place before it exists, so an interrupt
+  anywhere leaves none behind.
 - open_new (a caller that names its own temp file) creates it FRESH: an
-  existing entry at its name is unlinked first, then
-  os.open(O_CREAT | O_EXCL | O_NOFOLLOW, 0o600) refuses anything that
-  reappears there.
+  existing entry at its name is unlinked first, then the exclusive
+  create (O_CREAT | O_EXCL, 0o600) refuses anything that reappears
+  there.
+- Each new file is opened by its file object (_create), which owns the
+  descriptor from the moment it exists: an exception closes it once.
 - The data is flushed and fsync'd before the rename, so a crash never
   publishes a short file under the final name.
 - The rename (os.replace) replaces the final directory ENTRY: when the
@@ -30,7 +35,7 @@ overwrites whatever it points at — a file outside the project too.
 - Unique temps make each WRITE atomic, not a read-modify-write: the last
   rename wins. Writers that read a shared file, change it and write it
   back hold a lock around the whole step — the run lock
-  (taxjson_run._acquire_run_lock, one `tjs run` per project), the
+  (pipeline/run._acquire_run_lock, one `tjs run` per project), the
   checklist state lock (checklist._StateLock) and the shared price/rate
   caches' lock (json_cache.save_json_cache); file_lock is the general
   form (the fetch plugin's project and Questrade-token locks).
@@ -39,15 +44,35 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import functools
 import os
+import secrets
 import stat
-import tempfile
 from pathlib import Path
 from typing import IO, Iterator, Optional, Union
 
-_FLAGS = (os.O_WRONLY | os.O_CREAT | os.O_EXCL
-          | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
-          | getattr(os, "O_BINARY", 0))
+# Names atomic_open tries before it gives up (each one is random).
+_TEMP_TRIES = 100
+
+
+def _create(path: Union[str, Path], *, binary: bool = False,
+            encoding: str = "utf-8", newline: Optional[str] = None) -> IO:
+    """Create `path` as a NEW owner-only file, open for writing: the "x"
+    mode's O_CREAT | O_EXCL raises FileExistsError for anything at the
+    name (a file, a symlink: never followed). The file object opens its
+    own descriptor, so an exception anywhere closes it once. os.fdopen
+    on a descriptor opened first did not: an interrupt raised as fdopen
+    returned dropped the file object, which closed the descriptor, and
+    the `except`'s os.close then raised EBADF in the interrupt's place
+    ("Bad file descriptor": backlog TJ-4893)."""
+    # The opener, owner-only, is a C callable (os.open looked up here),
+    # so the descriptor goes from os.open to the file object with no
+    # Python code between them: no point an interrupt can be raised at.
+    opener = functools.partial(os.open, mode=0o600)
+    if binary:
+        return open(path, "xb", opener=opener)
+    return open(path, "x", encoding=encoding, newline=newline,
+                opener=opener)
 
 
 def open_new(path: Union[str, Path], *, binary: bool = False,
@@ -61,14 +86,7 @@ def open_new(path: Union[str, Path], *, binary: bool = False,
         os.unlink(p)
     except FileNotFoundError:
         pass
-    fd = os.open(p, _FLAGS, 0o600)
-    try:
-        if binary:
-            return os.fdopen(fd, "wb")
-        return os.fdopen(fd, "w", encoding=encoding, newline=newline)
-    except BaseException:
-        os.close(fd)
-        raise
+    return _create(p, binary=binary, encoding=encoding, newline=newline)
 
 
 def discard(path: Union[str, Path]) -> None:
@@ -175,31 +193,31 @@ def atomic_open(final: Union[str, Path], *, binary: bool = False,
     final = Path(final)
     if keep_mode:
         refuse_read_only(final)
-    fd, name = tempfile.mkstemp(prefix=final.name + ".", suffix=suffix,
-                                dir=str(final.parent))
-    tmp = Path(name)
-    try:
-        f = (os.fdopen(fd, "wb") if binary else
-             os.fdopen(fd, "w", encoding=encoding, newline=newline))
-    except BaseException:
-        os.close(fd)
-        discard(tmp)
-        raise
+    # The temp's removal is in place before the temp exists: its name is
+    # chosen first and it is created inside the `try`. tempfile.mkstemp
+    # returned a file the `try` did not cover yet, so an interrupt there
+    # left `<out>.<random>.part` behind (backlog TJ-4893).
+    made: Optional[Path] = None         # the temp, removed unless renamed
+    f: Optional[IO] = None
     done = False
     try:
+        for _ in range(_TEMP_TRIES):
+            tmp = final.with_name(
+                f"{final.name}.{secrets.token_hex(4)}{suffix}")
+            made = tmp
+            try:
+                f = _create(tmp, binary=binary, encoding=encoding,
+                            newline=newline)
+                break
+            except FileExistsError:
+                made = None             # not this writer's: never removed
+        else:
+            raise FileExistsError(errno.EEXIST,
+                                  "no free temporary file name", str(final))
         try:
             yield f
         except BaseException as e:
-            # The block failed: its exception is the error. Closing the
-            # temp can fail too (a full disk, a file-size limit) — the
-            # temp is removed below, so that second error must not
-            # replace the first: it hid a failed stage behind a bare
-            # "[Errno 27] File too large" (backlog TJ-0106).
             _name_full_disk(e, final)
-            try:
-                f.close()
-            except OSError:
-                pass
             raise
         try:
             with f:
@@ -212,7 +230,17 @@ def atomic_open(final: Union[str, Path], *, binary: bool = False,
         done = True
     finally:
         if not done:
-            discard(tmp)
+            # The block failed (or the temp's open, its rename): its
+            # exception is the error. Closing the temp can fail too (a
+            # full disk, a file-size limit) — the temp is removed, so
+            # that second error must not replace the first: it hid a
+            # failed stage behind a bare "[Errno 27] File too large"
+            # (backlog TJ-0106). A closed file closes again as a no-op.
+            if f is not None:
+                with contextlib.suppress(OSError):
+                    f.close()
+            if made is not None:
+                discard(made)
 
 
 def _name_full_disk(exc: BaseException, final: Path) -> None:
@@ -235,6 +263,28 @@ def write_atomic(final: Union[str, Path], data: Union[str, bytes], *,
                      encoding=encoding, newline=newline,
                      keep_mode=keep_mode) as f:
         f.write(data)
+
+
+def holds(final: Union[str, Path], data: Union[str, bytes], *,
+          encoding: str = "utf-8") -> bool:
+    """True when `final` is a regular file (not a link) whose bytes are
+    `data` (text encoded with `encoding`): write_changed's test, for a
+    writer that words its own errors (pipeline/tools `_write_work_stamp`).
+    Text a write translated the newlines of (Windows) never matches, so it
+    is written again."""
+    raw = data if isinstance(data, bytes) else data.encode(encoding)
+    return _same_regular_file(Path(final), raw)
+
+
+def write_changed(final: Union[str, Path], data: Union[str, bytes], *,
+                  encoding: str = "utf-8") -> bool:
+    """write_atomic, unless `final` is a regular file holding `data`
+    already: a run that changed nothing writes nothing (the stage table's
+    rule, for the run's own bookkeeping). True when it wrote."""
+    if holds(final, data, encoding=encoding):
+        return False
+    write_atomic(final, data, encoding=encoding)
+    return True
 
 
 def link_outside(path: Union[str, Path],
@@ -262,7 +312,7 @@ def backup_copy(path: Union[str, Path]) -> Path:
     free `<name>.bakN` — an earlier backup is never overwritten (a second
     --force used to replace the only copy of the first version), and an
     identical regular backup is reused. Each name is taken with an
-    exclusive create (O_CREAT | O_EXCL | O_NOFOLLOW, owner-only), so
+    exclusive create (O_CREAT | O_EXCL, owner-only: _create), so
     choosing the name and reserving it are one step: two overlapping
     callers both found `<name>.bak` free and one version was lost
     (audit 2026-10-24 D06). An entry at a .bak name that is not a
@@ -278,13 +328,13 @@ def backup_copy(path: Union[str, Path]) -> Path:
         bak = path.with_name(base if n == 0 else f"{base}{n}")
         n += 1
         try:
-            fd = os.open(str(bak), _FLAGS, 0o600)
+            f = _create(bak, binary=True)
         except FileExistsError:
             if _same_regular_file(bak, data):
                 return bak
             continue
         try:
-            _fill(fd, data)
+            _fill(f, data)
         except BaseException:
             discard(bak)
             raise
@@ -301,13 +351,8 @@ def _same_regular_file(path: Path, data: bytes) -> bool:
         return False
 
 
-def _fill(fd: int, data: bytes) -> None:
-    """Write `data` to the just-created `fd`, fsync it and close it."""
-    try:
-        f = os.fdopen(fd, "wb")
-    except BaseException:
-        os.close(fd)
-        raise
+def _fill(f: IO, data: bytes) -> None:
+    """Write `data` to the just-created file `f`, fsync it and close it."""
     with f:
         f.write(data)
         f.flush()

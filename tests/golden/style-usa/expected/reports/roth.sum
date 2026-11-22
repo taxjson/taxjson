@@ -1,0 +1,26 @@
+======================================================================
+ DIAGNOSTICS — roth  (parser/merge warnings; not part of the tax totals)
+======================================================================
+OK: <merged>: 2 transactions validated.
+NOTE: rewrote 1 TRANSFER row(s) → BUYSELL for basis tracking (sheltered-account approximation). (Standalone `taxjson-gains`: pass --taxable to reject TRANSFER rows instead.)
+======================================================================
+
+
+
+INCOME SUMMARY — year 2024, sorted by ticker
+
+SYMBOL                            GROSS DIV              PIL          TAX W/H       NET INCOME
+----------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------
+SUBTOTAL                               0.00             0.00             0.00             0.00
+CASH INTEREST                                                                             0.00
+----------------------------------------------------------------------------------------------
+TOTAL NET INCOME                                                                          0.00
+
+====================================================================================================
+ HOLDINGS REPORT - open positions at the end of the data (not 2024-12-31 positions; `tjs list --date` gives a date) - Sorted by: ticker
+====================================================================================================
+TICKER           QTY  COST/SHARE    TOTAL COST  CUR
+---------------------------------------------------
+QZQ.US            50     24.5990       1229.95  USD
+SAMPB.US          20      0.0000          0.00  USD

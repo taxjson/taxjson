@@ -1,0 +1,54 @@
+======================================================================
+ DIAGNOSTICS — qt  (parser/merge warnings; not part of the tax totals)
+======================================================================
+note: FX: Bank of Canada Valet for <n> dates, Yahoo fallback for 0
+OK: <merged>: 4 transactions validated.
+======================================================================
+
+
+TICKER SUMMARY — CAD, year 2024, sorted by ticker
+
+SYMBOL                                 TOTAL        TOTAL_COST     TOTAL_PROCEED        TOTAL_GAIN          CAP_GAIN          OPT_GAIN          DIVIDEND               PIL   AVG_DAYS
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+SAMPQ.US                              -84.38             84.38              0.00            -84.38              0.00            -84.38              0.00              0.00        8.5
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+TOTAL                                 -84.38             84.38              0.00            -84.38              0.00            -84.38              0.00              0.00        8.5
+
+ASSET: Options    | CURRENCY: CAD   | TRADES: 2 | YEAR: 2024
+
+Total Realized Gain:                -84.38 CAD
+Average Holding Period:                 8.5 Days
+Avg Fee Per Trade:                    0.00 CAD
+Avg Fee Per 100 Opt:                0.0000 CAD
+----------------------------------------------------------------------------------------------------------------
+Positive Trades: 0 | Negative Trades: 2 | Win/Loss: 0.00 | Win Rate: 0.0%
+Average Positive:              0.00 CAD | Average Negative:            -42.19 CAD
+----------------------------------------------------------------------------------------------------------------
+
+CONSOLIDATED TOTALS — CAD, year 2024
+
+TOTAL COST:                             84.38 CAD
+TOTAL PROCEEDS:                          0.00 CAD
+  (engine sign convention: shorts/written options negated — for Schedule 3 proceeds and ACB use `tjs form-export`)
+------------------------------------------------------
+TOTAL REALIZED NON-OPTION GAIN:          0.00 CAD
+  (shares, units, futures and crypto — Schedule 3 lines: `tjs form-export`)
+TOTAL REALIZED OPTION GAIN:            -84.38 CAD
+TOTAL REALIZED GAIN:                   -84.38 CAD
+------------------------------------------------------
+TOTAL DIVIDENDS / STAKING:               0.00 CAD
+------------------------------------------------------
+GRAND TOTAL (GAIN+DIV+PIL):            -84.38 CAD
+------------------------------------------------------
+TOTAL TRADING FEES PAID:                 3.38 CAD
+  (OPTION TRADING FEES):                 3.38 CAD
+
+INCOME SUMMARY — year 2024, sorted by ticker
+
+SYMBOL                            GROSS DIV              PIL          TAX W/H       NET INCOME
+----------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------
+SUBTOTAL                               0.00             0.00             0.00             0.00
+CASH INTEREST                                                                             0.00
+----------------------------------------------------------------------------------------------
+TOTAL NET INCOME                                                                          0.00

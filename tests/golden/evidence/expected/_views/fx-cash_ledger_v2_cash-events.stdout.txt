@@ -1,0 +1,54 @@
+FX on foreign cash, ledger v2 (opt-in, under audit): computed for 2025 — net 0.00 CAD, reportable 0.00; review it before using it.
+
+FX GAINS ON CASH — CAD, tax year 2025, ITA s.39(1.1) (capital, $200 de minimis), ledger v2 (opt-in, under audit)
+Every spend of foreign currency is a disposition; one pooled average cost per currency across the taxable accounts; conversions at the amount actually paid or received; moves between your own accounts are not dispositions; a negative balance is a debt in that currency, realised when repaid; each account reconciled to its statement balances.
+Policy: USD stablecoins (USDC and the others) are counted as US-dollar cash (CA-CRYPTO-02), not as crypto-assets.
+
+CUR         UNITS IN  UNITS OUT  GAIN(LOSS) CAD  ON DEBT CAD
+------------------------------------------------------------
+USD         1,605.50     205.00            0.00         0.00
+------------------------------------------------------------
+NET                                                     0.00
+REPORTABLE                                              0.00
+
+UNITS IN / OUT: units of each currency; the gains in CAD. Only the net gain (or loss) on foreign-currency dispositions beyond $200/year is a capital gain (loss) — Schedule 3, 'Bonds, debentures, promissory notes, and other similar properties'.
+
+OPENING
+BOOK CUR        UNITS  COST  FROM
+--------------------------------------------------------------------------
+margin/ib USD    0.00  0.00  ib_2025.csv: Cash Report Starting Cash (zero)
+margin2/ib USD   0.00  0.00  ib_2025.csv: Cash Report Starting Cash (zero)
+rbc/rbc USD      0.00  0.00  inputs/rbc/cash.tt:4
+
+RECONCILIATION (statement vs ledger, trade-date balance; tolerance 1.00)
+DATE        BOOK        CUR  STATEMENT  LEDGER   GAP
+----------------------------------------------------
+2024-12-31  margin/ib   USD       0.00    0.00  0.00
+2024-12-31  margin2/ib  USD       0.00    0.00  0.00
+2025-03-18  rbc/rbc     USD       0.00    0.00  0.00
+2025-03-20  margin/ib   USD     825.00  825.00  0.00
+2025-12-31  margin/ib   USD     826.50  826.50  0.00
+2025-12-31  margin2/ib  USD     436.00  436.00  0.00
+2025-12-31  rbc/rbc     USD     138.00  138.00  0.00
+
+DECLARED MOVES
+DATE        BOOK        CUR  AMOUNT  HOW
+------------------------------------------------
+2025-01-06  margin/ib   USD  200.00  cost=270.00
+2025-01-06  margin2/ib  USD  420.00  cost=567.00
+
+CASH EVENTS READ
+DATE        BOOK        KIND      DETAIL                                            DECLARED BY
+------------------------------------------------------------------------------------------------------------
+2024-12-31  margin/ib   CASHBAL   0.00 USD balance
+2024-12-31  margin2/ib  CASHBAL   0.00 USD balance
+2025-01-01  margin/ib   PERIOD
+2025-01-01  margin2/ib  PERIOD
+2025-01-01  rbc/rbc     CASHOPEN  0.00 USD cost 0.00
+2025-01-06  margin/ib   CASHMOVE  +200.00 USD cost=270.00 Electronic Fund Transfer  inputs/margin/cash.tt:4
+2025-01-06  margin2/ib  CASHMOVE  +420.00 USD cost=567.00 Electronic Fund Transfer  inputs/margin2/cash.tt:2
+2025-03-18  rbc/rbc     CASHBAL   0.00 USD balance
+2025-03-20  margin/ib   CASHBAL   825.00 USD balance
+2025-12-31  margin/ib   CASHBAL   826.50 USD balance
+2025-12-31  margin2/ib  CASHBAL   436.00 USD balance
+2025-12-31  rbc/rbc     CASHBAL   138.00 USD balance

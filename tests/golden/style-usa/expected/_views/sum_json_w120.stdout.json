@@ -1,0 +1,177 @@
+{
+  "accounts": [
+    {
+      "account": "crypto",
+      "dividend": 37.29,
+      "dividend_is_staking": true,
+      "fees": 96.06,
+      "option": 0.0,
+      "pil": 0.0,
+      "realized": 473.0,
+      "stock": 473.0,
+      "total": 510.29,
+      "type": "taxable"
+    },
+    {
+      "account": "margin",
+      "dividend": 415.0,
+      "fees": 55.8,
+      "option": -105.0,
+      "pil": 0.0,
+      "realized": -107.5,
+      "stock": -2.5,
+      "total": 307.5,
+      "type": "taxable"
+    },
+    {
+      "account": "qt",
+      "dividend": 0.0,
+      "fees": 1.25,
+      "option": -36.25,
+      "pil": 0.0,
+      "realized": -36.25,
+      "stock": 0.0,
+      "total": -36.25,
+      "type": "taxable"
+    },
+    {
+      "account": "roth",
+      "dividend": 0.0,
+      "fees": 4.95,
+      "option": 0.0,
+      "pil": 0.0,
+      "realized": 0.0,
+      "stock": 0.0,
+      "total": 0.0,
+      "type": "sheltered"
+    }
+  ],
+  "basis": "wash-adjusted",
+  "currency": "USD",
+  "filing": {
+    "accounts": [
+      {
+        "account": "crypto",
+        "adjustment": 0.0,
+        "cost": 9173.26,
+        "dispositions": 10,
+        "gain": 473.0,
+        "proceeds": 9646.26
+      },
+      {
+        "account": "margin",
+        "adjustment": 903.4,
+        "cost": 32094.95,
+        "dispositions": 6,
+        "gain": -107.5,
+        "proceeds": 31084.05
+      },
+      {
+        "account": "qt",
+        "adjustment": 0.0,
+        "cost": 36.25,
+        "dispositions": 1,
+        "gain": -36.25,
+        "proceeds": 0.0
+      }
+    ],
+    "date_basis": "date",
+    "engine_denied_unrounded": 903.4,
+    "engine_gain_unrounded": 329.25,
+    "fx_cash": null,
+    "parts_8949": [
+      {
+        "adjustment": 903.4,
+        "boxes": "A/B/C",
+        "cost": 41304.46,
+        "digital_asset": false,
+        "dispositions": 17,
+        "gain": 329.25,
+        "label": "Part I \u2014 short-term",
+        "part": "I",
+        "proceeds": 40730.31,
+        "schedule_d": "Schedule D Part I"
+      }
+    ],
+    "totals": {
+      "adjustment": 903.4,
+      "cost": 41304.46,
+      "gain": 329.25,
+      "permanently_denied": 100.5,
+      "proceeds": 40730.31,
+      "section_1256_gain": 0.0
+    }
+  },
+  "no_purchase_in_totals": [],
+  "no_purchase_uncovered": [
+    {
+      "account": "margin",
+      "proceeds": 590.05,
+      "sales": 1,
+      "symbol": "GHOSTQ.US"
+    },
+    {
+      "account": "margin",
+      "proceeds": 999.0,
+      "sales": 1,
+      "symbol": "OLDCO.US"
+    }
+  ],
+  "readiness": {
+    "complete": false,
+    "issues": [
+      {
+        "detail": "inputs changed since the last full run (added: filed/ (locked years))",
+        "fix": "tjs run, then tjs checklist --run",
+        "kind": "run-state"
+      },
+      {
+        "count": 2,
+        "detail": "2 sale(s) with no purchase in the files are in no total",
+        "fix": "tjs find-missing-history",
+        "kind": "no-purchase"
+      }
+    ]
+  },
+  "run_state_problems": [
+    "inputs changed since the last full run (added: filed/ (locked years))"
+  ],
+  "schema_version": 1,
+  "sheltered_included": [
+    "roth"
+  ],
+  "subtotals": {
+    "sheltered": {
+      "dividend": 0.0,
+      "fees": 4.95,
+      "option": 0.0,
+      "pil": 0.0,
+      "realized": 0.0,
+      "stock": 0.0,
+      "total": 0.0
+    },
+    "taxable": {
+      "dividend": 452.29,
+      "fees": 153.11,
+      "option": -141.25,
+      "pil": 0.0,
+      "realized": 329.25,
+      "stock": 470.5,
+      "total": 781.54
+    }
+  },
+  "tainted_included": 0,
+  "tainted_routed": 0,
+  "totals": {
+    "dividend": 452.29,
+    "fees": 158.06,
+    "option": -141.25,
+    "pil": 0.0,
+    "realized": 329.25,
+    "stock": 470.5,
+    "total": 781.54
+  },
+  "unknown_cost_included": 0,
+  "unknown_cost_routed": 0,
+  "year": "2024"
+}

@@ -16,7 +16,9 @@ from decimal import Decimal
 from taxjson.lib import country as C
 from tax_rules import rule, rule_absent
 from tax_rules.dual import gains_both, tx
+from taxjson.rules import ids as RID
 from _style import CapturedWidth
+from _support.ib_roc_brokerage import _usd_rates, _run_offline, _standalone_brokerage
 
 
 # Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
@@ -60,10 +62,10 @@ class TestFuturesByCountry(unittest.TestCase):
     base currency; each engine books settlement rows with the right sign;
     a partial close follows the country's lot rule."""
 
-    @rule("CA-FX-04")
-    @rule_absent("CA-FX-04", country="usa")
-    @rule("US-FUT-01")
-    @rule_absent("US-FUT-01", country="canada")
+    @rule(RID.CA_FX_04)
+    @rule_absent(RID.CA_FX_04, country="usa")
+    @rule(RID.US_FUT_01)
+    @rule_absent(RID.US_FUT_01, country="canada")
     def test_partial_close_average_vs_fifo(self):
         book = [_fut("2025-01-02", 1, 1000), _fut("2025-01-03", 1, 1100),
                 _fut("2025-01-06", -1, 1200)]
@@ -81,18 +83,18 @@ class TestFuturesByCountry(unittest.TestCase):
                                    150.0 if c == "canada" else 200.0,
                                    places=6)
 
-    @rule("US-FUT-01")
+    @rule(RID.US_FUT_01)
     def test_us_engine_books_a_short_cover_with_the_right_sign(self):
         # A short closed at a +5,000 profit: settlement rows 0 / +5,000.
         rows = _settled([_fut("2025-11-03", -1, 300000),
                          _fut("2025-11-10", 1, 295000)], "usa")
         self.assertEqual([r.net_amount for r in rows], [0.0, 5000.0])
-        from taxjson.lib.core import get_tax_rules
+        from taxjson.engine.by_country import get_tax_rules
         res = get_tax_rules("usa").compute_gains(rows)
         self.assertAlmostEqual(sum(g["gain"] for g in _gain_rows(res)),
                                5000.0, places=6)
 
-    @rule("US-FUT-01")
+    @rule(RID.US_FUT_01)
     def test_non_usd_future_in_a_us_book_has_no_fx_on_notional(self):
         # A CAD future in a USD project: the P/L (+1,000 CAD) at the
         # closing rate (0.72) — not notional x (0.72 - 0.70).
@@ -103,15 +105,15 @@ class TestFuturesByCountry(unittest.TestCase):
                 tx("BUYSELL", "2025-03-10", "F:SXFH5.TO", -1, 101000,
                    currency="CAD")]
         rows = _settled(book, "usa", rates=rates)
-        from taxjson.lib.core import get_tax_rules
+        from taxjson.engine.by_country import get_tax_rules
         res = get_tax_rules("usa").compute_gains(rows)
         self.assertAlmostEqual(sum(g["gain"] for g in _gain_rows(res)),
                                720.0, places=6)
 
-    @rule("US-FUT-02")
+    @rule(RID.US_FUT_02)
     def test_open_contract_is_not_marked_at_year_end(self):
         rows = _settled([_fut("2025-12-01", 1, 300000)], "usa")
-        from taxjson.lib.core import get_tax_rules
+        from taxjson.engine.by_country import get_tax_rules
         res = get_tax_rules("usa").compute_gains(rows)
         self.assertEqual(_gain_rows(res), [])
 
@@ -129,34 +131,6 @@ class TestFuturesByCountry(unittest.TestCase):
 
 
 # ------------------------------------------------------------ INPUTS-01
-def _usd_rates(path, home, start="2023-01-01"):
-    """A hand-written USD->CAD rates file reaching today (the run keeps
-    a fresh one offline), and the same rates in the currency cache of
-    `home`, the HOME _run_offline runs under: a run that rebuilds the
-    file keeps them (backlog TJ-0635)."""
-    from datetime import date, timedelta
-    from _planted_rates import plant
-    d, stop = date.fromisoformat(start), date.today()
-    lines = []
-    while d <= stop:
-        lines.append(f"{d.isoformat()} 12:00:00 USD CAD 1.3500 boc")
-        d += timedelta(days=1)
-    plant(path, "\n".join(lines) + "\n", home)
-
-
-def _run_offline(root, home, *args):
-    import os
-    import subprocess
-    import sys
-    from tax_rules.dual import SRC
-    env = dict(os.environ, PYTHONPATH=str(SRC), TAXJSON_OFFLINE="1",
-               HOME=str(home), NO_COLOR="1")
-    return subprocess.run([sys.executable, "-m", "taxjson.bin.taxjson_run",
-                           "-C", str(root), *args], capture_output=True,
-                          text=True, env=env, stdin=subprocess.DEVNULL,
-                          timeout=300)
-
-
 def _stkdiv(date, symbol, qty, **kw):
     return tx("BUYSELL", date, symbol, qty, 0.0, price=0.0,
               type="stock_dividend", **kw)
@@ -169,10 +143,10 @@ class TestStockDividend(unittest.TestCase):
     old and new shares, the purchase date tacks, and it is not a §1091
     purchase."""
 
-    @rule("CA-STKDIV-01")
-    @rule_absent("CA-STKDIV-01", country="usa")
-    @rule("US-STKDIV-01")
-    @rule_absent("US-STKDIV-01", country="canada")
+    @rule(RID.CA_STKDIV_01)
+    @rule_absent(RID.CA_STKDIV_01, country="usa")
+    @rule(RID.US_STKDIV_01)
+    @rule_absent(RID.US_STKDIV_01, country="canada")
     def test_new_shares_in_a_later_sale(self):
         book = [tx("BUYSELL", "2023-03-01", "XYZ.US", 100, 5000),
                 _stkdiv("2024-06-03", "XYZ.US", 5),
@@ -203,10 +177,10 @@ class TestStockDividend(unittest.TestCase):
         self.assertNotIn("distributions", r24["usa"]["_stderr"])
         self.assertNotIn("§307", r["canada"]["_stderr"])
 
-    @rule("CA-STKDIV-01")
-    @rule_absent("CA-STKDIV-01", country="usa")
-    @rule("US-STKDIV-01")
-    @rule_absent("US-STKDIV-01", country="canada")
+    @rule(RID.CA_STKDIV_01)
+    @rule_absent(RID.CA_STKDIV_01, country="usa")
+    @rule(RID.US_STKDIV_01)
+    @rule_absent(RID.US_STKDIV_01, country="canada")
     def test_stock_dividend_is_a_replacement_only_in_canada(self):
         # A loss 14 days before a 5-share stock dividend, still held.
         book = [tx("BUYSELL", "2024-01-02", "XYZ.US", 200, 10000),
@@ -222,9 +196,9 @@ class TestStockDividend(unittest.TestCase):
         self.assertFalse(any(g.get("is_wash_sale")
                              for g in _gain_rows(r["usa"])))
 
-    @rule("US-STKDIV-01")
+    @rule(RID.US_STKDIV_01)
     def test_per_account_basis_spreads_only_that_accounts_lots(self):
-        from taxjson.lib.core import get_tax_rules
+        from taxjson.engine.by_country import get_tax_rules
         book = [tx("BUYSELL", "2023-03-01", "XYZ.US", 100, 5000,
                    account="a"),
                 tx("BUYSELL", "2023-03-02", "XYZ.US", 100, 7000,
@@ -239,9 +213,9 @@ class TestStockDividend(unittest.TestCase):
                           for g in rows], [(110.0, "a")])
         self.assertAlmostEqual(rows[0]["cost"], 5000.0, places=6)
 
-    @rule("US-STKDIV-03")
+    @rule(RID.US_STKDIV_03)
     def test_no_shares_held_is_a_warned_zero_cost_purchase(self):
-        from taxjson.lib.core import get_tax_rules
+        from taxjson.engine.by_country import get_tax_rules
         import contextlib
         import io
         err = io.StringIO()
@@ -256,7 +230,7 @@ class TestStockDividend(unittest.TestCase):
     def test_parsers_emit_the_neutral_event_without_country_advice(self):
         import contextlib
         import io
-        from test_fix_ibparse import CA_H, HEAD, _ca, _parse_ib
+        from _support.ib_statement_rows import CA_H, HEAD, _ca, _parse_ib
         body = (HEAD + CA_H + _ca(
             'QZSD(US9990000999) Stock Dividend US9990000999 1 for 20 '
             '(QZSD, QZSD CORP, US9990000999)', 5, value=100))
@@ -266,8 +240,7 @@ class TestStockDividend(unittest.TestCase):
                          [("BUYSELL", 5.0, 0.0, "stock_dividend")])
         for law in ("ACB", "income", "§", "ITA"):
             self.assertNotIn(law, err)
-        from test_parser_activity_coverage import (QUESTRADE_HEADER,
-                                                   _parse_csv)
+        from _support.parser_csv import QUESTRADE_HEADER, _parse_csv
         from taxjson.lib.brokerages.questrade import QuestradeBrokerage
         csv = QUESTRADE_HEADER + (
             '2026-06-26 12:00:00 AM,2026-06-26 12:00:00 AM,DIS,QSC,'
@@ -280,16 +253,16 @@ class TestStockDividend(unittest.TestCase):
         self.assertEqual([t.get("type") for t in qt], ["stock_dividend"])
         self.assertNotIn("ACB", buf.getvalue())
 
-    @rule("CA-STKDIV-01")
-    @rule_absent("CA-STKDIV-01", country="usa")
-    @rule("US-STKDIV-01")
-    @rule_absent("US-STKDIV-01", country="canada")
+    @rule(RID.CA_STKDIV_01)
+    @rule_absent(RID.CA_STKDIV_01, country="usa")
+    @rule(RID.US_STKDIV_01)
+    @rule_absent(RID.US_STKDIV_01, country="canada")
     def test_through_taxjson_run(self):
         import json
         import tempfile
         from pathlib import Path
         from tax_rules.dual import projects_both
-        from test_fix_ibparse import CA_H, HEAD, TRADES_H, _ca, _trade
+        from _support.ib_statement_rows import CA_H, HEAD, TRADES_H, _ca, _trade
         csv = (HEAD + TRADES_H
                + _trade('XYZ', '2023-03-01, 10:00:00', 100, 50, -5000)
                + _trade('XYZ', '2025-01-15, 10:00:00', -105, 60, 6300,
@@ -325,37 +298,10 @@ class TestStandaloneBrokerageRoc(unittest.TestCase):
     """INPUTS-03 / SPEC-35: standalone taxjson-brokerage no longer
     applies ITA s.90(1) without a country."""
 
-    BODY = ('Statement,Header,Field Name,Field Value\n'
-            'Statement,Data,BrokerName,Interactive Brokers\n'
-            'Dividends,Header,Currency,Account,Date,Description,Amount\n'
-            'Dividends,Data,USD,U5550001,2026-06-30,'  # pii-ok
-            'QZRX(US0000000017) Return of Capital USD 0.12 per Share,'
-            '24.00\n')
+    _brokerage = staticmethod(_standalone_brokerage)
 
-    def _brokerage(self, *flags):
-        import json
-        import os
-        import subprocess
-        import sys
-        import tempfile
-        from pathlib import Path
-        from tax_rules.dual import SRC
-        with tempfile.TemporaryDirectory() as d:
-            p = Path(d) / "ib.csv"
-            p.write_text(self.BODY, encoding="utf-8")
-            r = subprocess.run(
-                [sys.executable, "-m", "taxjson.bin.taxjson_brokerage",
-                 "--brokerage", "ib", *flags, str(p)],
-                capture_output=True, text=True,
-                env=dict(os.environ, PYTHONPATH=str(SRC)))
-        txs = []
-        if r.returncode == 0:
-            data = json.loads(r.stdout)
-            txs = data["transactions"] if isinstance(data, dict) else data
-        return r, [t["action"] for t in txs]
-
-    @rule("CA-ACB-08")
-    @rule_absent("CA-ACB-08", country="usa")
+    @rule(RID.CA_ACB_08)
+    @rule_absent(RID.CA_ACB_08, country="usa")
     def test_country_picks_the_rule_and_none_is_not_canada(self):
         r, acts = self._brokerage("--country", "canada")
         self.assertEqual((r.returncode, acts), (0, ["DIVIDEND"]), r.stderr)
@@ -378,15 +324,14 @@ class TestSavedCryptoGift(unittest.TestCase):
     project, copied, hand-edited) is booked as a sale in Canada and
     refused at WRITE time in a US project — not only at --set."""
 
-    @rule("CA-CRYPTO-05")
-    @rule_absent("CA-CRYPTO-05", country="usa")
-    @rule("US-SEND-02")
-    @rule_absent("US-SEND-02", country="canada")
+    @rule(RID.CA_CRYPTO_05)
+    @rule_absent(RID.CA_CRYPTO_05, country="usa")
+    @rule(RID.US_SEND_02)
+    @rule_absent(RID.US_SEND_02, country="canada")
     def test_saved_gift_by_country(self):
         import json
         import tempfile
-        from test_fix_sends import (PAY_ID, _cad_usd_rates_file, _cli,
-                                    _project)
+        from _support.crypto_sends import PAY_ID, _cad_usd_rates_file, _cli, _project
         _, _, coin, qty = PAY_ID.split("-", 3)
         sold = f"{coin} -{qty}"
         out = {}
@@ -436,7 +381,7 @@ class TestCryptoSendBookedTwice(unittest.TestCase):
 
     def test_warns_with_both_files_and_keeps_them(self):
         import tempfile
-        from test_fix_sends import PAY_ID, _cli, _project
+        from _support.crypto_sends import PAY_ID, _cli, _project
         # The payment send's local stamp, coin and quantity, from its id
         # ("kr-YYYYMMDDTHHMMSS-COIN-QTY").
         _, stamp, coin, qty = PAY_ID.split("-", 3)
@@ -487,8 +432,8 @@ class TestManualLossWarningsByCountry(unittest.TestCase):
     # Not a @rule_absent pair (A2-0830): US FIFO never reaches the
     # partial-taint path, so this book cannot show the US date basis;
     # test_cross_year_window_dates is the pair.
-    @rule("CA-ACB-12")
-    @rule("US-BASIS-04")
+    @rule(RID.CA_ACB_12)
+    @rule(RID.US_BASIS_04)
     def test_partial_taint_window_dates(self):
         # A phantom-basis loss that settles 03-07 (traded 03-03) and a
         # rebuy that settles 04-04 (traded 04-03): 28 settle days, 31
@@ -530,8 +475,8 @@ class TestManualLossWarningsByCountry(unittest.TestCase):
         self.assertFalse(rebuy_warnings(r["canada"]))
         self.assertNotIn("superficial", r["usa"]["_stderr"])
 
-    @rule("CA-ACB-12")
-    @rule("US-BASIS-04")
+    @rule(RID.CA_ACB_12)
+    @rule(RID.US_BASIS_04)
     def test_thirty_days_is_the_edge(self):
         # A2-1497: day 30 is inside the window, day 31 is not — on settle
         # dates for Canada (both the engine's partial-taint path and the
@@ -564,10 +509,10 @@ class TestManualLossWarningsByCountry(unittest.TestCase):
                                                        country=c)
                 self.assertEqual(len(got), want, (c, d))
 
-    @rule("CA-ACB-12")
-    @rule_absent("CA-ACB-12", country="usa")
-    @rule("US-BASIS-04")
-    @rule_absent("US-BASIS-04", country="canada")
+    @rule(RID.CA_ACB_12)
+    @rule_absent(RID.CA_ACB_12, country="usa")
+    @rule(RID.US_BASIS_04)
+    @rule_absent(RID.US_BASIS_04, country="canada")
     def test_cross_year_window_dates(self):
         from taxjson.lib.missing_history import (
             detect_superficial_loss_warnings)
@@ -589,7 +534,7 @@ class TestManualLossWarningsByCountry(unittest.TestCase):
         self.assertEqual(len(us), 1)
         self.assertIn("§1091", us[0]["message"])
 
-    @rule("US-BASIS-04")
+    @rule(RID.US_BASIS_04)
     def test_no_wash_check_without_the_wash_rule(self):
         # A clean loss next to a phantom-basis sale: a manual wash-sale
         # check — except where the rule does not apply (US crypto: wash
@@ -617,10 +562,10 @@ class TestManualLossWarningsByCountry(unittest.TestCase):
 class TestSharedHelpersSpeakTheCountry(unittest.TestCase):
     """Shared helpers used to carry one country's law or words."""
 
-    @rule("CA-SL-14")
-    @rule_absent("CA-SL-14", country="usa")
-    @rule("US-WASH-14")
-    @rule_absent("US-WASH-14", country="canada")
+    @rule(RID.CA_SL_14)
+    @rule_absent(RID.CA_SL_14, country="usa")
+    @rule(RID.US_WASH_14)
+    @rule_absent(RID.US_WASH_14, country="canada")
     def test_warrant_warning_wording(self):
         book = [tx("BUYSELL", "2025-01-02", "KKK.US", 100, 1000),
                 tx("BUYSELL", "2025-02-03", "KKK.US", -100, 800),
@@ -675,14 +620,14 @@ class TestRecordDateHolder(unittest.TestCase):
     a US project's trade tax_date used to credit a buy traded ON the
     record date."""
 
-    @rule("CA-DIST-01")
-    @rule("US-DIST-01")
+    @rule(RID.CA_DIST_01)
+    @rule(RID.US_DIST_01)
     def test_same_adjust_in_both_countries(self):
         import json
         import tempfile
         from pathlib import Path
         from tax_rules.dual import projects_both
-        from test_fix_ibparse import HEAD, TRADES_H, _trade
+        from _support.ib_statement_rows import HEAD, TRADES_H, _trade
         csv = (HEAD + TRADES_H
                + _trade('XYZ', '2025-06-02, 10:00:00', 100, 50, -5000)
                # Traded on the record date, settles the next day.
@@ -739,16 +684,16 @@ class TestDatingSettings(unittest.TestCase):
     convert-tt writes the project's own tax_date, never a silent
     Canadian settle date."""
 
-    @rule("CA-DATE-12", "CA-DATE-07")
-    @rule("US-DATE-11", "US-DATE-07")
+    @rule(RID.CA_DATE_12, RID.CA_DATE_07)
+    @rule(RID.US_DATE_11, RID.US_DATE_07)
     def test_local_timezone_setting_dates_crypto_rows(self):
         import os
         import tempfile
         from pathlib import Path
         from unittest import mock
-        from taxjson.bin import taxjson_run as run
+        from taxjson.pipeline import config as pipeline_config
         from tax_rules.dual import settings_for
-        from test_crypto_parse_hardening import _KT_H, _kraken_dir, _run
+        from _support.kraken_coin_fees import _KT_H, _kraken_dir, _run
         csv = _KT_H + ("T1,O1,SOL/USD,2026-01-01 05:30:00.1,buy,limit,"
                        "200,2000,5,10,,,\n")
         for c in C.COUNTRIES:
@@ -761,7 +706,7 @@ class TestDatingSettings(unittest.TestCase):
                                  local_timezone="America/Los_Angeles")
                     + '[accounts.crypto]\ntype = "taxable"\n'
                       'crypto = true\n')
-                run.load_config(root)
+                pipeline_config.load_config(root)
                 self.assertEqual(os.environ.get("TAXJSON_LOCAL_TZ"),
                                  "America/Los_Angeles")
                 ktd, K = _kraken_dir({"kr_trades.csv": csv})
@@ -782,8 +727,8 @@ class TestDatingSettings(unittest.TestCase):
             text = TL.render(c, {"local_timezone": "America/Denver"})
             self.assertIn("America/Denver", text)
 
-    @rule("CA-DATE-13")
-    @rule("US-DATE-10")
+    @rule(RID.CA_DATE_13)
+    @rule(RID.US_DATE_10)
     def test_convert_tt_writes_the_projects_tax_date(self):
         import json
         import os
@@ -825,9 +770,9 @@ class TestRulesBothCountriesState(unittest.TestCase):
     """Rules the US section did not state although US projects run them
     (partition SPEC-14, SPEC-18, SPEC-20, INPUTS-12/13)."""
 
-    @rule("US-CORP-01", "US-CORP-02")
+    @rule(RID.US_CORP_01, RID.US_CORP_02)
     def test_us_split_and_rename_keep_basis_and_dates(self):
-        from taxjson.lib.core import get_tax_rules
+        from taxjson.engine.by_country import get_tax_rules
         book = [tx("BUYSELL", "2023-03-01", "OLD.US", 100, 5000),
                 tx("SPLIT", "2024-02-01", "OLD.US", 2, 0),
                 tx("SPLIT", "2024-06-03", "OLD.US", 1, 0,
@@ -840,10 +785,10 @@ class TestRulesBothCountriesState(unittest.TestCase):
                          [("NEW.US", 200.0, "LONG_TERM", "2023-03-01")])
         self.assertAlmostEqual(rows[0]["cost"], 5000.0, places=6)
 
-    @rule("CA-CRYPTO-02")
-    @rule_absent("CA-CRYPTO-02", country="usa")
-    @rule("US-CRYPTO-02")
-    @rule_absent("US-CRYPTO-02", country="canada")
+    @rule(RID.CA_CRYPTO_02)
+    @rule_absent(RID.CA_CRYPTO_02, country="usa")
+    @rule(RID.US_CRYPTO_02)
+    @rule_absent(RID.US_CRYPTO_02, country="canada")
     def test_stablecoins_are_cash_in_canada_property_in_the_us(self):
         import json
         import os
@@ -852,8 +797,8 @@ class TestRulesBothCountriesState(unittest.TestCase):
         import tempfile
         from pathlib import Path
         from tax_rules.dual import SRC
-        from test_fix_sends import CB_CSV
-        from test_crypto_parse_hardening import _KT_H
+        from _support.crypto_sends import CB_CSV
+        from _support.kraken_coin_fees import _KT_H
         head = CB_CSV.splitlines()[0]
         cb = (head + "\n"
               "d0,2023-03-01 12:00:00 UTC,Buy,USDC,1000,USD,1.00,1000,"
@@ -881,7 +826,8 @@ class TestRulesBothCountriesState(unittest.TestCase):
             d = json.loads(r.stdout)
             return (d["transactions"] if isinstance(d, dict) else d,
                     r.stderr)
-        from taxjson.lib.core import TaxTransaction, get_tax_rules
+        from taxjson.engine.by_country import get_tax_rules
+        from taxjson.model.transaction import TaxTransaction
         for broker, name, text, units in (
                 ("coinbase", "cb.csv", cb, 1000), ("kraken", "kr_trades.csv",
                                                    kr, 500)):
@@ -914,9 +860,9 @@ class TestRulesBothCountriesState(unittest.TestCase):
                 self.assertEqual([(t["quantity"], round(t["net_amount"], 2))
                                   for t in spent], [(-200.0, 200.0)])
 
-    @rule("US-CRYPTO-02")
+    @rule(RID.US_CRYPTO_02)
     def test_us_stablecoin_reward_and_convert_are_property(self):
-        from test_parser_coverage_audit import KR_LEDGER_H, _parse
+        from _support.parser_text import KR_LEDGER_H, _parse
         from taxjson.lib.brokerages.kraken import KrakenBrokerage
 
         class UsKraken(KrakenBrokerage):
@@ -930,7 +876,7 @@ class TestRulesBothCountriesState(unittest.TestCase):
                          [("BUYSELL", "USDC", 12.5),
                           ("DIVIDEND", "USDC", 12.5)])
 
-    @rule("CA-CRYPTO-08")
+    @rule(RID.CA_CRYPTO_08)
     def test_kraken_pyusd_is_a_cash_send(self):
         # SPEC-26 pinned PYUSD/GUSD as coins on Kraken; the owner decided
         # (audit S060-24) they are US-dollar cash there too, as on
@@ -952,8 +898,8 @@ class TestRulesBothCountriesState(unittest.TestCase):
         self.assertIn("US-dollar cash", fv["source"])
         self.assertAlmostEqual(fv["price"], 1.40, places=4)
 
-    @rule("CA-CRYPTO-06")
-    @rule("US-CRYPTO-05")
+    @rule(RID.CA_CRYPTO_06)
+    @rule(RID.US_CRYPTO_05)
     def test_send_paired_with_its_arrival_within_3_days_and_90pct(self):
         from taxjson.lib import crypto_sends as cs
 
@@ -973,8 +919,8 @@ class TestRulesBothCountriesState(unittest.TestCase):
         unmatched, pairs = cs.match_transfers([dict(send), late])
         self.assertEqual(len(pairs), 0)          # 4 days: not paired
 
-    @rule("CA-FX-02")
-    @rule("US-FX-02")
+    @rule(RID.CA_FX_02)
+    @rule(RID.US_FX_02)
     def test_rate_gap_uses_5_days_back_then_an_error(self):
         from taxjson.bin import taxjson_convert_currency as CC
         hist = {"USD": {"2025-06-02": Decimal("1.37")}}

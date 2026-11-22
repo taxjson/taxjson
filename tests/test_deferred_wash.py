@@ -14,8 +14,10 @@ import tempfile
 import unittest
 from pathlib import Path
 from tax_rules import rule
+from taxjson.rules import ids as R
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 def _gains(country, txs, tmp):
@@ -50,7 +52,7 @@ class TestDeferredWash(unittest.TestCase):
         inv = {r["symbol"]: r for r in out.get("inventory") or []}
         return out, inv
 
-    @rule("CA-SL-09")
+    @rule(R.CA_SL_09)
     def test_canada_deferred_parked_in_pool(self):
         out, inv = self._inv("canada", WASH)
         row = inv["XYZ.TO"]
@@ -58,7 +60,7 @@ class TestDeferredWash(unittest.TestCase):
         # Basis = 1,100 rebuy + 1,000 deferred.
         self.assertAlmostEqual(row["total_cost"], 2100.0, places=2)
 
-    @rule("CA-SL-09")
+    @rule(R.CA_SL_09)
     def test_canada_partial_sell_releases_proportionally(self):
         # Sell 40 of the 100 replacement shares later (well outside any
         # wash window, at a gain so no new wash fires).
@@ -68,7 +70,7 @@ class TestDeferredWash(unittest.TestCase):
         self.assertAlmostEqual(row["qty"], 60.0, places=4)
         self.assertAlmostEqual(row["deferred_wash"], 600.0, places=2)
 
-    @rule("CA-SL-09")
+    @rule(R.CA_SL_09)
     def test_canada_full_drain_releases_all(self):
         txs = WASH + [_tx("2025-06-01", -100, 30.0)]
         out, inv = self._inv("canada", txs)

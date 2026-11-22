@@ -1,0 +1,8 @@
+txid,refid,time,type,subtype,aclass,asset,wallet,amount,fee,balance,amountusd,feeusd,feecurrency
+LQ9ABC-AAAAA-000101,TX3,2025-02-03 15:00:00,trade,tradespot,currency,XETH,spot / main,0.2,0,0.2,580,0,ETH
+LQ9ABC-AAAAA-000102,TX3,2025-02-03 15:00:00,trade,tradespot,currency,ZCAD,spot / main,-800,3.2,96.8,580,2.32,CAD
+LQ9ABC-AAAAA-000103,TX9,2025-09-02 15:00:00,trade,tradespot,currency,ADA,spot / main,100,0.26,99.74,50,0.13,ADA
+LQ9ABC-AAAAA-000104,TX9,2025-09-02 15:00:00,trade,tradespot,currency,ZUSD,spot / main,-50,0,450,50,0,USD
+LQ9ABC-AAAAA-000105,TX10,2025-10-06 15:00:00,trade,tradespot,currency,XXBT,spot / main,0.001,0,0.001,65,0,BTC
+LQ9ABC-AAAAA-000106,TX10,2025-10-06 15:00:00,trade,tradespot,currency,ZUSD,spot / main,-65,0,385,65,0,USD
+LQ9ABC-AAAAA-000107,TX10,2025-10-06 15:00:00,trade,tradespot,currency,KFEE,spot / main,0,13,87,0,0.13,KFEE

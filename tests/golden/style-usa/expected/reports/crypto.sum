@@ -1,0 +1,66 @@
+======================================================================
+ DIAGNOSTICS — crypto  (parser/merge warnings; not part of the tax totals)
+======================================================================
+  NOTE: 1 crypto withdrawal/send(s) among them — if any paid for something (payment), each is a taxable SALE at fair market value: `tjs crypto-sends` lists them with the fair value and writes the .tt sale for each payment (self-custody moves need nothing; a gift is not a sale for a US donor, and taxjson cannot book it yet).
+  coinbase_demo.csv: 10 tax objects
+warning: Kraken trades kraken_demo.csv: the fee currency of 5 fill(s) can't be verified — the ledgers export(s) beside it do not contain them. Kraken's trades CSV states every fee in quote units even when Kraken took it in the traded coin, which books coins that were never received; add the ledgers export covering these dates beside the trades file.
+note: USDC is treated as a US-dollar stablecoin by taxjson's built-in market list (taxjson/data/markets.toml); if that is wrong add `STABLE USDC NO` to ticker.map.
+note: Kraken ledger kraken_ledgers_demo.csv txid=LQ***: a ETH reward of 0.0000000004 (0.00 USD) is under the books' zero (1e-09 units) — not booked.
+note: Kraken ledger kraken_ledgers_demo.csv: ignored 2 fiat-cash or zero-amount row(s) (withdrawal x2) — moving your own cash to or from Kraken (a bank deposit, withdrawal or transfer), or a row that moves nothing, is not a tax event.
+  kraken_demo.csv: 5 tax objects
+  kraken_ledgers_demo.csv: 8 tax objects
+OK: crypto_base.json: 23 transactions validated.
+OK: Validation passed. No obvious issues found across 1 files.
+======================================================================
+
+
+TICKER SUMMARY — USD, year 2024, sorted by ticker
+
+SYMBOL                                 TOTAL        TOTAL_COST     TOTAL_PROCEED        TOTAL_GAIN          CAP_GAIN          OPT_GAIN          DIVIDEND               PIL   AVG_DAYS
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+BTC                                   198.00          6,375.60          6,573.60            198.00            198.00              0.00              0.00              0.00      270.0 [ST:   198.00 LT:     0.00]
+ETH                                   301.64          2,795.91          3,070.91            275.00            275.00              0.00             26.64              0.00      225.6 [ST:   275.00 LT:     0.00]
+USDC                                   10.65              1.75              1.75              0.00              0.00              0.00             10.65              0.00       70.3
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+TOTAL                                 510.29          9,173.26          9,646.26            473.00            473.00              0.00             37.29              0.00      187.9 [ST:   473.00 LT:     0.00]
+
+ASSET: Non-option | CURRENCY: USD   | TRADES: 10 | YEAR: 2024
+
+Total Realized Gain:                473.00 USD
+Average Holding Period:               187.9 Days
+Avg Fee Per Trade:                    6.61 USD
+Avg Fee Per Share:                 44.0667 USD
+----------------------------------------------------------------------------------------------------------------
+Positive Trades: 6 | Negative Trades: 1 | Win/Loss: 6.00 | Win Rate: 85.7%
+Average Positive:             79.07 USD | Average Negative:             -1.43 USD
+----------------------------------------------------------------------------------------------------------------
+
+CONSOLIDATED TOTALS — USD, year 2024
+
+TOTAL COST:                          9,173.26 USD
+TOTAL PROCEEDS:                      9,646.26 USD
+  (engine sign convention: shorts/written options negated — for Form 8949 proceeds and basis use `tjs form-export`)
+------------------------------------------------------
+TOTAL REALIZED NON-OPTION GAIN:        473.00 USD
+  (shares, units, futures and crypto — Form 8949 lines: `tjs form-export`)
+TOTAL REALIZED OPTION GAIN:              0.00 USD
+TOTAL REALIZED GAIN:                   473.00 USD
+------------------------------------------------------
+TOTAL STAKING REWARDS:                  37.29 USD  (ordinary income, not dividends)
+------------------------------------------------------
+GRAND TOTAL (GAIN+DIV+PIL):            510.29 USD
+------------------------------------------------------
+TOTAL TRADING FEES PAID:                96.06 USD
+  (OPTION TRADING FEES):                 0.00 USD
+
+INCOME SUMMARY — USD, year 2024, sorted by ticker
+
+SYMBOL                            GROSS DIV              PIL          TAX W/H       NET INCOME
+----------------------------------------------------------------------------------------------
+ETH                                   26.64             0.00             0.00            26.64
+USDC                                  10.65             0.00             0.00            10.65
+----------------------------------------------------------------------------------------------
+SUBTOTAL                              37.29             0.00             0.00            37.29
+CASH INTEREST                                                                             0.00
+----------------------------------------------------------------------------------------------
+TOTAL NET INCOME                                                                         37.29

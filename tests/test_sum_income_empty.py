@@ -6,7 +6,8 @@ report. Empty input produced no output at all. Both cases now render.
 """
 import unittest
 
-from taxjson.bin.taxjson_sum_income import format_report, summarize_income
+from taxjson.lib.income_summary import summarize_income
+from taxjson.bin.taxjson_sum_income import format_report
 
 
 class TestEmptyInput(unittest.TestCase):
@@ -77,8 +78,7 @@ class TestOptionSymbolGroupsUnderUnderlying(unittest.TestCase):
     table."""
 
     def test_pil_on_occ_symbol(self):
-        from taxjson.bin.taxjson_sum_income import (get_base_ticker,
-                                                    summarize_income)
+        from taxjson.lib.income_summary import get_base_ticker, summarize_income
         self.assertEqual(get_base_ticker("AAPL260116C00150000.US"),
                          "AAPL.US")
         self.assertEqual(get_base_ticker("SHOP.TO"), "SHOP.TO")

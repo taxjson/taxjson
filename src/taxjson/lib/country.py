@@ -1,9 +1,15 @@
-"""The ONE country resolver and the country-ownership tables.
+"""The country-ownership tables, and the country resolver re-exported.
 
 Canadian and US tax law must never mix. Every reader of a project's
-country goes through this module, so a missing or odd `country` is
-refused with the same message everywhere instead of quietly becoming
-Canada in one command and an error in another (partition audit R1).
+country goes through this module or its leaf, so a missing or odd
+`country` is refused with the same message everywhere instead of
+quietly becoming Canada in one command and an error in another
+(partition audit R1). The resolver itself (``canonical_country``,
+``CountryError``, the spellings, the stablecoin basis,
+``plans_taxed_as_ordinary``, ``foreign_roc_choice`` and the engine
+guard) is defined in ``taxjson.rules.country``, the leaf the parse,
+characterize and the engine import (PLAN step 10 B1, B7); this module
+re-exports it.
 
 API (import from here; do not re-derive):
 
@@ -65,8 +71,8 @@ real CLI option that ``refuse_foreign_flags`` reads, every command is a
 ``SETTING_COUNTRY``, and every CLI option whose help calls itself
 "Canada only" / "US only" is in a flag table.
 
-Test hook: ``check_engine_allowed(country)`` is called by both gains
-engines. When the environment variable ``TAXJSON_TEST_ENGINE_COUNTRY``
+Test hook (in ``taxjson.rules.country``): ``check_engine_allowed(country)``
+is called by both gains engines. When the environment variable ``TAXJSON_TEST_ENGINE_COUNTRY``
 is set (only the test markers in ``tests/tax_rules`` set it), running
 the other country's engine raises ``AssertionError`` — a test tagged for
 a Canadian rule cannot silently exercise the US engine, in-process or
@@ -74,19 +80,25 @@ in a ``taxjson`` subprocess.
 """
 from __future__ import annotations
 
-import os
 from typing import Any, Dict, Iterable, List, Mapping, Optional
+from taxjson.project.accounts import accounts_of
+from taxjson.project.settings import as_settings, settings_of
+from taxjson.rules.country import (
+    CANADA, USA, COUNTRIES, ALIASES, DISPLAY_NAME, ENGINE_GUARD_ENV, CountryError, _SPELLINGS,
+    canonical_country, PLANS_TAXED_AS_ORDINARY, stablecoin_model, NEUTRAL_BASIS, parse_basis,
+    plans_taxed_as_ordinary, check_engine_allowed, foreign_roc_choice,
+)
 
-CANADA = "canada"
-USA = "usa"
-COUNTRIES = (CANADA, USA)
+# The leaf's names, re-exported (PLAN step 10: what moved from here, and B7's foreign_roc_choice).
+__all__ = [
+    "CANADA", "USA", "COUNTRIES", "ALIASES", "DISPLAY_NAME", "ENGINE_GUARD_ENV", "CountryError",
+    "_SPELLINGS", "canonical_country", "PLANS_TAXED_AS_ORDINARY", "stablecoin_model",
+    "NEUTRAL_BASIS", "parse_basis", "plans_taxed_as_ordinary", "check_engine_allowed",
+    "foreign_roc_choice",
+]
+
 BOTH = "both"
 
-# The only accepted spellings (compared after strip().lower()).
-ALIASES: Dict[str, str] = {"canada": CANADA, "ca": CANADA,
-                           "usa": USA, "us": USA}
-
-DISPLAY_NAME = {CANADA: "Canada", USA: "United States"}
 HOME_CURRENCY = {CANADA: "CAD", USA: "USD"}
 DEFAULT_TAX_DATE = {CANADA: "settle", USA: "trade"}
 TAX_DATES = ("settle", "trade")
@@ -100,36 +112,11 @@ COST_TERM = {CANADA: "ACB", USA: "basis", None: "cost"}
 LOSS_RULE = {CANADA: "superficial-loss", USA: "wash-sale",
              None: "loss-denial"}
 
-ENGINE_GUARD_ENV = "TAXJSON_TEST_ENGINE_COUNTRY"
-
-
-class CountryError(ValueError):
-    """A missing, unknown or other-country value. str(e) is the whole
-    user-facing message."""
-
-
-_SPELLINGS = "canada, ca, usa or us"
-
-
-def canonical_country(value: Any, *, what: str = "country") -> str:
-    """"canada" | "usa" for an accepted spelling; CountryError for
-    anything else, including None and ""."""
-    if value is None or (isinstance(value, str) and not value.strip()):
-        raise CountryError(
-            f"{what} is missing — set it to \"canada\" or \"usa\" "
-            f"(taxjson never guesses the country)")
-    if not isinstance(value, str):
-        raise CountryError(f"{what} must be {_SPELLINGS}, got {value!r}")
-    canon = ALIASES.get(value.strip().lower())
-    if canon is None:
-        raise CountryError(f"{what} must be {_SPELLINGS}, got {value!r}")
-    return canon
-
 
 def settings_country(settings: Optional[Mapping[str, Any]], *,
                      what: str = "[settings] country") -> str:
     """The canonical country of a [settings] table (missing: error)."""
-    return canonical_country((settings or {}).get("country"), what=what)
+    return canonical_country(as_settings(settings).country, what=what)
 
 
 def country_arg(value: str) -> str:
@@ -254,8 +241,9 @@ def resolve_tax_date(country: str, tax_date: Any = None, *,
 
 
 def settings_tax_date(settings: Mapping[str, Any]) -> str:
+    settings = as_settings(settings)
     return resolve_tax_date(settings_country(settings),
-                            settings.get("tax_date"))
+                            settings.tax_date)
 
 
 # ------------------------------------------------------------ setting resolvers
@@ -264,22 +252,21 @@ def settings_tax_date(settings: Mapping[str, Any]) -> str:
 # (partition audit SPEC-12). Option-premium timing: lib/pipeline
 # option_timing_from_settings.
 
-def foreign_roc_mode(settings: Mapping[str, Any]) -> str:
+def foreign_roc_mode(settings: Mapping[str, Any], *,
+                     no_country: Optional[str] = None) -> str:
     """How an issuer-designated return of capital from a non-Canadian
-    issuer is booked by the IB parser: "dividend" (ITA s.90(1), the
+    issuer (IB's label) is booked by the characterize step
+    (taxjson.characterize.foreign_roc): "dividend" (ITA s.90(1), the
     Canadian default) or "acb". Always "acb" in a US project — a US
     filer's nondividend distribution reduces basis (§301(c)(2)); the
-    key is Canada-only and refused there by the config readers."""
-    if settings_country(settings) == USA:
-        return "acb"
-    explicit = settings.get("foreign_return_of_capital")
-    if explicit in (None, ""):
-        return "dividend"
-    if explicit not in ("dividend", "acb"):
-        raise CountryError(
-            f"[settings] foreign_return_of_capital must be \"dividend\" "
-            f"or \"acb\" (got {explicit!r})")
-    return str(explicit)
+    key is Canada-only and refused there by the config readers.
+    `no_country`: what settings with no country give (a bare
+    taxjson-brokerage run: the setting, else this); None: a missing
+    country is an error, as everywhere. The rule itself is
+    taxjson.rules.country's `foreign_roc_choice`, on the two values."""
+    settings = as_settings(settings)
+    return foreign_roc_choice(settings.country, settings.foreign_return_of_capital,
+                              no_country=no_country)
 
 
 FUTURES_SETTLE = ("trade", "next_day")
@@ -287,7 +274,8 @@ FUTURES_SETTLE = ("trade", "next_day")
 
 def futures_settle_mode(settings: Mapping[str, Any]) -> str:
     """[settings] futures_settle: "trade" (default) or "next_day"."""
-    v = settings.get("futures_settle")
+    settings = as_settings(settings)
+    v = settings.futures_settle
     if v in (None, ""):
         return "trade"
     if v not in FUTURES_SETTLE:
@@ -370,6 +358,7 @@ CONFIG_COUNTRY: Dict[str, str] = {
     "[estimate] amt_carryover": CANADA,
     "[estimate] long_term_losses": USA,
     "[capital_gains_dividends]": CANADA,
+    "[carryover] carried_back": CANADA,
     "[accounts] custodian_country": CANADA,
 }
 
@@ -384,6 +373,9 @@ CONFIG_WHY: Dict[str, str] = {
     "[estimate] long_term_losses": "the long-term capital loss carryover "
                                    "(Schedule D line 14); a Canadian net "
                                    "capital loss has no term",
+    "[carryover] carried_back": "a net capital loss carried back on form "
+                                "T1A (ITA s.111(1)(b)); a US individual "
+                                "has no capital loss carry-back",
     "[capital_gains_dividends]": "T5 box 18 capital-gains dividends (ITA "
                                  "s.130.1(4)/s.131(1), line 17400); a US "
                                  "fund's capital-gain distributions "
@@ -420,29 +412,6 @@ def plan_kinds(country: Optional[str] = None) -> List[str]:
             if country is None or o in (BOTH, country)]
 
 
-# Canadian registered plans that a country's return taxes like an
-# ordinary account (tax-logic US-BASIS-09): the Canada-US treaty (Art.
-# XVIII(7)) defers US tax only on a retirement plan, an RRSP or RRIF and
-# their locked-in forms (Rev. Proc. 2014-55); a TFSA, RESP, RDSP or FHSA
-# has no US deferral. taxjson-brokerage hands the set to the parsers
-# (`plans_taxed`), whose taxable-versus-registered check then reads a
-# broker's Account Type naming one of them as a taxable account
-# (backlog TJ-0613: a US project's TFSA beside its margin account).
-PLANS_TAXED_AS_ORDINARY: Dict[str, tuple] = {
-    CANADA: (),
-    USA: ("tfsa", "resp", "rdsp", "fhsa"),
-}
-
-
-def plans_taxed_as_ordinary(country: Optional[str]) -> frozenset:
-    """The Canadian registered plans (lower case) a project of `country`
-    taxes like an ordinary account; empty for Canada and when the
-    country is not given (every plan a shelter: the guard's safe side)."""
-    if country is None:
-        return frozenset()
-    return frozenset(PLANS_TAXED_AS_ORDINARY[canonical_country(country)])
-
-
 # CLI flags owned by one country: the engine CLIs' (taxjson-gains,
 # -explain, -audit, -carryover: refuse_foreign_flags) and `taxjson`'s
 # estimate flags (sum/estimate/instalments: checked at dispatch).
@@ -458,6 +427,7 @@ FLAG_COUNTRY: Dict[str, str] = {
     "--corporate-distribution": CANADA,
     "--ric-january-dividend": USA,
     "--slip-gains": CANADA,
+    "--carried-back-year": CANADA,
     "--return-row": CANADA,
     "--locked-year": USA,
     "--lots-at": USA,
@@ -489,6 +459,9 @@ FLAG_WHY: Dict[str, str] = {
     "--slip-gains": "T5 box 18 capital-gains dividends (ITA s.130.1(4) / "
                     "s.131(1)); US fund capital-gain distributions are "
                     "not modelled",
+    "--carried-back-year": "a net capital loss carried back on form T1A "
+                           "(ITA s.111(1)(b)); a US individual has no "
+                           "capital loss carry-back",
     "--return-row": "the net-capital-loss ledger takes Schedule 3's "
                     "RETURN row; a US carryover keeps its term, from "
                     "the books' short- and long-term gains",
@@ -598,10 +571,10 @@ def config_country_problems(cfg: Mapping[str, Any]) -> List[str]:
     """Every config entry the project's country does not own, plus a
     base currency that is not the country's. Assumes [settings] country
     is valid (raises CountryError otherwise)."""
-    settings = cfg.get("settings") or {}
-    country = settings_country(settings)
+    settings_table = settings_of(cfg)
+    country = settings_country(settings_table)
     out: List[str] = []
-    for key in settings:
+    for key in settings_table.present:
         owner = SETTING_COUNTRY.get(key, BOTH)
         if owner not in (BOTH, country):
             out.append(_owner_problem(owner, country, f"[settings] {key}",
@@ -627,20 +600,18 @@ def config_country_problems(cfg: Mapping[str, Any]) -> List[str]:
         if present:
             out.append(_owner_problem(owner, country, path,
                                       CONFIG_WHY.get(path, "")))
-    accounts = cfg.get("accounts") or {}
-    if isinstance(accounts, Mapping):
-        for name, acfg in accounts.items():
-            if not isinstance(acfg, Mapping) or acfg.get("plan") is None:
-                continue
-            plan = str(acfg.get("plan")).strip().lower()
-            owner = PLAN_COUNTRY.get(plan, BOTH)
-            if owner not in (BOTH, country):
-                out.append(_owner_problem(
-                    owner, country, f"[accounts.{name}] plan = \"{plan}\"",
-                    PLAN_WHY[owner])
-                    + f" (this country's plans: "
-                      f"{' | '.join(plan_kinds(country))})")
-    bp = base_currency_problem(country, settings.get("base_currency"))
+    for name, acfg in accounts_of(cfg).items():
+        if acfg.plan is None:
+            continue
+        plan = str(acfg.plan).strip().lower()
+        owner = PLAN_COUNTRY.get(plan, BOTH)
+        if owner not in (BOTH, country):
+            out.append(_owner_problem(
+                owner, country, f"[accounts.{name}] plan = \"{plan}\"",
+                PLAN_WHY[owner])
+                + f" (this country's plans: "
+                  f"{' | '.join(plan_kinds(country))})")
+    bp = base_currency_problem(country, settings_table.base_currency)
     if bp:
         out.append(bp)
     return out
@@ -703,22 +674,6 @@ def command_country_problem(command: str, country: str,
             f"country = \"{c}\"")
 
 
-# ------------------------------------------------------------ test hook
-
-def check_engine_allowed(country: str) -> None:
-    """Raise when a test marker restricted this process to the other
-    country's engine (see module doc). A no-op outside the tests."""
-    allowed = os.environ.get(ENGINE_GUARD_ENV)
-    if not allowed or allowed not in COUNTRIES:
-        return
-    c = canonical_country(country)
-    if c != allowed:
-        raise AssertionError(
-            f"a test tagged with {DISPLAY_NAME[allowed]} tax rules ran the "
-            f"{DISPLAY_NAME[c]} engine — tag it @rule_absent(..., "
-            f"country=\"{c}\") if running both countries is the point")
-
-
 def owners(table: Mapping[str, str], country: str) -> Iterable[str]:
     """Entries of an ownership table that belong to `country` only."""
     c = canonical_country(country)
@@ -746,6 +701,7 @@ _FLAG_ATTRS = {"--option-premium-timing": "option_premium_timing",
                "--corporate-distribution": "corporate_distribution",
                "--ric-january-dividend": "ric_january_dividend",
                "--slip-gains": "slip_gains",
+               "--carried-back-year": "carried_back_year",
                "--return-row": "return_row",
                "--locked-year": "locked_year",
                "--lots-at": "lots_at",

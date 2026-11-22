@@ -1,0 +1,28 @@
+REBUY — wash sales (§1091, trade dates), as of 2024-11-25 (USD)
+REBUY ON: the first day a buy no longer cancels the loss; option series under their underlying.
+TICKER    SOLD ON       LOSS  ACCOUNTS  REBUY ON
+--------------------------------------------------------
+NVDA.US   2024-11-20   82.00  margin    2024-12-23 (28d)
+SAMPA.US  2024-11-01  519.90  margin    now (washed)
+
+A buy in ANY of your accounts counts, IRAs included; through an IRA the loss is lost for good.
+
+SALES BEHIND EACH ROW
+  - NVDA.US: 2024-11-20 margin 10 units, loss 82.00. Rebuy on 2024-12-23 (28d).
+  - SAMPA.US: 2024-11-01 margin 100 units, loss 519.90, 519.90 disallowed. Rebuy on now (washed). Already disallowed in
+    full; a buy now changes nothing.
+
+CLEARED IN THE LAST 7 DAYS
+  (none)
+
+HOW THE DATE IS SET
+  - A loss is a wash sale when the same security is bought within 30 days before or after the sale (trade dates, §1091)
+    in any account, IRAs included; no still-held test.
+  - REBUY ON is the first trading day from the 31st day after the latest loss sale a buy can still disallow; a loss
+    already disallowed in full is not one.
+  - After a loss on covering a short only a new short sale replaces it (§1091(e)); a long call is a note only
+    (US-PLAN-02); futures, their options and broad-based index options (§1256) are outside §1091 (US-WASH-18).
+
+Scope: these verdicts cover this project's accounts only. A purchase by your spouse or by a corporation you control
+within 30 days before or after a loss sale also makes it a wash sale (§1091; IRS Pub. 550) — those accounts are not in
+the project, so check them yourself.

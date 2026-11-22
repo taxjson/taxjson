@@ -1,0 +1,62 @@
+{
+  "newest": 2025,
+  "root": "<project>",
+  "schema_version": 2,
+  "years": [
+    {
+      "changed": null,
+      "closed_at": "<stamp>",
+      "differs_from_newest": {
+        "accounts": 0,
+        "keys": 0,
+        "map_rules": 0,
+        "tobase_rules": 0
+      },
+      "drifted": false,
+      "filed": true,
+      "folder": "2024",
+      "last_run": "<stamp>",
+      "marks": {
+        "done": 0,
+        "forced": 0
+      },
+      "partial_lock": false,
+      "problem": null,
+      "shared_exports_changed": [],
+      "shared_not_compared": [],
+      "stale": false,
+      "tobase_frozen": true,
+      "tobase_map": "2024/tobase.map",
+      "tobase_shared": false,
+      "totals": {
+        "disallowed": 511.65,
+        "income": 824.11,
+        "realized": 1418.33
+      },
+      "year": 2024
+    },
+    {
+      "changed": null,
+      "closed_at": null,
+      "differs_from_newest": null,
+      "drifted": null,
+      "filed": false,
+      "folder": "2025",
+      "last_run": "<stamp>",
+      "marks": {
+        "done": 0,
+        "forced": 0
+      },
+      "partial_lock": false,
+      "problem": null,
+      "shared_exports_changed": [],
+      "shared_not_compared": [],
+      "stale": false,
+      "tobase_frozen": false,
+      "tobase_map": "tobase.map",
+      "tobase_shared": true,
+      "totals": null,
+      "year": 2025
+    }
+  ]
+}

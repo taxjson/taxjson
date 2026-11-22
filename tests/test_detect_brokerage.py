@@ -3,11 +3,13 @@
 Detection must work off generic, brokerage-distinctive markers — never
 a hardcoded account number (that would only match one user's files and
 leak personal data into the repo)."""
-from _tmpfiles import private_tmpfile
+from _tmpfiles import isolate_layouts, private_tmpfile
 import unittest
 from pathlib import Path
 
 from taxjson.bin.taxjson_detect_brokerage import detect_brokerage
+
+isolate_layouts()
 
 
 def _detect(content):

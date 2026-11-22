@@ -6,7 +6,6 @@ would (width 100) and must pass out.lint; the phrases a reader needs are
 compared on flattened text. The --json documents, the radar's
 reports/wash_radar_*.json and the fx-cash last line the checklist reads
 are machine output and keep their shapes."""
-import datetime
 import json
 import os
 import shutil
@@ -15,7 +14,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from _style import quote_spelling, Project, assert_styled, project
+from _style import assert_styled, project
+from _support.style_project import _copy, _price_every_holding
 
 from taxjson.lib import out
 
@@ -25,38 +25,6 @@ def _flat(text: str) -> str:
 
 
 _SFX = {"canada": ".TO", "usa": ".US"}
-
-
-def _copy(country: str) -> Project:
-    """A writable copy of the built style project (watch writes state,
-    harvest needs every held symbol in the price cache)."""
-    src = project(country)
-    td = tempfile.mkdtemp(prefix="taxjson_style_c_")
-    dst = Path(td) / country
-    shutil.copytree(src.root, dst)
-    return Project(dst, country)
-
-
-def _price_every_holding(p: Project) -> None:
-    """Add a synthetic cache price for every open position harvest will
-    look up (the shared cache keys the country's own suffix only)."""
-    today = datetime.date.today().isoformat()
-    cache = p.root / "work" / ".price_cache.json"
-    doc = json.loads(cache.read_text())
-    for g in (p.root / "work").glob("*_gains*.json"):
-        try:
-            inv = json.loads(g.read_text()).get("inventory") or []
-        except (OSError, ValueError, AttributeError):
-            continue
-        for h in inv:
-            sym = str(h.get("symbol") or "")
-            if sym and sym not in doc:
-                cur = "CAD" if sym.endswith(".TO") else "USD"
-                doc[sym] = {"price": 0.05 if len(sym) > 12 else 20.0,
-                            "asof": today, "source": "yfinance",
-                            "currency": cur,
-                            "quote_symbol": quote_spelling(p.root, sym)}
-    cache.write_text(json.dumps(doc))
 
 
 class TestWashRadarStyle(unittest.TestCase):
@@ -186,7 +154,9 @@ class TestBuySellCheckStyle(unittest.TestCase):
     def test_json_unchanged_shape(self):
         r = project("canada").run("sell-check", "SAMPA.TO", "--json")
         doc = json.loads(r.stdout)
-        self.assertEqual(sorted(doc), ["results", "scope_note"])
+        # Its keys, the contract's schema_version among them
+        # (lib/json_contract).
+        self.assertEqual(sorted(doc), ["results", "schema_version", "scope_note"])
         self.assertTrue(doc["scope_note"].startswith("Scope: "))
 
 

@@ -597,7 +597,7 @@ class TestAccountNameOverride(unittest.TestCase):
     def test_same_label_same_id_hash(self):
         """Two parser invocations with the same --account-name produce
         the same tx.id for an identical trade."""
-        from taxjson.lib.core import TaxTransaction
+        from taxjson.model.transaction import TaxTransaction
         t1 = TaxTransaction(
             action='BUYSELL', date='2025-01-15', symbol='AAPL.US',
             quantity=100.0, price=150.0, net_amount=15001.0,
@@ -614,7 +614,7 @@ class TestAccountNameOverride(unittest.TestCase):
         """Changing the account label changes the dedup hash — expected,
         because the same trade in two different accounts must be tracked
         separately."""
-        from taxjson.lib.core import TaxTransaction
+        from taxjson.model.transaction import TaxTransaction
         margin = TaxTransaction(
             action='BUYSELL', date='2025-01-15', symbol='AAPL.US',
             quantity=100.0, price=150.0, net_amount=15001.0,

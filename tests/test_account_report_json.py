@@ -14,7 +14,7 @@ import unittest
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 
-from taxjson.lib.report_model import build_account_report
+from taxjson.lib.account_report import build_account_report
 
 GAINS = {
     "summary": {"year": 2026, "total_gain": 1500.0},
@@ -46,9 +46,13 @@ class TestBuildAccountReport(unittest.TestCase):
 
 class TestSummaryParity(unittest.TestCase):
     def _summary_output(self, root):
-        from taxjson.bin.taxjson_run import cmd_summary
+        # The aggregation over hand-built books: sum's refusal of books no
+        # full run recorded (TJ-4347) is not what this compares.
+        from unittest import mock
+        from taxjson.cli.estimate import cmd_summary
         out = io.StringIO()
-        with redirect_stdout(out), redirect_stderr(io.StringIO()):
+        with redirect_stdout(out), redirect_stderr(io.StringIO()), \
+                mock.patch("taxjson.cli.estimate._refuse_sum_books"):
             cmd_summary(argparse.Namespace(dir=str(root)))
         return out.getvalue()
 

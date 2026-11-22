@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "snapshots": [
+    {
+      "kind": "saved",
+      "name": "base",
+      "reports": 26,
+      "taken": "<stamp>"
+    },
+    {
+      "kind": "filed",
+      "name": "filed",
+      "reports": 26,
+      "taken": "<stamp>"
+    }
+  ]
+}

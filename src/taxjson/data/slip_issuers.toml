@@ -10,7 +10,7 @@
 #
 # Read only by taxjson/lib/cra_slips.py (`issuer_aliases`). Each
 # [[alias]]:
-#   broker  a taxjson broker id (lib/brokerages/detect DISPLAY_NAMES)
+#   broker  a taxjson broker id (lib/brokerages/base DISPLAY_NAMES)
 #   issuer  the issuer's names, one per language half: CRA prints a
 #           bilingual issuer as "ENGLISH NAME INC./FRENCH NAME INC". A
 #           name matches when its words stand together, in order, in

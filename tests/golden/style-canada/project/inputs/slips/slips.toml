@@ -1,0 +1,37 @@
+# T5 / T3 slips for 2024, typed from the PDFs (`tjs slip-audit` compares them with the books).
+# Synthetic: the golden book's slips, some boxes matching the books and some not.
+year = 2024
+
+[[slip]]
+type = "T5"
+issuer = "Sample Securities"
+account = "margin"
+currency = "CAD"
+[slip.boxes]
+24 = 50.00
+13 = 12.00
+
+[[slip]]
+type = "T5"
+issuer = "Sample Securities"
+account = "margin"
+currency = "USD"
+[slip.boxes]
+15 = 361.20
+16 = 17.10
+
+[[slip]]
+type = "T5"
+issuer = "Sample Trading"
+account = "qt"
+currency = "USD"
+[slip.boxes]
+15 = 18.00
+
+[[slip]]
+type = "T3"
+issuer = "Sample Fund Trust"
+account = "margin"
+currency = "CAD"
+security = "XYZQ.TO"
+boxes = { 49 = 10.00, 21 = 4.25, 42 = 1.50 }

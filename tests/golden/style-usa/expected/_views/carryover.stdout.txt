@@ -1,0 +1,10 @@
+CAPITAL-LOSS CARRYOVER LEDGER — usa, USD
+100% amounts, after the wash-sale rule; 3K OFFSET: used against ordinary income.
+YEAR  NET ST  NET LT  3K OFFSET  ST CARRY  LT CARRY
+---------------------------------------------------
+2024  329.25    0.00       0.00      0.00      0.00
+
+Carryover after 2024: 0.00 (ST 0.00 + LT 0.00)
+
+! History starts in 2024: earlier losses are not in the balance — tjs carryover --details
+Not in the nets: 1099-DIV capital gain distributions — tjs carryover --details

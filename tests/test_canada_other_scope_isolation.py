@@ -18,7 +18,8 @@ tests pin the fix.
 """
 import unittest
 
-from taxjson.lib.core import CanadaTaxRules, TaxTransaction
+from taxjson.engine.ca.taxrules import CanadaTaxRules
+from taxjson.model.transaction import TaxTransaction
 
 
 class TestPendingAdjustmentScope(unittest.TestCase):

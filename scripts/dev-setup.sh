@@ -55,7 +55,22 @@ HOOK
 }
 if [ "${1:-}" = --hook-only ]; then install_hook; exit 0; fi
 
-python3 -m venv venv                       # no-op if venv already exists
+# Python 3.12 or newer (requires-python): the newest found makes the venv;
+# a venv made with an older one is refused (remove venv/ and re-run).
+PY=""
+for c in python3.13 python3.12 python3; do
+  if command -v "$c" >/dev/null 2>&1 \
+      && "$c" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
+    PY="$c"; break
+  fi
+done
+[ -n "$PY" ] || { echo "Error: Python 3.12 or newer is required (python3.13, python3.12 or python3 on PATH)." >&2; exit 1; }
+if [ -x venv/bin/python ] \
+    && ! venv/bin/python -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
+  echo "Error: venv/ was made with $(venv/bin/python --version 2>&1); taxjson needs 3.12 or newer: remove venv/ and re-run scripts/dev-setup.sh." >&2
+  exit 1
+fi
+"$PY" -m venv venv                         # no-op if venv already exists
 venv/bin/pip install --upgrade pip --quiet
 # The dev lock first (hash-pinned): the ruff CI's lint job installs from
 # the same file, so scripts/ci.sh lints as CI does. The editable install

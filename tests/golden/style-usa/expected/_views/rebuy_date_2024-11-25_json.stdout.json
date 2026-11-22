@@ -1,0 +1,94 @@
+{
+  "any_account": "A buy in ANY of your accounts counts, IRAs included; through an IRA the loss is lost for good.",
+  "as_of_date": "<stamp>",
+  "cleared": [],
+  "cleared_days": 7,
+  "country": "usa",
+  "currency": "USD",
+  "rows": [
+    {
+      "accounts": [
+        "margin"
+      ],
+      "also": [],
+      "days_left": 28,
+      "denied_closed": [],
+      "final": [],
+      "is_option": false,
+      "loss": 82.0,
+      "losses": [
+        {
+          "account": "margin",
+          "buy_replaces": true,
+          "cleared": false,
+          "denied_qty": null,
+          "direction": "LONG",
+          "disallowed": 0.0,
+          "is_option": false,
+          "loss": 82.0,
+          "qty": 10.0,
+          "rebuy_at": "2024-12-23",
+          "rescue_by": null,
+          "rescue_passed": false,
+          "symbol": "NVDA.US",
+          "trade_date": "2024-11-20",
+          "tx_id": "c06c7e1ff627bebc",
+          "window_date": "2024-11-20"
+        }
+      ],
+      "qty": 10.0,
+      "rebuy_at": "2024-12-23",
+      "rescue_by": null,
+      "rescues": [],
+      "reshort_ok_from": null,
+      "similar": [],
+      "sold_on": "2024-11-20",
+      "status": "wait",
+      "ticker": "NVDA.US",
+      "underlying": "NVDA.US"
+    },
+    {
+      "accounts": [
+        "margin"
+      ],
+      "also": [],
+      "days_left": null,
+      "denied_closed": [],
+      "final": [],
+      "is_option": false,
+      "loss": 519.9,
+      "losses": [
+        {
+          "account": "margin",
+          "buy_replaces": false,
+          "cleared": false,
+          "denied_qty": null,
+          "direction": "LONG",
+          "disallowed": 519.9,
+          "is_option": false,
+          "loss": 519.9,
+          "qty": 100.0,
+          "rebuy_at": "2024-12-02",
+          "rescue_by": null,
+          "rescue_passed": false,
+          "symbol": "SAMPA.US",
+          "trade_date": "2024-11-01",
+          "tx_id": "64e284e899fcec7b",
+          "window_date": "2024-11-01"
+        }
+      ],
+      "qty": 100.0,
+      "rebuy_at": null,
+      "rescue_by": null,
+      "rescues": [],
+      "reshort_ok_from": null,
+      "similar": [],
+      "sold_on": "2024-11-01",
+      "status": "washed",
+      "ticker": "SAMPA.US",
+      "underlying": "SAMPA.US"
+    }
+  ],
+  "schema_version": 1,
+  "scope_note": "Scope: these verdicts cover this project's accounts only. A purchase by your spouse or by a corporation you control within 30 days before or after a loss sale also makes it a wash sale (\u00a71091; IRS Pub. 550) \u2014 those accounts are not in the project, so check them yourself."
+}

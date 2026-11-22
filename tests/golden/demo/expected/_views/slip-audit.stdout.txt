@@ -1,0 +1,11 @@
+SLIP AUDIT — tax year 2024, CAD, tolerance 1.00
+
+SLIPS
+! No slips in inputs/slips/: type them into slips.toml — tjs slip-audit --template
+
+COVERAGE
+- ib: foreign income 101.25 CAD, foreign tax withheld 15.20 CAD is on no slip
+- margin: foreign income 675.00 CAD is on no slip
+- questrade: foreign income 24.30 CAD is on no slip
+
+! 3 finding(s) (ib 1, margin 1, questrade 1): correct or explain each — tjs slip-audit --details

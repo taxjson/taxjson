@@ -37,6 +37,7 @@ Usage:
         [--map ticker.map] [--strict]
 """
 
+from taxjson.lib import out as _out
 from taxjson.lib.stage_msg import emit_line
 import argparse
 import re
@@ -67,7 +68,7 @@ def _load_txs(paths: List[str]) -> List[Dict[str, Any]]:
         # The canonical row funnel, as wash-radar uses: a non-numeric
         # quantity is one line naming the file and row, not a
         # traceback (audit S053-01).
-        from taxjson.lib.core import coerce_transaction_row
+        from taxjson.lib.tx_load import coerce_transaction_row
         for n, t in enumerate(rows):
             try:
                 coerce_transaction_row(
@@ -91,7 +92,7 @@ def _load_map(path):
     if not path:
         return tobase, journal, distinct
     from pathlib import Path
-    from taxjson.bin.taxjson_ticker_map import load_map_file
+    from taxjson.lib.map_file import load_map_file
     try:
         tmap = load_map_file(Path(path))
     except (OSError, UnicodeDecodeError) as e:
@@ -116,7 +117,7 @@ def _net_by_symbol(txs):
     ratio (and moves the position to `symbol_new`) — summing quantities
     alone left a flat split position at -100 (S035-02). Option rows
     count toward their underlying's listing (S035-03)."""
-    from taxjson.lib.core import parse_option_underlying
+    from taxjson.lib.option_symbols import parse_option_underlying
     by_src: Dict[Any, Dict[str, float]] = {}
     opt: Dict[str, float] = {}
     desc: Dict[str, str] = {}
@@ -260,7 +261,7 @@ def analyze(taxable_txs, sheltered_txs, tobase, journal, distinct=()):
     return findings
 
 
-from taxjson.lib.income_dating import CA_LISTING_SUFFIXES as _CA_VENUES
+from taxjson.characterize.income_dating import CA_LISTING_SUFFIXES as _CA_VENUES
 
 
 def venue_splits(taxable_txs, sheltered_txs, distinct=()):
@@ -324,27 +325,31 @@ def main():
     findings = analyze(taxable_txs, sheltered_txs, tobase, journal, distinct)
     splits = venue_splits(taxable_txs, sheltered_txs, distinct)
 
+    # The report: a live exact Doc, each line written as it is added, as
+    # the raw print() wrote it (nothing here wraps, so no width is
+    # resolved); the --strict line goes to stderr at its point.
+    d = _out.Doc(exact=True, width_=0, live=True)
     actionable = 0
     if splits:
-        print("CANADIAN VENUE SPLIT — one root under two Canadian suffixes")
-        print("(taxjson books every Canadian listing as ROOT.TO; if the "
-              "two are one security add `GLOBAL ROOT.V ROOT.TO` to "
-              "ticker.map or fix the .tt line; if not — a receipt on a "
-              "receipt venue, another issuer — `DISTINCT` records it)")
+        d.line("CANADIAN VENUE SPLIT — one root under two Canadian suffixes")
+        d.line("(taxjson books every Canadian listing as ROOT.TO; if the "
+               "two are one security add `GLOBAL ROOT.V ROOT.TO` to "
+               "ticker.map or fix the .tt line; if not — a receipt on a "
+               "receipt venue, another issuer — `DISTINCT` records it)")
         for v in splits:
             flag = "WARN ‼" if v["taxable"] else "WARN"
             if v["taxable"]:
                 actionable += 1
-            print(f"  [{flag}] {v['root']}: {', '.join(v['symbols'])}")
-        print()
+            d.line(f"  [{flag}] {v['root']}: {', '.join(v['symbols'])}")
+        d.blank()
 
-    print("CROSS-LISTING LINT — roots present on both .TO and .US")
-    print()
+    d.line("CROSS-LISTING LINT — roots present on both .TO and .US")
+    d.blank()
     if not findings:
-        print("No cross-listed roots found in the input. (Clean.)")
+        d.line("No cross-listed roots found in the input. (Clean.)")
         if args.strict and actionable:
-            print(f"\nstrict: {actionable} Canadian venue split(s) with "
-                  f"taxable exposure.", file=sys.stderr)
+            _out.put(f"\nstrict: {actionable} Canadian venue split(s) with "
+                     f"taxable exposure.", sys.stderr)
             return 1
         return 0
 
@@ -356,22 +361,22 @@ def main():
         if flag in ("WARN", "REVIEW") and tax_exposed:
             flag += " ‼"           # taxable exposure → actionable now
             actionable += 1
-        print(f"\n[{flag}] {f['root']}  ({f['note']})")
+        d.line(f"\n[{flag}] {f['root']}  ({f['note']})")
         for x in ("to", "us"):
             o_t, o_s = f[f"tax_{x}_opt"], f[f"shl_{x}_opt"]
             opts = (f"  options: taxable={o_t:+.0f} sheltered={o_s:+.0f}"
                     if (o_t or o_s or x.upper() in f["options_only"]) else "")
-            print(f"    .{x.upper()}  taxable={f[f'tax_{x}']:+.0f}  "
-                  f"sheltered={f[f'shl_{x}']:+.0f}{opts}"
-                  f"   {f[f'desc_{x}'][:48]!r}")
+            d.line(f"    .{x.upper()}  taxable={f[f'tax_{x}']:+.0f}  "
+                   f"sheltered={f[f'shl_{x}']:+.0f}{opts}"
+                   f"   {f[f'desc_{x}'][:48]!r}")
 
-    print("\n" + "-" * 100)
-    print("OK = correctly separate (CDR / Norbert's / DISTINCT / "
-          "different companies). WARN = mapped but not consolidated. "
-          "REVIEW = needs a human call. ‼ = has taxable exposure (act now).")
+    d.line("\n" + "-" * 100)
+    d.line("OK = correctly separate (CDR / Norbert's / DISTINCT / "
+           "different companies). WARN = mapped but not consolidated. "
+           "REVIEW = needs a human call. ‼ = has taxable exposure (act now).")
     if args.strict and actionable:
-        print(f"\nstrict: {actionable} actionable cross-listing(s) with taxable "
-              f"exposure.", file=sys.stderr)
+        _out.put(f"\nstrict: {actionable} actionable cross-listing(s) with "
+                 f"taxable exposure.", sys.stderr)
         return 1
     return 0
 

@@ -14,8 +14,10 @@ from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
+from _run_patch import patch_run
 from taxjson.lib.brokerages.base import BrokerageParseError
 from taxjson.lib.brokerages.ib_extractor import IbBrokerage
+from taxjson.project.settings import Settings
 
 HEAD = ('Statement,Header,Field Name,Field Value\n'
         'Statement,Data,BrokerName,Interactive Brokers\n'
@@ -415,7 +417,8 @@ class TestOptionRootAlias(unittest.TestCase):
         # A ticker.map GLOBAL VKD1.US VKD.US rule (the manual workaround)
         # now has nothing left to rename: a no-op.
         self.assertFalse(any(s.startswith('VKD1') for s in syms))
-        from taxjson.lib.core import CanadaTaxRules, TaxTransaction
+        from taxjson.engine.ca.taxrules import CanadaTaxRules
+        from taxjson.model.transaction import TaxTransaction
         fields = TaxTransaction.__dataclass_fields__
         tts = [TaxTransaction(**{k: v for k, v in r.items() if k in fields})
                for r in txs]
@@ -464,7 +467,7 @@ class TestRunParsesStrict(unittest.TestCase):
     ERROR stops the run instead of scrolling past as a warning."""
 
     def test_brokerage_stage_is_strict(self):
-        import taxjson.bin.taxjson_run as run_mod
+        from taxjson.pipeline import stages as pipeline_stages
 
         class _Stop(Exception):
             pass
@@ -477,9 +480,7 @@ class TestRunParsesStrict(unittest.TestCase):
                 raise _Stop()
             Path(out).write_text('{"transactions": []}\n')
 
-        orig = run_mod.run_to_file
-        run_mod.run_to_file = fake_run_to_file
-        try:
+        with patch_run("run_to_file", fake_run_to_file):
             with tempfile.TemporaryDirectory() as td:
                 root = Path(td)
                 acct = root / 'inputs' / 'tfsa'
@@ -489,19 +490,17 @@ class TestRunParsesStrict(unittest.TestCase):
                 (root / 'work').mkdir()
                 rates = root / 'work' / 'to_base.csv'
                 rates.write_text('')
-                settings = {'base_currency': 'CAD', 'country': 'canada',
-                            'year': 2026, 'tax_date': 'settle'}
+                settings = Settings.from_table({'base_currency': 'CAD', 'country': 'canada',
+                            'year': 2026, 'tax_date': 'settle'})
                 with contextlib.redirect_stdout(io.StringIO()), \
                         contextlib.redirect_stderr(io.StringIO()):
                     try:
-                        run_mod.stage_account(
+                        pipeline_stages.stage_account(
                             'tfsa', {'type': 'sheltered'}, settings,
                             root / 'inputs', root / 'work',
-                            root / 'reports', rates, None, None, True)
+                            root / 'reports', rates, None, None)
                     except _Stop:
                         pass
-        finally:
-            run_mod.run_to_file = orig
         self.assertEqual(len(seen), 1)
         self.assertIn('--strict', seen[0])
 

@@ -1,0 +1,183 @@
+# ==========================================================================================
+# taxjson-gains audit trace
+# ==========================================================================================
+# input         .blend_base.json
+# country       CANADA
+# tax year      2024 (settle basis)
+# generated     <stamp>
+#
+# dispositions       9
+# wash sales         3
+# total gain          +$174.42
+# disallowed           $943.13
+# ==========================================================================================
+
+# ==========================================================================================
+# Per-symbol summary
+# ==========================================================================================
+# Symbol                 Sales  Total qty  Total gain  Disallowed
+# ---------------------------------------------------------------
+# AAPL.US                    2   150.0000     +$84.65       $0.00
+# MSFT.US                    1    50.0000    +$132.30       $0.00
+# NVDA.US                    1    10.0000       $0.00     $117.45
+# QZQ.US                     1   200.0000    -$101.93     $305.78
+# QZQ240920C00030000.US      1     2.0000    -$410.40       $0.00
+# QZQ241220C00035000.US      1     1.0000    +$268.65       $0.00
+# QZQ250117C00040000.US      1     1.0000    +$201.15       $0.00
+# SAMPA.TO                   1   100.0000       $0.00     $519.90
+# ---------------------------------------------------------------
+# TOTAL                      9               +$174.42     $943.13
+# ==========================================================================================
+
+# ==================================================================================================================================================
+# AAPL.US   2024-05-10   qty=75.0000   gain=+$87.89
+#   days_held=51   account=qt   id=<hash>
+# ==================================================================================================================================================
+# --- ACB CALCULATION TRACE: AAPL.US ---
+# 2024-01-15 BUYSELL   100.0000 @ 249.7500 | Fee: 6.6825 | Cost_Added: 24981.6825 | Pool_Qty:   100.0000   | Pool_ACB: 24981.6825 | ACB/Sh: 249.8168
+# 2024-03-20 BUYSELL    50.0000 @ 229.5000 | Fee: 6.6825 | Cost_Added: 11481.6825 | Pool_Qty:   150.0000   | Pool_ACB: 36463.3650 | ACB/Sh: 243.0891
+# 2024-05-10 BUYSELL   -75.0000 @ 244.3500 | Fee: 6.6825 | Proceeds: 18319.5675   | Cost_Basis: 18231.6825 | Gain:    87.8850     | Gain/Sh:  1.1718
+# ==================================================================================================================================================
+
+# ==================================================================================================================================================
+# MSFT.US   2024-06-18   qty=50.0000   gain=+$132.30
+#   days_held=127   account=margin   id=<hash>
+# ==================================================================================================================================================
+# --- ACB CALCULATION TRACE: MSFT.US ---
+# 2024-02-12 BUYSELL    50.0000 @ 540.0000 | Fee: 1.3500 | Cost_Added: 27001.3500 | Pool_Qty:    50.0000   | Pool_ACB: 27001.3500 | ACB/Sh: 540.0270
+# 2024-06-18 BUYSELL   -50.0000 @ 542.7000 | Fee: 1.3500 | Proceeds: 27133.6500   | Cost_Basis: 27001.3500 | Gain:   132.3000     | Gain/Sh:  2.6460
+# ==================================================================================================================================================
+
+# =================================================================================================================================================
+# QZQ240920C00030000.US   2024-08-01   qty=2.0000   gain=-$410.40
+#   days_held=92   account=margin   id=<hash>
+# =================================================================================================================================================
+# --- ACB CALCULATION TRACE: QZQ240920C00030000.US ---
+# 2024-05-01 BUYSELL     2.0000 @  4.0500 | Fee: 2.7000 | Cost_Added:   812.7000 | Pool_Qty:     2.0000   | Pool_ACB:   812.7000 | ACB/Sh:  4.0635
+# 2024-08-01 BUYSELL    -2.0000 @  2.0250 | Fee: 2.7000 | Proceeds:   402.3000   | Cost_Basis:   812.7000 | Gain:  -410.4000     | Gain/Sh: -2.0520
+# =================================================================================================================================================
+
+# ====================================================================================================================================================================
+# QZQ.US   2024-09-10   qty=200.0000   gain=-$101.93   (raw -$407.70, disallowed +$305.78)
+#   days_held=193   account=margin   id=<hash>
+# ====================================================================================================================================================================
+# --- ACB CALCULATION TRACE: QZQ.US ---
+# 2024-03-01 BUYSELL   200.0000 @ 40.5000 | Fee: 1.3500                    | Cost_Added:  8101.3500 | Pool_Qty:   200.0000   | Pool_ACB:  8101.3500 | ACB/Sh: 40.5068
+# 2024-09-10 DISALLOW   305.7750          | (Loss disallowed on this date)
+# 2024-09-10 BUYSELL  -200.0000 @ 38.4750 | Fee: 1.3500                    | Proceeds:  7693.6500   | Cost_Basis:  8101.3500 | Gain:  -407.7000     | Gain/Sh: -2.0385
+#
+# --- SUPERFICIAL LOSS (ITA s.54) ---
+#   raw loss -$407.70 -> $305.78 disallowed (partial)
+#   triggered by 2 acquisitions:
+#     2024-09-20 BUY +100.0000 @ 32.4000   account=margin
+#     2024-09-25 BUY +50.0000 @ 33.0750   account=tfsa [sheltered]
+#   deferred $203.85: added to the ACB of the replacement units in your taxable pool (recovered when they are sold), on 2024-09-20 (margin)
+#   PERMANENTLY denied $101.93: the replacement is in a registered account (lost for good) or bought by an affiliated person (who adds it to their own ACB, s.53(1)(f)) — no ACB bump on your return
+#   rules: CA-SL-01, CA-SL-09
+#
+# --- SUPERFICIAL-LOSS WINDOW (±30 days, all accounts) ---
+#   T-30  = 2024-08-12
+#   LOSS  = 2024-09-10, settled 2024-09-11
+#   T+30  = 2024-10-11
+#   Superficial-loss test (ITA s.54, per holder): units a holder ACQUIRED in the window and still holds at T+30 back the denial
+#     (holders: your taxable accounts together; each registered or affiliated account on its own)
+#     all-account qty at T+30 = +150.0000   (context only)
+#   Result: partial disallowance — 150.0000 of 200.0000 units backed by substituted property (acquired in the window and still held at T+30)
+#
+#   Same-symbol activity in the window (across all accounts):
+#   pool_bal = running qty across ALL accounts (context); acb/sh = taxable pool's per-share ACB after this tx
+#     day      date           settled        account     action           qty       price      pool_bal      acb/sh     role                                                        
+#     ----     ----------     ----------     -------     ------     ---------     -------     ---------     -------     ------------------------------------------------------------
+#     T+0      2024-09-10     2024-09-11     margin      SELL       -200.0000     38.4750       +0.0000           —     *** LOSS SALE ***                                           
+#     T+12     2024-09-20     2024-09-23     margin      BUY        +100.0000     32.4000     +100.0000     34.4520     *** TRIGGER (denied loss added to the ACB) ***              
+#     T+14     2024-09-25     2024-09-25     tfsa        BUY         +50.0000     33.0750     +150.0000     34.4520     *** TRIGGER (denial PERMANENT — no ACB bump) *** [sheltered]
+# ====================================================================================================================================================================
+
+# =======================================================================================
+# QZQ241220C00035000.US   2024-10-01   qty=1.0000   gain=+$268.65
+#   days_held=0   account=margin   id=<hash>
+# =======================================================================================
+# --- ACB CALCULATION TRACE: QZQ241220C00035000.US (written) ---
+# 2024-10-01 WRITE     1.0000 @  2.7000 | premium   268.6500 recognised now (ITA s.49(1))
+# =======================================================================================
+
+# ====================================================================================================================================================================
+# SAMPA.TO   2024-11-01   qty=100.0000   gain=$0.00   (raw -$519.90, disallowed +$519.90)
+#   days_held=296   account=margin   id=<hash>
+# ====================================================================================================================================================================
+# --- ACB CALCULATION TRACE: SAMPA.TO ---
+# 2024-01-10 BUYSELL   100.0000 @ 40.0000 | Fee: 9.9500                    | Cost_Added:  4009.9500 | Pool_Qty:   100.0000   | Pool_ACB:  4009.9500 | ACB/Sh: 40.0995
+# 2024-11-01 DISALLOW   519.9000          | (Loss disallowed on this date)
+# 2024-11-01 BUYSELL  -100.0000 @ 35.0000 | Fee: 9.9500                    | Proceeds:  3490.0500   | Cost_Basis:  4009.9500 | Gain:  -519.9000     | Gain/Sh: -5.1990
+#
+# --- SUPERFICIAL LOSS (ITA s.54) ---
+#   raw loss -$519.90 -> fully disallowed (+$519.90)
+#   triggered by 2024-11-20 BUY +100.0000 @ 34.0000   account=margin
+#   deferred $519.90: added to the ACB of the replacement units in your taxable pool (recovered when they are sold), on 2024-11-20
+#   rules: CA-SL-01, CA-SL-09
+#
+# --- SUPERFICIAL-LOSS WINDOW (±30 days, all accounts) ---
+#   T-30  = 2024-10-02
+#   LOSS  = 2024-11-01
+#   T+30  = 2024-12-01
+#   Superficial-loss test (ITA s.54, per holder): units a holder ACQUIRED in the window and still holds at T+30 back the denial
+#     (holders: your taxable accounts together; each registered or affiliated account on its own)
+#     all-account qty at T+30 = +100.0000   (context only)
+#   Result: full disallowance — 100.0000 of 100.0000 units backed by substituted property
+#
+#   Same-symbol activity in the window (across all accounts):
+#   pool_bal = running qty across ALL accounts (context); acb/sh = taxable pool's per-share ACB after this tx
+#     day      date           account     action           qty       price      pool_bal      acb/sh     role                                          
+#     ----     ----------     -------     ------     ---------     -------     ---------     -------     ----------------------------------------------
+#     T+0      2024-11-01     margin      SELL       -100.0000     35.0000       +0.0000           —     *** LOSS SALE ***                             
+#     T+19     2024-11-20     margin      BUY        +100.0000     34.0000     +100.0000     39.2985     *** TRIGGER (denied loss added to the ACB) ***
+# ====================================================================================================================================================================
+
+# =================================================================================================================================================
+# AAPL.US   2024-11-05   qty=75.0000   gain=-$3.24
+#   days_held=230   account=qt   id=<hash>
+# =================================================================================================================================================
+# --- ACB CALCULATION TRACE: AAPL.US (continued from the sale of 2024-05-10 above, id=<hash>) ---
+# 2024-05-10 BUYSELL   -75.0000 @ 244.3500 | Fee: 6.6825 | Cost_Rmvd: 18231.6825 | Pool_Qty:    75.0000   | Pool_ACB: 18231.6825 | ACB/Sh: 243.0891
+# 2024-11-05 BUYSELL   -75.0000 @ 243.1350 | Fee: 6.6825 | Proceeds: 18228.4425  | Cost_Basis: 18231.6825 | Gain:    -3.2400     | Gain/Sh: -0.0432
+# =================================================================================================================================================
+
+# =======================================================================================
+# QZQ250117C00040000.US   2024-11-15   qty=1.0000   gain=+$201.15
+#   days_held=0   account=margin   id=<hash>
+# =======================================================================================
+# --- ACB CALCULATION TRACE: QZQ250117C00040000.US (written) ---
+# 2024-11-15 WRITE     1.0000 @  2.0250 | premium   201.1500 recognised now (ITA s.49(1))
+# =======================================================================================
+
+# ======================================================================================================================================================================
+# NVDA.US   2024-11-20   qty=10.0000   gain=$0.00   (raw -$117.45, disallowed +$117.45)
+#   days_held=133   account=margin   id=<hash>
+# ======================================================================================================================================================================
+# --- ACB CALCULATION TRACE: NVDA.US ---
+# 2024-07-10 BUYSELL    10.0000 @ 199.8000 | Fee: 1.3500                    | Cost_Added:  1999.3500 | Pool_Qty:    10.0000   | Pool_ACB:  1999.3500 | ACB/Sh: 199.9350
+# 2024-11-20 DISALLOW   117.4500           | (Loss disallowed on this date)
+# 2024-11-20 BUYSELL   -10.0000 @ 188.3250 | Fee: 1.3500                    | Proceeds:  1881.9000   | Cost_Basis:  1999.3500 | Gain:  -117.4500     | Gain/Sh: -11.7450
+#
+# --- SUPERFICIAL LOSS (ITA s.54) ---
+#   raw loss -$117.45 -> fully disallowed (+$117.45)
+#   triggered by 2024-12-05 BUY +10.0000 @ 182.2500   account=margin
+#   deferred $117.45: added to the ACB of the replacement units in your taxable pool (recovered when they are sold), on 2024-12-05
+#   rules: CA-SL-01, CA-SL-09
+#
+# --- SUPERFICIAL-LOSS WINDOW (±30 days, all accounts) ---
+#   T-30  = 2024-10-22
+#   LOSS  = 2024-11-20, settled 2024-11-21
+#   T+30  = 2024-12-21
+#   Superficial-loss test (ITA s.54, per holder): units a holder ACQUIRED in the window and still holds at T+30 back the denial
+#     (holders: your taxable accounts together; each registered or affiliated account on its own)
+#     all-account qty at T+30 = +10.0000   (context only)
+#   Result: full disallowance — 10.0000 of 10.0000 units backed by substituted property
+#
+#   Same-symbol activity in the window (across all accounts):
+#   pool_bal = running qty across ALL accounts (context); acb/sh = taxable pool's per-share ACB after this tx
+#     day      date           settled        account     action          qty        price     pool_bal       acb/sh     role                                          
+#     ----     ----------     ----------     -------     ------     --------     --------     --------     --------     ----------------------------------------------
+#     T+0      2024-11-20     2024-11-21     margin      SELL       -10.0000     188.3250      +0.0000            —     *** LOSS SALE ***                             
+#     T+15     2024-12-05     2024-12-06     margin      BUY        +10.0000     182.2500     +10.0000     194.1300     *** TRIGGER (denied loss added to the ACB) ***
+# ======================================================================================================================================================================

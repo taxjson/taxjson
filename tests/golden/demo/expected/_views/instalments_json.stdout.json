@@ -1,0 +1,118 @@
+{
+  "annual_rate": null,
+  "as_of": "2025-04-30",
+  "assumed_zero": [],
+  "basis": "current_year",
+  "charge_interest": 275.74,
+  "credit_interest": 50.47,
+  "current_net_tax": 9727.94,
+  "due_to_date": 9727.94,
+  "governing_required_total": 4200.0,
+  "governing_schedule": [
+    {
+      "amount": 975.0,
+      "date": "2024-03-15"
+    },
+    {
+      "amount": 975.0,
+      "date": "2024-06-17"
+    },
+    {
+      "amount": 1125.0,
+      "date": "2024-09-16"
+    },
+    {
+      "amount": 1125.0,
+      "date": "2024-12-16"
+    }
+  ],
+  "interest_bases_considered": [
+    "cra_reminder",
+    "current_year",
+    "prior_year"
+  ],
+  "interest_basis": "cra_reminder",
+  "interest_if_unpaid": 275.74,
+  "net_interest": 225.27,
+  "net_interest_computed": 225.27,
+  "not_modelled": [
+    "CPP/EI payable on self-employment earnings (T1 lines 42100 / 42120) \u2014 CRA adds it to the instalments due; add it yourself",
+    "FX gains/losses on foreign cash (s.39(1.1), line 15300 \u2014 `tjs fx-cash`) and capital gains on T3/T5 slips are not in the estimate this schedule is built on"
+  ],
+  "paid_total": 550.0,
+  "payments": [
+    {
+      "amount": 300.0,
+      "date": "2024-03-15"
+    },
+    {
+      "amount": 250.0,
+      "date": "2024-07-02",
+      "note": "late"
+    }
+  ],
+  "penalty": 0.0,
+  "penalty_floor": 1000.0,
+  "per_remaining_date": 0.0,
+  "prior_year_net_tax": 4200.0,
+  "prior_year_test": "met",
+  "rate_configured": false,
+  "rate_extrapolated": false,
+  "rate_extrapolated_after": false,
+  "rate_extrapolated_before": false,
+  "rate_schedule": [
+    {
+      "from": "2024-01-01",
+      "rate": 0.1
+    },
+    {
+      "from": "2024-07-01",
+      "rate": 0.09
+    },
+    {
+      "from": "2025-01-01",
+      "rate": 0.08
+    }
+  ],
+  "rate_source": "published",
+  "remaining_dates": [],
+  "remaining_total": 0.0,
+  "required": [
+    {
+      "amount": 2431.99,
+      "cumulative_paid": 300.0,
+      "cumulative_required": 2431.99,
+      "date": "2024-03-15",
+      "status": "missed"
+    },
+    {
+      "amount": 2431.98,
+      "cumulative_paid": 300.0,
+      "cumulative_required": 4863.97,
+      "date": "2024-06-17",
+      "status": "missed"
+    },
+    {
+      "amount": 2431.99,
+      "cumulative_paid": 550.0,
+      "cumulative_required": 7295.96,
+      "date": "2024-09-16",
+      "status": "missed"
+    },
+    {
+      "amount": 2431.98,
+      "cumulative_paid": 550.0,
+      "cumulative_required": 9727.94,
+      "date": "2024-12-16",
+      "status": "missed"
+    }
+  ],
+  "required_at_all": true,
+  "required_total": 9727.94,
+  "schema_version": 1,
+  "second_prior_net_tax": 3900.0,
+  "shortfall": 9177.94,
+  "vintage": "2024",
+  "vintage_notes": [],
+  "year": 2024
+}

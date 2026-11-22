@@ -1,0 +1,44 @@
+[
+ {
+  "account": "",
+  "amount": 500.0,
+  "currency": "CAD",
+  "date": "2024-04-02",
+  "decl": null,
+  "desc": "Transfers",
+  "internal": "",
+  "kind": "CASHMOVE",
+  "line_where": "sample.csv:40",
+  "origin": "broker",
+  "settle": "2024-04-02",
+  "where": "sample.csv"
+ },
+ {
+  "account": "",
+  "amount": 900.0,
+  "currency": "CAD",
+  "date": "2024-01-05",
+  "decl": null,
+  "desc": "Deposits & Contributions",
+  "internal": "",
+  "kind": "CASHMOVE",
+  "line_where": "sample.csv:41",
+  "origin": "broker",
+  "settle": "2024-01-05",
+  "where": "sample.csv"
+ },
+ {
+  "account": "",
+  "amount": -200.0,
+  "currency": "CAD",
+  "date": "2024-12-16",
+  "decl": null,
+  "desc": "Withdrawals & De-registrations",
+  "internal": "",
+  "kind": "CASHMOVE",
+  "line_where": "sample.csv:42",
+  "origin": "broker",
+  "settle": "2024-12-16",
+  "where": "sample.csv"
+ }
+]

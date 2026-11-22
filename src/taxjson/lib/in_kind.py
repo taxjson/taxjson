@@ -21,7 +21,7 @@ changes. `tjs run` finds them and books them:
   declares it (it wins over the ambiguity and over a same-kind pair;
   `plan=` picks the plan's leg), declares one whose plan is outside
   the project, or (`plan=own`) declares the transfer row a move of your
-  own, never in kind (bin/taxjson_convert_tt.parse_inkind_line). A
+  own, never in kind (lib/tt_format.parse_inkind_line). A
   declared transfer row with no partner of its quantity takes the
   plan's legs that add up to it (a delivery in parts) when one set
   does; an undeclared one in that shape is warned about (`in_parts`);
@@ -40,18 +40,22 @@ changes. `tjs run` finds them and books them:
   booked. A distribution in kind is a purchase at fair market value.
 
 Pure functions over plain dicts; `tjs run` feeds the transfer rows,
-the INKIND lines and the close lookup, and writes the rows.
+the INKIND lines and the close lookup, and writes the rows and the
+pairing (work/in_kind.json, IN_KIND_FILE). One reader of that file:
+in_kind_unbooked, the moves the run could not book.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date as _date
+from pathlib import Path
 from typing import (Any, Callable, Dict, Iterable, List, Optional, Sequence,
                     Tuple)
 
-from taxjson.lib.core import (IN_KIND_CONTRIBUTION_TYPE,
-                              IN_KIND_DISPOSITION_TYPE,
-                              IN_KIND_WITHDRAWAL_TYPE)
+from taxjson.lib.row_types import (IN_KIND_CONTRIBUTION_TYPE, IN_KIND_DISPOSITION_TYPE,
+                                   IN_KIND_WITHDRAWAL_TYPE)
+from taxjson.model.result import GainRow
+from taxjson.model import money as M
 
 # The most days between the two legs of one move (a transfer between two
 # brokers can take a week).
@@ -160,7 +164,7 @@ class Leg:
     def ident(self) -> Tuple[str, str, str, float]:
         """(account, symbol, date, signed quantity): the row's identity
         for the transfers view and the books' filters."""
-        return (self.account, self.symbol, self.date, round(self.qty, 8))
+        return (self.account, self.symbol, self.date, M.units(self.qty, 8))
 
 
 @dataclass
@@ -692,11 +696,11 @@ def _line_value(ln: Dict[str, Any], leg: Leg, other: Optional[Leg]):
         px = float(ln.get("price") or 0.0)
     except (TypeError, ValueError):
         px = 0.0
-    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.option_symbols import is_option_symbol
     if px <= 0 or not is_option_symbol(str(ln.get("symbol") or "")):
         return total
     size = contract_size(leg, other)
-    by_price = round(abs(float(ln["quantity"])) * px * size, 2)
+    by_price = M.units(abs(float(ln["quantity"])) * px * size, 2)
     if not ln.get("total_stated"):
         return by_price
     return line_total_problem(ln, size) or total
@@ -707,7 +711,7 @@ def line_total_problem(ln: Dict[str, Any], *sizes: float) -> str:
     total that agree at none of `sizes` (default: the size the symbol's
     own rule gives, a ticker.map MULT line, else the standard 100); ""
     for any other line (backlog TJ-1163)."""
-    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.option_symbols import is_option_symbol
     sym = str(ln.get("symbol") or "")
     try:
         px = float(ln.get("price") or 0.0)
@@ -719,10 +723,10 @@ def line_total_problem(ln: Dict[str, Any], *sizes: float) -> str:
     qty = abs(float(ln["quantity"]))
     size = 0.0
     for size in sizes or (contract_size(Leg("", "", {"symbol": sym}, "")),):
-        by_price = round(qty * px * size, 2)
+        by_price = M.units(qty * px * size, 2)
         if abs(total - by_price) <= max(0.05, 0.01 * max(by_price, 1.0)):
             return ""
-    return (f"the INKIND line {ln.get('source') or ''}: total {total:.2f} "
+    return (f"the INKIND line {ln.get('source') or ''}: total {M.shown(total, 2):.2f} "
             f"differs from qty x price x {size:g} = {by_price:.2f} — give "
             f"one of them (price 0 and the total, or the price alone)")
 
@@ -732,13 +736,14 @@ def contract_size(leg: Leg, *others: Optional[Leg]) -> float:
     price is multiplied by to value a contract, and what its booked
     price is per: the size a transfer row declares (`multiplier`: an
     adjusted series' 50, a mini's 10; IB states it — `leg`'s row, else
-    an `others`' row, the move's other leg), else lib/core's rule for
-    the symbol (a ticker.map `MULT` line, else the standard 100,
-    assumed and said once per root); 1 for a share. Every option used
-    to be valued and priced at 100 (audit 2026-10-24 B20)."""
+    an `others`' row, the move's other leg), else lib/contract_size's
+    rule for the symbol (a ticker.map `MULT` line, else the standard
+    100, assumed and said once per root); 1 for a share. Every option
+    used to be valued and priced at 100 (audit 2026-10-24 B20)."""
     from types import SimpleNamespace
 
-    from taxjson.lib.core import is_option_symbol, option_contract_size
+    from taxjson.lib.option_symbols import is_option_symbol
+    from taxjson.lib.contract_size import option_contract_size
     sym = leg.symbol
     if not is_option_symbol(sym):
         return 1.0
@@ -768,7 +773,7 @@ def _market_value(leg: Optional[Leg], qty: float) -> Optional[float]:
         return None
     if mv <= 0 or abs(leg.qty) < _EPS:
         return None
-    return round(mv * qty / abs(leg.qty), 2)
+    return M.units(mv * qty / abs(leg.qty), 2)
 
 
 def decide(moves: Iterable[Move], country: str) -> None:
@@ -822,7 +827,7 @@ def value(moves: Iterable[Move],
             continue
         # The rows' own contract size (B20), not 100 for every option.
         size = contract_size(m.taxable, m.registered)
-        m.fmv = round(float(c.price) * m.quantity * size, 2)
+        m.fmv = M.units(float(c.price) * m.quantity * size, 2)
         m.currency = str(c.currency).upper()
         m.source, m.estimated = "yahoo", True
         m.source_text = (f"Yahoo close {c.day}, ESTIMATED: split-adjusted"
@@ -845,7 +850,7 @@ def booked_rows(moves: Iterable[Move], country: str
                 ) -> Dict[str, List[Dict[str, Any]]]:
     """{taxable account: [rows]}: each booked move as one BUYSELL of the
     taxable account on its date at its fair market value — a sale for a
-    contribution, a purchase for a withdrawal (lib/core IN_KIND_*)."""
+    contribution, a purchase for a withdrawal (row_types IN_KIND_*)."""
     out: Dict[str, List[Dict[str, Any]]] = {}
     seen: Dict[str, int] = {}
     for m in moves:
@@ -868,7 +873,7 @@ def booked_rows(moves: Iterable[Move], country: str
             "symbol": m.symbol,
             "quantity": q,
             "currency": m.currency,
-            "price": round(m.fmv / m.quantity / size, 8),
+            "price": M.units(m.fmv / m.quantity / size, 8),
             "net_amount": m.fmv,
             "gross_amount": m.fmv,
             "fee": 0.0,
@@ -901,7 +906,7 @@ def _distinct(text: str, ident: Tuple[Any, ...], seen: Dict[str, int]
               ) -> str:
     """`text`, numbered from the second identical move on (" [2]"): two
     identical moves on one day are two rows, and the books' merge drops
-    a row identical to another (core.TaxTransaction.compute_id)."""
+    a row identical to another (model/transaction.py compute_id)."""
     k = repr((text,) + tuple(ident))
     seen[k] = seen.get(k, 0) + 1
     return text if seen[k] == 1 else f"{text} [{seen[k]}]"
@@ -1044,7 +1049,7 @@ def withdrawal_income(m: Move, country: str) -> str:
 
 
 def _money(x: float) -> str:
-    return f"{x:,.2f}"
+    return f"{M.shown(x, 2):,.2f}"
 
 
 def message(moves: Sequence[Move], problems: Sequence[str],
@@ -1209,7 +1214,12 @@ def contribution_results(gains_docs: Iterable[Dict[str, Any]], *,
                          key: Optional[Callable[[str], str]] = None
                          ) -> Dict[Tuple[str, str, str], Dict[str, float]]:
     """(account, security key, date) -> {"gain", "denied"} summed over
-    the in-kind contribution sales of the given gains documents."""
+    the in-kind contribution sales of the given gains documents, their
+    figures read through views (step 6c(6c3), backlog TJ-2984). The
+    caller checks the rows' fields the views read first: pipeline/stages
+    `_checked_gains_docs` checks `_IN_KIND_FIELDS` (date, gain,
+    denied_contribution), so a view of another field here needs it
+    there too (TJ-3059)."""
     keyf = key or (lambda s: str(s or "").upper())
     out: Dict[Tuple[str, str, str], Dict[str, float]] = {}
     for doc in gains_docs:
@@ -1221,6 +1231,28 @@ def contribution_results(gains_docs: Iterable[Dict[str, Any]], *,
                  keyf(str(e.get("symbol") or "")),
                  str(e.get("date") or "")[:10])
             r = out.setdefault(k, {"gain": 0.0, "denied": 0.0})
-            r["gain"] += float(e.get("gain") or 0.0)
-            r["denied"] += float(e.get("denied_contribution") or 0.0)
+            v = GainRow(e)
+            r["gain"] += float(v.gain or 0.0)
+            r["denied"] += float(v.denied_contribution or 0.0)
     return out
+
+
+IN_KIND_FILE = "in_kind.json"
+
+
+def in_kind_unbooked(cache: Path, year: Any = None) -> List[Dict[str, Any]]:
+    """The last run's in-kind moves NOT booked (work/in_kind.json: no
+    value found, an ambiguous pairing): their sale or purchase is not in
+    the taxable books. `year`: only the moves on or before its end. Read
+    by `sum` and the checklist's transfers step, which said nothing of
+    them (backlog TJ-0095)."""
+    import json as _json
+    try:
+        doc = _json.loads((cache / IN_KIND_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    moves = doc.get("moves") if isinstance(doc, dict) else None
+    end = f"{year}-12-31" if year else None
+    return [m for m in moves or [] if isinstance(m, dict)
+            and not m.get("booked")
+            and not (end and str(m.get("date") or "")[:10] > end)]

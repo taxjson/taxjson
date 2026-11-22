@@ -35,7 +35,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional, Tuple
 
 from taxjson.lib import out as _out
 from taxjson.lib.safe_write import write_atomic
@@ -52,7 +52,6 @@ from taxjson.lib.corp_actions import (
     options_for,
     parse_ib_corporate_actions,
     parse_questrade_corporate_actions,
-    parse_rbc_corporate_actions,
     rates_converter,
     read_tt_sales,
     resolve_event,
@@ -61,89 +60,111 @@ from taxjson.lib.corp_actions import (
     sheltered_default_applies,
     sheltered_default_rows,
 )
+from taxjson.lib.rbc_corp_actions import parse_rbc_corporate_actions
+from taxjson.parsers.registry import SPECS
+from taxjson.lib.corp_extract import extract_events, map_tables
 
 
-# Registry of (brokerage_id → extractor). Each extractor takes a CSV
-# path plus an account label and returns a list of CorporateAction
-# events. Extractors that don't natively report an account (Questrade's
-# CSV puts the account # in a column we ignore for now) accept the
-# label from `--account-name` so downstream tools see the right pool key.
+# (parser id → extractor), the parsers whose registry entry says they
+# extract corporate actions (taxjson.parsers.registry: `corp_actions`;
+# tests/test_parser_registry.py holds the two together). Each extractor
+# takes a CSV path plus an account label and returns a list of
+# CorporateAction events. Extractors that don't natively report an
+# account (Questrade's CSV puts the account # in a column we ignore for
+# now) accept the label from `--account-name` so downstream tools see
+# the right pool key. `--brokerage` takes a parser's other spellings too.
 EXTRACTORS = {
     'ib': parse_ib_corporate_actions,
-    'interactive_brokers': parse_ib_corporate_actions,
     'questrade': parse_questrade_corporate_actions,
-    'qt': parse_questrade_corporate_actions,
-    'rbc': parse_rbc_corporate_actions,
     'rbc_direct': parse_rbc_corporate_actions,
 }
+_BROKERAGE_CHOICES = sorted(x for s in SPECS if s.corp_actions
+                            for x in (s.id, *s.aliases))
 
 
-def extract_events(extractor, csv_paths: List[Path],
-                   account: Optional[str] = None,
-                   renames: Optional[dict] = None,
-                   symbol_codes: Optional[Path] = None
-                   ) -> List[CorporateAction]:
-    """Run `extractor` over every file of one broker group of an
-    account. Extractors that resolve securities by name (Questrade and
-    RBC spin-off parents, RBC merger placeholders) see ALL the group's
-    files as context: the parent was usually bought in another export.
-    `symbol_codes`: the account's internal-code record (work/<acct>
-    _symbol_codes.state), for an extractor that books a chain under
-    a broker's internal code (Questrade). The one extraction definition
-    for the CLI, `tjs elect` and `tjs spinoffs`, so all three
-    compute the same event ids and targets."""
-    events: List[CorporateAction] = []
-    paths = [Path(p) for p in csv_paths]
-    for csv_path in paths:
-        kw = ({'context_files': paths}
-              if getattr(extractor, 'accepts_context', False) else {})
-        if renames and getattr(extractor, 'accepts_renames', False):
-            kw['renames'] = renames
-        if (symbol_codes
-                and getattr(extractor, 'accepts_symbol_codes', False)):
-            kw['symbol_codes'] = symbol_codes
-        if account is None:
-            events.extend(extractor(csv_path, **kw))
-        else:
-            events.extend(extractor(csv_path, account, **kw))
-    return events
+def _statements_meta(csv_paths, reads) -> dict:
+    """The output's metadata entries of the statements the events were
+    read from: their shown names (`statements`), and the symbol spellings
+    the reads counted (`reads`, lib/symbol_case: written where one is not
+    upper case, for `tjs run`'s check of two spellings of one symbol,
+    backlog TJ-4606)."""
+    from taxjson.lib.brokerages.base import shown_name
+    from taxjson.lib.symbol_case import spellings_meta
+    return {'statements': [shown_name(p) for p in csv_paths],
+            **spellings_meta(reads)}
 
 
-def map_renames(path: Path) -> dict:
-    """The renames of a ticker.map as the extractors read them (a
-    spin-off's parent named by a broker code: `GLOBAL X123456
-    PARENT.TO`). OSError / ValueError when the map cannot be read."""
-    from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
-                                                merge_renames)
-    return merge_renames(_parse_map_file(Path(path))[0], to_base=True)
+def _spellings_from(specs) -> list:
+    """(folder, JSON) of each --spellings-from ACCOUNT=FILE. Exits 2
+    naming one that is not ACCOUNT=FILE or whose file is missing,
+    unreadable or not a JSON object: skipped, the check would pass and
+    the run save the elections it is to refuse (backlog TJ-4616)."""
+    docs = []
+    for spec in specs:
+        acct, _eq, path = spec.partition('=')
+        try:
+            if not (acct and path):
+                raise ValueError("not ACCOUNT=FILE")
+            doc = json.loads(Path(path).read_text(encoding='utf-8'))
+            if not isinstance(doc, dict):
+                raise ValueError("not a JSON object")
+        except (OSError, ValueError) as e:
+            emit_line(f"taxjson-corp-actions: error: --spellings-from "
+                      f"{spec}: {getattr(e, 'strerror', None) or e}",
+                      file=sys.stderr)
+            raise SystemExit(2)
+        docs.append((f"inputs/{acct}/", doc))
+    return docs
 
 
-def project_corp_map(root: Path) -> Optional[Path]:
-    """The map `tjs run`'s corporate-action stage read for the
-    project at `root`: the run's effective map (work/ticker.map.effective:
-    ticker.map plus the listings it joined and the .tt renames) when the
-    last run wrote one, else ticker.map; None without either. `tjs
-    elect` extracts with it, so its event ids are the run's (backlog
-    TJ-0849)."""
-    from taxjson.lib import project_layout as _PL
-    from taxjson.lib.cross_listings import EFFECTIVE_MAP
-    for p in (Path(root) / "work" / EFFECTIVE_MAP,
-              _PL.ticker_map_path(root)):
-        if p.is_file():
-            return p
-    return None
-
-
-def project_corp_renames(root: Path) -> Optional[dict]:
-    """map_renames of project_corp_map (None when there is no map or it
-    cannot be read: `tjs run` refuses a bad map up front)."""
-    p = project_corp_map(root)
-    if p is None:
-        return None
+def _read_events(args, csv_paths):
+    """(the events of `csv_paths`, one per id across the account's broker
+    accounts: combine_broker_copies keeps overlapping statements once and
+    adds a second broker account's holding; the spellings read). The
+    extractor's own default account label stays unless --account-name
+    was given. Exits 2 on a ticker.map or an export it cannot read, and
+    before any election is read or saved when the events spell a symbol
+    two ways that differ only in letter case, among themselves or with an
+    output of --spellings-from, and no ticker.map line says which they
+    are (lib/symbol_case): the id one spelling gives must not take an
+    election saved under the other's (backlog TJ-4616)."""
+    from taxjson.lib.brokerages.base import BrokerageParseError
+    from taxjson.lib.symbol_case import refusal
+    renames = case = None
+    if args.ticker_map and Path(args.ticker_map).exists():
+        try:
+            renames, case = map_tables(Path(args.ticker_map))
+        except (OSError, ValueError) as e:
+            emit_line(f"taxjson-corp-actions: error: {args.ticker_map}: {e}",
+                      file=sys.stderr)
+            raise SystemExit(2)
+    reads: list = []        # the spellings read (lib/symbol_case, TJ-4606)
     try:
-        return map_renames(p) or None
-    except (OSError, ValueError):
-        return None
+        events = extract_events(extractor_for(args.brokerage_id), csv_paths,
+                                args.account_name, renames=renames, case=case,
+                                spellings=reads,
+                                symbol_codes=args.symbol_codes)
+    except BrokerageParseError as e:
+        emit_line(f"taxjson-corp-actions: error: {e}", file=sys.stderr)
+        raise SystemExit(2)
+    own = {'metadata': {'source': 'taxjson-corp-actions',
+                        **_statements_meta(csv_paths, reads)},
+           'transactions': [{'symbol': s} for _w, seen in reads
+                            for by in seen.values() for s in by]}
+    said = refusal([(f"inputs/{args.account_name or ''}/", own)]
+                   + _spellings_from(args.spellings_from))
+    if said:
+        _out.error(said[0], prog="taxjson-corp-actions", details=said[1])
+        raise SystemExit(2)
+    return combine_broker_copies(events), reads
+
+
+def extractor_for(label):
+    """The extractor of a parser named by its id or any spelling (a
+    sources list's or a group's label, folded through the registry), or
+    None for a parser without one."""
+    from taxjson.parsers.registry import recorded_id
+    return EXTRACTORS.get(recorded_id(label))
 
 
 def _default_manifest_path(csv_path: Path) -> Path:
@@ -211,9 +232,9 @@ def _prompt_election(event: CorporateAction, country: str,
             doc.line(f"    {d}")
     doc.section("Tax treatment options")
     doc.line(_format_options(options))
-    print(file=sys.stderr)
+    _out.put("", file=sys.stderr)
     doc.print(file=sys.stderr)
-    print(file=sys.stderr)
+    _out.put("", file=sys.stderr)
 
     # input() writes its prompt to stdout, which leaks into the emitted
     # JSON when the user redirects output to a file. Print prompts to
@@ -239,9 +260,9 @@ def _prompt_election(event: CorporateAction, country: str,
             key, _ = options[idx]
             break
         except (ValueError, IndexError):
-            print(f"  invalid choice '{choice}' — pick a number from "
-                  f"the list", file=sys.stderr)
-    print(f"  Recorded: {key}", file=sys.stderr)
+            _out.put(f"  invalid choice '{choice}' — pick a number from "
+                     f"the list", file=sys.stderr)
+    _out.put(f"  Recorded: {key}", file=sys.stderr)
 
     # Some elections need extra numeric input (FMV, allocated ACB, etc).
     # Prompt for each declared hint and store on the manifest record.
@@ -257,7 +278,7 @@ def _prompt_election(event: CorporateAction, country: str,
         if len(hint_spec) > 2 and not hint_spec[2](event):
             continue
         # The explanation once; a re-entry asks for the number only.
-        print(file=sys.stderr)
+        _out.put("", file=sys.stderr)
         for ln in _out.wrap(f"{hint_key}: {prompt_text}", indent="  ",
                             hang="    ", stream=sys.stderr):
             print(ln, file=sys.stderr)
@@ -274,12 +295,12 @@ def _prompt_election(event: CorporateAction, country: str,
             try:
                 val = float(raw)
             except ValueError:
-                print(f"  '{raw}' isn't a number — try again", file=sys.stderr)
+                _out.put(f"  '{raw}' isn't a number — try again", file=sys.stderr)
                 continue
             from taxjson.lib.corp_actions import hint_value_problem
             prob = hint_value_problem(hint_key, val)
             if prob:
-                print(f"  {prob} — try again", file=sys.stderr)
+                _out.put(f"  {prob} — try again", file=sys.stderr)
                 continue
             hints[hint_key] = val
             break
@@ -291,6 +312,7 @@ def _prompt_election(event: CorporateAction, country: str,
         election=key,
         notes=notes,
         hints=hints,
+        read_event_id=event.read_event_id,
     )
 
 
@@ -444,223 +466,29 @@ def _pending_doc(missing: List[CorporateAction], manifest_path: Path,
             # A sheltered account's event that is asked: no tax in the
             # account depends on it (sheltered_note).
             "sheltered": bool(sheltered),
+            # The id the export's spelling gave it, kept with an
+            # election `tjs elect --set` saves (backlog TJ-4616).
+            **({"read_event_id": ev.read_event_id}
+               if ev.read_event_id else {}),
         })
     return {"schema_version": 1, "country": country,
             "manifest": str(manifest_path), "pending": pending}
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description=(
-            "Resolve broker corporate-action events into taxjson rows. "
-            "Manages an elections manifest automatically so re-runs are "
-            "deterministic; prompts only when new events appear and a TTY "
-            "is available."
-        )
-    )
-    parser.add_argument(
-        '--brokerage',
-        dest='brokerage_id',
-        required=True,
-        choices=sorted(EXTRACTORS),
-        help="Brokerage that produced the statement",
-    )
-    parser.add_argument(
-        'inputs',
-        nargs='+',
-        metavar='input',
-        help=(
-            "Broker statement CSV(s). Multiple files are extracted in "
-            "order and their events concatenated. Use --manifest when "
-            "passing more than one file."
-        ),
-    )
-    add_country_argument(
-        parser, help="Tax jurisdiction whose election rules to apply "
-                     "(required): canada | usa")
-    parser.add_argument(
-        '--manifest',
-        help=(
-            "Path to elections manifest. Defaults to `.<csv>.elections` "
-            "next to the input CSV — hidden by leading dot so it doesn't "
-            "clutter listings."
-        ),
-    )
-    parser.add_argument(
-        '--manifest-shown', metavar='TEXT', default=None,
-        help="How the messages name the manifest (`tjs run` passes "
-             "it as `tjs elect` shows it: relative to the project, "
-             "../inputs/<account>/manifest.json for shared exports); "
-             "default: --manifest as given.",
-    )
-    parser.add_argument(
-        '--account-name',
-        metavar='NAME',
-        default=None,
-        help=(
-            "Account label stamped on every emitted taxjson row (e.g. "
-            "'Margin', 'RRSP', 'TFSA', 'LIRA'). Matches the equivalent "
-            "flag on taxjson-brokerage so corp-action rows pool correctly "
-            "with the broker's other trades for the same account. When "
-            "omitted, the extractor's own DEFAULT_ACCOUNT (e.g. 'IB', "
-            "'Questrade') is kept — previously this defaulted to the "
-            "literal 'default', causing rows from the same security to "
-            "split across two pools when taxjson-brokerage was run "
-            "without --account-name on the same data."
-        ),
-    )
-    parser.add_argument(
-        '--rates', metavar='FILE', default=None,
-        help="Rates file (the conversion stage's `DATE TIME FROM TO RATE` "
-             "lines) used to express a cross-currency exchange's value in "
-             "each leg's own currency at the event date.",
-    )
-    parser.add_argument(
-        '--base-currency', metavar='CUR', default=None,
-        help="The rates file's target (base) currency (default: the "
-             "--country's home currency, CAD or USD).",
-    )
-    parser.add_argument(
-        '--decisions-only', action='store_true',
-        help='Save to the manifest only the elections answered at the '
-             'prompt: never a rekey of old ids or an automatic election '
-             '(a manifest shared by every year, written by no run as a '
-             'side effect)')
-    parser.add_argument(
-        '--ticker-map', metavar='FILE', default=None,
-        help="The project's ticker.map (`tjs run` passes it): a "
-             "temporary code it already renames is not warned about.",
-    )
-    parser.add_argument(
-        '--symbol-codes', metavar='FILE', default=None,
-        help="The account's internal-code record (`tjs run` passes "
-             "work/<acct>_symbol_codes.state): a Questrade chain booked "
-             "under an internal code takes the listing it resolves to.",
-    )
-    parser.add_argument(
-        '--sheltered', action='store_true',
-        help="The account is sheltered (registered): no tax in the "
-             "account depends on an election, which only sets the "
-             "holdings' cost; the holdings still count for the "
-             "superficial-loss / wash-sale rule (`tjs run` passes "
-             "it). See --sheltered-elections.",
-    )
-    parser.add_argument(
-        '--sheltered-elections', choices=SHELTERED_ELECTION_MODES,
-        default=SHELTERED_ELECTIONS_DEFAULT,
-        help="With --sheltered: \"zero\" (the default) books a spin-off "
-             "or merger that has no saved election without asking — a "
-             "spin-off's new shares at $0 cost, the parent keeping its "
-             "cost; a merger's new shares taking the old shares' cost; "
-             "\"ask\" asks as in a taxable account ([settings] "
-             "sheltered_elections).",
-    )
-    parser.add_argument(
-        '--tt', metavar='FILE', action='append', default=[],
-        help="One of the account's .tt files (`tjs run` passes each): "
-             "a spin-off's fraction sold there by hand is its cash in "
-             "lieu booked, not an UNBOOKED warning.",
-    )
-    parser.add_argument(
-        '--ask-event', metavar='ID', default=None,
-        help="Ask only about this event (`tjs elect --redo --event "
-             "ID`): no other event is asked about or elected, and the "
-             "rows of an event that has no election are left out of the "
-             "output (`tjs run` asks about it).",
-    )
-    parser.add_argument(
-        '--saved-log', metavar='FILE', default=None,
-        help="Append each election this run saves (one JSON line: the "
-             "record) to FILE: `tjs elect --redo` reads it to tell "
-             "its own answers from an election another command saved "
-             "meanwhile when it puts the cleared ones back (backlog "
-             "TJ-0955).",
-    )
-    parser.add_argument(
-        '--list', dest='list_only', action='store_true',
-        help="Just print extracted events; don't prompt, don't write, don't emit JSON.",
-    )
-    parser.add_argument(
-        '--no-input', action='store_true',
-        help="Never prompt, even at a TTY — unresolved events exit "
-             f"{EXIT_ELECTIONS_REQUIRED} (see --pending-json).",
-    )
-    parser.add_argument(
-        '--pending-json', metavar='FILE', default=None,
-        help="When elections are required and prompting isn't possible, "
-             "write the pending events (with their options and hints) "
-             "as JSON to FILE for a GUI or `tjs elect --set` to "
-             "resolve.",
-    )
-    parser.add_argument(
-        '--pending-json-shown', metavar='TEXT', default=None,
-        help="How the note names --pending-json (`tjs run` passes it "
-             "relative to the project, work/<account>_pending_elections"
-             ".json); default: --pending-json as given.",
-    )
+    parser = _corp_actions_parser()
+    _corp_actions_options(parser)
     args = parser.parse_args()
-    if not args.base_currency:
-        # Country-blind CAD used to be the default (re-audit A2-1363).
-        from taxjson.lib.country import home_currency
-        args.base_currency = home_currency(args.country)
+    csv_paths, manifest_path = _corp_actions_check_args(args)
 
-    csv_paths = [Path(p) for p in args.inputs]
-    missing = [p for p in csv_paths if not p.exists()]
-    if missing:
-        for p in missing:
-            emit_line(f"taxjson-corp-actions: error: input CSV not found: {p}",
-                      file=sys.stderr)
-        raise SystemExit(2)
-    if args.ticker_map and not Path(args.ticker_map).exists():
-        # A named --ticker-map that does not exist is refused, not
-        # silently skipped (re-audit A2-1436).
-        emit_line(f"taxjson-corp-actions: error: no such file: --ticker-map "
-                  f"{args.ticker_map}", file=sys.stderr)
-        raise SystemExit(2)
-
-    if args.manifest:
-        manifest_path = Path(args.manifest)
-    elif len(csv_paths) == 1:
-        manifest_path = _default_manifest_path(csv_paths[0])
-    else:
-        # The hidden `.<csv>.elections` default would silently bind to
-        # one of N files; we'd rather force an explicit choice than guess.
-        emit_line(
-            "taxjson-corp-actions: error: --manifest is required when multiple input files are given "
-            "(the default hidden manifest is per-file and can't safely cover "
-            "multiple CSVs).",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-
-    extractor = EXTRACTORS[args.brokerage_id]
-    # Only override the extractor's own default account label when
-    # the user explicitly passed --account-name. Mirrors the same
-    # change made to taxjson-brokerage so a forgotten flag doesn't
-    # clobber a meaningful default with the literal string 'default'.
-    from taxjson.lib.brokerages.base import BrokerageParseError
-    renames = None
-    if args.ticker_map and Path(args.ticker_map).exists():
-        try:
-            renames = map_renames(Path(args.ticker_map))
-        except (OSError, ValueError) as e:
-            emit_line(f"taxjson-corp-actions: error: {args.ticker_map}: {e}",
-                      file=sys.stderr)
-            raise SystemExit(2)
-    try:
-        events = extract_events(extractor, csv_paths, args.account_name,
-                                renames=renames,
-                                symbol_codes=args.symbol_codes)
-    except BrokerageParseError as e:
-        emit_line(f"taxjson-corp-actions: error: {e}", file=sys.stderr)
-        raise SystemExit(2)
-    # One event per id across the account's broker accounts (overlapping
-    # statements kept once; a second broker account's holding added).
-    events = combine_broker_copies(events)
+    events, reads = _read_events(args, csv_paths)
 
     if args.list_only:
+        # A live exact Doc: each line printed when it is added, as the
+        # print() it replaces printed it.
+        d = _out.Doc(exact=True, width_=0, live=True)
         for ev in events:
-            print(f"{ev.event_id}  {ev.summary()}")
+            d.line(f"{ev.event_id}  {ev.summary()}")
         return
 
     if not events:
@@ -731,35 +559,9 @@ def main():
     missing = [ev for ev in missing if ev.event_id not in not_asked]
 
     if missing:
-        if args.no_input or not sys.stdin.isatty():
-            reason = ("--no-input" if args.no_input
-                      else "no terminal to answer on")
-            _out.error(
-                f"{len(missing)} corp-action event(s) need an election "
-                f"— not asked: {reason}", prog="taxjson-corp-actions",
-                details=[f"- {ev.event_id}: {ev.summary()}"
-                         for ev in missing]
-                + [f"Answer at a terminal (`tjs run`), or set each "
-                   f"with `tjs elect ACCOUNT --set EVENT_ID=ELECTION`; "
-                   f"the elections are saved in {shown}."])
-            if args.pending_json:
-                doc = _pending_doc(missing, manifest_path, args.country,
-                                   sheltered=args.sheltered)
-                Path(args.pending_json).parent.mkdir(parents=True,
-                                                     exist_ok=True)
-                write_atomic(
-                    Path(args.pending_json),
-                    json.dumps(doc, indent=2, sort_keys=True),
-                    encoding="utf-8")
-                # Named as the run names its work/ files, never by the
-                # absolute path it passes (backlog TJ-0602).
-                emit_line(f"taxjson-corp-actions: note: pending elections "
-                          f"written to "
-                          f"{args.pending_json_shown or args.pending_json}",
-                          file=sys.stderr)
-            raise SystemExit(EXIT_ELECTIONS_REQUIRED)
+        _corp_actions_refuse(args, missing, shown, manifest_path)
 
-        print(
+        _out.put(
             f"\nFound {len(missing)} new corp-action event(s) needing an election.\n"
             f"Decisions will be saved to {shown} for future runs.\n",
             file=sys.stderr,
@@ -773,10 +575,10 @@ def main():
                 # save below) — losing six typed FMVs to a Ctrl-C at
                 # event 7 defeated the whole atomic-manifest design,
                 # and EOF used to print two stacked tracebacks.
-                print(f"\ntaxjson-corp-actions: interrupted — "
-                      f"{shown} keeps the elections answered "
-                      f"so far; rerun to continue with the rest.",
-                      file=sys.stderr)
+                _out.put(f"\ntaxjson-corp-actions: interrupted — "
+                         f"{shown} keeps the elections answered "
+                         f"so far; rerun to continue with the rest.",
+                         file=sys.stderr)
                 raise SystemExit(EXIT_ELECTIONS_REQUIRED)
             # Saved at once (never lose answers), under the lock.
             manifest, _ = _update_or_die(
@@ -788,17 +590,9 @@ def main():
                 # only (backlog TJ-1118).
                 manifest.migrate_legacy(events)
                 apply_auto_defaults(in_scope, manifest, args.country)
-        print(f"\nManifest saved to {shown}\n", file=sys.stderr)
+        _out.put(f"\nManifest saved to {shown}\n", file=sys.stderr)
 
-    fx = None
-    if args.rates:
-        try:
-            fx = rates_converter(Path(args.rates), args.base_currency)
-        except (OSError, ValueError) as e:
-            emit_line(f"taxjson-corp-actions: warning: rates file "
-                      f"{args.rates} unusable ({e}); cross-currency "
-                      f"exchanges are booked in the consideration's "
-                      f"currency.", file=sys.stderr)
+    fx = _corp_actions_rates(args)
     if not_asked:
         emit_line(f"note: {len(not_asked)} other event(s) without an "
                   f"election not asked (only {args.ask_event} was): "
@@ -820,10 +614,264 @@ def main():
     # `tjs audit` names them beside a corporate-action row, as a
     # parsed row names its export (backlog TJ-0359). Not `input_files`,
     # which the export checks read as broker exports of their own.
-    from taxjson.lib.brokerages.base import shown_name
-    out['metadata']['statements'] = [shown_name(p) for p in csv_paths]
+    out['metadata'].update(_statements_meta(csv_paths, reads))
     json.dump(out, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
+
+
+def _corp_actions_parser() -> argparse.ArgumentParser:
+    """corp-actions: the parser, with its brokerage, input, country,
+    manifest, account, rates, currency and decisions-only options."""
+    parser = argparse.ArgumentParser(
+        description=(
+            "Resolve broker corporate-action events into taxjson rows. "
+            "Manages an elections manifest automatically so re-runs are "
+            "deterministic; prompts only when new events appear and a TTY "
+            "is available."
+        )
+    )
+    parser.add_argument(
+        '--brokerage',
+        dest='brokerage_id',
+        required=True,
+        choices=_BROKERAGE_CHOICES,
+        help="Brokerage that produced the statement",
+    )
+    parser.add_argument(
+        'inputs',
+        nargs='+',
+        metavar='input',
+        help=(
+            "Broker statement CSV(s). Multiple files are extracted in "
+            "order and their events concatenated. Use --manifest when "
+            "passing more than one file."
+        ),
+    )
+    add_country_argument(
+        parser, help="Tax jurisdiction whose election rules to apply "
+                     "(required): canada | usa")
+    parser.add_argument(
+        '--manifest',
+        help=(
+            "Path to elections manifest. Defaults to `.<csv>.elections` "
+            "next to the input CSV — hidden by leading dot so it doesn't "
+            "clutter listings."
+        ),
+    )
+    parser.add_argument(
+        '--manifest-shown', metavar='TEXT', default=None,
+        help="How the messages name the manifest (`tjs run` passes "
+             "it as `tjs elect` shows it: relative to the project, "
+             "../inputs/<account>/manifest.json for shared exports); "
+             "default: --manifest as given.",
+    )
+    parser.add_argument(
+        '--account-name',
+        metavar='NAME',
+        default=None,
+        help=(
+            "Account label stamped on every emitted taxjson row (e.g. "
+            "'Margin', 'RRSP', 'TFSA', 'LIRA'). Matches the equivalent "
+            "flag on taxjson-brokerage so corp-action rows pool correctly "
+            "with the broker's other trades for the same account. When "
+            "omitted, the extractor's own DEFAULT_ACCOUNT (e.g. 'IB', "
+            "'Questrade') is kept — previously this defaulted to the "
+            "literal 'default', causing rows from the same security to "
+            "split across two pools when taxjson-brokerage was run "
+            "without --account-name on the same data."
+        ),
+    )
+    parser.add_argument(
+        '--rates', metavar='FILE', default=None,
+        help="Rates file (the conversion stage's `DATE TIME FROM TO RATE` "
+             "lines) used to express a cross-currency exchange's value in "
+             "each leg's own currency at the event date.",
+    )
+    parser.add_argument(
+        '--base-currency', metavar='CUR', default=None,
+        help="The rates file's target (base) currency (default: the "
+             "--country's home currency, CAD or USD).",
+    )
+    parser.add_argument(
+        '--decisions-only', action='store_true',
+        help='Save to the manifest only the elections answered at the '
+             'prompt: never a rekey of old ids or an automatic election '
+             '(a manifest shared by every year, written by no run as a '
+             'side effect)')
+    return parser
+
+
+def _corp_actions_options(parser: argparse.ArgumentParser) -> None:
+    """corp-actions: the parser's ticker.map, spelling, symbol-code,
+    sheltered-account, .tt, single-event, saved-log, listing, no-input
+    and pending-elections options."""
+    parser.add_argument(
+        '--ticker-map', metavar='FILE', default=None,
+        help="The project's ticker.map (`tjs run` passes it): a "
+             "temporary code it already renames is not warned about.",
+    )
+    parser.add_argument(
+        '--spellings-from', metavar='ACCOUNT=FILE', action='append',
+        default=[], help="A parse or corporate-action output of the run "
+        "(`tjs run` passes each): the events' symbol spellings are "
+        "checked with the ones it read before an election is read.")
+    parser.add_argument(
+        '--symbol-codes', metavar='FILE', default=None,
+        help="The account's internal-code record (`tjs run` passes "
+             "work/<acct>_symbol_codes.state): a Questrade chain booked "
+             "under an internal code takes the listing it resolves to.",
+    )
+    parser.add_argument(
+        '--sheltered', action='store_true',
+        help="The account is sheltered (registered): no tax in the "
+             "account depends on an election, which only sets the "
+             "holdings' cost; the holdings still count for the "
+             "superficial-loss / wash-sale rule (`tjs run` passes "
+             "it). See --sheltered-elections.",
+    )
+    parser.add_argument(
+        '--sheltered-elections', choices=SHELTERED_ELECTION_MODES,
+        default=SHELTERED_ELECTIONS_DEFAULT,
+        help="With --sheltered: \"zero\" (the default) books a spin-off "
+             "or merger that has no saved election without asking — a "
+             "spin-off's new shares at $0 cost, the parent keeping its "
+             "cost; a merger's new shares taking the old shares' cost; "
+             "\"ask\" asks as in a taxable account ([settings] "
+             "sheltered_elections).",
+    )
+    parser.add_argument(
+        '--tt', metavar='FILE', action='append', default=[],
+        help="One of the account's .tt files (`tjs run` passes each): "
+             "a spin-off's fraction sold there by hand is its cash in "
+             "lieu booked, not an UNBOOKED warning.",
+    )
+    parser.add_argument(
+        '--ask-event', metavar='ID', default=None,
+        help="Ask only about this event (`tjs elect --redo --event "
+             "ID`): no other event is asked about or elected, and the "
+             "rows of an event that has no election are left out of the "
+             "output (`tjs run` asks about it).",
+    )
+    parser.add_argument(
+        '--saved-log', metavar='FILE', default=None,
+        help="Append each election this run saves (one JSON line: the "
+             "record) to FILE: `tjs elect --redo` reads it to tell "
+             "its own answers from an election another command saved "
+             "meanwhile when it puts the cleared ones back (backlog "
+             "TJ-0955).",
+    )
+    parser.add_argument(
+        '--list', dest='list_only', action='store_true',
+        help="Just print extracted events; don't prompt, don't write, don't emit JSON.",
+    )
+    parser.add_argument(
+        '--no-input', action='store_true',
+        help="Never prompt, even at a TTY — unresolved events exit "
+             f"{EXIT_ELECTIONS_REQUIRED} (see --pending-json).",
+    )
+    parser.add_argument(
+        '--pending-json', metavar='FILE', default=None,
+        help="When elections are required and prompting isn't possible, "
+             "write the pending events (with their options and hints) "
+             "as JSON to FILE for a GUI or `tjs elect --set` to "
+             "resolve.",
+    )
+    parser.add_argument(
+        '--pending-json-shown', metavar='TEXT', default=None,
+        help="How the note names --pending-json (`tjs run` passes it "
+             "relative to the project, work/<account>_pending_elections"
+             ".json); default: --pending-json as given.",
+    )
+
+
+def _corp_actions_check_args(args: argparse.Namespace) -> Tuple[List[Path], Path]:
+    """corp-actions: the base currency (the country's home currency
+    unless given), the inputs and the ticker.map checked, and the
+    manifest's path (required when more than one input is given)."""
+    if not args.base_currency:
+        # Country-blind CAD used to be the default (re-audit A2-1363).
+        from taxjson.lib.country import home_currency
+        args.base_currency = home_currency(args.country)
+
+    csv_paths = [Path(p) for p in args.inputs]
+    missing = [p for p in csv_paths if not p.exists()]
+    if missing:
+        for p in missing:
+            emit_line(f"taxjson-corp-actions: error: input CSV not found: {p}",
+                      file=sys.stderr)
+        raise SystemExit(2)
+    if args.ticker_map and not Path(args.ticker_map).exists():
+        # A named --ticker-map that does not exist is refused, not
+        # silently skipped (re-audit A2-1436).
+        emit_line(f"taxjson-corp-actions: error: no such file: --ticker-map "
+                  f"{args.ticker_map}", file=sys.stderr)
+        raise SystemExit(2)
+
+    if args.manifest:
+        manifest_path = Path(args.manifest)
+    elif len(csv_paths) == 1:
+        manifest_path = _default_manifest_path(csv_paths[0])
+    else:
+        # The hidden `.<csv>.elections` default would silently bind to
+        # one of N files; we'd rather force an explicit choice than guess.
+        emit_line(
+            "taxjson-corp-actions: error: --manifest is required when multiple input files are given "
+            "(the default hidden manifest is per-file and can't safely cover "
+            "multiple CSVs).",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    return csv_paths, manifest_path
+
+
+def _corp_actions_refuse(args: argparse.Namespace, missing: List[CorporateAction], shown: str,
+                         manifest_path: Path) -> None:
+    """corp-actions: the events without an election refused when no one
+    can be asked (--no-input, or no terminal to answer on), the pending
+    elections written to --pending-json first when it names a file."""
+    if args.no_input or not sys.stdin.isatty():
+        reason = ("--no-input" if args.no_input
+                  else "no terminal to answer on")
+        _out.error(
+            f"{len(missing)} corp-action event(s) need an election "
+            f"— not asked: {reason}", prog="taxjson-corp-actions",
+            details=[f"- {ev.event_id}: {ev.summary()}"
+                     for ev in missing]
+            + [f"Answer at a terminal (`tjs run`), or set each "
+               f"with `tjs elect ACCOUNT --set EVENT_ID=ELECTION`; "
+               f"the elections are saved in {shown}."])
+        if args.pending_json:
+            doc = _pending_doc(missing, manifest_path, args.country,
+                               sheltered=args.sheltered)
+            Path(args.pending_json).parent.mkdir(parents=True,
+                                                 exist_ok=True)
+            write_atomic(
+                Path(args.pending_json),
+                json.dumps(doc, indent=2, sort_keys=True),
+                encoding="utf-8")
+            # Named as the run names its work/ files, never by the
+            # absolute path it passes (backlog TJ-0602).
+            emit_line(f"taxjson-corp-actions: note: pending elections "
+                      f"written to "
+                      f"{args.pending_json_shown or args.pending_json}",
+                      file=sys.stderr)
+        raise SystemExit(EXIT_ELECTIONS_REQUIRED)
+
+
+def _corp_actions_rates(args: argparse.Namespace) -> Optional[Callable[..., Optional[float]]]:
+    """corp-actions: the converter of --rates that values a cross-currency
+    exchange in each leg's currency; None without the file, or when it
+    is unusable (said)."""
+    fx = None
+    if args.rates:
+        try:
+            fx = rates_converter(Path(args.rates), args.base_currency)
+        except (OSError, ValueError) as e:
+            emit_line(f"taxjson-corp-actions: warning: rates file "
+                      f"{args.rates} unusable ({e}); cross-currency "
+                      f"exchanges are booked in the consideration's "
+                      f"currency.", file=sys.stderr)
+    return fx
 
 
 if __name__ == '__main__':

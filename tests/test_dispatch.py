@@ -1,4 +1,4 @@
-"""In-process tool dispatch (lib/dispatch.py).
+"""In-process tool dispatch (pipeline/dispatch.py).
 
 The orchestrator's `python -m taxjson.bin.X` commands execute
 IN-PROCESS (frozen-app prerequisite; faster runs). These tests pin the
@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from taxjson.lib.dispatch import run_cmd, tool_module
+from taxjson.pipeline.dispatch import run_cmd, tool_module
 
 
 def _tool(name, *args):

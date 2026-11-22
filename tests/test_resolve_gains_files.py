@@ -116,10 +116,17 @@ class TestSummaryUsesFilingBasis(unittest.TestCase):
             '[settings]\nyear = 2026\ncountry = "canada"\n'
             'base_currency = "CAD"\n[accounts.margin]\ntype = "taxable"\n')
         _work(td, wash=wash)
+        # The record a full run writes (sum refuses books without it:
+        # TJ-4347), never the wash file it would write too.
+        from taxjson.lib import checklist
+        from taxjson.lib.project_layout import read_config
+        from taxjson.pipeline.freshness import package_fingerprint
+        checklist.record_input_fingerprint(root, read_config(root),
+                                           code=package_fingerprint())
         return root
 
     def test_sum_reports_wash_adjusted_numbers(self):
-        from taxjson.bin.taxjson_run import cmd_summary
+        from taxjson.cli.estimate import cmd_summary
         with tempfile.TemporaryDirectory() as td:
             out = self._run(cmd_summary, self._project(td))
             self.assertIn("basis: wash-adjusted", out)
@@ -127,15 +134,24 @@ class TestSummaryUsesFilingBasis(unittest.TestCase):
             self.assertIn("0.00", out)
             self.assertNotIn("-1,500.00", out)
 
-    def test_sum_labels_pre_wash_when_no_wash_files(self):
-        from taxjson.bin.taxjson_run import cmd_summary
+    def test_sum_refuses_pre_wash_gains_of_a_taxable_account(self):
+        # It labelled them "basis: pre-wash" and summed them. A full run
+        # writes every taxable equity account's wash-adjusted gains; with
+        # the plain ones only, an `--account` run left the pass across
+        # accounts behind: refused, as the filing commands refuse it
+        # (TJ-4347).
+        from taxjson.cli.estimate import cmd_summary
         with tempfile.TemporaryDirectory() as td:
-            out = self._run(cmd_summary, self._project(td, wash=False))
-            self.assertIn("basis: pre-wash", out)
-            self.assertIn("-1,500.00", out)
+            with redirect_stdout(io.StringIO()) as out, \
+                    redirect_stderr(io.StringIO()) as err, \
+                    self.assertRaises(SystemExit) as cm:
+                cmd_summary(argparse.Namespace(dir=str(self._project(td, wash=False))))
+            self.assertEqual(out.getvalue() + err.getvalue(), "")
+            self.assertIn("the wash-adjusted gains of margin are not the last full run's",
+                          " ".join(str(cm.exception.code).split()))
 
     def test_list_prefers_wash_inventory_and_names_basis(self):
-        from taxjson.bin.taxjson_run import cmd_positions
+        from taxjson.cli.positions import cmd_positions
         with tempfile.TemporaryDirectory() as td:
             out = self._run(cmd_positions, self._project(td), account=None)
             self.assertIn("basis: wash-adjusted", out)
@@ -148,9 +164,13 @@ class TestSummaryGroupedTables(unittest.TestCase):
     the single-table layout when it doesn't."""
 
     def _run(self, root, **kw):
-        from taxjson.bin.taxjson_run import cmd_summary
+        # The tables over hand-built books: sum's refusal of books no full
+        # run recorded (TJ-4347) is not what these compare.
+        from unittest import mock
+        from taxjson.cli.estimate import cmd_summary
         out = io.StringIO()
-        with redirect_stdout(out), redirect_stderr(io.StringIO()):
+        with redirect_stdout(out), redirect_stderr(io.StringIO()), \
+                mock.patch("taxjson.cli.estimate._refuse_sum_books"):
             cmd_summary(argparse.Namespace(dir=str(root), **kw))
         return out.getvalue()
 
@@ -229,7 +249,7 @@ class TestSummaryTotalColumn(unittest.TestCase):
     """TOTAL = REALIZED + DIVIDEND (the d7fdc1a column) — was untested."""
 
     def test_total_column_arithmetic(self):
-        from taxjson.bin.taxjson_run import cmd_summary
+        from taxjson.cli.estimate import cmd_summary
         gains = {
             "summary": {"year": 2026, "total_gain": 100.0},
             "transactions": [
@@ -253,7 +273,9 @@ class TestSummaryTotalColumn(unittest.TestCase):
             work.mkdir()
             (work / "margin_gains.json").write_text(json.dumps(gains))
             out = io.StringIO()
-            with redirect_stdout(out), redirect_stderr(io.StringIO()):
+            from unittest import mock
+            with redirect_stdout(out), redirect_stderr(io.StringIO()), \
+                    mock.patch("taxjson.cli.estimate._refuse_sum_books"):
                 cmd_summary(argparse.Namespace(dir=str(root)))
         text = out.getvalue()
         row = next(ln for ln in text.splitlines()
@@ -274,7 +296,7 @@ class TestListNegativeFilter(unittest.TestCase):
     split-share stock dividend)."""
 
     def _run(self, root, **kw):
-        from taxjson.bin.taxjson_run import cmd_positions
+        from taxjson.cli.positions import cmd_positions
         out = io.StringIO()
         with redirect_stdout(out), redirect_stderr(io.StringIO()):
             cmd_positions(argparse.Namespace(dir=str(root), **kw))

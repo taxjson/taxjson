@@ -1,0 +1,45 @@
+# The generic importer's conformance fixture (synthetic rows): every target
+# the mapping knows but interest (the Wealthsimple layout's folder has one),
+# a [[classify]] rule and the [extract] patterns.
+[columns]
+date = "Date"
+action = "Transaction type"
+symbol = "Symbol"
+symbol_new = "New Symbol"
+ratio = "Ratio"
+book_value = "Book Value"
+lot_date = "Acquired"
+description = "Description"
+quantity = "Quantity"
+price = "Price"
+amount = "Amount"
+currency = "Currency"
+
+[formats]
+date = "%m/%d/%Y"
+
+[actions]
+"BUY" = "buy"
+"SELL" = "sell"
+"DIV" = "dividend"
+"PIL" = "dividend_in_lieu"
+"FEE" = "fee"
+"NRT" = "tax"
+"SPLIT" = "split"
+"RENAME" = "rename"
+"OPEN" = "opening"
+"TFI" = "transfer_in"
+"TFO" = "transfer_out"
+"ROC" = "roc"
+"ADJ" = "adjust"
+"ASGI" = "assign_buy"
+"ASGO" = "assign_sell"
+"JNL" = "skip"
+
+[[classify]]
+match = "^DRIP"
+target = "buy"
+
+[extract]
+quantity = '([0-9.]+) SHARES'
+price = '@ ([0-9.]+)'

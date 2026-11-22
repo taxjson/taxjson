@@ -1,14 +1,20 @@
 """Shared tt-style trace rendering used by taxjson-gains and taxjson-explain.
 
-Both tools take the per-gain `trace` list produced by core.compute_gains
+Both tools take the per-gain `trace` list produced by compute_gains (engine/)
 (`trace=True`) and need to format it as a box with a header line and a footer
 rule. Keeping the rendering here means the two tools never drift apart.
 """
 
+from __future__ import annotations
+
 from collections.abc import Sequence
 from datetime import datetime
 from itertools import islice
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Union
+
+from taxjson.engine.rows import closed_record, retest_record
+from taxjson.model.result import GainRow, gain_before_denial
+from taxjson.model import money as M
 
 
 class SharedTrace(Sequence):
@@ -31,11 +37,11 @@ class SharedTrace(Sequence):
     def __len__(self) -> int:
         return self.n + len(self.tail)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         yield from islice(self.base, self.n)
         yield from self.tail
 
-    def __getitem__(self, i):
+    def __getitem__(self, i: Union[int, slice]) -> Any:
         if isinstance(i, slice):
             return list(self)[i]
         k = i + len(self) if i < 0 else i
@@ -46,7 +52,7 @@ class SharedTrace(Sequence):
     def append(self, line: str) -> None:
         self.tail.append(line)
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, (list, tuple, SharedTrace)):
             return list(self) == list(other)
         return NotImplemented
@@ -81,14 +87,14 @@ def _denoise(amount) -> float:
     recomputes the engine's value (530.4250000000001) where the saved
     gains file holds 530.425: formatted as is, the trace printed 530.43
     and the wash-sales table 530.42 (re-audit A2-0708)."""
-    return round(float(amount or 0.0), 6)
+    return M.units(float(amount or 0.0), 6)
 
 
 def _fmt_money(amount: float) -> str:
     """Compact accounting-style money: $1,234.56 or -$1,234.56."""
     amount = _denoise(amount)
     sign = '-' if amount < 0 else ''
-    return f"{sign}${abs(amount):,.2f}"
+    return f"{sign}${M.shown(abs(amount), 2):,.2f}"
 
 
 def _fmt_signed_money(amount: float) -> str:
@@ -97,7 +103,7 @@ def _fmt_signed_money(amount: float) -> str:
     if abs(amount) < 0.005:
         return "$0.00"
     sign = '+' if amount > 0 else '-'
-    return f"{sign}${abs(amount):,.2f}"
+    return f"{sign}${M.shown(abs(amount), 2):,.2f}"
 
 
 def align_pipe_lines(lines: List[str]) -> List[str]:
@@ -192,8 +198,9 @@ def _wash_window_rows(txs) -> List[tuple]:
         tag += sheltered
         short += sheltered
 
-        # Running affiliated balance after this tx (the wash test's
-        # running tally, all accounts pooled).
+        # The identical property's running tally as of this tx, in the
+        # loss's units, all accounts pooled (the day-30 holding's own
+        # view: TJ-3295).
         rb = t.get('running_bal')
         rb_str = f"{rb:+.4f}" if rb is not None else "—"
 
@@ -207,10 +214,10 @@ def _wash_window_rows(txs) -> List[tuple]:
         elif abs(acb_sh) < 1e-6:
             acb_str = "—"   # pool empty
         else:
-            acb_str = f"{acb_sh:.4f}"
+            acb_str = f"{M.shown(acb_sh, 4):.4f}"
 
         rows.append((day, t['date'], t.get('account', ''), disp_action(t),
-                     f"{t['qty']:+.4f}", f"{t['price']:.4f}",
+                     f"{t['qty']:+.4f}", f"{M.shown(t['price'], 4):.4f}",
                      rb_str, acb_str, tag, short, key))
     return rows
 
@@ -337,18 +344,46 @@ def _render_wash_window(g: Dict[str, Any]) -> List[str]:
     return out
 
 
-def _render_wash_explanation(g: Dict[str, Any]) -> List[str]:
+def _rules_line(g: Dict[str, Any], rules: Optional[Dict[Any, Dict[Any, str]]], *,
+                own_reps: bool) -> List[str]:
+    """`#   rules: CA-SL-01, CA-SL-09`: the rules the block's decision records
+    name (compute_gains' `rules`, engine/rows RuleTable, keyed by the row's
+    id): the denial's first, then its additions' (`own_reps`: a US block's
+    own replacements' only, a sale over several lots being one id; one
+    closed before the loss under `closed_record`; a retest beside the
+    row's own disallowance under `retest_record`), each once. [] without
+    the table (`tjs audit`, `tjs explain`) or a record."""
+    gid = g.get('id')
+    recs = (rules or {}).get(gid) or {}
+    mine = ({closed_record(r.get('tx_id'))
+             if ('sold_before_loss' in r or 'covered_before_loss' in r) else r.get('tx_id')
+             for r in g.get('wash_replacements') or []}
+            if own_reps else None)
+    own = [gid, retest_record(gid)]
+    keys = own + [k for k in recs if k not in own and (mine is None or k in mine)]
+    names = list(dict.fromkeys(recs[k] for k in keys if k in recs))
+    return ["#   rules: " + ", ".join(names)] if names else []
+
+
+def _render_wash_explanation(g: Dict[str, Any],
+                             rules: Optional[Dict[Any, Dict[Any, str]]] = None) -> List[str]:
     """Render the inline wash-sale explanation that goes inside a gain block.
 
     Pulls from `wash_trigger` (Canada — one trigger lot) or `wash_replacements`
-    (USA — possibly multiple) populated by core.compute_gains. Returns [] when
-    the gain isn't a wash sale.
+    (USA — possibly multiple) populated by compute_gains (engine/). Returns []
+    when the gain isn't a wash sale. With `rules` (the run's table: the
+    trace file's blocks) it ends with the rules its records name
+    (`_rules_line`).
     """
-    raw = g.get('raw_gain', 0.0)
-    dis = g.get('disallowed_amount', 0.0)
+    wt, reps = g.get('wash_trigger'), g.get('wash_replacements')
+    if not wt and not reps:
+        return []
+    v = GainRow(g)                  # its figures (step 6c(6c2))
+    raw = float(gain_before_denial(v) or 0.0)
+    dis = float(v.disallowed_amount or 0.0)
+    perm = float(v.permanently_disallowed or 0.0)
     out: List[str] = []
 
-    wt = g.get('wash_trigger')
     if wt:
         # Canada (CRA superficial-loss rule, ITA 54).
         out.append("# --- SUPERFICIAL LOSS (ITA s.54) ---")
@@ -373,7 +408,7 @@ def _render_wash_explanation(g: Dict[str, Any]) -> List[str]:
                 out.append(
                     f"#     {t.get('date')} {act} "
                     f"{float(t.get('qty') or 0.0):+.4f} @ "
-                    f"{float(t.get('price') or 0.0):.4f}   "
+                    f"{M.shown(float(t.get('price') or 0.0), 4):.4f}   "
                     f"account={t.get('account', '')}{tag}")
         elif 'trigger_date' in wt:
             if wt.get('trigger_affiliated'):
@@ -384,11 +419,10 @@ def _render_wash_explanation(g: Dict[str, Any]) -> List[str]:
                 sheltered = ""
             out.append(
                 f"#   triggered by {wt['trigger_date']} BUY "
-                f"{wt['trigger_qty']:+.4f} @ {wt['trigger_price']:.4f}   "
+                f"{wt['trigger_qty']:+.4f} @ {M.shown(wt['trigger_price'], 4):.4f}   "
                 f"account={wt.get('trigger_account', '')}{sheltered}"
             )
-        perm = float(g.get('permanently_disallowed', 0.0) or 0.0)
-        deferred = float(dis or 0.0) - perm
+        deferred = dis - perm
         if deferred > 0.005:
             if perm > 0.005:
                 # Part permanent: `adjust_*` may be the registered or
@@ -430,16 +464,26 @@ def _render_wash_explanation(g: Dict[str, Any]) -> List[str]:
                        "adds it to their own ACB, s.53(1)(f)) — no ACB "
                        "bump on your return")
             out.append(f"#   PERMANENTLY denied {_fmt_money(perm)}: {why}")
-        return out
+        return out + _rules_line(g, rules, own_reps=False)
 
-    reps = g.get('wash_replacements')
+    out = _render_wash_us(reps, g, perm, dis, raw, out, rules)
+
+    return out
+
+
+def _render_wash_us(reps: Any, g: Dict[str, Any], perm: float, dis: float, raw: float,
+                    out: List[str], rules: Optional[Dict[Any, Dict[Any, str]]]
+                    ) -> List[str]:
+    """_render_wash_explanation, the US (IRC §1091): the heading by the
+    loss's direction, the raw loss and what is disallowed (deferred,
+    permanent or both), each replacement lot, the holding period and
+    the rules line, appended to `out`, which it returns."""
     if reps:
         # USA (IRC §1091). Direction determines:
         #   LONG  loss → replacement is a BUY,  disallowed amount = basis bump
         #   SHORT loss → replacement is a SELL, disallowed amount = proceeds reduction
         direction = g.get('direction', 'LONG')
         is_short = direction == 'SHORT'
-        perm = g.get('permanently_disallowed', 0.0) or 0.0
         all_perm = perm > 0.001 and abs(perm - dis) < 0.01
         side_label = "short" if is_short else ""
         if all_perm:
@@ -480,14 +524,13 @@ def _render_wash_explanation(g: Dict[str, Any]) -> List[str]:
             disallowance = r.get('basis_bump', r.get('proceeds_reduction', 0.0))
             adjust_word = "proceeds cut" if is_short else "basis bump"
             out.append(
-                f"#     - {r['date']} {action_word} {'-' if is_short else '+'}{r['match_qty']:.4f} @ {r['price']:.4f}   "
+                f"#     - {r['date']} {action_word} {'-' if is_short else '+'}{r['match_qty']:.4f} @ {M.shown(r['price'], 4):.4f}   "
                 f"account={r.get('account', '')}   "
                 f"{adjust_word}=+{_fmt_money(disallowance)}{sheltered}"
             )
         if not all_perm and not is_short:
             out.append("#   holding period inherits from loss lot (IRC §1223(3))")
-        return out
-
+        out += _rules_line(g, rules, own_reps=True)
     return out
 
 
@@ -499,12 +542,13 @@ def filing_position_text(g: Dict[str, Any],
     n = g.get('loss_override')
     if not isinstance(n, dict):
         return ''
-    from taxjson.lib.loss_overrides import note_text
+    from taxjson.lib.loss_override_note import note_text
     return note_text(n, country or ('usa' if g.get('term') else 'canada'))
 
 
 def render_gain_block(g: Dict[str, Any], align: bool = True,
-                      manual: bool = False) -> List[str]:
+                      manual: bool = False,
+                      rules: Optional[Dict[Any, Dict[Any, str]]] = None) -> List[str]:
     """Render one gain as a tt-style block: rule, header, trace lines, rule.
 
     The header is two lines:
@@ -521,6 +565,9 @@ def render_gain_block(g: Dict[str, Any], align: bool = True,
     manual_reporting_required): its cost is unknown, so the header shows
     no gain and no holding period (the engine's figures come from a
     zero-cost pool and a 1970 sentinel date — audit R1-165 / S029-22).
+
+    `rules`: the run's rule table (compute_gains' `rules`): a wash-sale
+    block then ends with the rules its records name (the trace file's).
     """
     trace = list(g.get('trace') or [])
     if not trace:
@@ -533,10 +580,11 @@ def render_gain_block(g: Dict[str, Any], align: bool = True,
 
     sym = g.get('symbol', '?')
     date = g.get('date', '?')
-    qty = g.get('qty', 0.0)
-    gain_amt = g.get('gain', 0.0)
-    raw = g.get('raw_gain', gain_amt)
-    dis = g.get('disallowed_amount', 0.0)
+    v = GainRow(g)                  # its figures (step 6c(6c2))
+    qty = float(v.quantity or 0.0)
+    gain_amt = float(v.gain or 0.0)
+    raw = float(gain_before_denial(v) or 0.0)
+    dis = float(v.disallowed_amount or 0.0)
     days = g.get('days_held')
     account = g.get('account', '')
     term = g.get('term')
@@ -546,9 +594,8 @@ def render_gain_block(g: Dict[str, Any], align: bool = True,
     gid = (g.get('id') or '')[:16]
 
     if manual:
-        proceeds = float(g.get('proceeds', 0.0) or 0.0)
         primary = [f"# {sym}", date, f"qty={qty:.4f}",
-                   f"proceeds={_fmt_money(abs(proceeds))}",
+                   f"proceeds={_fmt_money(abs(v.proceeds or 0))}",
                    "MANUAL REPORTING — no purchase in your files (cost "
                    "unknown): gain not computed, not in the gains total"]
         days = None
@@ -571,7 +618,7 @@ def render_gain_block(g: Dict[str, Any], align: bool = True,
     line2 = "#   " + "   ".join(secondary)
 
     body: List[str] = [rule, line1, line2, rule] + trace
-    wash_lines = _render_wash_explanation(g)
+    wash_lines = _render_wash_explanation(g, rules)
     window_lines = _render_wash_window(g)
     if wash_lines:
         body.append("#")
@@ -624,18 +671,18 @@ def render_document_header(
 def render_summary_table(gains: List[Dict[str, Any]]) -> List[str]:
     """Per-symbol summary table — one row per symbol with counts and totals.
 
-    `gains` is the post-year-filter list of gain entries (skips DIVIDEND).
+    `gains` is the post-year-filter list of dispositions, income rows left
+    out by the caller (lib/pipeline `is_disposition`; TJ-2784).
     """
     by_sym: Dict[str, Dict[str, float]] = {}
     for g in gains:
-        if g.get('action') == 'DIVIDEND':
-            continue
         s = g.get('symbol', '')
         row = by_sym.setdefault(s, {'sales': 0, 'qty': 0.0, 'gain': 0.0, 'disallowed': 0.0})
         row['sales'] += 1
-        row['qty'] += float(g.get('qty', 0.0))
-        row['gain'] += float(g.get('gain', 0.0))
-        row['disallowed'] += float(g.get('disallowed_amount', 0.0))
+        v = GainRow(g)
+        row['qty'] += float(v.quantity or 0.0)
+        row['gain'] += float(v.gain or 0.0)
+        row['disallowed'] += float(v.disallowed_amount or 0.0)
 
     if not by_sym:
         return []
@@ -905,16 +952,16 @@ def render_report_block(g: Dict[str, Any], width_: Optional[int] = None,
     if not trace:
         return []
     w = width() if width_ is None else width_
-    gain = _denoise(g.get('gain', 0.0))
-    raw = _denoise(g.get('raw_gain', gain))
-    dis = _denoise(g.get('disallowed_amount', 0.0))
+    v = GainRow(g)                  # its figures (step 6c(6c2))
+    gain = _denoise(v.gain)
+    raw = _denoise(gain_before_denial(v))
+    dis = _denoise(v.disallowed_amount)
     head = " — ".join(str(x) for x in (
         g.get('symbol', '?'), g.get('date', '?'), g.get('account'))
         if x)
-    pairs = [("quantity", fmt_qty(g.get('qty', 0.0)))]
+    pairs = [("quantity", fmt_qty(v.quantity))]
     if manual:
-        pairs.append(("proceeds", fmt_money(abs(float(
-            g.get('proceeds', 0.0) or 0.0)))))
+        pairs.append(("proceeds", fmt_money(abs(v.proceeds or 0))))
         pairs.append(("gain", "not computed — no purchase in your files "
                               "(cost unknown); not in the gains total"))
     else:

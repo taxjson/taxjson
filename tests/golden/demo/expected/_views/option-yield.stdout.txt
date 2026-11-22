@@ -1,0 +1,21 @@
+OPTION YIELD — planning numbers, tax year 2024 (2024-01-01 to 2024-12-31, 366 days)
+Planning numbers, not filing. WIN% = closed at a profit; YIELD = P/L / share cost (* strike notional), annualized.
+CLOSED      SERIES                  ACCOUNT  CUR  SIDE         QTY  HOW   DAYS    PREMIUM     CLOSE      P/L
+------------------------------------------------------------------------------------------------------------
+2024-08-05  KO240920C00065000.US    rrsp     USD  bought call    2  sold    63    -371.30    168.70  -202.60
+2024-12-13  ABCD270219C00045000.US  webull   USD  bought call   10  sold    22  -1,559.75  1,690.00   130.25
+
+OPEN AT 2024-12-31
+OPENED      SERIES                   ACCOUNT  CUR  SIDE          QTY  EXPIRY      DAYS  PREMIUM
+-----------------------------------------------------------------------------------------------
+2024-11-04  SAMPW250117C00030000.US  margin   USD  written call    1  2025-01-17    58   148.95
+
+SUMMARY
+UNDERLYING  CUR  WRITTEN  BOUGHT  RECEIVED      PAID  REALIZED  WIN%  OPEN  SHARES  SHARE COST    YIELD   ANNUAL
+----------------------------------------------------------------------------------------------------------------
+ABCD.US     USD        0      10  1,690.00  1,559.75    130.25  100%     0       0        0.00   4.82%*   4.80%*
+KO.US       USD        0       2    168.70    371.30   -202.60    0%     0       0        0.00  -9.05%*  -9.03%*
+SAMPW.US    USD        1       0    148.95      0.00      0.00     -     1       0        0.00       -*       -*
+
+Realized, USD:  -72.35 on 12 contract(s) closed (10 at a profit: win rate 83%); net cash 76.60
+Yield, USD:     -1.34% on an average strike notional of 5,418.03 (no shares held), -1.33% annualized

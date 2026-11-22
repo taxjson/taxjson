@@ -7,8 +7,11 @@ import tempfile
 import unittest
 from pathlib import Path
 from tax_rules import rule
+from taxjson.rules import ids as R
+from taxjson.lib.json_contract import SCHEMAS
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 _QT_HEADER = ("Transaction Date,Settlement Date,Action,Symbol,Description,"
               "Quantity,Price,Gross Amount,Commission,Net Amount,Currency,"
@@ -51,7 +54,7 @@ def _project(root, year, files, extra_settings=""):
     return root
 
 
-@rule("CA-RPT-08")
+@rule(R.CA_RPT_08)
 class TestHandoff(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -122,6 +125,8 @@ class TestHandoff(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         rep = json.loads(r.stdout)
         self.assertEqual(len(rep["missed"]), 1)
+        # A finding (exit 1) still prints its document, with its number.
+        self.assertEqual(rep["schema_version"], SCHEMAS["handoff"])
 
     def test_sale_reported_twice(self):
         # ABC was sold in 2024 (settled Dec 30); this project re-books
@@ -170,7 +175,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
-@rule("CA-RPT-08")
+@rule(R.CA_RPT_08)
 class TestChecklistStep(unittest.TestCase):
     def _ctx(self, root, settings, out, code=0):
         from datetime import date as _date

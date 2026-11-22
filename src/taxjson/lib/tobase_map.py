@@ -58,6 +58,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
+from taxjson.project.toml_io import decode_toml_bytes, parse_toml
+
 TOBASE_MAP = "tobase.map"
 MASTER_FILE = "interlisted.toml"
 MARKER = "master:"
@@ -123,9 +125,8 @@ def master_path() -> Path:
 
 @lru_cache(maxsize=4)
 def _load(path: str, stamp: Tuple[int, int]) -> Master:
-    from taxjson.lib.tomlcompat import tomllib
     with open(path, "rb") as f:
-        doc = tomllib.load(f)
+        doc = parse_toml(decode_toml_bytes(f.read()))
     return Master(dict(doc.get("meta") or {}),
                   dict(doc.get("security") or {}),
                   dict(doc.get("distinct") or {}))
@@ -628,7 +629,7 @@ def compute_overlay(ticker_text: str, tob: Optional[TobaseFile],
     """The Overlay of `tob` (a parsed tobase.map, or None) over a
     ticker.map's text. `canada`: the project is Canadian (else tobase.map
     is not read and no .V / .TO spelling is added)."""
-    from taxjson.bin.taxjson_ticker_map import _parse_map_text
+    from taxjson.lib.ticker_map_rules import _parse_map_text
     ov = Overlay()
     if not canada:
         if tob is not None and tob.lines:
@@ -870,8 +871,8 @@ def books_symbol_dates(root) -> Dict[str, List[str]]:
     and .tt books in work/ (before ticker.map renames: the same files
     ticker_map_suggest.books_symbols reads); an option counts for its
     underlying."""
-    from taxjson.bin.taxjson_run import _AUDIT_DERIVED_SUFFIXES
-    from taxjson.lib.core import parse_option_underlying
+    from taxjson.lib.project_layout import _AUDIT_DERIVED_SUFFIXES
+    from taxjson.lib.option_symbols import parse_option_underlying
     out: Dict[str, List[str]] = {}
     cache = Path(root) / "work"
     for p in sorted(cache.glob("*.json")) if cache.is_dir() else []:

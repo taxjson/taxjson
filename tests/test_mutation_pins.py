@@ -71,11 +71,12 @@ from contextlib import redirect_stderr
 from pathlib import Path
 
 from taxjson.bin.taxjson_export import _apply_transfer_evidence
-from taxjson.bin.taxjson_ticker_map import TickerMap
-from taxjson.lib.core import TaxTransaction, get_tax_rules
-from taxjson.lib.pipeline import (MANUAL_TRANSFER_DECLARATION,
-                                  _drop_self_cancelling_transfers,
-                                  _net_cross_account_transfers)
+from taxjson.lib.ticker_map_rules import TickerMap
+from taxjson.engine.by_country import get_tax_rules
+from taxjson.model.transaction import TaxTransaction
+from taxjson.lib.pipeline import (_drop_self_cancelling_transfers, _net_cross_account_transfers)
+from taxjson.lib.tt_format import MANUAL_TRANSFER_DECLARATION
+from _support.transfer_shelter_drop import _tx, _drop
 
 
 def run_engine(country, txs, shel=(), **kw):
@@ -283,7 +284,7 @@ class TestBackingOnDayThirtyDefers(unittest.TestCase):
 
 
 class TestPreLossAdjustDatedAfterLossSale(unittest.TestCase):
-    """M6 — _mk_adjust dates a PRE-loss trigger's wash ADJUST at the
+    """M6 — _sl_mk_adjust dates a PRE-loss trigger's wash ADJUST at the
     loss sale + 1 second: the s.53(1)(f) basis bump takes effect AT
     the loss, strictly after the same-timestamp loss sale. Gains on
     sales BETWEEN the trigger and the loss must therefore be computed
@@ -320,13 +321,6 @@ class TestPreLossAdjustDatedAfterLossSale(unittest.TestCase):
 # Pipeline pins — the transfer droppers, tested directly (mirroring
 # tests/test_transfer_handling.py's _tx helper).
 # ============================================================================
-def _tx(action, date, symbol, qty, net=0.0, account='RRSP',
-        currency='CAD', **extra):
-    return TaxTransaction(action=action, date=date, symbol=symbol,
-                          quantity=qty, net_amount=net, account=account,
-                          currency=currency, **extra)
-
-
 class TestTransferPairGapBoundary(unittest.TestCase):
     """M7 — _TRANSFER_PAIR_MAX_GAP_DAYS = 35: legs exactly 35 days
     apart share one segment and net to nothing; 36 days apart they are
@@ -438,15 +432,6 @@ class TestSegmentSpanCapBoundary(unittest.TestCase):
 # guards (declared attestations, restatement events, journal-candidate
 # notes). Stderr is redirected: these paths print NOTEs by design.
 # ============================================================================
-def _drop(shel, main=None):
-    """Run the dropper capturing stderr; returns (out, dropped, err)."""
-    err = io.StringIO()
-    with redirect_stderr(err):
-        out, dropped = _drop_self_cancelling_transfers(
-            shel, main_transactions=main)
-    return out, dropped, err.getvalue()
-
-
 class TestDeclaredPlusFarPairNetsWhenQuiet(unittest.TestCase):
     """M10 — with NO taxable trade near the segment, `near` is False
     and the bless-pad narrowing must stay dormant: a declared June
@@ -966,7 +951,7 @@ class TestRoundSixPins(unittest.TestCase):
     def test_acquired_zero_quantity_raises(self):
         """Mutation ctt-C3: qty 0 must refuse (declares shares you
         HOLD), and comma quantities parse."""
-        from taxjson.bin.taxjson_convert_tt import expand_acquired
+        from taxjson.lib.tt_format import expand_acquired
         with self.assertRaises(ValueError):
             expand_acquired("ACQUIRED 2024-06-03 09:30:00 A.US 0 "
                             "CAD 1 0 ARRIVED 2025-05-09")

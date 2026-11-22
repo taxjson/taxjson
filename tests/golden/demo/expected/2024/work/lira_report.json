@@ -1,0 +1,99 @@
+{
+  "account": "lira",
+  "basis": "pre-wash",
+  "gains": {
+    "manual_rows": [],
+    "option_fees": {
+      "CAD": 0.0
+    },
+    "returns_by_asset": {
+      "Stocks": {
+        "CAD": {
+          "days": [
+            245,
+            316
+          ],
+          "dollars": [
+            -309.9,
+            545.05
+          ],
+          "fee_shares": [
+            100.0,
+            100.0
+          ],
+          "fees": [
+            4.95,
+            4.95
+          ]
+        }
+      }
+    },
+    "tainted_count": 0,
+    "tainted_routed": 0,
+    "ticker_stats": {
+      "TD.TO": {
+        "CAD": {
+          "cap": -309.9,
+          "cost": 8204.95,
+          "div": 204.0,
+          "hold_days": [
+            245
+          ],
+          "opt": 0.0,
+          "pil": 0.0,
+          "proceeds": 7895.05,
+          "trade_count": 1
+        }
+      },
+      "XIU.TO": {
+        "CAD": {
+          "cap": 545.05,
+          "cost": 3200.0,
+          "div": 216.0,
+          "hold_days": [
+            316
+          ],
+          "opt": 0.0,
+          "pil": 0.0,
+          "proceeds": 3745.05,
+          "trade_count": 1
+        }
+      }
+    },
+    "total_fees": {
+      "CAD": 19.8
+    },
+    "total_year": "2024",
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1
+  },
+  "generated_at": "<stamp>",
+  "income": {
+    "interest_paid_totals": {},
+    "interest_totals": {},
+    "missing_amount": [],
+    "ticker_stats": {
+      "TD.TO": {
+        "CAD": {
+          "div": 204.0,
+          "pil": 0.0,
+          "tax": 0.0
+        }
+      },
+      "XIU.TO": {
+        "CAD": {
+          "div": 216.0,
+          "pil": 0.0,
+          "tax": 0.0
+        }
+      }
+    },
+    "total_year": "2024"
+  },
+  "schema_version": 1,
+  "wash": {
+    "count": 0,
+    "total_disallowed": 0
+  },
+  "year": "2024"
+}

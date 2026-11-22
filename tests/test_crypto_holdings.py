@@ -15,9 +15,10 @@ from pathlib import Path
 
 from taxjson.bin.taxjson_export import render_holdings_toml
 from taxjson.lib.dispatch import python_module_argv
-from taxjson.lib.tomlcompat import tomllib
+import tomllib
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 HDR = ("txid,ordertxid,pair,time,type,ordertype,price,cost,fee,vol,margin,"
        "misc,ledgers\n")
 # 0.1 + 0.2 BTC: a float sum of 0.30000000000000004; 1,000,000 ZZC at
@@ -49,7 +50,6 @@ def _cli(root, *a):
                           stdin=subprocess.DEVNULL)
 
 
-@unittest.skipIf(tomllib is None, "reading TOML needs Python 3.11+ or tomli")
 class TestCryptoHoldingsToml(unittest.TestCase):
     def test_run_writes_the_crypto_accounts_holdings_from_its_books(self):
         with tempfile.TemporaryDirectory() as td:

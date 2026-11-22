@@ -1,0 +1,73 @@
+[
+ {
+  "_broker_id": "99900001",
+  "account": "",
+  "amount": 1000.0,
+  "currency": "USD",
+  "date": "2025-05-05",
+  "decl": null,
+  "desc": "Coinbase deposit USD",
+  "internal": "",
+  "kind": "CASHMOVE",
+  "line_where": "sample.csv:5",
+  "origin": "broker",
+  "settle": "2025-05-05",
+  "where": "sample.csv"
+ },
+ {
+  "_broker_id": "99900008",
+  "account": "",
+  "amount": -200.0,
+  "currency": "USD",
+  "date": "2025-07-15",
+  "desc": "Coinbase convert USDC to ETH",
+  "kind": "FLOW",
+  "leg": "trade",
+  "origin": "broker",
+  "settle": "2025-07-15",
+  "where": "sample.csv:12"
+ },
+ {
+  "_broker_id": "99900009",
+  "account": "",
+  "amount": 297.0,
+  "currency": "USD",
+  "date": "2025-07-20",
+  "desc": "Coinbase convert ETH to USDC",
+  "kind": "FLOW",
+  "leg": "trade",
+  "origin": "broker",
+  "settle": "2025-07-20",
+  "where": "sample.csv:13"
+ },
+ {
+  "_broker_id": "99900015",
+  "account": "",
+  "amount": -500.0,
+  "currency": "USD",
+  "date": "2025-10-01",
+  "decl": null,
+  "desc": "Coinbase withdrawal USD",
+  "internal": "",
+  "kind": "CASHMOVE",
+  "line_where": "sample.csv:20",
+  "origin": "broker",
+  "settle": "2025-10-01",
+  "where": "sample.csv"
+ },
+ {
+  "_broker_id": "99900018",
+  "account": "",
+  "date": "2025-10-20",
+  "desc": "Coinbase buy USDC",
+  "from_amt": 680.0,
+  "from_ccy": "CAD",
+  "kind": "FXCONV",
+  "origin": "broker",
+  "settle": "2025-10-20",
+  "to_amt": 500.0,
+  "to_ccy": "USD",
+  "value": null,
+  "where": "sample.csv:22"
+ }
+]

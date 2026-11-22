@@ -4,18 +4,22 @@ tax-logic (src/taxjson/lib/tax_logic.py) is the spec: every statement has
 a stable rule id (CA-... for Canada, US-... for the United States).
 A test says which statements it pins:
 
+    from taxjson.rules import ids as R
     from tax_rules import rule, rule_absent
 
-    @rule("CA-SL-02")                        # Canada: still-held test applies
+    @rule(R.CA_SL_02)                        # Canada: still-held test applies
     def test_rebuy_sold_before_day_30_allows(self): ...
 
-    @rule("CA-SL-02", "CA-SL-01")            # several ids of ONE country
+    @rule(R.CA_SL_02, R.CA_SL_01)            # several ids of ONE country
     def test_...(self): ...
 
-    @rule("CA-SL-02")                        # a partition (dual-country) test:
-    @rule_absent("CA-SL-02", country="usa")  # the SAME book under the US
-    @rule("US-WASH-06")                      # does not apply it, and the US
+    @rule(R.CA_SL_02)                        # a partition (dual-country) test:
+    @rule_absent(R.CA_SL_02, country="usa")  # the SAME book under the US
+    @rule(R.US_WASH_06)                      # does not apply it, and the US
     def test_...(self): ...                  # rule applies instead
+
+The markers take the constants (scripts/check_tax_rules.py check 13);
+at run time they take the id itself, which is each constant's value.
 
 Both markers work on a test method or on a TestCase class (every test_*
 method of the class is marked).

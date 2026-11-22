@@ -1,0 +1,104 @@
+{
+  "account": "rrsp",
+  "basis": "pre-wash",
+  "gains": {
+    "manual_rows": [],
+    "option_fees": {
+      "CAD": 3.51
+    },
+    "returns_by_asset": {
+      "Options": {
+        "CAD": {
+          "days": [
+            63
+          ],
+          "dollars": [
+            -273.51
+          ],
+          "fee_shares": [
+            2.0
+          ],
+          "fees": [
+            1.755
+          ]
+        }
+      },
+      "Stocks": {
+        "CAD": {
+          "days": [
+            205
+          ],
+          "dollars": [
+            321.3
+          ],
+          "fee_shares": [
+            40.0
+          ],
+          "fees": [
+            1.35
+          ]
+        }
+      }
+    },
+    "tainted_count": 0,
+    "tainted_routed": 0,
+    "ticker_stats": {
+      "JNJ.US": {
+        "CAD": {
+          "cap": 321.3,
+          "cost": 8479.35,
+          "div": 131.22,
+          "hold_days": [
+            205
+          ],
+          "opt": 0.0,
+          "pil": 0.0,
+          "proceeds": 8800.65,
+          "trade_count": 1
+        }
+      },
+      "KO.US": {
+        "CAD": {
+          "cap": 0.0,
+          "cost": 501.255,
+          "div": 0.0,
+          "hold_days": [
+            63
+          ],
+          "opt": -273.51,
+          "pil": 0.0,
+          "proceeds": 227.745,
+          "trade_count": 1
+        }
+      }
+    },
+    "total_fees": {
+      "CAD": 7.56
+    },
+    "total_year": "2024",
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1
+  },
+  "generated_at": "<stamp>",
+  "income": {
+    "interest_paid_totals": {},
+    "interest_totals": {},
+    "missing_amount": [],
+    "ticker_stats": {
+      "JNJ.US": {
+        "CAD": {
+          "div": 131.22,
+          "pil": 0.0,
+          "tax": 0.0
+        }
+      }
+    },
+    "total_year": "2024"
+  },
+  "schema_version": 1,
+  "wash": {
+    "count": 0,
+    "total_disallowed": 0
+  },
+  "year": "2024"
+}

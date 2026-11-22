@@ -1,0 +1,30 @@
+TAX ESTIMATE — canada/ON, rates vintage 2024
+ESTIMATE ONLY, not filing numbers: taxable accounts only; [ ] says how an amount was built.
+  Other income                       58,000.00
+  Capital gains (taxable)               347.19  [694.38 realized - 0.00 other losses, x50%]
+  Eligible dividends (grossed)           69.00  [50.00 x1.38]
+  Foreign dividends                     517.05  [FTC 26.93: TAX rows 23.28 + assumed 15% 3.65]
+  Payments in lieu                        0.00
+  Crypto staking (ordinary)              23.56  [no withholding, no FTC]
+
+  Tax with investments                9,872.62  federal 6,620.41 + ON 3,252.21
+  Tax on other income alone           9,633.13
+  => ESTIMATED TAX ON INVESTMENT INCOME: 239.49 CAD  (18.6% of 1,284.99)
+  Net capital losses carried in:  0.00 — no close-year lock before 2024 and none entered: see `tjs carryover`
+
+AMT CHECK — post-2024 minimum tax (20.5% over 173,205.00 exemption)
+  Adjusted taxable income            59,284.99
+  Federal minimum tax                     0.00
+  Federal regular tax                 6,620.41
+  => does not bind                    6,620.41  [headroom]
+
+INSTALMENTS — prior-year option (Mar/Jun/Sep/Dec 15)
+  Required this year                  5,200.00
+  Paid to date                        1,150.00
+  Net instalment interest               211.31
+  => instalments behind               4,050.00  [due with the balance April 30; tjs instalments]
+
+Assumes Canadian dividends (trusts' too) eligible; no interest, FX on cash or slip gains
+! 2 sales with no purchase NOT in these totals, or a short — tjs find-missing-history
+! FX on foreign cash (line 15300): not in the rows; its estimate is NOT RELIABLE — tjs fx-cash
+More: tjs estimate --details (assumptions, 4 note(s)); the return's lines: tjs sum

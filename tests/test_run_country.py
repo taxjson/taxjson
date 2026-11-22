@@ -8,7 +8,7 @@ for jurisdictions with no corp-action rules (US today).
 """
 import unittest
 
-from taxjson.bin.taxjson_run import _normalize_country, _country_has_corp_rules
+from taxjson.pipeline.inputs import _country_has_corp_rules, _normalize_country
 
 
 class TestCountryNormalization(unittest.TestCase):

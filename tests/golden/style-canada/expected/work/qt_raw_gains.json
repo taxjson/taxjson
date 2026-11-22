@@ -1,0 +1,119 @@
+{
+  "by_ticker": {
+    "AAPL.US": {
+      "hold_days": [
+        51,
+        230
+      ],
+      "total_cost": 27009.9,
+      "total_div": 18.0,
+      "total_gain": 62.7,
+      "total_pil": 0.0,
+      "total_proceeds": 27072.6,
+      "trade_count": 2
+    }
+  },
+  "inventory": [
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-12-10",
+      "last_acq_settle": "2024-12-12",
+      "position_start_date": "2024-12-10",
+      "qty": 30.0,
+      "symbol": "SHOP.TO",
+      "total_cost": 2854.95
+    }
+  ],
+  "option_replacement_warnings": [],
+  "summary": {
+    "total_disallowed": 0,
+    "total_fees_by_currency": {
+      "CAD": {
+        "options": 0.0,
+        "stocks": 4.95,
+        "total": 4.95
+      },
+      "USD": {
+        "options": 0.0,
+        "stocks": 19.8,
+        "total": 19.8
+      }
+    },
+    "total_gain": 62.7,
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1
+  },
+  "transactions": [
+    {
+      "account": "qt",
+      "commission": 4.95,
+      "cost": 13504.95,
+      "currency": "USD",
+      "date": "2024-05-10",
+      "date_settle": "2024-05-14",
+      "days_held": 51,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 0.0,
+      "gain": 65.1,
+      "grant": false,
+      "id": "623e3df1278cae9b",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 13570.05,
+      "qty": 75.0,
+      "raw_gain": 65.1,
+      "replacement_lot_ids": [],
+      "symbol": "AAPL.US",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "qt",
+      "commission": 4.95,
+      "cost": 13504.95,
+      "currency": "USD",
+      "date": "2024-11-05",
+      "date_settle": "2024-11-07",
+      "days_held": 230,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 0.0,
+      "gain": -2.4,
+      "grant": false,
+      "id": "e60f629b611be979",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 13502.55,
+      "qty": 75.0,
+      "raw_gain": -2.4,
+      "replacement_lot_ids": [],
+      "symbol": "AAPL.US",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "qt",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "USD",
+      "date": "2024-08-15",
+      "date_settle": "2024-08-15",
+      "dividend": 18.0,
+      "gain": 0.0,
+      "id": "f6c124565acf0ac5",
+      "proceeds": 0.0,
+      "qty": 75.0,
+      "symbol": "AAPL.US",
+      "time": "00:00:00"
+    }
+  ],
+  "wash_sales": []
+}

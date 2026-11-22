@@ -32,6 +32,8 @@ htmlcov/
 # a working directory with these; keep real financial data out of git.
 inputs/
 reports/
+# ...but the reports area's tests (FEATURE_AREAS, tests/test_test_layout.py)
+!/tests/features/reports/
 .taxjson_cache/
 taxjson.toml
 *.tt
@@ -53,3 +55,16 @@ tmp*/
 # The output-style test projects are synthetic fixtures, tracked on purpose.
 !tests/fixtures/style/**
 !tests/fixtures/style/*/inputs/
+
+# The golden ledgers are synthetic books, tracked on purpose (tests/_golden.py).
+!tests/golden/**
+# ...but not what a run inside a book's project leaves there.
+tests/golden/*/project/**/work/
+tests/golden/*/project/**/reports/
+tests/golden/*/project/**/exports/
+tests/golden/*/project/**/crypto_sends.tt
+
+# What the mutation harness writes beside scripts/ (scripts/mutation_audit.py):
+# its report and its saved line trace.
+/mutation_report.txt
+/mutation_trace_*.json

@@ -1,0 +1,9 @@
+{
+  "basis": "wash-adjusted",
+  "currency": "USD",
+  "rows": [],
+  "schema_version": 1,
+  "sheltered_gain": 0.0,
+  "taxable_gain": 0.0,
+  "total_gain": 0.0
+}

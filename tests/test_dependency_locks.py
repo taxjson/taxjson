@@ -21,7 +21,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from test_fix_release_channels import GIT_ENV, REPO, _Repos
+from _support.release_channel_repos import GIT_ENV, REPO, _Repos
 
 _spec = importlib.util.spec_from_file_location(
     "lock_deps", REPO / "scripts" / "lock_deps.py")
@@ -95,8 +95,8 @@ class TestCoverageAcceptedGaps(unittest.TestCase):
                 self.assertTrue(lines[0].startswith(f"ok    {name}.txt"),
                                 lines)
                 self.assertIn("accepted: x86_64-apple-darwin / Python "
-                              "3.10, 3.11, 3.12, 3.13: no cryptography "
-                              "wheel", "\n".join(lines))
+                              "3.12, 3.13: no cryptography wheel",
+                              "\n".join(lines))
                 self.assertFalse([ln for ln in lines
                                   if ln.startswith("GAPS")], lines)
 
@@ -105,7 +105,8 @@ class TestCoverageAcceptedGaps(unittest.TestCase):
         for gaps in (self._gaps(other),
                      self._gaps(plat="aarch64-unknown-linux-gnu")):
             lines, failed = lock_deps.report("all", gaps)
-            self.assertTrue(lines[0].startswith("GAPS  all.txt (optional): 4"),
+            # Two: the platform on Python 3.12 and 3.13.
+            self.assertTrue(lines[0].startswith("GAPS  all.txt (optional): 2"),
                             lines)
             self.assertFalse(failed)          # an optional lock: reported
             self.assertIn("note: the accepted gap", "\n".join(lines))
@@ -179,7 +180,7 @@ class TestCheckCatchesDrift(unittest.TestCase):
 
     def test_hand_edit(self):
         f = self.locks / "core.txt"
-        f.write_text(f.read_text().replace("tomli==", "tomli==9", 1))
+        f.write_text(f.read_text().replace("tzdata==", "tzdata==9", 1))
         self.assertIn("edited by hand", self.problems())
 
     def test_pin_without_hash(self):
@@ -245,8 +246,7 @@ class TestInstallerUsesTheLocks(_Repos):
         self.git(self.dev, "push", "-q", "origin", "main", "--tags")
         self.stub = self.d / "stub"
         self.stub.mkdir()
-        for name in ("python3", "python3.10", "python3.11",
-                     "python3.12", "python3.13"):
+        for name in ("python3", "python3.12", "python3.13"):
             (self.stub / name).write_text(_PY_STUB)
             (self.stub / name).chmod(0o755)
         self.home = self.d / "home"
@@ -286,6 +286,41 @@ class TestInstallerUsesTheLocks(_Repos):
                 self.assertIn(" -e ", c)
                 self.assertNotIn("[", c)
         self.assertFalse(any("--upgrade" in c for c in calls), calls)
+
+    def _old_python(self, folder, version="3.11.9"):
+        """FOLDER/python3*: a Python older than 3.12 (the version check's
+        `-c` fails), first on PATH, hiding the machine's own."""
+        folder.mkdir(exist_ok=True)
+        for name in ("python3", "python3.12", "python3.13"):
+            (folder / name).write_text(
+                "#!/usr/bin/env bash\n"
+                f'case "$1" in -c) exit 1 ;; --version) echo "Python {version}" ;; esac\n')
+            (folder / name).chmod(0o755)
+        return folder
+
+    def test_a_python_older_than_3_12_is_refused(self):
+        old = self._old_python(self.d / "old")
+        r = self.install("--channel", "v0.4.0", ok=False,
+                         PATH=f"{old}:{os.environ['PATH']}")
+        self.assertIn("Python 3.12 or newer is required", r.stderr)
+        self.assertFalse(self.inst.exists(), "refused before anything is made")
+        self.assertEqual(self.installs(), [])
+
+    def test_a_venv_an_older_python_made_is_made_again(self):
+        self.install("--channel", "v0.4.0")
+        vpy = self.inst / "venv" / "bin" / "python"
+        old = self._old_python(self.d / "old", "3.10.12")
+        vpy.write_text((old / "python3").read_text())
+        (self.inst / "venv" / "left-from-3.10").write_text("x")
+        r = self.install("--channel", "v0.4.0")
+        self.assertIn("Python 3.10.12 in ", r.stdout)
+        self.assertIn("is older than 3.12: making it again with Python 3.12.0", r.stdout)
+        self.assertFalse((self.inst / "venv" / "left-from-3.10").exists())
+        self.assertEqual(vpy.read_text(), _PY_STUB)
+        self.assertAllPinned(self.installs())
+        # A venv of 3.12 or newer is kept as it is.
+        r = self.install("--channel", "v0.4.0")
+        self.assertNotIn("making it again", r.stdout)
 
     def test_default_extras(self):
         self.install("--channel", "v0.4.0")

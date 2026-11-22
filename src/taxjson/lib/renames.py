@@ -35,149 +35,33 @@ event gives the date.
 """
 from __future__ import annotations
 
+from taxjson.project.accounts import account_of, accounts_of
+from taxjson.project.settings import settings_of
 from taxjson.lib.stage_msg import emit_line
+from taxjson.lib.rename_decl import (KIND_ANY, LATE_FOLD, SOURCE_IB_CONID,
+                                     SOURCE_MAP, SOURCE_TT, WINDOW_DAYS,
+                                     DatedRename, _days)
+from taxjson.lib.rename_rows import (TICKER_MAP_SOURCE, _g, _option_root,
+                                     rename_events, rename_target)
 
 import re
 import sys
-from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from taxjson.lib import project_layout as _PL
+from taxjson.model import money as M
 
-LATE_FOLD = "fold"
-LATE_SEPARATE = "separate"
-LATE_CHOICES = (LATE_FOLD, LATE_SEPARATE)
-
-# The `source` stamped on a SPLIT row the pipeline books from a dated
-# ticker.map RENAME line.
-TICKER_MAP_SOURCE = "ticker.map"
 
 # Rows that move a position (a late one names the old ticker after its
 # rename).
 _POSITION_ACTIONS = ("BUYSELL", "ASSIGN", "TRANSFER", "OPENING_BALANCE")
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-# Copies of one rename booked on two dates (two brokers) are one event.
-WINDOW_DAYS = 7
-
-
-# Where a dated rename was declared (DatedRename.source, a booked SPLIT
-# row's event_source): a .tt line `RENAME <date> OLD NEW` (the form of
-# record, lib/dated_events), a legacy ticker.map line, or IB's contract
-# id under two symbols (brokerages/ib_extractor).
-SOURCE_TT = "tt"
-SOURCE_MAP = "map"
-SOURCE_IB_CONID = "ib-conid"
-
-
-# The kind of account a .tt RENAME applies to (DatedRename.kind): a
-# security's ticker change never touches a coin, nor a coin's a security
-# (tax-logic CA-CRYPTO-RENAME / US-CRYPTO-RENAME). A legacy ticker.map
-# line has no account: KIND_ANY.
-KIND_ANY = ""
-KIND_SECURITIES = "securities"
-KIND_CRYPTO = "crypto"
-
-
-@dataclass(frozen=True)
-class DatedRename:
-    """One declared dated rename: a .tt `RENAME <date> OLD NEW` line or a
-    legacy ticker.map `RENAME OLD NEW YYYY-MM-DD` line — or, once
-    lib/dated_events.resolve_renames has merged the declarations of one
-    change, the EVENT: its date (the earliest declared), `late` the
-    choice for an account without a line of its own, `lates` each
-    declaring account's own choice, `kind` the accounts it applies to,
-    `also` the other declarations it merged."""
-    old: str
-    new: str
-    date: str
-    late: str = ""          # "", "fold" or "separate"
-    where: str = ""         # "ticker.map:<lineno>" | "inputs/<acct>/<f>.tt:<n>"
-    line: str = ""
-    source: str = SOURCE_MAP    # SOURCE_MAP | SOURCE_TT
-    account: str = ""           # the .tt line's account ('' for the map)
-    kind: str = KIND_ANY        # KIND_ANY | KIND_SECURITIES | KIND_CRYPTO
-    lates: Tuple[Tuple[str, str], ...] = ()     # (account, late) overrides
-    also: Tuple[str, ...] = ()                  # merged declarations' where
-
-    def tt_line(self) -> str:
-        """The declaration as a .tt line (date first)."""
-        return (f"RENAME {self.date} {self.old} {self.new}"
-                + (f" late={self.late}" if self.late else ""))
-
-    def late_for(self, account: str, held: bool = True) -> str:
-        """The late= choice for `account`'s late rows: its own line's
-        when it declared one, else the event's (M4) — the event's only
-        for an account that `held` OLD before the date (its books carry
-        the rename row): the late rows of an account that never held OLD
-        are another security or a broker's late booking only that
-        account can say (second pre-release review, 8)."""
-        own = dict(self.lates)
-        if account in own:
-            return own[account]
-        return self.late if held else ""
-
-    def applies_to(self, kind: str) -> bool:
-        """The event books in an account of `kind` (KIND_ANY: unknown,
-        every event)."""
-        return not kind or not self.kind or self.kind == kind
 
 
 class RenameConflict(ValueError):
     """A dated ticker.map RENAME disagrees with the broker's own event."""
 
 
-def parse_rename_tail(tokens: List[str]) -> Tuple[str, str]:
-    """(date, late) of a dated RENAME line's tokens after `OLD NEW`
-    (`YYYY-MM-DD [late=fold|late=separate]`). Raises ValueError with a
-    one-line reason."""
-    if not tokens:
-        raise ValueError("no date")
-    date = tokens[0]
-    if not _DATE_RE.match(date):
-        raise ValueError(f"the date {date!r} is not YYYY-MM-DD")
-    try:
-        datetime.strptime(date, "%Y-%m-%d")
-    except ValueError:
-        raise ValueError(f"the date {date!r} is not a calendar date") \
-            from None
-    late = ""
-    rest = tokens[1:]
-    if rest:
-        tok = rest[0].lower()
-        if not tok.startswith("late=") or tok[5:] not in LATE_CHOICES:
-            raise ValueError(f"{rest[0]!r} is not late=fold or "
-                             f"late=separate")
-        late = tok[5:]
-        rest = rest[1:]
-    if rest:
-        raise ValueError(f"extra token(s) {rest} — notes go after `#`")
-    return date, late
-
-
 # ----------------------------------------------------------------- rows
-
-def _g(r: Any, k: str, default: Any = "") -> Any:
-    if isinstance(r, dict):
-        v = r.get(k, default)
-    else:
-        v = getattr(r, k, default)
-    return default if v is None else v
-
-
-def _days(a: str, b: str) -> Optional[int]:
-    try:
-        return abs((datetime.strptime(str(a)[:10], "%Y-%m-%d")
-                    - datetime.strptime(str(b)[:10], "%Y-%m-%d")).days)
-    except ValueError:
-        return None
-
-
-def _option_root(sym: str) -> Optional[str]:
-    from taxjson.lib.core import is_option_symbol, parse_option_underlying
-    if sym and is_option_symbol(sym):
-        return parse_option_underlying(sym)
-    return None
 
 
 def names_symbol(sym: str, old: str) -> bool:
@@ -185,96 +69,8 @@ def names_symbol(sym: str, old: str) -> bool:
     return sym == old or _option_root(sym) == old
 
 
-def rename_target(r: Any) -> str:
-    """The new symbol of a SPLIT row that renames ('' otherwise)."""
-    if str(_g(r, "action")).upper() != "SPLIT":
-        return ""
-    new = str(_g(r, "symbol_new") or "").strip()
-    return "" if not new or new == str(_g(r, "symbol")) else new
-
-
-# The words of a rename's `source` (the SOURCE column of `tjs
-# renames`): the stamp a stage writes on the SPLIT row. A source not
-# named here is shown as it is (a broker row's file name: `broker row
-# (<file>)`).
-SOURCE_LABELS: Dict[str, str] = {
-    TICKER_MAP_SOURCE: "ticker.map line",
-    "map": "ticker.map line",
-    "tt": ".tt line",
-    "ib-conid": "detected IB contract id",
-    "map-undated": "legacy undated map",
-    "legacy": "legacy undated map",
-}
 # An undated ticker.map rename (GLOBAL, RENAME without a date).
 UNDATED_SOURCE = "legacy undated map"
-
-
-def row_source(r: Any) -> str:
-    """Where a rename row came from, for the report (SOURCE_LABELS): the
-    row's `event_source` (the stage that booked it) when it names one,
-    else its `source`."""
-    ev = str(_g(r, "event_source") or "")
-    if ev in SOURCE_LABELS:
-        src = str(_g(r, "source") or "")
-        if ev == "tt" and src.lower().endswith(".tt"):
-            return f".tt line ({src})"
-        return SOURCE_LABELS[ev]
-    src = str(_g(r, "source") or "")
-    if src in SOURCE_LABELS:
-        return SOURCE_LABELS[src]
-    if src.lower().endswith(".tt"):
-        return f".tt line ({src})"
-    if _g(r, "corp_event_id"):
-        return "broker corporate action"
-    return f"broker row ({src})" if src else "broker row"
-
-
-def row_source_id(r: Any) -> str:
-    """The machine source of a rename row: "tt", "map", "ib-conid" or
-    "broker" (a broker's own row: a corporate action, a parser's SPLIT)."""
-    ev = str(_g(r, "event_source") or "")
-    if ev:
-        return ev
-    src = str(_g(r, "source") or "")
-    if src == TICKER_MAP_SOURCE:
-        return SOURCE_MAP
-    if src.lower().endswith(".tt"):
-        return SOURCE_TT
-    return "broker"
-
-
-def rename_events(rows: Iterable[Any]) -> List[Dict[str, Any]]:
-    """The rename events in `rows` (dicts or TaxTransactions, any
-    accounts): one per (old, new) with copies within WINDOW_DAYS merged
-    onto the earliest date. Each: date, old, new, ratio, sources,
-    accounts, rows."""
-    evs: List[Dict[str, Any]] = []
-    for r in sorted((r for r in rows if rename_target(r)),
-                    key=lambda r: (str(_g(r, "date")), str(_g(r, "symbol")))):
-        old, new = str(_g(r, "symbol")), rename_target(r)
-        d = str(_g(r, "date"))[:10]
-        for e in evs:
-            gap = _days(e["date"], d)
-            if (e["old"], e["new"]) == (old, new) and gap is not None \
-                    and gap <= WINDOW_DAYS:
-                break
-        else:
-            e = {"date": d, "old": old, "new": new,
-                 "ratio": float(_g(r, "quantity", 0.0) or 0.0),
-                 "sources": [], "source_ids": [], "accounts": [],
-                 "rows": []}
-            evs.append(e)
-        e["rows"].append(r)
-        s = row_source(r)
-        if s not in e["sources"]:
-            e["sources"].append(s)
-        s = row_source_id(r)
-        if s not in e["source_ids"]:
-            e["source_ids"].append(s)
-        a = str(_g(r, "_acct") or _g(r, "account") or "")
-        if a and a not in e["accounts"]:
-            e["accounts"].append(a)
-    return evs
 
 
 def row_stamp(r: Any) -> Tuple[str, str]:
@@ -401,7 +197,7 @@ def matching_lines(dated: Iterable[DatedRename], event: Dict[str, Any],
     """The dated declarations that name `event`: the line's OLD (through
     the stage's undated renames, `mapping`) is the event's old symbol and
     its date is within WINDOW_DAYS of the event's."""
-    from taxjson.bin.taxjson_ticker_map import map_symbol
+    from taxjson.lib.ticker_map_rules import map_symbol
     out = []
     for dr in dated:
         gap = _days(dr.date, event["date"])
@@ -468,8 +264,8 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
     merge, KIND_CRYPTO on the crypto map stage) — a .tt RENAME applies
     only to accounts of its declaring account's kind
     (DatedRename.applies_to). Returns the new list."""
-    from taxjson.bin.taxjson_ticker_map import map_symbol
-    from taxjson.lib.core import TaxTransaction
+    from taxjson.lib.ticker_map_rules import map_symbol
+    from taxjson.model.transaction import TaxTransaction
     stream = stream or sys.stderr
     mapping = mapping or {}
     # Stable: two renames on one date keep their declared order.
@@ -664,14 +460,13 @@ def _load_rows(path: Path) -> List[Dict[str, Any]]:
     an object is a ValueError naming the file (and the row) — such rows
     were dropped and a non-list read as no rows, so the report said
     clean (backlog TJ-0320). A valid empty list is no rows."""
-    from taxjson.lib.json_input import InputFileError, read_work_doc
+    from taxjson.lib.json_input import InputFileError, read_work_doc, rerun_advice
     if not path.exists() and not path.is_symlink():
         return []
     try:
         doc = read_work_doc(path)
     except InputFileError as e:
-        raise ValueError(f"{e} — re-run `tjs run` to rebuild it") \
-            from None
+        raise ValueError(rerun_advice(str(e), " — re-run `tjs run` to rebuild it")) from None
     return list(doc.get("transactions") or [])
 
 
@@ -681,8 +476,8 @@ def _ticker_map(root: Path):
     p = _PL.ticker_map_path(Path(root))
     if not p.exists():
         return None, {}
-    from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
-                                                merge_renames)
+    from taxjson.lib.ticker_map_rules import merge_renames
+    from taxjson.lib.map_file import _parse_map_file
     tmap = _parse_map_file(p)[0]
     try:
         ren = merge_renames(tmap, to_base=True)
@@ -743,17 +538,23 @@ def _assign_costs(rows: List[Dict[str, Any]], country: str = ""
     written put's premium comes out of the cost of the shares it
     delivered, a bought call's cost goes into them. Each option is
     paired with its own share legs as the engines pair them
-    (lib/core _pair_assign_legs) and its premium is the closed
-    contracts' own, oldest first (written, US bought), or its part of
-    the average cost (Canada bought); the legs share it by their units. Sales (a call assigned, a put exercised)
+    (engine/assign _pair_assign_legs, the Canadian books' pro rata among
+    equal strikes of one day included: CA-OPT-08, TJ-2750) and its
+    premium is the closed contracts' own, oldest first (written, US
+    bought), or its part of the average cost (Canada bought); the legs
+    share it by the shares the pairing says each delivered (a leg two
+    assignments share: each one's claim, as the engine's ledger folds it;
+    TJ-3177). Sales (a call assigned, a put exercised)
     change the cost of no shares held: not here. The rename's book cost
     added the delivery at the strike only, 1000 where the books carry
     900 (backlog TJ-0852)."""
     import contextlib
     import io
-    from taxjson.lib.core import (TaxTransaction, _assign_direction,
-                                  _make_assign_underlying_resolver,
-                                  _pair_assign_legs, is_option_symbol)
+    from taxjson.engine.assign import (
+        _assign_direction, _make_assign_underlying_resolver, _pair_assign_legs,
+    )
+    from taxjson.model.transaction import TaxTransaction
+    from taxjson.lib.option_symbols import is_option_symbol
     from taxjson.lib.corporate_timeline import event_sort_key
     fields = TaxTransaction.__dataclass_fields__
     txs: List[Any] = []
@@ -782,7 +583,8 @@ def _assign_costs(rows: List[Dict[str, Any]], country: str = ""
     with contextlib.redirect_stderr(io.StringIO()):
         resolve = _make_assign_underlying_resolver(
             txs, lambda t: t.date, quiet=True)
-        pairs = _pair_assign_legs(txs, lambda _t: True, resolve)
+        pairs = _pair_assign_legs(txs, lambda _t: True, resolve,
+                                  tie_pro_rata=not us)
     by_id = {t.id: t for t in txs}
     # The open contracts per (account, option), oldest first: [contracts
     # (signed), money]. A close takes the premium of the contracts it
@@ -824,7 +626,10 @@ def _assign_costs(rows: List[Dict[str, Any]], country: str = ""
             if t.action != "ASSIGN" or _assign_direction(t) != 1:
                 continue
             legs = [by_id[i] for i in pairs.get(t.id, ()) if i in by_id]
-            units = sum(abs(float(x.quantity or 0.0)) for x in legs)
+            claim = {x.id: pairs.qty.get((t.id, x.id),
+                                         abs(float(x.quantity or 0.0)))
+                     for x in legs}
+            units = sum(claim.values())
             if units < 1e-12:
                 continue
             # A written put (short, closed by +q): its premium off the
@@ -833,8 +638,7 @@ def _assign_costs(rows: List[Dict[str, Any]], country: str = ""
             sign = -1.0 if q > 0 else 1.0
             for x in legs:
                 key = id(row_of[x.id])
-                out[key] = out.get(key, 0.0) + sign * part * abs(
-                    float(x.quantity or 0.0)) / units
+                out[key] = out.get(key, 0.0) + sign * part * claim[x.id] / units
     return out
 
 
@@ -1078,7 +882,7 @@ def _project_country(cfg: Dict[str, Any]) -> str:
     late rows then decide only where both engines agree)."""
     from taxjson.lib.country import CountryError, settings_country
     try:
-        return settings_country(cfg.get("settings"))
+        return settings_country(settings_of(cfg))
     except CountryError:
         return ""
 
@@ -1094,14 +898,14 @@ def _denied_into_cost(root: Path, cfg: Dict[str, Any]
     figure."""
     import json as _json
     from taxjson.lib.report_model import resolve_gains_files
-    accounts = cfg.get("accounts") or {}
+    accounts = accounts_of(cfg)
     out: Dict[str, List[Tuple[str, float]]] = {}
     try:
         files = resolve_gains_files(Path(root) / "work", None) or {}
     except Exception:                                   # noqa: BLE001
         return out
     for acct, f in files.items():
-        if (accounts.get(acct) or {}).get("type") != "taxable":
+        if account_of(accounts, acct).type != "taxable":
             continue
         try:
             doc = _json.loads(Path(f).read_text(encoding="utf-8"))
@@ -1135,9 +939,9 @@ def report(root: Path, cfg: Dict[str, Any],
     # form of record) and legacy dated ticker.map lines, merged as the
     # run merges them (lib/dated_events.resolve_renames).
     from taxjson.lib.dated_events import project_renames
-    dated = project_renames(root, cfg.get("accounts") or {}, tmap)
+    dated = project_renames(root, accounts_of(cfg), tmap)
     rows = _book_rows(root, cfg)
-    base_cur = ((cfg.get("settings") or {}).get("base_currency") or "")
+    base_cur = settings_of(cfg).base_currency or ""
     events = rename_events(rows)
     by_acct: Dict[str, List[Dict[str, Any]]] = {}
     for r in rows:
@@ -1147,7 +951,7 @@ def report(root: Path, cfg: Dict[str, Any],
     for acct, rs in by_acct.items():
         snaps.update(_walk_states(rs, _country,
                                   _assign_costs(rs, _country)))
-    accounts = cfg.get("accounts") or {}
+    accounts = accounts_of(cfg)
     # The view's note only: the late-trade checks (hints=False: the
     # run's, edge-cases') read the gains files mid-run, before the
     # blended pass rebuilds them, and warned they were stale.
@@ -1166,11 +970,11 @@ def report(root: Path, cfg: Dict[str, Any],
                 continue
             carried.append({
                 "account": acct,
-                "sheltered": (accounts.get(acct) or {}).get("type")
+                "sheltered": account_of(accounts, acct).type
                 != "taxable",
-                "qty": round(q, 6),
-                "qty_after": round(q * (e["ratio"] or 1.0), 6),
-                "book_cost": round(c, 2)})
+                "qty": M.units(q, 6),
+                "qty_after": M.units(q * (e["ratio"] or 1.0), 6),
+                "book_cost": M.shown(c, 2)})
         lines = [w for dr in matching_lines(dated, e, ren)
                  for w in (dr.where,) + tuple(dr.also)]
         ids = e.get("source_ids") or []
@@ -1185,7 +989,7 @@ def report(root: Path, cfg: Dict[str, Any],
             "carried": carried, "currency": base_cur,
             # Denied losses on the old symbol by the rename date that
             # the books add to a replacement's cost: not in book_cost.
-            "denied_not_in_cost": round(sum(
+            "denied_not_in_cost": M.shown(sum(
                 a for d, a in denied.get(e["old"], [])
                 if d and d <= e["date"]), 2),
             "late": declared_late(dated, e, ren)})
@@ -1331,7 +1135,7 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
         _hang(d, f"{e['date']}  {e['old']} -> {e['new']}{ratio}", "", "  ")
         for c in e["carried"]:
             cost = ("" if c["sheltered"] else
-                    f"; book cost {c['book_cost']:,.2f} {e['currency']} "
+                    f"; book cost {M.shown(c['book_cost'], 2):,.2f} {e['currency']} "
                     f"carried")
             d.item(f"{c['account']}: held {c['qty']:g} {e['old']} "
                    f"-> {c['qty_after']:g} {e['new']}{cost}", "  ")
@@ -1340,7 +1144,7 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
             # The book cost is the trades' replay: a denied loss the
             # books add to the replacement's cost is not in it (backlog
             # TJ-0357), so it can differ from `tjs list`.
-            _hang(d, f"Book cost is as bought: the {_dn:,.2f} of denied "
+            _hang(d, f"Book cost is as bought: the {M.shown(_dn, 2):,.2f} of denied "
                      f"losses on {e['old']} by {e['date']} is in the "
                      f"replacement shares' cost in the books, not here "
                      f"(`tjs list` shows the adjusted cost).", "  ", "  ")

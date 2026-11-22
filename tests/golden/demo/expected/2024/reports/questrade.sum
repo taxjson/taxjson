@@ -1,0 +1,62 @@
+======================================================================
+ DIAGNOSTICS — questrade  (parser/merge warnings; not part of the tax totals)
+======================================================================
+note: FX: Bank of Canada Valet for <n> dates, Yahoo fallback for 0
+OK: <merged>: 6 transactions validated.
+======================================================================
+
+
+TICKER SUMMARY — CAD, year 2024, sorted by ticker
+
+SYMBOL                                 TOTAL        TOTAL_COST     TOTAL_PROCEED        TOTAL_GAIN          CAP_GAIN          OPT_GAIN          DIVIDEND               PIL   AVG_DAYS
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+AAPL.US                                98.82         36,463.37         36,537.89             74.52             74.52              0.00             24.30              0.00      140.5
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+TOTAL                                  98.82         36,463.37         36,537.89             74.52             74.52              0.00             24.30              0.00      140.5
+
+ASSET: Non-option | CURRENCY: CAD   | TRADES: 2 | YEAR: 2024
+
+Total Realized Gain:                 74.52 CAD
+Average Holding Period:               140.5 Days
+Avg Fee Per Trade:                    6.68 CAD
+Avg Fee Per Share:                  0.0891 CAD
+----------------------------------------------------------------------------------------------------------------
+Positive Trades: 1 | Negative Trades: 1 | Win/Loss: 1.00 | Win Rate: 50.0%
+Average Positive:             87.89 CAD | Average Negative:            -13.37 CAD
+----------------------------------------------------------------------------------------------------------------
+
+CONSOLIDATED TOTALS — CAD, year 2024
+
+TOTAL COST:                         36,463.37 CAD
+TOTAL PROCEEDS:                     36,537.89 CAD
+  (engine sign convention: shorts/written options negated — for Schedule 3 proceeds and ACB use `tjs form-export`)
+------------------------------------------------------
+TOTAL REALIZED NON-OPTION GAIN:         74.52 CAD
+  (shares, units, futures and crypto — Schedule 3 lines: `tjs form-export`)
+TOTAL REALIZED OPTION GAIN:              0.00 CAD
+TOTAL REALIZED GAIN:                    74.52 CAD
+------------------------------------------------------
+TOTAL DIVIDENDS / STAKING:              24.30 CAD
+------------------------------------------------------
+GRAND TOTAL (GAIN+DIV+PIL):             98.82 CAD
+------------------------------------------------------
+TOTAL TRADING FEES PAID:                31.68 CAD
+  (OPTION TRADING FEES):                 0.00 CAD
+
+INCOME SUMMARY — CAD, year 2024, sorted by ticker
+
+SYMBOL                            GROSS DIV              PIL          TAX W/H       NET INCOME
+----------------------------------------------------------------------------------------------
+AAPL.US                               24.30             0.00             0.00            24.30
+----------------------------------------------------------------------------------------------
+SUBTOTAL                              24.30             0.00             0.00            24.30
+CASH INTEREST                                                                             0.00
+----------------------------------------------------------------------------------------------
+TOTAL NET INCOME                                                                         24.30
+
+====================================================================================================
+ HOLDINGS REPORT - open positions at the end of the data (not 2024-12-31 positions; `tjs list --date` gives a date) - Sorted by: ticker
+====================================================================================================
+TICKER          QTY  COST/SHARE    TOTAL COST  CUR
+--------------------------------------------------
+SHOP.TO          30     95.1650       2854.95  CAD

@@ -273,6 +273,65 @@ Parser: `src/taxjson/lib/brokerages/webull.py` — `_HEADER_LABELS`, `_mark_assi
 Sources: [How do I get my monthly statement and trade confirmation?](https://www.webull.ca/help/faq/358-How-do-I-get-my-monthly-statement-and-trade-confirmation) (the Documents menu);
 [Which tax documentation can I expect to receive?](https://www.webull.ca/help/faq/591-Which-tax-documentation-can-I-expect-to-receive) (T5008 and Trading Summary, late February).
 
+## Wealthsimple
+
+**Unverified.** taxjson reads Wealthsimple's activities export with a
+layout it ships, no mapping file of yours needed. The layout was
+written from the export's documented columns and has not been checked
+against a real file yet. It says so itself (`verified = false`), so
+`tjs run` warns once for each account that reads it, again at the end
+of the run, and `tjs parser-check` and `taxjson-detect-brokerage` mark
+it too. Compare the account's totals (trades, income, cash) with your
+statements; if they differ, report it with the export's header row and
+made-up rows of the same shape, never real ones
+([Something not recognised?](#something-not-recognised)). The warning
+goes once a real export has checked the layout.
+
+**Download:** the activities export, as CSV, for all the history the
+account has.
+
+**What taxjson checks:**
+
+- **Found by its header.** A CSV with `activity_type`,
+  `activity_sub_type` and `net_cash_amount` columns is read with the
+  layout, under any file name. A layout of your own that fits the file
+  wins, and a project or user layout named `wealthsimple.toml` replaces
+  the shipped one ([settings.md](settings.md#generic-importer-mapping), `[layout]`).
+- **What it books:** a `Trade` row's `BUY` or `SELL` (its
+  `activity_sub_type`; the same word on another activity type is not a
+  trade), `Dividend` and `Interest`. A `MoneyMovement` deposit or
+  withdrawal (sub-type `EFT`, `E_TRANSFER`, `DEPOSIT`, `WITHDRAWAL` or
+  `CONTRIBUTION`) books nothing and is listed as a cash move; one
+  carrying shares (a transfer in kind: enter it as a `.tt` TRANSFER
+  line) is an `UNBOOKED` warning, as is a `MoneyMovement` of another
+  sub-type and any other activity type that moves cash or shares. The
+  warning names where an edited copy of the layout goes: the layout is
+  `data/layouts/wealthsimple.toml` inside the installed taxjson package
+  (`src/taxjson/data/layouts/` in its source).
+- **The generic importer's checks** apply: the amount must be quantity
+  x price ± the commission, and a sign must agree with its action
+  ([settings.md](settings.md#generic-importer-mapping)).
+- **The plan type.** The `account_type` column (TFSA, RRSP,
+  Non-registered) is checked against the taxjson account's `type`, as a
+  Questrade export's Account Type is: a TFSA's rows in a `type =
+  "taxable"` account, or a non-registered account's in a `type =
+  "sheltered"` one, is an ATTENTION line. A type the check does not
+  know is a note.
+- **One account per folder.** Put each account's export (a TFSA's apart
+  from a non-registered account's) in its own `inputs/<account>/`
+  folder. Exports holding rows of several `account_id`s, in one file
+  or across the folder's files, are booked to the one taxjson account:
+  an ATTENTION line, or a note when the account sets
+  `combined_broker_accounts = true`; refused when one of them is a
+  registered plan and the taxjson account is taxable.
+- **Securities only.** A Wealthsimple Crypto account's export is not
+  read as crypto: coins go in a `crypto = true` account as `.tt` lines.
+
+**Positions report:** none taxjson knows. Type the positions into a
+`[[holding]]` TOML.
+
+Layout: `src/taxjson/data/layouts/wealthsimple.toml` — `activity_sub_type`, `^MoneyMovement$`, `account_type`, `verified = false`; `src/taxjson/lib/brokerages/generic.py` — `BUILTIN_LAYOUTS`, `shipped_layout_hint`, `_units_of`, `_account_cells`, `_say_unverified`; `src/taxjson/lib/brokerages/base.py` — `check_account_plans`, `check_account_plans_across`.
+
 ## Kraken
 
 **Download:** **both** the **Trades** export **and** the **Ledgers**
@@ -406,6 +465,10 @@ File names do not decide which parser reads a CSV. For every CSV in
    header matched and the name suggests another broker, the content
    wins and a note says so.
 
+The parsers, their ids and the spellings `taxjson-brokerage --brokerage`
+accepts are listed once, in `src/taxjson/parsers/registry.py`; the
+detection above is generated from that list.
+
 The run prints one line per file under its account's step:
 
 ```
@@ -438,13 +501,33 @@ mapping, and the generic importer reads it.
 
 - **Where the mapping goes.** A sidecar `<file>.csv.toml` beside the
   CSV (any file name; it wins), or one shared `generic.toml` in the
-  folder for every `generic_<anything>.csv`.
+  folder for every `generic_<anything>.csv`. A mapping with a
+  `[signature]` (two or more of the export's header names) reads any
+  CSV whose header has them, whatever its name: the folder's
+  `generic.toml` for the files beside it, or a layout,
+  `layouts/<name>.toml` in the project or in `~/.config/taxjson/layouts/`,
+  for every account; a sidecar of one line, `[layout] name = "<name>"`,
+  picks a layout by hand (with a `[broker] account` of its own).
+  taxjson ships layouts too ([Wealthsimple](#wealthsimple)), weighed
+  only when none of yours fits the file.
 - **Start from the template**
   [`examples/generic_wealthsimple.toml`](../examples/generic_wealthsimple.toml):
   map your header names in `[columns]` (`date` is the **trade** date),
   the date format in `[formats]`, and each action value to `buy`,
-  `sell`, `dividend`, `dividend_in_lieu`, `tax`, `interest`, `fee` or
-  `skip` in `[actions]`. Set the currency in `[defaults]` if the CSV
+  `sell`, `dividend`, `dividend_in_lieu`, `tax`, `interest`, `fee`,
+  `split` (a `ratio` column holds the ratio, new units per old unit),
+  `rename` (a `symbol_new` column holds the new ticker), `transfer_in`
+  or `transfer_out` (the units; a `book_value` column for a transfer
+  in's stated cost), `opening` (a position held at the start of the
+  data: its units and total cost, a `lot_date` column for when it
+  was bought), `roc` (a return of capital), `adjust` (a cost
+  adjustment) or `skip` in `[actions]`. An action value that varies
+  (`DIVIDEND XEI`, `DIVIDEND ZQQ`) is matched by a `[[classify]]` rule
+  (a regular expression over the action or description cell, naming
+  the target), and a quantity, price, symbol or split ratio the export
+  prints only in its description comes from an `[extract]` pattern
+  (both in [docs/settings.md](settings.md#generic-importer-mapping)).
+  Set the currency in `[defaults]` if the CSV
   has no currency column: there is no implicit USD.
 - **Name the broker.** `[broker] name = "wealthsimple"` parses that
   broker's generic files on their own and gives it its own row in the
@@ -461,10 +544,12 @@ mapping, and the generic importer reads it.
 - **No crypto.** It books securities only; a generic file in a
   `crypto = true` account is refused. Coins go in a crypto account
   through the Kraken or Coinbase export, or `.tt` lines.
-- **No exercise or assignment.** A $0 option close beside a stock
-  trade at the strike is an `ATTENTION` line. Map those rows to `skip`
-  and enter both legs as `.tt` `ASSIGN` lines, so the premium goes into
-  the shares' cost.
+- **An exercise or an assignment is two legs.** Map the option's row
+  and the shares' row to `assign_buy` / `assign_sell` (the leg in or
+  out; docs/settings.md), so the premium goes into the shares' cost or
+  proceeds. A $0 option close beside a stock trade at the strike under
+  other targets is an `ATTENTION` line. A warrant's or a right's exercise
+  is a `.tt` `ASSIGN` line with `exercise_of=`.
 - **Futures need the amount column.** The contract size is never
   guessed.
 

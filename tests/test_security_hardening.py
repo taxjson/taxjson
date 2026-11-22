@@ -8,8 +8,9 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 class TestAccountNameValidation(unittest.TestCase):
@@ -19,7 +20,7 @@ class TestAccountNameValidation(unittest.TestCase):
                 f'[accounts."{name}"]\ntype = "taxable"\n')
 
     def _validate(self, name):
-        from taxjson.bin.taxjson_run import load_config
+        from taxjson.pipeline.config import load_config
         with tempfile.TemporaryDirectory() as td:
             (Path(td) / "taxjson.toml").write_text(self._cfg(name))
             with redirect_stderr(io.StringIO()):
@@ -37,7 +38,7 @@ class TestAccountNameValidation(unittest.TestCase):
 
 class TestOfflineGuard(unittest.TestCase):
     def test_crypto_price_lookup_refuses_when_offline(self):
-        from taxjson.bin import fill_crypto_prices as f
+        from taxjson.lib import crypto_prices as f
         os.environ["TAXJSON_OFFLINE"] = "1"
         try:
             with self.assertRaises(SystemExit):

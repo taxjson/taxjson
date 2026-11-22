@@ -4,34 +4,15 @@ work/checklist_results.json; a plain `tjs checklist` shows the kept
 verdicts (marks applied as they are now) with when they were made and
 what moved since (lib/checklist.save_results, load_results, RunInfo)."""
 import json
-import subprocess
 import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
 
 from taxjson.lib import checklist as cl
-from taxjson.lib.dispatch import python_module_argv
 
-from test_checklist import _ctx, _project
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
-# Every slow sub-command answers cleanly, so the verdicts are stable
-# between a serial and a parallel run.
-OK = {sub: (0, "ok\n", "") for sub in (
-    "sanity", "find-missing-history", "elect", "audit", "option-boundary",
-    "handoff", "reconcile-slips", "form-export", "t1135", "carryover",
-    "fx-cash", "amt", "check-filed", "check-dates", "sum")}
-
-
-def _cli(root, *a):
-    cmd = python_module_argv("taxjson.bin.taxjson_run",
-                             ["-C", str(root), "checklist", *a])
-    return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True,
-                          text=True, stdin=subprocess.DEVNULL,
-                          env={"TAXJSON_WIDTH": "0", "NO_COLOR": "1",
-                               "PATH": "/usr/bin:/bin", "HOME": str(root)})
+from _support.filing_checklist_run_project import _ctx, _project
+from _support.filing_checklist_cli import OK, _cli
 
 
 def _verdicts(results):
@@ -67,6 +48,49 @@ class TestParallel(unittest.TestCase):
     def test_default_jobs_is_at_least_one(self):
         self.assertGreaterEqual(cl.default_jobs(), 1)
         self.assertLessEqual(cl.default_jobs(), 4)
+
+    def test_a_stop_ends_the_queue(self):
+        """No queued check starts once one stops (a check that raises
+        past its own error line, as a Ctrl-C does); the running ones end
+        first (TJ-3205)."""
+        import concurrent.futures as cf
+        import threading
+        import time
+        from unittest import mock
+        started, gate = [], threading.Event()
+
+        def stops(ctx):
+            started.append("a")
+            raise KeyboardInterrupt
+
+        def slow(ctx):
+            started.append("b")
+            gate.wait(5)
+            return cl.Result("b", "done", "")
+
+        def queued(ctx):
+            started.append("c")
+            return cl.Result("c", "done", "")
+        dets = {"zz-a": stops, "zz-b": slow, "zz-c": queued}
+        real_wait = cf.wait
+
+        def late_wait(*a, **kw):
+            # The main thread wakes late, as it can on any Python (CI's
+            # 3.13 did): the stopped check's worker is free to take "c".
+            done = real_wait(*a, **kw)
+            time.sleep(0.2)
+            return done
+        with mock.patch.dict(cl.DETECTORS, dets), mock.patch.object(cl, "SLOW", set(dets)), \
+                mock.patch.object(cl, "step_meta", lambda sid, country: ("", "", "", sid)), \
+                mock.patch.object(cf, "wait", late_wait):
+            timer = threading.Timer(0.5, gate.set)
+            timer.start()
+            t0 = time.monotonic()
+            with self.assertRaises(KeyboardInterrupt):
+                cl._run_detectors(None, ["zz-b", "zz-a", "zz-c"], "canada", None, jobs=2)
+            timer.cancel()
+        self.assertNotIn("c", started)
+        self.assertGreaterEqual(time.monotonic() - t0, 0.4)     # b ended first
 
 
 class TestStore(unittest.TestCase):

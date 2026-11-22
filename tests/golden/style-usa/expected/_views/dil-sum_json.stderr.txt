@@ -1,0 +1,3 @@
+tjs dil-sum: warning: these books are not the clean result of the current inputs
+  - inputs changed since the last full run (added: filed/ (locked years))
+  The figures below may leave sales out or carry default FX; fix and re-run `tjs run` before using them. 2024 is filed (filed/2024.json) and its inputs changed since the last run: `tjs run` here recomputes the year and says whether the filed figures moved (DRIFTED).

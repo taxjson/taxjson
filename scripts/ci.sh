@@ -3,9 +3,11 @@
 # same lint, consistency, PII (generic patterns: no private denylist on a
 # hosted runner) and suite stages for pull requests on the public repo.
 #
-#   scripts/ci.sh            every stage: lint, consistency (release
+#   scripts/ci.sh            every stage: lint, types (mypy strict on the
+#                            typed packages), consistency (release
 #                            files), tax-rules (the spec gate), pii (the
-#                            tree scan), the full suite (an empty HOME,
+#                            tree scan), architecture (the refactor's
+#                            ratchet), the full suite (an empty HOME,
 #                            offline), no-extras (the extras- and
 #                            plugin-sensitive tests as a core install),
 #                            fetch-plugin (the packages/ plugin's own
@@ -132,8 +134,8 @@ if [ "$MODE" = release-edits ]; then
   stage consistency bash scripts/check-consistency.sh
   # shellcheck disable=SC2046
   stage release-edit-tests "${SUITE_ENV[@]}" "${NO_PLUGIN[@]}" TAXJSON_WIDTH=0 "$PY" scripts/run_tests_parallel.py \
-    $(grep -lE 'CHANGELOG|troubleshooting\.md|upgrading\.md|pyproject|__version__|--version|importlib\.metadata|_version\(' tests/test_*.py \
-      | sed 's#^tests/##; s#\.py$##')
+    $(grep -rlE --include='test_*.py' 'CHANGELOG|troubleshooting\.md|upgrading\.md|pyproject|__version__|--version|importlib\.metadata|_version\(' tests \
+      | sed 's#^tests/##; s#\.py$##; s#/#.#g' | sort)
   finish
 fi
 
@@ -142,7 +144,7 @@ fi
 #    imports (F401: 199 had piled up unseen, TJ-0593). An import kept for
 #    a re-export, a side effect or an availability check carries
 #    `# noqa: F401  (why)`. tests.yml's lint job runs the same line
-#    (tests/test_fix_1029_r5_imports.py holds them equal).
+#    (tests/features/repo_checks/test_gate_lints_unused_imports.py holds them equal).
 #    A missing linter FAILS the stage (it used to print 'skipped' and
 #    the gate stayed green; release.sh tags on that). scripts/dev-setup.sh
 #    installs the dev lock's ruff (requirements/dev.txt), the one CI's lint
@@ -159,6 +161,25 @@ else
   printf '\n== lint ==\n   lint: FAILED (ruff is not installed in %s: scripts/dev-setup.sh installs the dev lock, requirements/dev.txt)\n' "$PY"
   FAILED+=("lint")
 fi
+# 1b. Types (PLAN step 8): mypy strict on the packages pyproject.toml's
+#    [tool.mypy] names (model, rules, characterize, engine: the engine
+#    modules its overrides table lists are silenced until typed, a list
+#    tests/test_type_checks.py lets only shrink); tests.yml's lint job
+#    runs the same line (tests/test_type_checks.py). A missing mypy fails
+#    the stage, as a missing ruff does.
+#    A mypy other than the lock's gets a note, as ruff does (TJ-3505).
+if "$PY" -m mypy --version >/dev/null 2>&1; then
+  stage types "$PY" -m mypy
+  MYPY_HERE="$("$PY" -m mypy --version 2>/dev/null | sed -n 's/^mypy \([^ ]*\).*/\1/p')"
+  MYPY_LOCK="$(sed -n 's/^mypy==\([^ ;\\]*\).*/\1/p' requirements/dev.txt 2>/dev/null | head -1)"
+  if [ -n "$MYPY_LOCK" ] && [ "$MYPY_HERE" != "$MYPY_LOCK" ]; then
+    printf '   types: note: mypy %s here, %s in requirements/dev.txt (what CI checks with): scripts/dev-setup.sh installs it\n' \
+      "${MYPY_HERE:-?}" "$MYPY_LOCK"
+  fi
+else
+  printf '\n== types ==\n   types: FAILED (mypy is not installed in %s: scripts/dev-setup.sh installs the dev lock, requirements/dev.txt)\n' "$PY"
+  FAILED+=("types")
+fi
 
 # 2. Release consistency, then the full unit suite.
 stage consistency bash scripts/check-consistency.sh
@@ -168,6 +189,10 @@ stage consistency bash scripts/check-consistency.sh
 stage tax-rules "$PY" scripts/check_tax_rules.py
 # The tree scan covers packages/ (every tracked and untracked file).
 stage pii bash scripts/check-pii.sh
+# The refactor's guard rails: import layers and cycles, ruff's default rules,
+# noqa markers and long functions can shrink, not grow
+# (scripts/check_architecture.py says how to record a change).
+stage architecture "$PY" scripts/check_architecture.py
 # Unwrapped (docs/output-style.md): a phrase a test looks for never
 # depends on where a temp path made a message wrap. The style tests set
 # their own width (tests/_style.py, tests/test_output_style.py).
@@ -187,7 +212,7 @@ stage suite "${SUITE_ENV[@]}" "${NO_PLUGIN[@]}" TAXJSON_WIDTH=0 "$PY" scripts/ru
 stage no-extras bash scripts/ci_no_extras.sh "$PY"
 # The broker-fetch plugin (packages/taxjson-fetch): its own tests, run
 # from the checkout whether or not it is pip-installed here (its
-# tests/_support.py registers the entry point when it is not).
+# tests/_bootstrap.py registers the entry point when it is not).
 stage fetch-plugin "${SUITE_ENV[@]}" PYTHONPATH="$PWD/packages/taxjson-fetch/src${PYTHONPATH:+:$PYTHONPATH}" \
   "$PY" -m unittest discover -s packages/taxjson-fetch/tests -p "test_*.py" -q
 

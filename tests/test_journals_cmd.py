@@ -14,12 +14,13 @@ from datetime import date
 from pathlib import Path
 
 from taxjson.lib import cross_listings as XL
+from taxjson.lib import project_layout as _PL
 from taxjson.lib import journals as J
 from taxjson.lib import out
-from taxjson.lib.symbol_codes import exact_name
 from tax_rules.dual import SRC, projects_both
 from tax_rules.dual import cli as _cli
 from _style import CapturedWidth
+from _support.symbols_journals import _TOML, _leg, _state, _project
 
 
 # Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
@@ -51,46 +52,10 @@ def cli(root, *args, width="0"):
 
 NAME = "QZDOLLAR US DLR CURRENCY ETF UNIT"
 
-_TOML = ('[settings]\ncountry = "canada"\nbase_currency = "CAD"\n'
-         'year = 2025\n[accounts.margin]\ntype = "taxable"\n'
-         '[accounts.tfsa]\ntype = "tfsa"\n')
 _CFG = {"settings": {"country": "canada", "base_currency": "CAD",
                      "year": 2025},
         "accounts": {"margin": {"type": "taxable"},
                      "tfsa": {"type": "tfsa"}}}
-
-
-def _leg(sym, day, qty, name, *, account="margin", broker="rbc_direct",
-         journal=True, ref=""):
-    return XL.Leg(account, broker, sym, day, qty, name=exact_name(name),
-                  raw_name=name, journal=broker if journal else "",
-                  ref=ref)
-
-
-def _state(legs, *, named=(), distinct=(), currency_journals=False):
-    """work/cross_listings.state as the run writes it for `legs`."""
-    names = {}
-    for g in legs:
-        names.setdefault(g.symbol, set()).add(g.name)
-    shown = {g.name: g.raw_name for g in legs}
-    refused = []
-    res = XL.analyze(legs, names, shown, map_named=named,
-                     map_distinct=distinct, base_currency="CAD",
-                     currency_journals=currency_journals, refused=refused)
-    res["refused"] = refused
-    return XL.state_text(res)
-
-
-def _project(td, state, tmap=None, effective=None):
-    root = Path(td)
-    (root / "work").mkdir(parents=True, exist_ok=True)
-    (root / "taxjson.toml").write_text(_TOML)
-    (root / "work" / XL.STATE).write_text(state)
-    if tmap is not None:
-        (root / "ticker.map").write_text(tmap)
-    if effective is not None:
-        (root / "work" / XL.EFFECTIVE_MAP).write_text(effective)
-    return root
 
 
 def _effective(root, state_text, tmap=""):
@@ -133,7 +98,7 @@ class TestSourcesAndStates(unittest.TestCase):
         self.assertEqual(a["found_by"], "RBC journal transfer (J~ ref)")
         self.assertEqual((b["source"], b["state"]), ("rbc-journal", "joined"))
         self.assertEqual(a["line"], "TOBASE QZD.US QZD.TO")
-        self.assertTrue(a["line_at"].startswith(f"work/{XL.EFFECTIVE_MAP}:"))
+        self.assertTrue(a["line_at"].startswith(f"work/{_PL.EFFECTIVE_MAP}:"))
         self.assertIn("DISTINCT QZD.US QZD.TO", a["undo"])
         self.assertIn("TOBASE QZD.US QZD.TO (run)", text)
 
@@ -348,7 +313,7 @@ class TestSourcesAndStates(unittest.TestCase):
 def _rbc(gambits, distinct=False):
     """An RBC export: a fund bought on its USD line, journaled to the CAD
     line (TFR legs, J or J~ reference), later sold there."""
-    from test_fix_rbc import HDR, row
+    from _support.rbc_rows import HDR, row
     body = ('"Activity Export as of Jan 5, 2026 at 8:59:00 am ET"\n\n'
             + HDR + row("March 11, 2025", "Buy", "QZD", NAME, "800", "10",
                         "-8000", "USD", NAME + " UNSOLICITED DA"))
@@ -442,7 +407,7 @@ class TestCommand(unittest.TestCase):
                         {("joined", "ticker.map:1")})
 
     def test_ib_interdepot_joined(self):
-        from test_fix_journal_pairing import _ib_flip
+        from _support.symbols_journal_pairs import _ib_flip
         with tempfile.TemporaryDirectory() as td:
             root = projects_both(Path(td), files=_ib_flip())["canada"]
             self.assertEqual(cli(root, "run", "--no-input").returncode, 0)
@@ -454,7 +419,7 @@ class TestCommand(unittest.TestCase):
                                "joined")])
 
     def test_questrade_brw_joined(self):
-        from test_fix_journal_books import QT_CSV, _rates
+        from _support.qt_gambit_transfers import QT_CSV, _rates
         with tempfile.TemporaryDirectory() as td:
             root = projects_both(Path(td), files={
                 "inputs/margin/questrade.csv": QT_CSV})["canada"]
@@ -553,7 +518,7 @@ class TestRenames(unittest.TestCase):
         self.assertEqual([h["old"] for h in hs], ["QZR.US", "QZV"])
 
     def test_source_labels(self):
-        from taxjson.lib.renames import row_source
+        from taxjson.lib.rename_rows import row_source
         for src, want in (("tt", ".tt line"), ("ib-conid",
                                                 "detected IB contract id"),
                           ("map", "ticker.map line"),

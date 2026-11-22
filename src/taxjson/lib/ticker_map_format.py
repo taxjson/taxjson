@@ -9,7 +9,8 @@ naming its keywords:
   Listings of one security  TOBASE, DISTINCT
   Clean-up                  DELETE
   Dated events              legacy: RENAME with a date, JOURNAL (only when
-                            the file has one; migrate() moves them out)
+                            the file has one; format_map(migrate=True)
+                            moves them out)
   Lookups                   QUOTE, EXTRACT, CRYPTO, T1135, SIMILAR and the
                             market lists (STABLE ... VENUE)
   Retired                   TRADINGVIEW (only when the file has one)
@@ -28,8 +29,9 @@ moved lines, plus the moved lines read back as .tt declarations.
 Rules:
 
 - Within a group the lines keep the user's order (EXTRACT's first match
-  wins, so order can matter); exact duplicates (the same rule and inline
-  note, no comment of their own) are dropped and reported.
+  wins, so order can matter); duplicates (the same rule in any letter
+  case and the same inline note, no comment of their own) are dropped
+  and reported, the first line kept.
 - A rule line is normalised: the keyword upper case, one space between
   fields (EXTRACT keeps `desc | CUR | SYM`), an inline `# note` kept two
   spaces after it. The symbols are left as written.
@@ -232,7 +234,7 @@ def _split_lines(text: str) -> List[str]:
 
 def _accepted(line: str) -> bool:
     """Would taxjson read `line`, alone in a map, without a problem?"""
-    from taxjson.bin.taxjson_ticker_map import _parse_map_text
+    from taxjson.lib.ticker_map_rules import _parse_map_text
     return not _parse_map_text(line + "\n", TICKER_MAP_NAME)[1]
 
 
@@ -275,6 +277,23 @@ def normalise_rule(line: str) -> str:
     if hash_:
         out += "  #" + note.rstrip()
     return out
+
+
+def _duplicate_key(line: str) -> str:
+    """What makes two laid-out rule lines duplicates: the rule in any
+    letter case (ticker.map reads symbols upper case and EXTRACT's words
+    in any case, so `EXTRACT words | CAD | zyab.TO` repeats `... |
+    ZYAB.TO`: backlog TJ-4600), its inline note as written. Two lines
+    whose values differ only in case where case matters (a QUOTE Yahoo
+    symbol, a CRYPTO id) are a problem the parser names, never dropped.
+    A GLOBAL or DISTINCT line whose two symbols differ only in case reads
+    its symbols as written (backlog TJ-4606): its case is kept."""
+    code, hash_, note = line.partition("#")
+    toks = code.split()
+    if (len(toks) == 3 and toks[0].upper() in ("GLOBAL", "DISTINCT")
+            and toks[1] != toks[2] and toks[1].upper() == toks[2].upper()):
+        return " ".join([toks[0].upper(), *toks[1:]]) + hash_ + note
+    return code.upper() + hash_ + note
 
 
 def _rule_group(keyword: str, line: str) -> str:
@@ -367,7 +386,7 @@ def _problems(text: str) -> Tuple[List[str], Dict[int, str], set]:
     """(every problem `tjs run` refuses the map for, {line number:
     the problem} of each line whose rule is not in the map, the line
     numbers a problem or a no-op note starts with)."""
-    from taxjson.bin.taxjson_ticker_map import _parse_map_text
+    from taxjson.lib.ticker_map_rules import _parse_map_text
     dropped: List[str] = []
     _tm, problems, notes = _parse_map_text(text, TICKER_MAP_NAME, dropped)
     at = re.compile(re.escape(TICKER_MAP_NAME) + r":(\d+): ")
@@ -636,9 +655,10 @@ def _render(items: List[Item]) -> str:
 def meaning(text: str) -> tuple:
     """What a map's text means to taxjson: every rename table, DELETE,
     DISTINCT, dated rename (in order, without its line number), lookup
-    and market-list entry (EXTRACT in order), and how many problems,
-    no-op notes and retired lines it has."""
-    from taxjson.bin.taxjson_ticker_map import _parse_map_text
+    and market-list entry (EXTRACT in order), how many problems, no-op
+    notes and retired lines it has, and its case pairs (last: callers
+    index the rest)."""
+    from taxjson.lib.ticker_map_rules import _parse_map_text
     tmap, problems, notes = _parse_map_text(text, TICKER_MAP_NAME)
     side = side_rules_from_text(text, TICKER_MAP_NAME)
     return (tmap.glob, tmap.tobase, tmap.journal, frozenset(tmap.delete),
@@ -651,7 +671,8 @@ def meaning(text: str) -> tuple:
             side.stable, side.splitshare, side.indexopt, side.secfut,
             side.evening,
             side.mult, side.venue, len(problems), len(notes),
-            len(side.problems), len(side.retired))
+            len(side.problems), len(side.retired),
+            tuple(sorted(tmap.case_spellings.items())))
 
 
 def _comment_lines(text: str) -> Counter:
@@ -690,7 +711,7 @@ def _migrate_items(items: List["Item"]
     they were written). A switched-off rule inside another rule's comment
     block (`# JOURNAL A B` directly above a line) is migrated in place
     the same way."""
-    from taxjson.lib.renames import parse_rename_tail
+    from taxjson.lib.rename_decl import parse_rename_tail
     kept: List[Item] = []
     moved: List[Moved] = []
     journals: List[int] = []
@@ -825,14 +846,15 @@ def format_map(text: str, migrate: bool = False) -> FormatResult:
     for it in items:
         # (a line a problem or note names is never dropped: a repeated
         # dated RENAME is booked twice, a no-op line is counted)
+        key = _duplicate_key(it.line)
         if (it.kind == "rule" and not it.above and not it.below
                 and it.lineno not in named):
-            if it.line in seen:
+            if key in seen:
                 dups.append((it.lineno, it.line))
                 continue
-            seen[it.line] = it.lineno
+            seen[key] = it.lineno
         elif it.kind == "rule":
-            seen.setdefault(it.line, it.lineno)
+            seen.setdefault(key, it.lineno)
         kept.append(it)
     new = _render(kept)
     if migrate and (moved or journals or examples):
@@ -904,14 +926,14 @@ def _dated_comment_blocks(text: str) -> List[List[str]]:
 
 def _parse_dated(text: str) -> tuple:
     """The map's dated RENAME declarations in order (the parser's)."""
-    from taxjson.bin.taxjson_ticker_map import _parse_map_text
+    from taxjson.lib.ticker_map_rules import _parse_map_text
     tm = _parse_map_text(text, TICKER_MAP_NAME)[0]
     return tuple((d.old, d.new, d.date, d.late) for d in tm.dated)
 
 
 def _moved_meaning(moved: List[Moved]) -> tuple:
     """The live moved lines read back as .tt RENAME declarations."""
-    from taxjson.bin.taxjson_convert_tt import parse_rename_line
+    from taxjson.lib.tt_format import parse_rename_line
     out = []
     for mv in moved:
         if mv.commented:

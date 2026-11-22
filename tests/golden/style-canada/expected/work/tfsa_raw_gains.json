@@ -1,0 +1,150 @@
+{
+  "by_ticker": {
+    "ENB.TO": {
+      "hold_days": [],
+      "total_cost": 0.0,
+      "total_div": 183.0,
+      "total_gain": 0.0,
+      "total_pil": 0.0,
+      "total_proceeds": 0.0,
+      "trade_count": 0
+    },
+    "RY.TO": {
+      "hold_days": [
+        141
+      ],
+      "total_cost": 13346.6,
+      "total_div": 345.0,
+      "total_gain": 643.45,
+      "total_pil": 0.0,
+      "total_proceeds": 13990.05,
+      "trade_count": 1
+    }
+  },
+  "inventory": [
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-04-22",
+      "last_acq_settle": "2024-04-24",
+      "position_start_date": "2024-01-12",
+      "qty": 50.0,
+      "symbol": "RY.TO",
+      "total_cost": 6673.3
+    },
+    {
+      "currency": "USD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-09-25",
+      "last_acq_settle": "2024-09-25",
+      "position_start_date": "2024-09-25",
+      "qty": 50.0,
+      "symbol": "QZQ.US",
+      "total_cost": 1229.95
+    },
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-11-05",
+      "last_acq_settle": "2024-11-07",
+      "position_start_date": "2024-11-05",
+      "qty": 200.0,
+      "symbol": "ENB.TO",
+      "total_cost": 11009.95
+    }
+  ],
+  "option_replacement_warnings": [],
+  "summary": {
+    "total_disallowed": 0,
+    "total_fees_by_currency": {
+      "CAD": {
+        "options": 0.0,
+        "stocks": 39.8,
+        "total": 39.8
+      },
+      "USD": {
+        "options": 0.0,
+        "stocks": 4.95,
+        "total": 4.95
+      }
+    },
+    "total_gain": 643.45,
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1
+  },
+  "transactions": [
+    {
+      "account": "tfsa",
+      "commission": 0.0,
+      "cost": 13346.6,
+      "currency": "CAD",
+      "date": "2024-09-10",
+      "date_settle": "2024-09-12",
+      "days_held": 141,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 9.95,
+      "gain": 643.45,
+      "grant": false,
+      "id": "3f6fd3bcf2b77291",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 13990.05,
+      "qty": 100.0,
+      "raw_gain": 643.45,
+      "replacement_lot_ids": [],
+      "symbol": "RY.TO",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "tfsa",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "CAD",
+      "date": "2024-03-15",
+      "date_settle": "2024-03-15",
+      "dividend": 138.0,
+      "gain": 0.0,
+      "id": "b877731b3c824fc3",
+      "proceeds": 0.0,
+      "qty": 100.0,
+      "symbol": "RY.TO",
+      "time": "09:30:00"
+    },
+    {
+      "account": "tfsa",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "CAD",
+      "date": "2024-06-15",
+      "date_settle": "2024-06-15",
+      "dividend": 207.0,
+      "gain": 0.0,
+      "id": "b95888a1c44de093",
+      "proceeds": 0.0,
+      "qty": 150.0,
+      "symbol": "RY.TO",
+      "time": "09:30:00"
+    },
+    {
+      "account": "tfsa",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "CAD",
+      "date": "2024-12-20",
+      "date_settle": "2024-12-20",
+      "dividend": 183.0,
+      "gain": 0.0,
+      "id": "467360ce89a93206",
+      "proceeds": 0.0,
+      "qty": 200.0,
+      "symbol": "ENB.TO",
+      "time": "09:30:00"
+    }
+  ],
+  "wash_sales": []
+}

@@ -1,0 +1,5 @@
+NOTE: 1 unmatched TRANSFER row(s) in the --sheltered context kept as custody moves: their shares count as held; none is a purchase or a sale for the loss-denial walk (transfers_as_acquisitions = false).
+warning: sheltered account 'rrsp2' sells 10 S0.TO beyond its recorded balance on 2025-03-26 — missing acquisition history; NOT treated as a §1091 short replacement. Add the missing sheltered buy/transfer rows for exact wash matching.
+warning: S0.TO: the 2025-03-15 loss (A1) has a replacement bought 2025-02-15 in A0 and sold 2025-03-09 at a loss that was itself disallowed — not matched; check this wash sale by hand (§1091).
+warning: S0.TO: the 2025-03-31 loss (A1) has a replacement bought 2025-03-06 in A0 and sold 2025-03-09 at a loss that was itself disallowed — not matched; check this wash sale by hand (§1091).
+note: 2 earlier sale(s) or cover(s) (S0.TO in A1) that a wash sale's disallowed loss turned into a loss were tested for a wash sale of their own, 2 with a part disallowed. Each was tested after the losses already matched, not in the order of the sales (Reg. §1.1091-1), so a replacement a later loss took first stayed with it (US-WASH-22).

@@ -19,9 +19,10 @@ from argparse import Namespace
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
 
-import taxjson.bin.taxjson_run as R
+from taxjson.cli import plan as cli_plan
+from _run_patch import patch_run
+import _paths
 
 
 def _run(cmd, radar, last_loss=None, symbols=("XYZ",)):
@@ -30,7 +31,7 @@ def _run(cmd, radar, last_loss=None, symbols=("XYZ",)):
            last_loss or {})
     buf = StringIO()
     code = 0
-    with patch.object(R, "_wash_class_context", return_value=ctx):
+    with patch_run("_wash_class_context", return_value=ctx):
         try:
             with redirect_stdout(buf):
                 cmd(Namespace(dir=".", symbol=list(symbols), json=False))
@@ -43,7 +44,7 @@ class TestBuyCheckDates(unittest.TestCase):
     def test_violation_does_not_advertise_a_safe_to_buy_date(self):
         # clears_at on a VIOLATION is the SELL-BY deadline. Quoting it
         # as a buy date would invite the rebuy that kills the loss.
-        out, code = _run(R.cmd_buy_check,
+        out, code = _run(cli_plan.cmd_buy_check,
                          {"XYZ.TO": {"category": "VIOLATION",
                                      "clears_at": "2026-09-01"}})
         self.assertEqual(code, 1)
@@ -52,7 +53,7 @@ class TestBuyCheckDates(unittest.TestCase):
         self.assertIn("31 days after", out)
 
     def test_class_takes_the_latest_clearing_date(self):
-        out, _ = _run(R.cmd_buy_check,
+        out, _ = _run(cli_plan.cmd_buy_check,
                       {"XYZ.TO": {"category": "BLOCKED",
                                   "clears_at": "2026-09-01"},
                        "XYZ.US": {"category": "BLOCKED",
@@ -62,14 +63,14 @@ class TestBuyCheckDates(unittest.TestCase):
         self.assertIn("2026-09-20", out)
 
     def test_blank_category_is_not_reported_as_clear(self):
-        out, _ = _run(R.cmd_buy_check, {"XYZ.TO": {"category": ""}})
+        out, _ = _run(cli_plan.cmd_buy_check, {"XYZ.TO": {"category": ""}})
         self.assertNotIn("(CLEAR)", out)
         self.assertIn("SAFE", out)
 
 
 class TestSellCheckScope(unittest.TestCase):
     def test_sheltered_only_holding_is_not_told_to_sell_at_a_loss(self):
-        out, code = _run(R.cmd_sell_check,
+        out, code = _run(cli_plan.cmd_sell_check,
                          {"XYZ.TO": {"category": "CLEAR",
                                      "taxable_qty": 0.0,
                                      "sheltered_qty": 300.0}})
@@ -78,7 +79,7 @@ class TestSellCheckScope(unittest.TestCase):
         self.assertNotIn("safe to sell at a loss", out.lower())
 
     def test_taxable_holding_still_gets_the_clear_advice(self):
-        out, _ = _run(R.cmd_sell_check,
+        out, _ = _run(cli_plan.cmd_sell_check,
                       {"XYZ.TO": {"category": "CLEAR",
                                   "taxable_qty": 100.0,
                                   "sheltered_qty": 0.0}})
@@ -86,7 +87,7 @@ class TestSellCheckScope(unittest.TestCase):
         self.assertIn("30 days", out)
 
     def test_violation_with_sheltered_holding_is_unsafe_not_action(self):
-        out, code = _run(R.cmd_sell_check,
+        out, code = _run(cli_plan.cmd_sell_check,
                          {"XYZ.TO": {"category": "VIOLATION",
                                      "advisory": "sell all 100 by 2026-09-01.",
                                      "taxable_qty": 100.0,
@@ -96,7 +97,7 @@ class TestSellCheckScope(unittest.TestCase):
         self.assertIn("permanently denied", out)
 
     def test_violation_without_sheltered_holding_stays_rescueable(self):
-        out, code = _run(R.cmd_sell_check,
+        out, code = _run(cli_plan.cmd_sell_check,
                          {"XYZ.TO": {"category": "VIOLATION",
                                      "advisory": "sell all 100 by 2026-09-01.",
                                      "taxable_qty": 100.0,
@@ -176,7 +177,7 @@ class TestRootMatcherClasses(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = self._project(tmp)
             with redirect_stderr(StringIO()):
-                radar, canon, _ = R._wash_class_context(
+                radar, canon, _ = cli_plan._wash_class_context(
                     root, root / "work", "t")
         self.assertNotEqual(canon("UNH.TO"), canon("UNH.US"))
         self.assertEqual(canon("OLD.TO"), canon("NEW.TO"))
@@ -184,9 +185,9 @@ class TestRootMatcherClasses(unittest.TestCase):
         # to be one security (only ticker.map joins listings).
         self.assertNotEqual(canon("XYZ.TO"), canon("XYZ.US"))
         # And the verdicts that follow from it.
-        _, m_to, _ = R._class_matches(radar, canon, "UNH.TO")
+        _, m_to, _ = cli_plan._class_matches(radar, canon, "UNH.TO")
         self.assertEqual(set(m_to), {"UNH.TO"})
-        _, m_old, _ = R._class_matches(radar, canon, "OLD.TO")
+        _, m_old, _ = cli_plan._class_matches(radar, canon, "OLD.TO")
         self.assertIn("NEW.TO", m_old)
         self.assertEqual(m_old["NEW.TO"]["category"], "VIOLATION")
 
@@ -199,10 +200,10 @@ class TestRootMatcherClasses(unittest.TestCase):
         prot = {"UNH.US", "UNH.TO"}
         canon = lambda t: (t.strip().upper() if t.strip().upper() in prot  # noqa: E731
                            else t.strip().upper().rsplit(".", 1)[0])
-        _, m, note = R._class_matches(radar, canon, "UNH")
+        _, m, note = cli_plan._class_matches(radar, canon, "UNH")
         self.assertEqual(set(m), prot)
         self.assertIn("separate listings", note)
-        _, m, note = R._class_matches(radar, canon, "UNH.TO")
+        _, m, note = cli_plan._class_matches(radar, canon, "UNH.TO")
         self.assertEqual(set(m), {"UNH.TO"})
         self.assertIsNone(note)
 
@@ -211,12 +212,14 @@ class TestToleranceZero(unittest.TestCase):
     def test_zero_tolerance_is_honoured_not_defaulted(self):
         # `--tolerance 0` means EXACT; `or` coercion silently
         # restored the 1e-4 default.
-        import inspect
-        src = inspect.getsource(R)
-        self.assertNotIn('float(getattr(args, "tolerance", None) or 1e-4)',
-                         src,
-                         "falsy coercion turns --tolerance 0 into the "
-                         "default")
+        code = _paths.REPO / "src" / "taxjson"
+        files = [*(code / "cli").glob("*.py"), *(code / "pipeline").glob("*.py")]
+        self.assertGreater(len(files), 10)
+        for f in files:
+            self.assertNotIn('float(getattr(args, "tolerance", None) or 1e-4)',
+                             f.read_text(encoding="utf-8"),
+                             f"{f.name}: falsy coercion turns --tolerance 0 "
+                             "into the default")
 
 
 if __name__ == "__main__":

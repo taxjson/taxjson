@@ -1,0 +1,201 @@
+{
+  "as_of": "2024-12-31",
+  "base_currency": "CAD",
+  "by_country": {
+    "CRYPTO": {
+      "gain": 670.53,
+      "income": 23.56,
+      "max_cost": 20349.7,
+      "year_end_cost": 6936.7
+    },
+    "USA": {
+      "gain": 546.72,
+      "income": 800.55,
+      "max_cost": 111042.43,
+      "year_end_cost": 25570.99
+    }
+  },
+  "canadian_issuer_symbols": [],
+  "cash_accounts": {
+    "crypto": "CRYPTO"
+  },
+  "cash_ledger_status": "not_computed",
+  "cash_not_counted": [],
+  "cash_unknown_cost": [
+    "USD cash (crypto)"
+  ],
+  "category_review_symbols": [],
+  "classification_conflicts": [],
+  "classification_status": "resolved",
+  "classification_unknown_cost_symbols": [],
+  "classification_unresolved_symbols": [],
+  "crypto_symbols": [
+    "BTC",
+    "ETH",
+    "USD cash"
+  ],
+  "custodians": {},
+  "deferred_wash_not_in_cost": {},
+  "detailed_threshold": 250000.0,
+  "expired_options_held": [],
+  "filing_required": true,
+  "filing_threshold": 100000.0,
+  "foreign_issuer_countries": {},
+  "foreign_issuer_symbols": [],
+  "full_history_wash": true,
+  "futures_symbols": [],
+  "gains_not_given": [],
+  "max_total_cost": 117465.8,
+  "max_total_cost_high": 117465.8,
+  "max_total_cost_high_at_least": 117465.8,
+  "max_total_cost_low": 117465.8,
+  "max_total_date": "2024-04-22",
+  "missing_history_applied": false,
+  "over_threshold_as_counted": true,
+  "properties": [
+    {
+      "category": 2,
+      "category_from": "listing",
+      "country": "USA",
+      "futures": false,
+      "gain": 172.43,
+      "income": 24.3,
+      "max_cost": 72913.37,
+      "symbol": "AAPL.US",
+      "unknown_acb": false,
+      "year_end_cost": 18228.34
+    },
+    {
+      "category": 6,
+      "category_from": "derivative",
+      "country": "USA",
+      "futures": false,
+      "gain": 175.84,
+      "income": 0.0,
+      "max_cost": 2105.66,
+      "symbol": "ABCD270219C00045000.US",
+      "unknown_acb": false,
+      "year_end_cost": 0.0
+    },
+    {
+      "category": 6,
+      "category_from": "crypto",
+      "country": "CRYPTO",
+      "futures": false,
+      "gain": 197.67,
+      "income": 0.0,
+      "max_cost": 13003.34,
+      "symbol": "BTC",
+      "unknown_acb": false,
+      "year_end_cost": 3250.83
+    },
+    {
+      "category": 6,
+      "category_from": "crypto",
+      "country": "CRYPTO",
+      "futures": false,
+      "gain": 472.86,
+      "income": 23.56,
+      "max_cost": 7346.36,
+      "symbol": "ETH",
+      "unknown_acb": false,
+      "year_end_cost": 3685.87
+    },
+    {
+      "category": 2,
+      "category_from": "listing",
+      "country": "USA",
+      "futures": false,
+      "gain": 0.0,
+      "income": 0.0,
+      "max_cost": 946.35,
+      "symbol": "INTC.US",
+      "unknown_acb": false,
+      "year_end_cost": 0.0
+    },
+    {
+      "category": 2,
+      "category_from": "listing",
+      "country": "USA",
+      "futures": false,
+      "gain": 132.3,
+      "income": 101.25,
+      "max_cost": 27001.35,
+      "symbol": "MSFT.US",
+      "unknown_acb": false,
+      "year_end_cost": 0.0
+    },
+    {
+      "category": 2,
+      "category_from": "listing",
+      "country": "USA",
+      "futures": false,
+      "gain": 0.0,
+      "income": 0.0,
+      "max_cost": 1999.35,
+      "symbol": "NVDA.US",
+      "unknown_acb": false,
+      "year_end_cost": 1941.3
+    },
+    {
+      "category": 2,
+      "category_from": "listing",
+      "country": "USA",
+      "futures": false,
+      "gain": 0.0,
+      "income": 675.0,
+      "max_cost": 5401.35,
+      "symbol": "PARNT.US",
+      "unknown_acb": false,
+      "year_end_cost": 5401.35
+    },
+    {
+      "category": 2,
+      "category_from": "listing",
+      "country": "USA",
+      "futures": false,
+      "gain": 66.15,
+      "income": 0.0,
+      "max_cost": 675.0,
+      "symbol": "SPNCO.US",
+      "unknown_acb": false,
+      "year_end_cost": 0.0
+    },
+    {
+      "cash": true,
+      "cash_account": "crypto",
+      "cash_why": "webull/webull: taxjson does not read webull's conversions, deposits or withdrawals from its export, and this account moves USD in 2024 \u2014 write each as a .tt line (FXCONV, CASHMOVE) in webull, then `CASHBOOK webull complete` to say they are all there",
+      "category": 1,
+      "category_from": "cash",
+      "country": "CRYPTO",
+      "currency": "USD",
+      "futures": false,
+      "gain": 0.0,
+      "income": 0.0,
+      "max_cost": 0.0,
+      "symbol": "USD cash",
+      "unknown_acb": true,
+      "year_end_cost": 0.0
+    }
+  ],
+  "review_symbols": [
+    "BTC",
+    "ETH",
+    "USD cash"
+  ],
+  "schema_version": 1,
+  "scope": "books_only",
+  "scope_note": "on these books only: specified foreign property held outside them (a foreign bank account or cash held elsewhere, certificate shares, a foreign rental) is not counted and adds to the same threshold",
+  "short_only_symbols": [
+    "SAMPW250117C00030000.US"
+  ],
+  "simplified_method_available": null,
+  "tax_date_basis": "settle",
+  "total_settled": false,
+  "unknown_acb_symbols": [
+    "USD cash"
+  ],
+  "unused_overrides": [],
+  "year": 2024,
+  "year_complete": true
+}

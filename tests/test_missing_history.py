@@ -7,7 +7,7 @@ are reported as not-relevant so the user can ignore them.
 """
 import unittest
 
-from taxjson.lib.core import TaxTransaction
+from taxjson.model.transaction import TaxTransaction
 from taxjson.lib.missing_history import (
     detect_missing_history, assess_tax_year_relevance, detect_zero_basis_acquisitions,
     detect_corp_action_links,

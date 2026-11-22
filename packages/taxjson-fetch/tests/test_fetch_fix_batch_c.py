@@ -4,7 +4,7 @@ RuntimeError `tjs fetch` catches, never an AttributeError traceback.
 Synthetic tokens and account numbers only; nothing touches the network.
 """
 # First: puts the plugin, the core and its test helpers on sys.path.
-import _support  # noqa: F401
+import _bootstrap  # noqa: F401
 import unittest
 
 from taxjson_fetch import api

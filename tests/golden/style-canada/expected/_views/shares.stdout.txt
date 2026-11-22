@@ -1,0 +1,19 @@
+SHARES HELD — combined across crypto, margin, qt, rrsp, tfsa
+As of the books' latest data (2024-12-31), basis: wash-adjusted, after ticker.map; no futures, no option contracts. COST = combined book cost in CAD.
+SYMBOL     SHARES       COST  ACCOUNTS
+-------------------------------------------------
+AAPL.US        75  18,225.00  rrsp 75
+BTC          0.05   3,250.83  crypto 0.05
+ENB.TO        200  11,009.95  tfsa 200
+ETH        0.6552   3,197.81  crypto 0.6552
+GHOSTQ.TO     -40    -590.05  margin -40
+NVDA.US        10   1,941.30  margin 10
+OLDCO.US      -50  -1,348.65  margin -50
+PARN.US       100   6,751.35  margin 100
+QZQ.US        150   5,105.63  margin 100, tfsa 50
+RY.TO          50   6,673.30  tfsa 50
+SAMPA.TO      100   3,929.85  margin 100
+SHOP.TO        60   5,709.90  qt 30, rrsp 30
+SPNC.US        10     337.50  margin 10
+
+13 symbol(s).

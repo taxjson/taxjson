@@ -101,5 +101,30 @@ class TestReadSample(unittest.TestCase):
             os.remove(path)
 
 
+class TestThePromptTeachesTheTemplate(unittest.TestCase):
+    """TJ-2320: a draft takes the parse template's shape (read, classify,
+    build, finish), never a `parse_file` override, and the example sent
+    is a converted parser."""
+
+    def test_the_system_prompt_names_the_phases(self):
+        from taxjson.bin import taxjson_generate_parser as g
+        text = g._SYSTEM_TEMPLATE
+        for phase in ("`read(path)`", "`classify(row)`", "`build(row)`",
+                      "`finish(transactions, path)`", "NEVER override `parse_file`"):
+            self.assertIn(phase, text)
+        self.assertNotIn("Implement `parse_file", text)
+        for block in ("{protocol_source}", "{base_source}", "{example_source}"):
+            self.assertIn(block, text)
+
+    def test_the_example_is_a_parser_on_the_template(self):
+        from taxjson.bin import taxjson_generate_parser as g
+        example = g._EXAMPLE_PATH.read_text(encoding='utf-8')
+        self.assertNotIn("def parse_file", example)
+        for phase in ("def read", "def classify", "def build", "def finish"):
+            self.assertIn(phase, example)
+        self.assertNotIn("sibling", example)         # no machinery one broker alone needs
+        self.assertTrue(g._PROTOCOL_PATH.exists() and g._BASE_PATH.exists())
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -18,7 +18,8 @@ from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
-from taxjson.lib.core import CanadaTaxRules, TaxTransaction
+from taxjson.engine.ca.taxrules import CanadaTaxRules
+from taxjson.model.transaction import TaxTransaction
 from taxjson.lib.missing_history import (
     detect_missing_history,
     detect_superficial_loss_warnings,
@@ -28,6 +29,7 @@ from taxjson.lib.missing_history import (
     synthesize_openings,
 )
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 
 def _tx(action, date, symbol, qty, price=0.0, net=0.0, account='Margin', currency='USD'):
@@ -220,7 +222,7 @@ class TestSynthesisAndTaint(unittest.TestCase):
             txs, _ = synthesize_openings(txs, phantoms)
         return CanadaTaxRules().compute_gains(txs, detect_wash_sales=False)
 
-    @rule("CA-ACB-11")
+    @rule(R.CA_ACB_11)
     def test_case1_simple_phantom_sell_tainted(self):
         """Case #1: phantom sell → gain record marked tainted."""
         txs = [
@@ -544,7 +546,7 @@ class TestWalkOrderingMatchesEngine(unittest.TestCase):
     pre-split units while the engine replayed it post-split."""
 
     def test_evening_stamped_split_with_same_day_sale(self):
-        from taxjson.lib.core import CanadaTaxRules
+        from taxjson.engine.ca.taxrules import CanadaTaxRules
         from taxjson.lib.missing_history import synthesize_openings
         txs = [
             _tx('BUYSELL', '2026-03-05', 'X.US', 10, 10.0, 100.0),

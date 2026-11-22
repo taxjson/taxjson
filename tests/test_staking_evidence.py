@@ -11,11 +11,14 @@ import unittest
 from unittest.mock import patch
 from decimal import Decimal
 
+import _hermetic  # noqa: F401  (the synthetic HOME before taxjson's caches read it: TJ-3857)
 from taxjson.lib.brokerages.coinbase import CoinbaseBrokerage
 from taxjson.lib.brokerages.kraken import KrakenBrokerage
 from taxjson.lib.brokerages.schema import validate_transactions
-from taxjson.lib.core import TaxTransaction, coerce_transaction_row
+from taxjson.model.transaction import TaxTransaction
+from taxjson.lib.tx_load import coerce_transaction_row
 from taxjson.bin import fill_crypto_prices as filler
+from taxjson.lib import crypto_prices
 from taxjson.bin.taxjson_convert_currency import convert_transaction
 from taxjson.bin import taxjson_convert_currency as converter
 
@@ -207,9 +210,9 @@ class TestRewardEvidencePipeline(unittest.TestCase):
         rows = kraken(gross='', feeusd='')
         original = copy.deepcopy(income(rows)['staking_reward'])
         output = io.StringIO()
-        with patch.object(filler, 'load_cache', return_value={'QZC-2025-07-16': 150}), \
-                patch.object(filler, 'yahoo_id', side_effect=lambda s: s), \
-                patch.object(filler, 'ids_seen_in_cache', return_value=[]), \
+        with patch.object(crypto_prices, 'load_cache', return_value={'QZC-2025-07-16': 150}), \
+                patch.object(crypto_prices, 'yahoo_id', side_effect=lambda s: s), \
+                patch.object(crypto_prices, 'ids_seen_in_cache', return_value=[]), \
                 patch('sys.stdin', io.StringIO(json.dumps({'transactions': rows}))), \
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
             filler._fill(SimpleNamespace(input=None))

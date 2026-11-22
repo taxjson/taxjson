@@ -1,0 +1,36 @@
+SLIP AUDIT — tax year 2024, CAD, tolerance 1.00
+
+SLIPS
+- inputs/slips/slips.toml: 4 slip(s)
+- Annual average USD/CAD 1.3500: the mean of the 262 Bank of Canada daily rates of 2024 in the FX cache
+
+MARGIN
+CAD:  T5 Sample Securities, T3 Sample Fund Trust XYZQ
+SLIP: the slip's boxes; BOOKS: the books' income; DIFF = BOOKS − SLIP.
+ITEM                 BOXES                SLIP  BOOKS    DIFF  STATUS
+----------------------------------------------------------------------
+Canadian dividends   T5 24/10, T3 49/23  60.00  50.00  -10.00  differs
+Trust capital gains  T3 21                4.25   0.00   -4.25  differs
+Return of capital    T3 42                1.50   0.00   -1.50  differs
+Interest             T5 13               12.00  12.34   +0.34  ok
+
+USD:  T5 Sample Securities
+ITEM                  BOXES            SLIP USD  BOOKS USD   DIFF  STATUS   BOOKS CAD DAILY  SLIP CAD AVERAGE
+-------------------------------------------------------------------------------------------------------------
+Foreign income        T5 15, T3 24/25    361.20     365.00  +3.80  differs           492.75            487.62
+Foreign tax withheld  T5 16, T3 33/34     17.10      17.26  +0.16  ok                 23.30             23.09
+
+QT
+USD:  T5 Sample Trading
+ITEM            BOXES            SLIP USD  BOOKS USD   DIFF  STATUS  BOOKS CAD DAILY  SLIP CAD AVERAGE
+------------------------------------------------------------------------------------------------------
+Foreign income  T5 15, T3 24/25     18.00      18.00  +0.00  ok                24.30             24.30
+
+SUGGESTIONS
+Add to inputs/margin/slip-audit.tt (return of capital lowers the ACB, T3 box 42; a DIVIDEND line with a negative amount takes it out of the dividend income; `tjs roc-sum` then shows it):
+  ADJUST 2024-12-31 16:00:00 XYZQ CAD -1.50 type=roc
+
+NOTES
+- margin: the T3 for XYZQ splits its distribution (Canadian dividends 10.00, trust capital gains 4.25); the books carry it as one dividend — file the T3's boxes (CA-INC-02); taxjson's estimate counts the whole as eligible dividends (CA-EST-TRUST)
+
+4 finding(s) (margin 4): apply the suggestions, or explain each difference and mark the checklist's t5-t3 step done.

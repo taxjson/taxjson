@@ -35,13 +35,17 @@ import json
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
+from taxjson.lib import out as _out
 from taxjson.lib.cli_diag import error, warn
-from taxjson.bin.taxjson_convert_currency import norm_currency
+from taxjson.lib.exchange_rates import norm_currency
 from taxjson.lib.country import add_country_argument
-from taxjson.lib.core import (is_option_symbol, parse_option_expiry,
-                              parse_option_underlying)
+from taxjson.lib.json_contract import versioned
+from taxjson.lib.json_input import (InputFileError, check_row_types, read_json_doc, rerun_advice,
+                                    require_object_lists)
+from taxjson.lib.option_symbols import (is_option_symbol, parse_option_expiry,
+                                        parse_option_underlying)
 from taxjson.lib.price_chain import (DEFAULT_IBKR_HOST, DEFAULT_IBKR_PORT,
                                      DEFAULT_MAX_CACHE_AGE_DAYS,
                                      fetch_option_prices, fetch_prices,
@@ -50,6 +54,9 @@ from taxjson.lib.price_chain import (DEFAULT_IBKR_HOST, DEFAULT_IBKR_PORT,
                                      minor_unit_listing, quote_currency,
                                      yf_symbol_for)
 from taxjson.lib.ticker_map import is_future_ticker
+from taxjson.lib.report_fmt import fmt_money
+from taxjson.model.result import Holding
+from taxjson.model import money as M
 
 # Equity options premium-quote in per-share terms; a standard contract
 # covers 100 shares and the books carry the x100 amounts. A contract
@@ -68,7 +75,7 @@ def _declared_multiplier(h: Dict[str, Any]) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return m if m > 0 else None
-from taxjson.lib.report_model import fmt_money, gains_basis_label
+from taxjson.lib.report_model import gains_basis_label
 
 PROG = "taxjson-harvest"
 
@@ -82,7 +89,7 @@ def _account_of(path: Path) -> str:
     return path.stem
 
 
-from taxjson.lib.report_model import fmt_qty as _qfmt  # noqa: E402
+from taxjson.lib.report_fmt import fmt_qty as _qfmt  # noqa: E402
 
 
 def _read_input(p: Path, what: str) -> Dict[str, Any]:
@@ -91,12 +98,11 @@ def _read_input(p: Path, what: str) -> Dict[str, Any]:
     open positions.', a truncated --sheltered file turned SH_QTY/SH_ADD
     into '-' — the cells that warn of a PERMANENT denial — all at exit 0
     (audit S033-22, S034-08, S051-11, S079-11)."""
-    from taxjson.lib.json_input import InputFileError, read_json_doc
     try:
         return read_json_doc(p, list_key=None)
     except InputFileError as e:
         from taxjson.lib.cli_diag import error
-        error(PROG, f"{what} {e} — re-run `tjs run`")
+        error(PROG, rerun_advice(f"{what} {e}"))
         sys.exit(2)
 
 
@@ -109,7 +115,6 @@ def _inventory(doc: Dict[str, Any], p: Path) -> List[Dict[str, Any]]:
         sys.exit(2)
     # A text qty / total_cost is one line naming the file and row, like
     # every other reader of a gains file (re-audit A2-0793).
-    from taxjson.lib.json_input import InputFileError, check_row_types
     try:
         check_row_types(inv, p, "inventory")
     except InputFileError as e:
@@ -138,7 +143,8 @@ def load_positions(files: List[Path],
         acct = _account_of(p)
         for h in _inventory(data, Path(p)):
             sym = str(h.get("symbol") or "")
-            qty = float(h.get("qty", 0) or 0)
+            v = Holding(h)
+            qty = float(v.quantity or 0)
             if not sym or qty == 0:
                 continue
             if sym.startswith("CASH.") or is_future_ticker(sym):
@@ -164,12 +170,11 @@ def load_positions(files: List[Path],
                 "account": acct,
                 "symbol": sym,
                 "qty": qty,
-                "cost": float(h.get("total_cost", 0) or 0),
-                "deferred_wash": float(h.get("deferred_wash", 0) or 0),
+                "cost": float(v.total_cost or 0),
+                "deferred_wash": float(v.deferred_wash or 0),
                 # A written option's premium already taxed at the write
                 # (grant timing): not part of what a buy-back recovers.
-                "recognised_premium": float(
-                    h.get("recognised_premium", 0) or 0),
+                "recognised_premium": float(v.recognised_premium or 0),
                 "start": str(h.get("position_start_date") or "") or None,
                 # The holding period's start (a wash-sale replacement's
                 # tacked one, US-WASH-10): LT_IN counts from it (backlog
@@ -218,7 +223,7 @@ def load_inventory_agg(files: List[Path], column: str,
         file_has_field = False
         for h in _inventory(data, Path(p)):
             sym = str(h.get("symbol") or "")
-            qty = float(h.get("qty", 0) or 0)
+            qty = float(Holding(h).quantity or 0)
             if not sym or qty == 0:
                 continue
             if "last_acq_date" in h:
@@ -275,10 +280,8 @@ def _option_quote_symbols(option_tickers: List[str], files: List[Path],
     # or one that cannot be read, cannot say which contract is held:
     # the option rows are omitted, never quoted from another contract.
     try:
-        from taxjson.bin.taxjson_ticker_map import (load_map_file,
-                                                    map_file_problems,
-                                                    map_symbol,
-                                                    merge_renames)
+        from taxjson.lib.ticker_map_rules import map_symbol, merge_renames
+        from taxjson.lib.map_file import load_map_file, map_file_problems
         _problems = map_file_problems(Path(ticker_map))
         if _problems:
             raise ValueError(f"{len(_problems)} problem line(s), first "
@@ -297,14 +300,22 @@ def _option_quote_symbols(option_tickers: List[str], files: List[Path],
     for f in files:
         acct = _account_of(Path(f))
         raw = Path(f).parent / f"{acct}_raw_gains.json"
-        try:
-            doc = json.loads(raw.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        if not raw.is_file():
             continue
         seen_raw = True
+        try:
+            # Only its inventory is read, so only that is checked: a
+            # damaged one is read as none, and said (backlog TJ-2948,
+            # TJ-2957, TJ-2958).
+            doc = read_json_doc(raw, list_key=None)
+            require_object_lists(doc, raw, ["inventory"], empty_ok=True)
+            check_row_types(doc.get("inventory"), raw, "inventory")
+        except InputFileError as e:
+            warn(PROG, f"the native inventory is not read: {e}")
+            continue
         for h in doc.get("inventory") or []:
             sym = str(h.get("symbol") or "")
-            if not sym or not float(h.get("qty", 0) or 0) \
+            if not sym or not Holding(h).quantity \
                     or not is_option_symbol(sym):
                 continue
             sources.setdefault(map_symbol(sym, renames), set()).add(sym)
@@ -427,7 +438,7 @@ def _price_display(price_base: float, source: Optional[str]) -> str:
         # lookup rendered them as '?' (unknown source) instead of the
         # legend's '*' (2026-09 audit).
         _src = "cache"
-    return f"{price_base:,.4f}{_SOURCE_MARKS.get(_src, '?')}"
+    return f"{M.shown(price_base, 4):,.4f}{_SOURCE_MARKS.get(_src, '?')}"
 
 
 def _recovery_schedule(rows: List[Dict[str, Any]],
@@ -550,7 +561,7 @@ def _recovery_schedule(rows: List[Dict[str, Any]],
     out["14d"] += out["7d"]
     out["30d"] += out["14d"]
     out["later"] += out["30d"]
-    return {k: round(v, 2) for k, v in out.items()}
+    return {k: M.shown(v, 2) for k, v in out.items()}
 
 
 def _registered_backed_fraction(rec: Optional[Dict[str, Any]],
@@ -700,7 +711,7 @@ def _days_to_long_term(start: Optional[str],
         acquired = datetime.strptime(start, "%Y-%m-%d").date()
     except ValueError:
         return None
-    from taxjson.lib.core import held_more_than_one_year
+    from taxjson.engine.us.terms import held_more_than_one_year
     # First date the engine calls long-term: the anniversary (or the
     # 1st of the following month for an end-of-month buy) is never LT
     # itself, so start there and step forward — at most a few days.
@@ -721,6 +732,13 @@ def _act_item(text: str, cmd: Optional[str] = None):
     return out.act(text, cmd)[len(out.ACT):], "", out.ACT
 
 
+def _json_text(doc: Dict[str, Any]) -> str:
+    """The --json document as harvest prints it (`harvest`,
+    lib/json_contract): sorted, indented, a non-finite figure (a NaN)
+    null, as `_json_out` writes it (lib/out.clean_json)."""
+    return json.dumps(_out.clean_json(versioned(doc, "harvest")), indent=2, sort_keys=True)
+
+
 def _project_map(files: List[Path]) -> Optional[Path]:
     """The project's ticker.map beside the inputs or one folder up (the
     project root for work/ files), as the QUOTE lines are found."""
@@ -739,8 +757,8 @@ def _booked_as(symbols, ticker_map: Optional[Path]) -> Dict[str, str]:
     if not symbols or ticker_map is None or not Path(ticker_map).is_file():
         return {}
     try:
-        from taxjson.bin.taxjson_ticker_map import (load_map_file,
-                                                    merge_renames)
+        from taxjson.lib.ticker_map_rules import merge_renames
+        from taxjson.lib.map_file import load_map_file
         final = merge_renames(load_map_file(Path(ticker_map)),
                               to_base=True)
     except (OSError, ValueError):
@@ -756,88 +774,7 @@ def _booked_as(symbols, ticker_map: Optional[Path]) -> Dict[str, str]:
 def main(argv: Optional[List[str]] = None,
          fetchers: Optional[List] = None,
          option_fetchers: Optional[List] = None) -> int:
-    p = argparse.ArgumentParser(
-        prog=PROG,
-        description="Unrealized gain/(loss) per open position at current "
-                    "prices (IBKR -> yfinance -> cache) — the "
-                    "tax-loss-harvest view, losses first, with the wash "
-                    "radar's advisory on each loss.")
-    p.add_argument("files", nargs="+", metavar="FILE",
-                   help="Canonical per-account gains JSONs (prefer the "
-                        "_gains_wash.json files — the filing basis)")
-    p.add_argument("--radar", action="append", default=[], metavar="FILE",
-                   help="wash_radar_<account>.json sidecar(s) for the "
-                        "ADVISORY column; repeatable")
-    p.add_argument("--sheltered", action="append", default=[],
-                   metavar="FILE",
-                   help="SHELTERED accounts' gains JSONs; adds SH_QTY "
-                        "(shares held sheltered) and SH_ADD (date the "
-                        "sheltered side last acquired, as DATE(-Nd) — "
-                        "the 30-day superficial-loss window measures "
-                        "from there); repeatable. The taxable inputs' "
-                        "own last adds always show as TX_ADD")
-    p.add_argument("--symbol", action="append", default=[], metavar="NAME",
-                   help="Only these symbols (case-insensitive; repeatable)")
-    p.add_argument("--options", action="store_true",
-                   help="Include OCC option positions (e.g. LEAPS). "
-                        "Options price ONLY through the IBKR tier (+ "
-                        "cache) — with no gateway running they are "
-                        "listed as unpriced, never marked from a bad "
-                        "source. Adds a DTE (days-to-expiry) column")
-    add_country_argument(p, help="Project country (required; adds the LT "
-                                 "IN column for usa)")
-    p.add_argument("--base-currency", default=None, metavar="CURR",
-                   type=norm_currency,
-                   help="Base currency of the books (default: the "
-                        "--country's home currency, CAD or USD). Quotes "
-                        "in other currencies convert via --rates")
-    p.add_argument("--rates", type=Path, default=None, metavar="FILE",
-                   help="FX rates file (the pipeline's to_base.csv; "
-                        "default: to_base.csv next to the first input). "
-                        "Non-base quotes with no usable rate are omitted "
-                        "with a warning — never mixed in unconverted")
-    p.add_argument("--no-ibkr", action="store_true",
-                   help="Skip the IBKR tier (no TWS/Gateway running)")
-    p.add_argument("--ibkr-host", default=DEFAULT_IBKR_HOST)
-    p.add_argument("--ibkr-port", type=int, default=DEFAULT_IBKR_PORT,
-                   help="4001 Gateway live, 7496 TWS live (default: 4001)")
-    p.add_argument("--price-cache", type=Path, default=None, metavar="FILE",
-                   help="Price cache path (default: .price_cache.json next "
-                        "to the first input)")
-    p.add_argument("--price-cache-age", type=int,
-                   default=DEFAULT_MAX_CACHE_AGE_DAYS, metavar="DAYS",
-                   help="Days before a cache-served price warns "
-                        "(default: %(default)s)")
-    p.add_argument("--ticker-map", type=Path, default=None, metavar="FILE",
-                   help="The project's ticker.map: its QUOTE and CRYPTO "
-                        "lines pick what each holding is quoted as. "
-                        "With --options, a "
-                        "contract the pipeline renamed onto another "
-                        "listing's code (TOBASE SAMPLK.US SAMPLJ.TO turns "
-                        "SAMPLK...US calls into SAMPLJ...TO) is quoted as the "
-                        "contract actually held — found in the "
-                        "account's <acct>_raw_gains.json — in its own "
-                        "currency. Default: ticker.map next to the "
-                        "inputs or in the folder above them (the "
-                        "project root for work/ files)")
-    p.add_argument("--crypto-account", action="append", default=[],
-                   metavar="ACCOUNT",
-                   help="An input account marked `crypto = true` "
-                        "(repeatable). In a usa project its losses are "
-                        "outside the wash-sale rule (US-WASH-13) and "
-                        "count as claimable now; in a canada project "
-                        "the superficial-loss rule applies to crypto as "
-                        "to shares, so this changes nothing")
-    p.add_argument("--json", action="store_true",
-                   help="Emit the report as JSON instead of text")
-    p.add_argument("--verbose", "-v", action="store_true",
-                   help="Show per-tier price-chain diagnostics")
-    p.add_argument("--brief", action="store_true",
-                   help="The essentials (docs/output-style.md): a legend, "
-                        "the tables, the harvestable losses and one line "
-                        "per action; no COLUMNS / NOTES / scope "
-                        "paragraph (`tjs harvest` passes it unless "
-                        "--details)")
+    p = _harvest_parser()
     args = p.parse_args(argv)
     if args.ticker_map is not None and not Path(args.ticker_map).exists():
         # A named input that does not exist is refused, not silently
@@ -846,19 +783,7 @@ def main(argv: Optional[List[str]] = None,
         _error(PROG, f"no such file: --ticker-map {args.ticker_map}")
         return 2
 
-    from taxjson.lib.country import is_usa as _country_is_usa
-    from taxjson.lib.country import home_currency as _home_currency
-    is_usa = _country_is_usa(args.country)
-    # The books are in the country's currency unless told otherwise —
-    # a CAD default refused a US project's own USD books (re-audit
-    # A2-0433 / A2-0746, the COMMANDS-14 twin).
-    if not args.base_currency:
-        args.base_currency = _home_currency(args.country)
-    # US-PLAN-05: a US crypto account is outside §1091 (US-WASH-13).
-    # Canada has no such carve-out (crypto is property under s.54), so
-    # the set stays empty there — the two countries never mix.
-    wash_exempt_accounts = (set(args.crypto_account) if is_usa
-                            else set())
+    is_usa, wash_exempt_accounts = _harvest_country(args)
     from taxjson.lib.wash_scope import scope_more, scope_note
     _scope = scope_note(args.country)
 
@@ -896,28 +821,16 @@ def main(argv: Optional[List[str]] = None,
                          "BBB.US (not account names)."])
             if not positions:
                 return 1
-    if args.symbol:
-        skipped_options = [s for s in skipped_options
-                           if s.upper() in {w.upper() for w in args.symbol}]
-    if skipped_options:
-        # Said like the crypto accounts the wrapper leaves out: a book
-        # holding only a written put showed "No open positions." with no
-        # word of the option (backlog TJ-0167).
-        _opts = sorted(set(skipped_options))
-        from taxjson.lib.cli_diag import note as _note_opts
-        _note_opts(PROG, f"{len(skipped_options)} option position(s) "
-                         f"excluded (pass --options to include them): "
-                         f"{', '.join(_opts[:3])}"
-                         + (f" +{len(_opts) - 3} more"
-                            if len(_opts) > 3 else "") + ".")
+    _harvest_skipped_note(args, skipped_options)
     if not positions:
         scope = (f" for {', '.join(args.symbol)}" if args.symbol else "")
+        # A live exact Doc: the line written where the print() was.
+        jd = _out.Doc(exact=True, width_=0, live=True)
         if args.json:
-            print(json.dumps({"rows": [], "totals": {}, "omitted": [],
-                              "scope_note": _scope}, indent=2,
-                             sort_keys=True))
+            jd.line(_json_text({"rows": [], "totals": {}, "omitted": [],
+                                "scope_note": _scope}))
         else:
-            print(f"No open positions{scope}.")
+            jd.line(f"No open positions{scope}.")
         return 0
 
     radar = load_radar([Path(r) for r in args.radar])
@@ -973,65 +886,9 @@ def main(argv: Optional[List[str]] = None,
         # Project root first — `tjs run` reads the map from there.
         crypto_overrides = load_crypto_overrides(
             [d for d in reversed(_dirs)])
-    yf_map: Dict[str, str] = {}
-    # A QUOTE line's QTY_RATIO: the quoted ticker's units per book share
-    # (`QUOTE ZZOLD.TO ZZNEW.TO 0.25`: 4 old = 1 new). Ignored, 100 old
-    # shares were valued as 100 new ones (backlog TJ-0709).
-    quote_ratio: Dict[str, float] = {}
-    for t in tickers:
-        if t in external_map:
-            yf_map[t] = external_map[t][0]
-            try:
-                _ratio = float(external_map[t][1])
-            except (TypeError, ValueError, IndexError):
-                _ratio = 1.0
-            quote_ratio[t] = _ratio if _ratio > 0 else 1.0
-            continue
-        yf = yf_symbol_for(t, crypto_overrides)
-        if yf is not None:
-            yf_map[t] = yf
-
-    cache_path = args.price_cache or (files[0].parent / ".price_cache.json")
-    quotes = fetch_prices(yf_map, cache_path=cache_path,
-                          max_cache_age_days=args.price_cache_age,
-                          use_ibkr=not args.no_ibkr,
-                          ibkr_host=args.ibkr_host,
-                          ibkr_port=args.ibkr_port,
-                          verbose=args.verbose,
-                          fetchers=fetchers)
-    # The contract to QUOTE for each option position (see --ticker-map).
-    # Not named (the console script run on <project>/work/*_gains_wash.
-    # json): the project's ticker.map next to the inputs or one level
-    # up, as for the QUOTE lines — without it a TOBASE-renamed option was
-    # quoted as the other listing's contract (re-audit A2-0885).
-    _tmap = args.ticker_map
-    if _tmap is None and option_tickers:
-        _tmap = next((d / "ticker.map" for d in _dirs
-                      if (d / "ticker.map").is_file()), None)
-    opt_quote = _option_quote_symbols(option_tickers, files, _tmap)
-    if option_tickers:
-        _oq = fetch_option_prices(
-            sorted({opt_quote[t] for t in option_tickers
-                    if opt_quote.get(t)}),
-            cache_path=cache_path,
-            max_cache_age_days=args.price_cache_age,
-            use_ibkr=not args.no_ibkr,
-            ibkr_host=args.ibkr_host, ibkr_port=args.ibkr_port,
-            verbose=args.verbose, fetchers=option_fetchers)
-        for t in option_tickers:
-            if opt_quote.get(t) and opt_quote[t] in _oq:
-                quotes[t] = _oq[opt_quote[t]]
-    unpriced = sorted(set(tickers) - set(quotes))
-    if unpriced:
-        warn(PROG, f"no price from any tier for: {', '.join(unpriced)} "
-                   f"— rows omitted.")
-    unpriced_opts = sorted(t for t in set(option_tickers) - set(quotes)
-                           if opt_quote.get(t))
-    if unpriced_opts:
-        warn(PROG, f"{len(unpriced_opts)} option position(s) unpriced "
-                   f"(options quote only through IBKR — start TWS/"
-                   f"Gateway): {', '.join(unpriced_opts)} — rows "
-                   f"omitted.")
+    yf_map, quote_ratio, quotes, opt_quote = _harvest_prices(
+        args, files, tickers, option_tickers, external_map, crypto_overrides,
+        _dirs, fetchers, option_fetchers)
 
     # FX: book costs are BASE currency; quotes arrive in the quoted
     # symbol's native currency. Convert every non-base quote or drop the
@@ -1046,6 +903,31 @@ def main(argv: Optional[List[str]] = None,
         # as taxjson-harvest or `tjs harvest` (re-audit A2-0790).
         error(PROG, str(e))
         return 2
+    rows, omitted, tot_cost, tot_gross, tot_value = _harvest_rows(
+        positions, quotes, opt_quote, quote_ratio, yf_map, base, fx_history,
+        rates_path, radar, taxable_agg, sheltered, show_sheltered, is_usa,
+        wash_exempt_accounts)
+
+    return _harvest_report(args, rows, omitted, tot_cost, tot_gross, tot_value,
+                           basis, _scope, scope_more, is_usa, sheltered,
+                           show_sheltered, taxable_agg)
+
+
+def _harvest_rows(positions: List[Dict[str, Any]], quotes: Dict[str, Any],
+                  opt_quote: Dict[str, Optional[str]],
+                  quote_ratio: Dict[str, float], yf_map: Dict[str, str],
+                  base: str, fx_history: Dict[str, Dict[str, Any]],
+                  rates_path: Path, radar: Dict[str, Dict[str, Any]],
+                  taxable_agg: Dict[str, Dict[str, Any]],
+                  sheltered: Dict[str, Dict[str, Any]], show_sheltered: bool,
+                  is_usa: bool, wash_exempt_accounts: Set[str]
+                  ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]],
+                             float, float, float]:
+    """main, the rows: one per position (its quote and rate, cost and
+    value, verdict, the radar's advisory and the last buys), the
+    positions left out and why, the notes on unknown bases and on
+    currencies without a rate, the rows sorted by UNREALIZED; and
+    the totals."""
     today_iso = date.today().isoformat()
     stale_warned: set = set()
     # The positions left out, and why: --json lists them, and a quote
@@ -1157,7 +1039,7 @@ def main(argv: Optional[List[str]] = None,
         if (unreal < -0.005 and r["qty"] > 0 and r["cost"] > 0
                 and fx > 0):
             # In the QUOTED listing's units (a QUOTE ratio's).
-            exit_native = round(
+            exit_native = M.shown(
                 r["cost"] / (r["qty"] * ratio * mult * fx)
                 * _BREAKEVEN_BUFFER, 4)
         expiry = (parse_option_expiry(r["symbol"])
@@ -1229,166 +1111,45 @@ def main(argv: Optional[List[str]] = None,
                       f"source_currencies only, not the currency of a "
                       f"ticker.map QUOTE line's listing."])
     rows.sort(key=lambda x: x["unrealized"])    # harvestable losses first
+    return rows, omitted, tot_cost, tot_gross, tot_value
 
+
+def _harvest_report(args: argparse.Namespace, rows: List[Dict[str, Any]],
+                    omitted: List[Dict[str, Any]], tot_cost: float,
+                    tot_gross: float, tot_value: float, basis: str,
+                    _scope: str, scope_more: Any, is_usa: bool,
+                    sheltered: Dict[str, Dict[str, Any]],
+                    show_sheltered: bool,
+                    taxable_agg: Dict[str, Dict[str, Any]]) -> int:
+    """main, the report: the recovery schedule and the totals, then the
+    --json document or the text report (the table, the harvestable
+    losses and what to do, the legend and the notes)."""
     schedule = _recovery_schedule(rows)
     totals = {
-        "cost": round(tot_cost, 2),
-        "gross_cost": round(tot_gross, 2),
-        "value": round(tot_value, 2),
-        "unrealized": round(tot_value - tot_cost, 2),
+        "cost": M.shown(tot_cost, 2),
+        "gross_cost": M.shown(tot_gross, 2),
+        "value": M.shown(tot_value, 2),
+        "unrealized": M.shown(tot_value - tot_cost, 2),
         "currency": args.base_currency,
         "positions": len(rows),
         "basis": basis,
         "harvestable": schedule,
     }
     if args.json:
-        # CA-PLAN-04 / US-PLAN-04 in the JSON too (audit A2-1171).
-        print(json.dumps({"rows": rows, "totals": totals,
-                          "omitted": omitted,
-                          "scope_note": _scope}, indent=2,
-                         sort_keys=True))
+        # CA-PLAN-04 / US-PLAN-04 in the JSON too (audit A2-1171). A
+        # live exact Doc: the document written where the print() was.
+        jd = _out.Doc(exact=True, width_=0, live=True)
+        jd.line(_json_text({"rows": rows, "totals": totals,
+                            "omitted": omitted, "scope_note": _scope}))
         return 0
 
-    # Everything is BASE currency: PRICE is the native quote x FX, with
-    # its source marked (^ IBKR, + yfinance, * cache). TX_QTY is this
-    # taxable account's shares; SH_QTY (with --sheltered) is the
-    # sheltered side's total. TX_ADD / SH_ADD name the last acquisition
-    # on each side as DATE(-Nd): BOTH extend the wash window — a
-    # taxable rebuy defers the loss, a sheltered add denies it
-    # permanently. Signed days: negative = past (adds), positive =
-    # future (ADVISORY clear dates).
-    show_options = bool(args.options)
-    # Money columns carry their currency on a SECOND header line
-    # ("CAD" under COST/SH etc.) — stacked, so the label never widens
-    # a column the data hasn't already widened. EXIT@ values embed
-    # their own (native) currency per row.
-    _bc = args.base_currency
-    header = ["ACCOUNT", "SYMBOL", "TX_QTY"]
-    if show_sheltered:
-        header.append("SH_QTY")
-    header += [f"COST/SH\n{_bc}", f"PRICE\n{_bc}", "EXIT@\nnative",
-               f"UNREALIZED\n{_bc}", "PCT", "VERDICT"]
-    if show_options:
-        header.append("DTE")
-    if is_usa:
-        header.append("LT_IN")
-    header.append("TX_ADD")
-    if show_sheltered:
-        header.append("SH_ADD")
-    header.append("ADVISORY")
-    aligns = ["<", "<", ">"] + ([">"] if show_sheltered else []) \
-        + [">", ">", ">", ">", ">", "<"] \
-        + (["<"] if show_options else []) \
-        + (["<"] if is_usa else []) + ["<"] \
-        + (["<"] if show_sheltered else []) + ["<"]
-    body = []
-    for r in rows:
-        # Per-share terms for BOTH cells: an option's book cost covers
-        # qty contracts x 100 shares, so divide by the multiplier too —
-        # COST/SH then compares 1:1 against the per-share premium.
-        denom = r["qty"] * r.get("multiplier", 1.0)
-        cps = r.get("cost_basis", r["cost"]) / denom if denom else 0.0
-        cells = [r["account"], r["symbol"], _qfmt(r["qty"])]
-        if show_sheltered:
-            cells.append(_qfmt(r["sheltered_qty"])
-                         if r["sheltered_qty"] else "-")
-        _be = r.get("breakeven_exit_native")
-        cells += [f"{cps:,.4f}",
-                  _price_display(r["price_base"], r["price_source"]),
-                  (f"{_be:,.4f}{r['breakeven_exit_currency']}"
-                   if _be is not None else "-"),
-                  fmt_money(r["unrealized"]),
-                  f"{r['pct']:.1f}%", r["verdict"]]
-        if show_options:
-            d = r.get("dte")
-            cells.append("-" if d is None
-                         else ("EXP" if d <= 0 else f"{d}d"))
-        if is_usa:
-            d = r["days_to_long_term"]
-            cells.append("ST" if r.get("short") else
-                         "LT" if d == 0 else (f"{d}d" if d is not None
-                                              else "-"))
-        cells.append(_add_display(taxable_agg.get(r["symbol"])))
-        if show_sheltered:
-            cells.append(_add_display(sheltered.get(r["symbol"])))
-        cells.append(("no-wash-rule(crypto)" if r.get("wash_exempt")
-                      else _advisory_display(r["radar"]))
-                     if r["verdict"] == "LOSS" else "-")
-        body.append([str(c) for c in cells])
-    total_cells = ["TOTAL", "-", "-", "-", "-", "-",
-                   fmt_money(tot_value - tot_cost),
-                   (f"{(tot_value - tot_cost) / tot_gross * 100:.1f}%"
-                    if tot_gross > 1e-9 else "0.0%"), "-"]
-    if show_sheltered:
-        total_cells.insert(3, "-")
-    if show_options:
-        total_cells.append("-")                 # DTE
-    if is_usa:
-        total_cells.append("-")
-    total_cells.append("-")                     # TX_ADD
-    if show_sheltered:
-        total_cells.append("-")                 # SH_ADD
-    total_cells.append("-")                     # ADVISORY
+    show_options, _bc, header, aligns, body, total_cells = \
+        _harvest_table(args, is_usa, rows, sheltered, show_sheltered,
+                       taxable_agg, tot_cost, tot_gross, tot_value)
 
     from taxjson.lib import out
     from taxjson.lib.wash_scope import advisory_parts
-    doc = out.Doc(f"HARVEST — unrealized open positions, "
-                  f"{args.base_currency}, basis: {basis}")
-    if args.brief:
-        # The legend, before the table (docs/output-style.md).
-        doc.para("Losses first. PRICE: ^ IBKR, + yfinance, * cache. "
-                 "ADVISORY: the wash radar's.")
-    else:
-        doc.para("Losses first. PRICE marks its source: ^ IBKR, + "
-                 "yfinance, * cache. ADVISORY is the wash radar's.")
-        doc.blank()
-    # Too wide for the width: the columns are packed into as few tables
-    # as fit, each led by ACCOUNT and SYMBOL — the position and its
-    # verdict; the radar's advisory and the last buys; the cost and the
-    # break-even price — a group split only when it cannot fit whole;
-    # the TOTAL row stays under UNREALIZED. A table that cannot fit even
-    # one column goes one block per position. Unwrapped (TAXJSON_WIDTH=0,
-    # a captured run): the one full table, as before.
-    def _fit(cols, per_record=True):
-        foot = ([[total_cells[i] for i in cols]]
-                if header.index(f"UNREALIZED\n{_bc}") in cols else ())
-        return out.fit_table(
-            [header[i] for i in cols], [[r[i] for i in cols] for r in body],
-            aligns=[aligns[i] for i in cols], foot=foot,
-            width_=doc.w, key=(0, 1), per_record=per_record)
-
-    def _fits(cols):
-        return max(map(len, _fit([0, 1] + cols, per_record=False))) <= doc.w
-
-    full = _fit(list(range(len(header))), per_record=False)
-    if doc.w <= 0 or max(map(len, full)) <= doc.w:
-        doc.line("\n".join(full))
-    else:
-        def _idx(*names):
-            return [header.index(h) for h in names if h in header]
-        wash = _idx("ADVISORY", "TX_ADD", "SH_ADD")
-        cost = _idx(f"COST/SH\n{_bc}", "EXIT@\nnative")
-        core = [i for i in range(2, len(header))
-                if i not in wash and i not in cost]
-        tables: List[List[int]] = []
-        cur: List[int] = []
-        for group in (core, wash, cost):
-            if cur and _fits(cur + group):
-                cur += group
-                continue
-            if cur:
-                tables.append(cur)
-                cur = []
-            for i in group:
-                if cur and not _fits(cur + [i]):
-                    tables.append(cur)
-                    cur = []
-                cur.append(i)
-        tables.append(cur)
-        for k, cols in enumerate(tables):
-            if k:
-                doc.blank()
-            doc.line("\n".join(_fit([0, 1] + cols)))
+    doc = _harvest_doc(args, basis, out, _bc, header, aligns, body, total_cells)
 
     # When can the paper losses become CLAIMED losses? Cumulative
     # schedule from the radar's clear dates.
@@ -1458,6 +1219,22 @@ def main(argv: Optional[List[str]] = None,
         doc.para(scope_more("tjs harvest --details", args.country))
         doc.print()
         return 0
+    _harvest_columns_notes(doc, rows, show_options, show_sheltered, is_usa, out,
+                           advisory_parts)
+    # CA-PLAN-04 / US-PLAN-04 (audit S054-22).
+    doc.blank()
+    doc.para(_scope)
+    doc.print()
+    return 0
+
+
+def _harvest_columns_notes(doc: Any, rows: List[Dict[str, Any]],
+                           show_options: bool, show_sheltered: bool,
+                           is_usa: bool, out: Any, advisory_parts: Any) -> None:
+    """main, the text report's COLUMNS legend (the columns shown) and
+    its NOTES: written options, crypto accounts, a deferred wash and
+    the positions flagged for a manual check. `out` and
+    `advisory_parts` are main's imports."""
     # What the columns mean.
     legend: List[str] = [
         "TX_ADD: last buy in the taxable accounts; a rebuy within 30 days "
@@ -1540,11 +1317,374 @@ def main(argv: Optional[List[str]] = None,
             for t in [body] + [out.label("note", doc.w) + str(m)
                                for m in more]:
                 doc.item(t, indent="  ")
-    # CA-PLAN-04 / US-PLAN-04 (audit S054-22).
-    doc.blank()
-    doc.para(_scope)
-    doc.print()
-    return 0
+
+
+def _harvest_doc(args: argparse.Namespace, basis: str, out: Any, _bc: str,
+                 header: List[str], aligns: List[str],
+                 body: List[List[str]], total_cells: List[str]
+                 ) -> Any:
+    """main, the text report: the document, its title and legend line,
+    and the table fitted to the width (as few tables as fit, each led
+    by ACCOUNT and SYMBOL; unwrapped, the one full table). `out` is
+    main's import of taxjson.lib.out."""
+    doc = out.Doc(f"HARVEST — unrealized open positions, "
+                  f"{args.base_currency}, basis: {basis}")
+    if args.brief:
+        # The legend, before the table (docs/output-style.md).
+        doc.para("Losses first. PRICE: ^ IBKR, + yfinance, * cache. "
+                 "ADVISORY: the wash radar's.")
+    else:
+        doc.para("Losses first. PRICE marks its source: ^ IBKR, + "
+                 "yfinance, * cache. ADVISORY is the wash radar's.")
+        doc.blank()
+    # Too wide for the width: the columns are packed into as few tables
+    # as fit, each led by ACCOUNT and SYMBOL — the position and its
+    # verdict; the radar's advisory and the last buys; the cost and the
+    # break-even price — a group split only when it cannot fit whole;
+    # the TOTAL row stays under UNREALIZED. A table that cannot fit even
+    # one column goes one block per position. Unwrapped (TAXJSON_WIDTH=0,
+    # a captured run): the one full table, as before.
+    def _fit(cols, per_record=True):
+        foot = ([[total_cells[i] for i in cols]]
+                if header.index(f"UNREALIZED\n{_bc}") in cols else ())
+        return out.fit_table(
+            [header[i] for i in cols], [[r[i] for i in cols] for r in body],
+            aligns=[aligns[i] for i in cols], foot=foot,
+            width_=doc.w, key=(0, 1), per_record=per_record)
+
+    def _fits(cols):
+        return max(map(len, _fit([0, 1] + cols, per_record=False))) <= doc.w
+
+    full = _fit(list(range(len(header))), per_record=False)
+    if doc.w <= 0 or max(map(len, full)) <= doc.w:
+        doc.line("\n".join(full))
+    else:
+        def _idx(*names):
+            return [header.index(h) for h in names if h in header]
+        wash = _idx("ADVISORY", "TX_ADD", "SH_ADD")
+        cost = _idx(f"COST/SH\n{_bc}", "EXIT@\nnative")
+        core = [i for i in range(2, len(header))
+                if i not in wash and i not in cost]
+        tables: List[List[int]] = []
+        cur: List[int] = []
+        for group in (core, wash, cost):
+            if cur and _fits(cur + group):
+                cur += group
+                continue
+            if cur:
+                tables.append(cur)
+                cur = []
+            for i in group:
+                if cur and not _fits(cur + [i]):
+                    tables.append(cur)
+                    cur = []
+                cur.append(i)
+        tables.append(cur)
+        for k, cols in enumerate(tables):
+            if k:
+                doc.blank()
+            doc.line("\n".join(_fit([0, 1] + cols)))
+    return doc
+
+
+def _harvest_country(args: argparse.Namespace) -> Tuple[bool, Set[str]]:
+    """main: US or Canada, the base currency (the country's own when
+    none is given, set on args) and the crypto accounts outside the
+    wash-sale rule (US only)."""
+    from taxjson.lib.country import is_usa as _country_is_usa
+    from taxjson.lib.country import home_currency as _home_currency
+    is_usa = _country_is_usa(args.country)
+    # The books are in the country's currency unless told otherwise —
+    # a CAD default refused a US project's own USD books (re-audit
+    # A2-0433 / A2-0746, the COMMANDS-14 twin).
+    if not args.base_currency:
+        args.base_currency = _home_currency(args.country)
+    # US-PLAN-05: a US crypto account is outside §1091 (US-WASH-13).
+    # Canada has no such carve-out (crypto is property under s.54), so
+    # the set stays empty there — the two countries never mix.
+    wash_exempt_accounts = (set(args.crypto_account) if is_usa
+                            else set())
+    return is_usa, wash_exempt_accounts
+
+
+def _harvest_skipped_note(args: argparse.Namespace,
+                          skipped_options: List[str]) -> None:
+    """main: the note naming the option positions left out (pass
+    --options to include them), with --symbol only those of the
+    symbols asked."""
+    if args.symbol:
+        skipped_options = [s for s in skipped_options
+                           if s.upper() in {w.upper() for w in args.symbol}]
+    if skipped_options:
+        # Said like the crypto accounts the wrapper leaves out: a book
+        # holding only a written put showed "No open positions." with no
+        # word of the option (backlog TJ-0167).
+        _opts = sorted(set(skipped_options))
+        from taxjson.lib.cli_diag import note as _note_opts
+        _note_opts(PROG, f"{len(skipped_options)} option position(s) "
+                         f"excluded (pass --options to include them): "
+                         f"{', '.join(_opts[:3])}"
+                         + (f" +{len(_opts) - 3} more"
+                            if len(_opts) > 3 else "") + ".")
+
+
+def _harvest_prices(args: argparse.Namespace, files: List[Path],
+                    tickers: List[str], option_tickers: List[str],
+                    external_map: Dict[str, Any],
+                    crypto_overrides: Dict[str, str], _dirs: List[Path],
+                    fetchers: Optional[List[Any]],
+                    option_fetchers: Optional[List[Any]]
+                    ) -> Tuple[Dict[str, str], Dict[str, float],
+                               Dict[str, Any], Dict[str, Optional[str]]]:
+    """main, the prices: each listing's Yahoo spelling and QUOTE ratio,
+    its quote through IBKR -> yfinance -> cache, the contract quoted
+    for each option and its price, and the warnings for those left
+    unpriced."""
+    yf_map: Dict[str, str] = {}
+    # A QUOTE line's QTY_RATIO: the quoted ticker's units per book share
+    # (`QUOTE ZZOLD.TO ZZNEW.TO 0.25`: 4 old = 1 new). Ignored, 100 old
+    # shares were valued as 100 new ones (backlog TJ-0709).
+    quote_ratio: Dict[str, float] = {}
+    for t in tickers:
+        if t in external_map:
+            yf_map[t] = external_map[t][0]
+            try:
+                _ratio = float(external_map[t][1])
+            except (TypeError, ValueError, IndexError):
+                _ratio = 1.0
+            quote_ratio[t] = _ratio if _ratio > 0 else 1.0
+            continue
+        yf = yf_symbol_for(t, crypto_overrides)
+        if yf is not None:
+            yf_map[t] = yf
+
+    cache_path = args.price_cache or (files[0].parent / ".price_cache.json")
+    quotes = fetch_prices(yf_map, cache_path=cache_path,
+                          max_cache_age_days=args.price_cache_age,
+                          use_ibkr=not args.no_ibkr,
+                          ibkr_host=args.ibkr_host,
+                          ibkr_port=args.ibkr_port,
+                          verbose=args.verbose,
+                          fetchers=fetchers)
+    # The contract to QUOTE for each option position (see --ticker-map).
+    # Not named (the console script run on <project>/work/*_gains_wash.
+    # json): the project's ticker.map next to the inputs or one level
+    # up, as for the QUOTE lines — without it a TOBASE-renamed option was
+    # quoted as the other listing's contract (re-audit A2-0885).
+    _tmap = args.ticker_map
+    if _tmap is None and option_tickers:
+        _tmap = next((d / "ticker.map" for d in _dirs
+                      if (d / "ticker.map").is_file()), None)
+    opt_quote = _option_quote_symbols(option_tickers, files, _tmap)
+    if option_tickers:
+        _oq = fetch_option_prices(
+            sorted({opt_quote[t] for t in option_tickers
+                    if opt_quote.get(t)}),
+            cache_path=cache_path,
+            max_cache_age_days=args.price_cache_age,
+            use_ibkr=not args.no_ibkr,
+            ibkr_host=args.ibkr_host, ibkr_port=args.ibkr_port,
+            verbose=args.verbose, fetchers=option_fetchers)
+        for t in option_tickers:
+            if opt_quote.get(t) and opt_quote[t] in _oq:
+                quotes[t] = _oq[opt_quote[t]]
+    unpriced = sorted(set(tickers) - set(quotes))
+    if unpriced:
+        warn(PROG, f"no price from any tier for: {', '.join(unpriced)} "
+                   f"— rows omitted.")
+    unpriced_opts = sorted(t for t in set(option_tickers) - set(quotes)
+                           if opt_quote.get(t))
+    if unpriced_opts:
+        warn(PROG, f"{len(unpriced_opts)} option position(s) unpriced "
+                   f"(options quote only through IBKR — start TWS/"
+                   f"Gateway): {', '.join(unpriced_opts)} — rows "
+                   f"omitted.")
+    return yf_map, quote_ratio, quotes, opt_quote
+
+
+def _harvest_table(args: argparse.Namespace, is_usa: bool,
+                   rows: List[Dict[str, Any]],
+                   sheltered: Dict[str, Dict[str, Any]],
+                   show_sheltered: bool,
+                   taxable_agg: Dict[str, Dict[str, Any]],
+                   tot_cost: float, tot_gross: float,
+                   tot_value: float
+                   ) -> Tuple[bool, str, List[str], List[str],
+                              List[List[str]], List[str]]:
+    """main, the text report's table: the columns shown, the header
+    and its alignments, a row of cells per position and the TOTAL
+    row."""
+    # Everything is BASE currency: PRICE is the native quote x FX, with
+    # its source marked (^ IBKR, + yfinance, * cache). TX_QTY is this
+    # taxable account's shares; SH_QTY (with --sheltered) is the
+    # sheltered side's total. TX_ADD / SH_ADD name the last acquisition
+    # on each side as DATE(-Nd): BOTH extend the wash window — a
+    # taxable rebuy defers the loss, a sheltered add denies it
+    # permanently. Signed days: negative = past (adds), positive =
+    # future (ADVISORY clear dates).
+    show_options = bool(args.options)
+    # Money columns carry their currency on a SECOND header line
+    # ("CAD" under COST/SH etc.) — stacked, so the label never widens
+    # a column the data hasn't already widened. EXIT@ values embed
+    # their own (native) currency per row.
+    _bc = args.base_currency
+    header = ["ACCOUNT", "SYMBOL", "TX_QTY"]
+    if show_sheltered:
+        header.append("SH_QTY")
+    header += [f"COST/SH\n{_bc}", f"PRICE\n{_bc}", "EXIT@\nnative",
+               f"UNREALIZED\n{_bc}", "PCT", "VERDICT"]
+    if show_options:
+        header.append("DTE")
+    if is_usa:
+        header.append("LT_IN")
+    header.append("TX_ADD")
+    if show_sheltered:
+        header.append("SH_ADD")
+    header.append("ADVISORY")
+    aligns = ["<", "<", ">"] + ([">"] if show_sheltered else []) \
+        + [">", ">", ">", ">", ">", "<"] \
+        + (["<"] if show_options else []) \
+        + (["<"] if is_usa else []) + ["<"] \
+        + (["<"] if show_sheltered else []) + ["<"]
+    body = []
+    for r in rows:
+        # Per-share terms for BOTH cells: an option's book cost covers
+        # qty contracts x 100 shares, so divide by the multiplier too —
+        # COST/SH then compares 1:1 against the per-share premium.
+        denom = r["qty"] * r.get("multiplier", 1.0)
+        cps = r.get("cost_basis", r["cost"]) / denom if denom else 0.0
+        cells = [r["account"], r["symbol"], _qfmt(r["qty"])]
+        if show_sheltered:
+            cells.append(_qfmt(r["sheltered_qty"])
+                         if r["sheltered_qty"] else "-")
+        _be = r.get("breakeven_exit_native")
+        cells += [f"{M.shown(cps, 4):,.4f}",
+                  _price_display(r["price_base"], r["price_source"]),
+                  (f"{M.shown(_be, 4):,.4f}{r['breakeven_exit_currency']}"
+                   if _be is not None else "-"),
+                  fmt_money(r["unrealized"]),
+                  f"{r['pct']:.1f}%", r["verdict"]]
+        if show_options:
+            d = r.get("dte")
+            cells.append("-" if d is None
+                         else ("EXP" if d <= 0 else f"{d}d"))
+        if is_usa:
+            d = r["days_to_long_term"]
+            cells.append("ST" if r.get("short") else
+                         "LT" if d == 0 else (f"{d}d" if d is not None
+                                              else "-"))
+        cells.append(_add_display(taxable_agg.get(r["symbol"])))
+        if show_sheltered:
+            cells.append(_add_display(sheltered.get(r["symbol"])))
+        cells.append(("no-wash-rule(crypto)" if r.get("wash_exempt")
+                      else _advisory_display(r["radar"]))
+                     if r["verdict"] == "LOSS" else "-")
+        body.append([str(c) for c in cells])
+    total_cells = ["TOTAL", "-", "-", "-", "-", "-",
+                   fmt_money(tot_value - tot_cost),
+                   (f"{(tot_value - tot_cost) / tot_gross * 100:.1f}%"
+                    if tot_gross > 1e-9 else "0.0%"), "-"]
+    if show_sheltered:
+        total_cells.insert(3, "-")
+    if show_options:
+        total_cells.append("-")                 # DTE
+    if is_usa:
+        total_cells.append("-")
+    total_cells.append("-")                     # TX_ADD
+    if show_sheltered:
+        total_cells.append("-")                 # SH_ADD
+    total_cells.append("-")                     # ADVISORY
+    return show_options, _bc, header, aligns, body, total_cells
+
+
+def _harvest_parser() -> argparse.ArgumentParser:
+    """taxjson-harvest's arguments: the gains files, the radar and
+    sheltered reports, the symbols, options, the country and base
+    currency, the rates, the IBKR tier, the price cache, ticker.map,
+    the crypto accounts and the output's form."""
+    p = argparse.ArgumentParser(
+        prog=PROG,
+        description="Unrealized gain/(loss) per open position at current "
+                    "prices (IBKR -> yfinance -> cache) — the "
+                    "tax-loss-harvest view, losses first, with the wash "
+                    "radar's advisory on each loss.")
+    p.add_argument("files", nargs="+", metavar="FILE",
+                   help="Canonical per-account gains JSONs (prefer the "
+                        "_gains_wash.json files — the filing basis)")
+    p.add_argument("--radar", action="append", default=[], metavar="FILE",
+                   help="wash_radar_<account>.json sidecar(s) for the "
+                        "ADVISORY column; repeatable")
+    p.add_argument("--sheltered", action="append", default=[],
+                   metavar="FILE",
+                   help="SHELTERED accounts' gains JSONs; adds SH_QTY "
+                        "(shares held sheltered) and SH_ADD (date the "
+                        "sheltered side last acquired, as DATE(-Nd) — "
+                        "the 30-day superficial-loss window measures "
+                        "from there); repeatable. The taxable inputs' "
+                        "own last adds always show as TX_ADD")
+    p.add_argument("--symbol", action="append", default=[], metavar="NAME",
+                   help="Only these symbols (case-insensitive; repeatable)")
+    p.add_argument("--options", action="store_true",
+                   help="Include OCC option positions (e.g. LEAPS). "
+                        "Options price ONLY through the IBKR tier (+ "
+                        "cache) — with no gateway running they are "
+                        "listed as unpriced, never marked from a bad "
+                        "source. Adds a DTE (days-to-expiry) column")
+    add_country_argument(p, help="Project country (required; adds the LT "
+                                 "IN column for usa)")
+    p.add_argument("--base-currency", default=None, metavar="CURR",
+                   type=norm_currency,
+                   help="Base currency of the books (default: the "
+                        "--country's home currency, CAD or USD). Quotes "
+                        "in other currencies convert via --rates")
+    p.add_argument("--rates", type=Path, default=None, metavar="FILE",
+                   help="FX rates file (the pipeline's to_base.csv; "
+                        "default: to_base.csv next to the first input). "
+                        "Non-base quotes with no usable rate are omitted "
+                        "with a warning — never mixed in unconverted")
+    p.add_argument("--no-ibkr", action="store_true",
+                   help="Skip the IBKR tier (no TWS/Gateway running)")
+    p.add_argument("--ibkr-host", default=DEFAULT_IBKR_HOST)
+    p.add_argument("--ibkr-port", type=int, default=DEFAULT_IBKR_PORT,
+                   help="4001 Gateway live, 7496 TWS live (default: 4001)")
+    p.add_argument("--price-cache", type=Path, default=None, metavar="FILE",
+                   help="Price cache path (default: .price_cache.json next "
+                        "to the first input)")
+    p.add_argument("--price-cache-age", type=int,
+                   default=DEFAULT_MAX_CACHE_AGE_DAYS, metavar="DAYS",
+                   help="Days before a cache-served price warns "
+                        "(default: %(default)s)")
+    p.add_argument("--ticker-map", type=Path, default=None, metavar="FILE",
+                   help="The project's ticker.map: its QUOTE and CRYPTO "
+                        "lines pick what each holding is quoted as. "
+                        "With --options, a "
+                        "contract the pipeline renamed onto another "
+                        "listing's code (TOBASE SAMPLK.US SAMPLJ.TO turns "
+                        "SAMPLK...US calls into SAMPLJ...TO) is quoted as the "
+                        "contract actually held — found in the "
+                        "account's <acct>_raw_gains.json — in its own "
+                        "currency. Default: ticker.map next to the "
+                        "inputs or in the folder above them (the "
+                        "project root for work/ files)")
+    p.add_argument("--crypto-account", action="append", default=[],
+                   metavar="ACCOUNT",
+                   help="An input account marked `crypto = true` "
+                        "(repeatable). In a usa project its losses are "
+                        "outside the wash-sale rule (US-WASH-13) and "
+                        "count as claimable now; in a canada project "
+                        "the superficial-loss rule applies to crypto as "
+                        "to shares, so this changes nothing")
+    p.add_argument("--json", action="store_true",
+                   help="Emit the report as JSON instead of text")
+    p.add_argument("--verbose", "-v", action="store_true",
+                   help="Show per-tier price-chain diagnostics")
+    p.add_argument("--brief", action="store_true",
+                   help="The essentials (docs/output-style.md): a legend, "
+                        "the tables, the harvestable losses and one line "
+                        "per action; no COLUMNS / NOTES / scope "
+                        "paragraph (`tjs harvest` passes it unless "
+                        "--details)")
+    return p
 
 
 if __name__ == "__main__":

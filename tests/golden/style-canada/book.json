@@ -1,0 +1,240 @@
+{
+ "kind": "project",
+ "source": "tests/fixtures/style/canada with its elections saved, frozen at v0.41.0; an NVDA and a QZQ sale price changed from the fixture's, and prices lowered so no amount in a trace's # lines reaches 1,000 (the push gate reads them as comments); for its views (tests/_golden.py), an [estimate] other_income and an [instalments] table (the second prior year's tax above the prior year's, so the prior-year schedule is the one whose interest is charged), province BC (the --json estimate and amt views read it; the text ones pass --province ON) and a slips.toml added; and the qt AAPL sale of 2024-11-05 raised 0.10, its views' totals having met a figure the PII gate holds; and (PLAN step 15) its holdings.toml lists the margin account's positions as the books hold them but for SAMPA.TO's quantity and SPNC.US's cost, for the sanity views, and the views end with the reports step 15 renders, at width 0 and 120 (buy-check and sell-check left out: they answer for today, with no --date); and (TJ-4920, the --json contract) more --json views, last (two of them taxjson-sum-gains' and taxjson-sum-income's own documents), with a made-up T5008 slip CSV in slips/ (not inputs/: no figure of the run moves) for reconcile-slips",
+ "views": [
+  "sum",
+  "sum --json",
+  "estimate --province ON",
+  "estimate --json",
+  "carryover",
+  "carryover --json",
+  "form-export",
+  "form-export --json",
+  "wash-sales",
+  "wash-sales --json",
+  "fx-cash",
+  "fx-cash --json",
+  "cash all --json",
+  "fx-cash --ledger v2 --events --json",
+  "divs-sum",
+  "divs-sum --json",
+  "trades-sum",
+  "trades-sum --json",
+  "option-yield",
+  "option-yield --json",
+  "stats",
+  "stats --json",
+  "list",
+  "list --json",
+  "edge-cases",
+  "edge-cases --json",
+  "ccd-sum",
+  "ccd-sum --json",
+  "leaps-sum",
+  "leaps-sum --json",
+  "fees-sum",
+  "fees-sum --json",
+  "spinoffs",
+  "spinoffs --json",
+  "amt --province ON",
+  "amt --json",
+  "slip-audit",
+  "slip-audit --json",
+  "slip-audit --details",
+  "t1135",
+  "t1135 --json",
+  "instalments",
+  "instalments --json",
+  "option-boundary",
+  "option-boundary --json",
+  "close-year --yes",
+  "check-filed",
+  {
+   "argv": "sum",
+   "width": 120
+  },
+  {
+   "argv": "sum --json",
+   "width": 120
+  },
+  {
+   "argv": "estimate --province ON",
+   "width": 120
+  },
+  {
+   "argv": "estimate --json",
+   "width": 120
+  },
+  "sanity margin=holdings.toml",
+  {
+   "argv": "sanity margin=holdings.toml",
+   "width": 120
+  },
+  "sanity margin=holdings.toml --details",
+  {
+   "argv": "sanity margin=holdings.toml --details",
+   "width": 120
+  },
+  "sanity margin=holdings.toml --json",
+  {
+   "argv": "sanity margin=holdings.toml --json",
+   "width": 120
+  },
+  "wash-radar --date 2024-11-25",
+  {
+   "argv": "wash-radar --date 2024-11-25",
+   "width": 120
+  },
+  "wash-radar --date 2024-11-25 --details",
+  {
+   "argv": "wash-radar --date 2024-11-25 --details",
+   "width": 120
+  },
+  "wash-radar --date 2024-11-25 --all",
+  {
+   "argv": "wash-radar --date 2024-11-25 --all",
+   "width": 120
+  },
+  "wash-radar --date 2024-11-25 --json",
+  {
+   "argv": "wash-radar --date 2024-11-25 --json",
+   "width": 120
+  },
+  "rebuy --date 2024-11-25",
+  {
+   "argv": "rebuy --date 2024-11-25",
+   "width": 120
+  },
+  "rebuy --date 2024-11-25 --details",
+  {
+   "argv": "rebuy --date 2024-11-25 --details",
+   "width": 120
+  },
+  "rebuy --date 2024-11-25 --json",
+  {
+   "argv": "rebuy --date 2024-11-25 --json",
+   "width": 120
+  },
+  "sum --details",
+  {
+   "argv": "sum --details",
+   "width": 120
+  },
+  "sum --verbose",
+  {
+   "argv": "sum --verbose",
+   "width": 120
+  },
+  "sum --other-income 50000",
+  {
+   "argv": "sum --other-income 50000",
+   "width": 120
+  },
+  "estimate --province ON --details",
+  {
+   "argv": "estimate --province ON --details",
+   "width": 120
+  },
+  "estimate --province ON --verbose",
+  {
+   "argv": "estimate --province ON --verbose",
+   "width": 120
+  },
+  "estimate --province ON --other-income 400000 --details --verbose",
+  {
+   "argv": "estimate --province ON --other-income 400000 --details --verbose",
+   "width": 120
+  },
+  "tips",
+  {
+   "argv": "tips",
+   "width": 120
+  },
+  "tips --details",
+  {
+   "argv": "tips --details",
+   "width": 120
+  },
+  "tips --json",
+  {
+   "argv": "tips --json",
+   "width": 120
+  },
+  "transfers",
+  {
+   "argv": "transfers",
+   "width": 120
+  },
+  "transfers --details",
+  {
+   "argv": "transfers --details",
+   "width": 120
+  },
+  "transfers --json",
+  {
+   "argv": "transfers --json",
+   "width": 120
+  },
+  "shares",
+  {
+   "argv": "shares",
+   "width": 120
+  },
+  "shares --json",
+  {
+   "argv": "shares --json",
+   "width": 120
+  },
+  "winners",
+  {
+   "argv": "winners",
+   "width": 120
+  },
+  "winners --json",
+  {
+   "argv": "winners --json",
+   "width": 120
+  },
+  "checklist --json",
+  "checklist --reset --json",
+  "update-tobase-map --json",
+  "ticker-map --suggest --json",
+  "elect --json",
+  "elect --pending --json",
+  "compare --save base --json",
+  "compare base --json",
+  "compare --list --json",
+  "compare --delete base --json",
+  {
+   "argv": "snapshot --json",
+   "record": "output"
+  },
+  "plot-tax --json",
+  "div-estimate --date 2024-12-31 --json",
+  "win-rates --json",
+  "events all --json",
+  "divs all --json",
+  "dil all --json",
+  "roc all --json",
+  "trades all --json",
+  "leaps all --json",
+  "gains all --json",
+  "fees all --json",
+  "losers --json",
+  "check-dates --json",
+  "check-tt --json",
+  "splits --json",
+  "journals --json",
+  "renames --json",
+  "audit --json",
+  "reconcile-slips slips/t5008.csv --json",
+  {
+   "tool": "taxjson_sum_gains",
+   "argv": "--country canada --json work/margin_gains.json"
+  },
+  {
+   "tool": "taxjson_sum_income",
+   "argv": "--year 2024 --country canada --json --gains work/margin_gains.json work/margin_base.json"
+  }
+ ]
+}

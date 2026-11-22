@@ -12,12 +12,13 @@ rule covers any identical property, crypto included.
 
 import unittest
 
-from taxjson.bin.taxjson_run import _wash_flags
+from taxjson.pipeline.stages import _wash_flags
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 
 class TestWashFlags(unittest.TestCase):
-    @rule("US-WASH-13")
+    @rule(R.US_WASH_13)
     def test_usa_crypto_gets_no_wash(self):
         self.assertEqual(_wash_flags(True, True, "usa"),
                          ["--taxable", "--no-wash"])

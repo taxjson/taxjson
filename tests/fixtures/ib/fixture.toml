@@ -1,0 +1,32 @@
+# The rows of sample.csv the parser must count as skipped (row accounting:
+# tests/parser_conformance.py, `tjs parser-check`). 59 Data rows: 30 consumed, 29 skipped.
+# Statement: Period read (period end), BrokerName and Title non-events (2 skips).
+# Account Information: metadata, read by the prescan, and the Accounts Included line (2 skips).
+# Cash Report: 16 lines, read by the prescan and reconciled per currency at the end (16 skips);
+#   its Starting and Ending Cash are the cash reader's CASHBAL events.
+# Open Positions: the SAMPLF stock summary seeds the holdings; the futures summary is a non-event (1 skip).
+# Forex Balances: CAD 722 against the Cash Report's Ending Cash 724: the cash reader's NOTE (1 skip).
+# Trades: stock buy, stock sale (Basis -> broker_basis) and its ClosedLot (broker_lots; 1 skip), an equity option, a future (Notional Value header), a Forex conversion (cash booked, 1 skip).
+#   A written QZAS put assigned (A;C, the ASSIGN leg; A;O, the 100 shares bought at the strike);
+#   a Ca row cancelling a QZCX buy whose original is in no statement here (a trade_cancel leg, noted).
+# Transaction Fees: a breakdown of the sale's Comm/Fee, a non-event (1 skip).
+# Commission Adjustments: a refund naming the sale, folded into it (commission_refunds).
+# Corporate Actions: a 2-for-1 split of SAMPLF (SPLIT row); a QZSD stock dividend (5 shares at 0);
+#   a 1-for-10 split of QZOLD whose new leg is QZNEW (one SPLIT, renaming).
+# Options Expirations: the option's expiry (C;Ep, settled on the day).
+# Transfers: an ACATS transfer in of SAMPLF (TRANSFER with market_value).
+# Deposits & Withdrawals: metadata (1 skip).
+# Fees: a market-data fee (FEE). Dividends: MSFT (DIVIDEND), a QZPL payment in lieu (DIVIDEND_IN_LIEU),
+#   a Canadian issuer's QZRT return of capital (ADJUST roc). Withholding Tax: its US tax (TAX).
+#   A distribution paid as two rows with no rate (TJ-2598): QZRX, a foreign issuer's return of
+#   capital (a DIVIDEND marked _issuer_roc) beside an ordinary dividend, and QZRV, a Canadian
+#   issuer's (ADJUST roc) beside one: each dividend row at the accrual's shares and its own rate.
+# Change in Dividend Accruals: the dividends' Po rows (the ex_date on each DIVIDEND; the shares
+#   and gross rate of QZRX, 100 at 0.40, and QZRV, 50 at 0.40).
+# Interest: credit interest (INTEREST).
+# Financial Instrument Information: stock, option and futures rows (multipliers, names; 3 skips).
+expected_skips = 29
+# The kinds its rows and its broker's cash events have (parsers.protocol ROW_KINDS and
+# CASH_KINDS): the conformance kit asks for a row, or an event, of each.
+kinds = "trade, expiry, assign, split, rename, stock_dividend, trade_cancel, dividend, dividend_in_lieu, tax, interest, fee, transfer, roc"
+cash_kinds = "FXCONV, CASHMOVE, CASHBAL, FLOW, PERIOD, NOTE"

@@ -11,8 +11,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+import _paths
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 def _tx(action, dt, symbol, qty, net, time_="09:30:00"):
@@ -79,6 +80,45 @@ def _project(tmp):
         '[settings]\nyear = 2026\ncountry = "canada"\nbase_currency = "CAD"\n'
         '[accounts.margin]\ntype = "taxable"\n')
     return root
+
+
+def _no_token(token):
+    raise AssertionError(f"{token} is no JSON value")
+
+
+class TestJsonContract(unittest.TestCase):
+    """`wash-radar --json`: a NaN figure is null on stdout, as `_json_out`
+    writes it (json.dumps' bare NaN is not JSON), and the document
+    carries the contract's schema_version (lib/json_contract)."""
+
+    def test_a_nan_loss_prints_as_null(self):
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+        import taxjson.bin.taxjson_wash_radar as W
+        from taxjson.lib.json_contract import SCHEMAS
+        real = W._payload
+
+        def with_nan(*a, **kw):
+            doc = real(*a, **kw)
+            row = next(r for sec in doc["sections"] for r in sec["rows"])
+            row["recent_loss"] = float("nan")       # a made-up NaN
+            return doc
+        with tempfile.TemporaryDirectory() as tmp:
+            t = Path(tmp) / "t.json"
+            t.write_text(json.dumps({"transactions": _TAXABLE}))
+            argv = ["taxjson-wash-radar", "--country", "canada", "--taxable", str(t),
+                    "--date", "2026-06-15", "--json"]
+            out = io.StringIO()
+            with mock.patch.object(W, "_payload", with_nan), \
+                    mock.patch.object(sys, "argv", argv), redirect_stdout(out):
+                W.main()
+        doc = json.loads(out.getvalue(), parse_constant=_no_token)
+        self.assertEqual(doc["schema_version"], SCHEMAS["wash-radar"])
+        row = next(r for sec in doc["sections"] for r in sec["rows"])
+        self.assertEqual((row["ticker"], row["category"]), ("QWS.TO", "COOLING"))
+        self.assertIsNone(row["recent_loss"])
+        self.assertEqual(row["recent_loss_qty"], 50)
 
 
 if __name__ == "__main__":

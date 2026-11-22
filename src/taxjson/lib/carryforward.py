@@ -24,7 +24,14 @@ import json
 import math
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from types import MappingProxyType
+from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Tuple
+
+from taxjson.project.accounts import estimate_of, typed_estimate
+from taxjson.project.settings import as_settings, settings_of
+from taxjson.lib.tx_load import finite_num
+from taxjson.lib.project_tables import _plausible_year
+from taxjson.model import money as M
 
 # The old project-root files; only `tjs migrate` reads them now
 # (load_amt_file) — the inputs are [estimate] amt_carryover and
@@ -36,7 +43,7 @@ CLAIMED_KEY = "[carryover] claimed"
 BLOCK_VERSION = 1
 
 # A grouped amount's lead group has no leading zero; `$` allowed (the
-# claimed_losses.txt rule, taxjson_carryover._AMOUNT_RE).
+# claimed_losses.txt rule, carryover_inputs._AMOUNT_RE).
 _AMOUNT_RE = re.compile(
     r"\$?([1-9]\d{0,2}(?:,\d{3})+|\d+)(\.\d+)?|\$?\.\d+")
 
@@ -53,11 +60,6 @@ def _amount(text: str) -> float:
     if not math.isfinite(v) or v < 0:
         raise ValueError(text)
     return v
-
-
-def _plausible_year(y: int) -> bool:
-    from datetime import date
-    return 1900 <= y <= date.today().year + 1
 
 
 def load_amt_file(path: Path) -> Dict[int, float]:
@@ -141,18 +143,18 @@ def amt_from_config(value: Any) -> Dict[int, float]:
 
 # ------------------------------------------------------------- the locks
 
-def prior_lock(root: Path, settings: Dict[str, Any]
+def prior_lock(root: Path, settings: Mapping[str, Any]
                ) -> Optional[Tuple[int, Path, str]]:
     """(year, path, label) of the latest close-year lock BEFORE the
     project year: this project's filed/<year>.json or the lock
     [settings] prior_year_record names. None when there is none."""
-    from taxjson.bin import taxjson_filed
+    from taxjson.lib import filed_locks
     try:
-        py = int((settings or {}).get("year"))
+        py = int(as_settings(settings).year)
     except (TypeError, ValueError):
         return None
     try:
-        locks = taxjson_filed.project_locks(root, settings)
+        locks = filed_locks.project_locks(root, settings)
     except ValueError:
         return None
     best = None
@@ -161,119 +163,7 @@ def prior_lock(root: Path, settings: Dict[str, Any]
             best = (y, p)
     if best is None:
         return None
-    return best[0], best[1], taxjson_filed.lock_label(root, best[1])
-
-
-def _num(v: Any) -> bool:
-    return (isinstance(v, (int, float)) and not isinstance(v, bool)
-            and math.isfinite(float(v)))
-
-
-# What a present section must carry: the balance carried OUT of the
-# year, which the next year's estimate reads (resolve_losses,
-# _from_lock). A section with an opening and no closing passed as
-# well-formed, and the next year read the absent closing as zero: a loss
-# carry-forward silently reset (2026-10 audit B39).
-_BLOCK_CLOSING = {"net_capital_loss": ("closing",),
-                  "capital_loss": ("st_closing", "lt_closing"),
-                  "minimum_tax": ("closing_by_year",)}
-# The balances close-year writes as 0 or more (record_block; the T1A
-# carry-back it takes out): a negative one is a hand edit. The next
-# year read a negative closing as a loss that adds gains, and dropped a
-# negative minimum-tax amount in silence (2026-10-25 audit year-end#3).
-_BLOCK_BALANCES = {"net_capital_loss": ("closing", "carried_back"),
-                   "capital_loss": ("st_closing", "lt_closing",
-                                    "deduction_used"),
-                   "minimum_tax": ("closing",)}
-_BY_YEAR_KEYS = ("opening_by_year", "closing_by_year",
-                 "recovered_by_year", "expired_by_year")
-
-
-def _by_year_problem(where: str, d: Any) -> Optional[str]:
-    """What is wrong with a lock's {year of origin: amount} table, or
-    None: the checks [estimate] amt_carryover gets (amt_from_config) —
-    a year key, one entry per year (`2024` and `02024` are one year:
-    the second replaced the first in silence), a plausible year, an
-    amount that is a number of 0 or more (2026-10-25 audit year-end#3;
-    close-year writes str(year) keys and positive amounts)."""
-    if not isinstance(d, dict):
-        return f"{where} is not {{year: amount}}"
-    spelled: Dict[int, str] = {}
-    for k, a in d.items():
-        ks = str(k).strip()
-        if not ks.isdigit() or not _num(a):
-            return f"{where} is not {{year: amount}}"
-        y = int(ks)
-        if y in spelled:
-            return (f"{where} gives {y} twice ({spelled[y]!r} and "
-                    f"{str(k)!r}) — one entry per year of origin")
-        spelled[y] = str(k)
-        if not _plausible_year(y):
-            return f"{where}: {ks} is not a plausible year of origin"
-        if float(a) < 0:
-            return (f"{where}: {y} is {a!r}, a negative amount (close-year "
-                    f"writes 0 or more)")
-    return None
-
-
-def block_problem(block: Any) -> Optional[str]:
-    """None when a lock's `carryforwards` block has the shape close-year
-    writes; else what is wrong (taxjson_filed.lock_damage — the one
-    check every reader of a lock applies — and handoff use it). A
-    present section without its closing balance (_BLOCK_CLOSING) is a
-    problem, never a zero; so is a negative balance (_BLOCK_BALANCES), a
-    by-year table with a year twice or a negative amount
-    (_by_year_problem), and a minimum tax closing that is not the sum
-    of its closing_by_year."""
-    if not isinstance(block, dict):
-        return "carryforwards is not an object"
-    for sec, keys in (("net_capital_loss", ("opening", "created",
-                                            "applied", "closing",
-                                            "carried_back")),
-                      ("capital_loss", ("st_opening", "lt_opening",
-                                        "st_closing", "lt_closing",
-                                        "deduction_used",
-                                        "deduction_available",
-                                        "section_1256_gain",
-                                        "section_1256_short_term",
-                                        "section_1256_long_term")),
-                      ("minimum_tax", ("created", "closing",
-                                       "recovered_federal"))):
-        s = block.get(sec)
-        if s is None:
-            continue
-        if not isinstance(s, dict):
-            return f"carryforwards.{sec} is not an object"
-        for k in keys:
-            if k in s and not _num(s[k]):
-                return f"carryforwards.{sec}.{k} is not a number"
-        for k in _BLOCK_CLOSING[sec]:
-            if k not in s:
-                return (f"carryforwards.{sec} has no {k} — the balance "
-                        f"carried out of the year is missing (a truncated "
-                        f"block)")
-        for k in _BLOCK_BALANCES[sec]:
-            if k in s and float(s[k]) < 0:
-                return (f"carryforwards.{sec}.{k} is {s[k]!r}, a negative "
-                        f"balance (close-year writes 0 or more)")
-        for k in _BY_YEAR_KEYS:
-            if s.get(k) is None:
-                continue
-            prob = _by_year_problem(f"carryforwards.{sec}.{k}", s[k])
-            if prob:
-                return prob
-        if sec == "minimum_tax" and "closing" in s:
-            # close-year writes closing as the rounded sum of
-            # closing_by_year (tax_estimate): an amount edited in one
-            # and not the other moved the carryover the next year
-            # recovers with no word.
-            parts = s["closing_by_year"]
-            total = sum(float(a) for a in parts.values())
-            if abs(total - float(s["closing"])) > 0.01:
-                return (f"carryforwards.minimum_tax.closing is "
-                        f"{float(s['closing']):,.2f} but its "
-                        f"closing_by_year adds up to {total:,.2f}")
-    return None
+    return best[0], best[1], filed_locks.lock_label(root, best[1])
 
 
 def lock_block(path: Path, country: Optional[str] = None,
@@ -281,18 +171,18 @@ def lock_block(path: Path, country: Optional[str] = None,
     """The `carryforwards` block of the previous year's lock (None when
     the lock has none — written before close-year recorded them). The
     lock passes the one check every reader applies
-    (taxjson_filed.read_lock: readable, not damaged — its block
+    (filed_locks.read_lock: readable, not damaged — its block
     included — and, `country` given, closed under this project's
     country); else CarryInputError naming the lock and the fix. `loss`:
     the loss the lock carried is read, so a lock whose filed
     dispositions hold another year's rows is refused too (backlog
     TJ-0347)."""
-    from taxjson.bin import taxjson_filed
+    from taxjson.lib import filed_locks
     try:
-        doc = taxjson_filed.read_lock(
+        doc = filed_locks.read_lock(
             Path(path), None if country is None else {"country": country},
             prior=True, carried=loss)
-    except taxjson_filed.LockProblem as e:
+    except filed_locks.LockProblem as e:
         raise CarryInputError(str(e)) from None
     return doc.get("carryforwards")
 
@@ -310,8 +200,9 @@ def resolve_amt(root: Path, settings: Dict[str, Any],
     project year (Canada): [estimate] amt_carryover, else the prior
     year's lock. Raises CarryInputError on unreadable input."""
     root = Path(root)
-    if "amt_carryover" in (est_cfg or {}):
-        return {"by_year": amt_from_config(est_cfg["amt_carryover"]),
+    est = typed_estimate(est_cfg)
+    if est.has("amt_carryover"):
+        return {"by_year": amt_from_config(est.amt_carryover),
                 "source": AMT_KEY, "notes": []}
     # The minimum tax carryover is Canada's (s.120.2): a lock closed
     # under US law carries none, and reading it as "no earlier record"
@@ -325,16 +216,17 @@ def _from_lock(root: Path, settings: Dict[str, Any], section: str,
     must pass the one lock check (lock_block) under `country`: a lock
     closed under the other country's law is refused, never read as
     carrying nothing (2026-10-25 audit year-end#1)."""
+    settings = as_settings(settings)
     out: Dict[str, Any] = {"by_year": None, "source": None, "notes": [],
                            "block": None}
     pl = prior_lock(root, settings)
     # The lock prior_year_record names, deleted after its year was
     # closed, is a lock that cannot be read, never "no record" (backlog
     # TJ-0272).
-    from taxjson.bin.taxjson_filed import missing_prior_lock
+    from taxjson.lib.filed_locks import missing_prior_lock
     mp = missing_prior_lock(root, settings)
     try:
-        _py = int(settings.get("year"))
+        _py = int(settings.year)
     except (TypeError, ValueError):
         _py = None
     if mp is not None and (_py is None or mp[0] < _py) \
@@ -354,13 +246,13 @@ def _from_lock(root: Path, settings: Dict[str, Any], section: str,
     out["source"] = f"{label} (the {ly} close-year record)"
     out["lock_year"] = ly
     try:
-        py = int(settings.get("year"))
+        py = int(settings.year)
     except (TypeError, ValueError):
         py = None
     # A lock taken before its own year ended (`close-year --force` on an
     # open year) is a snapshot: its balances are provisional, said as
     # every other lock consumer says it (issue #55).
-    from taxjson.bin.taxjson_filed import partial_year_note
+    from taxjson.lib.filed_locks import partial_year_note
     try:
         _doc = json.loads(Path(lp).read_text(encoding="utf-8-sig"))
         _pn = partial_year_note(_doc, ly)
@@ -373,7 +265,7 @@ def _from_lock(root: Path, settings: Dict[str, Any], section: str,
     if section == "capital_loss" and isinstance(_doc, dict):
         # A US lock closed before the §1256 net was split 60/40 carries
         # it all short-term (US-FUT-03; backlog TJ-0611).
-        from taxjson.bin.taxjson_carryover import us_lock_1256
+        from taxjson.lib.carryover_inputs import us_lock_1256
         try:
             _s, _unsplit = us_lock_1256(_doc)
         except (TypeError, ValueError, AttributeError):
@@ -382,7 +274,7 @@ def _from_lock(root: Path, settings: Dict[str, Any], section: str,
             out["notes"].append(
                 f"The {ly} record ({label}) was closed before taxjson "
                 f"split §1256 P/L as Form 6781 does: its carryover counts "
-                f"its {_s:,.2f} of §1256 P/L as short-term, where Form "
+                f"its {M.shown(_s, 2):,.2f} of §1256 P/L as short-term, where Form "
                 f"6781 makes 60% of it long-term. Close {ly} again with "
                 f"--force in its project.")
     if py is not None and ly < py - 1:
@@ -509,36 +401,63 @@ def record_block(country: str, r: Dict[str, Any],
 # ------------------------------------------------------------ hand-off
 
 def _close(a: float, b: float) -> bool:
-    return abs(float(a) - float(b)) <= 0.01
+    """Within a cent, in whole cents (`M.cents_apart`): a figure cut a
+    cent the other way from the record's is no mismatch (TJ-3132)."""
+    return M.cents_apart(a, b) <= 1
+
+
+class LedgerCarryBack(NamedTuple):
+    """What the carryover ledger says of this project's T1A carry-back, the
+    one value handoff's comparison reads (backlog TJ-1448): `amounts` ({year:
+    the part of this project's loss a claim under it carries back}), `unknown`
+    (why the ledger could not be used) and `incomplete` (the years whose nets
+    it left sales out of, as text)."""
+    amounts: Mapping[int, float] = MappingProxyType({})
+    unknown: Optional[str] = None
+    incomplete: str = ""
+
+
+class CarryComparison(NamedTuple):
+    """`handoff_issues`' result: the differences, and the decision about the
+    claim under the record year, made once where it is compared. `unchecked`:
+    the note when that comparison could not run. `caveat`: the note when it
+    ran on a ledger that left sales out. `split_note`: the note when the record
+    itself was locked on one (backlog TJ-1461)."""
+    issues: List[Dict[str, Any]]
+    unchecked: Optional[str] = None
+    caveat: Optional[str] = None
+    split_note: Optional[str] = None
 
 
 def handoff_issues(root: Path, cfg: Dict[str, Any],
                    record: Dict[str, Any],
-                   carried_back_to: Optional[Dict[int, float]] = None
-                   ) -> List[Dict[str, Any]]:
+                   carry_back: Optional[LedgerCarryBack] = None
+                   ) -> CarryComparison:
     """What this (next) project's carry-forward inputs say vs what the
     closed year's record carried forward: [estimate] other_losses /
     long_term_losses, [carryover] claimed's entry for the record year,
     [estimate] amt_carryover (tax-logic CA-CARRY-05,
     US-CARRY-03). An input that is not set is not a
-    mismatch (the estimate then reads the record). `carried_back_to`
-    ({year: amount}, the carryover ledger's): the part of this
-    project's loss a claim under the record year carries back (T1A) —
-    the record, closed before it, applied none of it (backlog
-    TJ-0078)."""
+    mismatch (the estimate then reads the record). `carry_back`: the
+    part of this project's loss a claim under the record year carries
+    back (T1A) — the record, closed before it, applied none of it
+    (backlog TJ-0078). When the ledger could not tell, that claim is not
+    compared at all (backlog TJ-1426)."""
     from taxjson.lib.country import CountryError, settings_country
     block = record.get("carryforwards")
     if not isinstance(block, dict):
-        return []
+        return CarryComparison([])
     root = Path(root)
-    settings = cfg.get("settings") or {}
+    carry_back = carry_back or LedgerCarryBack()
+    settings = settings_of(cfg)
     try:
         country = settings_country(settings)
     except CountryError:
-        return []
-    est = cfg.get("estimate") or {}
+        return CarryComparison([])
+    est = estimate_of(cfg)
     ry = int(record["year"])
     out: List[Dict[str, Any]] = []
+    unchecked = caveat = split_note = None
 
     def item(what, here, there, why):
         out.append({"what": what, "here": here, "record": there,
@@ -546,35 +465,60 @@ def handoff_issues(root: Path, cfg: Dict[str, Any],
 
     if country == "canada":
         ncl = block.get("net_capital_loss") or {}
-        if "closing" in ncl and isinstance(est.get("other_losses"),
+        locked_on = ncl.get("carry_back_incomplete")
+        if locked_on:
+            from taxjson.lib.carry_back import left_out_text
+            years = (left_out_text(locked_on)
+                     if isinstance(locked_on, dict) else "")
+            split_note = (
+                f"The {ry} record split that year's loss on a carryover "
+                f"ledger that left out sales with an unknown cost"
+                + (f" ({years})" if years else "")
+                + f". Once they have a cost, re-close {ry} with --force: the "
+                  f"part carried back may change.")
+        if "closing" in ncl and isinstance(est.other_losses,
                                            (int, float)) \
-                and not isinstance(est.get("other_losses"), bool) \
-                and not _close(est["other_losses"], ncl["closing"]):
-            item("[estimate] other_losses", float(est["other_losses"]),
+                and not isinstance(est.other_losses, bool) \
+                and not _close(est.other_losses, ncl["closing"]):
+            item("[estimate] other_losses", float(est.other_losses),
                  float(ncl["closing"]),
-                 f"the {ry} record carried {ncl['closing']:,.2f} of net "
+                 f"the {ry} record carried {M.shown(ncl['closing'], 2):,.2f} of net "
                  f"capital losses (100%) into {ry + 1}; this project "
-                 f"enters {float(est['other_losses']):,.2f}. Fix "
+                 f"enters {M.shown(float(est.other_losses), 2):,.2f}. Fix "
                  f"whichever is wrong (your notice of assessment "
                  f"decides; re-close {ry} with --force if the record "
                  f"is).")
         if "applied" in ncl:
             from taxjson.lib.project_tables import claimed_losses
             claimed = claimed_losses(cfg)[0]
-            back = float((carried_back_to or {}).get(ry) or 0.0)
-            if ry in claimed and not _close(claimed[ry] - back,
-                                            ncl["applied"]):
+            back = float(carry_back.amounts.get(ry) or 0.0)
+            if ry in claimed and carry_back.unknown:
+                unchecked = (
+                    f"{CLAIMED_KEY} {ry} was not compared with the {ry} "
+                    f"record: only the carryover ledger knows the part "
+                    f"carried back from this project's loss, and it could "
+                    f"not be used. Reason: {carry_back.unknown}. `tjs "
+                    f"carryover` says more.")
+            elif ry in claimed and carry_back.incomplete:
+                caveat = (
+                    f"{CLAIMED_KEY} {ry} was compared using a carryover "
+                    f"ledger that leaves out sales with an unknown cost "
+                    f"({carry_back.incomplete}), so the "
+                    f"part carried back from this project's loss may change "
+                    f"(`tjs carryover`).")
+            if ry in claimed and not carry_back.unknown \
+                    and not _close(M.of(claimed[ry]) - M.of(back), ncl["applied"]):
                 item(f"{CLAIMED_KEY} {ry}", claimed[ry],
                      float(ncl["applied"]),
-                     f"{CLAIMED_KEY} records {claimed[ry]:,.2f} applied "
+                     f"{CLAIMED_KEY} records {M.shown(claimed[ry], 2):,.2f} applied "
                      f"on the {ry} return"
-                     + (f" ({back:,.2f} of it carried back from this "
+                     + (f" ({M.shown(back, 2):,.2f} of it carried back from this "
                         f"project's loss, T1A)" if back > 0.005 else "")
                      + f"; the {ry} record applied "
-                     f"{float(ncl['applied']):,.2f}.")
+                     f"{M.shown(float(ncl['applied']), 2):,.2f}.")
         mt = block.get("minimum_tax")
         given: Dict[str, Any] = {"source": None}
-        if isinstance(mt, dict) and "amt_carryover" in est:
+        if isinstance(mt, dict) and est.has("amt_carryover"):
             try:
                 given = resolve_amt(root, {"year": ry + 1}, est)
             except CarryInputError as e:
@@ -592,9 +536,9 @@ def handoff_issues(root: Path, cfg: Dict[str, Any],
                         item(f"{given['source']} {y}", have.get(y, 0.0),
                              want.get(y, 0.0),
                              f"the {ry} record carried "
-                             f"{want.get(y, 0.0):,.2f} of {y} minimum tax "
+                             f"{M.shown(want.get(y, 0.0), 2):,.2f} of {y} minimum tax "
                              f"into {ry + 1}; {given['source']} says "
-                             f"{have.get(y, 0.0):,.2f}. The notice of "
+                             f"{M.shown(have.get(y, 0.0), 2):,.2f}. The notice of "
                              f"assessment / T691 decides: fix the input, "
                              f"or re-close {ry} (its estimate inputs — "
                              f"[estimate] other_income — may differ from "
@@ -603,14 +547,14 @@ def handoff_issues(root: Path, cfg: Dict[str, Any],
         cl_ = block.get("capital_loss") or {}
         for key, k2, word in (("other_losses", "st_closing", "short"),
                               ("long_term_losses", "lt_closing", "long")):
-            v = est.get(key)
+            v = getattr(est, key)
             if k2 in cl_ and isinstance(v, (int, float)) \
                     and not isinstance(v, bool) \
                     and not _close(v, cl_[k2]):
                 item(f"[estimate] {key}", float(v), float(cl_[k2]),
-                     f"the {ry} record carried {float(cl_[k2]):,.2f} of "
+                     f"the {ry} record carried {M.shown(float(cl_[k2]), 2):,.2f} of "
                      f"{word}-term capital loss into {ry + 1}; this "
-                     f"project enters {float(v):,.2f} (Schedule D "
+                     f"project enters {M.shown(float(v), 2):,.2f} (Schedule D "
                      f"Capital Loss Carryover Worksheet decides).")
         # The closed year's [carryover] claimed entry is the deduction
         # its return took; the record counted another one as used, so
@@ -623,17 +567,17 @@ def handoff_issues(root: Path, cfg: Dict[str, Any],
         if ry in claimed and used is not None \
                 and not _close(min(claimed[ry], used[1]), used[0]):
             item(f"{CLAIMED_KEY} {ry}", claimed[ry], used[0],
-                 f"{CLAIMED_KEY} records {claimed[ry]:,.2f} deducted "
+                 f"{CLAIMED_KEY} records {M.shown(claimed[ry], 2):,.2f} deducted "
                  f"against ordinary income on the {ry} return (Schedule "
-                 f"D line 21); the {ry} record counted {used[0]:,.2f} "
-                 f"as used, so the {float(cl_.get('st_closing') or 0):,.2f}"
+                 f"D line 21); the {ry} record counted {M.shown(used[0], 2):,.2f} "
+                 f"as used, so the {M.shown(float(cl_.get('st_closing') or 0), 2):,.2f}"
                  f" short-term and "
-                 f"{float(cl_.get('lt_closing') or 0):,.2f} long-term "
+                 f"{M.shown(float(cl_.get('lt_closing') or 0), 2):,.2f} long-term "
                  f"it carried into {ry + 1} are off by the difference. "
                  f"Enter it in the {ry} project's {CLAIMED_KEY} and close "
                  f"{ry} again there with --force, or fix the entry here "
                  f"(the Capital Loss Carryover Worksheet decides).")
-    return out
+    return CarryComparison(out, unchecked, caveat, split_note)
 
 
 def us_deduction_used(record: Dict[str, Any]
@@ -650,12 +594,12 @@ def us_deduction_used(record: Dict[str, Any]
     if not isinstance(cl_, dict):
         return None
     try:
-        from taxjson.bin.taxjson_carryover import us_lock_gains
+        from taxjson.lib.carryover_inputs import us_lock_gains
         st, lt, _src = us_lock_gains(record)
         loss = max(0.0, -((st - float(cl_.get("st_opening") or 0.0))
                           + (lt - float(cl_.get("lt_opening") or 0.0))))
         cap = min(US_ORDINARY_LOSS_CAP, loss)
-        if _num(cl_.get("deduction_used")):
+        if finite_num(cl_.get("deduction_used")):
             return float(cl_["deduction_used"]), cap
         out = (float(cl_.get("st_closing") or 0.0)
                + float(cl_.get("lt_closing") or 0.0))

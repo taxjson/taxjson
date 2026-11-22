@@ -6,12 +6,13 @@ instead of FIFO-remaining lots.
 This test pins the engine-level difference between the two countries
 on a multi-lot scenario — confirming there IS a divergence that the
 `--country` plumbing protects against. The wrapper-plumbing side is
-covered by the live invocation in `taxjson_run.py:stage_account`."""
+covered by the live invocation in `pipeline/stages.py:stage_account`."""
 import unittest
 
-from taxjson.lib.core import (
-    CanadaTaxRules, USATaxRules, TaxTransaction, get_tax_rules,
-)
+from taxjson.engine.ca.taxrules import CanadaTaxRules
+from taxjson.engine.us.taxrules import USATaxRules
+from taxjson.engine.by_country import get_tax_rules
+from taxjson.model.transaction import TaxTransaction
 
 
 class TestEngineInventoryDiffersByCountry(unittest.TestCase):

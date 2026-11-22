@@ -24,6 +24,7 @@ import re
 import sys
 
 from taxjson.lib import cli_diag
+from taxjson.lib import out as _out
 from taxjson.lib.install_hint import extra_hint
 
 PROG = "taxjson-xlsx-to-csv"
@@ -85,8 +86,7 @@ class Sheet:
 def _apply_cells(df, fn):
     """Run `fn` over every cell. `DataFrame.map` is the modern API
     (pandas 2.1+); fall back to the older `applymap` on earlier
-    versions so this tool installs cleanly on Python 3.10 environs
-    that haven't bumped pandas yet."""
+    versions, so an older pandas still works."""
     if isinstance(df, Sheet):
         return Sheet([[fn(c) for c in row] for row in df.rows])
     if hasattr(df, 'map') and callable(getattr(df, 'map')):
@@ -271,7 +271,7 @@ def convert_xlsx_to_csv(input_file: str, output_file=None, sheet_name=0) -> None
         cli_diag.error(PROG, f"no such file: {input_file}")
         sys.exit(2)
 
-    print(f"Reading {input_file!r}...", file=sys.stderr)
+    _out.put(f"Reading {input_file!r}...", sys.stderr)
     df = read_sheet(input_file, sheet_name)
     df = _apply_cells(df, _clean_numeric_commas)
 
@@ -292,7 +292,7 @@ def convert_xlsx_to_csv(input_file: str, output_file=None, sheet_name=0) -> None
                                               alt=", or choose another -o")
             cli_diag.error(PROG, head, [fix] if fix else ())
             sys.exit(2)
-        print(f"Successfully converted to {output_file!r}.", file=sys.stderr)
+        _out.put(f"Successfully converted to {output_file!r}.", sys.stderr)
     else:
         df.to_csv(sys.stdout, index=False, encoding='utf-8')
 

@@ -1,0 +1,29 @@
+{
+  "active": false,
+  "currency": "USD",
+  "events": null,
+  "headline": "FX on foreign cash: no foreign-currency cash flow in the taxable books for 2024 (conversions, deposits/withdrawals and margin balances are not read)",
+  "ledger": "v1",
+  "open_pools": {},
+  "overdrafts": {},
+  "overdrafts_in_year": {},
+  "per_currency": {},
+  "pools_year_end": {},
+  "reasons": [
+    "0 in-year overdraft(s): the ledger spent currency it never saw acquired",
+    "currency conversions (IB Forex, Kraken/Coinbase fiat trades, bank conversions) are not read",
+    "cash deposits and withdrawals are not read",
+    "foreign-currency margin balances (debt) are not modelled",
+    "each history starts with an empty pool (no opening balance carried from the year before)"
+  ],
+  "reliable": false,
+  "rule": "\u00a7988 (ordinary income)",
+  "schema_version": 1,
+  "status": "unreliable",
+  "unrated": {},
+  "unreliable_raw": {
+    "net_gain": 0,
+    "reportable": 0
+  },
+  "year": 2024
+}

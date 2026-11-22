@@ -1,0 +1,25 @@
+REBUY — superficial losses (s.54, settlement dates), as of 2024-11-25 (CAD)
+REBUY ON: the first day a buy no longer cancels the loss; option series under their underlying.
+TICKER    SOLD ON       LOSS  ACCOUNTS  REBUY ON
+--------------------------------------------------------
+AAPL.US   2024-11-05    3.24  qt        2024-12-06 (11d)
+NVDA.US   2024-11-20  117.45  margin    2024-12-20 (25d)
+SAMPA.TO  2024-11-01  519.90  margin    2024-11-29 (4d)
+
+A buy in ANY of your accounts counts, RRSP and TFSA included; there the loss is denied for good.
+! SAMPA.TO: already bought back; sell it by 2024-11-28 to keep the loss — tjs wash-radar
+
+SALES BEHIND EACH ROW
+  - AAPL.US: 2024-11-05 qt 75 units, loss 3.24. Rebuy on 2024-12-06 (11d).
+  - NVDA.US: 2024-11-20 margin 10 units, loss 117.45. Rebuy on 2024-12-20 (25d).
+  - SAMPA.TO: 2024-11-01 margin 100 units, loss 519.90, 100 units denied as things stand. Rebuy on 2024-11-29 (4d). Already bought back: sell the replacement by 2024-11-28 (last trade date) to keep the loss.
+
+CLEARED IN THE LAST 7 DAYS
+  (none)
+
+HOW THE DATE IS SET
+  - A loss is superficial when the same property is acquired within 30 days before or after the sale (settlement dates, s.54) by you or an affiliated person and still held 30 days after it.
+  - REBUY ON is the first trading day whose buy settles after the latest loss sale's window closes (30 days after its settlement): the window's last day when a trade then settles the next day, the Friday before when it closes on a weekend (buy-check's safe-from date, and wash-radar's CLEARS for a COOLING or BLOCKED row; a VIOLATION's CLEARS is its last day to sell). When ticker.map or tobase.map books two listings as one, it is the later of their dates.
+  - A long call on the shares is a replacement too (CA-PLAN-02); an option series is replaced only by the same series.
+
+Scope: these verdicts cover this project's accounts only. A purchase by your spouse or common-law partner, or by a corporation you or they control (affiliated persons, ITA s.251.1), within 30 days before or after a loss sale also makes it superficial — those accounts are not in the project, so check them yourself.

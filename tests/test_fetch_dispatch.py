@@ -24,8 +24,9 @@ from pathlib import Path
 from unittest import mock
 
 from taxjson.lib import fetchers as FP
+from taxjson.lib.json_contract import SCHEMAS
 from _style import CapturedWidth
-from _tmpfiles import private_dir
+import _paths
 
 
 # Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
@@ -40,7 +41,7 @@ def setUpModule():
 def tearDownModule():
     _WIDTH.stop()
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 SRC = REPO_ROOT / "src"
 
 CALLS = []
@@ -102,7 +103,7 @@ class _Patched(unittest.TestCase):
         return root
 
     def fetch(self, root, *argv):
-        from taxjson.bin import taxjson_run as R
+        from taxjson.cli import setup as cli_setup
         p = argparse.ArgumentParser()
         p.add_argument("account", nargs="*")
         for flag in ("--list", "--json", "--dry-run"):
@@ -115,7 +116,7 @@ class _Patched(unittest.TestCase):
         code = 0
         with redirect_stdout(out), redirect_stderr(err):
             try:
-                R.cmd_fetch(args)
+                cli_setup.cmd_fetch(args)
             except SystemExit as e:
                 code = e.code if isinstance(e.code, int) else 1
                 if not isinstance(e.code, int) and e.code is not None:
@@ -143,11 +144,12 @@ class TestNoFetcherInstalled(_Patched):
     def test_list_json_is_empty(self):
         code, out, _err = self.fetch(self.project(""), "--list", "--json")
         self.assertEqual(code, 0)
-        self.assertEqual(json.loads(out), {"fetchers": []})
+        # The --json contract: its schema_version (lib/json_contract).
+        self.assertEqual(json.loads(out), {
+            "schema_version": SCHEMAS["fetch --list"], "fetchers": []})
 
     def test_fetch_keys_are_accepted_with_a_note(self):
-        from taxjson.bin.taxjson_run import (_fetch_plugin_note,
-                                             validate_config)
+        from taxjson.pipeline.config import _fetch_plugin_note, validate_config
         cfg = {"settings": {"year": 2026, "country": "canada"},
                "accounts": {"margin": {"type": "taxable",
                                        "brokerage": "questrade",
@@ -168,7 +170,7 @@ class TestNoFetcherInstalled(_Patched):
         # The v0.3.0 [fetch.*] tables are no longer read (fetch config
         # lives on the account). Unknown top-level tables now warn
         # (R1-216); the retired one says where its settings went.
-        from taxjson.bin.taxjson_run import validate_config
+        from taxjson.pipeline.config import validate_config
         warnings = validate_config(
             {"settings": {"year": 2026, "country": "canada"},
              "accounts": {"margin": {"type": "taxable"}},
@@ -179,34 +181,12 @@ class TestNoFetcherInstalled(_Patched):
         self.assertIn("brokerage", hits[0])
 
 
-def _tomli_alone() -> str:
-    """A folder holding only a copy of the installed `tomli` (every file
-    its distribution installed, a compiled helper module included)."""
-    import shutil
-    from importlib import metadata
-    dist = metadata.distribution("tomli")
-    d = Path(private_dir())
-    for f in dist.files or ():
-        if f.parts[0] == ".." or f.parts[0].endswith(".dist-info"):
-            continue
-        src = Path(dist.locate_file(f))
-        if src.is_file():
-            (d / f).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, d / f)
-    return str(d)
-
-
 class TestNoFetcherCli(unittest.TestCase):
     """The real CLI with no site-packages (`python -S`): no installed
     plugin can be seen, whatever this environment holds."""
 
     def _cli(self, root, *args):
-        path = [str(SRC)]
-        if sys.version_info < (3, 11):
-            # No site-packages, so no `tomli` (the 3.10 dependency
-            # standing in for tomllib): a private copy of it alone.
-            path.append(_tomli_alone())
-        env = dict(os.environ, PYTHONPATH=os.pathsep.join(path))
+        env = dict(os.environ, PYTHONPATH=str(SRC))
         return subprocess.run(
             [sys.executable, "-S", "-m", "taxjson.bin.taxjson_run",
              "-C", str(root), *args], cwd=REPO_ROOT, env=env,
@@ -279,6 +259,7 @@ class TestDispatch(_Patched):
         code, out, err = self.fetch(root, "b", "--json", "--dry-run")
         self.assertEqual(code, 0, err)
         self.assertEqual(json.loads(out), {
+            "schema_version": SCHEMAS["fetch"],
             "accounts": {"b": {"source": "fakebroker", "dry": True}},
             "dry_run": True})
         self.assertIn("fake: b", err)
@@ -342,8 +323,7 @@ class TestDispatch(_Patched):
         self.assertIn("no installed fetcher named 'nope'", err)
 
     def test_config_check_uses_the_installed_brokerages(self):
-        from taxjson.bin.taxjson_run import (_fetch_plugin_note,
-                                             validate_config)
+        from taxjson.pipeline.config import _fetch_plugin_note, validate_config
         base = {"settings": {"year": 2026, "country": "canada"}}
         ok = dict(base, accounts={"m": {"type": "taxable",
                                         "brokerage": "fakebroker",

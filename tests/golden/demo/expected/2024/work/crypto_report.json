@@ -1,0 +1,102 @@
+{
+  "account": "crypto",
+  "basis": "wash-adjusted",
+  "gains": {
+    "manual_rows": [],
+    "option_fees": {
+      "CAD": 0.0
+    },
+    "returns_by_asset": {
+      "Stocks": {
+        "CAD": {
+          "days": [
+            139,
+            170,
+            144,
+            156
+          ],
+          "dollars": [
+            30.2063,
+            167.4675,
+            387.3013,
+            85.5562
+          ],
+          "fee_shares": [
+            0.05,
+            0.1,
+            0.5,
+            0.25
+          ],
+          "fees": [
+            26.46,
+            13.365,
+            7.371,
+            10.53
+          ]
+        }
+      }
+    },
+    "tainted_count": 0,
+    "tainted_routed": 0,
+    "ticker_stats": {
+      "BTC": {
+        "CAD": {
+          "cap": 197.6738,
+          "cost": 9752.5013,
+          "div": 0.0,
+          "hold_days": [
+            139,
+            170
+          ],
+          "opt": 0.0,
+          "pil": 0.0,
+          "proceeds": 9950.175,
+          "trade_count": 2
+        }
+      },
+      "ETH": {
+        "CAD": {
+          "cap": 472.8575,
+          "cost": 3660.4915,
+          "div": 23.5575,
+          "hold_days": [
+            144,
+            156
+          ],
+          "opt": 0.0,
+          "pil": 0.0,
+          "proceeds": 4133.349,
+          "trade_count": 2
+        }
+      }
+    },
+    "total_fees": {
+      "CAD": 133.866
+    },
+    "total_year": "2024",
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1
+  },
+  "generated_at": "<stamp>",
+  "income": {
+    "interest_paid_totals": {},
+    "interest_totals": {},
+    "missing_amount": [],
+    "ticker_stats": {
+      "ETH": {
+        "CAD": {
+          "div": 23.5575,
+          "pil": 0.0,
+          "tax": 0.0
+        }
+      }
+    },
+    "total_year": "2024"
+  },
+  "schema_version": 1,
+  "wash": {
+    "count": 0,
+    "total_disallowed": 0
+  },
+  "year": "2024"
+}

@@ -1,0 +1,68 @@
+TAX ESTIMATE — canada/ON, rates vintage 2024
+ESTIMATE ONLY, not filing numbers; taxable accounts only.
+
+  Other income                       58,000.00
+  Capital gains (taxable)               347.19  [694.38 realized - 0.00 other losses, x50%]
+  Eligible dividends (grossed)           69.00  [50.00 x1.38, Canadian issuers, trust distributions included]
+  Foreign dividends                     517.05  [FTC 26.93 — TAX rows 23.28 + 3.65 assumed (15% of the foreign dividends of accounts with no TAX row), capped at 15% of each security's foreign divs]
+  Payments in lieu                        0.00
+  Crypto staking (ordinary)              23.56  [no withholding, no FTC]
+
+  Tax with investments                9,872.62  federal 6,620.41 + ON 3,252.21
+  Tax on other income alone           9,633.13
+  => ESTIMATED TAX ON INVESTMENT INCOME: 239.49 CAD  (18.6% of 1,284.99)
+  Net capital losses carried in: 0.00 — no close-year lock before 2024 and none entered: see `tjs carryover`
+
+  AMT CHECK — post-2024 minimum tax (20.5% over 173,205.00 exemption)
+  Adjusted taxable income            59,284.99
+  Federal minimum tax                     0.00
+  Federal regular tax                 6,620.41
+  => does not bind                    6,620.41  [headroom]
+  AMT recomputes with capital gains at 100% (vs 50%) and the dividend tax credit denied; on these numbers regular tax still exceeds the minimum, so no top-up is owed.
+
+  CALCULATION TRACE — BASE (other income only) vs WITH investments
+  Taxable income: BASE 58,000.00 | WITH 58,956.80 = 58,023.56 ordinary (after deductions) + 347.19 taxable gains + 69.00 grossed dividends + 517.05 foreign
+  FEDERAL                                       BASE          WITH
+    0-55,867 @ 15.00%                       8,380.05      8,380.05
+    55,867-58,957 @ 20.50%                    437.27        633.41
+    BPA credit (15,705 max @ 15%)          -2,355.75     -2,355.75
+    DTC 15.0198% x 69.00                        0.00        -10.36
+    FTC rows+assumed, max 15% x 517.05          0.00        -26.93
+    = FEDERAL                               6,461.56      6,620.41
+  ON
+    0-51,446 @ 5.05%                        2,598.02      2,598.02
+    51,446-58,957 @ 9.15%                     599.69        687.24
+    BPA credit (12,399 @ 5.05%)              -626.15       -626.15
+    = basic tax                             2,571.56      2,659.11
+    surtax 20% of basic over 5,554              0.00          0.00
+    surtax 36% of basic over 7,108              0.00          0.00
+    DTC 10.00% x 69.00                          0.00         -6.90
+    Ontario Health Premium                    600.00        600.00
+    = ON                                    3,171.56      3,252.21
+    TOTAL                                   9,633.13      9,872.62
+    => WITH - BASE = 239.49 estimated tax on investment income
+
+  INSTALMENTS — prior-year option (Mar/Jun/Sep/Dec 15)
+  Required this year                  5,200.00
+  Paid to date                        1,150.00
+  Net instalment interest               211.31
+  => instalments behind               4,050.00  [due with the balance April 30; tjs instalments]
+
+  - Included in the ON figure — ON surtax (20% over 5,554 + 36% over 7,108 of basic ON tax): 0.00 with investments, 0.00 on other income alone; Ontario Health Premium: 600.00 with investments, 600.00 on other income alone (max 900.00 over 200,600 taxable).
+  - Foreign tax not credited: the 0.01 withheld above 15% of each security's foreign dividends (MSFT.US 0.01; ITA s.20(11)) may be deductible on line 23200 (form T2209); the estimate does not deduct it: a deduction you claim goes in [estimate] deductions.
+  - If you paid minimum tax (AMT) in any of the 7 preceding years, its carryover (T691 Part 8, line 40427; ITA s.120.2) can reduce federal tax by up to 6,647.34 (basic federal tax less the minimum amount, s.120.2(1)(b)), plus the ON share — none is entered: put it in taxjson.toml's [estimate] amt_carryover = { YEAR = AMOUNT } (by year of origin, from your notice of assessment or T691), or close last year with `tjs close-year` so this year reads it from the lock.
+  - Crypto staking rewards (23.56) are taxed as ordinary income — no withholding, no foreign tax credit.
+  Assumes:
+  - Canadian issuers' dividends are all ELIGIBLE (non-eligible dividends would be taxed higher) — a Canadian trust's distribution (ETF, REIT or fund units) is grossed up as an eligible dividend too (its T3 split into eligible dividends, other income, capital gains and return of capital is not in the export; the T3 decides) — except the T5 box 18 capital-gains dividends named in [[capital_gains_dividends]] (taxed as capital gains)
+  - foreign withholding creditable up to 15% of each security's foreign dividends (its TAX rows paired with its dividends by symbol, across the taxable accounts; a TAX row that names no security, or one with no foreign dividend in the year, up to 15% of its account's foreign cash dividends that none of its TAX rows names, within each security's 15% that its paired withholding leaves) and up to the Canadian tax on their share of net income (forms T2209 and T2036, all foreign dividends as one country's and all foreign tax as non-business income tax)
+  - foreign tax that neither credit takes, and withholding above 15% of a security's dividends, is not deducted (either may be deductible on line 23200, ITA s.20(12) and s.20(11), in a minimum-tax year too: a deduction you claim goes in [estimate] deductions)
+  - crypto staking is ordinary income
+  - no QC abatement or low-income reductions
+  - interest income and interest paid are not included — each account's .sum shows interest earned ('CASH INTEREST') and interest charged ('INTEREST PAID') per currency, so take interest income from there (or the T5) and the margin interest paid to line 22100 (--carrying-charges)
+  - FX gains/losses on foreign cash (s.39(1.1), line 15300 — `tjs fx-cash`), T3 box 21 capital gains and T5 box 18 amounts not named in [[capital_gains_dividends]] are not included
+  - deductions below line 15000 only as entered (--deductions, --carrying-charges)
+  - a prior-year minimum tax carryover only as entered ([estimate] amt_carryover) or carried by last year's close-year lock
+  - the basic personal amount is the only non-refundable credit (no CPP/EI, Canada employment, age, pension or donation credits)
+  - no OAS recovery tax
+  - the AMT sees only these books and other income (no stock-option deduction add-back or donated securities)
+! FX on foreign cash (line 15300): not in the rows; its estimate is NOT RELIABLE — tjs fx-cash

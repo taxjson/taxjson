@@ -8,6 +8,7 @@ from pathlib import Path
 
 from tax_rules import rule
 from tax_rules.dual import cli
+from taxjson.rules import ids as R
 
 from taxjson.lib import positions_check as PC
 from _style import CapturedWidth
@@ -64,7 +65,7 @@ HIST = ("BUYSELL 2025-02-10 09:30:00 SAMPB.TO -10 CAD 8 80 0\n"
 
 
 class TestOpeningCanada(unittest.TestCase):
-    @rule("CA-OPEN-01")
+    @rule(R.CA_OPEN_01)
     def test_snapshot_lines_and_no_false_superficial_loss(self):
         with tempfile.TemporaryDirectory() as td:
             root = _project(Path(td) / "p", tt={("margin", "h.tt"): HIST})
@@ -103,7 +104,7 @@ class TestOpeningCanada(unittest.TestCase):
             self.assertEqual(fm.returncode, 0, fm.stderr)
             self.assertNotIn("SAMPB.TO", fm.stdout)
 
-    @rule("CA-OPEN-01")
+    @rule(R.CA_OPEN_01)
     def test_control_buysell_opening_is_denied(self):
         # The old hand-written opening keeps working unchanged — and
         # keeps its known flaw (the reproduced false denial).
@@ -120,7 +121,7 @@ class TestOpeningCanada(unittest.TestCase):
                     if t.get("symbol") == "SAMPB.TO"][0]
             self.assertTrue(sale.get("is_wash_sale"))
 
-    @rule("CA-OPEN-03")
+    @rule(R.CA_OPEN_03)
     def test_overlapping_history_is_not_counted_twice(self):
         with tempfile.TemporaryDirectory() as td:
             hist = ("BUYSELL 2024-03-01 09:30:00 SAMPB.TO 30 CAD 10 300 0\n"
@@ -139,7 +140,7 @@ class TestOpeningCanada(unittest.TestCase):
             self.assertAlmostEqual(inv["SAMPB.TO"]["qty"], 10.0)
             self.assertAlmostEqual(inv["SAMPB.TO"]["total_cost"], 100.0)
 
-    @rule("CA-OPEN-03")
+    @rule(R.CA_OPEN_03)
     def test_snapshot_inside_the_tax_year_with_a_sale_is_refused(self):
         with tempfile.TemporaryDirectory() as td:
             hist = ("BUYSELL 2025-01-06 09:30:00 SAMPB.TO 30 CAD 10 300 0\n"
@@ -153,7 +154,7 @@ class TestOpeningCanada(unittest.TestCase):
             self.assertIn("would leave out 1 sale(s) of the 2025 tax year",
                           r.stdout + r.stderr)
 
-    @rule("CA-OPEN-03")
+    @rule(R.CA_OPEN_03)
     def test_snapshot_after_a_return_of_capital_beyond_the_cost_refused(
             self):
         # Issue #77: a return of capital of 15 a share on shares costing
@@ -172,7 +173,7 @@ class TestOpeningCanada(unittest.TestCase):
             self.assertIn("would leave out 1 return(s) of capital of the "
                           "2025 tax year", r.stdout + r.stderr)
 
-    @rule("CA-OPEN-01")
+    @rule(R.CA_OPEN_01)
     def test_opening_from_an_ib_statement(self):
         stmt = (
             "Statement,Header,Field Name,Field Value\n"
@@ -256,7 +257,7 @@ class TestOpeningCanada(unittest.TestCase):
                 self.assertFalse((root / "inputs" / "margin" /
                                   "opening_2024-12-31.tt").exists())
 
-    @rule("CA-OPEN-01")
+    @rule(R.CA_OPEN_01)
     def test_an_option_average_price_is_per_share(self):
         # Questrade's snapshot (`tjs fetch --positions`) states an
         # option's average_entry_price per share: one contract at 2 is
@@ -306,7 +307,7 @@ class TestOpeningCanada(unittest.TestCase):
 
 
 class TestOpeningUsa(unittest.TestCase):
-    @rule("US-OPEN-01")
+    @rule(R.US_OPEN_01)
     def test_lots_with_dates_only(self):
         with tempfile.TemporaryDirectory() as td:
             root = _project(Path(td) / "p", country="usa", cur="USD",
@@ -438,7 +439,7 @@ class TestSanityCostCanada(unittest.TestCase):
         _gains(root, "cash", {"SAMPC.TO": (10, 300.0, "CAD", 0.0)})
         return root
 
-    @rule("CA-OPEN-01")
+    @rule(R.CA_OPEN_01)
     def test_pooled_and_superficial_loss_reasons(self):
         with tempfile.TemporaryDirectory() as td:
             root = self._root(td)
@@ -471,7 +472,7 @@ class TestSanityCostCanada(unittest.TestCase):
                           t.stdout)
             self.assertIn("pooled: the books average", t.stdout)
 
-    @rule("CA-OPEN-01")
+    @rule(R.CA_OPEN_01)
     def test_both_accounts_together_tie(self):
         with tempfile.TemporaryDirectory() as td:
             root = self._root(td)
@@ -729,10 +730,10 @@ class TestDrafterSeesOpenings(unittest.TestCase):
     covers has its purchase history — nothing to draft."""
 
     def test_opening_covered_closing_sale_is_not_drafted(self):
-        from test_basis_drafts import SINGLE, _book, _parsed
-        from taxjson.bin.taxjson_convert_tt import parse_tt_line
-        from taxjson.lib.core import TaxTransaction
-        from taxjson.lib.missing_history import draft_purchases
+        from _support.ib_basis_drafts import SINGLE, _book, _parsed
+        from taxjson.lib.tt_format import parse_tt_line
+        from taxjson.model.transaction import TaxTransaction
+        from taxjson.lib.purchase_drafts import draft_purchases
         book = _book(_parsed(SINGLE))
         self.assertEqual(len(draft_purchases(book, country="canada")[0]),
                          1)
@@ -748,7 +749,7 @@ class TestOpeningCoversTransferIn(unittest.TestCase):
     in the snapshot: covered, never booked at its book value too."""
 
     def test_snapshot_after_the_arrival_covers_it(self):
-        from taxjson.bin.taxjson_convert_tt import parse_tt_line
+        from taxjson.lib.tt_format import parse_tt_line
         from taxjson.lib.transfer_in import arrivals, mark_covered
         rows = [("margin", "questrade", dict(
             action="TRANSFER", symbol="GGG.TO", quantity=10,

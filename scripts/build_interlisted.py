@@ -377,8 +377,8 @@ def class_job(sc: str, exch: str) -> Dict[str, str]:
 
 def load_toml(path: Path) -> Dict[str, Any]:
     sys.path.insert(0, str(REPO / "src"))
-    from taxjson.lib.tomlcompat import tomllib      # noqa: E402
-    return tomllib.loads(path.read_text(encoding="utf-8"))
+    from taxjson.project.toml_io import read_toml  # noqa: E402
+    return read_toml(path)
 
 
 def load_history(path: Optional[Path]) -> List[Dict[str, Any]]:

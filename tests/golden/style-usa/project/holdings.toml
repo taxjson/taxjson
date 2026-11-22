@@ -1,0 +1,42 @@
+# synthetic positions report
+date = "2024-12-31"
+[[holding]]
+symbol = "GHOSTQ.US"
+quantity = -40
+currency = "USD"
+total_cost = -590.05
+[[holding]]
+symbol = "NVDA.US"
+quantity = 10
+currency = "USD"
+total_cost = 1351.00
+[[holding]]
+symbol = "OLDCO.US"
+quantity = -50
+currency = "USD"
+total_cost = -999.00
+[[holding]]
+symbol = "PARN.US"
+quantity = 100
+currency = "USD"
+total_cost = 5001.00
+[[holding]]
+symbol = "QZQ.US"
+quantity = 100
+currency = "USD"
+total_cost = 2401.00
+[[holding]]
+symbol = "QZQ250117C00040000.US"
+quantity = -1
+currency = "USD"
+total_cost = -149.00
+[[holding]]
+symbol = "SAMPA.US"
+quantity = 90
+currency = "USD"
+total_cost = 340.00
+[[holding]]
+symbol = "SPNC.US"
+quantity = 10
+currency = "USD"
+total_cost = 240.00

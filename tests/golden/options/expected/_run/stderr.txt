@@ -1,0 +1,2 @@
+taxjson-to-base-curr: note: TAXJSON_OFFLINE is set — using cached rates only (no download); a transaction whose date has no cached rate fails at the conversion stage.
+taxjson-to-base-curr: note: FX USD→CAD: Bank of Canada Valet for <n> dates, Yahoo fallback for 0

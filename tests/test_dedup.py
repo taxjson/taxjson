@@ -22,7 +22,7 @@ broker file twice.
 """
 import unittest
 from taxjson.bin.taxjson_sort import deduplicate, generate_uid
-from taxjson.lib.core import TaxTransaction
+from taxjson.model.transaction import TaxTransaction
 
 
 class TestDedup(unittest.TestCase):

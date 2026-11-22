@@ -1,0 +1,3 @@
+Transaction Date,Settlement Date,Action,Symbol,Description,Quantity,Price,Gross Amount,Commission,Net Amount,Currency,Activity Type,Account #,Account Type
+2024-06-03,2024-06-04,Buy,KELPQ.OPT,CALL KELPQ 06/21/24 8.00 KELPQ INC,1,0.35,-35.00,-1.25,-36.25,USD,Trades,99900041,Margin
+2024-06-24,2024-06-24,EXP,KELPQ.OPT,CALL KELPQ 06/21/24 8.00 KELPQ INC OPTION EXPIRATION - EXPIRED,-1,0.00,0.00,0.00,0.00,USD,Other,99900041,Margin

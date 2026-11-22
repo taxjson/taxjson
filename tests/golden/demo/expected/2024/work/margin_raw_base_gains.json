@@ -1,0 +1,193 @@
+{
+  "by_ticker": {
+    "INTC.US": {
+      "hold_days": [
+        112
+      ],
+      "total_cost": 946.35,
+      "total_div": 0.0,
+      "total_gain": -394.2,
+      "total_pil": 0.0,
+      "total_proceeds": 552.15,
+      "trade_count": 1
+    },
+    "PARNT.US": {
+      "hold_days": [],
+      "total_cost": 0.0,
+      "total_div": 675.0,
+      "total_gain": 0.0,
+      "total_pil": 0.0,
+      "total_proceeds": 0.0,
+      "trade_count": 0
+    },
+    "SAMPW250117C00030000.US": {
+      "hold_days": [
+        0
+      ],
+      "total_cost": -201.0825,
+      "total_div": 0.0,
+      "total_gain": 201.0825,
+      "total_pil": 0.0,
+      "total_proceeds": 0.0,
+      "trade_count": 1
+    },
+    "SPNCO.US": {
+      "hold_days": [
+        105
+      ],
+      "total_cost": 675.0,
+      "total_div": 0.0,
+      "total_gain": 66.15,
+      "total_pil": 0.0,
+      "total_proceeds": 741.15,
+      "trade_count": 1
+    }
+  },
+  "inventory": [
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-02-05",
+      "last_acq_settle": "2024-02-07",
+      "position_start_date": "2024-02-05",
+      "qty": 100.0,
+      "symbol": "PARNT.US",
+      "total_cost": 5401.35
+    },
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-03-18",
+      "last_acq_settle": "2024-03-20",
+      "position_start_date": "2024-03-18",
+      "qty": -20.0,
+      "symbol": "SAMPG.US",
+      "total_cost": -498.15
+    },
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2024-11-04",
+      "last_acq_settle": "2024-11-05",
+      "multiplier": 100.0,
+      "position_start_date": "2024-11-04",
+      "qty": -1.0,
+      "recognised_premium": 201.0825,
+      "symbol": "SAMPW250117C00030000.US",
+      "total_cost": -201.0825
+    }
+  ],
+  "option_replacement_warnings": [],
+  "summary": {
+    "total_disallowed": 0,
+    "total_fees_by_currency": {
+      "CAD": {
+        "options": 1.4175,
+        "stocks": 6.75,
+        "total": 8.1675
+      }
+    },
+    "total_gain": -126.9675,
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1
+  },
+  "transactions": [
+    {
+      "account": "margin",
+      "commission": 0.0,
+      "cost": 946.35,
+      "currency": "CAD",
+      "date": "2024-08-05",
+      "date_settle": "2024-08-06",
+      "days_held": 112,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 1.35,
+      "gain": -394.2,
+      "grant": false,
+      "id": "f64001ab707160b8",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 552.15,
+      "qty": 20.0,
+      "raw_gain": -394.2,
+      "replacement_lot_ids": [],
+      "symbol": "INTC.US",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "margin",
+      "commission": 0.0,
+      "cost": 675.0,
+      "currency": "CAD",
+      "date": "2024-09-16",
+      "date_settle": "2024-09-17",
+      "days_held": 105,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 1.35,
+      "gain": 66.15,
+      "grant": false,
+      "id": "790a51efc0c8b03a",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 741.15,
+      "qty": 25.0,
+      "raw_gain": 66.15,
+      "replacement_lot_ids": [],
+      "symbol": "SPNCO.US",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "margin",
+      "commission": 0.0,
+      "cost": -201.0825,
+      "currency": "CAD",
+      "date": "2024-11-04",
+      "date_settle": "2024-11-05",
+      "days_held": 0,
+      "deemed": false,
+      "direction": "SHORT",
+      "disallowed_amount": 0.0,
+      "fee": 1.4175,
+      "gain": 201.0825,
+      "grant": true,
+      "id": "cd93fb2797a23ea3",
+      "is_option": true,
+      "is_wash_sale": false,
+      "note": "WRITE \u2014 premium recognised on grant (ITA s.49(1))",
+      "permanently_disallowed": 0.0,
+      "proceeds": 0.0,
+      "qty": 1.0,
+      "raw_gain": 201.0825,
+      "replacement_lot_ids": [],
+      "symbol": "SAMPW250117C00030000.US",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "margin",
+      "action": "DIVIDEND",
+      "cost": 0.0,
+      "currency": "CAD",
+      "date": "2024-06-03",
+      "date_settle": "2024-06-03",
+      "dividend": 675.0,
+      "gain": 0.0,
+      "id": "e48f93e27bcc447b",
+      "proceeds": 0.0,
+      "qty": 0.0,
+      "symbol": "PARNT.US",
+      "time": "20:25:00"
+    }
+  ],
+  "wash_sales": []
+}

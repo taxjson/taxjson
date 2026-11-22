@@ -1,0 +1,29 @@
+SANITY — taxjson positions (basis: wash-adjusted) vs external holdings TOML (paired check)
+
+  accounts:  margin  (8 combined position(s))  [paired]
+  file:      holdings.toml
+  result:    1 discrepancy(ies)
+
+  - account crypto not included (3 position(s) unchecked)
+  - account roth not included (2 position(s) unchecked)
+
+ISSUE: MISSING_IN_HOLDINGS = not in the broker's file; MISSING_IN_TAXJSON = not in the books.
+ACCOUNTS  SYMBOL    ISSUE         TAXJSON  HOLDINGS  DIFF
+---------------------------------------------------------
+margin    SAMPA.US  QTY_MISMATCH      100        90   +10
+
+1 discrepancy(ies).
+
+COST — books vs the reports' cost: 7 compared, 4 within tolerance, 3 differ (informational: a broker's book value is not
+  your ACB/basis; never changes the exit code).
+
+ACCOUNTS  SYMBOL   QTY  CUR    BROKER     BOOKS     DIFF  REASON
+---------------------------------------------------------------------
+margin    NVDA.US   10  USD  1,351.00  1,433.00   +82.00  wash-sale
+margin    QZQ.US   100  USD  2,401.00  2,602.00  +201.00  wash-sale
+margin    SPNC.US   10  USD    240.00    250.00   +10.00  unexplained
+
+Reasons:
+  unexplained: none of the known differences closes it: a missing or mis-costed purchase, an opening line's cost, or the
+    broker's own error
+  wash-sale: the books' basis carries wash-sale additions (§1091(d)); a broker shows only washes inside the same account

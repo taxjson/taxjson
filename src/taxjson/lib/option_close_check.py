@@ -15,7 +15,7 @@ A2-0266, A2-0267).
 `unbacked_option_closes` walks the books once and returns each such row
 with the held contract it most likely closes (same account, expiry,
 right, strike and listing; a root that names the same company,
-core._root_matches_stock), so the run can print ONE line with the exact
+option_symbols.root_matches_stock), so the run can print ONE line with the exact
 ticker.map fix. Country-neutral: it reads positions, not tax rules.
 """
 
@@ -23,11 +23,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from taxjson.lib.core import _OCC_OPTION_RE, _root_matches_stock
+from taxjson.lib.option_symbols import _OCC_OPTION_RE, root_matches_stock
 from taxjson.lib.corporate_timeline import (dedupe_split_events, event_sort_key,
                                             normalize_symbol_new)
-from taxjson.lib.missing_history import (OrderStarts, open_close_codes,
-                                          unbacked_close)
+from taxjson.lib.unbacked_close import OrderStarts, unbacked_close
+from taxjson.lib.row_types import open_close_codes
 
 _QTY_EPS = 1e-9
 _POSITION_ACTIONS = ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE', 'TRANSFER')
@@ -42,7 +42,7 @@ def _contract(symbol: str) -> Optional[Tuple[str, str, str]]:
 
 
 def _same_company(a: str, b: str) -> bool:
-    return a != b and (_root_matches_stock(a, b) or _root_matches_stock(b, a))
+    return a != b and (root_matches_stock(a, b) or root_matches_stock(b, a))
 
 
 def _clocked(t: Any) -> bool:

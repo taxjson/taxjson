@@ -1,0 +1,62 @@
+REALIZED-GAINS SUMMARY — USD, tax year 2024, basis: wash-adjusted
+REALIZED = NON-OPT (shares, units, futures, crypto) + OPTION; TOTAL = REALIZED + DIVIDEND + PIL.
+DIVIDEND of crypto is staking rewards: ordinary income, not dividends.
+Totals include sheltered account(s) roth — not taxable events; carryover and form-export exclude them.
+
+TAXABLE ACCOUNTS
+ACCOUNT   NON-OPT   OPTION  REALIZED  DIVIDEND   PIL    FEES   TOTAL
+--------------------------------------------------------------------
+crypto     473.00     0.00    473.00     37.29  0.00   96.06  510.29
+margin      -2.50  -105.00   -107.50    415.00  0.00   55.80  307.50
+qt           0.00   -36.25    -36.25      0.00  0.00    1.25  -36.25
+--------------------------------------------------------------------
+SUBTOTAL   470.50  -141.25    329.25    452.29  0.00  153.11  781.54
+
+SHELTERED ACCOUNTS — not taxable
+ACCOUNT   NON-OPT  OPTION  REALIZED  DIVIDEND   PIL  FEES  TOTAL
+----------------------------------------------------------------
+roth         0.00    0.00      0.00      0.00  0.00  4.95   0.00
+----------------------------------------------------------------
+SUBTOTAL     0.00    0.00      0.00      0.00  0.00  4.95   0.00
+
+ALL ACCOUNTS — sheltered included
+ACCOUNT  NON-OPT   OPTION  REALIZED  DIVIDEND   PIL    FEES   TOTAL
+-------------------------------------------------------------------
+crypto    473.00     0.00    473.00     37.29  0.00   96.06  510.29
+margin     -2.50  -105.00   -107.50    415.00  0.00   55.80  307.50
+qt          0.00   -36.25    -36.25      0.00  0.00    1.25  -36.25
+roth        0.00     0.00      0.00      0.00  0.00    4.95    0.00
+-------------------------------------------------------------------
+TOTAL     470.50  -141.25    329.25    452.29  0.00  158.06  781.54
+DIVIDEND for crypto account(s) crypto (37.29) is STAKING rewards — ordinary income, not dividends.
+
+FOR THE RETURN — taxable accounts (crypto, margin, qt), USD (Form 8949 → Schedule D, tax year 2024)
+(h) = (d) − (e) + (g), the allowed gain; (g) = the code-W wash-sale loss disallowed, added back.
+FORM 8949                                (d) PROCEEDS   (e) COST  (g) ADJUSTMENT  (h) GAIN
+------------------------------------------------------------------------------------------
+Part I — short-term → Schedule D Part I     40,730.31  41,304.46          903.40    329.25
+------------------------------------------------------------------------------------------
+RETURN                                      40,730.31  41,304.46          903.40    329.25
+
+- (d) − (e) + (g) = (h). Column (g) is the code-W wash-sale loss disallowed and added back, so (h) is the allowed gain; the disallowed loss moves to the replacement shares' basis, except 100.50 from a repurchase in an IRA, which is lost for good — no basis addition (US-WASH-11).
+- Per-sale rows: `tjs form-export`.
+
+TAX ESTIMATE — usa (single, standard deduction), rates vintage 2024
+ESTIMATE ONLY, not filing numbers; taxable accounts only.
+
+  Other income                            0.00
+  Short-term gains (net)                329.25  [329.25 before carryovers; short-term carryover 0.00]
+  Long-term gains (net)                   0.00  [0.00 before carryovers; long-term carryover 0.00]
+  Qualified dividends                   415.00
+  Payments in lieu                        0.00  [ordinary]
+  Crypto staking                         37.29  [ordinary]
+
+  Tax with investments: 0.00 + NIIT 0.00
+  Tax on other income alone: 0.00
+  => ESTIMATED TAX ON INVESTMENT INCOME: 0.00 USD  (0.0% of 781.54)
+  Capital loss carryovers in: 0.00 — no close-year lock before 2024 and none entered: see `tjs carryover`
+
+  Assumes:
+  - single filer, standard deduction, all dividends QUALIFIED, no foreign tax credit, no state tax
+  - §1256 contracts (futures, index options) split 60/40 long-/short-term (Form 6781), with no year-end marking or loss carryback
+  - interest income and the §988 result on foreign currency (`tjs fx-cash`) not included

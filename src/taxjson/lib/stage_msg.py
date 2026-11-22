@@ -24,17 +24,18 @@ short display form (reword), continuation lines flush-left, wrapped;
 the .diag keeps the captured line.
 """
 
+from __future__ import annotations
+
 import os
 import re
 import sys
-from bisect import bisect_left
-from typing import Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, TextIO, Tuple
 
 from taxjson.lib import out
+from taxjson.lib.out import concise_line, split_message
 
-__all__ = ["say", "message_lines", "console_lines", "split_message",
-           "emit_line", "reword", "is_continuation", "concise_line",
-           "detail_command"]
+__all__ = ["say", "message_lines", "console_lines", "emit_line", "reword",
+           "is_continuation", "NOTE_HEAD", "parse_codes_note"]
 
 
 def message_lines(kind: str, text: str, details: Iterable[str] = (), *,
@@ -81,56 +82,6 @@ def say(kind: str, headline: str, details: Iterable[str] = (), *,
         return
     out.show(message_lines(kind, headline, details, prog=prog,
                            indent=indent, stream=file), file)
-
-
-# Where a long captured one-liner splits into headline + detail: the
-# earliest clause break (an em-dash, a sentence end, a semicolon, or the
-# colon after a parenthesised subject) past the first _MIN_HEAD columns.
-_BREAKS = (" — ", ". ", "; ", "): ")
-# A headline shorter than this is not worth a split (the marker and the
-# topic alone).
-_MIN_HEAD = 40
-
-
-def split_message(text: str):
-    """(headline, rest) of a captured one-line message, or (text, '')."""
-    best = None
-    # A break inside a `code span` is no break: one past an odd number of
-    # backticks. Their positions, once (linear in the text, however many
-    # breaks an unclosed span holds).
-    ticks = [j for j, c in enumerate(text) if c == "`"]
-    # Nor is one inside parentheses (`(a trust's, s.104(13); the T3)`):
-    # the paren depth before each position, once.
-    depth, d = [], 0
-    for c in text:
-        depth.append(d)
-        d += (c == "(") - (c == ")")
-    depth.append(d)
-
-    def _inside(i: int) -> bool:
-        # (the `): ` break closes its group: judged after the paren)
-        j = i + 1 if text.startswith("): ", i) else i
-        return bool(bisect_left(ticks, i) % 2) or depth[j] > 0
-
-    for brk in _BREAKS:
-        i = text.find(brk, _MIN_HEAD)
-        while i >= 0 and _inside(i):
-            i = text.find(brk, i + 1)
-        if i >= 0 and (best is None or i < best[0]):
-            best = (i, brk)
-    if best is None:
-        return text, ""
-    i, brk = best
-    keep = 1 if brk in (". ", "): ") else 0
-    head = text[:i + keep]
-    rest = text[i + len(brk):].strip()
-    if not rest:
-        return text, ""
-    # The detail is a sentence of its own: capitalised — after a `; `
-    # only when it starts with a plain word (never an id or a `code`).
-    if rest[0].islower() and (brk != "; " or re.match(r"[a-z]+ ", rest)):
-        rest = rest[0].upper() + rest[1:]
-    return head, rest
 
 
 def _plural(n, word: str, plural: Optional[str] = None) -> str:
@@ -247,7 +198,6 @@ def _codes_note(line: str) -> Optional[List[str]]:
     head and count, then one detail line per code (`X000001 → QZM.US
     (...)`) and the override. None when `line` is not that note (or no
     entry parses: shown as it is)."""
-    from taxjson.lib.symbol_codes import NOTE_HEAD, parse_codes_note
     if not line.startswith(NOTE_HEAD):
         return None
     codes = parse_codes_note(line)
@@ -295,50 +245,6 @@ def is_continuation(line: str) -> bool:
     first = reword(out.printable(line))[0]
     return (first[:1].isspace()
             and not _LABELLED.match(out.relabel(first).strip()))
-
-
-# Essentials first (docs/output-style.md): the run's console shows each
-# message as ONE line, its headline naming the command with the detail;
-# `tjs run --details` (and the captured .diag) keep the rest.
-_CMD_RE = re.compile(r"`((?:tjs|taxjson) [^`]+)`")
-
-
-def detail_command(texts: Iterable[str]) -> Optional[str]:
-    """The first `tjs ...` command a message's detail names (the
-    command that lists or fixes it), or None."""
-    for t in texts:
-        m = _CMD_RE.search(t or "")
-        if m:
-            return m.group(1)
-    return None
-
-
-def concise_line(text: str, details: Iterable[str] = (),
-                 width_: int = 0, cmd: Optional[str] = None) -> str:
-    """A message as one line: its headline (split_message) and, when the
-    headline names no command, ` — `<the command its detail names>``
-    (just `tjs <command>`, then `tjs <command>`, when the whole one
-    would not fit `width_`; the headline alone when none fits). `cmd`:
-    the command to name instead. `text` carries its label."""
-    if width_ > 0 and len(text) <= width_:
-        # It fits: the whole text is its one line.
-        head, rest = text, ""
-    else:
-        head, rest = split_message(text)
-    if "`taxjson " in head or "`tjs " in head:
-        return head
-    cmd = cmd or detail_command(([rest] if rest else []) + list(details))
-    if not cmd:
-        return head
-    full = f"{head} — `{cmd}`"
-    if width_ <= 0 or len(full) <= width_:
-        return full
-    for cand in (f"{head} — `{' '.join(cmd.split()[:2])}`",
-                 f"{head} — `tjs {' '.join(cmd.split()[1:2])}`"):
-        if len(cand) <= width_:
-            return cand
-    # The headline alone fits: one line (the command is in --details).
-    return head if len(head) <= width_ else cand
 
 
 def _names_of(listing: str, n: int = 2) -> str:
@@ -414,7 +320,7 @@ _CONCISE = [
      lambda m: f"Warning: Transfer-in: {m['a']}: {m['n']} only PARTLY "
                f"covered by .tt purchases, NOT booked "
                f"({_names_of(m['l'])}) — `tjs transfers`"),
-    # The engine's warn-only replacement flags (lib/core
+    # The engine's warn-only replacement flags (engine/replacement
     # format_option_replacement_warning), printed by the commands that
     # rebuild the books in-process (carryover, audit, wash-sales
     # --explain): cut at the first colon they said "Warning:
@@ -486,7 +392,7 @@ def console_lines(line: str, indent: str = "", stream=None,
     return lines
 
 
-def emit_line(text: str, *, file=None, indent: str = "") -> None:
+def emit_line(text: str, *, file: Optional[TextIO] = None, indent: str = "") -> None:
     """Print a program's own one-line message (`warning: ...`, `note:
     ...`, `<prog>: error: ...`): as is when captured (_captured — the
     .diag keeps its bytes), else as console_lines shows it: the label
@@ -517,3 +423,19 @@ def emit_line(text: str, *, file=None, indent: str = "") -> None:
             out.concise_show(b[0], file)
         return
     out.show_blocks(blocks, file)
+
+
+# The note's fixed head: the console echoes it from the parse .diag and
+# tests / tools parse the entries after it (parse_codes_note).
+NOTE_HEAD = "note: Questrade internal symbol codes resolved"
+
+
+_ENTRY_RE = re.compile(r"([A-Z]\d+) → (\S+) \(((?:[^()]|\([^()]*\))*)\)")
+
+
+def parse_codes_note(line: str) -> Dict[str, Tuple[str, str]]:
+    """{code: (listing, evidence)} from a codes_note line."""
+    if NOTE_HEAD not in line:
+        return {}
+    return {m.group(1): (m.group(2), m.group(3))
+            for m in _ENTRY_RE.finditer(line)}

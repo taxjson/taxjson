@@ -1,0 +1,105 @@
+==> Checking the project
+==> Loading currency rates
+==> Loading cached USD → CAD rates
+==> margin  (taxable, first pass: transfers between your accounts)
+  inputs/margin/ib_scenarios_demo.csv → Interactive Brokers (content: "Statement,Header" preamble)
+==> Reading 1 file
+  ib_scenarios_demo.csv: 6 tax objects
+==> ib  (taxable, first pass: transfers between your accounts)
+  inputs/ib/ib_demo.csv → Interactive Brokers (content: "Statement,Header" preamble)
+==> Reading 1 file
+  ib_demo.csv: 9 tax objects
+==> questrade  (taxable, first pass: transfers between your accounts)
+  inputs/questrade/questrade_demo.csv → Questrade (content: columns Transaction Date,Settlement Date,Action…)
+==> Reading 1 file
+  questrade_demo.csv: 6 tax objects
+==> webull  (taxable, first pass: transfers between your accounts)
+  inputs/webull/webull_demo.csv → Webull (content: Trading Summary header Currency,Date,Action Code…)
+==> Reading 1 file
+  webull_demo.csv: 6 tax objects
+==> tfsa  (sheltered, first pass: transfers between your accounts)
+  inputs/tfsa/rbc_direct_demo.csv → RBC Direct Investing (content: activity header Date,Activity,Symbol,Description…)
+==> Reading 1 file
+  rbc_direct_demo.csv: 7 tax objects
+==> lira  (sheltered, first pass: transfers between your accounts)
+  inputs/lira/questrade_lira_demo.csv → Questrade (content: columns Transaction Date,Settlement Date,Action…)
+==> Reading 1 file
+  questrade_lira_demo.csv: 11 tax objects
+==> rrsp  (sheltered, first pass: transfers between your accounts)
+  inputs/rrsp/ib_rrsp_demo.csv → Interactive Brokers (content: "Statement,Header" preamble)
+==> Reading 1 file
+  ib_rrsp_demo.csv: 7 tax objects
+==> tfsa  (sheltered)
+==> Processing corporate actions
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/tfsa_holdings.toml
+==> Writing summary reports/tfsa.sum
+==> lira  (sheltered)
+==> Processing corporate actions
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/lira_holdings.toml
+==> Writing summary reports/lira.sum
+==> rrsp  (sheltered)
+==> Processing corporate actions
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/rrsp_holdings.toml
+==> Writing summary reports/rrsp.sum
+==> Combining sheltered accounts
+==> margin  (taxable)
+==> Processing corporate actions
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/margin_holdings.toml
+==> Writing summary reports/margin.sum
+==> ib  (taxable)
+==> Processing corporate actions
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/ib_holdings.toml
+==> Writing summary reports/ib.sum
+==> questrade  (taxable)
+==> Processing corporate actions
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/questrade_holdings.toml
+==> Writing summary reports/questrade.sum
+==> webull  (taxable)
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/webull_holdings.toml
+==> Writing summary reports/webull.sum
+==> crypto  (taxable, crypto)
+  inputs/crypto/coinbase_demo.csv → Coinbase (content: columns Timestamp,Transaction Type,Asset…)
+  inputs/crypto/kraken_demo.csv → Kraken (content: trades columns txid,ordertxid,pair…)
+==> Reading 1 Coinbase file
+  coinbase_demo.csv: 8 tax objects
+==> Reading 1 Kraken file
+  kraken_demo.csv: 5 tax objects
+==> Merging the exports
+==> Sorting, de-duplicating
+==> Mapping tickers
+==> Looking up crypto prices
+==> Converting currency to CAD
+==> Calculating capital gains
+==> Writing holdings reports/crypto_holdings.toml
+==> Writing summary reports/crypto.sum
+==> Checking crypto for superficial losses with the sheltered accounts
+==> Writing summary reports/crypto_wash.sum
+==> Checking for missing purchase history
+  warning: ATTENTION: short: SAMPG.US (margin): the broker codes the sale on 2024-03-18 CLOSING (IB code C, IB Basis 301.00 USD), but the data holds no position to close — it is booked as a new short until the missing purchase is supplied (`tjs find-missing-history --write-missing-history` writes its .tt OPENING cost=unknown line).
+==> Pooling cost and checking superficial losses across taxable accounts (4 accounts)
+==> Writing summary reports/margin_wash.sum
+==> Writing summary reports/ib_wash.sum
+==> Writing summary reports/questrade_wash.sum
+==> Writing summary reports/webull_wash.sum
+==> Writing cross-account reports to reports/
+==> Writing fees report reports/fees.rpt
+  note: 20 file(s) for other tools -> ../exports/ (the newest year's)
+==> Done. Reports are in reports/
+==> Before you trust these numbers (docs/getting-started.md, step 5)
+Warning: 1 position sold in 2024 with no purchase in your files, not in missing_history.tt: SAMPG.US (margin). Those sales are NOT in `tjs sum`; run `tjs find-missing-history`. A short sale still open reads the same: it is in no total until it is covered.
+Info: 8 accounts with open positions and no holdings file to check them against: crypto (2), ib (1), lira (3), margin (3), questrade (1), rrsp (1) +2 more. Run `tjs sanity` with the broker's positions.
+Info: Then run `tjs checklist --run`: it checks every step and names the next one.

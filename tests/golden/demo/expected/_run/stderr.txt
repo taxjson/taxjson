@@ -1,0 +1,4 @@
+taxjson-to-base-curr: note: TAXJSON_OFFLINE is set — using cached rates only (no download); a transaction whose date has no cached rate fails at the conversion stage.
+taxjson-to-base-curr: note: FX USD→CAD: Bank of Canada Valet for <n> dates, Yahoo fallback for 0
+tjs: note: AAPL.US, SHOP.TO traded in more than one TAXABLE account
+  The blended pass computes their ACB across all non-registered accounts (ITA s. 47). The wash-adjusted artifacts (<account>_wash.sum — the canonical filing numbers) carry the blended figures; the per-account <account>.sum baseline stays isolated, so the pair shows what blending changed.

@@ -18,9 +18,10 @@ from pathlib import Path
 
 import _hermetic
 
-from taxjson.lib.tomlcompat import tomllib
+import tomllib
+import _paths
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = _paths.REPO
 
 
 class TestSyntheticHome(unittest.TestCase):
@@ -35,9 +36,10 @@ class TestSyntheticHome(unittest.TestCase):
 
     def test_the_rates_stage_reads_the_synthetic_cache(self):
         from taxjson.bin import to_base_curr as T
-        self.assertEqual(Path(T.CACHE_FILE).parent,
+        from taxjson.lib import rate_cache
+        self.assertEqual(Path(rate_cache.CACHE_FILE).parent,
                          Path(os.environ["HOME"]))
-        today = T._s(T.date.today())
+        today = rate_cache._s(T.date.today())
         for frm, to, rate in (("USD", "CAD", "1.3500"),
                               ("CAD", "USD", "0.7407")):
             with self.subTest(pair=frm + to):
@@ -54,6 +56,7 @@ class TestSyntheticHome(unittest.TestCase):
         home = os.environ["HOME"]
         self.assertEqual(_hermetic.install(), home)
 
+
     def test_cache_covers_every_pair_through_next_week(self):
         import datetime
         today = datetime.date(2026, 3, 4)
@@ -64,6 +67,87 @@ class TestSyntheticHome(unittest.TestCase):
             self.assertEqual(cache["_coverage"][key][0][1], "2026-03-11",
                              pair)
         json.dumps(cache)
+
+
+# A process whose first import of the setup is inside a patch of the
+# environment, and whose test then patches HOME and is the first to import
+# the two caches and the QA helper.
+_FIRST_UNDER_PATCH = """
+import json, os, sys
+from unittest import mock
+with mock.patch.dict(os.environ):
+    import _hermetic
+loaded = sorted(m for m in sys.modules if m.split(".")[0] == "taxjson")
+with mock.patch.dict(os.environ, {"HOME": sys.argv[1]}):
+    from taxjson.lib import crypto_prices, rate_cache
+    import _qa_project
+    inside = os.environ["HOME"]
+print(json.dumps({"home": _hermetic.HOME, "loaded": loaded, "inside": inside,
+                  "rates": rate_cache.CACHE_FILE, "crypto": crypto_prices.CACHE_FILE,
+                  "qa": _qa_project.ENV["HOME"]}))
+"""
+
+
+class TestCachesTakeTheSetupsHome(unittest.TestCase):
+    """The caches name their file from HOME at import: in a test process
+    they take the setup's HOME, whatever HOME the first test to import one
+    has patched in (TJ-3889); the setup imports nothing of taxjson itself
+    (TJ-3891); `_qa_project` reads the setup's HOME from the setup, not
+    from its record in the environment, which a patch can take (TJ-3894)."""
+
+    def test_first_import_under_a_patched_home(self):
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            given, patched = Path(td, "given"), Path(td, "patched")
+            given.mkdir()
+            patched.mkdir()
+            env = {k: v for k, v in os.environ.items() if k != _hermetic.MARK}
+            env.update(HOME=str(given), PYTHONPATH=os.pathsep.join(
+                [str(_paths.TESTS), str(_paths.SRC)]))
+            r = subprocess.run(
+                [sys.executable, "-c", _FIRST_UNDER_PATCH, str(patched)],
+                cwd=td, env=env, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            got = json.loads(r.stdout)
+            home = got["home"]
+            self.assertNotIn(home, (str(given), str(patched)))
+            self.assertEqual(got["loaded"], [])
+            self.assertEqual(got["inside"], str(patched))
+            self.assertEqual(Path(got["rates"]), Path(home, ".currency_price_cache.json"))
+            self.assertEqual(Path(got["crypto"]), Path(home, ".crypto_price_cache.json"))
+            self.assertEqual(Path(got["qa"]), Path(home))
+            self.assertEqual(sorted(os.listdir(patched)), [])
+
+    def test_the_loader_puts_back_only_what_it_set(self):
+        """A key another import (or the test) changed while the module code
+        ran keeps that change (TJ-3915); one it did not is put back."""
+        from unittest import mock
+
+        class Loader:
+            def __init__(self, during=None):
+                self.during, self.seen = during, None
+
+            def create_module(self, spec):
+                return None
+
+            def exec_module(self, module):
+                self.seen = os.environ["HOME"]
+                if self.during:
+                    os.environ["HOME"] = self.during
+
+        for during, after in ((None, "/patched"), ("/changed", "/changed")):
+            with self.subTest(during=during), mock.patch.dict(os.environ, {"HOME": "/patched"}):
+                inner = Loader(during)
+                _hermetic._UnderHome(inner, "/setup").exec_module(None)
+                self.assertEqual(inner.seen, "/setup")
+                self.assertEqual(os.environ["HOME"], after)
+
+    def test_the_loader_copies(self):
+        import copy
+        loader = _hermetic._UnderHome(object(), "/setup")
+        self.assertEqual(copy.copy(loader)._home, "/setup")
+
 
 
 class TestGateStage(unittest.TestCase):
@@ -95,11 +179,19 @@ class TestGateStage(unittest.TestCase):
         run = sh.rsplit("env -i", 1)[1]          # no TAXJSON_* / proxies
         self.assertIn('HOME="$ROOT/home"', run)   # an empty HOME
         self.assertNotIn("TAXJSON_WIDTH", run)    # as the workflow runs
-        # Every module the stage names exists.
+        # Every module the stage names exists; a class named in one
+        # (`module.Class`, as a split module's classes are, PLAN.md step 9)
+        # is defined at its top level.
         names = re.search(r'EXTRAS_TESTS="([^"]*)"', sh).group(1).split()
         self.assertTrue(names)
-        for m in names:
-            self.assertTrue((REPO / "tests" / f"{m}.py").is_file(), m)
+        for m in names:   # a package's module named dotted
+            path = REPO / "tests" / (m.replace(".", "/") + ".py")
+            if path.is_file():
+                continue
+            mod, _, cls = m.rpartition(".")
+            path = REPO / "tests" / (mod.replace(".", "/") + ".py")
+            self.assertTrue(path.is_file(), m)
+            self.assertRegex(path.read_text(encoding="utf-8"), rf"(?m)^class {cls}\b", m)
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "Linux only")

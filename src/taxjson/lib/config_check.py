@@ -9,9 +9,18 @@ run` (through validate_config) refused the same config (R1-268). This
 is the one home for that check, so the run and every read-only command
 refuse the same configs with the same message.
 """
+import collections.abc as _cabc
 import difflib
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+from taxjson.project.settings import TypedTable
+from taxjson.project.accounts import (
+    ACCOUNT_KEYS as ACCOUNT_KEYS, ESTIMATE_KEYS as ESTIMATE_KEYS,
+)
+from taxjson.project.accounts import estimate_of
+from taxjson.lib.project_tables import (carried_back_stated, claimed_losses,
+                                        distribution_rows)
 
 ACCOUNT_TYPES = ("taxable", "sheltered")
 
@@ -28,21 +37,13 @@ TOP_LEVEL_TABLES = ("settings", "accounts", "instalments", "estimate",
 # brokerage / account / query_id are the fetcher plugins' keys
 # (lib/fetchers.CORE_ACCOUNT_KEYS): accepted whether or not a fetcher is
 # installed, so a project that used `tjs fetch` keeps validating.
-ACCOUNT_KEYS = ("type", "crypto", "transfers", "plan",
-                "brokerage", "account", "query_id", "holdings",
-                "broker_accounts",
-                "combined_broker_accounts", "exercise_fee",
-                "year_end_posting", "custodian_country")
-ESTIMATE_KEYS = ("other_income", "other_losses", "deductions",
-                 "carrying_charges", "long_term_losses", "amt_carryover")
+# The [accounts.<name>] and [estimate] keys are the typed tables' fields
+# (project/accounts, imported above): one source (backlog TJ-1700). The
+# [carryover] and [[distributions]] keys are lib/project_tables', the
+# [[capital_gains_dividends]] keys lib/cg_dividends': their readers'.
 INSTALMENTS_KEYS = ("basis", "prior_year_net_tax", "second_prior_net_tax",
                     "withheld", "prescribed_rate", "prescribed_rates",
                     "paid")
-CARRYOVER_KEYS = ("claimed",)
-# One [[distributions]] / [[capital_gains_dividends]] entry's keys
-# (lib/project_tables, lib/cg_dividends).
-DISTRIBUTION_KEYS = ("symbol", "record_date", "per_share")
-CGD_KEYS = ("symbol", "year", "date", "amount", "account")
 # [settings] keys still recognised only to warn that they are ignored:
 # never documented as a setting.
 RETIRED_SETTINGS = ("cross_asset",)
@@ -179,7 +180,7 @@ def account_type_problems(cfg: Dict[str, Any]) -> List[str]:
         if clash:
             out.append(clash)
             continue
-        if not isinstance(acfg, dict):
+        if not isinstance(acfg, _cabc.Mapping):
             out.append(f"[accounts.{name}] must be a table")
             continue
         atype = acfg.get("type")
@@ -261,6 +262,18 @@ def account_type_problems(cfg: Dict[str, Any]) -> List[str]:
             + bool_setting_problems(cfg))
 
 
+
+def _table_or_none(table: Any) -> Optional[Dict[str, Any]]:
+    """The dict behind a table that may be typed (the values as the file
+    gave them: a typed one holds them unchanged; a dict is itself, so the
+    canonicalising writes land on the file's table), or None for what is
+    no table (`settings = 5`)."""
+    if isinstance(table, TypedTable):
+        return table.as_dict()
+    if isinstance(table, dict):
+        return table
+    return dict(table) if isinstance(table, _cabc.Mapping) else None
+
 def bool_setting_problems(cfg: Dict[str, Any]) -> List[str]:
     """A quoted boolean (`= "false"`) is truthy: every command but `run`
     read [settings] option_buyback_loss_superficial = "false" as ON
@@ -268,24 +281,24 @@ def bool_setting_problems(cfg: Dict[str, Any]) -> List[str]:
     close-year applied the strict buy-back rule). Refused by every
     config reader, like `run` does. (accounts.*.crypto: above.)"""
     out: List[str] = []
-    settings = cfg.get("settings") or {}
-    if isinstance(settings, dict):
+    table = _table_or_none(cfg.get("settings") or {})
+    if table is not None:
         # fx_cash_gains = "false" switched the FX-on-cash report ON and
         # its banner said "= true" (R1-152, R1-261).
         for key in ("option_buyback_loss_superficial", "fx_cash_gains",
                     "transfers_as_acquisitions"):
-            v = settings.get(key)
+            v = table.get(key)
             if v is not None and not isinstance(v, bool):
                 out.append(f"[settings] {key} must be true or false, "
                            f"unquoted (got {v!r})")
         # The FX-on-cash ledger (CA-FX-07 / US-FX-03): v1 is the default,
         # v2 the opt-in under audit; a typo must not fall back to either.
-        led = settings.get("fx_cash_ledger")
+        led = table.get("fx_cash_ledger")
         if led is not None and (not isinstance(led, str)
                                 or led.strip().lower() not in ("v1", "v2")):
             out.append(f"[settings] fx_cash_ledger must be \"v1\" or "
                        f"\"v2\" (got {led!r})")
-        inc = settings.get("fx_cash_inflow_cost")
+        inc = table.get("fx_cash_inflow_cost")
         if inc is not None and (not isinstance(inc, str)
                                 or inc.strip().lower()
                                 not in ("declared", "spot")):
@@ -295,7 +308,7 @@ def bool_setting_problems(cfg: Dict[str, Any]) -> List[str]:
         # "grants" as close timing and advised enabling grant timing,
         # close-year wrote the typo into the filed-year lock, and a
         # since of `true` read as year 1 (R1-183).
-        opt = settings.get("option_premium_timing")
+        opt = table.get("option_premium_timing")
         if opt is not None and (not isinstance(opt, str)
                                 or opt.strip().lower()
                                 not in ("grant", "close")):
@@ -304,13 +317,13 @@ def bool_setting_problems(cfg: Dict[str, Any]) -> List[str]:
         # A sheltered account's corporate-action elections (lib/
         # corp_actions.sheltered_elections_mode): a typo must not read
         # as either mode.
-        she = settings.get("sheltered_elections")
+        she = table.get("sheltered_elections")
         if she is not None and (not isinstance(she, str)
                                 or she.strip().lower()
                                 not in ("zero", "ask")):
             out.append(f"[settings] sheltered_elections must be "
                        f"\"zero\" or \"ask\" (got {she!r})")
-        since = settings.get("option_grant_timing_since")
+        since = table.get("option_grant_timing_since")
         if since is not None and not (isinstance(since, int)
                                       and not isinstance(since, bool)
                                       and 1900 <= since <= 2100):
@@ -334,10 +347,16 @@ def settings_problems(cfg: Dict[str, Any]) -> List[str]:
     first country problem (the ownership checks need a country)."""
     from taxjson.lib.country import (CountryError, config_country_problems,
                                      settings_country, TAX_DATES)
-    settings = cfg.get("settings")
-    if settings is None:
-        settings = {}
-    if not isinstance(settings, dict):
+    table = cfg.get("settings")
+    if table is None:
+        table = {}
+    # Checked again after loading (validate_config): the table is the typed,
+    # frozen object by then, so the writes below land on a copy that is
+    # handed back as a new object of its kind at the end (the same values,
+    # once loaded; backlog TJ-1600).
+    typed = table if isinstance(table, TypedTable) else None
+    table = _table_or_none(table)
+    if table is None:
         return ["[settings] must be a table"]
     # A top-level `estimate = 5` / `instalments = [..]` (a key where a
     # section belongs) was an AttributeError traceback in estimate, sum
@@ -347,9 +366,9 @@ def settings_problems(cfg: Dict[str, Any]) -> List[str]:
             return [f"[{_t}] must be a table (a [{_t}] section), got "
                     f"`{_t} = {cfg[_t]!r}`"]
     try:
-        settings["country"] = settings_country(settings)
+        table["country"] = settings_country(table)
         if "settings" not in cfg:
-            cfg["settings"] = settings
+            cfg["settings"] = table
     except CountryError as e:
         return [str(e)]
     out: List[str] = []
@@ -357,7 +376,7 @@ def settings_problems(cfg: Dict[str, Any]) -> List[str]:
     # 1850, 2024.0, true or "2024" that every CLI command refuses;
     # A2-1373).
     # Same plausible range as `tjs init` and --year (cli_diag).
-    year = settings.get("year")
+    year = table.get("year")
     if year is not None:
         from datetime import date as _date
         _hi = _date.today().year + 1
@@ -367,7 +386,7 @@ def settings_problems(cfg: Dict[str, Any]) -> List[str]:
         elif not 1900 <= year <= _hi:
             out.append(f"[settings] year = {year} is not a plausible tax "
                        f"year (expected 1900..{_hi})")
-    tax_date = settings.get("tax_date")
+    tax_date = table.get("tax_date")
     if tax_date is not None and tax_date not in TAX_DATES:
         out.append(f"[settings] tax_date must be settle|trade, "
                    f"got {tax_date!r}")
@@ -375,7 +394,7 @@ def settings_problems(cfg: Dict[str, Any]) -> List[str]:
     # as a misdiagnosed "rows still carry a non-CAD currency" error
     # (R1-153). One canonical, checked spelling for every reader.
     import re
-    base = settings.get("base_currency")
+    base = table.get("base_currency")
     if base is not None:
         if not isinstance(base, str) \
                 or not re.fullmatch(r"[A-Za-z]{3}", base.strip()):
@@ -383,37 +402,61 @@ def settings_problems(cfg: Dict[str, Any]) -> List[str]:
                        f"currency code such as \"CAD\" or \"USD\", got "
                        f"{base!r}")
             return out
-        settings["base_currency"] = base.strip().upper()
+        table["base_currency"] = base.strip().upper()
     # Every reader of the prior-year lock (run, handoff, the checklist)
     # refuses a non-path the same way: handoff and the checklist turned
     # a list into "no prior-year record at P/['../2023/...']" (A2-1161).
-    pyr = settings.get("prior_year_record")
+    pyr = table.get("prior_year_record")
     if pyr is not None and not (isinstance(pyr, str) and pyr.strip()):
         out.append(f"[settings] prior_year_record must be a path string "
                    f"such as \"../2024/filed/2024.json\" (got {pyr!r})")
     # The LEAPS views' cut-off (leaps, leaps-sum): months from the buy to
     # expiry. A quoted "3" or 2.5 would compare oddly.
-    lm = settings.get("leaps_months")
+    lm = table.get("leaps_months")
     if lm is not None and not (isinstance(lm, int)
                                and not isinstance(lm, bool)
                                and 1 <= lm <= 120):
         out.append(f"[settings] leaps_months must be a whole number of "
                    f"months such as 9, unquoted (got {lm!r})")
-    tz = settings.get("local_timezone")
+    tz = table.get("local_timezone")
     if tz is not None:
-        from taxjson.lib.brokerages._crypto_common import utc_to_local
+        from taxjson.lib.timezones import utc_to_local
         from datetime import datetime as _dt
         try:
             if not isinstance(tz, str) or not tz.strip():
                 raise ValueError
             utc_to_local(_dt(2025, 1, 1), tz.strip())
-            settings["local_timezone"] = tz.strip()
+            table["local_timezone"] = tz.strip()
         except ValueError:
             out.append(f"[settings] local_timezone must be an IANA zone "
                        f"name such as \"America/Toronto\" or "
                        f"\"America/Los_Angeles\", got {tz!r}")
     # The hand-entered year data ([[distributions]], [carryover] claimed,
     # [[capital_gains_dividends]], [estimate] amt_carryover): types,
-    # dates, duplicates — lib/project_tables.
-    from taxjson.lib.project_tables import table_problems
+    # dates, duplicates — table_problems, below.
+    if typed is not None:
+        cfg["settings"] = type(typed).from_table(table)
     return out + config_country_problems(cfg) + table_problems(cfg)
+
+
+def table_problems(cfg: Dict[str, Any]) -> List[str]:
+    """Every problem of the four data tables (types, dates, duplicates,
+    the account a box-18 entry names). Country ownership is checked by
+    lib/country with the rest of the config."""
+    out: List[str] = []
+    out += distribution_rows(cfg)[1]
+    out += claimed_losses(cfg)[1]
+    out += carried_back_stated(cfg)[1]
+    from taxjson.lib.cg_dividends import entries_from_config
+    try:
+        entries_from_config(cfg)
+    except ValueError as e:
+        out.append(str(e))
+    est = estimate_of(cfg)
+    if est.has("amt_carryover"):
+        from taxjson.lib.carryforward import amt_from_config
+        try:
+            amt_from_config(est.amt_carryover)
+        except ValueError as e:
+            out.append(str(e))
+    return out

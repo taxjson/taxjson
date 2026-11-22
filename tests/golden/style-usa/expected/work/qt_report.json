@@ -1,0 +1,63 @@
+{
+  "account": "qt",
+  "basis": "wash-adjusted",
+  "gains": {
+    "manual_rows": [],
+    "option_fees": {
+      "USD": 1.25
+    },
+    "returns_by_asset": {
+      "Options": {
+        "USD": {
+          "days": [
+            18
+          ],
+          "dollars": [
+            -36.25
+          ],
+          "fee_shares": [],
+          "fees": []
+        }
+      }
+    },
+    "tainted_count": 0,
+    "tainted_routed": 0,
+    "ticker_stats": {
+      "KELPQ.US": {
+        "USD": {
+          "cap": 0.0,
+          "cost": 36.25,
+          "div": 0.0,
+          "hold_days": [
+            18
+          ],
+          "opt": -36.25,
+          "pil": 0.0,
+          "proceeds": 0.0,
+          "st_gain": -36.25,
+          "trade_count": 1
+        }
+      }
+    },
+    "total_fees": {
+      "USD": 1.25
+    },
+    "total_year": "2024",
+    "wash_solver_converged": true,
+    "wash_solver_iterations": null
+  },
+  "generated_at": "<stamp>",
+  "income": {
+    "interest_paid_totals": {},
+    "interest_totals": {},
+    "missing_amount": [],
+    "ticker_stats": {},
+    "total_year": "2024"
+  },
+  "schema_version": 1,
+  "wash": {
+    "count": 0,
+    "total_disallowed": 0
+  },
+  "year": "2024"
+}

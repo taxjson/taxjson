@@ -37,6 +37,8 @@ symbol) is the income of the cash row of the currency it was paid in
 CA-RPT-14, backlog TJ-0628).
 """
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+from taxjson.model import money as M
+from taxjson.project.accounts import typed_accounts
 
 VERSION = 1
 # The country of crypto whose platform the books do not tell
@@ -53,17 +55,17 @@ def counted_accounts(accounts: Dict[str, Any]) -> Dict[str, str]:
     A value the config check refuses is left to it."""
     from taxjson.lib.t1135_country import parse_custodian_country
     out: Dict[str, str] = {}
-    for name, acfg in sorted((accounts or {}).items()):
-        if not isinstance(acfg, dict) or acfg.get("type") != "taxable":
+    for name, acfg in sorted(typed_accounts(accounts).items()):
+        if not acfg.taxable:
             continue
-        if acfg.get("custodian_country") is not None:
+        if acfg.custodian_country is not None:
             try:
-                cc = parse_custodian_country(acfg["custodian_country"])
+                cc = parse_custodian_country(acfg.custodian_country)
             except ValueError:
                 continue
             if cc:
                 out[str(name)] = cc
-        elif acfg.get("crypto"):
+        elif acfg.crypto:
             out[str(name)] = CRYPTO
     return out
 
@@ -92,7 +94,7 @@ def merge(series: Iterable[List[List[Any]]]) -> List[List[Any]]:
             if last is not None:
                 u += float(last[1])
                 c += float(last[2])
-        pt = [d, round(u, 6), round(c, 2)]
+        pt = [d, M.units(u, 6), M.shown(c, 2)]
         if not out or out[-1][1:] != pt[1:]:
             out.append(pt)
     return out
@@ -130,7 +132,7 @@ def _transit(transit: Iterable[Dict[str, Any]], accounts: Dict[str, str],
         if frm and to and tr.get("since") and None not in countries \
                 and len(countries) == 1:
             groups.setdefault((frm[0], cur), []).append(
-                [[str(tr["since"]), round(units, 6), round(cost, 2)]])
+                [[str(tr["since"]), M.units(units, 6), M.shown(cost, 2)]])
             continue
         n = named.setdefault(
             (", ".join(sorted(set(frm))), ", ".join(sorted(set(to))), cur),
@@ -143,10 +145,10 @@ def _transit(transit: Iterable[Dict[str, Any]], accounts: Dict[str, str],
         out.append({
             "account": n["account"], "currency": cur, "unknown": True,
             "year_end_transit": True,
-            "why": (f"{n['units']:,.2f} {cur} in transit between your own "
+            "why": (f"{M.shown(n['units'], 2):,.2f} {cur} in transit between your own "
                     f"accounts at the year end (from {frm_s or '?'} to "
                     f"{to_s or '?'}, arriving {n['arrives'] or '?'}; cost "
-                    f"{n['cost']:,.2f} {base}): the books do not tell whether "
+                    f"{M.shown(n['cost'], 2):,.2f} {base}): the books do not tell whether "
                     f"it was held outside Canada")})
     return out
 
@@ -188,7 +190,7 @@ def _spans(spans: Iterable[Dict[str, Any]], accounts: Dict[str, str],
         out.append({
             "account": frm if frm in accounts else to, "currency": cur,
             "unknown": False, "transit": True,
-            "why": (f"up to {n['units']:,.2f} {cur} (cost {n['cost']:,.2f} "
+            "why": (f"up to {M.shown(n['units'], 2):,.2f} {cur} (cost {M.shown(n['cost'], 2):,.2f} "
                     f"{base}) in transit between your own accounts during "
                     f"the year (from {frm or '?'} to {to or '?'}, first on "
                     f"{n['since']}): the books do not tell whether it was "
@@ -217,7 +219,7 @@ def _base_spans(spans: Iterable[Dict[str, Any]], accounts: Dict[str, str],
         n["over"] = n["over"] or sp["until"] > y1
     return [{"account": frm if frm in accounts else to, "currency": base,
              "unknown": False, "transit": True,
-             "why": (f"up to {n['units']:,.2f} {base} in transit between your "
+             "why": (f"up to {M.shown(n['units'], 2):,.2f} {base} in transit between your "
                      f"own accounts (from {frm} to {to}, first on "
                      f"{n['since']}): it is in neither account's balance, so "
                      f"it is not in the maximum"

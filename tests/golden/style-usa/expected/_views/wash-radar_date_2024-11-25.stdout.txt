@@ -1,0 +1,19 @@
+WASH RADAR — wash sales (§1091, trade dates), as of <stamp>
+STATUS: what a loss sale or a buy does today; CLEARS: the day its window closes.
+STATUS    TICKER                 TAXABLE  SHELTERED  CLEARS
+---------------------------------------------------------------------
+WASHED    SAMPA.US                   100          0  -
+EXITABLE  QZQ250117C00040000.US       -1          0  2024-12-16 (21d)
+COOLING   NVDA.US                      0          0  2024-12-23 (28d)
+RISK      QZQ.US                     100         50  -
+CLEAR     GHOSTQ.US                  -40          0  -
+CLEAR     OLDCO.US                   -50          0  -
+CLEAR     PARN.US                    100          0  -
+CLEAR     QZQ241220C00035000.US       -1          0  -
+CLEAR     SAMPB.US                     0         20  -
+CLEAR     SPNC.US                     10          0  -
+
+WASHED: SAMPA.US: the loss is disallowed; no sale undoes it
+! EXITABLE: sell all of QZQ250117C00040000.US or none at a loss — tjs wash-radar --details
+! RISK: QZQ.US: no IRA buy for 30 days after a loss sale — tjs wash-radar --details
+More: tjs wash-radar --details; not checked: your spouse's or company's buys (IRS Pub. 550)

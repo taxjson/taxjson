@@ -21,7 +21,8 @@ chunks.
 """
 import unittest
 
-from taxjson.lib.core import TaxTransaction, USATaxRules
+from taxjson.engine.us.taxrules import USATaxRules
+from taxjson.model.transaction import TaxTransaction
 
 
 class TestCallAssignmentLeftoverShort(unittest.TestCase):

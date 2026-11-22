@@ -1,0 +1,11 @@
+WASH SALES — USD, tax year 2024, basis: wash-adjusted
+DENIED: the loss the wash-sale rule (§1091) disallows; ALLOWED: the loss you claim.
+ACCOUNT  DATE        SYMBOL    QTY  PROCEEDS      COST     GAIN  DENIED  ALLOWED
+--------------------------------------------------------------------------------
+margin   2024-09-10  QZQ.US    200  5,599.00  6,001.00  -402.00  301.50  -100.50
+margin   2024-11-01  SAMPA.US  100  3,490.05  4,009.95  -519.90  519.90     0.00
+margin   2024-11-20  NVDA.US    10  1,399.00  1,481.00   -82.00   82.00     0.00
+
+DENIED:    903.40 USD over 3 wash sale(s) (100.50 permanently denied)
+DEFERRED:  802.90 USD in open positions' cost — tjs list
+More: tjs wash-sales --details (what DENIED means); --explain: each denial's trace

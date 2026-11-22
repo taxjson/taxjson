@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from _style import CapturedWidth
+import _paths
 
 
 # Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
@@ -20,7 +21,7 @@ def setUpModule():
 def tearDownModule():
     _WIDTH.stop()
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 _QT_HEADER = ("Transaction Date,Settlement Date,Action,Symbol,Description,"
               "Quantity,Price,Gross Amount,Commission,Net Amount,Currency,"
@@ -52,13 +53,13 @@ def _project(tmp):
 class TestSegmentSplitting(unittest.TestCase):
     def _split(self, argv):
         import argparse
-        from taxjson.bin.taxjson_run import _split_command_segments
+        from taxjson.cli.main import _split_command_segments
         # A miniature parser mirroring the real shapes.
         p = argparse.ArgumentParser()
         p.add_argument("-C", "--dir", default=".")
         sub = p.add_subparsers(dest="cmd", required=True)
         pr = sub.add_parser("run")
-        pr.add_argument("--fast", action="store_true")
+        pr.add_argument("--strict", action="store_true")
         pr.add_argument("--no-input", action="store_true")
         pr.add_argument("--account")
         ps = sub.add_parser("sum")
@@ -72,8 +73,8 @@ class TestSegmentSplitting(unittest.TestCase):
                          [["run"], ["sum"]])
 
     def test_flags_stay_with_their_command(self):
-        self.assertEqual(self._split(["run", "--fast", "sum", "--json"]),
-                         [["run", "--fast"], ["sum", "--json"]])
+        self.assertEqual(self._split(["run", "--strict", "sum", "--json"]),
+                         [["run", "--strict"], ["sum", "--json"]])
 
     def test_option_value_collision_not_split(self):
         # `sum` is --account's VALUE, not a new command.
@@ -160,7 +161,7 @@ class TestChainPreValidation(unittest.TestCase):
         # #52: `events trades` is `events` then `trades` when the project
         # has no account named trades (the word cannot be events'
         # argument), with no note; an account of that name would be the
-        # argument (test_fix_issues_cli).
+        # argument (features.cli.test_command_chains_and_names_like_commands).
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp)
             _cli(root, "run", "--no-input")

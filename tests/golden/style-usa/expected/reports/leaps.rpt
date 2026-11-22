@@ -1,0 +1,25 @@
+LONG OPTIONS — KELPQ.US
+
+DATE         SYMBOL                            QTY CUR          COST/QTY        PROC/QTY        GAIN/QTY            COST        PROCEEDS            GAIN   DAYS
+---------------------------------------------------------------------------------------------------------------------------------------------------------------
+2024-06-21   KELPQ240621C00008000.US        1.0000 USD           36.2500          0.0000        -36.2500           36.25            0.00          -36.25     18
+
+TOTAL KELPQ.US LONG OPTION GAIN: -36.25
+
+LONG OPTIONS — QZQ.US
+
+DATE         SYMBOL                            QTY CUR          COST/QTY        PROC/QTY        GAIN/QTY            COST        PROCEEDS            GAIN   DAYS
+---------------------------------------------------------------------------------------------------------------------------------------------------------------
+2024-08-01   QZQ240920C00030000.US          2.0000 USD          301.0000        149.0000       -152.0000          602.00          298.00         -304.00     92
+
+TOTAL QZQ.US LONG OPTION GAIN: -304.00
+
+LONG OPTIONS SUMMARY (every long option close, any tenor; `tjs leaps-sum` is the LEAPS-only view)
+
+SYMBOL                 LONG_OPT_GAIN
+------------------------------------
+KELPQ.US                      -36.25
+QZQ.US                       -304.00
+------------------------------------
+TOTAL                        -340.25
+(amounts in USD)

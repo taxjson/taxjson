@@ -16,11 +16,13 @@ import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
 
-from taxjson.lib.core import TaxTransaction
+from taxjson.model.transaction import TaxTransaction
 from taxjson.lib.pipeline import (GainsRequest, TransferValidationError,
                                   prepare_books, run_gains)
 from tax_rules import rule
+from taxjson.rules import ids as RID
 from _style import CapturedWidth
+import _paths
 
 
 # Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
@@ -35,7 +37,7 @@ def setUpModule():
 def tearDownModule():
     _WIDTH.stop()
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 def tx(action="BUYSELL", date="2025-01-15", symbol="AAA.TO", qty=0.0,
@@ -48,8 +50,8 @@ def tx(action="BUYSELL", date="2025-01-15", symbol="AAA.TO", qty=0.0,
 
 
 class TestGainsRequestDefaults(unittest.TestCase):
-    @rule("US-DATE-01")
-    @rule("CA-DATE-01")
+    @rule(RID.US_DATE_01)
+    @rule(RID.CA_DATE_01)
     def test_tax_date_country_aware(self):
         self.assertEqual(GainsRequest(country="canada").effective_tax_date(),
                          "settle")
@@ -113,7 +115,7 @@ class TestPrepareBooks(unittest.TestCase):
                                               phantom_hint=False)
         self.assertEqual(shel_out, [])
 
-    @rule("CA-SL-17")
+    @rule(RID.CA_SL_17)
     def test_sheltered_custody_pair_near_loss_survives(self):
         # transfers_as_acquisitions = true: 2026-09 audit finding 4 — a
         # same-account contribution+withdrawal pair INSIDE a main-book
@@ -134,7 +136,7 @@ class TestPrepareBooks(unittest.TestCase):
         self.assertEqual([(t.action, t.type) for t in shel_out],
                          [("BUYSELL", "transfer_rewrite")] * 2)
 
-    @rule("CA-SL-16")
+    @rule(RID.CA_SL_16)
     def test_sheltered_custody_pair_near_loss_nets_by_default(self):
         # The default policy: the same pair is a custody move whatever
         # trades sit near it — netted, nothing for the loss walk.
@@ -254,7 +256,7 @@ class TestRunGainsParityWithCli(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             cli_out = json.loads(proc.stdout)
 
-            from taxjson.lib.core import load_transactions
+            from taxjson.lib.tx_load import load_transactions
             with redirect_stderr(io.StringIO()):
                 lib_out = run_gains(
                     load_transactions(main_f), load_transactions(shel_f), [],

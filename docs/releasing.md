@@ -198,9 +198,9 @@ installer, which installs the newest release and knows no `--channel`.
 The installer installs dependencies only from `requirements/*.txt`
 (hash-pinned; SECURITY.md, "Release integrity"). `scripts/lock_deps.py`
 writes them with uv (`pipx install uv`): one resolution of every lock,
-universal over platforms and Python 3.10+, nothing published in the last
+universal over platforms and Python 3.12+, nothing published in the last
 7 days (`--cooldown-days`), then a wheel-coverage check for Linux
-x86_64 / aarch64 and macOS arm64 / x86_64 on Python 3.10–3.13 (it fails
+x86_64 / aarch64 and macOS arm64 / x86_64 on Python 3.12–3.13 (it fails
 when `build`, `core` or `fx` lack one; other extras are reported, and
 install.sh installs the core package where an extra has no wheel). A
 known gap in an optional lock is listed as accepted instead
@@ -227,10 +227,18 @@ Regenerate and commit them:
 
 Review the diff (new packages especially) before committing.
 
-The dev lock (`requirements/dev.txt`) also pins the linter: `tests.yml`'s
-lint job and `scripts/dev-setup.sh` both install ruff from it, so the local
-gate lints as CI does, and a regenerated lock moves both (re-run
+The dev lock (`requirements/dev.txt`) also pins the linter and the type
+checker: `tests.yml`'s lint job and `scripts/dev-setup.sh` both install ruff
+and mypy from it, so the local gate lints and type-checks as CI does, and a regenerated lock moves both (re-run
 `scripts/dev-setup.sh`; `scripts/ci.sh` notes a venv whose ruff differs).
+A new ruff can also move the counts `scripts/check_architecture.py` records,
+and the gate then fails with no code changed. It names the version
+difference. After `scripts/dev-setup.sh`, record the new counts in the same
+commit as the lock: `scripts/check_architecture.py --accept-growth=ruff`.
+A new mypy can likewise fail the types stage with no code changed (a new
+strict check, or a release that no longer reads `python_version = "3.12"`):
+the gate notes a venv whose mypy differs from the lock's; fix the errors it
+names in the lock's commit.
 
 ## Dependency and code checks (the publish kit's)
 
@@ -252,6 +260,9 @@ the reason holds no private values. Today's exceptions are two SHA-1
 fingerprints that are stored and compared, not security uses: the row stems
 that number parsed rows and the hash a ticker.map marker carries of its
 line (`tests/test_kit_checks.py` keeps them the only SHA-1 uses in `src/`).
+soupsieve 2.10's three selector advisories, excepted until Python 3.12
+became the floor (TJ-3327), went with the locks' branch for Python before
+3.11.5.
 Inline `nosemgrep` comments and `.semgrepignore` files are not honoured.
 
 `scripts/kit_checks.py` is an unchanged copy of the kit's
@@ -372,7 +383,7 @@ message.
 
 **The gate is both:** the full local `scripts/ci.sh` (fuzzers, the private
 lists) before the version commit is made, and GitHub CI (the Python
-3.10–3.13 matrix, the extras, gitleaks, the per-commit PII scan) on the
+3.12 and 3.13 matrix, the extras, gitleaks, the per-commit PII scan) on the
 version commit before it is tagged, then the publisher's gate twice before
 it is published. A CI failure on the version commit means nothing is
 tagged: re-run a flaky run on GitHub and cut again, or
@@ -426,7 +437,7 @@ PASS, and `scripts/release.sh vX.Y.Z` once GitHub CI is green.
 
 One tag covers both distributions: the core (`taxjson`) and the broker-fetch plugin (`taxjson-fetch`, `packages/taxjson-fetch`), which the installer installs by default from the same checkout (`--without-fetch` leaves it out). To publish wheels as well, build each from the tagged tree — `python -m build` and `python -m build packages/taxjson-fetch` — and upload both.
 
-Semantic versioning, applied to tax output: a change that alters any filed number for an already-supported input is at least a minor bump and gets a CHANGELOG entry that names the rule and the direction of the change. Parser additions, new commands, and report-format changes are minor; documentation and internal refactors are patch.
+Semantic versioning, applied to tax output. From 1.0.0 a major release is the only one that changes what [upgrading.md's "What 1.0.0 keeps"](upgrading.md#what-100-keeps) lists: a `--json` output's `schema_version` raised (a key renamed, moved or removed, a value whose type or meaning changes), a command, flag or `taxjson.toml` key removed or renamed, an exit code whose meaning changes, a change to the format of the `filed/<year>.json` locks (or of another file that list names) beyond an added key, or a name `pipeline/plugin_api.py` exports removed; each with its line in docs/upgrading.md. A change that alters any filed number for an already-supported input is at least a minor bump and gets a CHANGELOG entry that names the rule and the direction of the change. Parser additions, new commands, flags and keys, a key added to a `--json` output (its `schema_version` stays), and report-text changes are minor; documentation and internal refactors are patch.
 
 ## The tag guard
 
@@ -525,7 +536,7 @@ Nothing enforces this on the dev repo but the tooling: land through
 `scripts/land.sh`. Every `tests.yml` job that runs on a pull request runs
 on every one (no path filter, no `if:` that skips one), so a check that
 should have run is never simply missing from the wait
-(`tests/test_fix_release_hardening.py`). The nightly run (the whole
+(`tests/features/repo_checks/test_release_and_ci_hardening.py`). The nightly run (the whole
 matrix plus the deep fuzz) and the privacy watch (daily) are not part of
 it, and both run on the public repo only. The dev repo is private, and
 GitHub's runners for private repos are billed by the minute: a nightly
@@ -613,7 +624,7 @@ on an explicit runner image (`runs-on: ubuntu-24.04`, never
 runner's label (`taxjson-dev`): a moved tag or label cannot change what runs, and the
 runner image changes only when we choose (GitHub moves `ubuntu-latest` to
 Ubuntu 26 from 2026-10-19). The jobs have read-only tokens, a timeout, and
-checkouts that keep no credentials. `tests/test_fix_release_hardening.py`
+checkouts that keep no credentials. `tests/features/repo_checks/test_release_and_ci_hardening.py`
 fails CI when a `uses:` is not a SHA with its version, a runner label is a
 `*-latest` one, or a workflow asks for write access.
 

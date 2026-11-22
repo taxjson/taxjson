@@ -1,0 +1,1 @@
+NOTE: S0.TO: re-denominated a -40-share trade executed 2025-02-02 through the x3 split inside its settle lag (booked as -120 post-split shares; money unchanged).

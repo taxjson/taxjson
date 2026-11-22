@@ -4,7 +4,7 @@ is mocked; nothing touches the network. Synthetic numbers, account ids and
 tickers (SYN) only; each test's files live in a folder of their own.
 """
 # First: puts the plugin, the core and its test helpers on sys.path.
-import _support  # noqa: F401
+import _bootstrap  # noqa: F401
 import contextlib
 import io
 import tempfile
@@ -17,8 +17,8 @@ from taxjson_fetch import api
 from taxjson_fetch import command as fc
 from taxjson.lib.brokerages.questrade import QuestradeBrokerage
 
-from test_fix_1029_r7_fetch import NUMBER, SESSION, _act, _live, _qt_request
-from test_fix_1029_r7e_fetch import _DEP, LIVE, OCC
+from _questrade_fetch import (LIVE, NUMBER, OCC, SESSION, _DEP, _act, _live,
+                              _qt_request)
 
 _D1 = "2025-06-02T00:00:00.000000-04:00"
 _D2 = "2025-06-05T00:00:00.000000-04:00"

@@ -6,8 +6,10 @@ import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+import _paths
+from _support.filing_run_record import record_full_run
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 def _runsub(root, sub, *args):
@@ -295,7 +297,7 @@ class TestInstrumentFilters(unittest.TestCase):
 
 class TestDisplayHelpers(unittest.TestCase):
     def test_tx_display_line_variants(self):
-        from taxjson.bin.taxjson_run import _tx_display_line as f
+        from taxjson.cli.listings import _tx_display_line as f
         d, t = "2025-01-02", "09:30:00"
         # SPLIT: symbol_new + ratio, no money
         self.assertEqual(
@@ -333,7 +335,7 @@ class TestDisplayHelpers(unittest.TestCase):
             "2251.43987086 0.00")
 
     def test_align_columns(self):
-        from taxjson.bin.taxjson_run import _align_columns
+        from taxjson.cli.listings import _align_columns
         self.assertEqual(
             _align_columns(["A bb ccc", "aaa b c"]),
             ["A   bb ccc", "aaa b  c"])
@@ -342,7 +344,7 @@ class TestDisplayHelpers(unittest.TestCase):
         """The row views: a later line with one more field (a dividend's
         net amount) keeps its columns; the header mode merged its first
         two tokens into one cell and shifted the rest."""
-        from taxjson.bin.taxjson_run import _align_columns
+        from taxjson.cli.listings import _align_columns
         lines = ["rrsp DIVIDEND 2026-10-07 00:00:00 QZD.TO 300 USD 0.07 21.00",
                  "tfsa DIVIDEND 2026-10-07 09:30:00 QZE.US 200 USD 0.02 5.51 4.30"]
         merged = _align_columns(lines, numeric_right=True)
@@ -376,7 +378,7 @@ class TestDisplayHelpers(unittest.TestCase):
                 "4.30"])
 
     def test_period_cutoff_units(self):
-        from taxjson.bin.taxjson_run import _tx_period_cutoff
+        from taxjson.cli.common import _tx_period_cutoff
         from datetime import date, timedelta
         today = date.today()
         self.assertEqual(_tx_period_cutoff("10d"), today - timedelta(days=10))
@@ -602,6 +604,7 @@ class TestSummaryCmd(unittest.TestCase):
             (root / "work" / "margin_raw_gains.json").write_text(json.dumps({
                 "transactions": [{"symbol": "ZZZ.TO", "gain": 999999.0,
                                   "currency": "CAD"}]}))
+            record_full_run(root)
             r = _runsub(root, "sum")
         self.assertEqual(r.returncode, 0, r.stderr)
         out = r.stdout

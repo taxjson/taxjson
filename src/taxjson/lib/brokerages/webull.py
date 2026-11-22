@@ -2,11 +2,13 @@ from taxjson.lib.stage_msg import emit_line
 from collections import Counter
 import contextlib
 import csv
+from dataclasses import dataclass, field
 import io
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from taxjson.parsers.protocol import Outcome, builds
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          ticker_map_joins,
                                          answered_rename_note,
@@ -14,8 +16,12 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          OPTION_STRIKE_RE, parse_strict_number,
                                          read_broker_text,
                                          refuse_pasted_overlap,
-                                         shown_name)
-from taxjson.lib.core import is_option_symbol, parse_option_expiry
+                                         shown_name, zero_units_refusal)
+from taxjson.lib.option_symbols import is_option_symbol, parse_option_expiry
+from taxjson.parsers.toolbox.assets import QTY_ZERO
+from taxjson.parsers.toolbox.money import implied_commission_bounds
+from taxjson.parsers.toolbox.masking import mask_id
+from taxjson.model import money as M
 
 
 # Webull's option descriptions run the ticker directly into the date with
@@ -32,9 +38,8 @@ _CURRENCY_PREFIXES = frozenset({'U', 'US', 'USD', 'C', 'CA', 'CAD'})
 
 
 def _mask(acct: str) -> str:
-    """A broker account id as a message prints it: its first 2
-    characters + *** (the parsers' rule)."""
-    return (acct[:2] + '***') if acct else ''
+    """A broker account id as a message prints it (the parsers' rule)."""
+    return mask_id(acct)
 
 
 def _deliverable_size(opt, rows) -> float:
@@ -42,7 +47,7 @@ def _deliverable_size(opt, rows) -> float:
     ticker.map `MULT` line for it (or its root), else the size a priced
     row of the same option showed (a mini's 10), else the standard 100
     (B10)."""
-    from taxjson.lib.core import parse_option_underlying
+    from taxjson.lib.option_symbols import parse_option_underlying
     from taxjson.lib.markets import option_contract_size
     sym = str(opt.get('symbol') or '')
     und = parse_option_underlying(sym) or ''
@@ -55,7 +60,61 @@ def _deliverable_size(opt, rows) -> float:
     return float(BaseBrokerage.OPTION_MULTIPLIER)
 
 
+class _WbRow:
+    """A row of the export as `read` yields it: its cells (the csv row),
+    its line and the file's shown name (`where` names the row from them);
+    what `classify` learned for `build` (its currency, its date cell, its
+    action)."""
+    __slots__ = ("cells", "line", "shown", "currency", "date_raw", "action_raw")
+
+    def __init__(self, cells: List[str], line: int, shown: str):
+        self.cells, self.line, self.shown = cells, line, shown
+        self.currency = self.date_raw = self.action_raw = None
+
+    @property
+    def where(self) -> str:
+        return f"{self.shown} line {self.line}"
+
+
+@dataclass
+class _WbParse:
+    """What `read` hands the loop and the finish of one export: the file
+    and its shown name, the Trading Summary header's index (None: no
+    header, no rows), the account the preamble names (`named`: the one
+    every row is booked under, the first preamble's), the columns and the
+    header's width, the pasted segments (a statement preamble starts one)
+    and which segment each trade is in, the data rows counted, the
+    security carried across continuation rows, the non-trade actions
+    skipped (for the warning after the loop). Released by `release`
+    whatever happened."""
+    path: Path
+    shown: str
+    header_index: Optional[int] = None
+    account: str = ""
+    named: str = ""
+    cols: Dict[str, int] = field(default_factory=dict)
+    width: int = 0
+    segs: List[tuple] = field(default_factory=list)
+    seg_of: List[int] = field(default_factory=list)
+    data_rows: int = 0
+    current_symbol: str = ""
+    current_is_under: bool = False
+    current_description: str = ""
+    current_type: str = ""
+    skipped_actions: Dict[str, List[tuple]] = field(default_factory=dict)
+
+
+
 class WebullBrokerage(BaseBrokerage):
+    _wb: Optional["_WbParse"] = None    # the parse's state, None between parses
+
+    def __init__(self, *, pool_hints: bool = True) -> None:
+        """`pool_hints`: the folder's sibling exports are pooled for the
+        hints of the file parsed; a sibling read for that pool is made
+        with it off (`_sibling(pool_hints=False)`) and reads its rows alone."""
+        super().__init__()
+        self._pool_hints = pool_hints
+
     DEFAULT_ACCOUNT = "WB"
     # Webull's CSVs only carry USD/CAD positions (a trade row in any
     # other currency is refused before it is suffixed): the shared
@@ -64,6 +123,19 @@ class WebullBrokerage(BaseBrokerage):
     def _option_description_patterns(self):
         return (_WEBULL_OPTION_RE,)
 
+    def _sibling(self, **kw) -> "WebullBrokerage":
+        """A Webull parser configured as this one (the settings and the
+        account context `configure` was given; an unconfigured parser, a
+        test's, makes an unconfigured sibling; no sibling finder: read with `pool_hints` off, it reads
+        no siblings of its own), for reading a sibling export of the folder for
+        hints; `kw` goes to the constructor. The caller runs `parse_rows` on
+        it and releases it. Webull's alone (TJ-2321: no hook on the template
+        without two users); through `configure`, the one path (TJ-2416)."""
+        other = type(self)(**kw)
+        if self._settings is not None:
+            other.configure(self._settings, account_context=self.account_context)
+        return other
+
     def statement_accounts(self) -> set:
         """The broker account the last parsed export names in its
         preamble ('Account Number / Numéro de compte'); empty when it
@@ -71,36 +143,436 @@ class WebullBrokerage(BaseBrokerage):
         rows apart by it (audit A2-0286)."""
         return set(getattr(self, '_accounts', None) or ())
 
-    def parse_file(self, path: Path) -> List[Dict[str, Any]]:
+    def read(self, path: Path):
+        """The export decoded and its Trading Summary header found (none:
+        no rows), the account named in the preamble, the columns resolved;
+        what the later phases need as `_wb`. The rows are a generator
+        (`_rows`), so each row's checks come in file order with its
+        classification and build, as the one loop had them."""
         self._accounts = set()
-        parsed = self._parse_rows(path)
-        if parsed is None:
+        st = self._wb = _WbParse(path, shown_name(path))
+        content = read_broker_text(path)
+        lines = content.splitlines()
+        header_index = self._find_header(lines)
+        if header_index == -1:
+            # Not a Trading Summary: no row accounting for it (`_rows_seen`
+            # None), so taxjson-brokerage warns about the file as before
+            # instead of taking it for an export with no activity.
+            self._rows_seen = None
             return []
-        transactions, expiries, skipped_actions = parsed
-        self._accounts = set(getattr(self, '_last_accounts', ()) or ())
-        # Assignment pairing looks at the Webull exports BESIDE this one
-        # too (audit S065-24): the files are settlement-dated, so a put
-        # assigned on Dec 31 closes in one year's file while its stock
-        # leg settles in January in the next. Sibling rows only take
-        # part in the pairing; this file's rows are what is returned.
+        st.header_index = header_index
+        account = self._preamble_account(lines[:header_index])
+        self._last_accounts = {account} if account else set()
+        self._accounts = set(self._last_accounts)
+        st.account = st.named = account
+        reader = csv.reader(io.StringIO("\n".join(lines[header_index:])))
+        header_row = next(reader, [])           # the header record, consumed here
+        st.cols = self._resolve_columns(header_row, path)
+        st.width = len(header_row)
+        st.segs = [(header_index + 1, [])]
+        return self._rows(reader, header_index)
+
+    def _rows(self, reader, header_index: int):
+        """The export's rows after the header, each with its line; a line
+        with no cell worth a row dropped (counted nowhere, as before)."""
+        shown = self._wb.shown
+        for row in reader:
+            if not any(c.strip() for c in row):     # blank, or separators alone
+                continue
+            yield _WbRow(row, header_index + reader.line_num, shown)
+
+    def _cell(self, row, key: str) -> str:
+        j = self._wb.cols.get(key)
+        return row[j].strip() if j is not None and j < len(row) else ""
+
+    def classify(self, r) -> Outcome:
+        """A statement preamble's Account Number line (a segment boundary;
+        a second account refused), a row cut short refused, a short line a
+        non-event; the row's currency, date and action read: a repeated
+        page header or preamble row (no USD / CAD currency) a non-event, a
+        trade with one refused; a non-trade action a skip, kept for the
+        warning after the loop (a blank action with trade cells refused);
+        else a trade."""
+        st = self._wb
+        row = r.cells
+        where = r.where
+        if row[0].strip().lower().startswith('account number'):
+            st.segs.append((r.line, []))
+            other = self._account_in_cells(row)
+            if st.named and other and other.upper() != st.named.upper():
+                raise BrokerageParseError(
+                    f"{where}: this statement preamble names account "
+                    f"{_mask(other)}, a different account from the "
+                    f"{_mask(st.named)} named above — two accounts' "
+                    f"downloads pasted into one file, and every row "
+                    f"would be booked under the first one. Save each "
+                    f"account's download as its own file.")
+            st.named = st.named or other
+        if (len(row) < st.width and any(c.strip() for c in row)
+                and row[0].strip().upper() in _CURRENCY_PREFIXES):
+            raise BrokerageParseError(
+                f"{where}: a row starting {','.join(row)[:40]!r} has "
+                f"{len(row)} cell(s) but the header has {st.width} — the "
+                f"row is cut short (an export that stopped early?). "
+                f"Re-download the file; refusing to drop the row.")
+        if len(row) < 3:
+            return Outcome.nonevent("short line (a preamble or an account line)")
+        currency = r.currency = self._cell(row, 'currency').upper()
+        r.date_raw = self._cell(row, 'date')
+        action_raw = r.action_raw = self._cell(row, 'action').upper()
+        is_trade = action_raw in ('BUY', 'SELL')
+        if currency not in ('USD', 'CAD'):
+            if is_trade:
+                raise BrokerageParseError(
+                    f"{where}: {action_raw} row has currency "
+                    f"{currency!r} — Webull Trading Summaries carry "
+                    f"USD or CAD; refusing to drop the trade. Fix "
+                    f"the cell (a continuation row repeats its "
+                    f"security's currency).")
+            # Repeated page headers, the preamble.
+            return Outcome.nonevent("repeated page header or preamble row")
+        if not is_trade:
+            if action_raw:
+                st.skipped_actions.setdefault(action_raw, []).append(
+                    (where, self._cell(row, 'symbol').lstrip('@'),
+                     self._cell(row, 'quantity'), self._cell(row, 'proceeds')))
+                return Outcome.reported(f"action {action_raw}")
+            if any(self._cell(row, k) for k in ('date', 'quantity',
+                                                'price', 'proceeds')):
+                raise BrokerageParseError(
+                    f"{where}: a row with a blank Action Code carries "
+                    f"trade cells (date {self._cell(row, 'date') or '-'}, "
+                    f"quantity {self._cell(row, 'quantity') or '-'}, "
+                    f"proceeds {self._cell(row, 'proceeds') or '-'}) — "
+                    f"refusing to drop the trade or guess BUY/SELL. "
+                    f"Restore the Action Code from the original "
+                    f"export.")
+            return Outcome.nonevent("row with no action code")
+        return Outcome.build()
+
+    @builds("trade", "expiry")
+    def build(self, r) -> List[Dict[str, Any]]:
+        """A BUY / SELL row: its facts (`_trade_facts`: the date, the net
+        amount, the price, the quantity and its cell), then the option
+        read from the security description (the Type Code checked against
+        it), the symbol, an expiry (an option at $0), the money checked,
+        the trade date from the settlement, the row (an expiry kept for the
+        template's clamp; the segment it is in, for the order)."""
+        st = self._wb
+        date_str, net_amount, price, qty, qty_raw = self._trade_facts(r)
+        where, action_raw, currency = r.where, r.action_raw, r.currency
+        account = st.account
+        opt = self.parse_option_from_description(st.current_description)
+        # The row's Type Code decides the security type when it is
+        # there (audit S065-17): an OPC row whose description is not
+        # a readable contract was booked as 1 SHARE of the
+        # underlying, and an SHS row whose description happened to
+        # parse as a contract as 100 x the shares.
+        if st.current_type == 'OPC' and not opt:
+            raise BrokerageParseError(
+                f"{where}: {action_raw} row has Type Code OPC (an "
+                f"option) but its Security Description "
+                f"{st.current_description!r} is not a readable contract "
+                f"(CALL/PUT ROOT MM/DD/YY STRIKE) — refusing to book "
+                f"it as shares.")
+        if st.current_type == 'SHS' and opt:
+            raise BrokerageParseError(
+                f"{where}: {action_raw} row has Type Code SHS "
+                f"(shares) but its Security Description "
+                f"{st.current_description!r} reads as an option "
+                f"contract — refusing to guess which it is.")
+        under_sym = ''
+        if opt:
+            symbol = self.format_occ_symbol(
+                opt['right'], opt['base'], opt['expiry'], opt['strike'],
+                where=where)
+            is_option = True
+            # The row's own Symbol column (`@ZZS`) names the
+            # underlying; the description root can differ (an
+            # adjusted contract's `ZZS1`) — audit S066-02.
+            if st.current_is_under:
+                under_sym = self.apply_currency_suffix(
+                    st.current_symbol, currency)
+        else:
+            symbol = st.current_symbol
+            is_option = False
+        symbol = self.apply_currency_suffix(symbol, currency)
+
+        # Webull's CSV Date column IS the SETTLEMENT date (user-verified
+        # against real Webull statements) — keep it as date_settle
+        # verbatim, and BACK-compute the trade date (options T+1;
+        # equities T+2 pre-cutover, T+1 after). The trade date feeds the
+        # trade-basis consumers: the US engine's year attribution, FIFO
+        # acquisition order, and the §1091 window. (An earlier fix
+        # wrongly assumed the CSV date was the TRADE date and added the
+        # settlement lag ON TOP of an already-settled date.)
+        # EXCEPT an option expiry row (no price, no proceeds): its
+        # Date is the EXPIRY date itself — there is no settlement
+        # cycle to walk back. Shifting it a business day earlier
+        # made a 0DTE long that expired worthless close BEFORE the
+        # buy that opened it: a phantom $0 short WRITE. Kept on the
+        # expiry date, stamped at the close (after every same-day
+        # 09:30 trade), and the same-day opening trade's settle is
+        # clamped to the expiry (clamp_settlement_to_expiry below).
+        is_expiry = (is_option and abs(price) < 1e-9
+                     and abs(net_amount) < 1e-9)
+        if (not is_option and abs(price) < 1e-9
+                and abs(net_amount) < 1e-9):
+            # Shares at no price and no cash: a row whose Price and
+            # Proceeds were cut (a spreadsheet re-save pads the
+            # cells back), or a transfer/journal row — booking it
+            # put the shares in at $0 or took the sale's proceeds
+            # to $0 at rc 0 (audit A2-0102 / A2-0619). The generic
+            # importer refuses the same row.
+            raise BrokerageParseError(
+                f"{where}: {action_raw} {qty_raw} {st.current_symbol} has "
+                f"no Price and no Proceeds — a share trade at $0 is a "
+                f"cut row or a transfer, not a trade; refusing to book "
+                f"it at $0. Fix the cells, or enter a transfer as a "
+                f".tt line.")
+        if not is_option and abs(price) < 1e-9:
+            # Shares at Price 0 carrying Proceeds: booked unchecked
+            # (the money check needs a price), at price 0 (TJ-4501).
+            raise BrokerageParseError(
+                f"{where}: {action_raw} {qty_raw} {symbol} at "
+                f"Price 0 with Proceeds {M.shown(net_amount, 2):,.2f} — a "
+                f"share trade at Price 0 carrying cash: the Price cell is "
+                f"cut or the columns are shifted; refusing to book it. "
+                f"Fill the Price from the statement (the row is then "
+                f"checked against its Proceeds), or delete the row and "
+                f"enter the trade as a .tt line.")
+        # The export never states a contract's size: 100 is assumed
+        # unless only a mini's 10 fits the Proceeds (B10).
+        opt_mult, size_basis = None, ''
+        if is_option and not is_expiry and abs(price) > 1e-9:
+            opt_mult, size_basis = self.option_row_multiplier(
+                symbol, lambda m: not self._trade_money_problem(
+                    where, action_raw, qty, price, net_amount, True, m))
+        if not is_expiry and abs(price) > 1e-9:
+            self._check_trade_money(where, action_raw, qty, price,
+                                    net_amount, is_option,
+                                    mult=opt_mult)
+        if is_expiry:
+            trade_date, row_time = date_str, '16:00:00'
+        else:
+            trade_date = self.trade_date_from_settlement(
+                date_str, currency, is_option, "%Y-%m-%d")
+            row_time = '09:30:00'
+        _tx = {
+            'action': 'BUYSELL',
+            'date': trade_date,
+            'time': row_time,
+            'date_settle': date_str,
+            'symbol': symbol,
+            'quantity': qty,
+            'currency': currency,
+            'price': price,
+            'fee': self.back_compute_fee(qty, price, net_amount, is_option,
+                                         multiplier=opt_mult),
+            'net_amount': net_amount,
+            'gross_amount': self.theoretical_gross(qty, price, is_option,
+                                                   multiplier=opt_mult),
+            'account': self.DEFAULT_ACCOUNT,
+            'description': st.current_description,
+            '_where': where,
+        }
+        if size_basis == 'derived':
+            _tx['multiplier'] = opt_mult
+            _tx['contract_size_basis'] = size_basis
+        if account:
+            # The broker account the export names (cross-file dedup
+            # keeps two accounts' identical rows apart: A2-0286).
+            _tx['broker_account'] = account
+        if under_sym:
+            _tx['_under'] = under_sym
+        # The row's line, for the schema check (backlog TJ-0124).
+        st.seg_of.append(len(st.segs) - 1)
+        if is_expiry:
+            self._expiries.append(_tx)
+        return [_tx]
+
+    def _trade_facts(self, r) -> tuple:
+        """A trade row's cells read and checked: the date, a cell spanning
+        lines refused, the row counted and kept in its segment, the width
+        checked, the security carried from the row that named it (a
+        continuation row repeats its security), the date parsed, the
+        quantity, the price, the signed proceeds, the net amount."""
+        st = self._wb
+        where, date_raw, action_raw = r.where, r.date_raw, r.action_raw
+        row = r.cells
+        width = st.width
+        if not date_raw:
+            # A dated trade row with its Date cut off was reported as
+            # an 'unhandled action' and dropped (audit R1-97).
+            raise BrokerageParseError(
+                f"{where}: {action_raw} row has a blank Date — "
+                f"refusing to drop the trade or guess its date.")
+        if any('\n' in c or '\r' in c for c in row):
+            # Real exports put line breaks only in the bilingual
+            # header cells. One inside a data row is a quoted cell
+            # that never closed and swallowed the following rows
+            # (audit S066-04).
+            raise BrokerageParseError(
+                f"{where}: {action_raw} row has a cell spanning "
+                f"several lines — an unescaped quote (\") in a "
+                f"Description swallowed the rows after it. Fix the "
+                f"quote in the CSV.")
+
+        st.data_rows += 1
+        st.segs[-1][1].append((r.line,
+                            tuple(c.strip() for c in row)))
+        if len(row) != width:
+            # A row wider or narrower than its header (a 2025-layout
+            # row under the 9-column 2024 header, a hand edit) reads
+            # every cell after the gap from the wrong column: the
+            # Proceeds of a priced sale came back blank -> $0
+            # (audit R1-91).
+            raise BrokerageParseError(
+                f"{where}: {action_raw} row has {len(row)} cells but "
+                f"the header has {width} — misaligned columns "
+                f"(two export layouts mixed in one file, a hand "
+                f"edit, or a row cut short); refusing to read "
+                f"Proceeds from the wrong column.")
+        symbol_raw = self._cell(row, 'symbol')
+        description_raw = self._cell(row, 'description')
+        qty_raw = self._cell(row, 'quantity')
+        price_raw = self._cell(row, 'price')
+        proceeds_raw = self._cell(row, 'proceeds')
+
+        if symbol_raw:
+            _new_symbol = symbol_raw.lstrip('@')
+            if _new_symbol != st.current_symbol:
+                # Description carry-over is for CONTINUATION fills
+                # of the SAME security. A new symbol with a blank
+                # Description cell must not inherit the previous
+                # security's text — an equity row after an option
+                # row would re-parse as that option (KNOWN_ISSUES
+                # "Webull blank-Description carry-over").
+                st.current_description = ""
+                st.current_type = ""
+            st.current_symbol = _new_symbol
+            # `@ROOT` is how Webull names an option row's
+            # underlying; any other Symbol cell is not one.
+            st.current_is_under = symbol_raw.startswith('@')
+        if description_raw:
+            st.current_description = description_raw
+        # Type Code (OPC option / SHS shares), carried over blank
+        # continuation rows like the description.
+        type_raw = self._cell(row, 'type').upper()
+        if type_raw:
+            st.current_type = type_raw
+
+        dt = self.parse_date(date_raw, "%d-%m-%Y", "%Y-%m-%d")
+        if dt is None:
+            # Passed through verbatim before, as both date and
+            # settle date, with only a schema warning (audit
+            # A2-0618).
+            raise BrokerageParseError(
+                f"{where}: {action_raw} row has Date {date_raw!r} — "
+                f"not DD-MM-YYYY (Webull's format) or YYYY-MM-DD; "
+                f"refusing to guess the date.")
+        date_str = dt.strftime("%Y-%m-%d")
+
+        # Strict parses named by file line (audit R1-91): a blank,
+        # garbage ('N/A') or decimal-comma cell is an error, never a
+        # silent 0. Price and Proceeds may be blank only together —
+        # an option expiry row. A priced trade with no Proceeds used
+        # to book $0 (the back-computed fee then absorbed the whole
+        # gross, so even --strict passed).
+        qty = parse_strict_number(qty_raw, field='Quantity',
+                                  where=where)
+        if qty is None or abs(qty) < QTY_ZERO:
+            # A trade of no units, with cash or without: the run's schema
+            # check stopped the account, naming no row (TJ-4502, TJ-4505).
+            raise zero_units_refusal(where, action_raw, qty_raw)
+        price = parse_strict_number(price_raw, field='Price',
+                                    where=where, allow_blank=True,
+                                    blank=0.0)
+        if abs(price) > 1e-9 and not proceeds_raw:
+            raise BrokerageParseError(
+                f"{where}: {action_raw} {qty_raw} @ {price_raw} has a "
+                f"blank Proceeds cell — a priced trade must carry its "
+                f"cash; refusing to book it at $0.")
+        # Webull prints a buy's proceeds in accounting parentheses
+        # ("(1,234.56)"), read as NEGATIVE: cash out. A buy's cost is  # pii-ok
+        # booked as a magnitude (direction lives in the quantity
+        # sign; an unparenthesised buy amount reads the same). A
+        # SALE keeps its sign: a debit there is a close whose
+        # commission exceeded the gross (a $0.00 option close with
+        # a fee) — negative proceeds, which abs() used to book as
+        # cash RECEIVED (audit R1-100).
+        _signed = parse_strict_number(
+            proceeds_raw, field='Proceeds', where=where,
+            allow_blank=True, blank=0.0)
+        if action_raw == 'BUY' and qty < 0 and _signed > 0:
+            # The quantity AND the cash say SALE under a BUY label
+            # (re-audit A2-0287): it was booked as a purchase, also
+            # under --strict. Refused, as the generic importer does.
+            raise BrokerageParseError(
+                f"{where}: a BUY row with a NEGATIVE Quantity "
+                f"{qty_raw} and cash IN (Proceeds {proceeds_raw}) — "
+                f"both say sale; refusing to guess.")
+        if action_raw == 'BUY' and qty < 0 and abs(_signed or 0.0) < 1e-9:
+            # With no cash to tell, the sign was dropped: a $0 BUY of -1
+            # was booked as a buy of 1 (TJ-4502).
+            raise BrokerageParseError(
+                f"{where}: a BUY row with a NEGATIVE Quantity {qty_raw} "
+                f"and no cash — the action says purchase, the quantity "
+                f"says sale; refusing to guess. Correct the Quantity's "
+                f"sign or the Action Code from the statement.")
+        net_amount = abs(_signed) if action_raw == 'BUY' else _signed
+        qty = self.signed_quantity(qty, action_is_sell=(action_raw == 'SELL'))
+        return date_str, net_amount, price, qty, qty_raw
+
+    def _file_rows(self, transactions: List[Dict[str, Any]], path: Path
+                   ) -> List[Dict[str, Any]]:
+        """This file's rows after the loop (nothing for an export with no
+        Trading Summary header): the pasted segments' shared rows refused,
+        the row accounting checked (every dated BUY / SELL row one
+        transaction), each newest-first segment put oldest first (before
+        the template's fill marks, as the one parse had it)."""
+        st = self._wb
+        if st.header_index is None:
+            return []
+        refuse_pasted_overlap(st.shown, st.segs,
+                              "the statement preamble (Account Number)")
+        if len(transactions) != st.data_rows:
+            # Row accounting: every dated BUY/SELL data row becomes one
+            # transaction. A mismatch means a row was dropped or split.
+            raise BrokerageParseError(
+                f"{path}: Webull row accounting failed — {st.data_rows} "
+                f"BUY/SELL rows but {len(transactions)} transactions")
+        transactions = self._oldest_first(transactions, st.seg_of)
+        return transactions
+
+    @builds("assign")
+    def finish(self, transactions: List[Dict[str, Any]], path: Path
+               ) -> List[Dict[str, Any]]:
+        """This file's rows (`_file_rows`); then, for the file parsed and
+        not for a sibling read for hints (`pool_hints`), the folder's
+        sibling exports pooled for the assignment pairing, the zero-close
+        check and the ticker-change hint, and the skipped actions warned
+        about."""
+        st = self._wb
+        transactions = self._file_rows(transactions, path)
+        if st.header_index is None or not self._pool_hints:
+            return transactions
+        expiries = self._expiries
         pool, pool_exp = list(transactions), list(expiries)
-        # Overlapping downloads repeat rows: a row is pooled as many
-        # times as the one file holding it most often does, as the
-        # cross-file dedup keeps it (backlog TJ-0855: three copies of an
-        # expiry counted as three buys and refused a closed position).
         pooled = Counter(self._row_key(t) for t in transactions)
         for sib in self._sibling_exports(path):
+            _sib = self._sibling(pool_hints=False)
             try:
                 with contextlib.redirect_stderr(io.StringIO()):
-                    _sib = WebullBrokerage()
-                    _sib.exercise_fee = self.exercise_fee
-                    sp = _sib._parse_rows(sib)
+                    sp = _sib.parse_rows(sib)
+                exp_ids = {id(t) for t in _sib._expiries}
             except (ValueError, OSError, UnicodeDecodeError):
                 continue        # reported when that file is parsed
+            finally:
+                _sib.release()                      # whatever it read, or failed to
             if sp:
-                exp_ids = {id(t) for t in sp[1]}
                 before, seen = Counter(pooled), Counter()
-                for t in sp[0]:
+                for t in sp:
                     k = self._row_key(t)
                     seen[k] += 1
                     if seen[k] <= before[k]:
@@ -112,17 +584,13 @@ class WebullBrokerage(BaseBrokerage):
         self._mark_assignments(pool, pool_exp, own=transactions,
                                source=path.name)
         self._check_zero_closes(pool, expiries, path.name)
-        self.clamp_settlement_to_expiry(transactions, expiries)
-        # Ticker-change hint over every export of the folder (audit
-        # A2-1067 / A2-1070): a rename across yearly files is named
-        # when the file holding the new symbol's short is parsed.
+        # The settlement clamp is the template's, after this finish:
+        # the ticker-change hint reads no settle date.
         self._warn_ticker_changes(pool, path.name, own=transactions)
         for t in pool:
             t.pop('_under', None)
             t.pop('_where', None)
-        # Parser-level disambiguation so a downstream `taxjson-sort --dedup`
-        # can't collapse byte-identical split-fill rows.
-        self.disambiguate_split_fills(transactions)
+        skipped_actions = st.skipped_actions
         if skipped_actions:
             detail = ", ".join(f"{len(v)}× {a}" for a, v in
                                sorted(skipped_actions.items()))
@@ -154,6 +622,9 @@ class WebullBrokerage(BaseBrokerage):
                           f"account).")
         return transactions
 
+    def release(self) -> None:
+        self._wb = None                 # the export's segments and rows released
+
     @staticmethod
     def _row_key(t: Dict[str, Any]) -> tuple:
         """A parsed row's content, without its file position (the
@@ -162,382 +633,15 @@ class WebullBrokerage(BaseBrokerage):
         return tuple(sorted((k, repr(v)) for k, v in t.items()
                             if not k.startswith('_')))
 
-    @staticmethod
-    def _sibling_exports(path: Path) -> List[Path]:
+    def _sibling_exports(self, path: Path) -> List[Path]:
         """The other Webull exports in the same folder — the CSVs `tjs
-        run` reads as Webull (content first, lib/brokerages/detect), not
-        only those named wb_*/*webull*."""
-        from taxjson.lib.brokerages.detect import same_broker_siblings
-        return same_broker_siblings(
+        run` reads as Webull (content first, the caller's finder:
+        `sibling_finder`, lib/brokerages/detect), not only those named
+        wb_*/*webull*; none on a bare parse."""
+        return self._same_broker_siblings(
             Path(path), 'webull',
             by_name=lambda n: n.startswith('wb_') or 'webull' in n)
 
-    def _parse_rows(self, path: Path):
-        """(transactions, expiries, skipped_actions) for one export, or
-        None when it has no Trading Summary header. No assignment
-        pairing — parse_file does that across the folder."""
-        # The shared decoder (audit A2-0101 / A2-1451): a UTF-16 re-save
-        # is read like the IB/Questrade/RBC twins read it, never refused
-        # as 'not UTF-16'.
-        content = read_broker_text(path)
-        lines = content.splitlines()
-
-        header_index = self._find_header(lines)
-        if header_index == -1:
-            return None
-        account = self._preamble_account(lines[:header_index])
-        self._last_accounts = {account} if account else set()
-        # The account the file's preambles name so far: a later preamble
-        # naming another stops the parse (backlog TJ-0237).
-        named = account
-
-        reader = csv.reader(io.StringIO("\n".join(lines[header_index:])))
-        # Resolve columns by their HEADER LABELS, never by position. The
-        # 2024 Trading Summary has 9 columns (Proceeds in col 8); the 2025
-        # one inserted an empty column, moving Proceeds to col 9. A
-        # position-based read of one layout on the other puts the amount
-        # in the wrong field — the silent zero-cost failure that inflated
-        # a filed return. Unknown layouts fail loudly.
-        # The bilingual header cells hold embedded newlines, so the header
-        # is the first complete CSV RECORD, not the first physical line.
-        header_row = next(csv.reader(io.StringIO(
-            "\n".join(lines[header_index:]))), [])
-        cols = self._resolve_columns(header_row, path)
-        transactions: List[Dict[str, Any]] = []
-        data_rows = 0
-        current_symbol = ""
-        current_is_under = False
-        current_description = ""
-        current_type = ""
-        # Webull's parser only books BUY/SELL. Blank continuation rows are
-        # expected and harmless, but a row with a REAL non-trade action
-        # (dividend, option assignment/expiry, transfer) would be dropped
-        # silently, leaving a phantom open position. Count those so the loss
-        # is surfaced rather than invisible.
-        skipped_actions: Dict[str, List[tuple]] = {}
-        # Option expiry rows (see is_expiry below).
-        expiries: List[Dict[str, Any]] = []
-
-        def cell(row, key):
-            j = cols.get(key)
-            return row[j].strip() if j is not None and j < len(row) else ""
-
-        width = len(header_row)
-        # One segment per download: a second statement preamble (its
-        # 'Account Number' line) starts another (backlog TJ-0099).
-        segs: List[tuple] = [(header_index + 1, [])]
-        # The segment (download) of each transaction: each is read in
-        # its own direction (backlog TJ-0376).
-        seg_of: List[int] = []
-        for row in reader:
-            # File line of this record (the header record is the first
-            # one the reader returns; line_num counts physical lines
-            # read so far, so a record's LAST physical line).
-            where = f"{shown_name(path)} line {header_index + reader.line_num}"
-            if row and row[0].strip().lower().startswith('account number'):
-                segs.append((header_index + reader.line_num, []))
-                other = self._account_in_cells(row)
-                if named and other and other.upper() != named.upper():
-                    # Two accounts' downloads pasted into one file: every
-                    # row was booked under the first preamble's account
-                    # (backlog TJ-0237).
-                    raise BrokerageParseError(
-                        f"{where}: this statement preamble names account "
-                        f"{_mask(other)}, a different account from the "
-                        f"{_mask(named)} named above — two accounts' "
-                        f"downloads pasted into one file, and every row "
-                        f"would be booked under the first one. Save each "
-                        f"account's download as its own file.")
-                named = named or other
-            if (row and len(row) < width and any(c.strip() for c in row)
-                    and row[0].strip().upper() in _CURRENCY_PREFIXES):
-                # A data row cut short — the last line of a download
-                # that stopped early ('CAD,12-12-2024,'): it used to
-                # fall through as a preamble or blank continuation row
-                # and the trade vanished at rc 0 (audit A2-0028).
-                raise BrokerageParseError(
-                    f"{where}: a row starting {','.join(row)[:40]!r} has "
-                    f"{len(row)} cell(s) but the header has {width} — the "
-                    f"row is cut short (an export that stopped early?). "
-                    f"Re-download the file; refusing to drop the row.")
-            if not row or len(row) < 3:
-                continue
-            currency = cell(row, 'currency').upper()
-            date_raw = cell(row, 'date')
-            action_raw = cell(row, 'action').upper()
-            is_trade = action_raw in ('BUY', 'SELL')
-            if currency not in ('USD', 'CAD'):
-                if is_trade:
-                    # A trade row whose currency cannot be read used to
-                    # vanish here, before row accounting saw it (audit
-                    # R1-92): the disposition was simply lost.
-                    raise BrokerageParseError(
-                        f"{where}: {action_raw} row has currency "
-                        f"{currency!r} — Webull Trading Summaries carry "
-                        f"USD or CAD; refusing to drop the trade. Fix "
-                        f"the cell (a continuation row repeats its "
-                        f"security's currency).")
-                continue            # repeated page headers, preamble
-            if not is_trade:
-                # A populated action we don't handle is a real dropped event;
-                # an empty action is just a blank continuation row.
-                if action_raw:
-                    skipped_actions.setdefault(action_raw, []).append(
-                        (where, cell(row, 'symbol').lstrip('@'),
-                         cell(row, 'quantity'), cell(row, 'proceeds')))
-                elif any(cell(row, k) for k in ('date', 'quantity',
-                                                'price', 'proceeds')):
-                    # A blank Action cell on a row that carries a date,
-                    # quantity, price or proceeds is a damaged trade
-                    # row, not a continuation row: the sale vanished at
-                    # rc 0 (audit A2-0788; the blank-Date twin R1-97).
-                    raise BrokerageParseError(
-                        f"{where}: a row with a blank Action Code carries "
-                        f"trade cells (date {cell(row, 'date') or '-'}, "
-                        f"quantity {cell(row, 'quantity') or '-'}, "
-                        f"proceeds {cell(row, 'proceeds') or '-'}) — "
-                        f"refusing to drop the trade or guess BUY/SELL. "
-                        f"Restore the Action Code from the original "
-                        f"export.")
-                continue
-            if not date_raw:
-                # A dated trade row with its Date cut off was reported as
-                # an 'unhandled action' and dropped (audit R1-97).
-                raise BrokerageParseError(
-                    f"{where}: {action_raw} row has a blank Date — "
-                    f"refusing to drop the trade or guess its date.")
-            if any('\n' in c or '\r' in c for c in row):
-                # Real exports put line breaks only in the bilingual
-                # header cells. One inside a data row is a quoted cell
-                # that never closed and swallowed the following rows
-                # (audit S066-04).
-                raise BrokerageParseError(
-                    f"{where}: {action_raw} row has a cell spanning "
-                    f"several lines — an unescaped quote (\") in a "
-                    f"Description swallowed the rows after it. Fix the "
-                    f"quote in the CSV.")
-
-            data_rows += 1
-            segs[-1][1].append((header_index + reader.line_num,
-                                tuple(c.strip() for c in row)))
-            if len(row) != width:
-                # A row wider or narrower than its header (a 2025-layout
-                # row under the 9-column 2024 header, a hand edit) reads
-                # every cell after the gap from the wrong column: the
-                # Proceeds of a priced sale came back blank -> $0
-                # (audit R1-91).
-                raise BrokerageParseError(
-                    f"{where}: {action_raw} row has {len(row)} cells but "
-                    f"the header has {width} — misaligned columns "
-                    f"(two export layouts mixed in one file, a hand "
-                    f"edit, or a row cut short); refusing to read "
-                    f"Proceeds from the wrong column.")
-            symbol_raw = cell(row, 'symbol')
-            description_raw = cell(row, 'description')
-            qty_raw = cell(row, 'quantity')
-            price_raw = cell(row, 'price')
-            proceeds_raw = cell(row, 'proceeds')
-
-            if symbol_raw:
-                _new_symbol = symbol_raw.lstrip('@')
-                if _new_symbol != current_symbol:
-                    # Description carry-over is for CONTINUATION fills
-                    # of the SAME security. A new symbol with a blank
-                    # Description cell must not inherit the previous
-                    # security's text — an equity row after an option
-                    # row would re-parse as that option (KNOWN_ISSUES
-                    # "Webull blank-Description carry-over").
-                    current_description = ""
-                    current_type = ""
-                current_symbol = _new_symbol
-                # `@ROOT` is how Webull names an option row's
-                # underlying; any other Symbol cell is not one.
-                current_is_under = symbol_raw.startswith('@')
-            if description_raw:
-                current_description = description_raw
-            # Type Code (OPC option / SHS shares), carried over blank
-            # continuation rows like the description.
-            type_raw = cell(row, 'type').upper()
-            if type_raw:
-                current_type = type_raw
-
-            dt = self.parse_date(date_raw, "%d-%m-%Y", "%Y-%m-%d")
-            if dt is None:
-                # Passed through verbatim before, as both date and
-                # settle date, with only a schema warning (audit
-                # A2-0618).
-                raise BrokerageParseError(
-                    f"{where}: {action_raw} row has Date {date_raw!r} — "
-                    f"not DD-MM-YYYY (Webull's format) or YYYY-MM-DD; "
-                    f"refusing to guess the date.")
-            date_str = dt.strftime("%Y-%m-%d")
-
-            # Strict parses named by file line (audit R1-91): a blank,
-            # garbage ('N/A') or decimal-comma cell is an error, never a
-            # silent 0. Price and Proceeds may be blank only together —
-            # an option expiry row. A priced trade with no Proceeds used
-            # to book $0 (the back-computed fee then absorbed the whole
-            # gross, so even --strict passed).
-            qty = parse_strict_number(qty_raw, field='Quantity',
-                                      where=where)
-            price = parse_strict_number(price_raw, field='Price',
-                                        where=where, allow_blank=True,
-                                        blank=0.0)
-            if abs(price) > 1e-9 and not proceeds_raw:
-                raise BrokerageParseError(
-                    f"{where}: {action_raw} {qty_raw} @ {price_raw} has a "
-                    f"blank Proceeds cell — a priced trade must carry its "
-                    f"cash; refusing to book it at $0.")
-            # Webull prints a buy's proceeds in accounting parentheses
-            # ("(1,234.56)"), read as NEGATIVE: cash out. A buy's cost is  # pii-ok
-            # booked as a magnitude (direction lives in the quantity
-            # sign; an unparenthesised buy amount reads the same). A
-            # SALE keeps its sign: a debit there is a close whose
-            # commission exceeded the gross (a $0.00 option close with
-            # a fee) — negative proceeds, which abs() used to book as
-            # cash RECEIVED (audit R1-100).
-            _signed = parse_strict_number(
-                proceeds_raw, field='Proceeds', where=where,
-                allow_blank=True, blank=0.0)
-            if action_raw == 'BUY' and qty < 0 and _signed > 0:
-                # The quantity AND the cash say SALE under a BUY label
-                # (re-audit A2-0287): it was booked as a purchase, also
-                # under --strict. Refused, as the generic importer does.
-                raise BrokerageParseError(
-                    f"{where}: a BUY row with a NEGATIVE Quantity "
-                    f"{qty_raw} and cash IN (Proceeds {proceeds_raw}) — "
-                    f"both say sale; refusing to guess.")
-            net_amount = abs(_signed) if action_raw == 'BUY' else _signed
-            qty = self.signed_quantity(qty, action_is_sell=(action_raw == 'SELL'))
-
-            opt = self.parse_option_from_description(current_description)
-            # The row's Type Code decides the security type when it is
-            # there (audit S065-17): an OPC row whose description is not
-            # a readable contract was booked as 1 SHARE of the
-            # underlying, and an SHS row whose description happened to
-            # parse as a contract as 100 x the shares.
-            if current_type == 'OPC' and not opt:
-                raise BrokerageParseError(
-                    f"{where}: {action_raw} row has Type Code OPC (an "
-                    f"option) but its Security Description "
-                    f"{current_description!r} is not a readable contract "
-                    f"(CALL/PUT ROOT MM/DD/YY STRIKE) — refusing to book "
-                    f"it as shares.")
-            if current_type == 'SHS' and opt:
-                raise BrokerageParseError(
-                    f"{where}: {action_raw} row has Type Code SHS "
-                    f"(shares) but its Security Description "
-                    f"{current_description!r} reads as an option "
-                    f"contract — refusing to guess which it is.")
-            under_sym = ''
-            if opt:
-                symbol = self.format_occ_symbol(
-                    opt['right'], opt['base'], opt['expiry'], opt['strike'],
-                    where=where)
-                is_option = True
-                # The row's own Symbol column (`@ZZS`) names the
-                # underlying; the description root can differ (an
-                # adjusted contract's `ZZS1`) — audit S066-02.
-                if current_is_under:
-                    under_sym = self.apply_currency_suffix(
-                        current_symbol, currency)
-            else:
-                symbol = current_symbol
-                is_option = False
-            symbol = self.apply_currency_suffix(symbol, currency)
-
-            # Webull's CSV Date column IS the SETTLEMENT date (user-verified
-            # against real Webull statements) — keep it as date_settle
-            # verbatim, and BACK-compute the trade date (options T+1;
-            # equities T+2 pre-cutover, T+1 after). The trade date feeds the
-            # trade-basis consumers: the US engine's year attribution, FIFO
-            # acquisition order, and the §1091 window. (An earlier fix
-            # wrongly assumed the CSV date was the TRADE date and added the
-            # settlement lag ON TOP of an already-settled date.)
-            # EXCEPT an option expiry row (no price, no proceeds): its
-            # Date is the EXPIRY date itself — there is no settlement
-            # cycle to walk back. Shifting it a business day earlier
-            # made a 0DTE long that expired worthless close BEFORE the
-            # buy that opened it: a phantom $0 short WRITE. Kept on the
-            # expiry date, stamped at the close (after every same-day
-            # 09:30 trade), and the same-day opening trade's settle is
-            # clamped to the expiry (clamp_settlement_to_expiry below).
-            is_expiry = (is_option and abs(price) < 1e-9
-                         and abs(net_amount) < 1e-9)
-            if (not is_option and abs(price) < 1e-9
-                    and abs(net_amount) < 1e-9):
-                # Shares at no price and no cash: a row whose Price and
-                # Proceeds were cut (a spreadsheet re-save pads the
-                # cells back), or a transfer/journal row — booking it
-                # put the shares in at $0 or took the sale's proceeds
-                # to $0 at rc 0 (audit A2-0102 / A2-0619). The generic
-                # importer refuses the same row.
-                raise BrokerageParseError(
-                    f"{where}: {action_raw} {qty_raw} {current_symbol} has "
-                    f"no Price and no Proceeds — a share trade at $0 is a "
-                    f"cut row or a transfer, not a trade; refusing to book "
-                    f"it at $0. Fix the cells, or enter a transfer as a "
-                    f".tt line.")
-            # The export never states a contract's size: 100 is assumed
-            # unless only a mini's 10 fits the Proceeds (B10).
-            opt_mult, size_basis = None, ''
-            if is_option and not is_expiry and abs(price) > 1e-9:
-                opt_mult, size_basis = self.option_row_multiplier(
-                    symbol, lambda m: not self._trade_money_problem(
-                        where, action_raw, qty, price, net_amount, True, m))
-            if not is_expiry and abs(price) > 1e-9:
-                self._check_trade_money(where, action_raw, qty, price,
-                                        net_amount, is_option,
-                                        mult=opt_mult)
-            if is_expiry:
-                trade_date, row_time = date_str, '16:00:00'
-            else:
-                trade_date = self.trade_date_from_settlement(
-                    date_str, currency, is_option, "%Y-%m-%d")
-                row_time = '09:30:00'
-            _tx = {
-                'action': 'BUYSELL',
-                'date': trade_date,
-                'time': row_time,
-                'date_settle': date_str,
-                'symbol': symbol,
-                'quantity': qty,
-                'currency': currency,
-                'price': price,
-                'fee': self.back_compute_fee(qty, price, net_amount, is_option,
-                                             multiplier=opt_mult),
-                'net_amount': net_amount,
-                'gross_amount': self.theoretical_gross(qty, price, is_option,
-                                                       multiplier=opt_mult),
-                'account': self.DEFAULT_ACCOUNT,
-                'description': current_description,
-                '_where': where,
-            }
-            if size_basis == 'derived':
-                _tx['multiplier'] = opt_mult
-                _tx['contract_size_basis'] = size_basis
-            if account:
-                # The broker account the export names (cross-file dedup
-                # keeps two accounts' identical rows apart: A2-0286).
-                _tx['broker_account'] = account
-            if under_sym:
-                _tx['_under'] = under_sym
-            # The row's line, for the schema check (backlog TJ-0124).
-            self.note_row_line(_tx, header_index + reader.line_num)
-            transactions.append(_tx)
-            seg_of.append(len(segs) - 1)
-            if is_expiry:
-                expiries.append(_tx)
-        refuse_pasted_overlap(shown_name(path), segs,
-                              "the statement preamble (Account Number)")
-        if len(transactions) != data_rows:
-            # Row accounting: every dated BUY/SELL data row becomes one
-            # transaction. A mismatch means a row was dropped or split.
-            raise BrokerageParseError(
-                f"{path}: Webull row accounting failed — {data_rows} "
-                f"BUY/SELL rows but {len(transactions)} transactions")
-        transactions = self._oldest_first(transactions, seg_of)
-        return transactions, expiries, skipped_actions
 
     def _oldest_first(self, transactions, segments=None):
         """The rows in replay order. Webull groups its rows by security
@@ -618,14 +722,12 @@ class WebullBrokerage(BaseBrokerage):
             mult = self.OPTION_MULTIPLIER if is_option else 1
         gross = abs(qty) * abs(price) * mult
         fee = (gross - net) if action == 'SELL' else (net - gross)
-        low = -(0.05 + 0.005 * gross)
-        high = (max(250.0, 3.0 * abs(qty) if is_option else 0.0)
-                + 0.05 * gross)
+        low, high = implied_commission_bounds(gross, qty, is_option=is_option)
         if fee < low or fee > high:
-            return (f"{where}: {action} Proceeds {net:,.2f} does not fit "
+            return (f"{where}: {action} Proceeds {M.shown(net, 2):,.2f} does not fit "
                     f"|Quantity| {abs(qty):g} x Price {abs(price):g}"
-                    f"{f' x {mult:g}' if is_option else ''} = {gross:,.2f} "
-                    f"(implied commission {fee:,.2f}) — a wrong or shifted "
+                    f"{f' x {mult:g}' if is_option else ''} = {M.shown(gross, 2):,.2f} "
+                    f"(implied commission {M.shown(fee, 2):,.2f}) — a wrong or shifted "
                     f"column; refusing to book it.")
         return ''
 
@@ -798,7 +900,7 @@ class WebullBrokerage(BaseBrokerage):
                       f"{opt['date']} + {abs(float(stock['quantity'])):g} "
                       f"{stock['symbol']} at the strike {meta[oi][0]:g} "
                       f"settling {stock['date_settle']} (fee "
-                      f"{float(stock.get('fee') or 0):.2f}); both legs "
+                      f"{M.shown(float(stock.get('fee') or 0), 2):.2f}); both legs "
                       f"booked ASSIGN (the premium folds into the shares' "
                       f"cost or proceeds{meta[oi][1]}). Check it against "
                       f"the statement.")
@@ -826,14 +928,14 @@ class WebullBrokerage(BaseBrokerage):
                    f"this account ([accounts.<name>] exercise_fee), so"
                    if self.exercise_fee is None else
                    f"an ordinary trade's fee, not the account's "
-                   f"{float(self.exercise_fee):.2f} exercise/assignment "
+                   f"{M.shown(float(self.exercise_fee), 2):.2f} exercise/assignment "
                    f"charge (exercise_fee), so")
             emit_line(f"warning: Webull {source}: {opt['symbol']} closed at "
                   f"$0 on {opt['date']} and "
                   f"{abs(float(stock['quantity'])):g} {stock['symbol']} "
                   f"traded at the strike {meta[oi][0]:g} settling "
                   f"{stock['date_settle']} with a "
-                  f"{_fee:.2f} commission — {why} exercise/assignment "
+                  f"{M.shown(_fee, 2):.2f} commission — {why} exercise/assignment "
                   f"was NOT inferred: booked as an expiry plus a "
                   f"separate trade. "
                   f"If the statement shows an exercise/assignment, the "
@@ -853,7 +955,7 @@ class WebullBrokerage(BaseBrokerage):
                   f"$0 on {opt['date']} and {abs(float(stock['quantity'])):g} "
                   f"{stock['symbol']} traded at the strike {meta[oi][0]:g} "
                   f"settling {stock['date_settle']} with the account's "
-                  f"{float(self.exercise_fee or 0):.2f} exercise/"
+                  f"{M.shown(float(self.exercise_fee or 0), 2):.2f} exercise/"
                   f"assignment charge, but the quantities differ "
                   f"(the close or the stock leg is split across rows), so "
                   f"exercise/assignment was NOT inferred: booked as an "
@@ -870,17 +972,28 @@ class WebullBrokerage(BaseBrokerage):
         on the side of what is held) is a cut or mangled row and is
         refused; a $0 close before the expiry that found no stock leg is
         named (audit A2-0284). At the expiry a row with nothing held in
-        the data closes a position bought before the first export."""
-        def key(t):
+        the data closes a position bought before the first export. A $0
+        row at the row's own instant (a twin) is no holding: two $0 rows
+        of one contract at one instant counted each other as held, so a
+        premium-free open passed (TJ-4505); before the expiry, the
+        instant's closes on one side together close no more than held."""
+        def key(t: Dict[str, Any]) -> tuple[str, str]:
             return (t['date'], t['time'])
+
+        def twin(t: Dict[str, Any], e: Dict[str, Any]) -> bool:
+            return (key(t) == key(e) and abs(t.get('price') or 0) < 1e-9
+                    and abs(t.get('net_amount') or 0) < 1e-9)
         for e in expiries:
             if e['action'] == 'ASSIGN':
                 continue
-            held = sum(float(t['quantity']) for t in pool
-                       if t is not e and t['symbol'] == e['symbol']
-                       and t.get('broker_account') == e.get('broker_account')
-                       and key(t) <= key(e))
+            mates = [t for t in pool
+                     if t is not e and t['symbol'] == e['symbol']
+                     and t.get('broker_account') == e.get('broker_account')
+                     and key(t) <= key(e)]
             q = float(e['quantity'])
+            held = sum(float(t['quantity']) for t in mates if not twin(t, e))
+            closing = q + sum(float(t['quantity']) for t in mates
+                              if twin(t, e) and (float(t['quantity']) > 0) == (q > 0))
             where = e.get('_where') or source
             exp = parse_option_expiry(e['symbol'])
             at_expiry = bool(exp) and e['date'] >= exp
@@ -890,7 +1003,9 @@ class WebullBrokerage(BaseBrokerage):
             # side, a $0 row cannot be a close.
             if (abs(held) < 1e-9 and not at_expiry) \
                     or (abs(held) > 1e-9 and ((held > 0) == (q > 0)
-                                              or abs(q) > abs(held) + 1e-9)):
+                                              or abs(q) > abs(held) + 1e-9
+                                              or (not at_expiry and abs(closing)
+                                                  > abs(held) + 1e-9))):
                 raise BrokerageParseError(
                     f"{where}: {'BUY' if q > 0 else 'SELL'} "
                     f"{abs(q):g} {e['symbol']} at $0 (no Price, no "

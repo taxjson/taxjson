@@ -115,7 +115,7 @@ core loads). The plugin contract is `taxjson/lib/fetchers.py` in the
 core.
 
 Tests are offline (the HTTP layer is injected) and run from a checkout
-without installing (`tests/_support.py` registers the entry point):
+without installing (`tests/_bootstrap.py` registers the entry point):
 
 ```bash
 PYTHONPATH=packages/taxjson-fetch/src python -m unittest discover -s packages/taxjson-fetch/tests -p "test_*.py"

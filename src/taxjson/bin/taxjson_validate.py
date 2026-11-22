@@ -9,6 +9,7 @@ Usage:
     taxjson-validate input1.json [input2.json ...]
 """
 
+from taxjson.lib import out as _out
 from taxjson.lib.out import labelled
 import argparse
 import re
@@ -20,6 +21,7 @@ from datetime import datetime
 from collections import defaultdict
 
 from taxjson.lib import cli_diag
+from taxjson.lib.futures_prefixes import FUTURES_PREFIXES
 
 PROG = "taxjson-validate"
 
@@ -35,7 +37,7 @@ def validate_transactions(transactions, filename="input",
     warnings = defaultdict(list)
     
     # The engines' own list (lib/brokerages/schema): validate never
-    # passes a book they refuse (core.check_books refuses any other
+    # passes a book they refuse (require_computable_rows refuses any other
     # action), and never flags one they book (ADJUST, DISALLOW). It used
     # to carry INCOME, an action nothing writes and the engines refuse.
     from taxjson.lib.brokerages.schema import KNOWN_ACTIONS
@@ -71,7 +73,7 @@ def validate_transactions(transactions, filename="input",
                     f"Field '{_fld}' must be a string, got "
                     f"{type(_v).__name__}: {_v!r}")
         # Numeric view: value or None when the field is unusable. The
-        # loaders' own list (core.coerce_transaction_row): a malformed
+        # loaders' own list (tx_load.coerce_transaction_row): a malformed
         # multiplier, market_value or corp_parent_qty passed here and was
         # refused by the next load (backlog TJ-0979, TJ-1226).
         nums = {}
@@ -211,7 +213,7 @@ def validate_transactions(transactions, filename="input",
             # spread) and is booked correctly (audit S053-13), whatever
             # futures prefix the symbol carries (A2-1087/A2-1089).
             if (price_val is not None and price_val < 0
-                    and not (symbol or "").startswith(("F:", "/", "\\"))):
+                    and not (symbol or "").startswith(FUTURES_PREFIXES)):
                 issues[context].append(f"Price is negative: {price_val}")
 
         if (require_prices and action in {"BUYSELL", "DIVIDEND"}
@@ -252,6 +254,10 @@ def main():
                              "accounts)")
     args = parser.parse_args()
     
+    # The report: a live exact Doc, each line written as it is added, as
+    # the raw print() wrote it (labelled() still reads stdout's width
+    # where the line is built; nothing else wraps).
+    d = _out.Doc(exact=True, width_=0, live=True)
     global_total_issues = 0
     global_total_warnings = 0
     unreadable = 0
@@ -298,31 +304,31 @@ def main():
         global_total_warnings += total_warnings
         
         if total_issues == 0 and (total_warnings == 0 or not args.warnings):
-            print(f"OK: {filename}: {num_tx} transactions validated.")
+            d.line(f"OK: {filename}: {num_tx} transactions validated.")
         
         if total_issues > 0 or (total_warnings > 0 and args.warnings):
-            print(f"Validation found {total_issues} errors and {total_warnings} warnings in {filename} ({num_tx} transactions):\n")
+            d.line(f"Validation found {total_issues} errors and {total_warnings} warnings in {filename} ({num_tx} transactions):\n")
             
             all_contexts = set(issues.keys()) | (set(warnings.keys()) if args.warnings else set())
             
             for ctx in sorted(all_contexts):
                 if ctx in issues or (args.warnings and ctx in warnings):
-                    print(f"- {ctx}")
+                    d.line(f"- {ctx}")
                     # Report-content row labels (stdout), not diagnostics:
                     # per AUDIT-2026-07-ui §1C3 the per-record detail IS the
                     # tool's report.
                     for err in issues.get(ctx, []):
-                        print(labelled(f"  ERROR: {err}"))
+                        d.line(labelled(f"  ERROR: {err}"))
                     if args.warnings:
                         for warn in warnings.get(ctx, []):
-                            print(labelled(f"  WARNING: {warn}"))
-                    print()
+                            d.line(labelled(f"  WARNING: {warn}"))
+                    d.blank()
 
     if global_total_issues == 0:
         if global_total_warnings == 0 or not args.warnings:
-            print(f"OK: Validation passed. No obvious issues found across {len(args.files)} files.")
+            d.line(f"OK: Validation passed. No obvious issues found across {len(args.files)} files.")
             if global_total_warnings > 0:
-                print(f"   (There are {global_total_warnings} warnings hidden. Run with --warnings to see them)")
+                d.line(f"   (There are {global_total_warnings} warnings hidden. Run with --warnings to see them)")
             sys.exit(0)
         else:
             # We had warnings and user wanted them, but no issues.

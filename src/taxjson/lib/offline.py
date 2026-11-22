@@ -14,11 +14,12 @@ from taxjson.lib.stage_msg import emit_line
 import os
 import sys
 from typing import Mapping, Optional
+from taxjson.lib.once import said_set
 
 ENV_VAR = "TAXJSON_OFFLINE"
 _ON = frozenset({"1", "true", "yes", "on"})
 _OFF = frozenset({"", "0", "false", "no", "off"})
-_warned = set()
+_warned = said_set()
 
 
 def offline_enabled(env: Optional[Mapping[str, str]] = None) -> bool:

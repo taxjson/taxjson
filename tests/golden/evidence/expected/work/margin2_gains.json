@@ -1,0 +1,120 @@
+{
+  "by_ticker": {
+    "F:SAMPLMH6.US": {
+      "hold_days": [
+        28
+      ],
+      "total_cost": 0.0,
+      "total_div": 0.0,
+      "total_gain": 4.05,
+      "total_pil": 0.0,
+      "total_proceeds": 4.05,
+      "trade_count": 1
+    },
+    "SAMPLD.US": {
+      "hold_days": [
+        303
+      ],
+      "total_cost": 267.3,
+      "total_div": 0.0,
+      "total_gain": 14.85,
+      "total_pil": 2.7,
+      "total_proceeds": 282.15,
+      "trade_count": 1
+    }
+  },
+  "inventory": [],
+  "inventory_year_end": [],
+  "option_replacement_warnings": [],
+  "summary": {
+    "option_buyback_loss_superficial": false,
+    "option_grant_since": 2025,
+    "option_premium_timing": "grant",
+    "tax_date_basis": "settle",
+    "total_disallowed": 0,
+    "total_fees_by_currency": {
+      "CAD": {
+        "futures": 2.7,
+        "options": 0.0,
+        "stocks": 2.7,
+        "total": 5.4
+      }
+    },
+    "total_gain": 18.9,
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1,
+    "year": "2025"
+  },
+  "transactions": [
+    {
+      "account": "margin2",
+      "commission": 0.0,
+      "cost": 0.0,
+      "currency": "CAD",
+      "date": "2025-03-10",
+      "date_settle": "2025-03-10",
+      "days_held": 28,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 1.35,
+      "gain": 4.05,
+      "grant": false,
+      "id": "3cad8d6d33695fcb",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 4.05,
+      "qty": 1.0,
+      "raw_gain": 4.05,
+      "replacement_lot_ids": [],
+      "symbol": "F:SAMPLMH6.US",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "margin2",
+      "commission": 0.0,
+      "cost": 267.3,
+      "currency": "CAD",
+      "date": "2025-11-14",
+      "date_settle": "2025-11-17",
+      "days_held": 303,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 1.35,
+      "gain": 14.85,
+      "grant": false,
+      "id": "f7ffbe1f68f3901f",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 282.15,
+      "qty": 10.0,
+      "raw_gain": 14.85,
+      "replacement_lot_ids": [],
+      "symbol": "SAMPLD.US",
+      "term": null,
+      "wash_replacements": null
+    },
+    {
+      "account": "margin2",
+      "action": "DIVIDEND_IN_LIEU",
+      "cost": 0.0,
+      "currency": "CAD",
+      "date": "2025-09-30",
+      "date_settle": "2025-09-30",
+      "gain": 0.0,
+      "id": "f76187e4c0857f14",
+      "pil": 2.7,
+      "proceeds": 0.0,
+      "qty": 0.0,
+      "symbol": "SAMPLD.US",
+      "time": "09:30:00"
+    }
+  ],
+  "wash_sales": []
+}

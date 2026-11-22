@@ -1,0 +1,4 @@
+{
+ "kind": "engine",
+ "source": "test_settle_straddle_fuzz.build_book(14), frozen at v0.41.0"
+}

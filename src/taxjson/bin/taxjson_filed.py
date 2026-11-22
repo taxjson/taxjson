@@ -25,39 +25,36 @@ count, the engine's net proceeds, ST/LT gain, and the form lines the
 export puts on the return (Schedule 3 line codes, or Form 8949 part
 totals). NOT locked: interest, foreign tax withheld and the FX gain on
 foreign cash (line 15300 / §988) — check-filed says so with every OK.
+
+Reading a lock, its problems and the aggregates it holds is
+lib/filed_locks.py (read_lock, lock_damage, aggregates_from_gains, ...);
+this module writes a lock, recomputes a year and reports the drift.
 """
 
+from taxjson.project.settings import Settings, as_settings
 from taxjson.lib.pipeline import income_dating_flags, option_timing_flags
 import json
-import os
-import math
 import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib import channels as _channels
+from taxjson.lib.tx_load import finite_num
 from taxjson.lib import cli_diag
+from taxjson.model import money as M
+from taxjson.lib.filed_locks import (
+    PROG,
+    _canonical_country,
+    aggregates_from_gains,
+    locked_year_flags,
+    project_locks,
+)
 
-PROG = "taxjson-filed"
-_TOL = 0.01
-# The per-account and total figures a lock records as numbers.
-_NUMERIC_KEYS = ("realized", "disallowed", "income", "dividend", "pil",
-                 "proceeds", "st_gain", "lt_gain", "dispositions",
-                 "tainted")
-# The RETURN row's figures (close-year's _return_row_totals).
-_RETURN_ROW_KEYS = ("realized", "disallowed")
 
-
-def _finite_num(v: Any) -> bool:
-    """A locked figure: a number (not a bool) that is finite. json.loads
-    reads `NaN` and `Infinity` into floats, and every comparison with a
-    NaN is False, so a locked NaN total passed the shape check and
-    matched any recomputed figure in the drift check (2026-10 audit
-    B38). close-year writes plain finite numbers; anything else is a
-    damaged or hand-edited lock."""
-    return (isinstance(v, (int, float)) and not isinstance(v, bool)
-            and math.isfinite(float(v)))
+# A figure a cent or less from the lock's is no drift, in whole cents
+# (`M.cents_apart`): float error never trips it (TJ-3119).
+_TOL_CENTS = 1
 
 
 # What every OK line says the lock does not cover (S032-11); the RETURN
@@ -65,49 +62,6 @@ def _finite_num(v: Any) -> bool:
 NOT_LOCKED = ("interest, foreign tax withheld and the FX gain on foreign "
               "cash are not locked; the RETURN row (return_row) is not "
               "recomputed")
-
-
-def form_lines(entries: List[Dict[str, Any]], *, crypto: bool = False,
-               year: Optional[int] = None,
-               date_key: str = "date_settle") -> Dict[str, float]:
-    """The amounts the export puts on the return for these disposition
-    entries: Schedule 3 {proceeds/gain line code: amount} (Canadian
-    gains; the 2024 form's Period 1 codes 10689/10690 and 10693/10694
-    apart, A2-0166), or Form 8949 part totals {"I_proceeds": ..} (US
-    gains carry a term), with, from 2025, the digital-asset boxes' own
-    totals {"I_da_proceeds": ..} (boxes G-L, A2-0482). The lock records
-    them so a change that moves amounts BETWEEN lines (13199 vs 15199 vs
-    15200), or changes how proceeds are presented (outlays, short
-    sales), is drift even when the total gain is unchanged (R1-205,
-    R1-281)."""
-    import contextlib
-    import io
-    from taxjson.bin import taxjson_form_export as FE
-    if not entries:
-        return {}
-    marked = FE.mark_crypto(entries) if crypto else entries
-    with contextlib.redirect_stderr(io.StringIO()):
-        if any(e.get("term") in ("SHORT_TERM", "LONG_TERM")
-               for e in entries):
-            rep = FE.build_8949(marked, year)
-            out = {f"{part}_{k}": float(v)
-                   for part in ("I", "II")
-                   for k, v in (rep.get(f"part_{part}_totals") or {}).items()
-                   if rep.get(f"part_{part}")}
-            for g in rep.get("groups") or []:
-                if g.get("digital_asset"):
-                    for k, v in g["totals"].items():
-                        out[f"{g['part']}_da_{k}"] = float(v)
-            if rep.get("section_1256"):
-                # §1256 contracts are off Form 8949 (Form 6781 by hand,
-                # US-FUT-02): their net is locked on its own line.
-                out["6781_gain"] = float(
-                    rep["section_1256_totals"]["gain"])
-            return out
-        rep = FE.build_schedule3(marked, year, date_key)
-    return {k.split("_", 1)[1]: float(v)
-            for k, v in (rep.get("totals") or {}).items()
-            if k not in ("proceeds_all", "gain_all")}
 
 
 # A 2024 lock closed before the 2024 form's Period 1 codes were modelled
@@ -128,121 +82,8 @@ def _fold_old_2024(fl_filed: Dict[str, Any], fl_cur: Dict[str, Any]
     out: Dict[str, float] = {}
     for k, v in fl_cur.items():
         k2 = _PERIOD1_TO_2.get(k, k)
-        out[k2] = round(out.get(k2, 0.0) + float(v or 0.0), 2)
+        out[k2] = M.shown(out.get(k2, 0.0) + float(v or 0.0), 2)
     return out
-
-
-def aggregates_from_gains(doc: Dict[str, Any],
-                          account: Optional[str] = None, *,
-                          crypto: bool = False,
-                          year: Optional[int] = None,
-                          rounded: bool = True) -> Dict[str, Any]:
-    """The filing-relevant aggregate set from one gains document —
-    optionally restricted to one account's entries (used when the
-    document is a blended combined run). `crypto`: the account's
-    dispositions go on the crypto-asset line. `rounded=False` returns
-    the money totals unrounded (close-year sums the accounts and rounds
-    ONCE — S031-20)."""
-    if not isinstance(doc, dict):
-        raise ValueError("not a gains document (expected a JSON object)")
-    # The date the file was year-scoped on also places a 2024
-    # disposition in Period 1 or 2 of the 2024 Schedule 3 (A2-0166).
-    _basis = str(((doc.get("summary") or {}) if isinstance(
-        doc.get("summary"), dict) else {}).get("tax_date_basis") or "")
-    date_key = "date" if _basis == "trade" else "date_settle"
-    entries: List[Dict[str, Any]] = []
-    realized = disallowed = income = 0.0
-    dividend = pil = 0.0
-    proceeds = st_gain = lt_gain = 0.0
-    dispositions = tainted = 0
-    # Every row held to the gains-row contract first: a disposition
-    # without its gain or units was skipped here in silence and left out
-    # of the lock and the drift check (issue #17).
-    from taxjson.lib.json_input import check_gains_rows, gains_row_kind
-    check_gains_rows(doc.get("transactions"), "gains document")
-    for e in doc.get("transactions", []):
-        if account is not None and e.get("account") != account:
-            continue
-        kind = gains_row_kind(e)
-        if kind == "income":
-            dividend += float(e.get("dividend") or 0.0)
-            pil += float(e.get("pil") or 0.0)
-            continue
-        if kind == "manual":
-            tainted += 1
-            continue
-        entries.append(e)
-        realized += float(e.get("gain") or 0.0)
-        disallowed += float(e.get("disallowed_amount")
-                            or e.get("disallowed") or 0.0)
-        dispositions += 1
-        proceeds += float(e.get("proceeds") or 0.0)
-        term = str(e.get("term") or "")
-        if term == "SHORT_TERM":
-            st_gain += float(e.get("gain") or 0.0)
-        elif term == "LONG_TERM":
-            lt_gain += float(e.get("gain") or 0.0)
-    # Unknown-cost dispositions: the pipeline MOVES them to
-    # manual_reporting_required (its 'tainted' key popped), so the
-    # 'tainted' test above only sees hand-run files. Count both.
-    for e in doc.get("manual_reporting_required") or []:
-        if account is not None and e.get("account") != account:
-            continue
-        tainted += 1
-    income = dividend + pil
-    if not rounded:
-        return {"realized": realized, "disallowed": disallowed,
-                "income": income, "dividend": dividend, "pil": pil,
-                "proceeds": proceeds, "st_gain": st_gain,
-                "lt_gain": lt_gain}
-    return {
-        "realized": round(realized, 2),
-        "disallowed": round(disallowed, 2),
-        "dispositions": dispositions,
-        "income": round(income, 2),
-        # A dividend and a payment in lieu go on different lines (a PIL
-        # is not a taxable dividend: no gross-up, no dividend tax
-        # credit), so a reclassification between them moves the filed
-        # return even when their sum does not (S032-06).
-        "dividend": round(dividend, 2),
-        "pil": round(pil, 2),
-        "tainted": tainted,
-        # The ENGINE's net proceeds (sell-side costs netted, a short
-        # cover's negated cost) — not a return line; the return's lines
-        # are in form_lines (R1-281). A US ST<->LT term flip changes tax
-        # owed with realized unchanged, so ST/LT are locked too.
-        "proceeds": round(proceeds, 2),
-        "st_gain": round(st_gain, 2),
-        "lt_gain": round(lt_gain, 2),
-        "form_lines": {k: round(v, 2) for k, v in
-                       form_lines(entries, crypto=crypto, year=year,
-                                  date_key=date_key).items()},
-    }
-
-
-def income_as_summed(lock: Dict[str, Any]) -> Optional[float]:
-    """A lock's income as `tjs sum`'s taxable SUBTOTAL row adds it:
-    each account's DIVIDEND and PIL to the cent, summed. The lock's
-    `totals` round the accounts' unrounded sum once (what check-filed
-    compares), a cent or so apart: close-year and `tjs years` show
-    this (display only; backlog TJ-0212). None when the lock has no
-    per-account figures."""
-    accts = lock.get("accounts") if isinstance(lock, dict) else None
-    if not isinstance(accts, dict) or not accts:
-        return None
-    total = 0.0
-    for a in accts.values():
-        if not isinstance(a, dict):
-            return None
-        parts = ([a.get("dividend"), a.get("pil")]
-                 if "dividend" in a or "pil" in a else [a.get("income")])
-        for v in parts:
-            if v is None:
-                continue
-            if isinstance(v, bool) or not isinstance(v, (int, float)):
-                return None
-            total += round(float(v), 2)
-    return round(total, 2) + 0.0
 
 
 def snapshot_path(root: Path, year) -> Path:
@@ -274,7 +115,7 @@ def write_snapshot(root: Path, year, country: str, basis: str,
               "proceeds", "st_gain", "lt_gain")
     src = raw if raw else accounts
     totals = {
-        k: round(sum(a.get(k, 0) for a in src.values()), 2)
+        k: M.shown(sum(a.get(k, 0) for a in src.values()), 2)
         if k in _money
         else sum(a.get(k, 0) for a in accounts.values())
         for k in ("realized", "disallowed", "dispositions", "income",
@@ -308,388 +149,24 @@ def write_snapshot(root: Path, year, country: str, basis: str,
         write_atomic(path, json.dumps(doc, indent=2, sort_keys=True) + "\n")
     except OSError as e:
         # filed/ is a file, or the project is read-only: one line, not a
-        # traceback (S031-19). Nothing was written.
+        # traceback (S031-19), exit 2: an output it cannot write
+        # (TJ-4896). Nothing was written.
         from taxjson.lib.out import fail
         fail(f"cannot write filed/{path.name}: {e}",
-             prog="tjs close-year", details=["Nothing was written."])
+             prog="tjs close-year", details=["Nothing was written."],
+             code=2)
     return path
 
 
-def lock_country_problem(lock: Dict[str, Any], settings: Dict[str, Any],
-                         label: str, *, prior: bool = False
-                         ) -> Optional[str]:
-    """A refusal message when a filed-year lock (or a prior-year
-    record) was closed under the OTHER country than this project's, else
-    None. Every lock close-year writes records its country; recomputing
-    a US-filed year under Canadian rules (or the reverse) reported every
-    difference between the two laws as drift and advised amending or
-    refreshing the lock — which would overwrite the filed record with
-    the other country's numbers (partition COMMANDS-08). A lock without
-    a country (hand-written, pre-country) is not judged. `prior`: the
-    lock is read as the previous year's record (the next year's
-    carryover, estimate, amt, handoff), so the advice is to point
-    [settings] prior_year_record at this country's lock (2026-10-25
-    audit year-end#1)."""
-    from taxjson.lib.country import (CountryError, canonical_country,
-                                     display_name, settings_country)
-    rc = lock.get("country") if isinstance(lock, dict) else None
-    if rc in (None, ""):
-        return None
-    here = settings_country(settings)
-    try:
-        rcc = canonical_country(rc, what=f"{label} country")
-    except CountryError as e:
-        return f"{e} — the lock cannot be checked against this project"
-    if rcc == here:
-        return None
-    if prior:
-        return (f"{label} was closed under country = \"{rcc}\" "
-                f"({display_name(rcc)} law) but this project is country = "
-                f"\"{here}\" ({display_name(here)}): the other country's "
-                f"carry-forwards, positions and cost cannot open a "
-                f"{display_name(here)} year, so the lock is not read. Point "
-                f"[settings] prior_year_record at the previous year's lock "
-                f"of this project's {display_name(here)} books (or, if this "
-                f"project's country is wrong, set [settings] country = "
-                f"\"{rcc}\").")
-    return (f"{label} was closed under country = \"{rcc}\" "
-            f"({display_name(rcc)} law) but this project is country = "
-            f"\"{here}\" ({display_name(here)}): a return filed under one "
-            f"country's rules cannot be checked against the other's, so "
-            f"it is not recomputed. Set [settings] country = \"{rcc}\" to "
-            f"check it; do NOT refresh it with `close-year --force` (that "
-            f"would overwrite the filed {display_name(rcc)} record).")
-
-
-def lock_shape_problem(lock: Any, year) -> Optional[str]:
-    """Why a filed/<year>.json document is not a close-year lock — not
-    a JSON object, a per-account table that is not one, totals that are
-    not a table, a `year` other than the file's — else None. The
-    readers that summarise a lock (`tjs years`) call a damaged one
-    a problem instead of a filed year (issue #49); check-filed refuses
-    the same shapes."""
-    if not isinstance(lock, dict):
-        what = ("null" if lock is None else "true/false"
-                if isinstance(lock, bool) else "an array"
-                if isinstance(lock, list) else "a string"
-                if isinstance(lock, str) else "a number")
-        return f"is not a close-year lock ({what}, not a JSON object)"
-    accts = lock.get("accounts", {})
-    if not isinstance(accts, dict) or not all(
-            isinstance(v, dict) for v in accts.values()):
-        return "is not a close-year lock (no per-account table)"
-    if "totals" in lock and not isinstance(lock.get("totals"), dict):
-        return "is not a close-year lock (totals is not a table)"
-    # A figure that is not a finite number (NaN, Infinity, null, a quoted
-    # number) is a damaged lock, never a match (_finite_num).
-    for acct, tbl in accts.items():
-        for k in _NUMERIC_KEYS:
-            if k in tbl and not _finite_num(tbl[k]):
-                return (f"records accounts.{acct}.{k} as {tbl[k]!r}, not a "
-                        f"finite number — the lock is damaged")
-        fl = tbl.get("form_lines")
-        if isinstance(fl, dict):
-            for code, v in fl.items():
-                if not _finite_num(v):
-                    return (f"records accounts.{acct}.form_lines.{code} as "
-                            f"{v!r}, not a finite number — the lock is "
-                            f"damaged")
-    for k, v in (lock.get("totals") or {}).items():
-        if k in _NUMERIC_KEYS and not _finite_num(v):
-            return (f"records totals.{k} as {v!r}, not a finite number — "
-                    f"the lock is damaged")
-    # The RETURN row close-year recorded (`tjs sum`'s, each sale's
-    # cents): not recomputed by the drift check (display only there),
-    # but `tjs years` shows it and the next year's carryover takes
-    # it as the filed figure (Canada), so a damaged one is a damaged
-    # lock, never passed over in silence (backlog TJ-0274).
-    if "return_row" in lock:
-        rr = lock.get("return_row")
-        if not isinstance(rr, dict):
-            return ("records return_row as "
-                    + ("null" if rr is None else type(rr).__name__)
-                    + ", not a table — the lock is damaged")
-        for k in _RETURN_ROW_KEYS:
-            if k in rr and not _finite_num(rr[k]):
-                return (f"records return_row.{k} as {rr[k]!r}, not a "
-                        f"finite number — the lock is damaged")
-    # The year's slip capital gains close-year recorded (T5 box 18;
-    # backlog TJ-0898): the next year's carryover adds it to the filed
-    # figure.
-    if "slip_gains" in lock and not _finite_num(lock.get("slip_gains")):
-        return (f"records slip_gains as {lock.get('slip_gains')!r}, not a "
-                f"finite number — the lock is damaged")
-    y = lock.get("year")
-    if y is not None:
-        try:
-            ok = (not isinstance(y, bool) and int(y) == int(year))
-        except (TypeError, ValueError):
-            ok = False
-        if not ok:
-            return f"says year {y!r}, not {year}"
-    return None
-
-
-# ------------------------------------------- the one check of a lock
-#
-# Every reader of a close-year lock — check-filed and the run's filed-
-# year check, `tjs years`, the next year's carryover, estimate, amt,
-# close-year and handoff — applies the same check (read_lock), so a
-# lock one of them refuses is never taken as sound by another: the
-# carryover ledger dropped a lock the estimate refused and printed a
-# 0.00 carryforward, and took a lock closed under the other country's
-# law as the filed figure 0.00 (2026-10-25 audit robustness#1,
-# year-end#1, year-end#6).
-
-class LockProblem(ValueError):
-    """A close-year lock no reader may use: unreadable, damaged, or
-    closed under the other country's law. The message names the file
-    and the fix."""
-
-
-LOCK_FIX = ("restore the lock from git or re-close that year (`tjs "
-            "close-year --force` in its project)")
-
-
-def _unique_keys(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
-    """json.loads object_pairs_hook: a key written twice in one object
-    is refused — json.loads keeps the second in silence (a balance
-    written twice, 2026-10-25 audit year-end#3)."""
-    out: Dict[str, Any] = {}
-    for k, v in pairs:
-        if k in out:
-            raise ValueError(f"the key {k!r} is written twice in one "
-                             f"object")
-        out[k] = v
-    return out
-
-
-def load_lock_json(path: Path) -> Any:
-    """The JSON document of a lock file (UTF-8, a BOM tolerated). A key
-    written twice in one object raises ValueError, as do bad JSON and
-    text that is not UTF-8 (UnicodeDecodeError); OSError propagates."""
-    return json.loads(Path(path).read_text(encoding="utf-8-sig"),
-                      object_pairs_hook=_unique_keys)
-
-
-def file_year(path: Path) -> Optional[int]:
-    """The year a lock's file name gives (filed/<year>.json), else
-    None (a prior_year_record may be named anything)."""
-    try:
-        return int(Path(path).stem)
-    except ValueError:
-        return None
-
-
-def lock_damage(lock: Any, year: Any, label: str) -> Optional[str]:
-    """Why a lock document is damaged, as a sentence naming it
-    (`label`), else None: its shape (lock_shape_problem — an object, a
-    per-account table, finite figures, a `year` field that is `year`,
-    the file's) and its `carryforwards` block
-    (carryforward.block_problem — each present section with its closing
-    balance, numbers, one entry per year, no negative balance), and its
-    `fx_cash_v2` close (fx_cash_v2.close_problem). `year` None: the
-    year field is not judged."""
-    if year is None and isinstance(lock, dict):
-        year = lock.get("year")
-    prob = lock_shape_problem(lock, year)
-    if prob:
-        return f"{label} {prob}"
-    if isinstance(lock, dict) and lock.get("carryforwards") is not None:
-        from taxjson.lib.carryforward import block_problem
-        prob = block_problem(lock["carryforwards"])
-        if prob:
-            return f"{label}: {prob}"
-    if isinstance(lock, dict) and lock.get("fx_cash_v2") is not None:
-        # The FX-on-cash ledger v2's close, the next year's opening
-        # pool: the ledger refuses a damaged one, so the lock is damaged
-        # (backlog TJ-0068).
-        from taxjson.lib.fx_cash_v2 import close_problem
-        prob = close_problem(lock["fx_cash_v2"], year)
-        if prob:
-            return f"{label}: {prob}"
-    return None
-
-
-REFILE_DISPOSITIONS = ("tjs close-year --force --filed-dispositions "
-                       "<CSV>")
-
-
-def filed_rows_problem(lock: Any, year: Any, label: str) -> Optional[str]:
-    """Why the loss a lock carried cannot be read, when its
-    `filed_dispositions` (the sales a return prepared with another tool
-    reported) hold a row dated outside the lock's year: a sentence
-    naming the lock, the rows and the re-close; else None. close-year
-    refuses to write such a lock since TJ-0298, but one an older
-    release wrote counted the other year's sales in its filed_totals
-    and, in Canada, in the net capital loss it carried forward: the
-    next year's estimate, carryover and handoff stop until that year is
-    re-closed (backlog TJ-0347). `year` None: the lock's own field."""
-    if not isinstance(lock, dict) or not isinstance(
-            lock.get("filed_dispositions"), list):
-        return None
-    if year is None:
-        year = lock.get("year")
-    try:
-        y = int(year)
-    except (TypeError, ValueError):
-        return None
-    from taxjson.lib.handoff import filed_rows_outside
-    other = filed_rows_outside(lock["filed_dispositions"], y)
-    if not other:
-        return None
-    shown = ", ".join(other[:5]) + (f" and {len(other) - 5} more"
-                                    if len(other) > 5 else "")
-    return (f"{label} records {len(other)} filed disposition(s) dated "
-            f"outside {y} ({shown}): its filed totals and the loss it "
-            f"carried forward count another year's sales (a lock an "
-            f"older taxjson wrote), so it is not read — re-close {y} in "
-            f"its project with `{REFILE_DISPOSITIONS}`, the CSV holding "
-            f"the sales the {y} return reported ({y}'s rows only)")
-
-
-def missing_lock_problem(path: Path, label: Optional[str] = None
-                         ) -> Optional[str]:
-    """When `path` is a year project's filed/<year>.json that is gone
-    while that project shows the year was closed: its taxjson.toml still
-    carries close-year's freeze note (project_layout._freeze_noted),
-    or it still holds the reports close-year kept as filed
-    (filed/<year>/reports/: a year closed as a single folder, then moved
-    by `migrate --to-years`, has no freeze note) — a sentence naming it
-    (`label`, default the path) and the fix; else None: a year never
-    closed has no lock to miss. The next year read such a lock as no
-    record at all: no carried loss, no foreign-cash pool (backlog
-    TJ-0272)."""
-    import os
-    p = Path(path)
-    y = file_year(p)
-    if y is None or p.parent.name != "filed" or os.path.lexists(p):
-        return None
-    from taxjson.lib import project_layout as _PL
-    if _PL._freeze_noted(p.parent.parent):
-        why = (f"the {y} project's taxjson.toml still carries close-year's "
-               f"freeze note")
-    elif _filed_reports_kept(p.parent / str(y) / "reports", y):
-        why = (f"the {y} project holds the reports close-year kept as "
-               f"filed (filed/{y}/reports/)")
-    else:
-        return None
-    return (f"{label or p}: the {y} close-year lock is missing, while "
-            f"{why} (the year was closed) — restore filed/{y}.json from "
-            f"git or a backup, or run `tjs close-year` in the {y} "
-            f"project again; until then what {y} carried forward is "
-            f"unknown")
-
-
-def _filed_reports_kept(d: Path, year: int) -> bool:
-    """`d` (a filed/<year>/reports/ folder) holds a report close-year
-    kept after the year ended: the year was closed
-    (project_layout.filed_reports_kept)."""
-    from taxjson.lib import project_layout as _PL
-    return _PL.filed_reports_kept(d, year)
-
-
-def missing_prior_lock(root: Path, settings: Dict[str, Any]
-                       ) -> Optional[Tuple[int, Path, str]]:
-    """(year, path, text) of the lock [settings] prior_year_record
-    names when it is missing_lock_problem's case; else None (no
-    setting, a file there, a year never closed)."""
-    try:
-        p = prior_record_setting(root, settings)
-    except PriorRecordError:
-        return None
-    if p is None:
-        return None
-    text = missing_lock_problem(
-        p, f"[settings] prior_year_record "
-           f"({(settings or {}).get('prior_year_record')})")
-    if text is None:
-        return None
-    return int(Path(p).stem), Path(p), text
-
-
-def read_lock(path: Path, settings: Optional[Dict[str, Any]] = None, *,
-              label: Optional[str] = None,
-              prior: bool = False,
-              carried: bool = False) -> Dict[str, Any]:
-    """Read a close-year lock and apply the one check every reader of a
-    lock uses: readable JSON with no key written twice, lock_damage (the
-    year field against the file's name), and — `settings` given — the
-    country it was closed under (lock_country_problem). Returns the
-    document; raises LockProblem naming the file (`label`, default the
-    path) and the fix. `prior`: the lock is read as the previous year's
-    record (estimate, amt, carryover), so a country mismatch is advised
-    as a prior_year_record naming the wrong project's lock
-    (lock_country_problem). `carried`: the lock is read for what it
-    carried into the next year (its filed totals, the loss it carried
-    forward): one whose filed dispositions hold another year's rows is
-    refused too (filed_rows_problem, backlog TJ-0347)."""
-    p = Path(path)
-    label = label or str(p)
-    try:
-        doc = load_lock_json(p)
-    except OSError as e:
-        # A filed year's deleted lock says so (backlog TJ-0272).
-        raise LockProblem(
-            missing_lock_problem(p, label)
-            or f"cannot read the close-year lock {label} "
-               f"({e.strerror or e})") from None
-    except UnicodeDecodeError as e:
-        raise LockProblem(f"{label}: not UTF-8 text ({e.reason} at byte "
-                          f"{e.start}) — {LOCK_FIX}") from None
-    except ValueError as e:
-        raise LockProblem(f"{label}: not valid JSON ({e}) — "
-                          f"{LOCK_FIX}") from None
-    damage = lock_damage(doc, file_year(p), label)
-    if damage:
-        raise LockProblem(f"{damage} — {LOCK_FIX}")
-    if settings is not None:
-        cp = lock_country_problem(doc, settings, label, prior=prior)
-        if cp:
-            raise LockProblem(cp)
-    if carried:
-        fr = filed_rows_problem(doc, file_year(p), label)
-        if fr:
-            raise LockProblem(fr)
-    return doc
-
-
-def partial_year_note(lock: Dict[str, Any], year) -> Optional[str]:
-    """When the lock was taken on or before Dec 31 of its own year
-    (`close-year --force` on an open year): a sentence saying it is a
-    snapshot, not a filed return — every lock consumer says so instead
-    of certifying it (S045-23, A2-0679, A2-1164). None otherwise, and
-    for a lock without a readable closed_at."""
-    if not isinstance(lock, dict):
-        return None
-    at = str(lock.get("closed_at") or "")[:10]
-    try:
-        y = int(lock.get("year") or year)
-    except (TypeError, ValueError):
-        return None
-    if len(at) != 10 or at > f"{y}-12-31":
-        return None
-    return (f"the {y} lock was taken on {at}, before the year ended "
-            f"(close-year --force) — a snapshot, not a filed return; "
-            f"close the year again after filing")
-
-
-def lock_settings(lock: Dict[str, Any], settings: Dict[str, Any]
-                  ) -> Dict[str, Any]:
+def lock_settings(lock: Dict[str, Any], settings: Any) -> Settings:
     """The settings a lock is recomputed under: this project's, with the
     date basis the lock RECORDED (close-year writes `date_basis`) — a
     year filed on settlement dates is checked on settlement dates even
     after the project switched tax_date."""
     rb = lock.get("date_basis") if isinstance(lock, dict) else None
     if rb in ("settle", "trade"):
-        return dict(settings, tax_date=rb)
-    return settings
-
-
-def _canonical_country(settings: Dict[str, Any]) -> str:
-    """lib/country.settings_country: missing / unknown raises."""
-    from taxjson.lib.country import settings_country
-    return settings_country(settings)
+        return as_settings(settings).replace(tax_date=rb)
+    return as_settings(settings)
 
 
 def _tax_date(settings: Dict[str, Any], country: str) -> str:
@@ -697,7 +174,8 @@ def _tax_date(settings: Dict[str, Any], country: str) -> str:
     value that is not settle/trade (any case) is refused by name — it
     reached the engine raw and died with an argparse usage line that
     the checklist then reported as drift (S031-21)."""
-    raw = settings.get("tax_date")
+    settings = as_settings(settings)
+    raw = settings.tax_date
     if raw in (None, ""):
         from taxjson.lib.country import default_tax_date
         return default_tax_date(country)
@@ -708,7 +186,7 @@ def _tax_date(settings: Dict[str, Any], country: str) -> str:
     return td
 
 
-def _lock_timing_flags(settings: Dict[str, Any], year: int,
+def _lock_timing_flags(settings: Any, year: int,
                        option_timing: Optional[Dict[str, Any]]
                        ) -> List[str]:
     """The written-option timing flags for recomputing locked `year`:
@@ -718,15 +196,14 @@ def _lock_timing_flags(settings: Dict[str, Any], year: int,
     filed year's gains and advised amending a correct return (R1-188)."""
     if isinstance(option_timing, dict) \
             and option_timing.get("option_premium_timing"):
-        s = dict(settings)
-        s["option_premium_timing"] = option_timing["option_premium_timing"]
         since = option_timing.get("option_grant_since")
-        s["option_grant_timing_since"] = since if since is not None \
-            else year
+        changes = {"option_premium_timing": option_timing["option_premium_timing"],
+                   "option_grant_timing_since": since if since is not None
+                   else year}
         if "option_buyback_loss_superficial" in option_timing:
-            s["option_buyback_loss_superficial"] = bool(
+            changes["option_buyback_loss_superficial"] = bool(
                 option_timing["option_buyback_loss_superficial"])
-        return option_timing_flags(s)
+        return option_timing_flags(as_settings(settings).replace(**changes))
     return option_timing_flags(settings)
 
 
@@ -734,7 +211,7 @@ def _has_lot_moves(cache: Path, accounts: List[str]) -> bool:
     """Whether these accounts' base books carry own-account move legs
     (a US project's crypto accounts are then blended, as the run does —
     US-CRYPTO-05)."""
-    from taxjson.lib.core import LOT_MOVE_TYPE
+    from taxjson.lib.row_types import LOT_MOVE_TYPE
     for a in accounts:
         try:
             doc = json.loads((cache / f"{a}_base.json").read_text(
@@ -830,7 +307,7 @@ def _recompute_blended(cache: Path, accounts: List[str], year: int,
     if basis == "wash-adjusted" and sheltered.exists() and not no_wash:
         cmd += ["--sheltered", str(sheltered)]
     cmd += _lock_timing_flags(settings, year, option_timing)
-    cmd += income_dating_flags(dict(settings, country=country))
+    cmd += income_dating_flags(as_settings(settings).replace(country=country))
     cmd += locked_year_flags(cache.parent, settings)
     # The filing positions the books took (.tt ALLOWLOSS lines).
     from taxjson.lib.loss_overrides import flags as _lo_flags
@@ -886,7 +363,7 @@ def recompute_year(cache: Path, account: str, year: int,
     if basis == "wash-adjusted" and sheltered.exists():
         cmd += ["--sheltered", str(sheltered)]
     cmd += _lock_timing_flags(settings, year, option_timing)
-    cmd += income_dating_flags(dict(settings, country=country))
+    cmd += income_dating_flags(as_settings(settings).replace(country=country))
     cmd += locked_year_flags(cache.parent, settings)
     # The filing positions the books took (.tt ALLOWLOSS lines).
     from taxjson.lib.loss_overrides import flags as _lo_flags
@@ -936,15 +413,15 @@ def diff_snapshot(snapshot: Dict[str, Any],
             continue
         active = (int(cur.get("dispositions") or 0)
                   or int(cur.get("tainted") or 0)
-                  or any(abs(float(cur.get(k) or 0.0)) > _TOL
+                  or any(M.cents_apart(cur.get(k) or 0.0, 0) > _TOL_CENTS
                          for k in ("realized", "disallowed", "income",
                                    "proceeds")))
         if active:
             lines.append(
                 f"{acct}: in the books but not in the filed lock — "
                 f"{int(cur.get('dispositions') or 0)} disposition(s), "
-                f"realized {float(cur.get('realized') or 0.0):,.2f}, "
-                f"income {float(cur.get('income') or 0.0):,.2f} "
+                f"realized {M.shown(float(cur.get('realized') or 0.0), 2):,.2f}, "
+                f"income {M.shown(float(cur.get('income') or 0.0), 2):,.2f} "
                 f"(added or renamed after close-year?)")
     for acct, filed in sorted(locked.items()):
         cur = recomputed.get(acct)
@@ -979,17 +456,17 @@ def diff_snapshot(snapshot: Dict[str, Any],
                     "pil", "proceeds", "st_gain", "lt_gain"):
             if key not in filed or key not in cur:
                 continue        # pre-upgrade lock: field not recorded
-            if not _finite_num(filed[key]):
+            if not finite_num(filed[key]):
                 # A NaN compares equal to nothing and drifts from
                 # nothing: said OK over any figure (2026-10 audit B38).
                 raise ValueError(
                     f"accounts.{acct}.{key} is {filed[key]!r}, not a "
                     f"finite number — the lock is damaged")
-            if abs(float(filed[key]) - float(cur[key])) > _TOL:
+            if M.cents_apart(filed[key], cur[key]) > _TOL_CENTS:
                 lines.append(
-                    f"{acct}: {key} filed {filed[key]:,.2f} -> now "
-                    f"{cur[key]:,.2f} (drift "
-                    f"{cur[key] - filed[key]:+,.2f})")
+                    f"{acct}: {key} filed {M.shown(filed[key], 2):,.2f} -> now "
+                    f"{M.shown(cur[key], 2):,.2f} (drift "
+                    f"{M.shown(cur[key] - filed[key], 2):+,.2f})")
         fl_filed = filed.get("form_lines")
         fl_cur = cur.get("form_lines")
         if isinstance(fl_filed, dict) and isinstance(fl_cur, dict):
@@ -1010,24 +487,24 @@ def diff_snapshot(snapshot: Dict[str, Any],
                 fl_cur = {k: v for k, v in fl_cur.items()
                           if "_da_" not in k}
             for code in sorted(set(fl_filed) | set(fl_cur)):
-                if code in fl_filed and not _finite_num(fl_filed[code]):
+                if code in fl_filed and not finite_num(fl_filed[code]):
                     raise ValueError(
                         f"accounts.{acct}.form_lines.{code} is "
                         f"{fl_filed[code]!r}, not a finite number — the "
                         f"lock is damaged")
                 a = float(fl_filed.get(code) or 0.0)
                 b = float(fl_cur.get(code) or 0.0)
-                if abs(a - b) > _TOL:
+                if M.cents_apart(a, b) > _TOL_CENTS:
                     lines.append(f"{acct}: form line {code} filed "
-                                 f"{a:,.2f} -> now {b:,.2f} (drift "
-                                 f"{b - a:+,.2f})")
+                                 f"{M.shown(a, 2):,.2f} -> now {M.shown(b, 2):,.2f} (drift "
+                                 f"{M.shown(b - a, 2):+,.2f})")
         for key in ("dispositions", "tainted"):
             if key == "tainted" and not snapshot.get(
                     "tainted_counts_manual"):
                 continue        # pre-fix lock: its count missed them
             if key not in filed:
                 continue        # not recorded (hand-written lock)
-            if not _finite_num(filed[key]):
+            if not finite_num(filed[key]):
                 raise ValueError(
                     f"accounts.{acct}.{key} is {filed[key]!r}, not a "
                     f"finite number — the lock is damaged")
@@ -1037,96 +514,6 @@ def diff_snapshot(snapshot: Dict[str, Any],
     return lines
 
 
-class PriorRecordError(ValueError):
-    """[settings] prior_year_record is not a path string."""
-
-
-def prior_record_setting(root: Path, settings: Dict[str, Any]
-                         ) -> Optional[Path]:
-    """The lock [settings] prior_year_record names (per-year project
-    layout: "../2025/filed/2025.json"), resolved against the project
-    root; None when the key is unset. A non-string value raises
-    PriorRecordError with the same text `tjs run` refuses it with —
-    handoff read 5 as the path <root>/5 (A2-1135)."""
-    configured = (settings or {}).get("prior_year_record")
-    if configured is None or configured == "":
-        return None
-    if not isinstance(configured, str):
-        raise PriorRecordError(
-            f"[settings] prior_year_record must be a path string "
-            f"(got {configured!r}).")
-    p = Path(configured).expanduser()
-    return p if p.is_absolute() else (Path(root) / p)
-
-
-def _lock_year(path: Path) -> Optional[int]:
-    """The tax year a lock file records: its "year" key, else its
-    <year>.json name. None when neither says."""
-    try:
-        doc = json.loads(Path(path).read_text(encoding="utf-8"))
-        if isinstance(doc, dict) and doc.get("year") is not None:
-            return int(doc["year"])
-    except (OSError, ValueError, TypeError):
-        pass
-    try:
-        return int(Path(path).stem)
-    except ValueError:
-        return None
-
-
-def project_locks(root: Path, settings: Dict[str, Any]
-                  ) -> List[Tuple[int, Path, str]]:
-    """Every filed-year lock this project answers to, as (year, path,
-    where): the project's own filed/<year>.json ("local"), plus the lock
-    [settings] prior_year_record names ("prior_year_record") when no
-    local lock covers its year. In the documented per-year layout last
-    year's lock lives only in the previous project; readers that looked
-    only under <project>/filed/ (option-boundary, audit --year,
-    carryover, the grant-since hint) said "no filed-year locks" and gave
-    advice the lock contradicted (A2-0036, A2-0335, A2-0338, A2-0664).
-    A configured record that does not exist is left out (handoff and the
-    checklist report it); a non-string setting raises
-    PriorRecordError."""
-    out: List[Tuple[int, Path, str]] = [
-        (y, p, "local") for y, p in list_snapshots(root)]
-    pr = prior_record_setting(root, settings)
-    if pr is not None and pr.is_file():
-        try:
-            same = any(pr.resolve() == p.resolve() for _y, p, _w in out)
-        except OSError:
-            same = False
-        y = _lock_year(pr)
-        if y is None:
-            try:
-                y = int((settings or {}).get("year")) - 1
-            except (TypeError, ValueError):
-                y = None
-        if (y is not None and not same
-                and y not in {yy for yy, _p, _w in out}):
-            out.append((y, pr, "prior_year_record"))
-    out.sort(key=lambda t: t[0])
-    return out
-
-
-def locked_year_flags(root: Path, settings: Dict[str, Any]) -> List[str]:
-    """`--locked-year Y --locked-record PATH` for every filed-year lock
-    of a US project (the gains engine then books a wash-sale basis add
-    that reaches a sale in a filed year in the loss's year instead,
-    US-WASH-22, unless the lock's own row for that sale has it: backlog
-    TJ-0463). Canada has no such flag ([] — lib/country.FLAG_COUNTRY)."""
-    if _canonical_country(settings) != "usa":
-        return []
-    try:
-        locks = project_locks(root, settings)
-    except ValueError:
-        return []
-    out: List[str] = []
-    for y, p, _w in locks:
-        out += ["--locked-year", str(y), "--locked-record",
-                os.path.abspath(p)]
-    return out
-
-
 def lock_for_year(root: Path, settings: Dict[str, Any], year: int
                   ) -> Optional[Tuple[Path, str]]:
     """(path, where) of the lock for `year` (project_locks), or None."""
@@ -1134,24 +521,3 @@ def lock_for_year(root: Path, settings: Dict[str, Any], year: int
         if y == int(year):
             return p, w
     return None
-
-
-def lock_label(root: Path, path: Path) -> str:
-    """A short name for a lock in messages: filed/<year>.json for the
-    project's own, else the path as configured."""
-    try:
-        return str(Path(path).relative_to(Path(root)))
-    except ValueError:
-        return str(path)
-
-
-def list_snapshots(root: Path) -> List[Tuple[int, Path]]:
-    d = Path(root) / "filed"
-    out = []
-    if d.is_dir():
-        for p in sorted(d.glob("*.json")):
-            try:
-                out.append((int(p.stem), p))
-            except ValueError:
-                cli_diag.warn(PROG, f"ignoring non-year file {p.name}")
-    return out

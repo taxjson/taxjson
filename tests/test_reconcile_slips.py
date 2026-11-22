@@ -7,13 +7,10 @@ import unittest
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 
-from taxjson.bin.taxjson_reconcile_slips import (
-    load_computed,
-    load_slip,
-    main,
-    norm_symbol,
-    reconcile,
-)
+from taxjson.lib.slip_symbols import load_computed, norm_symbol
+from taxjson.bin.taxjson_reconcile_slips import load_slip, main, reconcile
+from taxjson.lib.json_contract import SCHEMAS
+import _paths
 
 
 
@@ -181,6 +178,31 @@ class TestCli(unittest.TestCase):
             rep = json.loads(out.getvalue())
             self.assertEqual(rep["counts"]["ok"], 1)
 
+    def test_json_carries_its_number_and_a_nan_is_null(self):
+        # The --json contract (lib/json_contract): its schema_version, and
+        # a non-finite figure written as null, never a bare NaN token
+        # (not JSON). The NaN here is made up: a reconciled row's proceeds.
+        from unittest import mock
+        from taxjson.bin import taxjson_reconcile_slips as RS
+        real = RS.reconcile
+
+        def with_nan(*a, **k):
+            rep = real(*a, **k)
+            rep["rows"][0]["proceeds"] = float("nan")
+            return rep
+        with tempfile.TemporaryDirectory() as td:
+            g = write_gains(td, [sell()])
+            s = write_slip(td, "symbol,proceeds\nAAPL,12000\n")
+            out = io.StringIO()
+            with mock.patch.object(RS, "reconcile", with_nan), redirect_stdout(out):
+                rc = main([str(s), "--gains", str(g), "--country", "canada", "--json"])
+        self.assertEqual(rc, 0)
+        self.assertNotIn("NaN", out.getvalue())
+        rep = json.loads(out.getvalue())
+        self.assertEqual(rep["schema_version"], SCHEMAS["reconcile-slips"])
+        self.assertIsNone(rep["rows"][0]["proceeds"])
+        self.assertEqual(rep["counts"]["ok"], 1)
+
     def test_missing_slip_file(self):
         with tempfile.TemporaryDirectory() as td:
             g = write_gains(td, [sell()])
@@ -201,7 +223,7 @@ class TestWrapperExcludesCrypto(unittest.TestCase):
         import os
         import subprocess
         import sys
-        repo = Path(__file__).resolve().parent.parent
+        repo = _paths.REPO
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             (root / "work").mkdir()

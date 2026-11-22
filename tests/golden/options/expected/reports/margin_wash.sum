@@ -1,0 +1,82 @@
+======================================================================
+ DIAGNOSTICS — margin  (parser/merge warnings; not part of the tax totals)
+======================================================================
+note: FX: Bank of Canada Valet for <n> dates, Yahoo fallback for 0
+OK: <merged>: 30 transactions validated.
+note: ib_2023.csv: 14 recognized non-event row(s) not translated — Statement metadata row: 2, section Account Information (not translated): 3, section Cash Report (not translated): 6, section Financial Instrument Information (not translated): 3.
+note: ib_2024.csv: 25 recognized non-event row(s) not translated — Statement metadata row: 2, section Account Information (not translated): 3, section Cash Report (not translated): 6, section Financial Instrument Information (not translated): 14.
+  ib_2023.csv: 3 tax objects
+  ib_2024.csv: 27 tax objects
+======================================================================
+
+
+TICKER SUMMARY — CAD, year 2024, sorted by ticker
+
+SYMBOL                                 TOTAL        TOTAL_COST     TOTAL_PROCEED        TOTAL_GAIN          CAP_GAIN          OPT_GAIN          DIVIDEND               PIL   AVG_DAYS
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+QZQ.US                                375.19          4,531.73          4,906.91            375.19            335.63             39.56              0.00              0.00       66.3
+SAMPA.US                              855.56          4,460.67          5,316.23            855.56            334.73            520.83              0.00              0.00       68.0
+SAMPB.US                               31.69          3,645.71          3,677.40             31.69             31.69              0.00              0.00              0.00       80.0
+XYZQ.US                              -394.27          2,701.35          2,307.08           -394.27           -394.27              0.00              0.00              0.00       39.0
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+TOTAL                                 868.17         15,339.45         16,207.63            868.17            307.79            560.39              0.00              0.00       65.4
+
+ASSET: Non-option | CURRENCY: CAD   | TRADES: 4 | YEAR: 2024
+
+Total Realized Gain:                307.79 CAD
+Average Holding Period:               124.2 Days
+Avg Fee Per Trade:                    1.35 CAD
+Avg Fee Per Share:                  0.0180 CAD
+----------------------------------------------------------------------------------------------------------------
+Positive Trades: 3 | Negative Trades: 1 | Win/Loss: 3.00 | Win Rate: 75.0%
+Average Positive:            234.02 CAD | Average Negative:           -394.27 CAD
+----------------------------------------------------------------------------------------------------------------
+
+ASSET: Options    | CURRENCY: CAD   | TRADES: 7 | YEAR: 2024
+
+Total Realized Gain:                560.39 CAD
+Average Holding Period:                31.7 Days
+Avg Fee Per Trade:                    2.55 CAD
+Avg Fee Per 100 Opt:                1.4175 CAD
+----------------------------------------------------------------------------------------------------------------
+Positive Trades: 4 | Negative Trades: 2 | Win/Loss: 2.00 | Win Rate: 66.7%
+Average Positive:            308.63 CAD | Average Negative:           -337.06 CAD
+----------------------------------------------------------------------------------------------------------------
+
+CONSOLIDATED TOTALS — CAD, year 2024
+
+TOTAL COST:                         15,339.45 CAD
+TOTAL PROCEEDS:                     16,207.63 CAD
+  (engine sign convention: shorts/written options negated — for Schedule 3 proceeds and ACB use `tjs form-export`)
+------------------------------------------------------
+TOTAL REALIZED NON-OPTION GAIN:        307.79 CAD
+  (shares, units, futures and crypto — Schedule 3 lines: `tjs form-export`)
+TOTAL REALIZED OPTION GAIN:            560.39 CAD
+TOTAL REALIZED GAIN:                   868.17 CAD
+------------------------------------------------------
+TOTAL DIVIDENDS / STAKING:               0.00 CAD
+------------------------------------------------------
+GRAND TOTAL (GAIN+DIV+PIL):            868.17 CAD
+------------------------------------------------------
+TOTAL TRADING FEES PAID:                33.82 CAD
+  (OPTION TRADING FEES):                29.77 CAD
+
+INCOME SUMMARY — year 2024, sorted by ticker
+
+SYMBOL                            GROSS DIV              PIL          TAX W/H       NET INCOME
+----------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------
+SUBTOTAL                               0.00             0.00             0.00             0.00
+CASH INTEREST                                                                             0.00
+----------------------------------------------------------------------------------------------
+TOTAL NET INCOME                                                                          0.00
+
+====================================================================================================
+ HOLDINGS REPORT - open positions at the end of the data (not 2024-12-31 positions; `tjs list --date` gives a date) - Sorted by: ticker
+====================================================================================================
+TICKER                          QTY  COST/SHARE    TOTAL COST  CUR
+------------------------------------------------------------------
+QZQ.US                          200     38.4795       7695.90  CAD
+QZQ250117C00035000.US            -1      1.8758       -187.58  CAD
+SAMPB.US                         50     72.9142       3645.71  CAD
+SAMPB250620P00060000.US           2      4.0642        812.84  CAD

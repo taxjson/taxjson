@@ -1,0 +1,71 @@
+[
+ {
+  "account": "5994471abb",
+  "amount": -1000.0,
+  "currency": "USD",
+  "date": "2025-07-03",
+  "decl": null,
+  "desc": "FXT conversion leg with no other leg",
+  "internal": "",
+  "kind": "CASHMOVE",
+  "line_where": "sample.csv:7",
+  "origin": "broker",
+  "settle": "2025-07-03",
+  "where": "sample.csv"
+ },
+ {
+  "account": "5994471abb",
+  "amount": 500.0,
+  "currency": "CAD",
+  "date": "2025-07-07",
+  "decl": null,
+  "desc": "DEP",
+  "internal": "",
+  "kind": "CASHMOVE",
+  "line_where": "sample.csv:9",
+  "origin": "broker",
+  "settle": "2025-07-07",
+  "where": "sample.csv"
+ },
+ {
+  "account": "5994471abb",
+  "amount": 250.0,
+  "currency": "CAD",
+  "date": "2025-09-11",
+  "decl": null,
+  "desc": "TF6",
+  "internal": "",
+  "kind": "CASHMOVE",
+  "line_where": "sample.csv:30",
+  "origin": "broker",
+  "settle": "2025-09-11",
+  "where": "sample.csv"
+ },
+ {
+  "account": "5994471abb",
+  "date": "2025-09-24",
+  "desc": "FXT",
+  "from_amt": 952.0,
+  "from_ccy": "CAD",
+  "kind": "FXCONV",
+  "line_where": "sample.csv:33",
+  "origin": "broker",
+  "settle": "2025-09-24",
+  "to_amt": 700.0,
+  "to_ccy": "USD",
+  "value": null,
+  "where": "sample.csv"
+ },
+ {
+  "account": "5994471abb",
+  "amount": 0.85,
+  "currency": "USD",
+  "date": "2025-09-30",
+  "desc": "LFJ stock-lending income",
+  "kind": "FLOW",
+  "line_where": "sample.csv:39",
+  "origin": "broker",
+  "settle": "2025-09-30",
+  "where": "sample.csv"
+ }
+]

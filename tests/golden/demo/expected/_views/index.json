@@ -1,0 +1,287 @@
+[
+ {
+  "view": "sum",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "sum --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "estimate",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "estimate --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "carryover",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "carryover --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "form-export",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "form-export --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "wash-sales",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "wash-sales --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "fx-cash",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "fx-cash --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "cash all --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "fx-cash --ledger v2 --events --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "divs-sum",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "divs-sum --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "trades-sum",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "trades-sum --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "option-yield",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "option-yield --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "stats",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "stats --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "list",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "list --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "edge-cases",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "edge-cases --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "ccd-sum",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "ccd-sum --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "leaps-sum",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "leaps-sum --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "fees-sum",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "fees-sum --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "spinoffs",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "spinoffs --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "amt",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "amt --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "slip-audit",
+  "cwd": ".",
+  "exit": 1
+ },
+ {
+  "view": "slip-audit --json",
+  "cwd": ".",
+  "exit": 1
+ },
+ {
+  "view": "t1135",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "t1135 --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "instalments",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "instalments --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "option-boundary",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "option-boundary --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "form-export --csv schedule3.csv",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "close-year --yes",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "check-filed",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "new-year 2025",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "run --no-input",
+  "cwd": "../2025",
+  "exit": 0
+ },
+ {
+  "view": "handoff",
+  "cwd": "../2025",
+  "exit": 0
+ },
+ {
+  "view": "handoff --json",
+  "cwd": "../2025",
+  "exit": 0
+ },
+ {
+  "view": "update-tobase-map --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "years --json",
+  "cwd": "../2025",
+  "exit": 0
+ },
+ {
+  "view": "years --diff 2024 2025 --json",
+  "cwd": "../2025",
+  "exit": 0
+ },
+ {
+  "view": "align --from 2024 --json",
+  "cwd": "../2025",
+  "exit": 0
+ },
+ {
+  "view": "amt 2024 --json",
+  "cwd": "../2025",
+  "exit": 0
+ },
+ {
+  "view": "align --from 2024 --write --all --json",
+  "cwd": "../2025",
+  "exit": 0
+ }
+]

@@ -1,0 +1,13 @@
+FX on foreign cash: NOT RELIABLE for 2024 — 8 in-year overdrafts; do not file this figure.
+
+FX GAINS ON CASH — CAD, tax year 2024, ITA s.39(1.1) (capital, $200 de minimis), ledger v1 (default)
+GAIN(LOSS): the FX move realized when foreign cash is spent (pooled average cost), in CAD.
+CUR                  UNITS IN  UNITS OUT  GAIN(LOSS) CAD
+--------------------------------------------------------
+USD                 66,474.84  78,931.56            0.00
+--------------------------------------------------------
+NET (NOT RELIABLE)                                  0.00
+
+Ledger balance 2024-12-31:  USD 53,815.11 (compare with the brokers' year-end cash)
+! It misses conversions, deposits and margin; ledger v2 reads them — tjs fx-cash --ledger v2
+More: tjs fx-cash --details (why it is not reliable)

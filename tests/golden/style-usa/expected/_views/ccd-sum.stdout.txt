@@ -1,0 +1,7 @@
+COVERED-CALL GAINS — tax year 2024 (USD, basis: wash-adjusted)
+Short call legs only, allowed amounts. PREMIUM = proceeds of the sold calls; BUYBACK = cost to close (0 at expiry); CLOSES = closing records. An assignment's share gain is in the stock's rows.
+UNDERLYING  CLOSES  QTY  PREMIUM  BUYBACK    GAIN
+-------------------------------------------------
+QZQ.US           1    1   199.00     0.00  199.00
+
+TOTAL COVERED-CALL GAIN: 199.00 USD

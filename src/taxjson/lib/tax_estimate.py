@@ -41,6 +41,7 @@ year) — add a new vintage annually.
 
 import math
 from typing import Any, Dict, List, Optional, Tuple
+from taxjson.model import money as M
 
 RATE_VINTAGE = "2025"
 
@@ -58,7 +59,7 @@ def fmt_pct(rate: float) -> str:
 
 def fmt_dollars(amount: float) -> str:
     """'$55,867' (whole dollars, the tables' own precision)."""
-    return f"${amount:,.0f}"
+    return f"${M.shown(amount, 0):,.0f}"
 
 # Three published vintages; `apply_vintage(year)` selects one (exact
 # year, else the LATEST table at or before it — a 2027 project runs on
@@ -747,61 +748,61 @@ def _amt_canada(*, realized: float, eligible_div: float,
          "s.127.52(1); line 22100"),
     ]
     return {
-        "adjusted_income": round(ati, 2),
-        "ati_lines": [{"label": lb, "amount": round(float(a), 2) + 0.0,
+        "adjusted_income": M.shown(ati, 2),
+        "ati_lines": [{"label": lb, "amount": M.shown(float(a), 2) + 0.0,
                        "ref": ref}
                       for lb, a, ref in lines],
-        "exemption": round(exemption, 2),
-        "subject": round(base, 2),
+        "exemption": M.shown(exemption, 2),
+        "subject": M.shown(base, 2),
         "rate": CA_AMT_RATE,
-        "gross_minimum": round(gross, 2),
-        "bpa_amount": round(bpa_amount, 2),
-        "bpa_credit": round(bpa_credit, 2),
-        "minimum_amount": round(minimum_amount, 2),
-        "ftc": round(sftc, 2),
-        "ftc_regular": round(max(0.0, regular_ftc), 2),
-        "ftc_foreign_taxes": round(sftc_taxes, 2),
-        "ftc_income_limit": round(sftc_income, 2),
-        "minimum_fed": round(fed_min, 2),
-        "regular_fed": round(regular_fed, 2),
-        "basic_fed": round(basic_fed, 2),
-        "excess_fed": round(excess, 2),
+        "gross_minimum": M.shown(gross, 2),
+        "bpa_amount": M.shown(bpa_amount, 2),
+        "bpa_credit": M.shown(bpa_credit, 2),
+        "minimum_amount": M.shown(minimum_amount, 2),
+        "ftc": M.shown(sftc, 2),
+        "ftc_regular": M.shown(max(0.0, regular_ftc), 2),
+        "ftc_foreign_taxes": M.shown(sftc_taxes, 2),
+        "ftc_income_limit": M.shown(sftc_income, 2),
+        "minimum_fed": M.shown(fed_min, 2),
+        "regular_fed": M.shown(regular_fed, 2),
+        "basic_fed": M.shown(basic_fed, 2),
+        "excess_fed": M.shown(excess, 2),
         # s.120.2(3), T691 Part 7 line 14 (BC's base, and the minimum
         # tax carryover the year creates), and the part of the special
         # credit above the regular one it takes off (Part 7 line 12).
-        "additional_tax_s120_2": round(s120_2, 2),
-        "additional_tax_sftc_part": round(sftc_part, 2),
+        "additional_tax_s120_2": M.shown(s120_2, 2),
+        "additional_tax_sftc_part": M.shown(sftc_part, 2),
         "provincial_factor": factor,
         "provincial_factor_assumed": bool(prov.get("amt_factor_assumed")),
         # The federal figure the factor applies to and which one it is
         # (excess: T691 Part 5 line 11; before_ftc: Part 7 line 1 minus
         # line 2; s120_2: Part 7 line 14).
-        "provincial_amt_base": round(prov_base, 2),
+        "provincial_amt_base": M.shown(prov_base, 2),
         "provincial_amt_base_kind": base_kind,
-        "provincial_amt_basic": round(prov_add, 2),
-        "provincial_amt_surtax": round(prov_surtax_extra, 2),
-        "provincial_amt": round(prov_amt, 2),
+        "provincial_amt_basic": M.shown(prov_add, 2),
+        "provincial_amt_surtax": M.shown(prov_surtax_extra, 2),
+        "provincial_amt": M.shown(prov_amt, 2),
         # Form T2036 in the regular year and in the minimum-tax year,
         # and what the difference adds to the top-up.
-        "provincial_ftc_regular": round(prov_ftc_regular, 2),
-        "provincial_ftc_min_tax": round(prov_ftc_min, 2),
-        "provincial_ftc_change": round(prov_ftc_change, 2) + 0.0,
+        "provincial_ftc_regular": M.shown(prov_ftc_regular, 2),
+        "provincial_ftc_min_tax": M.shown(prov_ftc_min, 2),
+        "provincial_ftc_change": M.shown(prov_ftc_change, 2) + 0.0,
         # The foreign tax no credit takes (backlog TJ-0592): the
         # minimum-tax year's when AMT binds.
-        "foreign_tax_not_credited": round(not_credited, 2) + 0.0,
-        "topup": round(excess + prov_amt + prov_ftc_change, 2),
+        "foreign_tax_not_credited": M.shown(not_credited, 2) + 0.0,
+        "topup": M.shown(excess + prov_amt + prov_ftc_change, 2),
         # The minimum tax carryover the year creates: its additional tax
         # of s.120.2(3), not the excess (backlog TJ-0626).
-        "carryforward": round(s120_2, 2),
+        "carryforward": M.shown(s120_2, 2),
         "binding": binding,
-        "headroom": round(max(0.0, regular_fed - fed_min), 2),
+        "headroom": M.shown(max(0.0, regular_fed - fed_min), 2),
         # What a minimum tax carryover can take this year (s.120.2(1)(b)):
         # the federal tax before the deductions of s.120.2, s.126 and
         # s.127 (basic federal tax, before the foreign tax credit) less
         # the minimum amount of s.127.51 (before the special credit).
         # The headroom above, after both foreign tax credits, let a
         # carryover lapse that the law allows (backlog TJ-0719).
-        "recovery_limit": round(max(0.0, basic_fed - minimum_amount), 2),
+        "recovery_limit": M.shown(max(0.0, basic_fed - minimum_amount), 2),
     }
 
 
@@ -865,17 +866,17 @@ def ca_amt_carryover(year, available: Optional[Dict[Any, float]],
                   if o > y - CA_AMT_CARRY_YEARS and a > 0.005}
 
     def _c(d):
-        return {str(k): round(float(v), 2) for k, v in sorted(d.items())}
+        return {str(k): M.shown(float(v), 2) for k, v in sorted(d.items())}
     return {
         "year": y,
         "available_by_year": _c(usable),
         "last_year_by_origin": {str(o): o + CA_AMT_CARRY_YEARS
                                 for o in sorted(usable)},
-        "available": round(float(sum(usable.values())), 2),
+        "available": M.shown(float(sum(usable.values())), 2),
         "expired_by_year": _c(expired),
-        "limit": round(max(0.0, float(headroom)), 2),
+        "limit": M.shown(max(0.0, float(headroom)), 2),
         "recovered_by_year": _c(recovered),
-        "recovered_federal": round(float(sum(recovered.values())), 2),
+        "recovered_federal": M.shown(float(sum(recovered.values())), 2),
         "lapsing_by_year": _c(lapsing),
         "remaining_by_year": _c(open_after),
     }
@@ -900,7 +901,7 @@ def _useful_claim(tax_after, most: float) -> float:
             hi = mid
         else:
             lo = mid
-    return min(most, math.ceil(round(hi * 100.0, 6)) / 100.0)
+    return min(most, math.ceil(M.units(hi * 100.0, 6)) / 100.0)
 
 
 def ca_withholding_limit(entries) -> Dict[str, Any]:
@@ -959,7 +960,7 @@ def _over_cap_parts(over_by: Dict[str, float], unpaired_over: float,
                     shown: int = 3) -> str:
     """'ZZQ.US 150.00, TAX rows with no security 10.00': the largest
     amounts above the limit, then how many more (`--json` lists each)."""
-    from taxjson.lib.report_model import fmt_money as m
+    from taxjson.lib.report_fmt import fmt_money as m
     items = sorted(over_by.items(), key=lambda kv: (-kv[1], kv[0]))
     parts = [f"{k} {m(v)}" for k, v in items[:shown]]
     if len(items) > shown:
@@ -981,7 +982,7 @@ def ca_foreign_deduction_text(not_credited: float, over_cap: float,
     withholding was paired with its securities: the amount above 15% is
     then each security's, and the largest are named (backlog
     TJ-0638)."""
-    from taxjson.lib.report_model import fmt_money as m
+    from taxjson.lib.report_fmt import fmt_money as m
     parts = []
     if not_credited > 0.005:
         parts.append(f"the {m(not_credited)} neither credit takes "
@@ -1019,7 +1020,7 @@ def shown_credits_reduced(carry: Dict[str, Any]) -> float:
 def _claim_kept_note(carry: Dict[str, Any]) -> str:
     """The sentence on a carryover the limit had room for and the claim
     leaves open (tax-logic CA-AMT-04); "" with none."""
-    from taxjson.lib.report_model import fmt_money as m
+    from taxjson.lib.report_fmt import fmt_money as m
     kept = float(carry.get("claim_kept") or 0.0)
     if kept <= 0.005:
         return ""
@@ -1042,7 +1043,7 @@ def _canada_notes(prov_key: str, prov: Dict[str, Any],
     counts (named with the foreign tax no credit takes); `limit`:
     `ca_withholding_limit`'s result when the withholding was paired
     with its securities (backlog TJ-0638)."""
-    from taxjson.lib.report_model import fmt_money as m
+    from taxjson.lib.report_fmt import fmt_money as m
 
     def _sentence(text: str) -> str:
         return text[:1].upper() + text[1:]
@@ -1050,7 +1051,7 @@ def _canada_notes(prov_key: str, prov: Dict[str, Any],
     notes = []
     extras = []
     if prov.get("surtax"):
-        tiers = " + ".join(f"{r * 100:.0f}% over {t:,.0f}"
+        tiers = " + ".join(f"{r * 100:.0f}% over {M.shown(t, 0):,.0f}"
                            for t, r in prov["surtax"])
         extras.append(f"{prov_key} surtax ({tiers} of basic "
                       f"{prov_key} tax): {m(tw['prov_surtax'])} with "
@@ -1073,8 +1074,8 @@ def _canada_notes(prov_key: str, prov: Dict[str, Any],
             f"Federal BPA phased down by net income: "
             f"{m(tw['fed_bpa_amount'])} with investments, "
             f"{m(tb['fed_bpa_amount'])} on other income alone (full "
-            f"{CA_FED_BPA:,.0f} up to {CA_FED_BRACKETS[2][0]:,.0f}, "
-            f"{CA_FED_BPA_MIN:,.0f} from {CA_FED_BRACKETS[3][0]:,.0f}).")
+            f"{M.shown(CA_FED_BPA, 0):,.0f} up to {M.shown(CA_FED_BRACKETS[2][0], 0):,.0f}, "
+            f"{M.shown(CA_FED_BPA_MIN, 0):,.0f} from {M.shown(CA_FED_BRACKETS[3][0], 0):,.0f}).")
     if amt["binding"] and amt["provincial_factor"]:
         txt = (f"{prov_key} AMT = {amt['provincial_factor'] * 100:.2f}% "
                f"of {ca_prov_amt_base_text(amt)} "
@@ -1375,7 +1376,7 @@ def estimate_canada(*, realized: float, eligible_div: float,
     pct = fmt_pct(CA_FOREIGN_WITHHOLDING)
     noncash = min(max(0.0, float(foreign_div_noncash or 0.0)),
                   max(0.0, foreign_div))
-    nc_note = (f"; none on {noncash:,.2f} of spin-off deemed dividends, "
+    nc_note = (f"; none on {M.shown(noncash, 2):,.2f} of spin-off deemed dividends, "
                f"paid in shares" if noncash > 0.005 else "")
     # Paired with its securities, the withholding counts up to 15% of
     # each security's own foreign dividends: excess withholding on one
@@ -1398,12 +1399,12 @@ def estimate_canada(*, realized: float, eligible_div: float,
             ftc_by_assumption = 0.0
         # The two parts foot to the foreign tax counted as printed: a
         # security's capped withholding leaves fractions of a cent.
-        ftc_by_assumption = round(ftc_by_assumption, 2)
-        ftc_from_rows = round(round(ftc, 2) - ftc_by_assumption, 2)
+        ftc_by_assumption = M.shown(ftc_by_assumption, 2)
+        ftc_from_rows = M.shown(M.shown(ftc, 2) - ftc_by_assumption, 2)
         if ftc_by_assumption > 0.005:
             ftc_basis = "tax_rows_and_assumed"
-            ftc_source = (f"TAX rows {ftc_from_rows:,.2f} + "
-                          f"{ftc_by_assumption:,.2f} assumed ({pct} of "
+            ftc_source = (f"TAX rows {M.shown(ftc_from_rows, 2):,.2f} + "
+                          f"{M.shown(ftc_by_assumption, 2):,.2f} assumed ({pct} of "
                           f"the foreign dividends of accounts with no "
                           f"TAX row{nc_note}), capped at {pct} of "
                           f"{of_divs}")
@@ -1447,7 +1448,7 @@ def estimate_canada(*, realized: float, eligible_div: float,
     inv_income = realized + eligible_div + foreign_div + pil + staking
 
     def _totals(d):
-        return {k: round(d[k], 2) for k in ("federal", "provincial",
+        return {k: M.shown(d[k], 2) for k in ("federal", "provincial",
                                             "total")}
     amt = _amt_canada(realized=realized, eligible_div=eligible_div,
                       foreign_div=foreign_div, pil=pil + staking,
@@ -1474,7 +1475,7 @@ def estimate_canada(*, realized: float, eligible_div: float,
         deductions=deductions, carrying_charges=carrying_charges,
         prov_key=prov_key, regular=base["detail"])
     amt["base_topup"] = base_amt["topup"]
-    amt["topup_attributed"] = round(amt["topup"] - base_amt["topup"], 2)
+    amt["topup_attributed"] = M.shown(amt["topup"] - base_amt["topup"], 2)
     # Minimum tax carryover (s.120.2): recovered against the regular
     # federal tax above the minimum, the province's share at its
     # minimum-tax factor. The estimate is incremental, so only the
@@ -1550,31 +1551,31 @@ def estimate_canada(*, realized: float, eligible_div: float,
         _reduced = fed_nominal + prov_credit + prov_sur - recovered
         # With no credit limited, the share and the surtax foot to the
         # rounded provincial drop, as they did.
-        _sur_out = (round(round(prov_rec, 2) - round(prov_credit, 2), 2)
+        _sur_out = (M.shown(M.shown(prov_rec, 2) - M.shown(prov_credit, 2), 2)
                     if abs(prov_rec - prov_credit - prov_sur) < 0.005
-                    else round(prov_sur, 2))
+                    else M.shown(prov_sur, 2))
         c.update({
             "entered": amt_carryover is not None,
             "source": amt_carryover_source,
-            "recovered_federal": round(fed_nominal, 2),
+            "recovered_federal": M.shown(fed_nominal, 2),
             # What federal and provincial tax actually fall by.
-            "recovered_federal_tax": round(fed_rec_t, 2),
-            "recovered_provincial": round(prov_rec, 2),
-            "recovered_provincial_credit": round(prov_credit, 2),
+            "recovered_federal_tax": M.shown(fed_rec_t, 2),
+            "recovered_provincial": M.shown(prov_rec, 2),
+            "recovered_provincial_credit": M.shown(prov_credit, 2),
             "recovered_provincial_surtax": _sur_out + 0.0,
             # The foreign tax credits (and any dividend tax credit
             # floored at the tax) the lower tax takes back: the parts
             # less it foot to the drop, `recovered` (to the cent).
-            "recovered_credits_reduced": round(_reduced, 2) + 0.0,
-            "recovered": round(recovered, 2),
-            "base_recovered": round(base_rec, 2),
-            "attributed": round(recovered_attr, 2),
+            "recovered_credits_reduced": M.shown(_reduced, 2) + 0.0,
+            "recovered": M.shown(recovered, 2),
+            "base_recovered": M.shown(base_rec, 2),
+            "attributed": M.shown(recovered_attr, 2),
             "created": created,
             "closing_by_year": dict(sorted(closing.items())),
-            "closing": round(float(sum(closing.values())), 2),
+            "closing": M.shown(float(sum(closing.values())), 2),
         })
         # What the claim leaves open though the limit had room for it.
-        _kept = round(_most - fed_rec, 2)
+        _kept = M.shown(_most - fed_rec, 2)
         if _kept > 0.005:
             c["claim_kept"] = _kept
         amt["carryover"] = c
@@ -1583,7 +1584,7 @@ def estimate_canada(*, realized: float, eligible_div: float,
         notes.append(
             f"Eligible dividend compensation paid (on a short, s.260) "
             f"exceeds the eligible dividends received by "
-            f"{eligible_excess:,.2f}: it offsets them only down to zero "
+            f"{M.shown(eligible_excess, 2):,.2f}: it offsets them only down to zero "
             f"(ITA s.82(1)(a.1)), so the excess is not deducted from "
             f"other income here.")
     if prov_key is None:
@@ -1604,74 +1605,74 @@ def estimate_canada(*, realized: float, eligible_div: float,
         # The investment income's tax with the top-up it adds and the
         # change in carryover recovery it causes (incremental, like
         # `estimated_tax`).
-        "estimated_tax_with_amt": round(est + amt["topup"]
+        "estimated_tax_with_amt": M.shown(est + amt["topup"]
                                         - base_amt["topup"]
                                         - recovered_attr, 2),
-        "losses_opening": round(max(0.0, other_losses), 2),
-        "losses_created": round(max(0.0, -realized), 2),
+        "losses_opening": M.shown(max(0.0, other_losses), 2),
+        "losses_created": M.shown(max(0.0, -realized), 2),
         "vintage": RATE_VINTAGE,
         "notes": notes,
         "assumptions": CA_ASSUMPTIONS,
-        "taxable_gain": round(taxable_gain, 2),
-        "capital_gains_dividends": round(cg_div, 2),
-        "losses_applied": round(losses_applied, 2),
-        "losses_unused": round(losses_unused, 2),
-        "grossed_eligible": round(grossed, 2),
+        "taxable_gain": M.shown(taxable_gain, 2),
+        "capital_gains_dividends": M.shown(cg_div, 2),
+        "losses_applied": M.shown(losses_applied, 2),
+        "losses_unused": M.shown(losses_unused, 2),
+        "grossed_eligible": M.shown(grossed, 2),
         # The eligible dividends taxed (net of compensation paid, at
         # least 0) and the compensation paid above the dividends
         # received, which is not deducted (backlog TJ-0727).
-        "eligible_dividends": round(eligible_div, 2),
-        "eligible_compensation_excess": round(eligible_excess, 2) + 0.0,
-        "staking": round(staking, 2),
-        "deductions": round(deductions, 2),
-        "carrying_charges": round(carrying_charges, 2),
+        "eligible_dividends": M.shown(eligible_div, 2),
+        "eligible_compensation_excess": M.shown(eligible_excess, 2) + 0.0,
+        "staking": M.shown(staking, 2),
+        "deductions": M.shown(deductions, 2),
+        "carrying_charges": M.shown(carrying_charges, 2),
         # The foreign tax counted (T2209 line 1: the TAX rows capped at
         # 15%, or 15% assumed — `ftc_source` says which) and what the
         # federal (T2209) and provincial (T2036) credits take of it.
         # `ftc_assumed` is its old name, kept for scripts that read it
         # (it was the foreign tax whether assumed or not: TJ-0345).
-        "foreign_tax_creditable": round(ftc, 2),
-        "ftc_federal": round(with_inv["detail"]["fed_ftc"], 2),
-        "ftc_provincial": round(with_inv["detail"]["prov_ftc"], 2),
+        "foreign_tax_creditable": M.shown(ftc, 2),
+        "ftc_federal": M.shown(with_inv["detail"]["fed_ftc"], 2),
+        "ftc_provincial": M.shown(with_inv["detail"]["prov_ftc"], 2),
         # What neither credit takes of it (the regular year's; the
         # minimum-tax year's is amt.foreign_tax_not_credited) and the
         # withholding above the 15% counted: both may be deductible on
         # line 23200 (s.20(12), s.20(11)) and are not deducted (backlog
         # TJ-0592).
-        "foreign_tax_not_credited": round(max(
+        "foreign_tax_not_credited": M.shown(max(
             0.0, ftc - with_inv["detail"]["fed_ftc"]
             - with_inv["detail"]["prov_ftc"]), 2) + 0.0,
-        "foreign_withholding_over_cap": round(over_cap, 2) + 0.0,
+        "foreign_withholding_over_cap": M.shown(over_cap, 2) + 0.0,
         # Of it, each security's (paired by the books' symbols), and the
         # TAX rows the books cannot pair with a security: what they
         # withheld, what counted and their accounts (backlog TJ-0638).
         "foreign_withholding_over_cap_by_security": {
-            k: round(v, 2) for k, v in sorted(
+            k: M.shown(v, 2) for k, v in sorted(
                 ((limit or {}).get("over_by_security") or {}).items())},
         "foreign_withholding_unpaired": {
-            "withheld": round(float((limit or {}).get(
+            "withheld": M.shown(float((limit or {}).get(
                 "unpaired_withheld") or 0.0), 2) + 0.0,
-            "counted": round(float((limit or {}).get(
+            "counted": M.shown(float((limit or {}).get(
                 "unpaired_counted") or 0.0), 2) + 0.0,
             "accounts": list((limit or {}).get("unpaired_accounts")
                              or [])},
-        "ftc_assumed": round(ftc, 2),
+        "ftc_assumed": M.shown(ftc, 2),
         "ftc_source": ftc_source,
         # Of the foreign tax counted, the part from the TAX rows and the
         # part assumed at 15% (`ftc_basis`: tax_rows, assumed or
         # tax_rows_and_assumed); the spin-off deemed dividends nothing
         # was assumed withheld on (backlog TJ-0422).
         "ftc_basis": ftc_basis,
-        "foreign_tax_from_rows": round(ftc_from_rows, 2) + 0.0,
-        "foreign_tax_by_assumption": round(ftc_by_assumption, 2) + 0.0,
-        "foreign_div_noncash": round(noncash, 2) + 0.0,
+        "foreign_tax_from_rows": M.shown(ftc_from_rows, 2) + 0.0,
+        "foreign_tax_by_assumption": M.shown(ftc_by_assumption, 2) + 0.0,
+        "foreign_div_noncash": M.shown(noncash, 2) + 0.0,
         "tax_with": _totals(with_inv),
         "tax_base": _totals(base),
         "trace_with": with_inv["detail"],
         "trace_base": base["detail"],
-        "estimated_tax": round(est, 2),
-        "investment_income": round(inv_income, 2),
-        "avg_rate_pct": round(est / inv_income * 100, 2)
+        "estimated_tax": M.shown(est, 2),
+        "investment_income": M.shown(inv_income, 2),
+        "avg_rate_pct": M.units(est / inv_income * 100, 2)
         if inv_income > 0 else None,
     }
 
@@ -1816,38 +1817,38 @@ def estimate_usa(*, st: float, lt: float, qualified_div: float,
     inv_income = st + lt + qualified_div + pil
 
     def _totals(d):
-        return {k: round(d[k], 2) for k in ("ordinary", "preferential",
+        return {k: M.shown(d[k], 2) for k in ("ordinary", "preferential",
                                             "total")}
     return {
         "country": "usa", "vintage": RATE_VINTAGE,
         "notes": vintage_notes(year, pick, country="usa"),
         # Each term's gains before the carryovers, the §1256 parts in.
-        "st_input": round(st, 2), "lt_input": round(lt, 2),
+        "st_input": M.shown(st, 2), "lt_input": M.shown(lt, 2),
         # The two parts to the cent add up to the net shown.
-        "section_1256_gain": round(float(section_1256 or 0.0), 2),
-        "section_1256_short_term": round(
-            round(float(section_1256 or 0.0), 2) - round(s1256_lt, 2), 2)
+        "section_1256_gain": M.shown(float(section_1256 or 0.0), 2),
+        "section_1256_short_term": M.shown(
+            M.shown(float(section_1256 or 0.0), 2) - M.shown(s1256_lt, 2), 2)
         + 0.0,
-        "section_1256_long_term": round(s1256_lt, 2) + 0.0,
-        "st_net": round(st_net, 2), "lt_net": round(lt_net, 2),
-        "ordinary_offset": round(ordinary_offset, 2),
-        "offset_used_for_carryover": round(offset_used, 2),
+        "section_1256_long_term": M.shown(s1256_lt, 2) + 0.0,
+        "st_net": M.shown(st_net, 2), "lt_net": M.shown(lt_net, 2),
+        "ordinary_offset": M.shown(ordinary_offset, 2),
+        "offset_used_for_carryover": M.shown(offset_used, 2),
         "offset_used_from": ("claimed" if deduction_claimed is not None
                              else "taxable_income"),
-        "losses_unused": round(loss + max(0.0, -net_cap)
+        "losses_unused": M.shown(loss + max(0.0, -net_cap)
                                - offset_used, 2),
-        "st_carryover_after": round(st_carry_after, 2),
-        "lt_carryover_after": round(lt_carry_after, 2),
-        "niit": round(niit, 2),
-        "niit_base": round(min(max(0.0, inv_income_for_niit),
+        "st_carryover_after": M.shown(st_carry_after, 2),
+        "lt_carryover_after": M.shown(lt_carry_after, 2),
+        "niit": M.shown(niit, 2),
+        "niit_base": M.shown(min(max(0.0, inv_income_for_niit),
                                max(0.0, magi - US_NIIT_MAGI_THRESHOLD)), 2),
-        "magi": round(magi, 2),
+        "magi": M.shown(magi, 2),
         "tax_with": _totals(with_inv),
         "tax_base": _totals(base),
         "trace_with": with_inv["detail"],
         "trace_base": base["detail"],
-        "estimated_tax": round(est, 2),
-        "investment_income": round(inv_income, 2),
-        "avg_rate_pct": round(est / inv_income * 100, 2)
+        "estimated_tax": M.shown(est, 2),
+        "investment_income": M.shown(inv_income, 2),
+        "avg_rate_pct": M.units(est / inv_income * 100, 2)
         if inv_income > 0 else None,
     }

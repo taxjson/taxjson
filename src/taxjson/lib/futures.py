@@ -50,12 +50,15 @@ from __future__ import annotations
 import copy
 import re
 from decimal import Decimal
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from taxjson.lib.core import TaxTransaction, is_option_symbol
+from taxjson.model.transaction import TaxTransaction
+from taxjson.lib.option_symbols import is_option_symbol
+from taxjson.lib.futures_prefixes import FUTURES_PREFIX_GROUP, FUTURES_PREFIXES
+from taxjson.model.evidence import (format_settle_native, parse_settle_native, settle_leg,
+                                    settle_native, stamp_settle_rate)
 
 FUTURES_SETTLEMENT = "futures_settlement"
-_FUTURES_PREFIXES = ("F:", "/", "\\")
 _EPS = Decimal("1e-9")
 
 # Which open units a partial close consumes, by country (module doc).
@@ -82,7 +85,7 @@ def has_plain_futures(transactions) -> bool:
 def is_plain_future(symbol: str) -> bool:
     """A futures contract (not an option on one)."""
     s = str(symbol or "")
-    return s.startswith(_FUTURES_PREFIXES) and not is_option_symbol(s)
+    return s.startswith(FUTURES_PREFIXES) and not is_option_symbol(s)
 
 
 # Cash-settled options on a broad-based index listed on a US exchange:
@@ -97,7 +100,7 @@ def is_plain_future(symbol: str) -> bool:
 
 
 _FUTURE_ROOT_RE = re.compile(
-    r'^(?:F:|[\\/])([A-Z0-9]+?)(?:[FGHJKMNQUVXZ]\d{1,2})?(?:\..*)?$')
+    '^' + FUTURES_PREFIX_GROUP + r'([A-Z0-9]+?)(?:[FGHJKMNQUVXZ]\d{1,2})?(?:\..*)?$')
 
 
 def futures_root(symbol: str) -> str:
@@ -133,13 +136,13 @@ def section_1256_kind(symbol: str) -> str:
     none of them is modelled, so the US filing outputs keep them off
     Form 8949 and list them for Form 6781 by hand. US-only: Canada
     has no §1256 (a future is an ordinary property on Schedule 3)."""
-    from taxjson.lib.core import parse_option_underlying
+    from taxjson.lib.option_symbols import parse_option_underlying
     s = str(symbol or "")
     if is_plain_future(s):
         return "" if is_security_future(s) else "future"
     if not is_option_symbol(s):
         return ""
-    if s.startswith(_FUTURES_PREFIXES):
+    if s.startswith(FUTURES_PREFIXES):
         return "futures option"
     root = (parse_option_underlying(s) or "").split(".", 1)[0]
     from taxjson.lib.markets import is_index_option_root
@@ -171,9 +174,8 @@ def _part(tx: TaxTransaction, qty: Decimal, frac: Decimal, net: Decimal,
     d["quantity"] = float(qty)
     d["net_amount"] = float(net)
     d["type"] = FUTURES_SETTLEMENT
-    d["settle_native"] = (
-        f"{leg} {money} {net} {(tx.currency or '').upper() or '-'}"
-        if leg else "")
+    d["settle_native"] = (format_settle_native(settle_native(leg, money, net, tx.currency))
+                          if leg else "")
     for f in ("fee", "commission", "gross_amount", "proceeds"):
         d[f] = float(_D(d.get(f)) * frac)
     if not keep_id:
@@ -221,7 +223,7 @@ def _take_moved_position(pos: Dict[Tuple[str, str, str], list],
     come from the other books holding that side, their money with them.
     All of them are closed by this fill, so their place in the lots
     does not matter."""
-    from taxjson.lib.missing_history import open_close_codes
+    from taxjson.lib.row_types import open_close_codes
     if open_close_codes(tx) != ("C",):
         return
     p = pos[key]
@@ -417,7 +419,7 @@ def opposite_broker_positions(rows: List[TaxTransaction]) -> List[str]:
     for tx in rows:
         if (tx.type or "") != FUTURES_SETTLEMENT:
             continue
-        leg = (tx.settle_native or " ").split()[0]
+        leg = settle_leg(tx.settle_native)
         key = (tx.symbol, str(tx.source_account or ""))
         units = abs(float(tx.quantity or 0.0))
         if leg in ("LO", "LC"):
@@ -465,8 +467,8 @@ def settle_futures_dicts(rows: List[dict], method: str, *,
     settlement dict also carries `_open_fee`, the opening fills'
     commissions inside a close's basis (None on an opening part), so
     the FX cash ledger dates every commission on its own fill
-    (taxjson_fx_cash._cash_legs)."""
-    from taxjson.lib.core import coerce_transaction_row
+    (cash_legs._cash_legs)."""
+    from taxjson.lib.tx_load import coerce_transaction_row
     by_acct: Dict[str, List[int]] = {}
     for i, r in enumerate(rows):
         if isinstance(r, dict) and is_plain_future(r.get("symbol") or ""):
@@ -505,26 +507,10 @@ def settle_futures_dicts(rows: List[dict], method: str, *,
 # account's direction (LO/LC/SO/SC) and only the AVERAGE behind a close
 # is taken across accounts — longs with longs, shorts with shorts.
 
-_LEGS = ("LO", "LC", "SO", "SC")
 # The Canadian engine's pool key for a short futures position: its own
 # pool beside the long one, so a short in one account never closes a
-# long in another (lib/core CanadaTaxRules.compute_gains).
+# long in another (engine/ca/taxrules CanadaTaxRules.compute_gains).
 SHORT_POOL_SUFFIX = "\x00short"
-
-
-def parse_settle_native(value) -> "Tuple[str, Decimal, Decimal, str, Decimal] | None":
-    """(leg, money, pl, currency, rate) from a settlement part's
-    `settle_native`, rate None before conversion; None when absent or
-    unreadable (a book settled by an older taxjson)."""
-    parts = str(value or "").split()
-    if len(parts) not in (4, 5) or parts[0] not in _LEGS:
-        return None
-    try:
-        money, pl = Decimal(parts[1]), Decimal(parts[2])
-        rate = Decimal(parts[4]) if len(parts) == 5 else None
-    except Exception:
-        return None
-    return parts[0], money, pl, parts[3], rate
 
 
 def stamp_rate(tx: TaxTransaction, rate) -> None:
@@ -534,23 +520,18 @@ def stamp_rate(tx: TaxTransaction, rate) -> None:
     so the recorded rate always takes its native P/L to the currency
     it is in now; the first rate alone priced the Canadian re-averaged
     close in the intermediate currency (backlog TJ-0745)."""
-    v = str(getattr(tx, "settle_native", "") or "")
-    parts = v.split()
-    if len(parts) == 4:
-        tx.settle_native = f"{v} {rate}"
-    elif len(parts) == 5 and parse_settle_native(v) is not None:
-        prior = Decimal(parts[4])
-        composed = prior * Decimal(str(rate))
-        tx.settle_native = " ".join(parts[:4] + [str(composed)])
+    stamped = stamp_settle_rate(getattr(tx, "settle_native", ""), rate)
+    if stamped is not None:
+        tx.settle_native = stamped
 
 
-def engine_pool_key(tx) -> str:
+def engine_pool_key(tx: Any) -> str:
     """The Canadian engine's pool key for a row: its symbol, or the
     symbol's short-futures pool for a settlement part of a SHORT
     position (leg SO/SC)."""
     sym = tx.symbol
     if (tx.type or "") == FUTURES_SETTLEMENT and \
-            str(getattr(tx, "settle_native", "") or "")[:1] == "S":
+            settle_leg(getattr(tx, "settle_native", ""))[:1] == "S":
         return sym + SHORT_POOL_SUFFIX
     return sym
 
@@ -590,12 +571,12 @@ def pool_across_accounts(transactions: List[TaxTransaction]
             tx = transactions[i]
             if abs(float(tx.quantity or 0.0)) <= 1e-12:
                 continue
-            leg = parse_settle_native(getattr(tx, "settle_native", ""))
-            if leg is None or (leg[4] is None and (
-                    (tx.currency or "").upper() != leg[3])):
+            facts = parse_settle_native(getattr(tx, "settle_native", ""))
+            if facts is None or (facts.rate is None and (
+                    (tx.currency or "").upper() != facts.currency)):
                 legs = None
                 break
-            legs[i] = leg
+            legs[i] = facts
         if legs is None:
             notes.append(
                 f"note: {sym}: held in several taxable accounts, but its "
@@ -610,12 +591,13 @@ def pool_across_accounts(transactions: List[TaxTransaction]
         pool: Dict[Tuple[str, str], List[Decimal]] = {}
         for i in order:
             tx = transactions[i]
-            leg, money, old_pl, cur, rate = legs[i]
+            facts = legs[i]
+            side = facts.leg[0]             # L(ong) or S(hort)
             units = abs(_D(tx.quantity))
-            p = pool.setdefault((cur, leg[0]), [Decimal(0), Decimal(0)])
-            if leg[1] == "O":
+            p = pool.setdefault((facts.currency, side), [Decimal(0), Decimal(0)])
+            if facts.leg[1] == "O":
                 p[0] += units
-                p[1] += money
+                p[1] += facts.money
                 continue
             if p[0] <= _EPS:
                 # Cannot happen on books settled per account (the
@@ -624,7 +606,7 @@ def pool_across_accounts(transactions: List[TaxTransaction]
                 notes.append(
                     f"note: {sym}: the close on {tx.date} in account "
                     f"{tx.account} has no open "
-                    f"{'long' if leg[0] == 'L' else 'short'} contracts "
+                    f"{'long' if side == 'L' else 'short'} contracts "
                     f"behind it across the taxable accounts — kept at "
                     f"its account's own average cost (tax-logic "
                     f"CA-FX-04).")
@@ -635,12 +617,12 @@ def pool_across_accounts(transactions: List[TaxTransaction]
             p[1] -= basis
             if p[0] <= _EPS:
                 p[0], p[1] = Decimal(0), Decimal(0)
-            pl = money - basis if leg[0] == "L" else basis - money
-            if abs(pl - old_pl) <= Decimal("1e-6"):
+            pl = facts.money - basis if side == "L" else basis - facts.money
+            if abs(pl - facts.pl) <= Decimal("1e-6"):
                 continue
             native = float(pl)
-            net = (native if rate is None
-                   else float(Decimal(str(native)) * rate))
+            net = (native if facts.rate is None
+                   else float(Decimal(str(native)) * facts.rate))
             new = copy.copy(tx)
             new.net_amount = net
             out[i] = new

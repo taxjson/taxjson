@@ -1,0 +1,190 @@
+{
+  "account": "margin",
+  "basis": "wash-adjusted",
+  "gains": {
+    "manual_rows": [],
+    "option_fees": {
+      "CAD": 8.1
+    },
+    "returns_by_asset": {
+      "Options": {
+        "CAD": {
+          "days": [
+            92,
+            0,
+            0
+          ],
+          "dollars": [
+            -410.4,
+            268.65,
+            201.15
+          ],
+          "fee_shares": [
+            2.0,
+            1.0,
+            1.0
+          ],
+          "fees": [
+            2.7,
+            1.35,
+            1.35
+          ]
+        }
+      },
+      "Stocks": {
+        "CAD": {
+          "days": [
+            127,
+            193,
+            296,
+            133
+          ],
+          "dollars": [
+            132.3,
+            -101.925,
+            0.0,
+            0.0
+          ],
+          "fee_shares": [
+            50.0,
+            200.0,
+            100.0,
+            10.0
+          ],
+          "fees": [
+            1.35,
+            1.35,
+            9.95,
+            1.35
+          ]
+        }
+      }
+    },
+    "tainted_count": 0,
+    "tainted_routed": 0,
+    "ticker_stats": {
+      "MSFT.US": {
+        "CAD": {
+          "cap": 132.3,
+          "cost": 27001.35,
+          "div": 101.25,
+          "hold_days": [
+            127
+          ],
+          "opt": 0.0,
+          "pil": 0.0,
+          "proceeds": 27133.65,
+          "trade_count": 1
+        }
+      },
+      "NVDA.US": {
+        "CAD": {
+          "cap": 0.0,
+          "cost": 1999.35,
+          "div": 0.0,
+          "hold_days": [
+            133
+          ],
+          "opt": 0.0,
+          "pil": 0.0,
+          "proceeds": 1881.9,
+          "trade_count": 1
+        }
+      },
+      "PARN.US": {
+        "CAD": {
+          "cap": 0.0,
+          "cost": 0.0,
+          "div": 337.5,
+          "hold_days": [],
+          "opt": 0.0,
+          "pil": 0.0,
+          "proceeds": 0.0,
+          "trade_count": 0
+        }
+      },
+      "QZQ.US": {
+        "CAD": {
+          "cap": -101.925,
+          "cost": 8444.250000000002,
+          "div": 54.0,
+          "hold_days": [
+            92,
+            193,
+            0,
+            0
+          ],
+          "opt": 59.400000000000006,
+          "pil": 0.0,
+          "proceeds": 8095.95,
+          "trade_count": 4
+        }
+      },
+      "SAMPA.TO": {
+        "CAD": {
+          "cap": 0.0,
+          "cost": 4009.95,
+          "div": 50.0,
+          "hold_days": [
+            296
+          ],
+          "opt": 0.0,
+          "pil": 0.0,
+          "proceeds": 3490.05,
+          "trade_count": 1
+        }
+      }
+    },
+    "total_fees": {
+      "CAD": 61.400000000000006
+    },
+    "total_year": "2024",
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 2
+  },
+  "generated_at": "<stamp>",
+  "income": {
+    "interest_paid_totals": {},
+    "interest_totals": {
+      "CAD": 12.34
+    },
+    "missing_amount": [],
+    "ticker_stats": {
+      "MSFT.US": {
+        "CAD": {
+          "div": 101.25,
+          "pil": 0.0,
+          "tax": 15.201
+        }
+      },
+      "PARN.US": {
+        "CAD": {
+          "div": 337.5,
+          "pil": 0.0,
+          "tax": 0.0
+        }
+      },
+      "QZQ.US": {
+        "CAD": {
+          "div": 54.0,
+          "pil": 0.0,
+          "tax": 8.1
+        }
+      },
+      "SAMPA.TO": {
+        "CAD": {
+          "div": 50.0,
+          "pil": 0.0,
+          "tax": 0.0
+        }
+      }
+    },
+    "total_year": "2024"
+  },
+  "schema_version": 1,
+  "wash": {
+    "count": 3,
+    "total_disallowed": 943.13
+  },
+  "year": "2024"
+}

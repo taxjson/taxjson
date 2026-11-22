@@ -137,10 +137,10 @@ class TestTickerMapSuggest(unittest.TestCase):
 
     def test_suggestions_and_details(self):
         import tempfile
-        import test_fix_cross_listings as XT
-        from test_fix_ticker_map_suggest import _tjs
+        from _support.qt_cross_listing import _projects
+        from _support.symbols_ticker_map_cli import _tjs
         with tempfile.TemporaryDirectory() as tmp:
-            root = XT._projects(
+            root = _projects(
                 tmp, tail="GLOBAL SAMPZ.TO SAMPY.TO\n",
                 in_desc="SAMPQ ENERGY INC PFD SER 2 TRANSFER")["canada"]
             self.assertEqual(_tjs(root, "run", "--no-input").returncode, 0)
@@ -161,11 +161,11 @@ class TestTickerMapSuggest(unittest.TestCase):
 class TestYears(unittest.TestCase):
 
     def test_table_and_details(self):
-        import test_fix_multi_year as M
-        top = M.multi("canada", years=(2024, 2025))
+        from _support.years_multi_projects import multi, run_ok, tjs
+        top = multi("canada", years=(2024, 2025))
         for y in (2024, 2025):
-            M.run_ok(self, top / str(y))
-        r = M.tjs("-C", str(top / "2024"), "close-year", "--yes", "--force")
+            run_ok(self, top / str(y))
+        r = tjs("-C", str(top / "2024"), "close-year", "--yes", "--force")
         self.assertEqual(r.returncode, 0, r.stderr)
         (top / "2024" / "ticker.map").write_text("GLOBAL ABCX.US ABCX.TO\n")
         import subprocess

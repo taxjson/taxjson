@@ -37,9 +37,10 @@ import os
 import sys
 from pathlib import Path
 
+from taxjson.lib import out as _out
 from taxjson.lib.cli_diag import guard_main, tax_year
-from taxjson.lib.core import get_tax_rules
-from taxjson.lib.json_input import load_transactions_or_exit
+from taxjson.engine.by_country import get_tax_rules
+from taxjson.lib.json_input import is_disposition, load_transactions_or_exit
 from taxjson.lib.country import (add_country_argument, default_tax_date,
                                  refuse_foreign_flags)
 from taxjson.lib.pipeline import (GainsRequest, apply_roc_record_dates,
@@ -47,6 +48,8 @@ from taxjson.lib.pipeline import (GainsRequest, apply_roc_record_dates,
                                   loss_overrides_from_args, prepare_books)
 from taxjson.lib.trace_format import (render_gain_block,
                                       render_report_block)
+from taxjson.model.result import GainRow
+from taxjson.model import money as M
 
 
 COLORS = {
@@ -195,7 +198,7 @@ def load_input(args):
 
 
 def gain_matches(g, args) -> bool:
-    if g.get('action') == 'DIVIDEND':
+    if not is_disposition(g):      # an income row is no gain (TJ-2784)
         return False
     date_key = 'date_settle' if args.tax_date == 'settle' else 'date'
     effective_date = g.get(date_key) or g.get('date', '')
@@ -227,11 +230,12 @@ def fmt_summary(g) -> str:
     gid = (g.get('id') or '')[:10]
     date = g.get('date', '')
     sym = g.get('symbol', '')
-    qty = g.get('qty', 0.0)
-    cost = g.get('cost', 0.0)
-    proc = g.get('proceeds', 0.0)
-    gain = g.get('gain', 0.0)
-    dis = g.get('disallowed_amount', 0.0)
+    v = GainRow(g)                  # its figures (step 6c(6c2))
+    qty = float(v.quantity or 0.0)
+    cost = float(v.cost or 0.0)
+    proc = float(v.proceeds or 0.0)
+    gain = float(v.gain or 0.0)
+    dis = float(v.disallowed_amount or 0.0)
     direction = g.get('direction', '')
     tag = ''
     if g.get('tainted'):
@@ -239,21 +243,21 @@ def fmt_summary(g) -> str:
         # routes it to manual reporting with no gain (audit S029-22).
         return (
             f"{gid}  {date}  {sym:<14}  qty={qty:>10.4f}  "
-            f"proc={proc:>12.4f}  MANUAL REPORTING — no purchase in your "
+            f"proc={M.shown(proc, 4):>12.4f}  MANUAL REPORTING — no purchase in your "
             f"files (cost unknown); gain not computed, not in the gains "
             f"total"
             f"  ({direction})")
     if dis > 0.001:
-        tag += f"  WASH+{dis:.2f}"
+        tag += f"  WASH+{M.shown(dis, 2):.2f}"
     if isinstance(g.get('loss_override'), dict):
         # A .tt ALLOWLOSS filing position (CA-SL-18 / US-WASH-25).
         tag += (f"  ALLOWLOSS(rule: "
-                f"{float(g['loss_override'].get('would_disallow') or 0):.2f})")
+                f"{M.shown(float(g['loss_override'].get('would_disallow') or 0), 2):.2f})")
     if g.get('term'):
         tag += f"  [{g['term']}]"
     return (
         f"{gid}  {date}  {sym:<14}  qty={qty:>10.4f}  "
-        f"cost={cost:>12.4f}  proc={proc:>12.4f}  gain={gain:>+12.4f}"
+        f"cost={M.shown(cost, 4):>12.4f}  proc={M.shown(proc, 4):>12.4f}  gain={M.shown(gain, 4):>+12.4f}"
         f"{tag}  ({direction})"
     )
 
@@ -266,7 +270,7 @@ def print_trace(g, args, use_color):
     block = render_gain_block(g, align=not args.no_align,
                               manual=bool(g.get('tainted')))
     if not block:
-        print(f"# (no trace produced for {g.get('id','?')})", file=sys.stderr)
+        _out.put(f"# (no trace produced for {g.get('id','?')})", sys.stderr)
         return
 
     # render_gain_block returns: [rule, header, rule, *trace_lines, rule]
@@ -274,31 +278,36 @@ def print_trace(g, args, use_color):
     body = block[3:-1]
     rule_bot = block[-1]
 
-    gain_amt = g.get('gain', 0.0)
-    dis = g.get('disallowed_amount', 0.0)
+    v = GainRow(g)
+    gain_amt = float(v.gain or 0.0)
+    dis = float(v.disallowed_amount or 0.0)
     color_key = 'wash' if dis > 0.001 else ('gain' if gain_amt >= 0 else 'loss')
 
-    print()
-    print(colorize(rule_top, 'rule', use_color))
-    print(colorize(header_line, color_key, use_color))
-    print(colorize(rule_mid, 'rule', use_color))
+    # The block: a live exact Doc, each line written as it is added, as
+    # the raw print() wrote it (nothing here wraps): a line that stops the
+    # block, or a reader that has gone, stops it where the prints did.
+    d = _out.Doc(exact=True, width_=0, live=True)
+    d.blank()
+    d.line(colorize(rule_top, 'rule', use_color))
+    d.line(colorize(header_line, color_key, use_color))
+    d.line(colorize(rule_mid, 'rule', use_color))
     in_wash_block = False
     for line in body:
         if line.startswith('# --- WASH SALE'):
             in_wash_block = True
-            print(colorize(line, 'wash', use_color))
+            d.line(colorize(line, 'wash', use_color))
         elif in_wash_block and (line == '#' or line.startswith('#   ') or line.startswith('#     ')):
-            print(colorize(line, 'wash', use_color))
+            d.line(colorize(line, 'wash', use_color))
         elif 'CALCULATION TRACE' in line:
             in_wash_block = False
-            print(colorize(line, 'header', use_color))
+            d.line(colorize(line, 'header', use_color))
         elif is_disposition_line(line):
             in_wash_block = False
-            print(colorize(line, color_key, use_color))
+            d.line(colorize(line, color_key, use_color))
         else:
             in_wash_block = False
-            print(line)
-    print(colorize(rule_bot, 'rule', use_color))
+            d.line(line)
+    d.line(colorize(rule_bot, 'rule', use_color))
 
 
 def _timing_default_note(args, prog):
@@ -373,7 +382,7 @@ def main():
         sys.exit(exit_text(f"taxjson-explain: error: {e}"))
     apply_roc_record_dates(transactions, req)
     rules = get_tax_rules(args.country)
-    from taxjson.lib.core import AmbiguousTransferDateError
+    from taxjson.engine.rows import AmbiguousTransferDateError
     try:
         _kw = engine_options(req)
         results = rules.compute_gains(
@@ -404,13 +413,18 @@ def main():
         emit_line("taxjson-explain: note: no matching gains found", file=sys.stderr)
         return
 
+    # Each report below is a live exact Doc: every line written as it is
+    # added, as the raw print() wrote it, so a note about a later match
+    # (stderr) still comes after the lines before it.
     if args.list:
+        d = _out.Doc(exact=True, width_=0, live=True)
         for g in matches:
-            print(fmt_summary(g))
+            d.line(fmt_summary(g))
         return
 
     if args.layout == "report":
         # One blank line between blocks, none before the first.
+        d = _out.Doc(exact=True, width_=0, live=True)
         for i, g in enumerate(matches):
             block = render_report_block(g, manual=bool(g.get('tainted')),
                                         country=args.country)
@@ -419,9 +433,9 @@ def main():
                           f"{g.get('id', '?')}", file=sys.stderr)
                 continue
             if i:
-                print()
+                d.blank()
             for ln in block:
-                print(ln)
+                d.line(ln)
         return
 
     for g in matches:

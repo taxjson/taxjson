@@ -1,0 +1,1 @@
+No LEAPS contracts found (long option buys placed >9 months to expiry).

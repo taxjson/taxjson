@@ -30,34 +30,35 @@ import json
 import re
 import sys
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 from taxjson.lib.cli_diag import guard_main
-from taxjson.lib.core import (
-    coerce_transaction_row, strip_json_comments,
-)
+from taxjson.lib.tx_load import coerce_transaction_row, strip_json_comments
 from taxjson.bin.taxjson_sort import (deduplicate, sort_transactions,
                                       source_accounts_of, source_brokers_of)
-from taxjson.bin.taxjson_ticker_map import (
-    load_map_file, apply_mapping, apply_drops, merge_renames,
-    bare_target_warnings,
-    guard_option_listing_collisions,
-)
+from taxjson.lib.ticker_map_rules import merge_renames, bare_target_warnings
+from taxjson.lib.map_file import load_map_file
+from taxjson.bin.taxjson_ticker_map import (apply_mapping, apply_drops,
+                                            guard_option_listing_collisions)
 from taxjson.lib.country import country_arg
-from taxjson.bin.taxjson_convert_currency import (
-    abort_if_currency_uncovered, emit_fallback_summary,
-    emit_source_summary, fallback_validation_issues, load_rate_sources,
-    load_exchange_rates, process_transactions as convert_transactions,
-    positive_rate, reset_fallback_tally, resolve_default_rate,
-    describe_default_rate,
-)
+from taxjson.lib.exchange_rates import load_exchange_rates
+from taxjson.bin.taxjson_convert_currency import (abort_if_currency_uncovered,
+                                                  emit_fallback_summary, emit_source_summary,
+                                                  fallback_validation_issues,
+                                                  load_rate_sources,
+                                                  process_transactions as convert_transactions,
+                                                  positive_rate, reset_fallback_tally,
+                                                  resolve_default_rate, describe_default_rate)
 from taxjson.bin.taxjson_validate import validate_transactions as _validate_dict_list
 from taxjson.lib.corporate_timeline import normalize_symbol_new
 from taxjson.lib.trade_cancel import (pair_cancellations, retained_fee,
                                       trade_cancel_what)
 from taxjson.lib.corp_actions import drop_broker_cil_pairs
+from taxjson.model import money as M
+from taxjson.lib import out as _out
 
 
 def warn_duplicate_splits(txs, conflicts=None) -> int:
@@ -90,7 +91,7 @@ def warn_duplicate_splits(txs, conflicts=None) -> int:
         if len(rows) < 2:
             continue
         n += 1
-        ratios = sorted({round(float(r.quantity or 0), 9) for r in rows})
+        ratios = sorted({M.units(float(r.quantity or 0), 9) for r in rows})
         tgt = f" -> {new}" if new else ""
         if len(ratios) == 1:
             emit_line(f"warning: duplicate split: {sym}{tgt} x{ratios[0]:g} on "
@@ -139,7 +140,7 @@ def warn_duplicate_splits(txs, conflicts=None) -> int:
                     continue
                 n += 1
                 tgt = f" -> {new}" if new else ""
-                exact = round(pair[0], 9) == round(pair[1], 9)
+                exact = M.units(pair[0], 9) == M.units(pair[1], 9)
                 head = ("warning: duplicate split:" if exact
                         else "warning: ATTENTION: split:")
                 emit_line(f"{head} {sym}{tgt} is booked on {d1} (x{pair[0]:.9g}) "
@@ -326,15 +327,15 @@ def reconcile_dividend_tax(txs, rate=None):
                 total_tax += amount
             g = _fld(d, 'gross_amount', 0.0) or 0.0
             _set_fld(d, 'net_amount',
-                     round(g - total_tax * (g / total_gross), 8))
+                     M.units(g - total_tax * (g / total_gross), 8))
         total_qty = sum(_fld(d, 'quantity', 0.0) or 0.0 for d in dlist)
         if total_qty > 0:
             for t in tlist:
                 _set_fld(t, 'quantity', total_qty)
                 # Signed: a refund row keeps its negative per-share rate.
                 _set_fld(t, 'price',
-                         round((_fld(t, 'net_amount', 0.0) or 0.0)
-                               / total_qty, 8))
+                         M.units((_fld(t, 'net_amount', 0.0) or 0.0)
+                                 / total_qty, 8))
     return {"converted": converted, "unconverted": unconverted}
 
 
@@ -392,7 +393,7 @@ def _load_json_files(paths, require_inputs=False):
     'transactions' list, a row the shared loader refuses) is always
     fatal: the old warn-and-skip turned a `#`-commented input into
     "error reading ... skipping" and an EMPTY merge at exit 0
-    (stage-tools audit). Rows go through core.coerce_transaction_row —
+    (stage-tools audit). Rows go through tx_load.coerce_transaction_row —
     the same funnel as load_transactions — so `#` comments, the
     qty→quantity alias and the type guards behave identically here.
     Returns (TaxTransaction list, sources)."""
@@ -458,7 +459,7 @@ def _load_json_files(paths, require_inputs=False):
 
 def _to_tax_transactions(items):
     """Coerce rows into TaxTransaction through the shared loader funnel
-    (core.coerce_transaction_row): `qty` alias, known-field filtering
+    (tx_load.coerce_transaction_row): `qty` alias, known-field filtering
     and the type/finite/date guards. Already-TaxTransaction items pass
     through. Raises ValueError on a malformed row."""
     return [coerce_transaction_row(item, i, "taxjson-merge2")
@@ -467,6 +468,152 @@ def _to_tax_transactions(items):
 
 @guard_main("taxjson-merge2")
 def main():
+    args = _parse_args()
+
+    # --- Stage 1: merge ------------------------------------------------
+    # _load_json_files already coerces every row to TaxTransaction via
+    # the shared loader funnel, so the later stages see one shape.
+    txs, sources = _load_json_files(args.files, require_inputs=args.require_inputs)
+
+    # --- Stage 2: sort / dedup ----------------------------------------
+    txs = _sort_dedup(args, txs, sources)
+
+    # --- Stage 2b: broker trade cancellations -------------------------
+    # An IB `Ca` row whose original fill sits in ANOTHER statement of the
+    # account (a 2026 statement cancelling a 2025 fill) survives the
+    # parse as a marked cancellation leg; drop it with its original here
+    # (lib/trade_cancel, audit R1-51). Always on: a no-op without marks.
+    txs = cancel_trade_pairs(txs)
+    # An s.86.1 spin-off's sale of a fraction paid in cash replaces the
+    # broker parser's own pair for that cash (Questrade's $0 buy and its
+    # sale; CA-CORP-05): the fraction is sold once. No-op without one.
+    txs = drop_broker_cil_pairs(txs)
+
+    # --- Stage 3: ticker-map ------------------------------------------
+    if args.map_file:
+        tmap = load_map_file(Path(args.map_file))
+        # GLOBAL renames always apply; TOBASE/JOURNAL apply only when
+        # converting to base (--to) — pre-conversion they'd merge
+        # different-currency legs into one ACB pool.
+        renames = merge_renames(tmap, to_base=bool(args.target_currency))
+        # DELETE first, then rename — the same order as the standalone
+        # taxjson-ticker-map (the crypto path). A DELETE line names the
+        # broker's RAW symbol; mapping first meant `GLOBAL FOO BAR` +
+        # `DELETE FOO` deleted nothing here while the crypto path
+        # deleted FOO, so one map file meant two things (stage-tools
+        # audit). DELETE lines nuke a ticker's transactions (audited).
+        txs = apply_drops(txs, tmap.delete)
+        # Dated RENAME lines are EVENTS (lib/renames): a SPLIT row on the
+        # date in every account holding the old symbol, and `late=fold`
+        # rows re-booked under the new one — on the RAW symbols, before
+        # the undated renames below map both (A2-0197).
+        # (this is the securities path: a coin's .tt RENAME — declared
+        # in a crypto account — never books here.)
+        from taxjson.lib.renames import RenameConflict, apply_dated_renames
+        from taxjson.lib.rename_decl import KIND_SECURITIES
+        try:
+            txs = apply_dated_renames(txs, tmap.dated,
+                                      kind=KIND_SECURITIES,
+                                      country=args.country or "",
+                                      mapping=renames)
+        except RenameConflict as e:
+            emit_line(f"error: {e}")
+            return 1
+        # An option the underlying rule would move onto a contract the
+        # book already trades natively keeps its own symbol (R1-16).
+        renames = guard_option_listing_collisions(
+            [t.symbol for t in txs], renames, prog="taxjson-merge2")
+        # A rename to a bare symbol in a listed book (A2-0304).
+        for _w in bare_target_warnings([t.symbol for t in txs], renames):
+            emit_line(f"warning: ATTENTION: {_w}")
+        # apply_mapping mutates and returns the same tx; that's fine here
+        # because we built fresh TaxTransaction instances above.
+        txs = [apply_mapping(t, renames) for t in txs]
+
+    # --- Stage 3b: opening-balance cut-off -----------------------------
+    # An OPENING snapshot replaces the account's earlier rows of its
+    # symbols (lib/opening, CA-OPEN-03 / US-OPEN-03): on the mapped
+    # symbols, so a renamed listing is the snapshot's own. Always on: a
+    # no-op without OPENING rows.
+    from taxjson.lib.opening import OpeningError, apply_opening_cutoff
+    # The rows it leaves out, kept in the output's metadata: the cut-off
+    # across accounts walks the whole history back (backlog TJ-1201).
+    opening_cut = []
+    try:
+        txs = apply_opening_cutoff(
+            txs, year=args.year, country=args.country,
+            base_currency=(args.target_currency or None),
+            tax_date=args.tax_date, cut=opening_cut)
+    except OpeningError as e:
+        emit_line(f"error: {e}")
+        return 1
+
+    # Post-mapping (a DELETE'd or renamed row is judged as the engine will
+    # see it): one account carrying the same split twice.
+    split_conflicts = []
+    warn_duplicate_splits(txs, split_conflicts)
+    canonicalize_split_ratios(txs)
+
+    # --- Stage 4: currency conversion ---------------------------------
+    _stop, _rc, target_currency, fx_issues, txs = _convert_stage(args, txs)
+    if _stop:
+        return _rc
+
+    # --- Stage 4.5: reconcile dividends with their withholding --------
+    # Post-dedup and post-conversion: every dividend and withholding row
+    # is unique and, with --to, in the target currency. Without --to (a
+    # native-currency merge) a withholding in another currency than its
+    # dividend has no rate here: it is left out of the dividend's net
+    # (`tjs run` restates it with the run's rates; backlog TJ-0618).
+    _rec = reconcile_dividend_tax(txs)
+    for _sym, _day, _tcur, _dcur in _rec["unconverted"]:
+        emit_line(f"note: {_sym} {_day}: the {_tcur} withholding is left "
+                  f"out of the {_dcur} dividend's net_amount (no exchange "
+                  f"rate in a merge without --to); the dividend's gross "
+                  f"and the TAX row are unchanged.")
+
+    # --- Stage 5: validate --------------------------------------------
+    error_count = _validate_stage(args, txs, fx_issues, split_conflicts)
+
+    # --- Emit ----------------------------------------------------------
+    # In --validate-strict mode we bail BEFORE writing stdout when there
+    # are errors. The old order (write, then exit 1) let shell redirects
+    # capture bad JSON alongside the nonzero exit, so a CI step that
+    # only checks `$?` would happily publish the file. Refusing to emit
+    # makes "broken output" and "nonzero exit" the same observable.
+    if args.validate_strict and error_count:
+        emit_line(f"error: --validate-strict aborted output emit due to "
+            f"{error_count} validation error(s) above.")
+        sys.exit(1)
+
+    output = {
+        'transactions': [t.to_dict() for t in txs],
+        'metadata': {
+            # No time stamp: the same inputs give the same bytes (TJ-4267).
+            'sources': sources,
+            'stages': [
+                stage for stage, flag in [
+                    ('sort', args.sort or args.dedup),
+                    ('dedup', args.dedup),
+                    ('ticker_map', bool(args.map_file)),
+                    ('convert_currency', bool(target_currency)),
+                    ('validate', args.validate or args.validate_strict),
+                ] if flag
+            ],
+            **({'target_currency': target_currency} if target_currency else {}),
+            **({'opening_cut': [t.to_dict() for t in opening_cut]}
+               if opening_cut else {}),
+        },
+    }
+    json.dump(output, sys.stdout, indent=2, sort_keys=True)
+    # A live exact Doc: each line printed when it is added, as the
+    # print() it replaces printed it.
+    d = _out.Doc(exact=True, width_=0, live=True)
+    d.blank()
+
+
+def _parse_args() -> argparse.Namespace:
+    """merge2: the command line, read (`--rates` needs `--to`)."""
     parser = argparse.ArgumentParser(
         description=(
             "Combined pipeline: merge, sort/dedup, ticker-map, "
@@ -556,13 +703,13 @@ def main():
 
     if args.rates_file and not args.target_currency:
         parser.error("--rates requires --to to also be set")
+    return args
 
-    # --- Stage 1: merge ------------------------------------------------
-    # _load_json_files already coerces every row to TaxTransaction via
-    # the shared loader funnel, so the later stages see one shape.
-    txs, sources = _load_json_files(args.files, require_inputs=args.require_inputs)
 
-    # --- Stage 2: sort / dedup ----------------------------------------
+def _sort_dedup(args: argparse.Namespace, txs: list[Any],
+                sources: list[dict[str, Any]]) -> list[Any]:
+    """merge2: stage 2, the rows sorted (`--sort`, `--dedup`) and the
+    duplicates dropped, each one named (`--dedup`)."""
     if args.sort or args.dedup:
         txs = sort_transactions(txs)
     if args.dedup:
@@ -593,84 +740,13 @@ def main():
                     f"account={account} id={tx_id}"
                     + (f" source={tx.source}" if getattr(tx, 'source', '')
                        else ""))
+    return txs
 
-    # --- Stage 2b: broker trade cancellations -------------------------
-    # An IB `Ca` row whose original fill sits in ANOTHER statement of the
-    # account (a 2026 statement cancelling a 2025 fill) survives the
-    # parse as a marked cancellation leg; drop it with its original here
-    # (lib/trade_cancel, audit R1-51). Always on: a no-op without marks.
-    txs = cancel_trade_pairs(txs)
-    # An s.86.1 spin-off's sale of a fraction paid in cash replaces the
-    # broker parser's own pair for that cash (Questrade's $0 buy and its
-    # sale; CA-CORP-05): the fraction is sold once. No-op without one.
-    txs = drop_broker_cil_pairs(txs)
 
-    # --- Stage 3: ticker-map ------------------------------------------
-    if args.map_file:
-        tmap = load_map_file(Path(args.map_file))
-        # GLOBAL renames always apply; TOBASE/JOURNAL apply only when
-        # converting to base (--to) — pre-conversion they'd merge
-        # different-currency legs into one ACB pool.
-        renames = merge_renames(tmap, to_base=bool(args.target_currency))
-        # DELETE first, then rename — the same order as the standalone
-        # taxjson-ticker-map (the crypto path). A DELETE line names the
-        # broker's RAW symbol; mapping first meant `GLOBAL FOO BAR` +
-        # `DELETE FOO` deleted nothing here while the crypto path
-        # deleted FOO, so one map file meant two things (stage-tools
-        # audit). DELETE lines nuke a ticker's transactions (audited).
-        txs = apply_drops(txs, tmap.delete)
-        # Dated RENAME lines are EVENTS (lib/renames): a SPLIT row on the
-        # date in every account holding the old symbol, and `late=fold`
-        # rows re-booked under the new one — on the RAW symbols, before
-        # the undated renames below map both (A2-0197).
-        # (this is the securities path: a coin's .tt RENAME — declared
-        # in a crypto account — never books here.)
-        from taxjson.lib.renames import (KIND_SECURITIES, RenameConflict,
-                                         apply_dated_renames)
-        try:
-            txs = apply_dated_renames(txs, tmap.dated,
-                                      kind=KIND_SECURITIES,
-                                      country=args.country or "",
-                                      mapping=renames)
-        except RenameConflict as e:
-            emit_line(f"error: {e}")
-            return 1
-        # An option the underlying rule would move onto a contract the
-        # book already trades natively keeps its own symbol (R1-16).
-        renames = guard_option_listing_collisions(
-            [t.symbol for t in txs], renames, prog="taxjson-merge2")
-        # A rename to a bare symbol in a listed book (A2-0304).
-        for _w in bare_target_warnings([t.symbol for t in txs], renames):
-            emit_line(f"warning: ATTENTION: {_w}")
-        # apply_mapping mutates and returns the same tx; that's fine here
-        # because we built fresh TaxTransaction instances above.
-        txs = [apply_mapping(t, renames) for t in txs]
-
-    # --- Stage 3b: opening-balance cut-off -----------------------------
-    # An OPENING snapshot replaces the account's earlier rows of its
-    # symbols (lib/opening, CA-OPEN-03 / US-OPEN-03): on the mapped
-    # symbols, so a renamed listing is the snapshot's own. Always on: a
-    # no-op without OPENING rows.
-    from taxjson.lib.opening import OpeningError, apply_opening_cutoff
-    # The rows it leaves out, kept in the output's metadata: the cut-off
-    # across accounts walks the whole history back (backlog TJ-1201).
-    opening_cut = []
-    try:
-        txs = apply_opening_cutoff(
-            txs, year=args.year, country=args.country,
-            base_currency=(args.target_currency or None),
-            tax_date=args.tax_date, cut=opening_cut)
-    except OpeningError as e:
-        emit_line(f"error: {e}")
-        return 1
-
-    # Post-mapping (a DELETE'd or renamed row is judged as the engine will
-    # see it): one account carrying the same split twice.
-    split_conflicts = []
-    warn_duplicate_splits(txs, split_conflicts)
-    canonicalize_split_ratios(txs)
-
-    # --- Stage 4: currency conversion ---------------------------------
+def _convert_stage(args: argparse.Namespace, txs: list[Any]) -> tuple[Any, ...]:
+    """merge2: stage 4, the rows converted to `--to`'s currency, the
+    default-rate rows as validation issues, and the rows left in
+    another currency refused or warned of."""
     target_currency = (args.target_currency or '').upper() or None
     fx_issues = {}
     if target_currency:
@@ -693,19 +769,19 @@ def main():
             )
         except ValueError as e:
             emit_line(f"error: {e}")
-            return 1
+            return True, 1, None, None, None
         default_rate = resolve_default_rate(args.default_rate)
         try:
             txs = convert_transactions(txs, target_currency, history,
                                        default_rate, country=args.country)
         except ValueError as e:
             emit_line(f"error: {e}")
-            return 1
+            return True, 1, None, None, None
         emit_fallback_summary(default_rate)
         if abort_if_currency_uncovered(
                 rates_given=bool(args.rates_file),
                 default_rate_explicit=args.default_rate is not None):
-            return 1
+            return True, 1, None, None, None
         emit_source_summary(load_rate_sources(
             Path(args.rates_file) if args.rates_file else None,
             target_currency))
@@ -738,23 +814,15 @@ def main():
                    f"coverage and re-run.")
             if args.validate or args.validate_strict:
                 emit_line(f"error: {msg}")
-                return 1
+                return True, 1, None, None, None
             emit_line(f"warning: {msg}")
+    return False, None, target_currency, fx_issues, txs
 
-    # --- Stage 4.5: reconcile dividends with their withholding --------
-    # Post-dedup and post-conversion: every dividend and withholding row
-    # is unique and, with --to, in the target currency. Without --to (a
-    # native-currency merge) a withholding in another currency than its
-    # dividend has no rate here: it is left out of the dividend's net
-    # (`tjs run` restates it with the run's rates; backlog TJ-0618).
-    _rec = reconcile_dividend_tax(txs)
-    for _sym, _day, _tcur, _dcur in _rec["unconverted"]:
-        emit_line(f"note: {_sym} {_day}: the {_tcur} withholding is left "
-                  f"out of the {_dcur} dividend's net_amount (no exchange "
-                  f"rate in a merge without --to); the dividend's gross "
-                  f"and the TAX row are unchanged.")
 
-    # --- Stage 5: validate --------------------------------------------
+def _validate_stage(args: argparse.Namespace, txs: list[Any], fx_issues: dict[str, list[str]],
+                    split_conflicts: list[tuple[str, str]]) -> int:
+    """merge2: stage 5, `--validate`: the merged rows' errors, the
+    conversion's and the split conflicts', counted and listed."""
     error_count = 0
     if args.validate or args.validate_strict:
         # taxjson-validate's validator works on plain dicts and prints to
@@ -776,39 +844,7 @@ def main():
             # Positive confirmation so the diagnostics section of a .sum
             # report records that validation actually ran and passed.
             emit_line(f"OK: <merged>: {len(txs)} transactions validated.")
-
-    # --- Emit ----------------------------------------------------------
-    # In --validate-strict mode we bail BEFORE writing stdout when there
-    # are errors. The old order (write, then exit 1) let shell redirects
-    # capture bad JSON alongside the nonzero exit, so a CI step that
-    # only checks `$?` would happily publish the file. Refusing to emit
-    # makes "broken output" and "nonzero exit" the same observable.
-    if args.validate_strict and error_count:
-        emit_line(f"error: --validate-strict aborted output emit due to "
-            f"{error_count} validation error(s) above.")
-        sys.exit(1)
-
-    output = {
-        'transactions': [t.to_dict() for t in txs],
-        'metadata': {
-            'merged_at': datetime.now(timezone.utc).isoformat(),
-            'sources': sources,
-            'stages': [
-                stage for stage, flag in [
-                    ('sort', args.sort or args.dedup),
-                    ('dedup', args.dedup),
-                    ('ticker_map', bool(args.map_file)),
-                    ('convert_currency', bool(target_currency)),
-                    ('validate', args.validate or args.validate_strict),
-                ] if flag
-            ],
-            **({'target_currency': target_currency} if target_currency else {}),
-            **({'opening_cut': [t.to_dict() for t in opening_cut]}
-               if opening_cut else {}),
-        },
-    }
-    json.dump(output, sys.stdout, indent=2, sort_keys=True)
-    print()
+    return error_count
 
 
 if __name__ == '__main__':

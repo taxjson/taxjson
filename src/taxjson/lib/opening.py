@@ -2,7 +2,7 @@
 
 An OPENING row (a `.tt` line `OPENING <snapshot-date> <symbol> <qty>
 <currency> <total-cost> [<lot-date>]`, written by `tjs opening`) is
-a BUYSELL of type core.OPENING_TYPE dated the snapshot day. It sets the
+a BUYSELL of type row_types.OPENING_TYPE dated the snapshot day. It sets the
 position and its cost but is not a purchase (tax-logic CA-OPEN-01,
 US-OPEN-01): the engines never treat it as superficial-loss / wash-sale
 replacement property.
@@ -45,7 +45,9 @@ from __future__ import annotations
 import sys
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from taxjson.lib.core import is_opening_row
+from taxjson.lib.row_types import is_opening_row
+from taxjson.lib import out as _out
+from taxjson.model.evidence import CutLeg, cut_leg, join_cut_legs
 
 # Rows a snapshot replaces: everything that moves a position or its
 # cost. Income (DIVIDEND, INTEREST, TAX, FEE, DIVIDEND_IN_LIEU) stays.
@@ -54,6 +56,65 @@ POSITION_ACTIONS = ('BUYSELL', 'ASSIGN', 'TRANSFER', 'SPLIT', 'ADJUST',
 
 # The console line merge2 writes (echoed by `tjs run`).
 ATTENTION_OPENING = "warning: ATTENTION: opening: "
+OPENING_TIME = '00:00:00'
+
+
+def opening_row(*, symbol: str, quantity: float, total_cost: float, day: str,
+                currency: str, account: str, lot_date: str = '',
+                size: Optional[float] = None,
+                description: str = 'opening balance') -> dict:
+    """The row an opening position is booked as, shared by the .tt
+    converter's OPENING line and the generic mapping's `opening` target
+    (tax-logic CA-OPEN-01 / US-OPEN-01): a BUYSELL of type OPENING_TYPE
+    dated the snapshot `day` at 00:00:00 and settled that day, `quantity`
+    units at the total cost per unit (per share of an option's contract
+    `size`, 100 when none is declared; a declared size is carried as
+    `multiplier`), the lot's acquisition date in `lot_date` and in the
+    description (so two lots of one snapshot keep two ids). The invariants
+    are refused here, whatever the caller said first in its own words: a
+    long position (a short's or a written option's premium depends on its
+    write date), a cost that is not negative, no futures contract (booked
+    on its own basis), a lot date on or before the snapshot day, a size on
+    an option symbol alone."""
+    from taxjson.lib.row_types import OPENING_TYPE
+    from taxjson.lib.option_symbols import is_option_symbol
+    from taxjson.lib.futures_prefixes import FUTURES_PREFIXES
+    if not quantity or quantity <= 0:
+        raise ValueError(f"an opening position is long: quantity "
+                         f"{quantity!r} is not positive")
+    if total_cost < 0:
+        raise ValueError(f"an opening position's cost is not negative, "
+                         f"got {total_cost:g}")
+    if symbol.startswith(FUTURES_PREFIXES):
+        raise ValueError(f"{symbol} is a futures contract, booked on its "
+                         f"own basis (lib/futures), never opened")
+    if lot_date and lot_date > day:
+        raise ValueError(f"lot date {lot_date} is after the snapshot day "
+                         f"{day}")
+    if size is not None and not is_option_symbol(symbol):
+        raise ValueError(f"a contract size is an option's: {symbol} is not "
+                         f"an option symbol")
+    per = size if size is not None else 100.0 if is_option_symbol(symbol) else 1.0
+    tx = {
+        'action': 'BUYSELL',
+        'type': OPENING_TYPE,
+        'date': day,
+        'time': OPENING_TIME,
+        'date_settle': day,
+        'account': account,
+        'symbol': symbol,
+        'quantity': quantity,
+        'currency': currency,
+        'price': total_cost / quantity / per,
+        'net_amount': total_cost,
+        'fee': 0.0,
+        'description': description + (f', acquired {lot_date}' if lot_date else ''),
+    }
+    if lot_date:
+        tx['lot_date'] = lot_date
+    if size is not None:
+        tx['multiplier'] = size
+    return tx
 
 
 class OpeningError(ValueError):
@@ -116,7 +177,7 @@ def _note_cut_legs(dropped: Dict[str, List], rows: List) -> None:
     """Name on each OPENING row of `rows` the share rows it replaced
     (`opening_cut_legs`): the premium ledger reads whether an option's
     delivery is among them (backlog TJ-1332)."""
-    legs: Dict[Tuple[str, str], List[str]] = {}
+    legs: Dict[Tuple[str, str], List[CutLeg]] = {}
     for acct, items in dropped.items():
         for t, hit in items:
             q = float(_get(t, 'quantity', 0.0) or 0.0)
@@ -126,14 +187,13 @@ def _note_cut_legs(dropped: Dict[str, List], rows: List) -> None:
             px = (float(_get(t, 'price', 0.0) or 0.0)
                   or abs(float(_get(t, 'net_amount', 0.0) or 0.0) / q))
             legs.setdefault((acct, hit), []).append(
-                f"{_get(t, 'date')} {q} {px} {_get(t, 'action')}")
+                cut_leg(_get(t, 'date'), q, px, _get(t, 'action')))
     for t in rows:
         if not legs or not is_opening_row(t):
             continue
         new = legs.pop((str(_get(t, 'account')), str(_get(t, 'symbol'))), None)
         if new:
-            text = ";".join(filter(None, [str(_get(t, 'opening_cut_legs'))]
-                                   + new))
+            text = join_cut_legs(_get(t, 'opening_cut_legs'), new)
             if isinstance(t, dict):
                 t['opening_cut_legs'] = text
             else:
@@ -230,12 +290,12 @@ def apply_opening_cutoff(txs: List, *, year: Optional[int] = None,
         rows = dropped[acct]
         syms = sorted({hit for _t, hit in rows})
         days = sorted(set(by_acct[acct].values()))
-        print(f"{ATTENTION_OPENING}{acct}: the opening snapshot "
-              f"({', '.join(days)}) replaces {len(rows)} earlier row(s) "
-              f"of {', '.join(syms[:6])}"
-              f"{f' (+{len(syms) - 6} more)' if len(syms) > 6 else ''}"
-              f" — left out of the books so the shares are not counted "
-              f"twice (income rows stay).", file=report)
+        _out.put(f"{ATTENTION_OPENING}{acct}: the opening snapshot "
+                 f"({', '.join(days)}) replaces {len(rows)} earlier row(s) "
+                 f"of {', '.join(syms[:6])}"
+                 f"{f' (+{len(syms) - 6} more)' if len(syms) > 6 else ''}"
+                 f" — left out of the books so the shares are not counted "
+                 f"twice (income rows stay).", report)
     return kept
 
 

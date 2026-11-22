@@ -1,0 +1,20 @@
+CUSTODY TRANSFERS — evidence, not tax events
+Basis comes from the buy and sell history. WHERE: sidecar = kept out of the books; book = a sheltered account's transfers, kept in.
+
+DATE        ACCOUNT  SYMBOL     QTY  TYPE            VALUE  FEE  CUR  WHERE    IN_BOOKS
+---------------------------------------------------------------------------------------
+2024-02-15  roth     SAMPB.US    20  transfer-in      0.00    -  USD  book     -
+2024-05-01  margin   XYZQ.US     30  ACATS        1,500.00    -  USD  sidecar  NO_COST
+2024-09-01  crypto   ETH       -0.1  Send           250.00    -  USD  sidecar  -
+
+3 transfer row(s).
+
+IN_BOOKS — a taxable account's transfer-in
+- own_move: your own shares moving (a transfer-out of yours cancels it: within 10 days, or up to 45 days before it when no other transfer could be either leg's partner). Not one move: a .tt NOTOWN line in the receiving account's folder undoes the pairing (docs/settings.md).
+- book_value: from outside your books, booked at the book value the broker states on the row.
+- .tt_covers: your .tt purchase covers it.
+- PARTLY_covered: your .tt purchases account for some of its units only — NOT booked (the covered units would be held twice): add the other units' purchase to a .tt file, or all the units' when those purchases are another holding.
+- missing_history: a .tt OPENING cost=unknown line opens it (cost unknown, reported by hand).
+- NO_COST: from outside your books with no cost — add the original purchase to a .tt file (docs/getting-started.md, step 5c). `(0_stated)`: the row states a book value of 0, usually the broker's placeholder for a cost it was not given; never booked as a $0 lot.
+- in-kind_contribution / in-kind_withdrawal: a move between a taxable and a registered account, booked in the taxable account as a sale / purchase at fair market value (`tjs run` lists each).
+- UNCLASSIFIED: neither paired with a transfer-out of yours nor read as an arrival — work/ could not be read (the warning says which file): run `tjs run`.

@@ -15,7 +15,7 @@ All data synthetic (fake account ids, invented tickers).
 """
 # First: puts the plugin, the core and its test helpers on sys.path and
 # registers the plugin's entry point when it is not pip-installed.
-import _support  # noqa: F401
+import _bootstrap  # noqa: F401
 import csv
 import io
 import json
@@ -29,6 +29,7 @@ from datetime import date
 from pathlib import Path
 
 from tax_rules import rule
+from taxjson.rules import ids as R
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -64,8 +65,8 @@ def _actions(text):
 class TestFetchKeepsApiOrder(unittest.TestCase):
     """A2-0084 / A2-0598."""
 
-    @rule("CA-DATE-14")
-    @rule("US-DATE-13")
+    @rule(R.CA_DATE_14)
+    @rule(R.US_DATE_13)
     def test_qt_to_csv_keeps_same_day_api_order(self):
         from taxjson_fetch.api import qt_to_csv
         self.assertEqual(_actions(qt_to_csv(_API, "1")),
@@ -81,8 +82,8 @@ class TestFetchKeepsApiOrder(unittest.TestCase):
         # byte-stable: the same download renders the same file
         self.assertEqual(text, qt_to_csv([_API[1], _API[2], _API[0]], "1"))
 
-    @rule("CA-DATE-14")
-    @rule("US-DATE-13")
+    @rule(R.CA_DATE_14)
+    @rule(R.US_DATE_13)
     def test_merge_keeps_api_order_of_new_rows(self):
         from taxjson_fetch.api import qt_to_csv
         from taxjson_fetch.command import _merge_csv_text
@@ -116,7 +117,7 @@ class TestFetchKeepsApiOrder(unittest.TestCase):
                          ["2025-01-10", "2025-06-10", "2025-06-10",
                           "2025-12-01"])
 
-    @rule("CA-DATE-14")
+    @rule(R.CA_DATE_14)
     def test_fetched_file_books_sale_before_rebuy(self):
         # End to end (Canada): the sale is made from the January shares
         # (ACB 1,000 -> gain 500), and the rebuy is the new pool (1,510).

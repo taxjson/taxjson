@@ -13,6 +13,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from _style import CapturedWidth
+import _paths
+from _support.filing_sanity import _gains, _holdings_toml
 
 
 # Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
@@ -27,29 +29,13 @@ def setUpModule():
 def tearDownModule():
     _WIDTH.stop()
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _paths.REPO
 
 
 def _run(root, *args):
     return subprocess.run(
         [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root),
          *args], cwd=REPO_ROOT, capture_output=True, text=True)
-
-
-def _gains(root, acct, inv):
-    (root / "work").mkdir(exist_ok=True)
-    (root / "work" / f"{acct}_gains.json").write_text(json.dumps(
-        {"summary": {"year": "2026"}, "transactions": [],
-         "inventory": [{"symbol": s, "qty": q, "total_cost": 1.0}
-                       for s, q in inv.items()]}))
-
-
-def _holdings_toml(path, account, holdings):
-    rows = "".join(
-        f'[[holding]]\nsymbol = "{s}"\nquantity = {q}\n'
-        f'asset_type = "equity"\n\n' for s, q in holdings.items())
-    path.write_text(f'schema_version = "1.0"\n[meta]\n'
-                    f'account = "{account}"\n\n{rows}')
 
 
 class TestSanity(unittest.TestCase):
@@ -481,7 +467,7 @@ class TestSanity(unittest.TestCase):
             self.assertTrue(json.loads(r.stdout)["clean"])
 
     def test_map_symbol_helper(self):
-        from taxjson.bin.taxjson_ticker_map import map_symbol
+        from taxjson.lib.ticker_map_rules import map_symbol
         m = {"QAM.US": "QAM.TO", "FB.US": "META.US"}
         self.assertEqual(map_symbol("QAM.US", m), "QAM.TO")
         self.assertEqual(

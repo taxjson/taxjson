@@ -1,0 +1,25 @@
+==> Checking the project
+==> Loading currency rates
+==> Loading cached USD → CAD rates
+==> crypto  (taxable, crypto)
+  inputs/crypto/coinbase_gold.csv → Coinbase (content: columns Timestamp,Transaction Type,Asset…)
+  inputs/crypto/kraken_gold.csv → Kraken (content: trades columns txid,ordertxid,pair…)
+==> Reading 1 Coinbase file
+  coinbase_gold.csv: 15 tax objects
+==> Reading 1 Kraken file
+  kraken_gold.csv: 6 tax objects
+==> Writing crypto sends inputs/crypto/crypto_sends.tt
+==> Reading crypto_sends.tt
+==> Merging the exports
+==> Sorting, de-duplicating
+==> Looking up crypto prices
+==> Converting currency to CAD
+==> Calculating capital gains
+==> Writing holdings reports/crypto_holdings.toml
+==> Writing summary reports/crypto.sum
+==> Writing cross-account reports to reports/
+==> Writing fees report reports/fees.rpt
+==> Done. Reports are in reports/
+==> Before you trust these numbers (docs/getting-started.md, step 5)
+Info: 1 account with open positions and no holdings file to check them against: crypto (3). Run `tjs sanity` with the broker's positions.
+Info: Then run `tjs checklist --run`: it checks every step and names the next one.

@@ -24,6 +24,7 @@ import subprocess
 import sys
 from typing import List, Optional
 
+from taxjson.lib import out as _out
 from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.country import add_country_argument
 
@@ -94,10 +95,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     doc = json.loads(res.stdout)
 
     usa = args.country == "usa"
-    print("TAXABLE-ONLY SAFE-TO-SELL AUDIT — "
-          + ("§1091 30-day window (trade dates)" if usa
-             else "CRA 30-day window"))
-    print()
+    # The report: a live exact Doc, each line written as it is added, as
+    # the raw print() wrote it (nothing here wraps, so no width is
+    # resolved).
+    d = _out.Doc(exact=True, width_=0, live=True)
+    d.line("TAXABLE-ONLY SAFE-TO-SELL AUDIT — "
+           + ("§1091 30-day window (trade dates)" if usa
+              else "CRA 30-day window"))
+    d.blank()
     headers = ["TICKER", "TAXABLE QTY", "STATUS", "REASON"]
     output_rows = []
     for sec in doc.get("sections") or []:
@@ -131,7 +136,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     output_rows.sort(key=lambda row: row[0])
 
     if not output_rows:
-        print("No taxable holdings found.")
+        d.line("No taxable holdings found.")
         return 0
 
     widths = [len(h) for h in headers]
@@ -140,23 +145,23 @@ def main(argv: Optional[List[str]] = None) -> int:
             widths[i] = max(widths[i], len(str(val)))
 
     fmt = "  ".join(f"{{:<{w}}}" for w in widths)
-    print(fmt.format(*headers))
-    print("-" * (sum(widths) + 2 * (len(widths)-1)))
+    d.line(fmt.format(*headers))
+    d.line("-" * (sum(widths) + 2 * (len(widths)-1)))
 
     for row in output_rows:
-        print(fmt.format(*row))
+        d.line(fmt.format(*row))
 
     _sl = "a wash sale" if usa else "superficial"
-    print("\nNOTE: statuses are the wash radar's (`tjs wash-radar` "
-          "explains each). SAFE means no replacement bought in the last "
-          f"30 days would make a loss sale {_sl}; FULL-EXIT-ONLY "
-          "means only selling the whole position is clean.")
-    print("To fully avoid "
-          + ("a wash sale" if usa else "superficial loss")
-          + ", you must also NOT REPURCHASE for 30 days AFTER selling.")
+    d.line("\nNOTE: statuses are the wash radar's (`tjs wash-radar` "
+           "explains each). SAFE means no replacement bought in the last "
+           f"30 days would make a loss sale {_sl}; FULL-EXIT-ONLY "
+           "means only selling the whole position is clean.")
+    d.line("To fully avoid "
+           + ("a wash sale" if usa else "superficial loss")
+           + ", you must also NOT REPURCHASE for 30 days AFTER selling.")
     # CA-PLAN-04 / US-PLAN-04 (audit S054-22).
     from taxjson.lib.wash_scope import scope_note
-    print(scope_note(args.country))
+    d.line(scope_note(args.country))
     return 0
 
 

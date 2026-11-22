@@ -1,37 +1,30 @@
 [project]
 name = "taxjson"
-version = "0.41.0"
+version = "1.0.1"
 description = "Capital gains, dividend income, and wash-sale / superficial-loss computation from brokerage CSVs (Canada + US)"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 authors = [
     { name = "cksci", email = "ckscijdtest@gmail.com" },
 ]
 keywords = ["tax", "capital-gains", "wash-sale", "acb", "fifo", "brokerage", "csv", "canada", "us"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: End Users/Desktop",
     "Intended Audience :: Financial and Insurance Industry",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Office/Business :: Financial :: Accounting",
 ]
 
-# `tomllib` is in the stdlib only from Python 3.11. `taxjson_run.py`
-# falls back to `tomli` on older versions; declare it so 3.10
-# users get a working install instead of a "pip install tomli"
-# stderr at first invocation.
 # Windows ships no IANA time-zone database: zoneinfo needs `tzdata` for
 # the IB exchange-local trade dates (Sydney, Tokyo, ...; audit A2-1447).
 dependencies = [
-    'tomli >= 1.2.0; python_version < "3.11"',
     'tzdata; sys_platform == "win32"',
 ]
 
@@ -75,6 +68,8 @@ dev = [
     # The ci.sh / workflow lint stage (critical tier, unused imports); a missing linter
     # fails the gate.
     "ruff>=0.4",
+    # The types stage (scripts/ci.sh) and CI's lint job: [tool.mypy] below.
+    "mypy>=1.10",
 ]
 # Everything, for users who want one install command.
 all = [
@@ -139,8 +134,25 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
-# The shipped market reference data (lib/markets): venue suffixes,
+# The shipped market reference data (lib/markets_data): venue suffixes,
 # currencies and the security lists a user's ticker.map can override.
 [tool.setuptools.package-data]
 # The `taxjson init --demo` project (lib/demo): made-up exports.
-taxjson = ["data/*.toml", "data/demo/*/*"]
+taxjson = ["data/*.toml", "data/demo/*/*", "data/layouts/*.toml"]
+
+# The rule set scripts/check_architecture.py ratchets: ruff's defaults plus
+# blind excepts. ci.sh's lint stage still hard-fails its own --select line.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "BLE001"]
+
+# scripts/ci.sh's types stage and CI's lint job (`python -m mypy`, PLAN step 8):
+# strict on these packages; what they import is read for its types, not checked.
+# The source tree only (no site-packages): the same result in the dev venv, where
+# taxjson is installed, as in CI's lint job, where it is not.
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "$MYPY_CONFIG_FILE_DIR/src"
+packages = ["taxjson.model", "taxjson.rules", "taxjson.characterize", "taxjson.engine"]
+strict = true
+follow_imports = "silent"
+no_site_packages = true
