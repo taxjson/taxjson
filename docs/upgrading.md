@@ -60,6 +60,38 @@ In each project you keep working in (each year folder):
 Newest first. Each says what changed and what to do. Releases not listed
 needed nothing.
 
+### v1.1.0
+
+- **`tjs div-estimate`: a payer with too short a history is projected quarterly, shown as
+  assumed, and the estimate's totals move.** A payer with a single payment in the books was
+  estimated at one payment a year (pro rata from its 12-month amount per share), and two
+  payments six months apart read as semi-annual even when you did not hold the shares on
+  the quarterly date between them. Such a payer (one to three payments on quarterly dates,
+  the latest in the last 12 months) is now projected every quarter at its latest per-share
+  amount, until the books contradict it: a quarterly date with no payment of any kind that
+  passed while the books show the shares held, or an overdue date nothing in the books
+  explains. The row shows `quarterly?` under FREQ and stays under "payer(s) to check";
+  `--details` says "assumed quarterly: N payment(s) in the books, none contradicts it", and
+  "the books of ACCOUNT end YYYY-MM-DD: later dates not checked" where an export is older
+  than the date asked about (one such date: a missing payment; two: not assumed); `--json`
+  rows gain `frequency_assumed` (true or false; `schema_version` stays 1, no key changed).
+  **What moves:** "Next N months", "Rest of tax year" and the withholding totals rise where
+  you hold such payers (up to four times the old figure for a single payment). A payer that
+  really pays once or twice a year, or whose only payment was a special dividend, is
+  over-projected until its next payment or a passed quarterly date shows it. A payer whose
+  history shows its schedule (four quarterly payments, twelve monthly, two a year apart) is
+  projected as before. Nothing to do; these are planning numbers, and no filed figure reads
+  them.
+- **taxjson.toml gains a "Views" group** (TJ-4975). The template has a new `[settings]` key,
+  `benchmark` (the symbol `tjs technicals` measures beta and alpha against). Until
+  `tjs format --write` adds its commented-out line, `tjs format --check` reports your
+  taxjson.toml as not formatted. Only comments change and no figure moves. Setting the key is
+  no run input either: the books stay fresh, a closed year's `tjs check-filed` stays OK, and
+  `tjs checklist` keeps its verdicts. Without the key, `tjs technicals` leaves beta and alpha
+  blank and says so in one `Info:` line.
+- **`tjs run` on a book with many written options is several times faster** (TJ-4977 to
+  TJ-4982): no figure moves, and nothing is asked of you.
+
 ### v1.0.1
 
 - **Code of your own that imports taxjson's modules** (a script, a notebook; not `tjs`,

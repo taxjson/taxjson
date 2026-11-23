@@ -215,6 +215,7 @@ country's commands (`tjs help --all` lists them). Every command takes
 | [`tjs run`](docs/commands.md#tjs-run) | Build the books and every report from your exports, every stage every run (`--strict`, `--account`) |
 | [`tjs compare`](docs/commands.md#tjs-compare) | What moved since the run before, a saved snapshot or the reports as filed |
 | [`tjs snapshot`](docs/commands.md#tjs-snapshot) | Copy the whole project to `snapshot/<year>.<timestamp>/`, to diff file by file or `compare` later |
+| [`tjs clean`](docs/commands.md#tjs-clean) | Remove what `tjs run` wrote (`work/`, `reports/`, its export), so the next run builds it all again; your inputs and decisions stay |
 | [`tjs crypto-sends`](docs/commands.md#tjs-crypto-sends) | Decide each crypto send that did not arrive in another of your accounts (an arrival from 10 minutes before to 3 days after the send is yours) |
 | [`tjs find-missing-history`](docs/commands.md#tjs-find-missing-history) | Sales and holdings whose purchase is not in your files |
 | [`tjs opening`](docs/commands.md#tjs-opening) | An opening balance from a broker's positions report |
@@ -240,6 +241,7 @@ country's commands (`tjs help --all` lists them). Every command takes
 | --- | --- |
 | [`tjs list`](docs/commands.md#tjs-list) | Open positions per account, with book cost (`--date` for a past day) |
 | [`tjs shares`](docs/commands.md#tjs-shares) | Total held per symbol across all accounts |
+| [`tjs technicals`](docs/commands.md#tjs-technicals) | Each holding's distance from its moving averages, RSI, beta and alpha (daily closes from Yahoo Finance, cached) |
 
 #### Row listings
 
@@ -295,6 +297,7 @@ country's commands (`tjs help --all` lists them). Every command takes
 | [`tjs carryover`](docs/commands.md#tjs-carryover) | Capital-loss carryforward ledger across years |
 | [`tjs option-boundary`](docs/commands.md#tjs-option-boundary) | Canada: written options across a year end |
 | [`tjs close-year`](docs/commands.md#tjs-close-year) | Lock the year you filed (`filed/<year>.json`) |
+| [`tjs unclose-year`](docs/commands.md#tjs-unclose-year) | Reopen a closed year (its lock moved to a backup) |
 | [`tjs check-filed`](docs/commands.md#tjs-check-filed) | Recompute filed years and report any drift |
 | [`tjs handoff`](docs/commands.md#tjs-handoff) | Check this year starts where last year's return ended |
 

@@ -7,8 +7,11 @@ Per payer (a listing, across the accounts that hold it):
   monthly, quarterly, semi-annual or annual), anchored at the latest
   payment on it, that most of the last payments fall on; a payment off the
   grid (a special) or a stretch of empty slots (payments made while
-  the position was not held) does not break it. No grid fits, or a
-  single payment: irregular (its estimate is pro rata from the
+  the position was not held) does not break it. A history too short
+  to settle one (one to three payments, each on the quarterly grid
+  anchored at the latest) is projected quarterly, shown as assumed,
+  until the books contradict it (`assumed_quarterly`). No grid fits,
+  and not assumed: irregular (its estimate is pro rata from the
   trailing-12-month amount per share);
 - its latest per-share amount (gross, in the payment's currency) and
   its trailing-12-month amount per share. A payment before a stock
@@ -166,10 +169,18 @@ class Payments(dict):
     as the position's flags. `short_paid`: {(account, symbol): [the pay
     dates of the positive rows paid while the books put the account
     short the symbol]}: counted as income, and the command warns
-    (backlog TJ-0073)."""
+    (backlog TJ-0073). What `assumed_quarterly` reads: `held`: {symbol
+    (now): [(account, its [(date, signed share balance after it)], by
+    date)]} (`_held_now`); `paid`: {symbol (now): [the date of every
+    income row of it with money left after reversals, whatever its
+    currency or share count]}; `ends`: {account: the date of its last
+    row in the books, whatever the as-of date} (`_paid_and_ends`)."""
     rows: List[Tuple[str, Dict[str, Any]]] = []
     notes: Dict[Tuple[str, str], List[str]] = {}
     short_paid: Dict[Tuple[str, str], List[str]] = {}
+    held: Dict[str, List[Tuple[str, List[Tuple[str, float]]]]] = {}
+    paid: Dict[str, List[str]] = {}
+    ends: Dict[str, str] = {}
 
 
 def _money(v: float) -> str:
@@ -244,6 +255,44 @@ def _held(rows: List[Tuple[str, Dict[str, Any]]],
         for k in [k for k in by_src if k[0] == acct and k[2] in mixed]:
             del by_src[k]
     return out, by_src
+
+
+def _held_now(held: Dict[Tuple[str, str], List[Tuple[str, float]]],
+              events: List[Tuple[str, str, str, float]]
+              ) -> Dict[str, List[Tuple[str, List[Tuple[str, float]]]]]:
+    """`_held`'s balances per security as it is named now: {symbol:
+    [(account, its (date, balance) list)]}. A rename of `events` (the
+    splits, sorted: date, symbol, new symbol, ratio) carries the old
+    symbol's list to the new one, beside the list the shares moved to
+    (the old one ends at 0 on the rename's date)."""
+    out: Dict[str, List[Tuple[str, List[Tuple[str, float]]]]] = {}
+    for (acct, sym), series in held.items():
+        for _d, old, new, _ratio in events:
+            if old == sym:
+                sym = new
+        out.setdefault(sym, []).append((acct, series))
+    return out
+
+
+def _paid_and_ends(inc: Dict[tuple, Dict[str, Any]],
+                   rows: List[Tuple[str, Dict[str, Any]]]
+                   ) -> Tuple[Dict[str, List[str]], Dict[str, str]]:
+    """({symbol (now): the dates of `payments`' income entries `inc`
+    with money left after the reversals: a row the schedule leaves out
+    (no share count, another currency) is still a payment made},
+    {account: the date of its last row of `rows`: where its books end,
+    as far as the rows can say. Every row, whatever date the estimate
+    is as of: how far the books reach is a fact about the books})."""
+    paid: Dict[str, List[str]] = {}
+    for k, e in inc.items():
+        if e["gross"] > 0.005:
+            paid.setdefault(e["sym"], []).append(k[3])
+    ends: Dict[str, str] = {}
+    for acct, t in rows:
+        d = str(t.get("date") or "")[:10]
+        if len(d) == 10:
+            ends[acct] = max(ends.get(acct, ""), d)
+    return paid, ends
 
 
 def _said_no_count(d: str, e: Dict[str, Any],
@@ -540,9 +589,9 @@ def payments(rows: Iterable[Tuple[str, Dict[str, Any]]],
     for ds in short_paid.values():
         ds.sort()
     out = Payments()
-    out.rows = rows
-    out.notes = notes
-    out.short_paid = short_paid
+    out.rows, out.notes, out.short_paid = rows, notes, short_paid
+    out.held = _held_now(held, events)
+    out.paid, out.ends = _paid_and_ends(inc, rows)
     for k, e in inc.items():
         acct, src, sym, d, cur = k
         if e["gross"] <= 0.005 or e["qty"] <= 1e-9:
@@ -747,6 +796,213 @@ def _latest_regular(slots: Dict[int, List[date]], months: int,
     return top
 
 
+# ---------------------------------------------- the assumed schedule
+# A payer with at most this many payments in the books can be read as
+# quarterly on assumption.
+ASSUME_MAX = 3
+ASSUMED = "quarterly"
+# The shares were held on a quarterly date when the books show them
+# long on every day from HELD_LEAD of a quarter before it (a record
+# date is weeks before its pay date, and the pay date can be early by
+# the grid's tolerance) through the date itself: a holder long that far
+# was entitled, whatever was sold after.
+HELD_LEAD = 0.5
+# Days with no shares in any account that still count as held: a
+# transfer between the owner's accounts leaves one book days before it
+# reaches the other (out on the 20th, in on the 23rd).
+TRANSIT_DAYS = 5
+_QUARTER = 3 * 365.25 / 12
+
+
+def _long_through(series: List[List[Tuple[str, float]]], lo: str,
+                  hi: str) -> bool:
+    """Whether the balances `series` (`_held`'s lists of (date, signed
+    balance after it), by date: every account's, and a renamed
+    security's old and new name) add up to a long position at the end
+    of every day from `lo` to `hi`: each list counts when positive (one
+    account's short is not another's holding), so the test follows the
+    position through a rename and a move between accounts. Up to
+    TRANSIT_DAYS with nothing held, between days that are long, still
+    count."""
+    gap = None
+    for day in sorted({lo} | {d for s in series for d, _q in s
+                              if lo < d <= hi}):
+        total = 0.0
+        for s in series:
+            q = 0.0
+            for d, after in s:
+                if d > day:
+                    break
+                q = after
+            total += max(q, 0.0)
+        if total <= 1e-9:
+            gap = gap or day
+            continue
+        if gap and (gap == lo or (date.fromisoformat(day)
+                                  - date.fromisoformat(gap)).days
+                    > TRANSIT_DAYS):
+            return False
+        gap = None
+    return bool(series) and gap is None
+
+
+def _date_reading(pays: Any, sym: str, slot: date, as_of: str) -> str:
+    """What the books say of the quarterly date `slot` of `sym`, a date
+    the schedule has no payment on:
+
+    "paid"    an income row of the security is within the grid's
+              tolerance of it, in any currency, with or without a share
+              count (`Payments.paid`; the payments of every currency
+              when `pays` is a plain dict): the schedule left the row
+              out, the payer did not skip the date. (A return of
+              capital booked as an adjustment is no income row.)
+    "held"    the accounts whose books run to the quarterly grace past
+              the date show, together, the shares long from HELD_LEAD
+              of a quarter before it through it (`_long_through`): the
+              payer skipped it;
+    "end:ACCOUNT"  all the accounts together show them long so, but not
+              without ACCOUNT, whose books end before the grace past
+              the date (`Payments.ends`, its last row): they cannot say
+              whether it was paid. Also an account that was paid the
+              security, where no trade row of it is in the books, and
+              that ends so;
+    "unheld"  trade rows of the security, and no position long so: no
+              payment was due;
+    ""        no trade row of the security, in books that reach the
+              date: nothing explains the gap."""
+    tol = timedelta(days=int(_QUARTER * GAP_TOL))
+    every = pays.get(sym) or []
+    dates = (getattr(pays, "paid", None) or {}).get(sym) \
+        or [p.pay_date for p in every]
+    if any(_iso(slot - tol) <= d <= min(_iso(slot + tol), as_of)
+           for d in dates):
+        return "paid"
+    series = (getattr(pays, "held", None) or {}).get(sym) or []
+    ends = getattr(pays, "ends", None) or {}
+    reach = _iso(slot + timedelta(days=GRACE_DAYS[ASSUMED]))
+    short = sorted(a for a in {a for a, _b in series}
+                   | ({p.account for p in every} if not series else set())
+                   if ends.get(a, reach) < reach)
+    if not series:
+        return "end:" + short[0] if short else ""
+    try:
+        lo = _iso(slot - timedelta(days=int(_QUARTER * HELD_LEAD)))
+    except OverflowError:
+        return "unheld"             # before 0001-01-01: nothing held
+    hi = min(_iso(slot), as_of)
+    if _long_through([b for a, b in series if a not in short], lo, hi):
+        return "held"
+    if short and _long_through([b for _a, b in series], lo, hi):
+        return "end:" + next(
+            (a for a in short if not _long_through(
+                [b for x, b in series if x != a], lo, hi)), short[0])
+    return "unheld"
+
+
+def assumed_quarterly(sched: List[Payment], name: Optional[str],
+                      pays: Any, sym: str, as_of: str
+                      ) -> Tuple[bool, set, List[str]]:
+    """(whether the payer `sym` of `sched` (its payments, `schedule`) is
+    projected quarterly on assumption, the quarterly dates since its
+    latest payment on which none was due or the books cannot say, the
+    row's check lines). Assumed: its own history cannot settle its
+    schedule, and nothing in the books contradicts quarterly (most
+    payers of shares are; one payment a year, the pro rata reading of a
+    single payment, is the worse guess: the owner's request of
+    2026-11-22, backlog TJ-4976). `name`: detect_schedule's reading;
+    `pays`: the `Payments` (a plain dict: nothing known of holdings).
+
+    Cannot settle: at most ASSUME_MAX payments, the latest in the 12
+    months to `as_of`, each alone in its slot of the quarterly grid
+    anchored at the latest (the detector's tolerance, GAP_TOL of a
+    quarter), where the detector found no grid or a semi-annual one
+    that rests on a single six-month gap. A grid the detector did read
+    (quarterly or shorter, annual, three payments six months apart) is
+    settled: never touched here. Two payments closer than a quarter, or
+    one off the quarterly grid, contradict it by the dates alone.
+
+    Contradicted (the reading is then the detector's, as before), by a
+    quarterly date the schedule has no payment on (`_date_reading`):
+    - between the payments, a date the books show as held;
+    - after the latest payment and more than the quarterly grace
+      overdue on `as_of`: a date the books show as held; one that
+      nothing explains (no trade row of the security, in books that
+      reach it); or a second date past the end of an account's books.
+
+    An overdue date that was paid by a row the schedule leaves out, or
+    that the books show as not held, is no missing payment: it is in
+    the set returned. One past the end of an account's books is
+    unchecked, and not free: it is not in the set, so `estimate` counts
+    it as a settled payer's missing payment (one: late, still
+    projected), and two drop the assumption. Either way the check lines
+    name the account and where its books end, assumed or not."""
+    no: Tuple[bool, set, List[str]] = (False, set(), [])
+    if len(sched) > ASSUME_MAX or name not in (None, "semi-annual"):
+        return no
+    ds = [date.fromisoformat(p.pay_date) for p in sched]
+    today = date.fromisoformat(as_of)
+    anchor, tol = ds[-1], _QUARTER * GAP_TOL
+    if (today - anchor).days >= 365:
+        return no                   # no payment in the last 12 months
+    filled = set()
+    for d in ds:
+        k = int((anchor - d).days / _QUARTER + 0.5)
+        if k in filled or abs((d - _slot(anchor, 3, 91, k)).days) > tol:
+            return no
+        filled.add(k)
+    half = 2 * _QUARTER
+    if sum(1 for a, b in zip(ds, ds[1:])
+           if abs((b - a).days - half) <= half * GAP_TOL) >= 2:
+        return no                   # three payments six months apart
+    if any(_date_reading(pays, sym, _slot(anchor, 3, 91, k), as_of)
+           == "held" for k in range(1, max(filled)) if k not in filled):
+        return no
+    excused, cut, ends = set(), [], getattr(pays, "ends", None) or {}
+    for k in range(1, 5):
+        try:
+            nxt = date.fromisoformat(add_months(_iso(anchor), 3 * k))
+        except (ValueError, OverflowError):
+            break                   # past 9999-12-31: nothing overdue
+        if (today - nxt).days <= GRACE_DAYS[ASSUMED]:
+            break
+        said = _date_reading(pays, sym, nxt, as_of)
+        if said in ("held", ""):
+            return no
+        if said.startswith("end:"):
+            cut.append(said[4:])
+        else:
+            excused.add(_iso(nxt))
+    why = [f"the books of {a} end {ends[a]}: later dates not checked"
+           for a in dict.fromkeys(cut)]
+    if len(cut) >= 2:
+        return False, set(), why
+    return True, excused, [_assumed_flag(len(sched))] + why
+
+
+def _assumed_flag(n: int) -> str:
+    """The check line of a payer projected quarterly on assumption."""
+    return (f"assumed quarterly: {n} payment(s) in the books, none "
+            f"contradicts it (over-projected if it pays less often"
+            + (", or if its only payment was a special)" if n == 1
+               else ")"))
+
+
+def _on_schedule(sched: List[Payment], name: Optional[str],
+                 on_grid: Optional[str], flags: List[str]) -> Payment:
+    """The payment the forecast runs from: the latest ON the schedule.
+    A later one off it (a special paid last) is neither the next date's
+    base nor its amount, and `flags` names it (backlog TJ-0900)."""
+    latest = sched[-1]
+    if not (name and on_grid and on_grid < latest.pay_date):
+        return latest
+    base_pay = [p for p in sched if p.pay_date <= on_grid][-1]
+    off = [p.pay_date for p in sched if p.pay_date > on_grid]
+    flags.append(f"{len(off)} payment(s) off the {name} schedule "
+                 f"after {base_pay.pay_date} (a special?): "
+                 f"{', '.join(off)}, left out of the forecast")
+    return base_pay
+
+
 def ttm_per_share(sched: List[Payment], as_of: str) -> float:
     lo = _iso(date.fromisoformat(as_of) - timedelta(days=365))
     return sum(p.per_share for p in sched if lo < p.pay_date <= as_of)
@@ -839,16 +1095,15 @@ def estimate(positions: Iterable[Dict[str, Any]],
         latest = sched[-1]
         name, step, gap, on_grid = detect_schedule(
             [p.pay_date for p in sched])
-        # The forecast runs from the latest payment ON the schedule: a
-        # later one off it (a special paid last) is neither the next
-        # date's base nor its amount (backlog TJ-0900).
-        base_pay = latest
-        if name and on_grid and on_grid < latest.pay_date:
-            base_pay = [p for p in sched if p.pay_date <= on_grid][-1]
-            off = [p.pay_date for p in sched if p.pay_date > on_grid]
-            flags.append(f"{len(off)} payment(s) off the {name} schedule "
-                         f"after {base_pay.pay_date} (a special?): "
-                         f"{', '.join(off)}, left out of the forecast")
+        # Too short a history to settle a schedule: quarterly, shown as
+        # assumed, until the books contradict it (`why`: its check
+        # lines). `excused`: the dates since on which no payment was due.
+        assumed, excused, why = assumed_quarterly(sched, name, pays, sym,
+                                                  as_of)
+        flags += why
+        if assumed:
+            name, step, on_grid = ASSUMED, 3, latest.pay_date
+        base_pay = _on_schedule(sched, name, on_grid, flags)
         ttm = ttm_per_share(sched, as_of)
         rate = 1.0 if cur == base.upper() else fx(cur)
         # The withholding rate: this account's latest payment, every
@@ -903,7 +1158,7 @@ def estimate(positions: Iterable[Dict[str, Any]],
                 k += 1
                 if (date.fromisoformat(as_of)
                         - date.fromisoformat(d)).days > grace:
-                    missed += 1
+                    missed += d not in excused
                     continue
                 td = _projected_tax_date(base_pay, d, income_date)
                 projected.append({"pay_date": d, "tax_date": td,
@@ -941,6 +1196,7 @@ def estimate(positions: Iterable[Dict[str, Any]],
             "symbol": sym, "currency": cur, "shares": shares,
             "frequency": name or ("1 payment" if len(sched) < 2
                                   else "irregular"),
+            "frequency_assumed": assumed,
             "median_gap_days": gap, "payments": len(sched),
             "last_pay_date": latest.pay_date,
             "last_per_share": M.shown(latest.per_share, 6),
@@ -1003,6 +1259,46 @@ def _ps(v: float) -> str:
     return f"{M.shown(v, 4):,.4f}".rstrip("0").rstrip(".") if v else "0"
 
 
+def _assumed(r: Dict[str, Any]) -> bool:
+    return bool(r.get("frequency_assumed"))
+
+
+def _how(dating: str) -> List[str]:
+    """HOW IT IS ESTIMATED's lines; `dating`: the project's own dating
+    rule, in brackets."""
+    return [
+        "Frequency: the grid (weekly, monthly, quarterly, semi-annual, "
+        "annual) most of the last payments fall on, anchored at the "
+        "latest on it; a special or a stretch not held does not break "
+        "it.",
+        "Too few payments to tell (one to three, each on a quarterly date "
+        "counted back from the latest, the latest in the last 12 months): "
+        "quarterly, assumed (FREQ quarterly?), until the books contradict "
+        "it: a quarterly date passed with the shares held and no payment "
+        "of any kind in the books. A payer that pays less often, or a "
+        "special as the only payment, is over-projected until then.",
+        "No grid, and not assumed quarterly: pro rata from the 12-month "
+        "amount per share.",
+        "Each projected payment: the latest per-share amount x the shares "
+        "held now, at the books' latest rate, in the tax year of its pay "
+        f"date{dating}, as in divs-sum.",
+        "A payment more than a few days overdue is missing from the books; "
+        "two missing stop the projection. Planning numbers: a payer can "
+        "change a dividend at any time."]
+
+
+def next_last(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The rows in the order the text view lists them: by the next pay
+    date, the latest first, so the payment that comes next is the bottom
+    row; a row with no projected payment above them, by ticker. (`--json`
+    keeps the document's order, by ticker and account.)"""
+    undated = [r for r in rows if not r["next_pay_date"]]
+    dated = sorted((r for r in rows if r["next_pay_date"]),
+                   key=lambda r: (r["symbol"], r["account"]))
+    dated.sort(key=lambda r: r["next_pay_date"], reverse=True)
+    return undated + dated
+
+
 def render(doc: Dict[str, Any], details: bool = False,
            cmd: str = "tjs div-estimate", country: Optional[str] = None):
     """The text view (lib/out.Doc): a legend, one row per position,
@@ -1017,13 +1313,19 @@ def render(doc: Dict[str, Any], details: bool = False,
     d = out.Doc(f"DIVIDEND ESTIMATE — planning numbers, as of "
                 f"{doc['as_of_date']} ({base})")
     rows = doc["rows"]
+    shown = next_last(rows)
     if rows:
         d.para("Planning numbers, not filing: last per-share amount x "
-               "shares held, on the payer's own schedule.")
+               "shares held, on the payer's own schedule. By NEXT pay "
+               "date, the payment that comes next at the bottom."
+               + (" FREQ quarterly?: assumed, too few payments in the "
+                  "books to tell." if any(_assumed(r) for r in rows)
+                  else ""))
         body = []
-        for r in rows:
+        for r in shown:
             body.append([
-                r["symbol"], r["account"], r["frequency"],
+                r["symbol"], r["account"],
+                r["frequency"] + ("?" if _assumed(r) else ""),
                 f"{r['shares']:,.4f}".rstrip("0").rstrip("."),
                 f"{_ps(r['last_per_share'])} {r['currency']}",
                 r["next_pay_date"] or "-",
@@ -1085,7 +1387,7 @@ def render(doc: Dict[str, Any], details: bool = False,
         for a in acts:
             d.item(a[len(out.ACT):], bullet=out.ACT)
     d.section("SCHEDULES AND PROJECTED PAYMENTS")
-    for r in rows:
+    for r in shown:
         proj = "; ".join(
             f"{p['pay_date']}"
             + (f" (tax date {p['tax_date']})"
@@ -1093,7 +1395,8 @@ def render(doc: Dict[str, Any], details: bool = False,
             + f" {fmt_money(p['amount'])} {r['currency']}"
             for p in r["projected"]) or "none"
         gap = (f", typical gap {r['median_gap_days']:g} days"
-               if r["median_gap_days"] is not None else "")
+               if r["median_gap_days"] is not None and not _assumed(r)
+               else "")
         wh = (f"; withholding {r['withholding_rate'] * 100:.1f}% (the "
               f"latest payment in {r['account']})"
               if r["withholding_rate"] is not None else "")
@@ -1104,7 +1407,7 @@ def render(doc: Dict[str, Any], details: bool = False,
         d.item(f"{r['symbol']} ({r['account']}): {r['payments']} "
                f"payment(s)"
                + (f", {r['frequency']}" if r['frequency'] != "1 payment"
-                  else "")
+                  else "") + (" (assumed)" if _assumed(r) else "")
                + f"{gap}; last "
                f"{r['last_pay_date']} at {_ps(r['last_per_share'])} "
                f"{r['currency']}/share, 12-month {_ps(r['ttm_per_share'])}"
@@ -1128,17 +1431,5 @@ def render(doc: Dict[str, Any], details: bool = False,
     dating = {True: " (a fund in ric_january_dividends: its January "
                     "dividend in the year before)",
               False: " (a Canadian trust's: its record date)"}.get(_us, "")
-    d.items([
-        "Frequency: the grid (weekly, monthly, quarterly, semi-annual, "
-        "annual) most of the last payments fall on, anchored at the "
-        "latest on it; a special or a stretch not held does not break "
-        "it.",
-        "No grid, or a single payment: pro rata from the 12-month amount "
-        "per share.",
-        "Each projected payment: the latest per-share amount x the shares "
-        "held now, at the books' latest rate, in the tax year of its pay "
-        f"date{dating}, as in divs-sum.",
-        "A payment more than a few days overdue is missing from the books; "
-        "two missing stop the projection. Planning numbers: a payer can "
-        "change a dividend at any time."], "  ")
+    d.items(_how(dating), "  ")
     return d

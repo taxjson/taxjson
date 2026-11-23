@@ -243,6 +243,8 @@ class TestHelpersTakeEitherShape(unittest.TestCase):
             ctx = Ctx(root=Path(td), cfg={}, year=2025, today=None, run_sub=None)
             self.assertFalse(has_books(ctx))
             (cache / "m_base.json").write_text("{}")
+            # A book is a named account's (lib/clean holds_books).
+            (Path(td) / "taxjson.toml").write_text("[accounts.m]\n")
             self.assertTrue(has_books(ctx))
 
     def test_configured_accounts_leaves_an_entry_that_is_no_table_out(self):

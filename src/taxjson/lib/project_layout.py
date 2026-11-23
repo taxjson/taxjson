@@ -45,6 +45,7 @@ import collections.abc as _cabc
 import datetime as _dt
 import os
 import re
+import stat
 from pathlib import Path
 from typing import (Any, Dict, List, NamedTuple, Optional, Sequence,
                     Tuple, Union)
@@ -415,6 +416,35 @@ def exports_folder(root) -> Optional[Path]:
     """Where the newest year's run writes files for other tools
     (`exports_dir`), or None."""
     return _folder(root, EXPORTS_KEY, None)
+
+
+# The record of the files the last export into exports_dir wrote
+# (pipeline/run `_write_exports`; `tjs clean` removes only those).
+EXPORTS_MANIFEST = ".taxjson-exports.json"
+
+
+def exports_record(dst) -> Optional[Tuple[Optional[int], List[str]]]:
+    """(the year whose run wrote it, the plain file names it recorded
+    writing) of the export in the folder `dst`; None without a readable
+    record (none there, not a regular file, not JSON). A name with a path
+    in it, or a dot name, is never one."""
+    import json
+    rec = Path(dst) / EXPORTS_MANIFEST
+    try:
+        if not stat.S_ISREG(os.lstat(rec).st_mode):
+            return None
+        doc = json.loads(rec.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    files = doc.get("files")
+    year = doc.get("year")
+    return (year if isinstance(year, int) and not isinstance(year, bool)
+            else None,
+            [f for f in (files if isinstance(files, list) else [])
+             if isinstance(f, str) and f and f == Path(f).name
+             and f not in (".", "..") and not f.startswith(".")])
 
 
 def tobase_setting(root, settings: Any = None

@@ -317,6 +317,7 @@ SETTING_COUNTRY: Dict[str, str] = {
     # (Canada's registered plans, the US IRA-type accounts alike:
     # CA-CORP-11 / US-CORP-12).
     "sheltered_elections": BOTH,
+    "benchmark": BOTH,              # `tjs technicals`' beta and alpha (no tax effect)
     "province": CANADA,
     "option_premium_timing": CANADA,
     "option_grant_timing_since": CANADA,

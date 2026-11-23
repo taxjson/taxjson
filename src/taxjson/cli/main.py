@@ -583,7 +583,10 @@ _YEARS_ROOT_CMDS = frozenset({
     "init", "help", "tax-logic", "redact", "years", "new-year",
     # What the years share: the per-year tobase.map copies made one file
     # (migrate), that file brought in step with the master.
-    "migrate", "update-tobase-map"}) | frozenset(_RELEASE_CMDS)
+    "migrate", "update-tobase-map",
+    # Every year's generated files removed (lib/clean; it refuses a folder
+    # that is no project itself).
+    "clean"}) | frozenset(_RELEASE_CMDS)
 
 
 # The commands (and the flags that make them write) that save a decision
@@ -726,6 +729,7 @@ _RUN_STATE_BANNER_CMDS = frozenset({
     "events", "wash-radar", "sell-check", "buy-check", "rebuy",
     "div-estimate", "harvest", "watch", "edge-cases", "option-boundary", "spinoffs", "splits",
     "check-dates", "stats", "option-yield", "win-rates", "compare",
+    "technicals",
     # The step-5 detectors read the books too (backlog TJ-0077).
     "find-missing-history", "sanity", "transfers",
     # The review commands over the saved books: audit's tie-out passed

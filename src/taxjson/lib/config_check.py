@@ -418,6 +418,15 @@ def settings_problems(cfg: Dict[str, Any]) -> List[str]:
                                and 1 <= lm <= 120):
         out.append(f"[settings] leaps_months must be a whole number of "
                    f"months such as 9, unquoted (got {lm!r})")
+    # `tjs technicals`' benchmark: one symbol, as the books spell it.
+    bm = table.get("benchmark")
+    if bm is not None:
+        if not isinstance(bm, str) or not bm.strip() or any(
+                c.isspace() for c in bm.strip()):
+            out.append(f"[settings] benchmark must be one symbol in quotes "
+                       f"such as \"XYZQ.TO\" (got {bm!r})")
+        else:
+            table["benchmark"] = bm.strip()
     tz = table.get("local_timezone")
     if tz is not None:
         from taxjson.lib.timezones import utc_to_local

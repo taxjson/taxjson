@@ -341,7 +341,17 @@ def _ca_tl_after(run: _CanadaRun, it: _CanadaIteration, seq: int, prev: TaxTrans
     it._tl.touch(seq, _ca_touched(prev, it._jlegs), _ren)
     if it._msr.short:
         assert it._tl_shorts is not None, "set with _tl (_ca_solve)"
-        it._tl_shorts.sweep(seq, [(_a, _s) for (_s, _a) in it._msr.short])
+        # The shorts that are open, in the table's order. A key at 0 units
+        # (a covered short stays in the table) has no state, so its check
+        # records nothing unless the recorder's last state of it is not the
+        # flat one: one it still holds is in the sweep's own labels, and
+        # one it does not is in `loose` (backlog TJ-4977).
+        # `steady`: a short's state (_ca_short_state) reads the pools, the
+        # router's table and its lots, none of which a check writes.
+        _loose = it._tl_shorts.loose()
+        it._tl_shorts.sweep(seq, [(_a, _s) for (_s, _a), _u in it._msr.short.items()
+                                  if _u > 0 or (_loose and (_a, _s) in _loose)],
+                            steady=True)
 
 
 # The Canadian engine's helpers that read nothing of its frame, as module

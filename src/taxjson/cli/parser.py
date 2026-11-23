@@ -5,7 +5,7 @@ from typing import Any, Optional, Tuple
 from taxjson.cli import (
     books, elect, estimate, explain, file, listings,
     maintainer, maps, migrate, plan, positions, setup,
-    slips, summaries, tips, tools, totals,
+    slips, summaries, technicals, tips, tools, totals, unclose,
 )
 
 
@@ -34,12 +34,13 @@ _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Set up", ("checklist", "init", "years", "new-year", "align",
                 "format", "format-map", "migrate", "fetch", "elect",
                 "ticker-map", "update-tobase-map")),
-    ("Build the books", ("run", "compare", "snapshot", "crypto-sends",
-                         "find-missing-history", "opening")),
+    ("Build the books", ("run", "compare", "snapshot", "clean",
+                         "crypto-sends", "find-missing-history",
+                         "opening")),
     ("Summaries", ("amt", "div-estimate", "estimate", "fx-cash",
                    "instalments", "option-yield", "plot-tax", "stats",
                    "sum", "win-rates")),
-    ("Positions", ("list", "shares")),
+    ("Positions", ("list", "shares", "technicals")),
     ("Row listings", ("cash", "dil", "divs", "events", "fees", "gains",
                       "leaps", "roc", "staking", "trades", "transfers")),
     ("Totals by type", ("ccd-sum", "dil-sum", "divs-sum", "fees-sum",
@@ -50,7 +51,8 @@ _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Before you file", ("form-export", "t1135",
                          "reconcile-slips", "slip-audit", "carryover",
                          "option-boundary",
-                         "close-year", "check-filed", "handoff")),
+                         "close-year", "unclose-year", "check-filed",
+                         "handoff")),
     ("Explain and check", ("audit", "wash-sales", "tax-logic", "edge-cases",
                            "check-dates", "check-tt", "sanity", "journals",
                            "renames", "spinoffs", "splits")),
@@ -163,7 +165,7 @@ class _GroupedHelpParser(argparse.ArgumentParser):
 # The groups, in help-page order: an unknown command's error lists the
 # names in this order.
 _GROUPS = (setup, maps, migrate, elect, books, summaries, estimate,
-           positions, listings, totals, tips, plan, file, slips, explain,
+           positions, technicals, listings, totals, tips, plan, file, unclose, slips, explain,
            maintainer, tools)
 
 
@@ -247,9 +249,10 @@ _DETAILS_CMDS = frozenset({
     "carryover", "t1135", "fx-cash", "form-export", "reconcile-slips",
     "slip-audit", "wash-sales", "wash-radar", "sell-check", "buy-check",
     "rebuy", "div-estimate", "harvest", "tips", "sanity", "audit", "list",
-    "check-dates", "compare",
+    "check-dates", "compare", "clean",
     "edge-cases", "find-missing-history", "ticker-map",
-    "update-tobase-map", "years", "close-year", "check-filed", "handoff",
+    "update-tobase-map", "years", "close-year", "unclose-year", "check-filed", "handoff",
     "redact", "migrate", "new-year", "init", "elect", "journals",
     "renames", "opening", "transfers", "format", "crypto-sends", "stats",
-    "fees-sum", "option-boundary", "spinoffs", "splits", "staking", "staking-sum"})
+    "fees-sum", "option-boundary", "spinoffs", "splits", "staking", "staking-sum",
+    "technicals"})

@@ -455,8 +455,10 @@ def cmd_div_estimate(args: argparse.Namespace) -> None:
     if account and account not in accounts_cfg:
         _die_input(f"no [accounts.{account}] in taxjson.toml",
                    "Check the name.")
-    if not cache.is_dir():
-        _die("no work/ — run `tjs run` first.")
+    from taxjson.lib.clean import no_books
+    missing = no_books(cache)
+    if missing:
+        _die(f"{missing} — run `tjs run` first.")
     groups = _account_group_of(root)
     rows: List[Tuple[str, Dict[str, Any]]] = []
     positions: List[Dict[str, Any]] = []
@@ -2641,7 +2643,9 @@ def _register_div_estimate(sub: argparse._SubParsersAction) -> None:
         description="Estimate upcoming dividends from each held "
              "position's own dividend history in the books: its "
              "payment frequency (monthly, quarterly, semi-annual or "
-             "annual; irregular payers flagged), latest and 12-month "
+             "annual; irregular payers flagged; quarterly, shown as "
+             "assumed, for a payer with too few payments to tell), "
+             "latest and 12-month "
              "amount per share, the shares held now and the next pay "
              "date and amount; totals for the rest of the tax year and "
              "the next N months, taxable and sheltered, in the base "

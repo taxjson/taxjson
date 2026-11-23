@@ -205,12 +205,7 @@ def listed_files(root: Path, accounts_cfg: Dict[str, Any]) -> set:
     the project)."""
     out = set()
     for a in typed_accounts(accounts_cfg).values():
-        raw = a.holdings
-        if isinstance(raw, str):
-            raw = [raw]
-        if not isinstance(raw, (list, tuple)):
-            continue
-        for x in raw:
+        for x in a.holdings_paths or []:
             if not isinstance(x, str) or not x.strip():
                 continue
             pp = Path(x).expanduser()

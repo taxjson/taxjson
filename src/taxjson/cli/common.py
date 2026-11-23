@@ -1882,13 +1882,15 @@ def _run_state_problems(root: Path, cfg: Dict[str, Any]) -> List[str]:
     if res.status == "blocked":
         # No .sum yet: nothing to judge — unless a run aborted after
         # writing work/ (a first run that died at a later stage). Those
-        # partial books are what sum / t1135 / list read (A2-0658).
+        # partial books are what sum / t1135 / list read (A2-0658). A
+        # `tjs clean` stopped part-way leaves these too: it removes the
+        # .sum files first and these books last (lib/clean PARTIAL_BOOKS).
+        from taxjson.lib.clean import PARTIAL_BOOKS
         cache = root / "work"
         try:
             partial = any(
                 not p.name.startswith(".")
-                for pat in ("*_gains.json", "*_gains_wash.json",
-                            "*_base.json")
+                for pat in PARTIAL_BOOKS
                 for p in cache.glob(pat))
         except OSError:
             partial = False

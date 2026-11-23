@@ -1648,9 +1648,10 @@ def _lock_folder_problem(root: Path) -> Optional[str]:
     return None
 
 
-def _config_rewrite_target(root: Path, nothing: str) -> Path:
+def _config_rewrite_target(root: Path, nothing: str, then: str = "close") -> Path:
     """The file close-year writes to rewrite taxjson.toml (its freeze
-    and thaw), checked before anything is written, as every editor of a
+    and thaw; unclose-year's too, `then` "reopen"), checked before
+    anything is written, as every editor of a
     user file checks it (lib/safe_write.write_user_file; backlog
     TJ-0918): a link inside the project is followed (the link stays,
     its target is written), a link leaving it is refused, and so is a
@@ -1663,7 +1664,7 @@ def _config_rewrite_target(root: Path, nothing: str) -> Path:
     if tgt is not None:
         _die_input(f"{_config_shown(cfg_path)} is a symlink to {tgt}, "
                    f"outside the project — never written through: "
-                   f"replace the link with a copy, then close", nothing)
+                   f"replace the link with a copy, then {then}", nothing)
     real = cfg_path.resolve() if cfg_path.is_symlink() else cfg_path
     try:
         refuse_read_only(real)

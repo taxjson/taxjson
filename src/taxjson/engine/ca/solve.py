@@ -99,6 +99,18 @@ def _place_wash_adjusts(stream: List[TaxTransaction],
     return out
 
 
+def _trace_dated(lines: List[str]) -> List[Tuple[str, str]]:
+    """(date, line) of each trace line that carries a date, in the trace's
+    order (example line: `# margin | NOTE | 2024-12-19 ...`): read once for
+    all the denied losses' trace windows (backlog TJ-4982)."""
+    out = []
+    for line in lines:
+        match = re.search(r'\|\s+(\d{4}-\d{2}-\d{2})', line)
+        if match:
+            out.append((match.group(1), line))
+    return out
+
+
 def _wash_after(wash_place: Mapping[RowId, WashPlace], t: TaxTransaction) -> Optional[RowId]:
     """The row an addition (a virtual ADJUST) is placed after; None: it has
     no placement (any other row)."""
@@ -327,6 +339,7 @@ def _ca_solve(*, run: _CanadaRun) -> _CanadaBooks:
                             entry['acb_per_share_after'] = _ZERO
             books.final_wash_sales = []
             _adj_idx = _WashAdjustIndex(run.final_virtual_txs)
+            _dated: Optional[List[Tuple[str, str]]] = None
             for v in run.final_virtual_txs:
                 if v.action == 'DISALLOW':
                     # ALL of this loss's ADJUST vtxs (a multi-trigger
@@ -360,15 +373,14 @@ def _ca_solve(*, run: _CanadaRun) -> _CanadaBooks:
                             wash_trace.append(f"# --- (D-30 Window Start: {window_start}) ---")
                             # Since symbol_acb_traces[v.symbol] gets reset to just the last segment when pool reaches 0,
                             # we need to trace over iteration_trace to get the full chronological context.
-                            for line in iteration_trace:
-                                # Example line: # margin | NOTE | 2024-12-19 ...
-                                match = re.search(r'\|\s+(\d{4}-\d{2}-\d{2})', line)
-                                if match:
-                                    line_date = match.group(1)
-                                    # Also ensure the symbol matches
-                                    if f"| {v.symbol}" in line:
-                                        if window_start <= line_date <= window_end:
-                                            wash_trace.append(line)
+                            if _dated is None:
+                                # (once: no line is added to the trace in this loop)
+                                _dated = _trace_dated(iteration_trace)
+                            for line_date, line in _dated:
+                                # Also ensure the symbol matches
+                                if f"| {v.symbol}" in line:
+                                    if window_start <= line_date <= window_end:
+                                        wash_trace.append(line)
                             wash_trace.append(f"# --- (D+30 Window End: {window_end}) ---")
                             wash_trace.append("# ")
                         except (ValueError, TypeError) as e:

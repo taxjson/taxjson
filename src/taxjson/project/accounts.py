@@ -50,6 +50,23 @@ class AccountSettings(TypedTable):
     def sheltered(self) -> bool:
         return self.type == "sheltered"
 
+    @property
+    def holdings_paths(self) -> Optional[List[Any]]:
+        """What `holdings` names, as a list: one path (a string) is a
+        one-item list, unset or empty []; None when it is neither a string
+        nor a list (`tjs sanity` says it is not checked). The one reading
+        of the setting: pipeline/sanity, lib/holdings_dir `listed_files`,
+        lib/ticker_map_suggest and lib/clean (whose refusal of a holdings
+        file in work/ or reports/ must see what sanity reads) ask it."""
+        raw = self.holdings
+        if not raw:
+            return []
+        if isinstance(raw, str):
+            return [raw]
+        if isinstance(raw, (list, tuple)):
+            return list(raw)
+        return None
+
 
 @dataclass(frozen=True, eq=False)
 class EstimateSettings(TypedTable):

@@ -1,4 +1,5 @@
-"""The Positions commands: list, shares."""
+"""The Positions commands: list, shares (and the inventory sum
+`tjs technicals` reads)."""
 import collections.abc as _cabc
 import argparse
 import sys
@@ -28,6 +29,49 @@ from taxjson.pipeline.stages import (
 )
 
 
+def held_by_symbol(files: Dict[str, Path], *, options: bool,
+                   futures: bool = False
+                   ) -> Tuple[Dict[str, Dict[str, Any]], Any]:
+    """The books' end-of-data inventory (each account's gains file in
+    `files`, after ticker.map), summed per symbol: ({symbol: {"qty", "cost",
+    "accounts": {account: qty}, "unknown_cost"}}, the books' year). Option
+    contracts only with `options`; futures contracts only with `futures`
+    (futures options follow `options`). A symbol whose total nets to zero
+    is still in it: the caller drops it (`tjs shares`, `tjs technicals`)."""
+    from taxjson.lib.option_symbols import is_option_symbol
+    from taxjson.lib.ticker_map import is_future_ticker
+    by_sym: Dict[str, Dict[str, Any]] = {}
+    year = None
+    for acct, f in files.items():
+        data = _load_json_or_die(f)
+        year = year or (data.get("summary") or {}).get("year")
+        for h in (data.get("inventory") or []):
+            sym = str(h.get("symbol") or "")
+            v = Holding(h)
+            qty = float(v.quantity or 0)
+            if not sym or abs(qty) < 1e-12:
+                continue
+            if not options and is_option_symbol(sym):
+                continue
+            if (not futures and is_future_ticker(sym)
+                    and not is_option_symbol(sym)):
+                # A futures contract is not a share: it was listed as
+                # "1 share" with its notional as book cost (S044-04).
+                # (Futures options follow --options.)
+                continue
+            e = by_sym.setdefault(sym, {"qty": 0.0, "cost": 0.0,
+                                        "accounts": {},
+                                        "unknown_cost": False})
+            e["qty"] += qty
+            e["cost"] += float(v.total_cost or 0)
+            e["accounts"][acct] = e["accounts"].get(acct, 0.0) + qty
+            # Units held before the data (an opening cost=unknown): the
+            # cost is the known part only (backlog TJ-0774).
+            e["unknown_cost"] = e["unknown_cost"] or bool(
+                h.get("unknown_cost"))
+    return by_sym, year
+
+
 def cmd_shares(args: argparse.Namespace) -> None:
     """`tjs shares [--options] [--taxable|--sheltered] [--json]`: the
     COMBINED quantity held of each symbol across all accounts — the
@@ -35,10 +79,8 @@ def cmd_shares(args: argparse.Namespace) -> None:
     where built), summed per symbol with a per-account breakdown. Shorts
     net against longs (the breakdown shows them). Option contracts are
     left out unless --options; positions netting to zero are dropped."""
-    from taxjson.lib.option_symbols import is_option_symbol
     from taxjson.lib.report_model import gains_basis_label, resolve_gains_files
     from taxjson.lib.report_fmt import fmt_qty as qfmt
-    from taxjson.lib.ticker_map import is_future_ticker
     root = Path(args.dir).resolve()
     cache = root / "work"
     files = resolve_gains_files(cache)
@@ -60,34 +102,8 @@ def cmd_shares(args: argparse.Namespace) -> None:
             _die(f"no {want} account with books in work/",
                  "Accounts and their types come from taxjson.toml; run "
                  "`tjs run` first.")
-    by_sym: Dict[str, Dict[str, Any]] = {}
-    year = None
-    for acct, f in files.items():
-        data = _load_json_or_die(f)
-        year = year or (data.get("summary") or {}).get("year")
-        for h in (data.get("inventory") or []):
-            sym = str(h.get("symbol") or "")
-            v = Holding(h)
-            qty = float(v.quantity or 0)
-            if not sym or abs(qty) < 1e-12:
-                continue
-            if not getattr(args, "options", False) and is_option_symbol(sym):
-                continue
-            if is_future_ticker(sym) and not is_option_symbol(sym):
-                # A futures contract is not a share: it was listed as
-                # "1 share" with its notional as book cost (S044-04).
-                # (Futures options follow --options.)
-                continue
-            e = by_sym.setdefault(sym, {"qty": 0.0, "cost": 0.0,
-                                        "accounts": {},
-                                        "unknown_cost": False})
-            e["qty"] += qty
-            e["cost"] += float(v.total_cost or 0)
-            e["accounts"][acct] = e["accounts"].get(acct, 0.0) + qty
-            # Units held before the data (an opening cost=unknown): the
-            # cost is the known part only (backlog TJ-0774).
-            e["unknown_cost"] = e["unknown_cost"] or bool(
-                h.get("unknown_cost"))
+    by_sym, year = held_by_symbol(
+        files, options=bool(getattr(args, "options", False)))
     rows = [(sym, e) for sym, e in by_sym.items()
             if abs(e["qty"]) > 1e-9]
     if getattr(args, "sort", "symbol") == "qty":

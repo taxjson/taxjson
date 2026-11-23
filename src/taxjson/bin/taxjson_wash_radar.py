@@ -1260,8 +1260,27 @@ class _Radar:
     def _booked(self, t):
         return date_to_epoch(self._trade_day(t)) <= self.today_epoch
 
+    # (the timeline the memo below was filled from, {(sym, date, before): class})
+    _alias_memo: tuple = (None, {})
+
     def alias_of(self, sym, date=None, before=False):
-        return self._split_tl.class_at(sym, date, before=before)
+        # One answer per (symbol, date, before) for this radar's timeline
+        # (the per-loss tests ask the same ones millions of times: backlog
+        # TJ-4980). The timeline's renames are complete when it is built
+        # (from_transactions) and class_at reads nothing else; anything
+        # but plain strings and a bool is asked as before.
+        tl = self._split_tl
+        if (type(sym) is not str or type(before) is not bool
+                or not (date is None or type(date) is str)):
+            return tl.class_at(sym, date, before=before)
+        memo = self._alias_memo
+        if memo[0] is not tl or len(memo[1]) > 200_000:
+            memo = self._alias_memo = (tl, {})
+        key = (sym, date, before)
+        cls = memo[1].get(key)
+        if cls is None:
+            cls = memo[1][key] = tl.class_at(sym, date, before=before)
+        return cls
 
     def _f_end(self, sym, d, inclusive=False):
         # Units of `sym` at date `d` -> units after every later split

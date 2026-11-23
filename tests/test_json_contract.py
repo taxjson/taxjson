@@ -67,12 +67,16 @@ UNHELD = {
     "sell-check": ("answers for today (no --date)",
                    "tests/features/planning/test_buy_check_and_sell_check_of_an_option_level_alias.py"),
     "harvest": ("today's radar and prices", "tests/test_harvest.py"),
+    "technicals": ("Yahoo Finance's daily closes, or a history cache no golden book holds",
+                   "tests/features/totals/test_technicals_command.py"),
     "tax-logic": ("the spec itself, hundreds of KB a country, moved by every rule's edit",
                   "tests/test_tax_logic.py"),
     "slip-audit --import-cra": ("needs pdftotext (poppler-utils), a program taxjson does not ship",
                                 "tests/test_slip_audit_cra.py"),
     "taxjson-audit": ("the per-account document `tjs audit` merges into its own (held there)",
                       "tests/test_audit_command.py"),
+    "clean": ("removes the files a golden book compares, and names the project's folders",
+              "tests/features/run/test_clean_removes_what_a_run_wrote.py"),
 }
 
 # The json.dump / json.dumps calls in src/taxjson/cli/ and bin/ that write
@@ -82,6 +86,7 @@ NOT_JSON_OUTPUT = {
     ("src/taxjson/cli/file.py", "cmd_t1135"): "the cash events handed to taxjson-t1135, in a temp file",
     ("src/taxjson/cli/file.py", "_thaw_partial_freeze"): "a close-year lock, filed/<year>.json",
     ("src/taxjson/cli/migrate.py", "_record_migrate_edits"): "a close-year lock, filed/<year>.json",
+    ("src/taxjson/cli/unclose.py", "_apply"): "the record of a reopening, unclosed.json in the backup folder",
     ("src/taxjson/bin/fill_crypto_prices.py", "_fill"): "a stage's book on stdout (the run writes it to work/)",
     ("src/taxjson/bin/taxjson_apply_distributions.py", "main"): "the books file it rewrites",
     ("src/taxjson/bin/taxjson_brokerage.py", "_dedup_evidence"): "a row's identity key, never written",

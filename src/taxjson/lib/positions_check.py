@@ -280,10 +280,32 @@ def _ordered(rows, *, clock: bool = False):
                                        str(r.get("time") or "")))
 
 
+class _BookOrder:
+    """The books' order (_ordered) of a rows list, sorted once for the
+    calls of one check that read the same list unchanged
+    (income_share_mismatches asks a position on up to a hundred days of
+    one account's rows, twice a day: backlog TJ-4981). By the list
+    itself, which it keeps, so another list is sorted on its own."""
+
+    def __init__(self) -> None:
+        self._kept: Dict[Tuple[int, bool], Tuple[Any, List[Dict[str, Any]]]] = {}
+
+    def of(self, rows: Any, clock: bool) -> Optional[List[Dict[str, Any]]]:
+        """`rows` in the books' order; None for anything but a list
+        (the caller sorts it itself)."""
+        if type(rows) is not list:
+            return None
+        hit = self._kept.get((id(rows), clock))
+        if hit is None or hit[0] is not rows:
+            hit = self._kept[(id(rows), clock)] = (rows, _ordered(rows, clock=clock))
+        return hit[1]
+
+
 def positions_on(rows: Iterable[Dict[str, Any]], day: str, *,
                  settled: bool = False,
                  before: bool = False,
-                 clock: bool = False) -> Dict[str, float]:
+                 clock: bool = False,
+                 in_order: Optional[List[Dict[str, Any]]] = None) -> Dict[str, float]:
     """{symbol: quantity} after every row traded on or before `day`
     (`before`: strictly before it; `settled`: by settlement date — the
     holder of record). Splits scale the symbol's shares; a rename moves
@@ -291,12 +313,13 @@ def positions_on(rows: Iterable[Dict[str, Any]], day: str, *,
     or two sources' copies, nearby dates) applies once: the position
     is keyed by symbol, so the event is too (split_copies,
     CA-CORP-12). Rows are taken in the books' order (_ordered; `clock`:
-    the US engine's)."""
+    the US engine's; `in_order`: these rows already in that order,
+    _BookOrder)."""
     from taxjson.lib.corporate_timeline import split_copies
     rows = list(rows)
     dup = split_copies(rows)
     pos: Dict[str, float] = {}
-    for r in _ordered(rows, clock=clock):
+    for r in (_ordered(rows, clock=clock) if in_order is None else in_order):
         d = str((r.get("date_settle") if settled else None)
                 or r.get("date") or "")
         if (d >= day) if before else (d > day):
@@ -443,7 +466,7 @@ def _record_date_of(r: Dict[str, Any]) -> str:
 
 def held_as(rows: Iterable[Dict[str, Any]], sym: str, day: str, *,
             settled: bool = False, before: bool = False,
-            clock: bool = False) -> float:
+            clock: bool = False, order: Optional[_BookOrder] = None) -> float:
     """The units the books held on `day` of the security `sym` names
     now: its own position plus the units a later ticker change (a
     rename SPLIT row into `sym` — a broker's corporate action, a dated
@@ -460,15 +483,20 @@ def held_as(rows: Iterable[Dict[str, Any]], sym: str, day: str, *,
     (a reused ticker: OLD -> NEW, then a new OLD -> OTHER) carries only
     the shares bought under the reused ticker, never the ones that left
     with the earlier rename (audit finding 61). `clock`: the US
-    engine's order of a day's rows (_ordered; backlog TJ-1094)."""
+    engine's order of a day's rows (_ordered; backlog TJ-1094). `order`:
+    a caller's _BookOrder, when it asks again of the same unchanged
+    list."""
+    ordered = order.of(rows, clock) if order is not None else None
     rows = list(rows)
+    if ordered is None:
+        ordered = _ordered(rows, clock=clock)
     pos = positions_on(rows, day, settled=settled, before=before,
-                       clock=clock)
+                       clock=clock, in_order=ordered)
     # Each held symbol's shares on `day`: where they are now, and the
     # ratio applied on the way.
     lots = {s: (s, 1.0) for s in pos if s != sym}
     total = pos.get(sym, 0.0)
-    for r in _ordered(rows, clock=clock):
+    for r in ordered:
         if not lots:
             break
         if r.get("action") != "SPLIT":
@@ -519,7 +547,7 @@ def last_entitled_trade_day(record: str, currency: str) -> Optional[str]:
 
 
 def _max_held(rows, sym: str, pay: str, days: int, *,
-              clock: bool = False) -> Optional[float]:
+              clock: bool = False, order: Optional[_BookOrder] = None) -> Optional[float]:
     """The most shares of `sym` the rows held at the end of any day of
     the `days` before `pay` (pay day included); None for a bad date."""
     from datetime import datetime, timedelta
@@ -530,7 +558,7 @@ def _max_held(rows, sym: str, pay: str, days: int, *,
     best = 0.0
     for k in range(days + 1):
         day = (d0 - timedelta(days=k)).strftime("%Y-%m-%d")
-        best = max(best, held_as(rows, sym, day, clock=clock))
+        best = max(best, held_as(rows, sym, day, clock=clock, order=order))
     return best
 
 
@@ -556,6 +584,10 @@ def income_share_mismatches(rows: List[Dict[str, Any]], account: str,
     may hold two brokers' accounts (a count the whole account held is
     accepted too)."""
     out: List[Dict[str, Any]] = []
+    # Nothing below writes a row or a list of them: each list is put in
+    # the books' order once (TJ-4981).
+    order = _BookOrder()
+    mine_of: Dict[str, List[Dict[str, Any]]] = {}
     for r in rows:
         if r.get("action") not in ("DIVIDEND", "DIVIDEND_IN_LIEU"):
             continue
@@ -570,7 +602,10 @@ def income_share_mismatches(rows: List[Dict[str, Any]], account: str,
             continue
         sym = str(r.get("symbol") or "")
         src = str(r.get("source_account") or "")
-        mine = [t for t in rows
+        mine = mine_of.get(src)
+        if mine is None:
+            mine = mine_of[src] = [
+                t for t in rows
                 if not src or not t.get("source_account")
                 or t.get("source_account") == src]
         rec = _record_date_of(r)
@@ -590,14 +625,14 @@ def income_share_mismatches(rows: List[Dict[str, Any]], account: str,
                 # traded by the eve of the ex-date on the market's own
                 # calendar (a broker's settle date can follow another
                 # market's holiday), whichever is more.
-                h = held_as(book, sym, rec, settled=True, clock=clock)
+                h = held_as(book, sym, rec, settled=True, clock=clock, order=order)
                 eve = last_entitled_trade_day(rec, cur)
                 if eve:
-                    h = max(h, held_as(book, sym, eve, clock=clock))
+                    h = max(h, held_as(book, sym, eve, clock=clock, order=order))
                 return h
             if exd:
-                return held_as(book, sym, exd, before=True, clock=clock)
-            return _max_held(book, sym, pay, INCOME_WINDOW_DAYS, clock=clock)
+                return held_as(book, sym, exd, before=True, clock=clock, order=order)
+            return _max_held(book, sym, pay, INCOME_WINDOW_DAYS, clock=clock, order=order)
         held = _held(mine)
         if held is None:
             continue

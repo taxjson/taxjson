@@ -8,6 +8,7 @@ ticker.map, is lib/contract_size's."""
 
 from __future__ import annotations
 
+import functools
 import re
 from datetime import datetime
 from typing import Any, Optional
@@ -47,7 +48,20 @@ def _occ_match(symbol: Any) -> Optional[re.Match[str]]:
     as no option; backlog TJ-4601): an ASCII symbol is matched upper-cased,
     so a lower-case one reads as the same contract."""
     s = str(symbol or '')
+    # One match per spelling (the walk, the router and the radar read the
+    # same symbols millions of times a run: backlog TJ-4979). A match is
+    # immutable and reads nothing but its string; a `str` subclass's own
+    # hash or equality stays out of the cache.
+    return _occ_match_text(s) if type(s) is str else _occ_match_uncached(s)
+
+
+def _occ_match_uncached(s: str) -> Optional[re.Match[str]]:
     return _OCC_OPTION_RE.match(s.upper() if s.isascii() else s)
+
+
+@functools.lru_cache(maxsize=16384)
+def _occ_match_text(s: str) -> Optional[re.Match[str]]:
+    return _occ_match_uncached(s)
 
 
 def parse_option_underlying(symbol: str) -> Optional[str]:
@@ -82,7 +96,12 @@ def parse_option_expiry(symbol: str) -> Optional[str]:
     m = _occ_match(symbol)
     if not m:
         return None
-    yymmdd = m.group(2)[:6]
+    return _expiry_iso(m.group(2)[:6])
+
+
+@functools.lru_cache(maxsize=16384)
+def _expiry_iso(yymmdd: str) -> Optional[str]:
+    """The ISO date of an OCC block's six digits (None: no such date)."""
     try:
         return datetime.strptime(yymmdd, '%y%m%d').strftime('%Y-%m-%d')
     except ValueError:

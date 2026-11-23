@@ -23,3 +23,12 @@ def _est(rows, positions, as_of="2026-07-01", months=12, year=2026,
 
 def _pos(sym, qty, acct="margin", group="taxable"):
     return {"account": acct, "group": group, "symbol": sym, "qty": qty}
+
+
+def _trade(d, sym, qty, acct="margin", cur="CAD", **kw):
+    """A buy (qty > 0) or a sale (qty < 0) of `sym` on `d`: what tells the
+    estimate the shares were held on a past date."""
+    r = {"action": "BUYSELL", "date": d, "symbol": sym, "quantity": qty,
+         "currency": cur, "account": acct}
+    r.update(kw)
+    return (acct, r)

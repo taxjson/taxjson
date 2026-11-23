@@ -31,7 +31,10 @@ def _project(td: str, other_rows=None, holdings=None) -> Path:
     (work / "margin_rbc_direct.json.diag").write_text(err)
     if other_rows is not None:
         _book(work, "tfsa_ib.json", other_rows)
-    cfg = '[settings]\nyear = 2025\ncountry = "canada"\n'
+    # The account whose parse work/ holds: a book is an account's
+    # (lib/clean holds_books).
+    cfg = ('[settings]\nyear = 2025\ncountry = "canada"\n\n'
+           '[accounts.margin]\ntype = "taxable"\n')
     if holdings:
         (root / "h.toml").write_text(holdings)
         cfg += '\n[accounts.tfsa]\nholdings = ["h.toml"]\n'

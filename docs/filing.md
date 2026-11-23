@@ -8,7 +8,8 @@ and carryover differ, and the Canada-only commands (`tjs t1135`,
 Each step names the command that proves it; a step is done when the
 command is clean, not when it has been run. Amending a filed year
 (T1-ADJ) is the same list from step 2 with `close-year --force` at the
-end.
+end; a year closed by mistake is reopened with `tjs unclose-year`
+([After assessment](#6-after-assessment)).
 
 `tjs checklist --run` is this list as a command, inside the whole
 workflow from install to year end (its sections put these steps where
@@ -262,6 +263,19 @@ Canada; a US return: [A US return](#a-us-return).
       (`tjs run` there, a T1-ADJ, then `tjs close-year --force`
       there). `tjs check-filed`
       also catches a taxjson upgrade that moves a filed year.
+- [ ] A year closed by mistake (before it was filed, or from the wrong
+      books): `tjs unclose-year` in its folder takes the close back
+      (`--dry-run` shows what would change). The lock and the reports as
+      filed move into `filed/<year>.unclosed-<date>-<time>/`,
+      `taxjson.toml` reads the shared `inputs/` and `tobase.map` again,
+      and a frozen copy that differs from the shared file is kept in
+      that backup, never deleted: the year is then computed from the
+      shared inputs, and the output says when they are not what it was
+      filed from. It is refused while a later year is closed (reopen the
+      newest first). It is not the way to amend a return that was
+      filed: an amendment keeps the year closed (the steps above, ending
+      in `tjs close-year --force`), so the lock stays the record of what
+      the CRA has.
 
 ## A US return
 

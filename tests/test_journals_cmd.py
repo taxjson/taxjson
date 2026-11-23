@@ -464,6 +464,9 @@ def _renames_project(td, tmap="", tt=""):
     (root / "work").mkdir(parents=True, exist_ok=True)
     (root / "taxjson.toml").write_text(_TOML)
     (root / "ticker.map").write_text(tmap)
+    # The parse the log sits beside: a work/ with no book reads as never
+    # run (lib/clean.holds_books).
+    (root / "work" / "margin_questrade.json").write_text('{"transactions": []}')
     (root / "work" / "margin_questrade.json.diag").write_text(_QT_HINT)
     (root / "work" / "margin_rbc_direct.json.diag").write_text(_RBC_HINT)
     (root / "work" / "tfsa_webull.json.diag").write_text(_WB_HINT)

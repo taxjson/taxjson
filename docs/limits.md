@@ -22,7 +22,7 @@ are in [KNOWN_ISSUES.md](../KNOWN_ISSUES.md); problems with a known fix are in
 - **Runs locally; no web UI, no cloud.** Your files stay on your computer. `tjs run` reaches the network
   only for FX rates (Bank of Canada, Yahoo Finance), missing crypto prices and crypto-send values, and
   the closing price of an in-kind move with no value of its own (Yahoo Finance), each on a cache miss; the commands that quote today's prices (`tjs harvest`, `tjs tips --online`) ask Yahoo Finance
-  too. `TAXJSON_OFFLINE=1` forbids all of it. Broker download (`tjs fetch`) is the separate taxjson-fetch
+  too, and `tjs technicals` asks it for a year of each holding's daily closes (once a day, cached in work/). `TAXJSON_OFFLINE=1` forbids all of it. Broker download (`tjs fetch`) is the separate taxjson-fetch
   plugin (Questrade and IBKR Flex). SECURITY.md lists every network call.
 - **Only the listed brokers.** Interactive Brokers, Questrade, RBC Direct Investing, Webull, Kraken and
   Coinbase have parsers. Any other broker's CSV is read through a column mapping you write (the generic

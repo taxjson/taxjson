@@ -78,6 +78,12 @@ source_currencies           = []
 ## cost; no tax depends on it); "ask": asked like a taxable account's. `tjs elect` wins either way.
 ## cost; no tax depends on it); "ask": asked like a taxable account's. `tjs elect` wins either
 # sheltered_elections       = "zero"  # zero | ask
+
+## --- Views ---
+## The symbol `tjs technicals` measures each holding's beta and alpha against, spelled as the books
+## spell it (a ticker.map QUOTE line maps it) or as Yahoo spells an index. A view only: no tax
+## figure reads it. No default (beta and alpha blank).
+# benchmark                 = "XYZQ.TO"
 ## The `tjs fetch` source of this account (a fetcher plugin's name; `tjs fetch --list` names
 
 ## One [accounts.NAME] table per folder under inputs/ (the folder name is the account name). Every

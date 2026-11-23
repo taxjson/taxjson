@@ -404,14 +404,15 @@ DENIED_FORMS = MappingProxyType({
 })
 REVIEWED = frozenset((
     "align", "amt", "audit", "buy-check", "carryover", "cash", "ccd-sum", "check-dates", "check-filed",
-    "check-tt", "checklist", "close-year", "compare", "crypto-sends", "dil", "dil-sum", "div-estimate",
-    "divs", "divs-sum", "edge-cases", "elect", "estimate", "events", "fees", "fees-sum",
+    "check-tt", "checklist", "clean", "close-year", "compare", "crypto-sends", "dil", "dil-sum",
+    "div-estimate", "divs", "divs-sum", "edge-cases", "elect", "estimate", "events", "fees", "fees-sum",
     "find-missing-history", "form-export", "format", "format-map", "fx-cash", "gains", "handoff",
     "harvest", "help", "init", "instalments", "journals", "leaps", "leaps-sum", "list", "losers",
     "migrate", "new-year", "opening", "option-boundary", "option-yield", "parser-check", "plot-tax",
     "rebuy", "reconcile-slips", "redact", "renames", "roc", "roc-sum", "run", "sanity", "sell-check",
     "shares", "slip-audit", "snapshot", "spinoffs", "splits", "staking", "staking-sum", "stats", "sum",
-    "t1135", "tax-logic", "ticker-map", "tips", "trades", "trades-sum", "transfers",
+    "t1135", "tax-logic", "technicals", "ticker-map", "tips", "trades", "trades-sum", "transfers",
+    "unclose-year",
     "update-tobase-map", "wash-radar", "wash-sales", "watch", "win-rates", "winners", "years"))
 TOOLS = frozenset(("taxjson-audit", "taxjson-diff", "taxjson-explain", "taxjson-fees-sum",
                    "taxjson-sum-gains"))
@@ -575,6 +576,9 @@ EXTRA_COMMANDS = (
     ("demo", "compare --save before"),
     ("demo", "snapshot"),
     ("demo", "snapshot --json"),
+    # `tjs clean` removes only inside the copy (lib/clean); its default
+    # form, --details and --json are option forms on every project book.
+    ("demo", "clean --dry-run"),
     ("demo", "check-dates"),
     ("demo", "check-dates --json"),
     ("demo", "check-tt margin"),
@@ -808,6 +812,8 @@ OPTION_LINES = (
     ("demo", "ticker-map --suggest --details" + _SUGGESTED),
     ("demo", "ticker-map --suggest --json" + _SUGGESTED),
     ("demo", "ticker-map --suggest --write --all" + _SUGGESTED),
+    ("demo", "unclose-year --dry-run # before: close-year --yes"),
+    ("demo", "unclose-year --year 2024 # before: close-year --yes"),
 )
 # The registry's options no recorded line passes, each with its reason
 # (tests/test_byte_proof.py fails on an option in neither, and on an entry
@@ -823,6 +829,11 @@ REVIEWED_OPTIONS = MappingProxyType({
     ("tips", "--online"): "a DENIED_FORMS form (Yahoo Finance)",
     ("parser-check", "--update-golden"): "a DENIED_FORMS form (it writes the checkout's tests/fixtures)",
     ("harvest", "--ibkr-port"): "a TWS or IB Gateway socket: the namespace refuses it; `--no-ibkr` is recorded",
+    ("technicals", "--benchmark"): "no golden book holds a history cache, and the proof runs offline: "
+                                   "every form stops before a statistic (no history: exit 1, the "
+                                   "default form records it; a bare-word symbol refused first, exit "
+                                   "2); tests/features/totals/test_technicals_command.py runs "
+                                   "--benchmark on a made-up cache",
     ("checklist", "--skip"): "retired (`--done --force`): it always refuses, exit 2 (recorded)",
     ("find-missing-history", "--gen-phantoms"): "retired (--write-missing-history): it always refuses, "
                                                 "exit 2 (recorded)",

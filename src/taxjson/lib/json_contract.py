@@ -42,6 +42,7 @@ SCHEMAS: Dict[str, int] = {
     "compare --delete": 1,
     "compare --list": 1,
     "snapshot": 1,
+    "clean": 1,
     "crypto-sends": 1,
     # Summaries
     "amt": 1,
@@ -59,6 +60,7 @@ SCHEMAS: Dict[str, int] = {
     # Positions
     "list": 1,
     "shares": 1,
+    "technicals": 1,
     # Row listings
     "cash": 1,
     "dil": 1,

@@ -52,7 +52,8 @@ EXTRAS_TESTS="test_ci_hermetic test_fx_boc rules.ca.opt.test_engine_options_deni
   test_price_chain rules.ca.fx.test_no_hard_coded_rates_spellings_twins_or_dealer_names.TestNoBuiltInFxRate
   rules.ca.fx.test_no_hard_coded_rates_spellings_twins_or_dealer_names.TestYahooSpelling rules.ca.fx.test_no_hard_coded_rates_spellings_twins_or_dealer_names.TestCanadianTwinOnEveryVenue
   rules.ca.fx.test_no_hard_coded_rates_spellings_twins_or_dealer_names.TestQuestradeKeyWithoutDealerNames
-  rules.ca.fx.test_no_hard_coded_rates_spellings_twins_or_dealer_names.TestIbRocHomeCountry test_rbc_parser"
+  rules.ca.fx.test_no_hard_coded_rates_spellings_twins_or_dealer_names.TestIbRocHomeCountry test_rbc_parser
+  features.totals.test_technicals_command features.totals.test_technicals_statistics"
 # The modules that touch the broker-fetch plugin, by what they contain:
 # a `fetch` command (not a `git fetch` line), the fetcher discovery, the
 # plugin's package or its refusal.

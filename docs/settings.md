@@ -22,7 +22,7 @@ A project is a folder:
 | `holdings/*.toml` | the year's broker positions snapshots (or the broker's RBC Holdings Export or IB statement, `.csv`), read by `tjs sanity` with no setting. Optional: with no folder or no file nothing is compared | [holdings/](#holdings-the-years-positions-snapshots) |
 | `filed/<year>.json` | close-year locks (keep them) | [filed/YEAR.json](#filedyearjson-close-year-locks) |
 | `snapshot/` | the copies `tjs snapshot` makes (`<year>.<timestamp>/`), beside the year folders in a multi-year project; never read by a run. `tjs init`'s `.gitignore` lists it; they cannot be rebuilt, so keep them in a backup if you want them | — |
-| `work/`, `reports/` | rebuilt by every `tjs run` (`work/`: per-stage files and the price and FX caches; `reports/`: `<account>.sum`, `wash_radar_*`, `fees.rpt`, holdings); never edited. `tjs init`'s `.gitignore` lists them | — |
+| `work/`, `reports/` | rebuilt by every `tjs run` (`work/`: per-stage files and the price and FX caches; `reports/`: `<account>.sum`, `wash_radar_*`, `fees.rpt`, holdings); never edited. `tjs init`'s `.gitignore` lists them. `tjs clean` removes them, keeping in `work/` what no run rebuilds (docs/commands.md, tjs clean) | — |
 
 Every map file and folder other than `inputs/` is optional. What cannot be rebuilt — `taxjson.toml`, `ticker.map`, `tobase.map`, `inputs/` (its `.tt` files, `manifest.json` and `sends.json` included) and `filed/` — is what to keep in version control or a backup.
 
@@ -248,6 +248,15 @@ Where the project reads its exports and positions and writes files for other too
 - **Country:** both.
 - **Change it when:** you want the sheltered holdings view to show a real cost for every spin-off, and to be asked for it.
 - **Example:** `sheltered_elections = "ask"`
+
+#### Views
+
+#### `benchmark`
+- **Meaning:** the symbol `tjs technicals` measures each holding's beta and alpha against (a year of daily returns), spelled as the books spell a listing (`XYZQ.TO`, `XYZQ.US`; a ticker.map `QUOTE` line maps it to Yahoo's spelling) or as Yahoo Finance spells an index (`^XYZQ`). A bare word is taxjson's spelling of a coin and is refused unless a `QUOTE` line names it. `--benchmark SYMBOL` wins for one run. A view only: no tax figure reads it.
+- **Default:** none: beta and alpha are blank, and `tjs technicals` says so in one `Info:` line.
+- **Country:** both.
+- **Change it when:** you want beta and alpha in `tjs technicals` without passing `--benchmark`.
+- **Example:** `benchmark = "XYZQ.TO"`
 
 #### Retired setting
 
@@ -1091,6 +1100,28 @@ The slip audit as one document: a stable schema for programs (new keys may be ad
 
 ---
 
+## `tjs technicals --json`
+
+Each holding's statistics from its daily closes (docs/commands.md, `tjs technicals`): market statistics, no tax figure. New keys may be added; none is renamed or removed while `schema_version` is 1. Code: `src/taxjson/cli/technicals.py` — `_json_doc`, `_stats_rows`; `src/taxjson/lib/technicals.py` — `series_stats`, `blank_reasons`, `MIN_SESSIONS`; `src/taxjson/lib/price_chain.py` — `daily_history`, `HISTORY_TODAY`.
+
+| Key | Meaning |
+| --- | --- |
+| `as_of` | the books' last day (their horizon), or `null` |
+| `adjusted` | `"splits+dividends"`: every series is Yahoo's adjusted one |
+| `latest_close_date` | the newest last close of any row; a row with an older one has `stale: true` |
+| `benchmark` | `null` without one, else `symbol`, `given_by` (`"--benchmark"` or `"[settings] benchmark"`), `history`, `cache_reason`, `quote_symbol`, `currency`, `sessions`, `last_date`, `fetched` (as a row's) |
+| `windows`, `min_sessions` | each statistic's window, and the closes each needs (`min_sessions`, by the `stats` keys) |
+| `left_out` | `{"options", "futures", "crypto"}`: the symbols left out, by kind |
+| `rows` | one object per symbol held (below), by symbol |
+
+Each row: `symbol`, `qty` and `accounts` (the quantity summed, and by account), `quote_symbol` (the Yahoo spelling asked: a ticker.map `QUOTE` line's, else taxjson's; `null` when there is none) and `quote_ratio`, `currency` (the series', never converted), `source` (`"yfinance"` or `"cache"`), `fetched` (the day the series was fetched), `sessions`, `first_date`, `last_date`, `last_close` (adjusted, in `currency`), `stale`, `paired_returns` (the daily returns on dates the benchmark has too; `null` without one), `stats` (every statistic: `sma20_pct`, `sma50_pct`, `sma200_pct`, `rsi14`, `beta`, `alpha_pct`, `from_high_pct`, `from_low_pct`, `volatility_pct`, `return_1m_pct`, `return_3m_pct`, `return_1y_pct`, `max_drawdown_pct`, `atr14_pct` at 4 places, `avg_volume_20` at 2; `null` when blank, never `-0.0`), and:
+
+| Key | Values |
+| --- | --- |
+| `history` | `"ok"`: a series was read. `"offline"`: none cached and `TAXJSON_OFFLINE` set. `"no-extra"`: none cached and no `[fx]` extra. `"none"`: Yahoo was asked and gave nothing (or the tier failed), none cached. `"no-spelling"`: taxjson has no Yahoo spelling for the symbol and no `QUOTE` line gives one. The benchmark's has the same values. |
+| `cache_reason` | why a cached series was read: `null` when Yahoo answered on this run; `"today"`: the entry was fetched today (not asked again); `"none"`: Yahoo gave nothing; `"offline"`, `"no-extra"`: as `history`'s. `null` for a row with no series too. |
+| `blank` | `{stat: why}` for each `null` in `stats`: `"history"` (fewer closes than its window), `"paired"` (fewer than 252 returns on dates the benchmark has too), `"no-benchmark"`, `"flat"` (RSI: no close moved), `"flat-benchmark"` (the benchmark's returns do not vary), `"no-high-low"` (ATR: fewer than 15 sessions in a row with a high and a low), `"no-volume"` (a session of the last 20 has no volume); `{}` for a row with no series |
+
 ## `--json` outputs
 
 Every `--json` output is one JSON object whose top-level `schema_version` is the integer below: a command's document, or a mode's that prints one of its own (`YEAR` is a 4-digit year, `a/b` either flag), or a taxjson-* tool's that no command prints (the tools a command runs print the command's). A variant of an output (an empty one, not applicable, nothing to compare, the other country's form) carries its number. New keys may be added at any depth, and new values of a status or a kind; while the number stays, none is renamed, moved or removed, and no value changes its type, unit or meaning: a change that does raises it, in docs/upgrading.md. Key order and indentation are not part of it. A refused command prints its `Error:` on stderr and nothing on stdout; a finding (exit 1) still prints its document. Code: `src/taxjson/lib/json_contract.py` — `SCHEMAS`, `TOOL_OUTPUTS`, `versioned`; `tests/test_json_contract.py` holds each output to a golden view or a test, and to its row here.
@@ -1114,6 +1145,7 @@ Every `--json` output is one JSON object whose top-level `schema_version` is the
 | `compare --delete` | 1 |
 | `compare --list` | 1 |
 | `snapshot` | 1 |
+| `clean` | 1 |
 | `crypto-sends` | 1 |
 | `amt` | 1 |
 | `amt YEAR` | 1 |
@@ -1129,6 +1161,7 @@ Every `--json` output is one JSON object whose top-level `schema_version` is the
 | `win-rates` | 1 |
 | `list` | 1 |
 | `shares` | 1 |
+| `technicals` | 1 |
 | `cash` | 1 |
 | `dil` | 1 |
 | `divs` | 1 |

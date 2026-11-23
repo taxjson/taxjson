@@ -187,8 +187,12 @@ class TestCoveredHeading(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             (root / "work").mkdir()
+            # The account's parse: ticker-map wants a run's books in work/
+            # (lib/clean holds_books), not only its messages.
             (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2025\ncountry = "canada"\n')
+                '[settings]\nyear = 2025\ncountry = "canada"\n\n'
+                '[accounts.margin]\ntype = "taxable"\n')
+            _book(root / "work", "margin_rbc_direct.json", [])
             (root / "work" / "margin_rbc.json.diag").write_text(
                 "warning: x: add to ticker.map:  EXTRACT QZ DLR FUND | USD "
                 "| QZD.U.TO\n"

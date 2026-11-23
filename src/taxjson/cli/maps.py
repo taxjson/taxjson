@@ -35,8 +35,10 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
                    "ticker.map lines the last run suggested",
                    "`tjs ticker-map --suggest --write` appends them.")
     load_config(root)
-    if not (root / "work").is_dir():
-        _die("no work/ — run `tjs run` first",
+    from taxjson.lib.clean import no_books
+    missing = no_books(root / "work")
+    if missing:
+        _die(f"{missing} — run `tjs run` first",
              "The suggestions come from the run's messages.")
     offer, skipped = TS.pending(root)
     # The listing pairs the map does not answer (MAP-GAP): to verify,

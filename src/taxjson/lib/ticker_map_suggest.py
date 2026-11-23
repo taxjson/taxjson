@@ -460,9 +460,7 @@ def _holdings_files(root: Path) -> List[Path]:
         return []
     out: List[Path] = []
     for acfg in accounts_of(cfg if isinstance(cfg, dict) else None).values():
-        raw = acfg.holdings
-        for x in ([raw] if isinstance(raw, str) else
-                  raw if isinstance(raw, list) else []):
+        for x in acfg.holdings_paths or []:
             pp = Path(str(x)).expanduser()
             pp = pp if pp.is_absolute() else root / pp
             if pp.is_file():

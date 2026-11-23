@@ -239,7 +239,11 @@ class TestDivEstimateCombinedShort(unittest.TestCase):
         self.assertEqual(doc["omitted_no_history"], [])
         r = doc["rows"][0]
         self.assertAlmostEqual(r["last_per_share"], 0.10)
-        self.assertAlmostEqual(r["window_amount"], 22.50)
+        # One payment, three days old: assumed quarterly, so the October
+        # payment of 0.10 x 900 is in the 3-month window (it was 22.50,
+        # pro rata from one payment a year).
+        self.assertIs(r["frequency_assumed"], True)
+        self.assertAlmostEqual(r["window_amount"], 90.0)
 
     def test_a_row_naming_no_broker_account_falls_back_to_the_account(
             self):

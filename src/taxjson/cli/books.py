@@ -683,6 +683,115 @@ def cmd_snapshot(args: argparse.Namespace) -> None:
         d.line(ln)
 
 
+def cmd_clean(args: argparse.Namespace) -> None:
+    """`tjs clean`: what `tjs run` generated removed (work/, reports/, the
+    export it wrote into exports_dir), what the inputs cannot rebuild kept
+    (lib/clean); in the folder holding the year folders, every year's.
+    Each run lock is held throughout: refused, nothing removed, while a
+    run or close-year holds one."""
+    from taxjson.lib import clean as _cl
+    from taxjson.pipeline.config import _no_project_message
+    base = Path(args.dir).resolve()
+    if not _PL.has_config(base) and not _PL.year_dirs(base):
+        _die(*_no_project_message(base, "clean"))
+    dry = bool(getattr(args, "dry_run", False))
+    try:
+        roots = _cl.projects(base)
+        with _cl.held(roots, dry_run=dry) as made:
+            try:
+                pl = _cl.plan(base, roots, made)
+            except OSError as e:
+                _die_input(f"{_PL.shown(Path(e.filename or base), base)} cannot be "
+                           f"read ({e.strerror or e}): nothing was removed")
+            if not dry:
+                try:
+                    _cl.remove(pl)
+                except OSError as e:
+                    _die(f"{_PL.shown(Path(e.filename or base), base)} could not be "
+                         f"removed ({e.strerror or e})",
+                         "What came before it is gone, the reports' .sum files "
+                         "and the run's record of what it read first: the "
+                         "filing commands refuse what is left and the views "
+                         "warn that the books are not the clean result. Fix "
+                         "it, then run `tjs clean` again.")
+                except KeyboardInterrupt:
+                    _out.fail("stopped part-way: the reports' .sum files and the "
+                              "run's record of what it read went first, so the "
+                              "filing commands refuse what is left and the views "
+                              "warn", prog=f"{_PROG} clean",
+                              details=("Run `tjs clean` again to finish.",), code=130)
+    except _cl.Busy as e:
+        where = _PL.shown(Path(str(e)), base)
+        _die("another `tjs run` (or `tjs close-year`) is in progress in "
+             + ("this project" if where == "." else f"{where}/")
+             + ": nothing was removed — wait for it to finish (or stop it), "
+               "then re-run")
+    except _cl.CleanError as e:
+        _die_input(str(e))
+    _clean_report(args, pl, dry)
+
+
+# The items taxjson did not write that `tjs clean` names without --details.
+_FOREIGN_SHOWN = 8
+
+
+def _clean_report(args: argparse.Namespace, pl: Any, dry: bool) -> None:
+    """What `tjs clean` removed (or would), a line per folder; what it kept
+    or left alone (Info), a folder it would not clean (Warning)."""
+    from taxjson.lib import out as _out
+    details = _details(args)
+    for shown, why in pl.skipped:
+        _out.warn(f"{shown} not cleaned: {why}")
+    if getattr(args, "json", False):
+        _json_out(pl.to_json(dry), schema="clean")
+        return
+    gone = pl.removed
+    if not gone:
+        _out.note("nothing to remove: no file `tjs run` wrote is here"
+                  + (" (a dry run)" if dry else ""), file=sys.stdout)
+    else:
+        n = pl.files
+        _out.put(f"Would remove {n} file(s) `tjs run` wrote (a dry run: nothing "
+                 f"was removed)" if dry else
+                 f"Removed {n} file(s) `tjs run` wrote: the next `tjs run` "
+                 f"builds them again from the inputs")
+        rows = []
+        for f in gone:
+            v = f"{f.files} file(s)" if f.files else "an empty folder"
+            rows.append((f.shown, v + (f", {f.what}" if f.what else "")))
+        _out.put(_out.kv_lines(rows, indent="  "))
+        if details:
+            _out.put([f"  - {_PL.shown(p, pl.base)}"
+                      + (f"/ ({n} file(s))" if d else "")
+                      for f in gone for p, n, d in f.entries])
+    sys.stdout.flush()
+    if pl.foreign:
+        shown = pl.foreign if details else pl.foreign[:_FOREIGN_SHOWN]
+        _out.note(f"left {len(pl.foreign)} item(s) taxjson did not write: "
+                  + ", ".join(shown)
+                  + (f" +{len(pl.foreign) - len(shown)} more (`tjs clean "
+                     f"--details` lists them)" if len(shown) < len(pl.foreign) else "")
+                  + "; remove them yourself if you do not need them",
+                  whole=True)
+    if pl.kept:
+        _out.note(f"left {len(pl.kept)} item(s) of taxjson's alone"
+                  + ("" if details else " (`tjs clean --details` says why)")
+                  + ": " + ", ".join(p for p, _w in pl.kept[:3])
+                  + (f" +{len(pl.kept) - 3} more" if len(pl.kept) > 3 else ""),
+                  details=[f"{p}: {w}" for p, w in pl.kept])
+    for _where, year in pl.filed:
+        _out.note(f"{year} is filed: run `tjs run` before `tjs check-filed`; "
+                  f"filed/ stays, the last drift verdict "
+                  f"{'would go' if dry else 'went'} with work/")
+    if pl.stray:
+        _out.note("left alone, as no command writes them now (remove them "
+                  "yourself if you do not need them): "
+                  + ", ".join(p for p, _w in pl.stray),
+                  details=[f"{p}: {w}" for p, w in pl.stray] if details else ())
+    if dry and gone:
+        _out.put("Run `tjs clean` without --dry-run to remove them.")
+
+
 # What `tjs opening` writes into a .tt line from a positions
 # report's cells (security review M2): anything else is skipped, named.
 _OPENING_SYMBOL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]*\Z")
@@ -1727,6 +1836,31 @@ def _register_snapshot(sub: argparse._SubParsersAction) -> None:
     p_snap.set_defaults(func=cmd_snapshot)
 
 
+def _register_clean(sub: argparse._SubParsersAction) -> None:
+    p_clean = sub.add_parser(
+        "clean",
+        help="Remove what `tjs run` wrote (work/, reports/)",
+        description="Remove what `tjs run` generated in the project: the "
+             "files of work/ and reports/ taxjson writes, and the files the "
+             "run wrote into exports_dir, so the next `tjs run` builds every "
+             "file again from the inputs. A file goes only by a name taxjson "
+             "gives one; any other (and every .tt file) stays and is named. "
+             "What cannot be rebuilt stays: taxjson.toml, the "
+             "maps, inputs/, holdings/, filed/, snapshot/, inputs_redact/, "
+             "and in work/ the lock files, the slip-key salt, `tjs watch`'s "
+             "baseline, the price caches, the generated crypto-sends .tt and "
+             "the snapshots `tjs compare --save` kept. A link is never "
+             "followed. In the folder holding the year folders it cleans "
+             "every year. Refused, nothing removed, while a `tjs run` holds "
+             "the project's lock, or when a folder of your files is in work/ "
+             "or reports/.")
+    p_clean.add_argument("--dry-run", action="store_true",
+                         help="List what would be removed; remove nothing")
+    p_clean.add_argument("--json", action="store_true",
+                         help="Emit JSON instead of text")
+    p_clean.set_defaults(func=cmd_clean)
+
+
 def _register_find_missing_history(sub: argparse._SubParsersAction) -> None:
     p_fmh = sub.add_parser(
         "find-missing-history",
@@ -1819,5 +1953,6 @@ def register(sub: argparse._SubParsersAction) -> None:
     _register_crypto_sends(sub)
     _register_compare(sub)
     _register_snapshot(sub)
+    _register_clean(sub)
     _register_find_missing_history(sub)
     _register_opening(sub)

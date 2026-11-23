@@ -189,8 +189,14 @@ class TestSymbolCollision(unittest.TestCase):
                              ['EXTRACT <words that name it> | USD | '
                               'QZK.U.TO'])
             from tax_rules.dual import cli
+            # The account the .diag is of, and its parse: books a run built
+            # (lib/clean holds_books: an account's book by its name).
             (root / 'taxjson.toml').write_text(
-                '[settings]\nyear = 2025\ncountry = "canada"\n')
+                '[settings]\nyear = 2025\ncountry = "canada"\n\n'
+                '[accounts.margin]\ntype = "taxable"\n')
+            (root / 'work' / 'margin_rbc_direct.json').write_text(
+                '{"metadata": {"source_brokerage": "rbc_direct"}, '
+                '"transactions": []}\n')
             r = cli(root, 'ticker-map', '--suggest', '--write', '--all')
             self.assertIn('Not added (a template', r.stdout + r.stderr)
             self.assertNotIn('<words', (root / 'ticker.map').read_text())

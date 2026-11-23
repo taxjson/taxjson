@@ -7,7 +7,7 @@ Moved from lib/core.py (PLAN step 10).
 from __future__ import annotations
 
 from taxjson.lib.stage_msg import emit_line
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Mapping, Optional, Set, Tuple, TypeAlias, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Set, Tuple, TypeAlias, Union
 
 from taxjson.lib.numeric import D
 from taxjson.model import money as M
@@ -270,12 +270,73 @@ def _fold_short_futures_pools(pools: _Pools) -> _Pools:
     return out
 
 
+class _ShortUnits(Dict[Tuple[str, str], float]):
+    """{(symbol, account): units short} (_MarkedShortRouter.short) that also
+    keeps each symbol's accounts (`of`), so a symbol's shares cost the
+    accounts short in it, not the whole table (backlog TJ-4978). A symbol's
+    accounts stand in the order the table holds their keys: both take the
+    same insertions and deletions (a new key last, a changed one where it
+    was), so the floats are added in the order a scan of the table adds
+    them. Written by item assignment, `del` and `clear` only: the other
+    dict writes are refused (_refuse_other_writes), so none can pass the
+    index by."""
+    __slots__ = ('_by',)
+
+    def __init__(self, units: Optional[Mapping[Tuple[str, str], float]] = None) -> None:
+        super().__init__()
+        self._by: Dict[str, Dict[str, float]] = {}
+        for k, u in (units or {}).items():
+            self[k] = u
+
+    def __setitem__(self, k: Tuple[str, str], units: float) -> None:
+        super().__setitem__(k, units)
+        self._by.setdefault(k[0], {})[k[1]] = units
+
+    def __delitem__(self, k: Tuple[str, str]) -> None:
+        super().__delitem__(k)
+        del self._by[k[0]][k[1]]
+
+    def clear(self) -> None:
+        super().clear()
+        self._by.clear()
+
+    def of(self, sym: str) -> Mapping[str, float]:
+        """{account: units} of one symbol, in the table's order."""
+        return self._by.get(sym, _NO_UNITS)
+
+    def __deepcopy__(self, memo: Dict[int, Any]) -> _ShortUnits:
+        """The re-fold's checkpoint copy (keys and units are immutable)."""
+        out = memo[id(self)] = _ShortUnits(self)
+        return out
+
+    def __reduce__(self) -> Tuple[Any, ...]:
+        return (_ShortUnits, (dict(self),))
+
+
+_NO_UNITS: Mapping[str, float] = {}
+
+
+def _refuse_other_writes() -> None:
+    """dict's other writes on a _ShortUnits raise: they would not keep `of`."""
+    def refused(self: _ShortUnits, *_a: Any, **_k: Any) -> None:
+        raise TypeError("_ShortUnits: write by item, del or clear (its by-symbol index)")
+    for name in ('pop', 'popitem', 'setdefault', 'update', '__ior__'):
+        setattr(_ShortUnits, name, refused)
+
+
+_refuse_other_writes()
+
+
 def _short_shares(sym: str, short_units: Dict[Tuple[str, str], float]
                   ) -> Dict[str, float]:
     """{account: its share of the symbol's short pool}: each account's
-    units short (_MarkedShortRouter.short), of all of them."""
-    who = {a: u for (y, a), u in short_units.items()
-           if y == sym and u > pool_qty_eps(sym, u)}
+    units short (_MarkedShortRouter.short), of all of them. The router's
+    own table gives the symbol's accounts (_ShortUnits.of); a plain copy
+    is scanned, in the same order."""
+    own: Iterable[Tuple[str, float]] = (
+        short_units.of(sym).items() if isinstance(short_units, _ShortUnits)
+        else ((a, u) for (y, a), u in short_units.items() if y == sym))
+    who = {a: u for a, u in own if u > pool_qty_eps(sym, u)}
     total = sum(who.values())
     return {a: u / total for a, u in who.items()}
 
@@ -342,12 +403,18 @@ def _pool_rows(pools: _Pools,
     taxjson_split_gains._split_inventory). Every other pool: its symbol,
     account ''."""
     from taxjson.lib.futures import SHORT_POOL_SUFFIX
+    units: Optional[_ShortUnits] = None
     for k, p in pools.items():
         if not k.endswith(SHORT_POOL_SUFFIX):
             yield k, p, ''
             continue
         sym = k[:-len(SHORT_POOL_SUFFIX)]
-        shares = _short_shares(sym, short_units)
+        if units is None:
+            # Grouped by symbol once (the books' final units, which nothing
+            # writes while these rows are read): TJ-4978.
+            units = (short_units if isinstance(short_units, _ShortUnits)
+                     else _ShortUnits(short_units))
+        shares = _short_shares(sym, units)
         if not shares:
             yield sym, p, ''
         for acct, f in sorted(shares.items()):
@@ -374,8 +441,17 @@ def _ca_short_state(pools: _Pools, short_units: Callable[[], Dict[Tuple[str, str
     def state(lab: Tuple[str, str]) -> Optional[_PoolState]:
         acct, sym = lab
         p = pools.get(sym + SHORT_POOL_SUFFIX)
-        f = _short_shares(sym, short_units()).get(acct)
-        if p is None or not f:
+        if p is None:
+            return None
+        # The account's own units first: _short_shares gives a share only to
+        # an account whose units pass this test, so one that fails it has
+        # none, whatever the others hold (backlog TJ-4977).
+        units = short_units()
+        u = units.get((sym, acct))
+        if u is None or not u > pool_qty_eps(sym, u):
+            return None
+        f = _short_shares(sym, units).get(acct)
+        if not f:
             return None
         lad = p.last_acq_date
         part = _short_account_part(p, acct, f, cache)

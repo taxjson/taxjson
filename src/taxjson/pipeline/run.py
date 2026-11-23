@@ -3209,24 +3209,17 @@ Read them; do not edit them.
 
 _EXPORTS_README_NAME = "README.txt"
 # The files the last export wrote: the next one removes only those it no
-# longer writes (`_write_exports`).
-_EXPORTS_MANIFEST = ".taxjson-exports.json"
+# longer writes (`_write_exports`), and so does `tjs clean`
+# (lib/project_layout exports_record).
+_EXPORTS_MANIFEST = _PL.EXPORTS_MANIFEST
 
 
 def _exports_manifest(dst: Path) -> List[str]:
     """The plain file names the previous export recorded writing ([]
     without a readable manifest; a name with a path in it is never
     one)."""
-    import json
-    try:
-        doc = json.loads((dst / _EXPORTS_MANIFEST).read_text(
-            encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    files = doc.get("files") if isinstance(doc, dict) else None
-    return [f for f in (files if isinstance(files, list) else [])
-            if isinstance(f, str) and f and f == Path(f).name
-            and f not in (".", "..") and not f.startswith(".")]
+    rec = _PL.exports_record(dst)
+    return rec[1] if rec is not None else []
 
 
 def _write_exports(root: Path, settings: Settings,

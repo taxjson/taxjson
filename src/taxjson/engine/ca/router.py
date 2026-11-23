@@ -17,6 +17,7 @@ from taxjson.model.transaction import TaxTransaction
 from taxjson.engine.journal import _is_listing_journal
 from taxjson.engine.rows import not_a_purchase
 
+from taxjson.engine.ca.pools import _ShortUnits
 from taxjson.engine.ca.run_helpers import _futures_names
 from taxjson.engine.ca.own_moves import _move_sign, _is_lot_move
 
@@ -62,7 +63,7 @@ class _MarkedShortRouter:
         from taxjson.lib.row_types import open_close_codes
         self._short_re = _BROKER_SHORT_RE
         self._codes = open_close_codes
-        self.short: _Positions = {}
+        self.short: _Positions = _ShortUnits()      # by symbol too (TJ-4978)
         self.long: _Positions = {}
         # A close row's contracts past the account's own (_is_close_row),
         # by row id: they close nothing and open nothing (TJ-3303, TJ-3302).
@@ -354,7 +355,8 @@ class _MarkedShortRouter:
         """A split or rename applies to both positions alike."""
         for d in (self.short, self.long):
             for ka in [k for k in d if k[0] == symbol]:
-                units = d.pop(ka) * ratio
+                units = d[ka] * ratio
+                del d[ka]
                 kt = (target, ka[1])
                 d[kt] = d.get(kt, 0.0) + units
 
@@ -366,7 +368,8 @@ class _MarkedShortRouter:
         """Back to a `fold_state`, in place (the shorts recorder reads `short`)."""
         for dst, src in zip((self.short, self.long), state):
             dst.clear()
-            dst.update(src)
+            for k, units in src.items():        # item by item: `short` keeps its index
+                dst[k] = units
 
 
 def _row_part(t: TaxTransaction, units: float, code: str, part_id: Optional[str], *,

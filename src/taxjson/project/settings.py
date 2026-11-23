@@ -163,6 +163,7 @@ class Settings(TypedTable):
     requires_taxjson: Optional[str] = None
     transfers_as_acquisitions: Optional[bool] = None
     sheltered_elections: Optional[str] = None        # "zero" | "ask"
+    benchmark: Optional[str] = None                  # a symbol (technicals)
     province: Optional[str] = None
     option_premium_timing: Optional[str] = None
     option_grant_timing_since: Optional[int] = None

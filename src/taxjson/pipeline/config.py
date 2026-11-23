@@ -86,7 +86,8 @@ def _use_project_ticker_map(root: Path) -> None:
                                    else "")
 
 
-def load_config(root: Path, *, missing_ok: bool = False) -> Dict[str, Any]:
+def load_config(root: Path, *, missing_ok: bool = False,
+                reopening: bool = False) -> Dict[str, Any]:
     """The project's taxjson.toml, parsed and checked: every command's one
     reader. It refuses what no command may run on: a taxjson.toml the
     installed version cannot read (lib/requires), a bad account name or type,
@@ -103,7 +104,12 @@ def load_config(root: Path, *, missing_ok: bool = False) -> Dict[str, Any]:
     `tjs tax-logic` renders the rules of a project it cannot run), so only
     the full read repeats them here; and only the full read points the
     stages at the project's ticker.map and names the project in the
-    environment."""
+    environment.
+
+    `reopening`: `tjs unclose-year`'s read only. One refusal is left to
+    that command, which takes the state back or refuses it itself: a
+    `tobase_map` named again beside the year's own tobase.map
+    (lib/project_layout.tobase_both_problem). Every other check is made."""
     path = root / "taxjson.toml"
     if path.is_symlink() and not path.exists():
         # Unreadable is not absent: a dangling taxjson.toml switched fees /
@@ -143,7 +149,7 @@ def load_config(root: Path, *, missing_ok: bool = False) -> Dict[str, Any]:
     if not missing_ok:
         _refuse_outside_dir_links(root, cfg.get("accounts") or {})
     _normalize_settings(cfg)
-    _refuse_folder_settings(root, cfg)
+    _refuse_folder_settings(root, cfg, reopening=reopening)
     if not missing_ok:
         _use_project_ticker_map(root)
         import os as _os
@@ -180,11 +186,17 @@ def _refuse_newer_config(path: Path, where: str = "this project"
     return cfg
 
 
-def _refuse_folder_settings(root: Path, cfg: Dict[str, Any]) -> None:
+def _refuse_folder_settings(root: Path, cfg: Dict[str, Any], *,
+                            reopening: bool = False) -> None:
     """[settings] inputs_dir / holdings_dir / exports_dir that leave the
     folder holding the project, and a year folder holding another
-    year's project (lib/project_layout.setting_problems)."""
+    year's project (lib/project_layout.setting_problems). `reopening`
+    (load_config): the two tobase.map files of a year are left to `tjs
+    unclose-year`."""
     probs = _PL.setting_problems(root, cfg.get("settings") or {})
+    if reopening:
+        both = _PL.tobase_both_problem(root, cfg.get("settings") or {})
+        probs = [p for p in probs if p != both]
     if probs:
         _die(probs[0] if len(probs) == 1 else
              "taxjson.toml:\n  " + "\n  ".join(probs))

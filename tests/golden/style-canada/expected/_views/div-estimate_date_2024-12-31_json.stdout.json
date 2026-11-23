@@ -39,6 +39,7 @@
         "single payment"
       ],
       "frequency": "1 payment",
+      "frequency_assumed": false,
       "fx_rate": 1.35,
       "group": "sheltered",
       "last_pay_date": "2024-08-15",
@@ -66,28 +67,54 @@
       "account": "tfsa",
       "currency": "CAD",
       "flags": [
-        "single payment"
+        "assumed quarterly: 1 payment(s) in the books, none contradicts it (over-projected if it pays less often, or if its only payment was a special)"
       ],
-      "frequency": "1 payment",
+      "frequency": "quarterly",
+      "frequency_assumed": true,
       "fx_rate": 1.0,
       "group": "sheltered",
       "last_pay_date": "2024-12-20",
       "last_per_share": 0.915,
       "median_gap_days": null,
-      "next_amount": null,
-      "next_amount_base": null,
-      "next_pay_date": null,
-      "next_tax_date": null,
+      "next_amount": 183.0,
+      "next_amount_base": 183.0,
+      "next_pay_date": "2025-03-20",
+      "next_tax_date": "2025-03-20",
       "payments": 1,
-      "projected": [],
-      "rest_of_year_amount": 0.0,
+      "projected": [
+        {
+          "amount": 183.0,
+          "amount_base": 183.0,
+          "pay_date": "2025-03-20",
+          "tax_date": "2025-03-20"
+        },
+        {
+          "amount": 183.0,
+          "amount_base": 183.0,
+          "pay_date": "2025-06-20",
+          "tax_date": "2025-06-20"
+        },
+        {
+          "amount": 183.0,
+          "amount_base": 183.0,
+          "pay_date": "2025-09-20",
+          "tax_date": "2025-09-20"
+        },
+        {
+          "amount": 183.0,
+          "amount_base": 183.0,
+          "pay_date": "2025-12-20",
+          "tax_date": "2025-12-20"
+        }
+      ],
+      "rest_of_year_amount": 0,
       "rest_of_year_base": 0.0,
       "shares": 200.0,
-      "status": "irregular",
+      "status": "ok",
       "symbol": "ENB.TO",
       "ttm_per_share": 0.915,
-      "window_amount": 183.0,
-      "window_amount_base": 183.0,
+      "window_amount": 732.0,
+      "window_amount_base": 732.0,
       "withholding_rate": null,
       "withholding_rest_of_year_base": null,
       "withholding_window_base": null
@@ -99,6 +126,7 @@
         "single payment"
       ],
       "frequency": "1 payment",
+      "frequency_assumed": false,
       "fx_rate": 1.35,
       "group": "taxable",
       "last_pay_date": "2024-09-12",
@@ -129,6 +157,7 @@
         "single payment"
       ],
       "frequency": "1 payment",
+      "frequency_assumed": false,
       "fx_rate": 1.35,
       "group": "sheltered",
       "last_pay_date": "2024-09-12",
@@ -159,6 +188,7 @@
         "2 expected payments not in the books"
       ],
       "frequency": "quarterly",
+      "frequency_assumed": false,
       "fx_rate": 1.0,
       "group": "sheltered",
       "last_pay_date": "2024-06-15",
@@ -189,6 +219,7 @@
         "single payment"
       ],
       "frequency": "1 payment",
+      "frequency_assumed": false,
       "fx_rate": 1.0,
       "group": "taxable",
       "last_pay_date": "2024-03-28",
@@ -221,7 +252,7 @@
       "taxable": 0.0
     },
     "window": {
-      "sheltered": 220.8,
+      "sheltered": 769.8,
       "taxable": 77.0
     },
     "withholding_rest_of_year": {

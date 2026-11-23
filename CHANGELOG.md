@@ -3,6 +3,121 @@
 ## Unreleased
 
 
+## v1.1.0 (2026-11-23)
+
+### Added
+
+- `tjs unclose-year` takes a `tjs close-year` back, for a year closed by mistake. All or
+  nothing, as the close is. The lock and the reports as filed move into a backup folder,
+  `filed/<year>.unclosed-<date>-<time>/` (nothing reads it as a lock), `taxjson.toml` names
+  `inputs_dir` / `tobase_map` again and loses the freeze note (only the close's own lines are
+  edited), and a frozen copy that is the shared file's bytes is removed. A copy that differs
+  from the shared file, or that the shared folder does not hold, is never deleted: it is kept
+  in the backup, and the output says the year now reads other inputs than it was filed from.
+  Refused while a later year is closed; a later year only started is named. `--dry-run` shows
+  what would change. To amend a filed return, keep using `tjs close-year --force`
+  (docs/filing.md) (TJ-4974).
+- `tjs technicals`: each position the books hold at their end, one row a symbol (all accounts
+  summed, as `tjs shares`), with statistics of about a year of its daily closes. The default
+  view gives the last close and its date, the % from the 20-, 50- and 200-session moving
+  averages, RSI(14) (Wilder) and, against a benchmark, beta and alpha (Jensen's, risk-free 0,
+  % a year). `--details` adds the % from the 52-week high and low, annualised volatility, the
+  1M / 3M / 1Y returns, the maximum drawdown, ATR(14) as a % of the close and the 20-session
+  average volume, plus the history behind each row, why each blank is one and one line
+  defining each statistic. `--json` has every figure (`schema_version` 1). The closes are
+  Yahoo Finance's, adjusted for splits and dividends (the `[fx]` extra), each in its listing's
+  own currency. A session dated today is left out. They are cached in
+  `work/.history_cache.json` with the day they were fetched, and an entry fetched today is not
+  asked for again. When the cache stands in for Yahoo, an `! ` line gives its day: after Yahoo
+  gave no answer, at any age; offline (`TAXJSON_OFFLINE`, or without the extra), once it is
+  more than 7 days old. When no holding has a history it refuses (exit 1). A holding with none
+  is a blank row, with the ticker.map `QUOTE` line to add when other symbols came back; when
+  none came back, the line says the network or Yahoo gave nothing. Options, futures and crypto
+  are left out and counted. A statistic is blank, never a figure from a shorter window, when
+  the history is shorter than its window or the data does not allow it (no close moved, a
+  benchmark that does not move, no high and low, a session without volume); `--details` says
+  which. The benchmark is `--benchmark SYMBOL` or the new `[settings] benchmark` key. With
+  neither, BETA and ALPHA are blank and one `Info:` line names the key. The `Benchmark:` line
+  gives its last close, marked when it is older than the rows', and one line says when BETA
+  and ALPHA end earlier, or include the exchange rate because a row is in another currency.
+  Market statistics, not tax figures: no figure in the books reads them (docs/commands.md;
+  TJ-4975).
+- `[settings] benchmark` (a new "Views" group in the template): the symbol `tjs technicals`
+  measures beta and alpha against, spelled as the books spell a listing (`XYZQ.TO`) or as
+  Yahoo spells an index (`^XYZQ`). No default. It is no run input: setting it leaves the books
+  fresh, a closed year's frozen inputs as they were and `tjs checklist`'s verdicts kept
+  (docs/settings.md, docs/upgrading.md; TJ-4975).
+- `tjs clean` removes what `tjs run` generated, so the next run builds every file again from
+  the inputs and no result of an earlier run is left to read: `work/`, the run's files in
+  `reports/` and the files the run wrote into `exports_dir` (the ones its record names, and the
+  record); in the folder holding the year folders, every year and its export. Only a file it
+  recognises goes: by the exact name its writer gives it (an account's books, a blend's, the
+  fixed reports) or a name the run's records hold, never by how a name begins. Anything else
+  stays and is named in one `Info:` line ("taxjson did not write"), even a file named like an
+  account's, and no `.tt` file is ever removed, nor a folder holding one. Kept in `work/`,
+  though taxjson's, each named: the lock files, the slip-key salt (the broker keys in
+  `slips.toml` are salted with it), `tjs watch`'s baseline, the price caches
+  (`.close_cache.json`, `.price_cache.json`, `.history_cache.json`), `crypto_sends/` (the generated crypto-sends
+  `.tt`) and the snapshots `tjs compare --save` kept. Never touched: taxjson.toml, the maps,
+  `inputs/`, `holdings/`, `filed/` and `snapshot/`. It stops with nothing removed when a
+  setting puts files of yours in a `work/` or `reports/` it cleans (a `[settings]` folder such
+  as `holdings_dir`, or an account's `holdings` file, of any year cleaned; exit 2), when a
+  `work/` or `reports/` is a link (it never follows one; exit 2), and while a `tjs run` or
+  `tjs close-year` holds the project's run lock (exit 1). The reports' `.sum` files and the
+  run's record of what it read go first and the books last, so a clean that stops part-way
+  leaves books the filing commands refuse and the views warn of. `--dry-run` lists and removes
+  nothing, `--details` lists every entry and why anything was left alone, and `--json` has the
+  same, `schema_version` 1 (docs/commands.md) (TJ-4973).
+
+### Changed
+
+- `tjs div-estimate` lists its rows by the next pay date, the latest first, so the payment
+  that comes next is the bottom row (it was by ticker); a payer with no projected payment
+  is listed above them, by ticker. `--details` lists the schedules in the same order.
+  `--json` is unchanged (by ticker and account).
+- `tjs div-estimate` projects a payer whose own history cannot settle its schedule as
+  **quarterly, shown as assumed**, until the books contradict it. It was one payment a year
+  (pro rata from the 12-month amount per share) for a payer with a single payment, far too
+  low for a position bought lately, and semi-annual for two payments six months apart with
+  the quarter between them not held. Assumed: one to three payments, the latest in the last
+  12 months, each alone on a quarterly date counted back from the latest, where no schedule
+  was read or a semi-annual one resting on a single six-month gap. Contradicted, and read as
+  before: a quarterly date with no payment of any kind in the books, between the payments or
+  more than 15 days overdue after the latest, on which the books show the shares held (long
+  from about 45 days before the date through it); or an overdue date that nothing explains
+  (no trade of the security in books that reach the date). An overdue date on which the
+  books show the shares not held is not a missing payment. One after the end of the
+  account's books (its last row) is not checked, and the row says `the books of ACCOUNT end
+  YYYY-MM-DD: later dates not checked`: one such date counts as a missing payment, two or
+  more drop the assumption. Each projected payment is the latest per-share amount. The row
+  shows `quarterly?` under FREQ, is listed under "payer(s) to check", and `--details` says
+  `assumed quarterly: N payment(s) in the books, none contradicts it`; `--json` rows gain
+  `frequency_assumed` (true or false; no key changed, `schema_version` 1). An annual or
+  semi-annual payer with a short history, or a special dividend as the only payment, is
+  over-projected until a later payment or a passed date shows it. A payer whose history
+  shows a schedule is projected as before: its figures do not move. The estimate's totals
+  rise where such payers are held (planning numbers only).
+
+### Fixed
+
+- `tjs run` took several times longer in 1.0.0 and 1.0.1 than in 0.41.0 on a book with many
+  written option series (one report: 262 s against 73 s). After every row the Canadian engine
+  checked the short position of every option series ever written, in every account, and each
+  check read the whole list again; it now checks the series that are open. On a made-up book
+  with 306 written series in four accounts the run went from 232 s to 31 s (0.41.0: 30 s).
+  No figure, report or file of `work/` changes (TJ-4977, TJ-4978).
+- Smaller costs of a large run, with no change in any output: an option symbol is parsed once
+  per spelling, the wash radar resolves a symbol's class once per date, the dividend share
+  check of `tjs sanity` sorts an account's rows once, and the trace of a denied loss reads the
+  walk's lines once (TJ-4979 to TJ-4982).
+- A `work/` holding no books (only the run lock of a run that stopped early, the checklist's
+  last verdicts, what `tjs clean` keeps, or a file of your own) read as a run: the checklist's
+  renames step said done with 0 dated renames, `tjs ticker-map --suggest` said "Nothing to
+  add", `tjs div-estimate` "No position held now has a dividend history" and `tjs slip-audit`
+  showed BOOKS 0.00 against every slip. They now answer as in a project never run: the step is
+  blocked ("no books yet — run `tjs run`"), and the commands say "no books in work/" and to run
+  `tjs run` first (exit 1) (TJ-4973).
+
 ## v1.0.1 (2026-11-22)
 
 ### Fixed

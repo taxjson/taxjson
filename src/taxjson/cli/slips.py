@@ -320,8 +320,13 @@ def cmd_slip_audit(args: argparse.Namespace) -> None:
     if year is None:
         _die_input("taxjson.toml has no [settings] year",
                    "slip-audit compares one tax year's slips.")
-    if not (root / "work").is_dir():
-        _die("no work/ in the project", "Run `tjs run` first.")
+    from taxjson.lib.clean import no_books
+    missing = no_books(root / "work")
+    if missing:
+        # (no books: before any run, or after a `tjs clean` that kept the
+        # slip-key salt, the BOOKS column would read 0.00 throughout)
+        _die("no work/ in the project" if missing == "no work/" else missing,
+             "Run `tjs run` first.")
     if getattr(args, "template", False):
         try:
             sys.stdout.write(SA.template(root, cfg))

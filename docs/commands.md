@@ -953,6 +953,82 @@ A snapshot holds your real figures and exports. `tjs init`'s `.gitignore`
 keeps it out of git, so keep it in a backup; a `.gitignore` written by an
 earlier release does not list it.
 
+#### tjs clean
+
+`tjs clean [--dry-run] [--json] [--details]`
+
+Remove what `tjs run` generated, so the next `tjs run` builds every file
+again from the inputs and no result of an earlier run is left to read:
+in `work/` and `reports/` the files it recognises as taxjson's, and the
+files the run wrote into `exports_dir` (the ones its `.taxjson-exports.json`
+names, and that record). Prints one line per folder with the files removed;
+`--dry-run` prints the same and removes nothing, `--details` lists every
+entry and why anything was left alone.
+
+Only what taxjson writes goes, each file by its full name, never by how a
+name begins: in `work/` the records' folder `.deps/` and every file (never
+a folder) a record there names, the fixed names the run and the views write,
+and the names the stages give an account's files (`<account>_base.json`,
+`<account>_<group>.json`, `.<account>_gains.timeline.json`, ...) and a
+blend's (`.blend_base.json`, ...), for the accounts `taxjson.toml` names and
+the ones the records name (an account removed since: its books are the stale
+result); in `reports/` a report its record names, the fixed reports
+(`ccd.rpt`, `fees.rpt`, `run_summary.json`, the combined radar, ...) and each
+account's `.sum`, `_wash.sum`, `_holdings.toml` and radar. Anything else in
+them (a file or folder of your own, even one named like an account's files,
+such as `work/margin_notes.txt`) stays and is named in one `Info:` line
+("taxjson did not write"), never counted as removed; so does an account's
+book that no record and no `taxjson.toml` table ties to taxjson. No `.tt`
+file is ever removed, whatever names it, nor a folder holding one; a `.tt` a
+run generates under `inputs/` (`inputs/crypto/crypto_sends.tt`) stays too,
+as `inputs/` is never touched.
+
+Kept, though taxjson's: the lock files, `.slip_key_salt` (the broker keys in
+`slips.toml` are salted with it), `tjs watch`'s baseline, the prices fetched
+from outside (`.close_cache.json`, `.price_cache.json`, `tjs technicals`'
+`.history_cache.json`: an offline run reads only them), the generated `crypto_sends.tt` of a shared-exports project (the
+run keeps each line at the price it showed), an older layout's
+`<account>_manifest.json` and the snapshots `tjs compare --save` kept
+(`work/compare/prev`, the run's own, goes). Never touched: `taxjson.toml`,
+`ticker.map`, `tobase.map`, `checklist.json`, `inputs/`, `holdings/`,
+`filed/`, `snapshot/`, `layouts/` and `inputs_redact/`. When one of these, a
+folder a `[settings]` key names (`holdings_dir`, `inputs_dir`, `exports_dir`,
+`tobase_map`, `prior_year_record`) or an account's `holdings` file (one path
+or a list, as `tjs sanity` reads it) is, is inside or holds `work/` or
+`reports/` (a link followed), it stops, naming it, and removes nothing
+(exit 2): move your files out of `work/` and `reports/` first. In the folder
+holding the year folders every year's places are checked against every
+year's `work/` and `reports/` (2025's holdings file in `2024/reports/` stops
+it); in a year folder only that year's settings are read, so another year's
+setting naming a file there is not seen.
+
+In the folder holding the year folders it cleans every year and the export
+of each (and names a `work/`, `reports/` or older `export/` folder of its
+own, which no command writes); in a year folder, that year and its export
+(the newest year's export is left alone by an older year, and one whose
+record names no year is cleaned only from the folder holding the years). A
+filed year's `work/` goes like any other (its `filed/` stays), and so does
+the export its run wrote: run `tjs run` before `tjs check-filed`, and
+`tjs years` shows its drift verdict again after that run.
+
+It never follows a link: a `work/` or `reports/` that is a symlink stops it
+(exit 2, nothing removed), a link inside them is removed as a link, and an
+exports folder reached through a link, outside the project (a single-folder
+project's `exports_dir = "../exports"`) or overlapping another folder is
+left alone with a `Warning:`. It takes each project's run lock first: while
+a `tjs run` or `tjs close-year` holds one it stops in one line (exit 1),
+nothing removed. In every year it removes the reports' `.sum` files first,
+then the last full run's record of what it read
+(`work/.inputs_fingerprint.json`), then the rest, the books last, and the
+run locks after everything: a clean that stops part-way (a file it cannot
+remove, exit 1 naming it; Ctrl-C, exit 130) leaves books the filing commands
+refuse and the views warn of ("these books are not the clean result of the
+current inputs"; once the books are gone, they refuse as before any run),
+until `tjs clean` or `tjs run` runs again. Nothing to remove is an `Info:`
+line, exit 0. After it, the commands that read the books answer as in a
+project never run ("no books in work/" where something kept is left in
+`work/`).
+
 #### tjs crypto-sends
 
 `tjs crypto-sends [ACCOUNT] [--set ID=DECISION] [--unpair] [--unset ID] [--note TEXT] [--price P] [--write] [--json] [--details]`
@@ -1143,12 +1219,16 @@ carryover rules:
 
 Upcoming dividends estimated from each held position's **own dividend
 history in the books** (planning numbers only, never a filing figure).
+The rows are listed by the next pay date, the latest first, so the
+payment that comes next is the bottom row; a payer with no projected
+payment is listed above them, by ticker (`--json`: by ticker and account).
 Per payer it reads the payment frequency from its past pay dates (the
 grid — weekly, monthly, quarterly, semi-annual or annual — most of the
 last payments fall on; a special beside a regular payment or a stretch
-the position was not held does not break it; no grid, or a single
-payment, is flagged and estimated pro rata from its 12-month amount per
-share; a reversal posted later nets against the payment it cancels, and
+the position was not held does not break it; a history too short to
+settle a schedule is projected **quarterly, shown as assumed** (below);
+no grid, and not assumed quarterly, is flagged and estimated pro rata
+from its 12-month amount per share; a reversal posted later nets against the payment it cancels, and
 a row with no share count takes the account's nearest one, except one
 the broker's statements show no count for (an Interactive Brokers row
 its accrual does not pay: `no_share_count` in `tjs divs --json`), which
@@ -1190,6 +1270,66 @@ account); `--date` sets the as-of day (default today; the shares are
 always the books' current holdings). `--details` lists each payer's
 schedule, the projected payments with their tax dates, and the positions
 left out.
+
+**Quarterly, assumed.** A payer whose own history cannot settle its
+schedule is projected quarterly from its latest payment, at that
+payment's per-share amount, until the books contradict it:
+
+- *Cannot settle:* one to three payments in the books, the latest in the
+  last 12 months, each alone on a quarterly date counted back from the
+  latest (the latest pay date less 3, 6, 9 … months, within about three
+  weeks: the tolerance the frequency reading uses), where no grid was
+  read or a semi-annual one that rests on a single six-month gap. So: a
+  single payment; two or three payments any number of quarters apart
+  with gaps between them (6, 9 or 15 months, for example). A schedule
+  the history does show (four quarterly payments, two a quarter apart,
+  monthly, two a year apart, three six months apart) is read as before.
+- *Contradicted* (the row is read as before: `1 payment`, `semi-annual`,
+  `irregular`):
+  - two payments closer than a quarter, or one off the quarterly dates;
+  - a quarterly date with no payment, between the payments or after the
+    latest and more than 15 days overdue, on which the books show the
+    shares held: long on every day from about 45 days before the date
+    through the date itself (sold later still counts), in books that
+    run at least 15 days past it. The position is followed through a
+    rename and a move between your accounts: every account's balance
+    counts, and up to 5 days with no shares in any account (a transfer
+    out that reaches the other account days later) still count as held.
+    The payer skipped the date;
+  - an overdue date after the latest payment that nothing explains: no
+    trade of the security in the books, which do reach the date;
+  - two or more overdue dates after the end of the account's books
+    (below).
+- *Not a contradiction, and not a missing payment:*
+  - a date paid by a row the schedule leaves out: any dividend row of
+    the security within about three weeks of it, in another currency or
+    with no share count (the per-share amount still comes from the
+    schedule's rows). A return of capital booked as an adjustment is
+    not a dividend row: a trust quarter paid wholly as return of
+    capital reads as a date with no payment;
+  - a date on which the books show the shares not held: none was due.
+- *Not checked:* an overdue date after the end of the books of an account
+  that held the shares (the date of the account's last row of any kind,
+  whatever `--date`: an export older than the date asked about, or an
+  account with no row since). The books cannot say, and the row says so:
+  `the books of ACCOUNT end YYYY-MM-DD: later dates not checked`. One
+  such date counts as a missing payment, as for any quarterly payer (the
+  row is still projected, with "1 expected payment not in the books");
+  two or more drop the assumption, and the row, read as before, keeps
+  that line as the reason. Download the newer export and `tjs run` to
+  have the dates checked.
+
+The row shows `quarterly?` under FREQ, is one of the "payer(s) to check",
+and `--details` says `assumed quarterly: N payment(s) in the books, none
+contradicts it` (it prints no typical gap for such a row); in `--json`
+the row has `"frequency": "quarterly"` and `"frequency_assumed": true`
+(`false` on every other row), and `median_gap_days` stays what the
+payments show (182 for two payments six months apart: the data's, not
+the assumed schedule's). A payer that pays less often (annual,
+semi-annual), or whose only payment was a special dividend, is
+**over-projected** until a later payment or a passed date shows its
+schedule. No ticker or security data is built in: the rule reads the
+books alone.
 
 #### tjs estimate
 
@@ -1749,6 +1889,132 @@ ticker.map, wash-adjusted where built) with a per-account breakdown and
 the combined book cost; shorts net against longs. Option contracts only
 with `--options`; futures contracts are left out. Like `list`, it is the
 end of the books (the header says the date), not the tax year's Dec 31.
+
+#### tjs technicals
+
+`tjs technicals [--benchmark SYMBOL] [--details] [--json]`
+
+Every position the books hold at their end, one row a symbol (all
+accounts' quantity summed, as `tjs shares`), with technical statistics
+from about a year of daily closes. Market statistics from past prices:
+not tax figures, and not advice. Option and futures contracts are left
+out, and so is crypto (the windows count trading sessions, and a coin
+trades every day); the header counts them and `--details` names them.
+With no position left, it says `No open positions.` under its title,
+and nothing else.
+
+The closes are Yahoo Finance's daily series (the `[fx]` extra), adjusted
+for splits and dividends (Yahoo's adjusted closes, high and low with
+them), so a split or an ex-dividend day does not read as a move; each
+series is in its listing's own currency, never converted. A holding is
+asked for under its ticker.map `QUOTE` line's spelling, else taxjson's
+(`XYZQ.TO` as `XYZQ.TO`, `XYZQ.US` as `XYZQ`). Only completed sessions
+count: a bar dated today is left out until the next day.
+
+The series are cached in `work/.history_cache.json` with the day each
+was fetched (an entry of another spelling or adjustment, or whose fetch
+day is not a `YYYY-MM-DD` date, is not used). An entry fetched today is
+used without asking again; on another day the series is fetched again,
+and the cache is used when Yahoo has nothing, with `TAXJSON_OFFLINE`
+set, or without the `[fx]` extra. The header says where the closes came
+from and the day the cache fetched them, and one `! ` line a cause says
+when the cache stood in: after Yahoo gave no answer, whatever its age;
+with `TAXJSON_OFFLINE` set or without the extra, when it is more than 7
+days old. A tier that fails is one warning line, never a traceback.
+Every row shows the date of its last close; a date older than the newest
+row's is marked `*`, with an `! ` line.
+
+With no history for any holding it refuses (exit 1): one line when
+`TAXJSON_OFFLINE` is set; the error and the install command without the
+`[fx]` extra; the error and a hint when Yahoo gave nothing. A holding
+with no history is a row of blanks. When other symbols came back, an
+`! ` line names the ticker.map `QUOTE SYMBOL YAHOO_SYMBOL` line that
+gives Yahoo's spelling; when none came back (the network, or Yahoo), it
+says so instead.
+
+Beta and alpha need a benchmark: `--benchmark SYMBOL`, else
+`[settings] benchmark` (docs/settings.md), spelled as the books spell a
+listing or as Yahoo spells an index (`^XYZQ`); a bare word (taxjson's
+spelling of a coin) is refused unless a `QUOTE` line names it. With
+none, BETA and ALPHA are blank (the table leaves the empty columns out)
+and one `Info:` line names the key. The `Benchmark:` line gives the
+benchmark's last close: a date older than the newest row's is marked
+`*`, and an `! ` line says BETA and ALPHA end on it. A benchmark the
+cache served is on the cache's line, as a holding is. One with no daily
+history at all leaves them blank too, the `Benchmark:` line says so, and
+an `! ` line of its own says why (no `QUOTE` advice for an index, or
+when Yahoo answered nothing). When rows are in another currency than
+the benchmark's, an `! ` line says their BETA and ALPHA include the
+exchange rate's moves.
+
+A statistic needs its whole window (counted in sessions): with less
+history it is blank, never a figure from a shorter window. It is blank
+too when the data does not allow it: RSI when no close moved, BETA and
+ALPHA when the benchmark's returns do not vary, ATR14 without 15
+sessions in a row with a high and a low, AVGVOL20 when a session of the
+last 20 has no volume. `--details` says which and why, row by row. The
+statistics, LAST being the last close (adjusted) and a year 252
+sessions:
+
+- **SMA20, SMA50, SMA200** (default view): (LAST / the mean of the last
+  20, 50 or 200 closes - 1) x 100.
+- **RSI**: RSI(14) with Wilder's smoothing: the first average gain and
+  loss are the mean of the first 14 changes of the series, then avg =
+  (avg x 13 + this change) / 14 through the rest; 100 - 100 / (1 + gain
+  / loss); 100 when no close fell, 0 when none rose, blank when none
+  moved. Needs 15 closes.
+- **BETA**: cov / var (sample, n - 1) of the daily simple returns of the
+  holding and the benchmark, between the consecutive dates both series
+  have (a holiday on one market is skipped by both), the last 252 such
+  returns.
+- **ALPHA**: Jensen's alpha with a zero risk-free rate, annualised:
+  (mean holding return - BETA x mean benchmark return) x 252 x 100, in
+  % a year, over the same returns.
+- **HIGH52, LOW52** (`--details`): LAST's % from the highest and the
+  lowest close of the last 253 closes (252 returns).
+- **VOL**: the sample standard deviation of the last 252 daily returns x
+  sqrt(252) x 100 (annualised volatility).
+- **1M, 3M, 1Y**: (LAST / the close 21, 63 or 252 sessions before - 1) x
+  100.
+- **MAXDD**: the deepest fall from a running peak close over the last
+  253 closes (252 returns): min(close / the highest close so far - 1) x
+  100.
+- **ATR14**: Wilder's average true range over 14 sessions (the first the
+  mean of 14 true ranges, then (ATR x 13 + TR) / 14), as a % of LAST;
+  true range = max(high - low, |high - previous close|, |low - previous
+  close|).
+- **AVGVOL20**: the mean volume of the last 20 sessions.
+
+`--details` adds those statistics, the history behind each row (the
+spelling asked, its currency, sessions, first and last date, source and
+fetch day), the notes (each blank and why) and the definitions.
+`--json` has every figure (percentages and ratios at 4 places, `null`
+when blank, never `-0.0`) with why each blank is one, why a cached
+series was used, the windows, each statistic's minimum sessions and what
+was left out (`schema_version` 1; its values in docs/settings.md,
+"`tjs technicals --json`"). Stale books (inputs newer than the last run)
+get the warning `tjs list` gives; the `benchmark` key itself is no run
+input, so setting it leaves the books and a closed year as they are.
+
+```
+$ tjs technicals
+TECHNICALS — 3 holdings at the end of the books (2026-09-21)
+Closes:     daily, adjusted for splits and dividends, from Yahoo Finance (2026-09-22)
+Benchmark:  XYZQ.TO ([settings] benchmark), last close 2026-09-21
+Left out:   1 option contract (--details names them)
+
+SMA: % from the 20/50/200-close mean. RSI(14), Wilder. Blank: too little history, or not computable.
+BETA: cov/var, ALPHA: Jensen's (risk-free 0, % a year), over 252 daily returns against XYZQ.TO.
+SYMBOL   QTY   LAST  DATE         SMA20  SMA50  SMA200   RSI  BETA  ALPHA
+-------------------------------------------------------------------------
+ABCX.US   30  41.20  2026-09-21    +2.1   +4.8    +9.6  61.3  1.18   +6.2
+XYZQ.TO   10  42.05  2026-09-21    +0.4   +1.2    +5.1  54.0  1.00    0.0
+ZZQN.TO    4  60.10  2026-09-18*   -3.2   -1.5          38.7
+
+! DATE marked *: last close older than 2026-09-21 for 1 symbol (ZZQN.TO) — tjs technicals --details
+! 1 row not in CAD, the benchmark's currency: BETA and ALPHA include the exchange rate's moves
+More: tjs technicals --details (the other statistics, the history, the notes)
+```
 
 ### Row listings
 
@@ -3359,6 +3625,108 @@ an older release froze is thawed by `--force` first (taxjson.toml
 names the shared folders again, the unchanged copies are removed; a
 copy edited since is named and kept), which stops for a `tjs run`
 before the year is closed.
+
+#### tjs unclose-year
+
+`tjs unclose-year [--year YEAR] [--dry-run] [--details]`
+
+Take back the year's `tjs close-year`: the year is open again, as it
+was before the close, and what was filed is kept in a backup. It is all
+or nothing, as the close is: whatever stops it before its last write (a
+refusal, an error, Ctrl-C) puts back everything it moved and says
+nothing was changed. `--dry-run` shows what would change and changes
+nothing (the backup folder as its pattern: its name carries the time
+the run starts). It reverses the close's three writes:
+
+- **The lock and the reports as filed** move into a backup folder of
+  their own, `filed/<year>.unclosed-<date>-<time>/` (`<year>.json`,
+  `reports/`), with `taxjson.toml` as it was while closed and
+  `unclosed.json`, the record of what the command did (every file it
+  removed, kept or left). Nothing reads the backup as a lock: `tjs
+  years` shows the year `open`, `tjs check-filed` has no lock to check,
+  and the next year's estimate, `carryover` and `handoff` read none.
+  The lock is the record of what was filed and cannot be rebuilt once
+  the inputs change, so commit the backup with your records. The backup
+  folder and `unclosed.json` are a record for people, not part of the
+  stable surface: no command reads them, and a release may lay them
+  out differently. The checklist verdicts kept in `work/` while the
+  year was closed are dropped (`tjs checklist --run` checks again).
+- **`taxjson.toml`** names `inputs_dir` / `tobase_map` again and loses
+  close-year's note. Only the close's own lines are edited: each note
+  is removed, and the `# ` the close put before a setting is taken off
+  only where the lock's `frozen` record names that setting with that
+  very value. So the file is byte for byte what it was before the
+  close, and an edit made since stays (a file with Windows line ends, a
+  BOM or no final newline was rewritten without them by the close, and
+  stays so). A commented `# tobase_map = ...` of your own that happens
+  to sit under the note is not the close's line: it stays a comment,
+  and the year's own `tobase.map` is then not a frozen copy and is not
+  touched. A setting already named again by hand is left as it is
+  (`tobase_map` too: the "two tobase.map files for this year" every
+  other command refuses in that state is this command's to take back,
+  when the lock records the freeze). When the line under the note is
+  gone, or is not the one the close wrote, the setting is written from
+  the lock's record and the output says which. With no record (the lock
+  deleted or unreadable, or written before locks recorded the freeze)
+  only the one commented line directly under each note is restored; a
+  second commented setting under the same note is left and named
+  (`Not restored:`) for you to un-comment by hand if the close wrote
+  it.
+- **The frozen copies** (the year's own `inputs/<account>/` files and
+  `tobase.map`), for each setting the record says the close froze: a
+  copy that is byte for byte the shared file it was copied from is
+  removed. A copy that differs from the shared file (the shared export
+  gained rows since, or the copy was edited), whose shared file cannot
+  be read, or that the shared folder does not hold, is never deleted:
+  it moves into the backup (`inputs/<account>/...`, `tobase.map`), is
+  named in the output, and a `! ` line says the year now reads other
+  inputs than it was filed from, with the count of kept files and of
+  exports in the shared folder the filed year never read. The reopened
+  year is then computed from the shared folder, so its figures may
+  differ from the filed ones: `tjs run`, then compare `reports/` with
+  the backup's `reports/`. A kept file that differs from the shared one
+  is for comparing: the shared file is what every year reads, so do not
+  copy the kept one over it unless it is right for all of them; a kept
+  file the shared folder does not hold goes into the shared
+  `inputs/<account>/` if it belongs to the books (`--details` says
+  which is which). A copy that is a link (the close copies files, so a
+  link is yours) is left where it is and named. A `layouts/` file the
+  close copied into the project stays (it shadows the same layout).
+
+Refused, with nothing changed: a year that is not closed (no
+`filed/<year>.json`; one line); a `--year` other than `[settings]
+year`; a **later year that is closed**, in this project's `filed/` or
+in a later year's project beside it (its return took its carry-in from
+this year's record: reopen the newest year first; to amend a filed year
+and keep it filed, use `tjs close-year --force`, see
+[filing.md](filing.md#6-after-assessment)); the shared `inputs/` folder
+or `tobase.map` gone while the year's copy is the only one; the year's
+`tobase.map` a link to another file than the shared one; a
+`tobase_map` named by hand beside a `tobase.map` no record calls the
+close's copy; a `tjs run` in progress; a `taxjson.toml` that is
+read-only or a link out of the project (exit 2). The later years looked
+at are the year folders beside this one and any other folder beside it
+holding a `taxjson.toml` (a link to a folder too, such as `2025 ->
+y2025`) whose `year` is later or whose `prior_year_record` names this
+year's lock. A later year that was only started (`tjs new-year`) is no
+refusal: a `! ` line names it, its kept checklist verdicts are dropped
+too, and its `tjs handoff` has no record to check against until this
+year is closed again.
+
+It also handles the states a close can be left in by hand: a lock
+written before locks recorded the freeze (the freeze is read from the
+note in `taxjson.toml`), a lock taken before the year ended (nothing
+was frozen: only the lock and the reports as filed move), a
+single-folder project (the same), a lock that cannot be read (kept as
+it is), and a lock already deleted while the note or the reports as
+filed remain (`tjs years`: "lock missing"): the freeze is taken back,
+and the output says the filed figures are recorded nowhere here (the
+backup then holds the reports as filed, not the lock).
+
+To close the year again, `tjs close-year`: it locks the books as they
+are then, which are the filed figures only while the inputs are the
+same. Exit codes: 0 reopened (or `--dry-run`), 1 a refusal, 2 a file
+that cannot be read or written, 130 interrupted.
 
 #### tjs check-filed
 

@@ -598,13 +598,15 @@ def _quiet_yfinance():
 
 
 def _yf_history_fetcher(pairs: Dict[str, str], *, start: str, end: str,
-                        verbose: bool
-                        ) -> Dict[str, Tuple[Dict[str, float], Optional[str]]]:
+                        verbose: bool, adjusted: bool = False,
+                        bars: bool = False) -> Dict[str, tuple]:
     """Daily close history via yfinance: {sym: ({date: close},
     currency)}, the closes in the MAJOR unit of the currency Yahoo names
     (None when it names none; a unit it names that taxjson cannot read
     drops the symbol). Yahoo closes are split-adjusted (current share
-    terms)."""
+    terms); `adjusted`: dividend-adjusted too (Yahoo's auto_adjust, the
+    high and low with them). `bars`: {sym: ([[date, close, high, low,
+    volume], ...], currency, source)} instead (daily_history's rows)."""
     try:
         import yfinance as yf
     except ImportError:
@@ -613,7 +615,7 @@ def _yf_history_fetcher(pairs: Dict[str, str], *, start: str, end: str,
                      "history tier", sys.stderr)
         return {}
     from datetime import date as _date, timedelta as _td
-    out: Dict[str, Dict[str, float]] = {}
+    out: Dict[str, tuple] = {}
     # yfinance's `end` is exclusive — push one day past the window.
     try:
         end_x = (_date.fromisoformat(end) + _td(days=1)).isoformat()
@@ -623,7 +625,8 @@ def _yf_history_fetcher(pairs: Dict[str, str], *, start: str, end: str,
         try:
             with _quiet_yfinance():
                 tk = yf.Ticker(ysym)
-                hist = tk.history(start=start, end=end_x, auto_adjust=False)
+                hist = tk.history(start=start, end=end_x,
+                                  auto_adjust=adjusted)
                 yf_cur = _yf_currency(tk)
         except Exception:                                   # noqa: BLE001
             continue
@@ -634,6 +637,11 @@ def _yf_history_fetcher(pairs: Dict[str, str], *, start: str, end: str,
         if problem:
             emit_line(f"warning: price-chain: Yahoo history for {sym} "
                       f"({ysym}): {problem} — not used", file=sys.stderr)
+            continue
+        if bars:
+            rows = _yf_bar_rows(hist, div)
+            if rows:
+                out[sym] = (rows, cur, HISTORY_LIVE_SOURCE)
             continue
         closes = {}
         try:
@@ -646,6 +654,29 @@ def _yf_history_fetcher(pairs: Dict[str, str], *, start: str, end: str,
             out[sym] = (closes, cur)
     return out
 
+
+
+def _yf_bar_rows(hist, div: float) -> list:
+    """A yfinance history frame's sessions as [date, close, high, low,
+    volume] rows, the prices divided by `div` (a minor unit's 100); a
+    column it lacks is None in every row. Unchecked beyond that:
+    daily_history keeps a session only when its close is a price."""
+    try:
+        cols = [hist[c] if c in hist else None
+                for c in ("Close", "High", "Low", "Volume")]
+        if cols[0] is None:
+            return []
+        rows = []
+        for i, ts in enumerate(hist.index):
+            cells = [None if col is None else _money(col.iloc[i])
+                     for col in cols[:3]]
+            rows.append([str(ts)[:10]]
+                        + [None if c is None else c / div for c in cells]
+                        + [None if cols[3] is None
+                           else _volume(cols[3].iloc[i])])
+    except (AttributeError, IndexError, KeyError, TypeError):
+        return []
+    return rows
 
 
 def _yf_currency(tk) -> Optional[str]:
@@ -1128,3 +1159,272 @@ def close_on(symbol: str, quote_symbol: str, day: str, *,
         return DayClose(price=price, currency=cur, day=str(used)[:10],
                         source="yfinance")
     return None
+
+
+# ------------------------------------------------------------ daily history
+
+# `tjs technicals`' series: the completed daily sessions of about the last
+# 400 calendar days (a year of 252 sessions and the close before it, with
+# room for holidays), adjusted for splits and dividends.
+HISTORY_LOOKBACK_DAYS = 400
+# The adjustment a series carries: Yahoo's auto_adjust (open, high, low and
+# close scaled back for every split and dividend since, so the last close is
+# the session's own and no ex-date or split day reads as a move). A cache
+# entry of another adjustment is a miss.
+HISTORY_ADJUSTED = "splits+dividends"
+HISTORY_LIVE_SOURCE = "yfinance"
+HISTORY_CACHE_SOURCE = "cache"
+# Why the live tier did not answer for a symbol: daily_history's second
+# result (none cached either), or a cached series' `cache_reason`.
+HISTORY_OFFLINE = "offline"          # TAXJSON_OFFLINE
+HISTORY_NO_EXTRA = "no-extra"        # the [fx] extra is missing
+HISTORY_NONE = "none"                # asked: nothing came back (or it failed)
+# A cached series' `cache_reason` when the entry was fetched today (served
+# without asking: the sessions before today do not change within it).
+HISTORY_TODAY = "today"
+
+
+@dataclass
+class DailyHistory:
+    """One symbol's daily sessions (lib/technicals.Bar, oldest first, each
+    before the day they were fetched), the currency of its prices (major
+    units), where they came from (HISTORY_LIVE_SOURCE, HISTORY_CACHE_SOURCE
+    or a test fetcher's label), the day they were fetched, the quote
+    spelling they are the history of, and why a cached series was served:
+    None for a live answer, HISTORY_TODAY for an entry fetched today, else
+    why the live tier gave nothing (HISTORY_OFFLINE, HISTORY_NO_EXTRA,
+    HISTORY_NONE): the caller says how old such a series is."""
+    bars: list
+    currency: Optional[str]
+    source: str
+    fetched: str
+    listing: str
+    cache_reason: Optional[str] = None
+
+
+class HistoryTierFailed(Exception):
+    """A live history tier raised: its exception as one line (daily_history
+    says it on stderr and serves the cache)."""
+
+
+def _ask_history_tier(fetcher: Callable, want: Dict[str, str], start: str,
+                      today: str):
+    """One live tier's answer for `want`; any exception it raises (not a
+    KeyboardInterrupt or SystemExit) comes back as HistoryTierFailed, one
+    line naming its type, so a failing tier is a warning, not a
+    traceback."""
+    try:
+        return fetcher(dict(want), start, today)
+    except Exception as exc:
+        raise HistoryTierFailed(f"{type(exc).__name__}: {exc}") from exc
+
+
+def history_tier_installed() -> bool:
+    """Whether the live history tier's library (Yahoo Finance, the [fx]
+    extra) is installed."""
+    import importlib.util
+    try:
+        return importlib.util.find_spec("yfinance") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _volume(raw) -> Optional[float]:
+    """A session's volume: a finite number of 0 or more (never a bool), else
+    None."""
+    import numbers
+    if isinstance(raw, numbers.Real) and not isinstance(raw, bool) \
+            and raw == 0:
+        return 0.0
+    return _money(raw)
+
+
+def _history_bars(rows, div: float, upto: str) -> list:
+    """Bars from `rows` ([day, close, high, low, volume] lists or (day,
+    close) pairs), the prices divided by `div`, each day a calendar date
+    before `upto`: a close that is no usable price drops its session, a high,
+    low or volume that is not one is None. Sorted by day, a day once (the
+    last row of it)."""
+    from taxjson.lib.technicals import Bar
+    by_day: Dict[str, object] = {}
+    for r in rows if isinstance(rows, (list, tuple)) else ():
+        if not isinstance(r, (list, tuple)) or len(r) < 2:
+            continue
+        day = str(r[0])[:10]
+        try:
+            ok = date.fromisoformat(day).isoformat() == day and day < upto
+        except ValueError:
+            ok = False
+        close = _money(r[1])
+        if not ok or close is None:
+            continue
+        extra = list(r[2:5]) + [None] * (5 - len(r))
+        hi, lo = _money(extra[0]), _money(extra[1])
+        by_day[day] = Bar(day=day, close=close / div,
+                          high=None if hi is None else hi / div,
+                          low=None if lo is None else lo / div,
+                          volume=_volume(extra[2]))
+    return [by_day[d] for d in sorted(by_day)]
+
+
+def _history_key(symbol: str, quote_symbol: str) -> str:
+    return f"{symbol}|{quote_symbol}"
+
+
+def _cached_history(rec, quote_symbol: str, today: str
+                    ) -> Optional[DailyHistory]:
+    """A history cache entry as a DailyHistory, or None when it is not one
+    to serve: another adjustment or spelling, a fetch date that is no date
+    or after today (but CACHE_CLOCK_SKEW_DAYS), a unit taxjson cannot read,
+    a pence/cents market's prices without the provider's unit, or no usable
+    session."""
+    from datetime import timedelta as _td
+    if not isinstance(rec, dict) or rec.get("adjusted") != HISTORY_ADJUSTED \
+            or rec.get("quote_symbol") != quote_symbol:
+        return None
+    fetched = str(rec.get("fetched") or "")
+    try:
+        when = date.fromisoformat(fetched)
+    except ValueError:
+        return None
+    if when.isoformat() != fetched:
+        # Only the canonical YYYY-MM-DD form (fromisoformat also reads
+        # 20250103 and 2025-W01-5): the fetch date is shown and compared.
+        return None
+    if when > date.fromisoformat(today) + _td(days=CACHE_CLOCK_SKEW_DAYS):
+        return None
+    div, cur, problem = provider_unit(rec.get("currency"))
+    if problem or div != 1.0:
+        return None
+    if minor_unit_listing(quote_symbol) and rec.get("unit") != "provider":
+        return None
+    bars = _history_bars(rec.get("bars"), 1.0, fetched)
+    if not bars:
+        return None
+    return DailyHistory(bars=bars, currency=cur or quote_currency(quote_symbol),
+                        source=HISTORY_CACHE_SOURCE, fetched=fetched,
+                        listing=quote_symbol)
+
+
+def _history_hit(sym: str, quote_symbol: str, hit, today: str
+                 ) -> Optional[DailyHistory]:
+    """A live tier's answer for one symbol ({sym: rows}, {sym: (rows,
+    currency)} or {sym: (rows, currency, source)}) as a DailyHistory of the
+    sessions before today, or None (the next tier is asked): no usable
+    session, a unit taxjson cannot read, or a pence/cents market's prices
+    with no unit named (said on stderr, as the day's close says it)."""
+    rows, cur, source = hit, None, HISTORY_LIVE_SOURCE
+    if isinstance(hit, tuple):
+        rows = hit[0] if hit else None
+        cur = hit[1] if len(hit) > 1 else None
+        source = str(hit[2]) if len(hit) > 2 and hit[2] else source
+    div, major, problem = provider_unit(cur)
+    if problem:
+        emit_line(f"warning: price-chain: the daily history of {sym} "
+                  f"({quote_symbol}): {problem} — not used", file=sys.stderr)
+        return None
+    if major is None and minor_unit_listing(quote_symbol):
+        emit_line(f"warning: price-chain: the daily history of {sym} "
+                  f"({quote_symbol}) did not say its unit — that market "
+                  f"quotes in pence/cents as well as pounds, so it was not "
+                  f"used", file=sys.stderr)
+        return None
+    bars = _history_bars(rows, div, today)
+    if not bars:
+        return None
+    return DailyHistory(bars=bars, currency=major or quote_currency(quote_symbol),
+                        source=source, fetched=today, listing=quote_symbol)
+
+
+def _history_entry(h: DailyHistory, start: str) -> dict:
+    """A fresh history's cache entry (its prices in major units)."""
+    return {"quote_symbol": h.listing, "fetched": h.fetched,
+            "source": h.source, "currency": h.currency,
+            "unit": "provider", "adjusted": HISTORY_ADJUSTED, "start": start,
+            "bars": [[b.day, b.close, b.high, b.low, b.volume]
+                     for b in h.bars]}
+
+
+def daily_history(pairs: Dict[str, str], *, cache_path: Path,
+                  fetchers: Optional[List[Callable]] = None,
+                  offline: Optional[bool] = None,
+                  today: Optional[str] = None,
+                  verbose: bool = False
+                  ) -> Tuple[Dict[str, DailyHistory], Dict[str, str]]:
+    """The daily history of `pairs` (taxjson symbol -> Yahoo spelling):
+    ({symbol: DailyHistory}, {symbol: why it has none: HISTORY_OFFLINE,
+    HISTORY_NO_EXTRA or HISTORY_NONE}).
+
+    The sessions of the last HISTORY_LOOKBACK_DAYS before today, adjusted
+    for splits and dividends (HISTORY_ADJUSTED): a session dated today is
+    left out (it may be the live price, not a close). The cache
+    (work/.history_cache.json, keyed SYMBOL|QUOTE_SYMBOL, each entry with
+    the day it was fetched) serves an entry fetched today without asking,
+    since the sessions before today do not change within it; any other is
+    fetched again, and the cache serves an older entry only when the live
+    tier has nothing, or with TAXJSON_OFFLINE, or without the [fx] extra
+    (its `cache_reason` says which; the fetch date is the caller's to
+    show). A tier that raises is one stderr line and answers nothing.
+    Fresh series are written back, merged into the file under its lock.
+
+    `fetchers` replaces the live tier for tests: callables taking ({sym:
+    yahoo_sym}, start, end) and returning {sym: rows}, {sym: (rows,
+    currency)} or {sym: (rows, currency, source)}, rows [day, close, high,
+    low, volume] lists or (day, close) pairs. `offline` forces the
+    TAXJSON_OFFLINE decision (None: the switch applies unless test fetchers
+    are injected); `today` the day (YYYY-MM-DD)."""
+    from datetime import timedelta as _td
+    from taxjson.lib.offline import offline_enabled
+    from taxjson.lib.json_cache import save_json_cache
+    today = today or date.today().isoformat()
+    start = (date.fromisoformat(today)
+             - _td(days=HISTORY_LOOKBACK_DAYS)).isoformat()
+    if offline is None:
+        offline = offline_enabled() and fetchers is None
+    cache = _load_cache(cache_path)
+    cached = {s: _cached_history(cache.get(_history_key(s, q)), q, today)
+              for s, q in pairs.items()}
+    no_live = None
+    if offline:
+        no_live, fetchers = HISTORY_OFFLINE, []
+    elif fetchers is None:
+        if history_tier_installed():
+            fetchers = [lambda p, s, e: _yf_history_fetcher(
+                p, start=s, end=e, verbose=verbose, adjusted=True, bars=True)]
+        else:
+            no_live, fetchers = HISTORY_NO_EXTRA, []
+    out = {s: h for s, h in cached.items()
+           if h is not None and h.fetched == today}
+    for h in out.values():
+        h.cache_reason = HISTORY_TODAY
+    want = {s: q for s, q in pairs.items() if s not in out}
+    fresh: Dict[str, dict] = {}
+    for fetcher in fetchers:
+        if not want:
+            break
+        try:
+            got = _ask_history_tier(fetcher, want, start, today)
+        except HistoryTierFailed as exc:
+            emit_line(f"warning: price-chain: the daily-history tier failed "
+                      f"({exc}) — the history cache serves what it holds",
+                      file=sys.stderr)
+            continue
+        for sym, hit in (got.items() if isinstance(got, dict) else ()):
+            if sym not in want:
+                continue
+            h = _history_hit(sym, want[sym], hit, today)
+            if h is None:
+                continue
+            out[sym] = h
+            fresh[_history_key(sym, want.pop(sym))] = _history_entry(h, start)
+    missing: Dict[str, str] = {}
+    for sym in want:
+        if cached.get(sym) is not None:
+            out[sym] = cached[sym]
+            out[sym].cache_reason = no_live or HISTORY_NONE
+        else:
+            missing[sym] = no_live or HISTORY_NONE
+    if fresh:
+        save_json_cache(cache_path, fresh, merge=True, label="history cache ",
+                        allow_nan=False)
+    return out, missing

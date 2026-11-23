@@ -40,6 +40,8 @@ def _project(td, state, tmap=None, effective=None):
     (root / "work").mkdir(parents=True, exist_ok=True)
     (root / "taxjson.toml").write_text(_TOML)
     (root / "work" / XL.STATE).write_text(state)
+    # A book of a run, so the project reads as built (lib/clean.holds_books).
+    (root / "work" / "margin_raw.json").write_text('{"transactions": []}')
     if tmap is not None:
         (root / "ticker.map").write_text(tmap)
     if effective is not None:

@@ -37,12 +37,10 @@ contracts then open, which `inventory_on` passes to the per-account views
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeAlias, Union
+from decimal import Decimal
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeAlias, Union
 
 from taxjson.model import money as M
-
-if TYPE_CHECKING:
-    from decimal import Decimal
 
 VERSION = 1
 
@@ -74,6 +72,19 @@ EngineState: TypeAlias = Union[
           Dict[str, Any]]]
 
 _FLAT: State = (0.0, 0.0, 0.0, False, "", None, None)
+# The types of a state's own seven fields (_unequal_to_itself).
+_PLAIN = (float, int, bool, str, type(None), Decimal)
+
+
+def _unequal_to_itself(st: Union[State, EngineState]) -> bool:
+    """Whether the same state read again might not compare equal to this
+    one: it holds a value that is not equal to itself (a float or Decimal
+    NaN; a signalling one raises), or one that is no plain number, text,
+    bool or None (an eighth field's dict could hold such a value)."""
+    try:
+        return any(x != x or type(x) not in _PLAIN for x in st)
+    except ArithmeticError:
+        return True
 
 
 class Recorder:
@@ -90,6 +101,15 @@ class Recorder:
         self._state_of = state_of
         self._last: Dict[Label, Union[State, EngineState]] = {}
         self._held: Dict[Label, None] = {}      # ordered set
+        # The labels whose last state is not the flat one and that are not
+        # held (a state with no units and no cost that differs in another
+        # field): with `_held`, every label a check with no state would
+        # record a row for (`loose`).
+        self._loose: Dict[Label, None] = {}
+        # The labels whose last state holds a value unequal to itself (a
+        # NaN): a check of the same state again records it again
+        # (`sweep`'s `steady`).
+        self._unequal: Dict[Label, None] = {}
         self._rows: List[Tuple[int, Label, Union[State, EngineState], str]] = []
         # The id of the book row each `seq` is (the engine appends one
         # per row it walks; the Canadian engine does): the document's
@@ -101,23 +121,49 @@ class Recorder:
     def fold_state(self) -> tuple:
         """What a walk changes here, copied (the entries are tuples and strings):
         the Canadian re-fold's checkpoint (`engine/ca/fold._WalkFold`)."""
-        return (dict(self._last), dict(self._held), list(self._rows), list(self.row_ids))
+        return (dict(self._last), dict(self._held), list(self._rows), list(self.row_ids),
+                dict(self._loose), dict(self._unequal))
 
     def restore(self, state: tuple) -> None:
         """Back to a `fold_state`, in place (the engine's closures keep this object)."""
-        for dst, src in zip((self._last, self._held), state[:2]):
+        # (six names: a tuple of another shape is refused, not half restored)
+        last, held, rows, row_ids, loose, unequal = state
+        dst: Dict[Label, Any]
+        for dst, src in ((self._last, last), (self._held, held),
+                         (self._loose, loose), (self._unequal, unequal)):
             dst.clear()
             dst.update(src)
-        self._rows[:] = state[2]
-        self.row_ids[:] = state[3]
+        self._rows[:] = rows
+        self.row_ids[:] = row_ids
+
+    def loose(self) -> Dict[Label, None]:
+        """The labels not held whose last state is not the flat one (read,
+        not changed): a sweep that leaves out a label with no state now
+        must still name these, so their flat row is recorded."""
+        return self._loose
 
     def touch(self, seq: int, labels: Iterable[Label],
               renamed: Optional[Dict[Label, str]] = None) -> None:
         for lab in labels:
             self._check(seq, lab, (renamed or {}).get(lab, ""))
 
-    def sweep(self, seq: int, labels: Iterable[Label] = ()) -> None:
-        for lab in list(self._held) + list(labels):
+    def sweep(self, seq: int, labels: Iterable[Label] = (), *,
+              steady: bool = False) -> None:
+        """Check every label held, then `labels`. `steady`: state_of gives
+        a label the same state when asked twice in one sweep (it reads
+        nothing a check writes), so a label of `labels` that was checked a
+        moment ago as a held one is not asked again: its second check
+        compares that same state with the one just kept and records
+        nothing, unless the state holds a value unequal to itself
+        (`_unequal`), which is still checked."""
+        held, labels = list(self._held), list(labels)
+        for lab in held:
+            self._check(seq, lab, "")
+        if steady and held and labels:
+            done = set(held)
+            labels = [lab for lab in labels
+                      if lab not in done or lab in self._unequal]
+        for lab in labels:
             self._check(seq, lab, "")
 
     def _check(self, seq: int, lab: Label, renamed: str) -> None:
@@ -125,11 +171,20 @@ class Recorder:
         if st == self._last.get(lab, _FLAT) and not renamed:
             return
         self._last[lab] = st
+        if _unequal_to_itself(st):
+            self._unequal[lab] = None
+        elif self._unequal:
+            self._unequal.pop(lab, None)
         # (the flat state's cost is a float zero: read through the switch)
         if abs(st[0]) > 1e-12 or abs(M.of(st[1])) > M.of(1e-9):
             self._held[lab] = None
+            self._loose.pop(lab, None)
         else:
             self._held.pop(lab, None)
+            if st == _FLAT:
+                self._loose.pop(lab, None)
+            else:
+                self._loose[lab] = None
         self._rows.append((seq, lab, st, renamed))
 
     def finish(self, dates: List[Tuple[str, str]], *, stamp: str,

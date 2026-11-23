@@ -302,6 +302,11 @@ SETTINGS_SPEC: Tuple[Key, ...] = (
         "old shares' cost; no tax depends on it); \"ask\": asked like a "
         "taxable account's. `tjs elect` wins either way.",
         inline="zero | ask"),
+    Key("benchmark", '"XYZQ.TO"',
+        "The symbol `tjs technicals` measures each holding's beta and "
+        "alpha against, spelled as the books spell it (a ticker.map QUOTE "
+        "line maps it) or as Yahoo spells an index. A view only: no tax "
+        "figure reads it. No default (beta and alpha blank)."),
 )
 
 ACCOUNT_SPEC: Tuple[Key, ...] = (
@@ -363,6 +368,7 @@ SETTINGS_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Futures", ("futures_settle",)),
     ("Transfers", ("transfers_as_acquisitions",)),
     ("Corporate actions", ("sheltered_elections",)),
+    ("Views", ("benchmark",)),
 )
 
 

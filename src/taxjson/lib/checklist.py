@@ -527,9 +527,10 @@ class Ctx:
 def has_books(ctx: Ctx) -> bool:
     """work/ holds a run's files. A work/ holding only the checklist's
     own results file (RESULTS_FILE, written by `--run` before any
-    `tjs run`) is no work/ for the detectors that ask."""
-    return ctx.cache.is_dir() and any(f.name != RESULTS_FILE and f.name != ".deps"
-                                      for f in ctx.cache.iterdir())
+    `tjs run`), the records' folder, a lock or what `tjs clean` keeps
+    (lib/clean.holds_books) is no work/ for the detectors that ask."""
+    from taxjson.lib.clean import holds_books
+    return holds_books(ctx.cache)
 
 
 def _data_files(folder: Path) -> List[Path]:
@@ -1258,7 +1259,10 @@ _PLANNING_SETTINGS = ("province", "prior_year_record", "holdings_dir",
                       # fingerprinted itself (_input_paths), so the year
                       # that starts reading an identical shared copy
                       # (`tjs migrate`) is not stale.
-                      "tobase_map")
+                      "tobase_map",
+                      # `tjs technicals`' benchmark: a view's, read by no
+                      # stage and no figure (TJ-4975).
+                      "benchmark")
 _PLANNING_ACCOUNT_KEYS = ("holdings", "brokerage", "account", "query_id",
                           "broker_accounts",
                           # Read by `tjs t1135` only, not by the run.
@@ -3955,6 +3959,12 @@ EXCLUDED: Dict[str, str] = {
                     "parser's fixtures",
     "snapshot": "optional at any step: a copy of the project, a record "
                 "no step of the filing needs",
+    "unclose-year": "takes back a close made by mistake: no step of the "
+                    "filing needs it",
+    "technicals": "market statistics of the holdings (moving averages, RSI, "
+                  "beta): no step of the filing reads them",
+    "clean": "optional at any step: removes what `tjs run` wrote, which "
+             "the next run (step one of the list again) builds anew",
 }
 
 
@@ -5193,6 +5203,12 @@ def _check_key(root: Path, p: Path) -> str:
 PLANNING_CONFIG_KEY = "taxjson.toml (planning settings)"
 
 
+# The [settings] keys of _PLANNING_SETTINGS that no check reads either:
+# a view's alone, so setting one leaves the kept verdicts fresh too
+# (tjs technicals' benchmark; TJ-4975).
+_VIEW_ONLY_SETTINGS = frozenset({"benchmark"})
+
+
 def _planning_config_digest(path: Path) -> Optional[str]:
     """sha256 of the part of taxjson.toml a run does not read (the
     planning tables and keys _run_config_part leaves out), canonically
@@ -5208,7 +5224,8 @@ def _planning_config_digest(path: Path) -> Optional[str]:
     st = doc.get("settings")
     if isinstance(st, dict):
         part["settings"] = {k: v for k, v in st.items()
-                            if k in _PLANNING_SETTINGS}
+                            if k in _PLANNING_SETTINGS
+                            and k not in _VIEW_ONLY_SETTINGS}
     accts = doc.get("accounts")
     if isinstance(accts, dict):
         part["accounts"] = {
@@ -5364,6 +5381,25 @@ def save_results(ctx: Ctx, results: List[Result],
     ctx.cache.mkdir(parents=True, exist_ok=True, mode=0o700)
     with _StateLock(ctx.root):
         return _save_results_locked(ctx, results, now)
+
+
+def forget_results(root: Path) -> bool:
+    """Drop the verdicts kept for the project `root`
+    (work/checklist_results.json), under the project lock: what they were
+    made from is gone, and the list shows each step not checked until the
+    next `--run`. `tjs unclose-year` does, for the year reopened and the
+    years started from it: a kept "locked; no drift", or the next year's
+    "carried forward once", read a lock that is no longer there (backlog
+    TJ-4974). False when the file could not be removed."""
+    p = Path(root) / "work" / RESULTS_FILE
+    with _StateLock(Path(root)):
+        try:
+            p.unlink()
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+    return True
 
 
 def _save_results_locked(ctx: Ctx, results: List[Result],

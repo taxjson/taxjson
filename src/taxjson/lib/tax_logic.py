@@ -106,6 +106,8 @@ NON_RULE_SETTINGS: Dict[str, str] = {
     "source_currencies": "which FX rate series are fetched",
     "cross_asset": "retired; warned about and ignored",
     "leaps_months": "the LEAPS views' cut-off; no tax figure reads it",
+    "benchmark": "the symbol `tjs technicals` measures beta and alpha "
+                 "against (a market statistic); no tax figure reads it",
     "requires_taxjson": "the oldest taxjson that runs the project; an "
                         "older one refuses it (no tax figure reads it)",
 }
@@ -3142,8 +3144,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "`div-estimate` projects each held position's dividends "
                  "from its own history in the books (frequency, the "
                  "latest per-share amount on that schedule, shares held "
-                 "now; a payment off the schedule, a special, is named "
-                 "and left out) and dates each "
+                 "now; a payment off the schedule, a special, is named and left out; a history too short to settle a schedule, one to three payments on a quarterly grid, is projected "
+                 "quarterly, shown as assumed, until a quarterly date passes with the shares held and no payment) and dates each "
                  "projected payment by the income rule above (a Canadian "
                  "trust's distribution by its record date): planning "
                  "numbers, never a filed figure."),
@@ -5166,8 +5168,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "`div-estimate` projects each held position's dividends "
                  "from its own history in the books (frequency, the "
                  "latest per-share amount on that schedule, shares held "
-                 "now; a payment off the schedule, a special, is named "
-                 "and left out) and dates each "
+                 "now; a payment off the schedule, a special, is named and left out; a history too short to settle a schedule, one to three payments on a quarterly grid, is projected "
+                 "quarterly, shown as assumed, until a quarterly date passes with the shares held and no payment) and dates each "
                  "projected payment by its pay date (a listed RIC's "
                  "January dividend: the year before): planning numbers, "
                  "never a filed figure."),

@@ -42,8 +42,10 @@ _CFG = {"settings": {"year": 2026, "country": "canada"},
 
 
 def _project(root: Path) -> None:
-    """A minimal Canadian project with an empty work/ (the probes')."""
+    """A minimal Canadian project whose work/ holds one empty book (the
+    probes' was empty; a work/ with no book reads as never run)."""
     (root / "work").mkdir()
+    (root / "work" / "margin_raw.json").write_text('{"transactions": []}')
     (root / "taxjson.toml").write_text(
         '[settings]\nyear = 2026\ncountry = "canada"\n'
         '[accounts.margin]\ntype = "taxable"\n')

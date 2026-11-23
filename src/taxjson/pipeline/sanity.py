@@ -78,15 +78,13 @@ def _sanity_items_from_config(accounts_cfg: Dict[str, Any],
     files_of: Dict[str, List[str]] = {}
     accounts_cfg = typed_accounts(accounts_cfg)
     for name, acfg in accounts_cfg.items():
-        raw = acfg.holdings
-        if not raw:
-            continue
-        if isinstance(raw, str):
-            raw = [raw]
-        if not isinstance(raw, (list, tuple)):
+        raw = acfg.holdings_paths
+        if raw is None:
             notes.append(f"account {name}: `holdings` must be a path "
                          f"or a list of paths — not checked")
             _unchecked.append(name)
+            continue
+        if not raw:
             continue
         paths: List[str] = []
         missing: List[str] = []

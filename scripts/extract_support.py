@@ -1484,6 +1484,8 @@ CACHED = {
     "taxjson.engine.rows._iso_ordinal": "a date's ordinal, by its text",
     "taxjson.engine.ca.run_helpers._futures_names": "lib/futures' two names, imported once",
     "taxjson.lib.cra_slips.issuer_aliases": "the shipped issuer aliases, from their file",
+    "taxjson.lib.option_symbols._occ_match_text": "a symbol's OCC match, by its spelling",
+    "taxjson.lib.option_symbols._expiry_iso": "an expiry's date, by its six digits",
 }
 MEMOS.update(CACHED)
 ADDR = re.compile(r" at 0x[0-9a-fA-F]+")

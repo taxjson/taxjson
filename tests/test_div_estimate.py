@@ -11,7 +11,7 @@ from taxjson.rules import ids as R
 from _qa_project import project as qa_project, tj
 from _style import assert_concise, assert_legend_first, assert_styled
 from _style import project as style_project
-from _support.view_div_estimate import _div, _est, _pos
+from _support.view_div_estimate import _div, _est, _pos, _trade
 
 _W = {"TAXJSON_WIDTH": "100"}
 
@@ -158,8 +158,15 @@ class TestFrequency(unittest.TestCase):
         self.assertNotIn("ZZN.TO", DE.payments(rows))
 
     def test_single_payment_is_labelled_one_payment(self):
-        rows = [("margin", _div("2026-02-01", "ZZS.TO", 10, 2.0))]
+        # Held since December and nothing paid on the May date, in
+        # books that run to June: not a quarterly payer (a payment in
+        # the last quarter is assumed quarterly:
+        # test_div_estimate_assumed_quarterly).
+        rows = [_trade("2025-12-01", "ZZS.TO", 10),
+                ("margin", _div("2026-02-01", "ZZS.TO", 10, 2.0)),
+                _trade("2026-06-01", "ZZX.TO", 1)]
         doc = _est(rows, [_pos("ZZS.TO", 10)])
+        self.assertIs(doc["rows"][0]["frequency_assumed"], False)
         self.assertEqual(doc["rows"][0]["frequency"], "1 payment")
         self.assertEqual(doc["rows"][0]["status"], "irregular")
 
@@ -225,7 +232,11 @@ class TestEstimate(unittest.TestCase):
         self.assertEqual(doc["no_fx"], ["USD"])
 
     def test_omitted_irregular_stopped_and_late(self):
-        rows = [("margin", _div("2026-02-01", "ZZS.TO", 10, 2.0))]
+        # ZZS: one payment, and the May date passed with the shares
+        # held, in books that run to June.
+        rows = [_trade("2025-12-01", "ZZS.TO", 10),
+                ("margin", _div("2026-02-01", "ZZS.TO", 10, 2.0)),
+                _trade("2026-06-01", "ZZX.TO", 1)]
         rows += [("margin", _div(d, "ZZL.TO", 10, 1.0))
                  for d in ("2025-06-15", "2025-09-15", "2025-12-15",
                            "2026-03-15")]                  # 06-15 missed

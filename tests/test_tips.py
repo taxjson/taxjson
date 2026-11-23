@@ -136,7 +136,8 @@ class TestTips(unittest.TestCase):
                 accounts=[("margin", "taxable"), ("rrsp", "sheltered")],
                 holdings={"margin": _holdings_toml("AEM.TO"),
                           "rrsp": _holdings_toml("AEM.US")},
-                raws={},
+                # A book in work/: ticker-map reads a run's (holds_books).
+                raws={"margin": _raw_json()},
                 ticker_map="TOBASE AEM.US AEM.TO\n")
             r = _run(root)
             _r, doc = _suggest_json(root)
