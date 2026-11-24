@@ -6,6 +6,40 @@ from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional
 
 
+# The actions whose rows carry their corporate event in the id: the ones a
+# `.tt` line can say it on (`corp=`: lib/tt_format `_CORP_ACTIONS` and a
+# SPLIT line), which are all the corp-action emitters write. A row of
+# another action keeps its id with or without an event, so a book row and
+# its `.tt` line are one row (tests/features/merge/test_generated_row_ids).
+EVENT_ID_ACTIONS = ('BUYSELL', 'ASSIGN', 'SPLIT', 'ADJUST', 'DIVIDEND',
+                    'DIVIDEND_IN_LIEU', 'TAX')
+
+
+def event_identity(symbol: Any, symbol_new: Any,
+                   corp_event_id: Any, action: Any) -> List[str]:
+    """What tells two rows of separate events apart when every other id
+    field is equal, as the id's last components: the corporate event a
+    generated row belongs to (two spin-offs of one parent on one day
+    with one allocated amount each cut the parent's cost: one id made
+    the second cut a duplicate and created basis; `EVENT_ID_ACTIONS`)
+    and a rename's
+    destination (two copies of a rename that disagree on it are not one
+    row; bin/taxjson_sort `rename_conflicts` refuses the pair). A row
+    with neither keeps the id it always had; a plain split that spells
+    its own symbol as the destination (IB) is a row with none
+    (lib/corporate_timeline `normalize_symbol_new`). One list for
+    `TaxTransaction.compute_id` and lib/tt_format `compute_tt_id`
+    (backlog TJ-4985, TJ-1348)."""
+    out: List[str] = []
+    new = str(symbol_new or '').strip()
+    if new and new != str(symbol or ''):
+        out.append(f"new={new}")
+    event = str(corp_event_id or '').strip()
+    if event and action in EVENT_ID_ACTIONS:
+        out.append(f"corp={event}")
+    return out
+
+
 @dataclass
 class TaxTransaction:
     """Normalized transaction record: a parsed row as the JSON files and
@@ -34,8 +68,9 @@ class TaxTransaction:
     description: str = ''
     symbol_new: str = ''
     # Traceability back to the corp-action event/election that emitted
-    # this row (empty for ordinary broker rows). NOT part of
-    # compute_id — the identifying content is unchanged.
+    # this row (empty for ordinary broker rows). The event is part of
+    # compute_id (`event_identity`: two events' rows are two rows); the
+    # election is not.
     corp_event_id: str = ''
     corp_election: str = ''
     # An s.86.1 spin-off's parent cost reduction: how many parent shares
@@ -91,6 +126,15 @@ class TaxTransaction:
     # "C") — shown next to a closing sale that has no position in the
     # data. Evidence only, never booked.
     broker_basis: str = ''
+    # How the row's export marks a short account's trades, stamped by
+    # taxjson-brokerage from the parser (BaseBrokerage.SHORT_MARKS) on
+    # trade rows: "description" for a broker that writes "SHORT." on a
+    # short sale and "COVER SHORT." on the purchase that covers it (RBC).
+    # There a purchase with no such words is a long purchase (tax-logic
+    # CA-DISP-04). Empty: the export has no such convention, or none
+    # known (IB, Questrade, a .tt line, the generic importer). NOT part of compute_id,
+    # omitted from to_dict() when empty.
+    short_marks: str = ''
     # The lots that closing trade closed, when the export lists them
     # (IB ClosedLot rows): "<open date> <qty> <cost>" per lot, joined by
     # ";", in broker_basis's currency ("invalid" when a lot row did not
@@ -300,6 +344,8 @@ class TaxTransaction:
             self.date_settle,
             self.description
         ]
+        components += event_identity(self.symbol, self.symbol_new,
+                                     self.corp_event_id, self.action)
         raw_id = "|".join(str(c) for c in components)
         return hashlib.sha256(raw_id.encode('utf-8')).hexdigest()[:16]
 
@@ -330,7 +376,7 @@ INCOME_FACT_FIELDS = ('record_date', 'ex_date', 'income_label',
 EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
                    'broker_basis', 'broker_lots', 'multiplier',
                    'commission_refunds', 'contract_size_basis',
-                   'source', 'source_key',
+                   'source', 'source_key', 'short_marks',
                    'source_account', 'exercise_of', 'corp_cash', 'no_cash',
                    'cash_leg',
                    'no_share_count', 'corp_parent_qty', 'lot_date', 'opening_cut_legs',

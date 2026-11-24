@@ -69,14 +69,23 @@ AUD = "AX"
 GBP = "L"
 
 # An ISIN's country prefix → the listing suffix of its home market (IB
-# income rows name the security by ISIN). IE (Irish UCITS funds) is
-# assumed to be an LSE line.
+# income rows name the security by ISIN).
 [isin_country_suffix]
 CA = "TO"
 US = "US"
 GB = "L"
-IE = "L"
 AU = "AX"
+
+# An ISIN prefix that names where the issuer is domiciled, not a market
+# (an Irish UCITS fund lists in London, Amsterdam or Frankfurt, an Irish
+# company in New York) → the suffix its listing is looked for under
+# first. Never booked on the prefix alone: an income row is put there
+# only when the account holds that listing, the project's ticker.map
+# names that symbol, or the statement's instrument list gives the ISIN
+# that one venue; else the parse stops, naming the line to add. A prefix
+# in neither table is treated the same way, looked for under .US.
+[isin_domicile_suffix]
+IE = "L"
 
 # A Canadian-listed fund's US-dollar unit class: the TSX lists it as the
 # fund's root with a `.U` class (book symbol ROOT.U.TO). A market

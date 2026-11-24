@@ -13,7 +13,8 @@ from taxjson.lib.option_symbols import (
     exercise_target, is_option_symbol, parse_option_strike, parse_option_underlying,
 )
 from taxjson.lib.row_types import is_opening_row
-from taxjson.model.evidence import cut_leg_symbol, parse_cut_leg, split_cut_legs
+from taxjson.model.evidence import (UNKNOWN_OPENING_LEG, cut_leg_action, cut_leg_symbol,
+                                    parse_cut_leg, split_cut_legs)
 
 from taxjson.engine.assign import (
     _MARKED_LEG_MAX_LAG_DAYS, _ASSIGN_LEG_LEAD_DAYS, _assign_delivery_shares, _assign_direction,
@@ -159,6 +160,10 @@ class _AssignPremiumLedger:
                 self._snap_qty[k] = (self._snap_qty.get(k, 0.0)
                                      + float(t.quantity or 0.0))
                 for leg in split_cut_legs(t.opening_cut_legs):
+                    if cut_leg_action(leg) == UNKNOWN_OPENING_LEG:
+                        # An OPENING cost=unknown line the snapshot
+                        # replaced: no share row, never a delivery.
+                        continue
                     was = cut_leg_symbol(leg)
                     if was:
                         self._snap_was.setdefault((t.account, was), []).append(

@@ -254,6 +254,9 @@ ATTENTION_TOPICS = {
     "wash sale reaches a filed year": "Wash sale reaches a filed year",
     "undated listing": "Undated listing",
     "one payment in two exports": "One payment in two exports",
+    "share exchange": "Share exchange",
+    "marked cover": "Marked cover",
+    "long and short": "Long and short",
 }
 _TOPIC_RE = re.compile(r"(?P<topic>[a-z][a-z -]*?): ")
 

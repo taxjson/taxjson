@@ -123,8 +123,10 @@ class TestHalfACentOfCostIsAHolding(unittest.TestCase):
             [(r['date'], r['direction'], round(r['qty'], 9),
               round(r['cost'], 6), round(r['gain'], 6))
              for r in res['transactions']],
+            # (the cover's 1e-7 units past the short are rounding: its whole 900
+            # is the cover's cost, where 0.000009 of it was dropped; TJ-4990)
             [('2025-04-01', 'LONG', 1e-7, 0.005, -0.00499),
-             ('2025-05-01', 'SHORT', 9.9999999, -999.99999, 99.999999)])
+             ('2025-05-01', 'SHORT', 9.9999999, -999.99999, 99.99999)])
 
     @rule(R.CA_CRYPTO_09, R.CA_DISP_04)
     def test_less_is_drained(self):

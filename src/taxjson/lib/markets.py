@@ -302,7 +302,18 @@ def currency_suffix(currency: str) -> Optional[str]:
 
 
 def isin_country_suffix(cc: str) -> Optional[str]:
+    """The listing suffix of an ISIN country's home market
+    (`[isin_country_suffix]`); None for a country with none here: the
+    prefix then names a domicile, no market (`isin_domicile_suffix`)."""
     return data()["isin_country_suffix"].get(str(cc or "").upper())
+
+
+def isin_domicile_suffix(cc: str) -> Optional[str]:
+    """The suffix a listing is looked for under first where the ISIN's
+    country names the issuer's domicile and no market
+    (`[isin_domicile_suffix]`: IE -> L); never a listing by itself (the
+    IB parser books an income row there only on evidence)."""
+    return (data().get("isin_domicile_suffix") or {}).get(str(cc or "").upper())
 
 
 def crypto_venue_suffix(broker: str) -> Optional[str]:

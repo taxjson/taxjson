@@ -32,6 +32,7 @@ from taxjson.model.evidence import (EvidenceError, commission_refunds_of_tt,
 from taxjson.lib.row_types import (CASH_LEG_CASH, CASH_LEG_KINDS, CASH_LEG_NONE,
                                    CASH_LEG_REWARD)
 from taxjson.model import money as M
+from taxjson.model.transaction import event_identity
 
 
 _VALID_ACTIONS = (
@@ -80,7 +81,7 @@ _FORMS = {
     'BUYSELL': ('DATE TIME SYMBOL QTY CUR PRICE TOTAL', '[FEE] [xSIZE]'),
     'ASSIGN': ('DATE TIME SYMBOL QTY CUR PRICE TOTAL', '[FEE] [xSIZE]'),
     'TRANSFER': ('DATE TIME SYMBOL QTY CUR PRICE TOTAL', '[DECLARED]'),
-    'SPLIT': ('DATE TIME OLD NEW RATIO', ''),
+    'SPLIT': ('DATE TIME OLD NEW RATIO', '[corp=EVENT election=NAME]'),
     'DIVIDEND': ('DATE TIME SYMBOL QTY CUR PRICE GROSS', '[NET] [facts]'),
     'DIVIDEND_IN_LIEU': ('DATE TIME SYMBOL QTY CUR PRICE GROSS',
                          '[NET] [facts]'),
@@ -163,6 +164,8 @@ _FACT_ACTIONS = ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'ADJUST')
 _CORP_KEYS = {'corp': 'corp_event_id', 'election': 'corp_election',
               'parent_qty': 'corp_parent_qty', 'cash': 'corp_cash'}
 _CORP_ACTIONS = ('BUYSELL', 'ASSIGN') + _FACT_ACTIONS
+# A SPLIT line's: the event and its election only (no money moves on it).
+_SPLIT_CORP_KEYS = ('corp', 'election')
 # Optional cash facts at the end of a trade, income or ADJUST line, which
 # the FX-on-cash ledgers read (lib/cash_legs, lib/fx_cash_v2). A parser's
 # row says them by its wording and its source file, which a .tt line
@@ -369,7 +372,7 @@ def parse_tt_line(line: str, account_name: str = 'default',
     _check_time(parts[2], line, source)
     facts = {}
     trade_keys = {}
-    corp = _take_line_keys(parts, line, source)
+    corp = _take_line_keys(parts, line, source, action)
     if action in _FACT_ACTIONS:
         while parts and _FACT_RE.match(parts[-1]):
             key, val = _FACT_RE.match(parts.pop()).groups()
@@ -1191,12 +1194,17 @@ def _canonical_ca_symbols(tx: dict) -> None:
             tx[key] = canon
 
 
-def _take_line_keys(parts: list, line: str, source: str) -> dict:
+def _take_line_keys(parts: list, line: str, source: str,
+                    action: str = '') -> dict:
     """Take the tokens any row line may end with off `parts` (in place):
     `settled=<date>` or `traded=<date>`, returned as {key: date} for
     _check_corp (given twice: refused). A `not_tt=<why>` token is refused here: the
     line is the `tjs events` view's print of a row no .tt line can say
-    (NOT_TT_WHY)."""
+    (NOT_TT_WHY). A SPLIT line's `corp=` / `election=` too
+    (_SPLIT_CORP_KEYS): the corporate event that made the row and its
+    election. The event is part of the row's id (model/transaction
+    `event_identity`), so a line without it read back as another row
+    (backlog TJ-4985); any other `key=value` there is refused."""
     out: dict = {}
     for i in range(len(parts) - 1, 2, -1):
         m = _LINE_KEY_RE.match(parts[i])
@@ -1218,6 +1226,16 @@ def _take_line_keys(parts: list, line: str, source: str) -> dict:
         _refuse_twice(key, val, out, line, source)
         out[key] = val
         del parts[i]
+    while action == 'SPLIT' and len(parts) > 6 and _FACT_RE.match(parts[-1]) \
+            and not _LINE_KEY_RE.match(parts[-1]):
+        key, val = _FACT_RE.match(parts.pop()).groups()
+        if key not in _SPLIT_CORP_KEYS:
+            raise ValueError(
+                f"{_where(source)}unknown .tt token {key}={val} — a SPLIT "
+                f"line takes corp=<event id> and election=<name> (the "
+                f"corporate action that made the row): {line.strip()!r}")
+        _refuse_twice(key, val, out, line, source)
+        out[key] = val
     return out
 
 
@@ -1529,10 +1547,13 @@ def _check_traded(action: str, traded: str, settled: Optional[str],
 
 def _corp_tokens(tx: dict, action: str) -> str:
     """A row's corporate-action provenance tokens (_CORP_KEYS)."""
-    if action not in _CORP_ACTIONS or not tx.get('corp_event_id'):
+    if (action not in _CORP_ACTIONS + ('SPLIT',)
+            or not tx.get('corp_event_id')):
         return ""
     toks = []
     for key, field in _CORP_KEYS.items():
+        if action == 'SPLIT' and key not in _SPLIT_CORP_KEYS:
+            continue
         val = tx.get(field)
         if key == 'parent_qty':
             val = _num(float(val)) if val and action == 'ADJUST' else ''
@@ -1684,6 +1705,8 @@ def tt_tail(tx: dict, action: str) -> str:
                 + _cash_tokens(tx, action))
     if action == 'INTEREST':
         return _interest_tokens(tx)
+    if action == 'SPLIT':
+        return _corp_tokens(tx, action)
     return (_fact_tokens(tx, action) + _corp_tokens(tx, action)
             + _cash_tokens(tx, action))
 
@@ -1872,9 +1895,31 @@ def _check_total_sign(action: str, tx: dict, parts: list, typed: bool,
     # cost as its magnitude (engine _ca_trade_money, lib/futures
     # _money). A future's price can be negative, where a buy receives
     # money and a sale pays: _check_futures_total reads the total
-    # against the line (backlog TJ-5162).
+    # against the line (backlog TJ-5162). No other security trades
+    # below 0, so a negative price on one is refused here, at its line
+    # (_refuse_negative_price): the total checks above the call stand
+    # down at a price below 0, and such a line reached the books unread
+    # (backlog TJ-5031). A future's ASSIGN line is refused whatever its
+    # price (_refuse_futures_assign): the settlement books BUYSELL
+    # fills only, and stopped the run on it, naming no line.
+    _refuse_negative_price(action, tx, parts[6], line, source)
+    _refuse_futures_assign(action, tx, line, source)
+    from taxjson.lib.futures import is_plain_future
+    below_zero = ((tx.get('price') or 0.0) < 0
+                  and is_plain_future(str(tx.get('symbol') or '')))
     if action == 'BUYSELL' and not typed:
         _check_futures_total(tx, parts[6], written, line, source)
+    if tx.get('quantity', 0) < 0 and tx.get('net_amount', 0) < 0 \
+            and below_zero:
+        # A sale at a negative price pays: its negative total is the
+        # notional, not a commission larger than the gross. Proved
+        # against the line above; a typed line (a cancellation of a buy
+        # at a negative price), whose total is otherwise not read
+        # against the price, proves a negative one here, so what is
+        # refused is refused for what it is.
+        if typed:
+            _check_futures_total(tx, parts[6], written, line, source)
+        return
     if (tx.get('quantity', 0) < 0 and tx.get('net_amount', 0) < 0
             and not _excess_commission_sale(tx)):
         raise ValueError(
@@ -1886,6 +1931,50 @@ def _check_total_sign(action: str, tx: dict, parts: list, typed: bool,
             f"price{' (add the contract size, e.g. x1000)' if str(tx.get('symbol') or '').startswith(FUTURES_PREFIXES) and not tx.get('multiplier') else ''} "
             f"and the total equals qty x price - commission. "
             f"Line: {line.strip()!r}")
+
+
+def _refuse_negative_price(action: str, tx: dict, price_text: str,
+                           line: str, source: str) -> None:
+    """A BUYSELL / ASSIGN line whose price is below 0 and whose symbol
+    is not a futures contract, refused naming the line: a share's price
+    and an option's premium (an option on a future too) are never
+    negative, so nothing says what the line's total means, and every
+    total check stands down at such a price. The run's row check refused
+    a share's or an equity option's later, naming no line, and let an
+    option on a future through (backlog TJ-5031)."""
+    from taxjson.lib.futures import is_plain_future
+    if not (tx.get('price') or 0.0) < 0 \
+            or is_plain_future(str(tx.get('symbol') or '')):
+        return
+    raise ValueError(
+        f"{_where(source)}{action} price {price_text} is negative: only "
+        f"a futures contract (an F: or / symbol, not an option on one) "
+        f"trades below 0; a share's price and an option's premium never "
+        f"do. Write the price above 0 (the direction is the QTY's sign, "
+        f"and the total is the net cash). Line: {' '.join(line.split())!r}")
+
+
+def _refuse_futures_assign(action: str, tx: dict, line: str,
+                           source: str) -> None:
+    """An ASSIGN line of a futures contract (not an option on one) that
+    moves units, refused naming the line with the settlement's own reason
+    (lib/futures settle_futures: only BUYSELL fills of a futures contract
+    can be booked): the reader took the line, at any price, and the run
+    stopped at the settlement, which names the row by its id and no file
+    or line (the review of TJ-5031). The future an option on it delivers
+    is written as the BUYSELL fill it is."""
+    from taxjson.lib.futures import is_plain_future
+    sym = str(tx.get('symbol') or '')
+    if action != 'ASSIGN' or not is_plain_future(sym) \
+            or not abs(tx.get('quantity') or 0.0) > 0:
+        return
+    raise ValueError(
+        f"{_where(source)}ASSIGN line of the futures contract {sym}: only "
+        f"BUYSELL fills of a futures contract can be booked (on their "
+        f"settled P/L). Write the line as BUYSELL (the fill the exercise "
+        f"or assignment gave, at its price, with the contract size after "
+        f"the fee, e.g. x1000), or remove it. Line: "
+        f"{' '.join(line.split())!r}")
 
 
 def _check_futures_total(tx: dict, price_text: str, written: str,
@@ -1961,7 +2050,10 @@ def _excess_commission_sale(tx: dict) -> bool:
     """A SELL (or ASSIGN) line whose negative total is a commission
     larger than its gross: fee > |qty| x price x size and the total is
     |qty| x price x size - fee within the typo-check tolerance. A
-    futures line needs its size on the line (`x1000`) to tell."""
+    futures line needs its size on the line (`x1000`) to tell. Never a
+    line at a price below 0: there the gross itself is negative (a
+    future's sale pays its notional, `_check_futures_total`), which is
+    not a commission (backlog TJ-5031)."""
     sym = str(tx.get('symbol') or '')
     is_fut = sym.startswith(FUTURES_PREFIXES)
     if is_fut and not tx.get('multiplier'):
@@ -1972,6 +2064,8 @@ def _excess_commission_sale(tx: dict) -> bool:
     fee = float(tx.get('fee') or 0.0)
     expected = gross - fee
     net = float(tx.get('net_amount') or 0.0)
+    if gross < 0:
+        return False
     return (fee > gross and expected < 0
             and abs(net - expected) <= max(0.05, 0.01 * abs(expected)))
 
@@ -2025,6 +2119,8 @@ def compute_tt_id(tx: dict) -> str:
         tx.get('date_settle', ''),
         tx.get('description', ''),
     ]
+    components += event_identity(tx.get('symbol', ''), tx.get('symbol_new'),
+                                 tx.get('corp_event_id'), tx.get('action', ''))
     raw_id = "|".join(str(c) for c in components)
     return hashlib.sha256(raw_id.encode('utf-8')).hexdigest()[:16]
 
@@ -2188,7 +2284,8 @@ def _row_line(tx: dict, date_basis: str = 'settle'):
     if action == 'SPLIT':
         # SPLIT date time symbol_old symbol_new ratio
         symbol_new = tx.get('symbol_new') or symbol
-        return f"SPLIT {date} {time} {symbol} {symbol_new} {_num(qty)}"
+        return (f"SPLIT {date} {time} {symbol} {symbol_new} {_num(qty)}"
+                + tt_tail(tx, action))
 
     if action in ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX'):
         # ACTION date time symbol qty currency price total

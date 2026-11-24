@@ -62,7 +62,7 @@ EVENT 3/6   SELL 1 F:SAMPLMH6.US   2025-03-10   margin2   #3cad8d6d3369
     2025-03-10  BUYSELL  -1.0000  33.7500  1.3500  -0.0000         -         -       -
 
 ══════════════════════════════════════════════════════════════════════════════════════
-EVENT 4/6   SELL 12 SAMPR.US   2025-03-17   rbc   #f954c4649bcc
+EVENT 4/6   SELL 12 SAMPR.US   2025-03-17   rbc   #e47751d4d9ef
 ──────────────────────────────────────────────────────────────────────────────────────
   SOURCE       rbc_rbc_direct_corp.json (corporate actions from rbc_2024.csv, rbc_2025.csv)
                2025-03-17 SELL 12 SAMPR.US @ 10.50 — net 126.00 USD  [corp event 20250317-sampr-sampt-1b4d]

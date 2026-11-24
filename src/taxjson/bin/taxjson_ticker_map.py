@@ -222,6 +222,13 @@ def main():
                              "account's only in securities accounts "
                              "(`tjs run` passes it; default: every "
                              "dated RENAME).")
+    parser.add_argument("--incomplete-history", metavar="DIR", default=None,
+                        help="The project folder whose accounts' .tt files "
+                             "open units at an unknown cost (`OPENING "
+                             "<date> <SYMBOL> <qty> cost=unknown`): the "
+                             "lines are held as position rows while the "
+                             "dated renames are booked (a rename moves "
+                             "them) and are not written to the output.")
     from taxjson.lib.country import country_arg
     parser.add_argument("--country", type=country_arg, default=None,
                         metavar="{canada,ca,usa,us}",
@@ -260,6 +267,20 @@ def main():
         # DELETE first, then rename: a DELETE line names the broker's
         # RAW symbol. taxjson-merge2 applies the same order so one map
         # file means one thing on the equity and crypto paths.
+        # The accounts' .tt `OPENING ... cost=unknown` lines, held as
+        # position rows while the dated renames are booked (a rename
+        # moves the units held before the data: backlog TJ-5042), as
+        # taxjson-merge2 holds them; never written to the output.
+        held_openings = {}
+        if args.incomplete_history:
+            from taxjson.lib.missing_history import (TtOpeningError,
+                                                     hold_declared_openings)
+            try:
+                transactions, held_openings = hold_declared_openings(
+                    transactions, Path(args.incomplete_history))
+            except TtOpeningError as e:
+                emit_line(f"taxjson-ticker-map: error: {e}")
+                sys.exit(1)
         transactions = apply_drops(transactions, tmap.delete)
         # Dated RENAME lines are events (lib/renames), booked on the raw
         # symbols like taxjson-merge2 does.
@@ -272,6 +293,10 @@ def main():
         except RenameConflict as e:
             emit_line(f"taxjson-ticker-map: error: {e}")
             sys.exit(1)
+        if held_openings:
+            from taxjson.lib.missing_history import release_declared_openings
+            transactions = release_declared_openings(transactions,
+                                                     held_openings)
         mapping = guard_option_listing_collisions(
             [t.symbol for t in transactions], mapping)
         for _w in bare_target_warnings([t.symbol for t in transactions],

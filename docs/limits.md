@@ -291,7 +291,14 @@ the fund's declared amount, which no export carries, so the run prints an ATTENT
 taxable accounts) until the cost is added. US: a pro-rata stock dividend is not income (§305(a)); the basis
 is spread over old and new shares (§307) and the dates carry over (US-STKDIV-01). A taxable US stock
 dividend (§305(b)) is not detected. An IB stock dividend paid in another security is not booked (an
-`UNBOOKED` line asks for a hand entry).
+`UNBOOKED` line asks for a hand entry). Received by an account that is short the security (US: the
+account holds no share and a short is open; Canada: the account's own position), a stock dividend is the short
+seller's to make good: the short grows by the new shares, its proceeds unchanged, and nothing is covered
+(US-STKDIV-06, CA-STKDIV-02; no statute states the entry, so the run says it in an ATTENTION line). The
+wash-sale and superficial-loss rules read the row the same way: nothing is acquired, and no loss is denied
+against it. `tjs find-missing-history` and the run's closing `$0 cost` line add up the rows themselves and
+still list such a row as shares received at $0. A short covered between the ex-dividend date and the pay
+date leaves the row booked as a $0 purchase.
 **Instead:** Canada: add the declared per-share amount as a `[[distributions]]` entry in taxjson.toml (or
 a `.tt` ADJUST); that raises the ACB only, and the dividend itself is reported from the T5/T3 slip.
 **Code:** `src/taxjson/lib/pipeline.py` — `stock dividend of`
@@ -370,6 +377,21 @@ BUYSELL 2025-06-02 10:01:00 NEW.TO 5 CAD 20 100 0
 The sale shows on the gains report with no gain, and the shares kept keep their cost. In the US a purchase
 booked this way starts a new holding period: the old purchase dates are not carried over.
 **Code:** `src/taxjson/pipeline/inputs.py` — `_warn_partial_carryovers`; `src/taxjson/lib/corp_actions.py` — `_emit_basis_carryover_rename`
+
+#### A share exchange is not an acquisition for the superficial-loss rule
+
+A merger booked as a cost carry-over (Canada's s. 85.1 rollover, a registered account's merger) is a rename
+in the books: the cost and the dates carry over, and nothing is bought. The superficial-loss rule counts
+purchases only (`tjs tax-logic` CA-SL-07), so a loss on the acquirer's shares within 30 days of the exchange
+that brings you more of them stays allowed in full, though the exchange does acquire those shares. A pure
+ticker change is not affected (nothing is acquired). `tjs run` names each such exchange inside a loss's
+window (in any of your accounts, where the shares are still held 30 days after the loss), mid-run and again at its end ("Share exchange: … the loss is not tested against the … exchange"),
+and denies nothing for it.
+**Instead:** review the loss yourself. To have the exchange counted, elect the event `ignore` and book the
+exchange by hand in a `.tt` file, as a sale of the old shares at their cost and a purchase of the new
+shares at that cost (the lines under "A partial share-for-share exchange moves the whole position"): the
+purchase is then tested like any other.
+**Code:** `src/taxjson/lib/share_exchange_windows.py` — `share_exchanges_in_loss_windows`, `share_exchange_message`, `SHARE_EXCHANGE_ELECTIONS`; `src/taxjson/lib/pipeline.py` — `run_gains`
 
 #### A merger's per-account ratios are blended
 

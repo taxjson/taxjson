@@ -105,7 +105,7 @@ UNCITED = RULES_DIR / "baseline-uncited.txt"
 SEED_UNCITED = RULES_DIR / "seed-uncited.txt"
 # baseline-uncited.txt's size: with the seed, it keeps the baseline from
 # taking back a line once deleted (a rule cited, then not again).
-UNCITED_MAX = 142
+UNCITED_MAX = 141
 SRC = ROOT / "src" / "taxjson"
 IDS_FILE = SRC / "rules" / "ids.py"
 # The spec itself: its ids are where rules are stated, not applied.

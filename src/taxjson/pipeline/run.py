@@ -1416,14 +1416,30 @@ def _short_positions_cands(base_json: Path, account: str,
         from taxjson.lib.first_run import read_missing_history_pairs
         from taxjson.lib.missing_history import (account_types_near,
                                                   detect_missing_history,
+                                                  forward_dated,
                                                   walk_journal_symbols)
         txs = load_transactions(base_json)
         journal = walk_journal_symbols(
             Path(base_json).parent,
             ticker_map if ticker_map and Path(ticker_map).is_file()
             else None)
+        from taxjson.lib.first_run import replaced_openings
         covered = {(sym, a.lower()) for sym, a in
                    read_missing_history_pairs(missing_history)}
+        # (A line an opening snapshot replaced opens nothing: TJ-5007.)
+        covered -= replaced_openings(Path(base_json).parent)
+        # A line's units under the symbol a rename row gave them: the
+        # walk reports a renamed holding under its new symbol (backlog
+        # TJ-5042: the dated rename moves an unknown-cost opening).
+        _fwd = forward_dated(txs)
+        for _ in range(len(_fwd) + 1):
+            _more = {(new.upper(), a.lower())
+                     for (old, a), news in _fwd.items()
+                     if (old.upper(), a.lower()) in covered
+                     for new, _d in news} - covered
+            if not _more:
+                break
+            covered |= _more
 
         def _cands(rows, registered):
             return [c for c in detect_missing_history(

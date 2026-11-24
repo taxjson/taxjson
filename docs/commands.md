@@ -1017,7 +1017,10 @@ account's `.sum`, `_wash.sum`, `_holdings.toml` and radar. Anything else in
 them (a file or folder of your own, even one named like an account's files,
 such as `work/margin_notes.txt`) stays and is named in one `Info:` line
 ("taxjson did not write"), never counted as removed; so does an account's
-book that no record and no `taxjson.toml` table ties to taxjson. No `.tt`
+book that no record and no `taxjson.toml` table ties to taxjson. So does
+`work/kept/`, where `tjs run` moves a file named like an account's parse
+that no export makes now and that taxjson cannot vouch it wrote as it is
+(yours, a link, one edited since): delete what is in it yourself. No `.tt`
 file is ever removed, whatever names it, nor a folder holding one; a `.tt` a
 run generates under `inputs/` (`inputs/crypto/crypto_sends.tt`) stays too,
 as `inputs/` is never touched.
@@ -1161,7 +1164,10 @@ accounts' `OPENING ... cost=unknown` lines already cover are listed
 apart (COVERED), not as work to do. A line whose position never goes
 short without it (its purchase is in the books now) is listed under
 STALE: the run still opens its units at an unknown cost, so delete it
-(the run and `tjs checklist` say so too). A STALE or REMOVE row names
+(the run and `tjs checklist` say so too). A line an opening snapshot
+replaces is listed under REPLACED: the run opens nothing for it, its
+sales are in the totals at the snapshot's cost, and it covers no later
+sale; delete it. A STALE, REPLACED or REMOVE row names
 the file and line it is on (`inputs/margin/hand.tt:1`). `--include-options` checks option
 positions too; `--year` scopes what counts as relevant (default: the
 config year).
@@ -1220,7 +1226,12 @@ purchase**: no superficial-loss / wash-sale window, no "recent buy"
 rows of its symbols: trades, transfers, renames and cost adjustments
 dated on or before it are left out of the books with an `ATTENTION:
 opening:` line (income rows stay; a ticker reused after its rename into
-a snapshot symbol is another holding and keeps its rows); a left-out
+a snapshot symbol is another holding and keeps its rows; an `OPENING
+... cost=unknown` line dated on or before it is left out too, named in
+an `ATTENTION: opening:` line of its own: delete it; the run stops when
+such a line reaches the snapshot only through another account's rename,
+or when its units and the rows before it hold more than the snapshot,
+each refusal naming the line and the remedy); a left-out
 sale, short cover or return of capital that may go beyond the cost, of
 the tax year, stops the run (CA-OPEN-03). A US project needs one line per lot
 with its purchase date and a US-dollar cost (a holdings TOML with
@@ -1306,7 +1317,16 @@ December-record distribution paid in January is the December year's);
 in a US project a fund listed in `ric_january_dividends` pays its
 January dividend in the year before (tax-logic `CA-PLAN-06` /
 `US-PLAN-07`). A payer whose expected payment is missing from the books
-is flagged (two missing: the projection stops); positions with no
+is flagged (two missing: the projection stops); a date of its schedule
+on which the books show no shares held through half a period before it
+(read as below, a month's period for a monthly payer) is not counted as
+a missing payment, and a flag names it (`N quarterly date(s) not counted
+as missed payments: the books show no shares held through the 45 days
+before each (...)`). Only where the trades the books hold can say so:
+they end at the shares held now (in every account, whichever `ACCOUNT`
+is asked for, so a row reads the same with it or without), and show
+shares held before each payment the books record (shares that came in by a spin-off or a merger
+are no trade, and the dates are read as missed, as before); positions with no
 dividend history are left out and counted in one line; crypto accounts
 are not read (staking is not a dividend). `ACCOUNT` estimates that
 account's positions (the payer's history still comes from every
@@ -1337,8 +1357,13 @@ payment's per-share amount, until the books contradict it:
     through the date itself (sold later still counts), in books that
     run at least 15 days past it. The position is followed through a
     rename and a move between your accounts: every account's balance
-    counts, and up to 5 days with no shares in any account (a transfer
-    out that reaches the other account days later) still count as held.
+    counts, each broker account's on its own (one broker account short
+    the symbol, its sale marked as a short sale by the broker, does not
+    cancel another's shares; a sale with no such mark that puts one
+    short, as shares sold under another broker account number than they
+    were bought, leaves your account's balance as a whole), and up to 5
+    days with no shares in any account (a transfer out that reaches the
+    other account days later, on the date too) still count as held.
     The payer skipped the date;
   - an overdue date after the latest payment that nothing explains: no
     trade of the security in the books, which do reach the date;
@@ -4012,7 +4037,19 @@ read-only or a link out of the project (exit 2). The later years looked
 at are the year folders beside this one and any other folder beside it
 holding a `taxjson.toml` (a link to a folder too, such as `2025 ->
 y2025`) whose `year` is later or whose `prior_year_record` names this
-year's lock. A later year that was only started (`tjs new-year`) is no
+year's lock. A folder beside this one whose `filed/` holds the lock of a
+later year (`filed/2025.json`) but whose `taxjson.toml` cannot say which
+year it is (not valid TOML, unreadable, a link to nothing, no `year` or
+one that is no number) is refused too, a link or not, and so is a folder
+named as a later year (`2025`, or a link so named) with such a lock and
+no `taxjson.toml`, and one whose `filed/` cannot be listed while its
+`taxjson.toml` cannot say its year, or that is a later year whose
+`filed/` cannot be listed (it may hold that year's lock): the refusal names the folder, the
+lock and why, and says to repair what it names, reopen the newest year
+first, or move the folder out if it is not a later year of this project
+(exit 1). Where a readable year folder and a broken copy hold the same
+later lock, the year folder is named. A folder of another name with no
+`taxjson.toml` is no project. A later year that was only started (`tjs new-year`) is no
 refusal: a `! ` line names it, its kept checklist verdicts are dropped
 too, and its `tjs handoff` has no record to check against until this
 year is closed again.
@@ -4261,7 +4298,13 @@ What it checks, and what it does not (the footer's `not traced` line;
 - **Source amounts:** each sale's net amount against its parsed broker
   row (`sale amounts`): times the rates file's rate when converted, and
   equal when already in the base currency; for a crypto book from the
-  row the fill stage priced, for a futures fill its settled P/L. The
+  row the fill stage priced, for a futures fill its settled P/L (the
+  account's parsed fills of the contract settled as the run settles
+  them, each broker cancellation, `type=trade_cancel`, netted with the
+  fill it reverses first, as the run's merge nets it; one the audit
+  cannot place as the books did, booked as a trade of its own or left
+  out with no fill to reverse, fails every settled row of that contract
+  and account, naming it). The
   audited securities' other trades (their buys, earlier sales and
   assignments, up to 31 days after the last audited sale) and the
   wash-sale / superficial-loss replacements the sales name are checked
@@ -4516,7 +4559,9 @@ mistyped action (with the nearest valid one), a bad date, time or
 number (a decimal comma), a missing field (named, with the action's
 form), a stray column, a `SPLIT` ratio of 0 or below, a futures line at
 a negative price whose total is not qty x price x size +/- fee with its
-sign (or that has no size), a futures buy with price 0 and a negative
+sign (or that has no size), a negative price on a trade line of
+anything but a futures contract, an `ASSIGN` line of a futures contract
+(write it as `BUYSELL`), a futures buy with price 0 and a negative
 total, a settled futures line an older `taxjson-convert-tt` wrote with
 a buy's money negative at a price above 0, a `settled=` date before
 the line's date or a `traded=` date after it (or no date, one more than
@@ -4719,7 +4764,9 @@ US's oldest lots first; no superficial-loss or wash-sale adjustment: when
 the gains files add a denied loss on the old symbol to a replacement's
 cost by the rename date, the view says so with the amount, also
 `denied_not_in_cost` in `--json`, and `tjs list` shows the adjusted
-cost). Then every trade in
+cost; units an `OPENING ... cost=unknown` line opened are counted in the
+position, never in the book cost: the view says so, `cost_unknown: true`
+on that account's `carried` entry in `--json`, absent otherwise). Then every trade in
 an old ticker after its rename, with how its declaration resolves it;
 the look-alike renames the Questrade, RBC and Webull exports show (an
 old symbol that stops with shares open, a new one that starts with a

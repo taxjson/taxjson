@@ -3,6 +3,230 @@
 ## Unreleased
 
 
+## v2.1.0 (2026-11-24)
+
+### Added
+
+- Canada: `tjs run` says when a share-exchange merger booked as a cost carry-over (the s. 85.1
+  rollover election, a registered account's merger) brings shares inside the 30-day window of a
+  loss on those shares that are still held 30 days after the loss, in any of your accounts (the
+  loss in one, the exchange in another or in a registered account): `Warning: Share exchange:
+  SYQ.TO: the 2025-01-20 loss is not tested against the 2025-01-25 exchange of OLD.TO
+  (ACCOUNT)`, mid-run and again in the closing list with what to do. Nothing is denied for it:
+  such an exchange is a rename in the books, never a purchase, and the limit is now in
+  docs/limits.md ("A share exchange is not an acquisition for the superficial-loss rule") and
+  `tjs tax-logic` (CA-SL-07). A ticker change says nothing (TJ-4992, TJ-4410).
+
+### Changed
+
+- Interactive Brokers: an income row (a dividend, a payment in lieu, a return of capital, the
+  tax withheld) whose ISIN country has no home market in taxjson's table (`IE`, `LU`, `DE` ...;
+  the table has `CA`, `US`, `GB`, `AU`) is booked only on evidence of its listing. An Irish
+  ISIN put every such row on a London line (`ZZQ.L`), though an Irish fund lists in Amsterdam
+  or Frankfurt as well and an Irish company in New York, and any other country put it on
+  `ZZQ.US` with a warning. The listing the account holds still takes the row, as before. New
+  evidence: a ticker.map line naming the symbol the parse looked for; the one listing the
+  account holds the ticker under when its suffix is a currency's code (a line IB trades in
+  euros, `ZZQ.EUR`: its dividends stayed on `ZZQ.L`), said on the run's console once a security
+  with the line that confirms it (`GLOBAL ZZQ.L ZZQ.EUR`), and never for a return of capital;
+  the one venue the statement's Financial Instrument Information gives the ISIN. Otherwise the
+  parse stops, says what the statement shows (the listings the account holds, the venues the
+  instrument list names, or that nothing names one) and names the line to add
+  (`QUOTE ZZQ.L ZZQ.L` when London is its listing, `GLOBAL ZZQ.L ZZQ.US` to a listing held). A
+  return of capital of such a security that v2.0.0 kept on the ISIN's listing with an
+  `Undated listing` flag (the account's only listing first bought after the payment) is refused
+  the same way. The warning "the ISIN country has no exchange-suffix mapping, so .US was
+  assumed" is gone with the guess (TJ-5016; docs/brokers.md, docs/upgrading.md).
+
+### Fixed: brokers and input files
+
+- Interactive Brokers: the Dividends rows of a pay date that two distributions of one security
+  share (two Change in Dividend Accruals rows, an ex date each: a regular and a special
+  dividend) are matched to their own accruals. Every row took the first one: a second dividend
+  of 100 shares at 0.50 was shown as 125 shares at 0.40 with the first one's ex date, and a
+  special dividend stating its rate was counted into a regular distribution paid as rows of
+  different character with shares lent, which stopped the parse ("as 4 rows of different
+  character ... does not account for their 70.00 USD"). The rows are matched by the rate a row
+  states, by their cash against each accrual's shares and rate (the shares lent with it) and by
+  their characters; one accrual pays one distribution. Where the cash fits more than one way, a
+  way with whole share counts, then the same shares lent under each accrual, then more accruals
+  with rows of their own is taken, and the run says so (with both readings and the fix) where a
+  reading it set aside is in whole shares and gives a row another share count or rate. A match
+  that still stays open stops the parse, naming the rows and the fix (each row's per-share rate
+  written into its Description); where the accruals state the same shares and rate the rows are
+  booked and an ex date that stays open is left out, said on the run's console. No booked
+  amount moves: a row's share count, rate and ex date do (`tjs divs`, `tjs div-estimate`), and
+  its id with them (TJ-5013, TJ-4902, TJ-4903).
+- Two corporate events whose generated rows differ only in the event are two rows. Two
+  spin-offs of one parent on one day with the same allocated amount (two broker accounts under
+  one taxjson account) lost one of the parent's cost cuts to the duplicate removal, which
+  created cost: 250 in, 290 held. A row's id now holds the corporate event that made it and a
+  rename's destination; the ids of those rows change (docs/upgrading.md). A `.tt` SPLIT line
+  takes and writes `corp=EVENT election=NAME`, so a rename a corporate action made reads back
+  from its line as the same row. Both countries (TJ-4985, TJ-1348).
+- Two rows that rename one holding on one day to different symbols (two exports that disagree,
+  a `.tt` line beside the broker's row) stop the run, both named with their files. One was
+  dropped as an identical row, or both were booked and the first applied (TJ-4985).
+- Questrade: a stock-dividend, cash-in-lieu, reinvestment and interest row keeps the clock its
+  Transaction Date gives, as a trade, a dividend, a split, a fee, a transfer and a journal row
+  do; they were stamped 09:30:00 (the cash in lieu's sale 09:30:01), so shares a stock dividend
+  or a reinvestment added sorted after a sale, a journal or a transfer listed below them on
+  their day: 110 shares sold after a 10-share stock dividend were 100 sold and 10 sold short. A
+  cash in lieu's two legs share the row's clock, the sale right after the fraction. A
+  reinvestment follows the cash that pays it: a dividend or a return of capital of the same
+  security, or an interest credit, of its day is ordered before it where the export lists the
+  REI row first, so the cash ledgers (`tjs fx-cash`) see the credit before the purchase spends
+  it. A return of capital stays at 09:30:00, and a reinvestment it pays that has no clock of
+  its own (the export's midnight) is placed there, after it. The rows' ids change with the time
+  (TJ-2381, TJ-5017, TJ-5265).
+- RBC Direct: a row under an Activity the parser does not know whose Description says Sell
+  (`NAME - Sell`) is booked as a sale with its Quantity signed or not; it was read as a
+  purchase and refused as a shifted column. Refused, naming the line: a Buy or Sell row whose
+  Description ends with the other verb (it was booked by the Activity alone), a Description
+  with both words under an unknown Activity, and a `- Buy` row there with a negative Quantity
+  (it was booked as a sale). A sale's Value (the cash before commission) is cash in, a
+  purchase's cash out: a Sell row with a negative Value, booked before as a sale with negative
+  proceeds, is refused, and so is a row whose direction comes from its Description and whose
+  Value says the other. A sale whose commission is larger than its proceeds (a positive Value,
+  a negative Amount) and a Buy row whose cash is written positive book as before. In an export
+  with one money column a Sell row is read as before; a row read as a sale from its Description
+  that pays Quantity x Price or more, or as a purchase with positive cash, is refused (TJ-2383,
+  TJ-5021).
+- Webull: the Type Code is read as its kind before it is checked against the Security
+  Description: `OPC` and `OPP` an option, `SHS`, `STK` and `EQ` shares. An `OPP` row with no
+  readable contract was booked as shares of the underlying, and an `STK` or `EQ` row whose
+  description read as a contract as that option; both are refused now, and so is a trade row
+  with any other code, naming the line and the code (TJ-2388, TJ-5022).
+- `.tt` files: a negative price on a BUYSELL or ASSIGN line of a share, an option or an option
+  on a future is refused at its line (the run's row check refused a share's later, naming no
+  line, and let an option on a future through). An ASSIGN line of a futures contract is refused
+  at its line, at any price: only BUYSELL fills of a futures contract are booked, and the run
+  stopped on such a line at the futures settlement, naming the row by its id and no line. A
+  cancellation of a buy at a negative price whose total does not fit is told the notional, not
+  a commission. The entry "A negative futures price in a `.tt` file" leaves KNOWN_ISSUES.md:
+  the futures total it described has been refused since v2.0.0 (TJ-5031).
+
+### Fixed: the engines
+
+- An opening snapshot (`tjs opening`, a `.tt` `OPENING <date> <SYMBOL> <qty> <CUR> <cost>`
+  line) now replaces an earlier `OPENING <date> <SYMBOL> <qty> cost=unknown` line of the same
+  symbol as it replaces earlier purchases, in both countries. The line was opened after the
+  cut-off had run, so its units came back on top of the snapshot's: a Canadian project took the
+  later sale out of the totals (manual reporting) and kept phantom units at an unknown cost; a
+  US project computed the gain and kept the phantom units. The run names such a line in an
+  `ATTENTION: opening:` line (delete it); the snapshot's row records it (`opening_cut_legs`),
+  also when a rename made the line the snapshot's. A replaced line answers for nothing:
+  `tjs find-missing-history` lists it under REPLACED (the checklist's missing-history step asks
+  for its deletion), it covers no later sale with no purchase, and a transfer-in of its symbol
+  is booked at the broker's stated book value again. Inputs that disagree stop the run, each
+  refusal naming the line and the remedy: a line that only another account's rename row ties to
+  the snapshot (the pooled books would replace it, the account's own could not), and a buy of
+  the tax year that the snapshot's units do not account for once the line's units are taken off
+  them; a return-of-capital refusal whose walk passes such a line names it (TJ-5007, TJ-5241).
+- A dated rename (`.tt` `RENAME <date> OLD NEW`) now moves the units an
+  `OPENING ... cost=unknown` line opens on or before its date, in securities and crypto
+  accounts. The run said the rename "books nothing", kept the old symbol's units at an unknown
+  cost and read the sale of the new symbol as a short with no purchase, in no total and in no
+  manual-reporting list. The sale is now an unknown-cost sale listed for manual reporting, both
+  holdings end flat, and `tjs renames` lists the rename with the units it carried
+  (`cost_unknown: true` on the `carried` entry in `--json`; the book cost leaves them out)
+  (TJ-5042, TJ-3240).
+- A stock dividend posted while the position is short raises the short: the shares owed grow by
+  the new shares and the proceeds stay (US: the short lots sold before the entitlement date,
+  pro rata; Canada: the pool). It was booked as a $0 purchase, which covered that many shares
+  for nothing: a short of 100 sold for 500, a 10-share stock dividend and a purchase of 110 for
+  440 gave a gain of 140 and 20 shares held costing 80; it gives 60 and no holding. The
+  wash-sale and superficial-loss rules read the row the same way, so nothing is acquired by it
+  and no loss is denied against it. An ATTENTION line on the run's console says so, the rule is
+  stated as an assumption (tax-logic US-STKDIV-06, CA-STKDIV-02), and a Canadian run no longer
+  asks for the declared amount of such a row. In Canada the account that received the row
+  decides, so the pooled books and each account's books read it alike. Re-run a year with such
+  a row: see docs/upgrading.md (TJ-5006, TJ-5280).
+- US: a stock dividend whose ex-dividend date falls before a §356 exchange of part of the
+  holding counts the exchanged shares among those entitled. The new shares paid on them are a
+  lot with their dates and their share of the basis the exchange carried, taken off the shares
+  received; where those are no longer the lot the exchange booked, the new shares are booked at
+  $0 and an ATTENTION line names the amount to move and where it sits (on the shares still
+  held, in the cost of those sold). The shares still held took the whole dividend: 100 bought
+  for 400, 50 exchanged, 10 paid: 60 shares at 200 and the new company's 25 at 200, for 60 at
+  218.18 and 25 at 181.82 (US-STKDIV-05; TJ-4987, TJ-2706).
+- US: shares that already replaced a loss never replace a second one after a §355 spin-off
+  moved their whole basis. The spin-off took the earlier loss's addition with the basis, the
+  shares looked never matched, and another account's later loss was disallowed against them
+  once they were sold (a 600 loss disallowed and added to a sale already closed). The lot now
+  keeps its own record of having replaced a loss (TJ-4986, TJ-2704).
+- Canada: a trade larger than the position it closes by a millionth of a share or less no
+  longer loses that part's money. Where the part's share of the trade's amount is under half a
+  cent it is rounding and stays with the disposition; where it is more (a holding of 0.0000005
+  shares costing 25, 0.000001 sold for 100) it is booked as any sale past a holding is: here a
+  short of the excess at its 50 of proceeds, where 50 was in no total before (TJ-4990,
+  TJ-1347).
+- Canada: which purchase closes a short the broker marks now follows that broker's convention
+  (docs/brokers.md "Short sales: which purchase covers a short"). In RBC exports, which write
+  "SHORT." on a short sale and "COVER SHORT." on its cover, only the marked purchase closes the
+  short; a purchase with no mark is a long purchase, in whichever file it is. Before, the first
+  purchase made while the account was short and held no shares was taken as the cover, so a
+  later sale used the wrong cost. Interactive Brokers and Questrade rows, `.tt` lines and the
+  generic importer's rows are read as before (a purchase while short covers). Two new Warnings,
+  so that nothing is booked silently: `Marked cover: …` when a purchase with no mark was read
+  as the cover and a marked cover then finds less short than it buys (both rows named), and
+  `Long and short: …` when an account's rows end with shares held and a short of the same
+  shares. `tjs find-missing-history` and the run's "cover of a short opened before your files"
+  line read the same covers as the books: a marked cover after a plain purchase is no longer
+  listed, and `--write-missing-history` no longer drafts a short line for it. US projects are
+  unchanged (TJ-4993, TJ-1357).
+- A `.tt` purchase whose shares a move of your own took to another account no longer covers a
+  later transfer-in of the same security: that arrival is booked at the broker's stated book
+  value (`tjs transfers`: `book value`, where it said `.tt covers`), also when the shares later
+  moved back. A transfer-in from outside your books within 45 days after the move out is read
+  as before, since a transfer row can post that late. Canada and the US alike: in a US project
+  the moved lot keeps its cost in the receiving account and the arrival is a lot of its own
+  (TJ-5003, TJ-1354).
+
+### Fixed: the year end and its commands
+
+- `tjs unclose-year` refuses when a folder beside the year may be a later year closed and
+  cannot say: it holds a later year's lock and its taxjson.toml cannot be read, is not valid
+  TOML, is a link to nothing or sets no `year` (a link such as `2025 -> elsewhere` included),
+  it is named as a later year and has no taxjson.toml, or its `filed/` cannot be listed (a
+  readable later year's too). It reopened the year, leaving the later lock in place. The
+  refusal names the folder, the lock and why, with the remedy (TJ-5088).
+- `tjs checklist`: the kept verdicts go stale when the lock `prior_year_record` names is
+  rewritten, restored, deleted or leads elsewhere ("the inputs changed (prior_year_record
+  lock)"): the handoff verdict stayed current (TJ-5089).
+
+### Fixed: other commands and tools
+
+- `tjs run` no longer deletes, or reads, a file in work/ it did not write that is named like a
+  parse of an account's exports (`work/margin_notes.json`, a link there): an account's cleanup
+  of the parse of an export taken out of its inputs removes only what the run's records say it
+  wrote (with no records, an older taxjson's work/, only the parse stage's own names). Anything
+  else is moved to `work/kept/` with its `.diag` and named once ("moved N files named like a
+  parse of account margin's exports, which no export in inputs/margin/ makes now, out of the
+  books: work/margin_notes.json -> work/kept/margin_notes.json (taxjson has no record of
+  writing it) ..."), so no report reads it: one that is no transactions JSON, or a link to
+  nothing, no longer stops the fees step or `tjs audit`. With work/ a link to a folder in the
+  project (`work -> .w`), what the last run built and this one does not goes from that folder
+  as from a plain work/: a removed account's books stayed there while its reports went
+  (TJ-5071, TJ-4275).
+- `tjs div-estimate`: a payer whose schedule the books settle is no longer read as stopped (or
+  late) on dates the books show no shares held through the half period before them: a quarterly
+  payer sold in December and bought back in June was `stopped` in July with "2 expected
+  payments not in the books"; such dates are not counted as missed, as on the assumed quarterly
+  schedule, and named ("2 quarterly date(s) not counted as missed payments: the books show no
+  shares held through the 45 days before each ..."), where the books' trades end at the shares
+  held now (in every account, whichever account is asked for) and show shares held before each
+  payment. In an account combining several broker accounts, one broker account short the symbol
+  (the sale marked a short by the broker) no longer cancels another's shares when the books are
+  asked whether they were held: a single payment was assumed quarterly (four payments) though a
+  quarter passed with the shares held and nothing paid. A move between accounts under way on a
+  date counts as held (TJ-5050, TJ-5051).
+- `tjs audit`: a futures close after a partial broker cancellation (`type=trade_cancel` of part
+  of a fill) ties: the audit nets the cancellations as the run does before it re-derives the
+  settled P/L; it read 0 and failed ("FX cross-check FAILED: 0.00 USD x 1.35 = 0.00 but the
+  base book row carries ..."), exit 1, on fresh books. A cancellation the audit cannot place as
+  the books did fails naming it (TJ-5193).
+
 ## v2.0.0 (2026-11-24)
 
 ### Added

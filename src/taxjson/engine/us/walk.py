@@ -31,7 +31,7 @@ from taxjson.engine.us.terms import (
 )
 from taxjson.engine.us.wash import (
     _us_split_covers, _us_note, _us_rep_units_factor, _us_grow_rep_capacity, _us_allot_sold_shares,
-    _us_apply_other_stkdivs, _us_split_rep_refs,
+    _us_apply_other_stkdivs, _us_split_rep_refs, _US_LOT_USED,
 )
 from taxjson.engine.us.lots import (
     _us_move_long_lots, _us_draw_long_lots, _us_tl_label, _us_tl_held, _USDayLots,
@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from taxjson.model.transaction import TaxTransaction
     from taxjson.engine.rows import RowId
     from taxjson.engine.splits import _RenameKey
-    from taxjson.engine.us.lot_store import _IKey, _USInventory, _USLotsNow
+    from taxjson.engine.us.lot_store import _IKey, _USInventory, _USLot, _USLotsNow
     from taxjson.engine.us.run import _USRun
     from taxjson.engine.us.trades import _GainRow
     from taxjson.engine.us.wash import _LeftChunk
@@ -55,6 +55,16 @@ if TYPE_CHECKING:
 # unknown cost, and the chunk of its never-matched units (TJ-2700).
 _ReorgBlock: TypeAlias = Tuple[Decimal, Decimal, str, str, bool, Decimal,
                                Optional[Dict[str, Any]], Optional["_LeftChunk"]]
+
+
+class _BootBlocks(Dict[Tuple[str, str], Tuple[List[_ReorgBlock], Decimal, List[Dict[str, Any]]]]):
+    """The §356 exchanges whose new shares' row is still to come, by (account, event): the
+    blocks, the old leg's value less boot, the blocks' records (`_us_exchange_block`). And
+    `exchanged`: every exchange's records, which a later stock dividend reads (TJ-4987)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.exchanged: List[Dict[str, Any]] = []
 
 
 def _us_walk_lot_move(*, _book_accounts: Set[str], _moves_done: Set[RowId], ikey: _IKey, run: _USRun, symbol: str, symbol_traces: Dict[str, List[str]], tx: TaxTransaction) -> None:
@@ -494,30 +504,10 @@ def _us_walk_adjust(*, ikey: _IKey, run: _USRun, symbol: str, symbol_traces: Dic
             f"{open_qty:.4f} sh")
 
 
-def _us_walk_stock_dividend(*, ikey: _IKey, run: _USRun, symbol: str, symbol_traces: Dict[str, List[str]], tx: TaxTransaction) -> bool:
-    """A stock dividend's shares: the lots entitled to it (bought before the ex-date, else the
-    record date; the shares sold since counted) share their basis with the new shares
-    (Pub. 550), whose lot carries its share; returns True when the row is spent."""
-    _lots = run.inventory_long.get(ikey, [])
-    _held = sum(l['qty'] for l in _lots)
-    # The shares ENTITLED to the dividend share their basis
-    # with the new ones (Pub. 550, "Stock bought at various
-    # times"): the lots bought before the ex-dividend date
-    # (with only a record date, before it). A lot bought
-    # after the entitlement date and before the pay date
-    # keeps its own basis (2026-10 filing audit F3: every
-    # lot held on the pay date was scaled, moving basis from
-    # the old lot to the new one and the gain the other
-    # way). With neither date the lots held on the pay date
-    # are taken as entitled, and a lot bought within the
-    # 90 days before it is named as the open question.
-    _ent_date = (tx.ex_date or tx.record_date or '').strip()
-    if _ent_date:
-        _ent = [l for l in _lots
-                if (l.get('date') or '') < _ent_date]
-    else:
-        _ent = list(_lots)
-    _ent_qty = sum(l['qty'] for l in _ent)
+def _us_stkdiv_sold(run: _USRun, ikey: _IKey, symbol: str, tx: TaxTransaction, ent_date: str
+                    ) -> Tuple[List[_GainRow], Dict[int, float]]:
+    """(the gain rows of a stock dividend's entitled shares sold before its pay date, id(row) ->
+    its units on the pay date); none without an entitlement date."""
     # Entitled shares sold on or after the entitlement date,
     # before the pay date: the sale keeps the right to the
     # new shares, so they share the basis too (TJ-0498: the
@@ -540,21 +530,246 @@ def _us_walk_stock_dividend(*, ikey: _IKey, run: _USRun, symbol: str, symbol_tra
                            e.get('date') or None)
                        == _cls_now)
                   and _us_ikey_on(run, e['account'], symbol) == ikey
-                  and _ent_date <= (e.get('date') or '')
+                  and ent_date <= (e.get('date') or '')
                   <= tx.date
                   and (e.get('acquired_date') or '')
-                  < _ent_date]
-                 if _ent_date else [])
+                  < ent_date]
+                 if ent_date else [])
     _sold_units = {
         id(e): e['qty'] * _us_rep_units_factor(run,
             e.get('symbol') or symbol, e.get('date') or '',
             tx.date)
         for e in _sold_ent}
+    return _sold_ent, _sold_units
+
+
+def _us_stkdiv_exchanged(run: _USRun, exchanged: List[Dict[str, Any]], ikey: _IKey, symbol: str,
+                         tx: TaxTransaction, ent_date: str
+                         ) -> Tuple[List[Dict[str, Any]], Dict[int, float]]:
+    """(the blocks of a stock dividend's entitled shares that a §356 exchange took on or after
+    the entitlement date, before the pay date, id(block) -> its old shares in the pay date's
+    units). The exchange is no sale (its rows are left out of `_us_stkdiv_sold`), and the
+    shares kept the right to the dividend as a sale's do: they count, and the new shares paid
+    on them take their part of the basis the exchange carried (US-STKDIV-05; backlog TJ-4987:
+    the shares still held took the whole dividend)."""
+    if not ent_date:
+        return [], {}
+    _cls_now = run.split_timeline.class_at(symbol, tx.date)
+    _exch = [x for x in exchanged
+             if _us_ikey_on(run, x['account'], symbol) == ikey
+             and (x['symbol'] == symbol
+                  or run.split_timeline.class_at(x['symbol'], x['date']) == _cls_now)
+             and ent_date <= x['date'] <= tx.date
+             and x['acquired'] < ent_date]
+    return _exch, {id(x): x['qty'] * _us_rep_units_factor(run, x['symbol'], x['date'], tx.date)
+                   for x in _exch}
+
+
+def _us_stock_dividend_owed(*, ikey: _IKey, run: _USRun, symbol: str, symbol_traces: Dict[str, List[str]], tx: TaxTransaction,
+                            ent_date: str) -> bool:
+    """A stock dividend while the position is short (US-STKDIV-06): the short seller owes the
+    lender the new shares, so the short lots open at the entitlement date (else every open
+    one) grow by them, their proceeds, dates and deferral as they were: nothing is bought,
+    nothing covered, no gain until the cover. Read as the $0 purchase the row looks like, it
+    covered that many shares for nothing (backlog TJ-5006). The walk asks with no share held:
+    the position is short, as the replacement pre-pass reads it (engine/us/prepare
+    `_us_scan_events`' running position). False: no short is open."""
+    shorts = [_s for _s in run.inventory_short.get(ikey, [])
+              if _s['qty'] > run.epsilon]
+    if not shorts:
+        return False
+    _owing = ([_s for _s in shorts if (_s.get('date') or '') < ent_date]
+              if ent_date else list(shorts))
+    _undated = bool(ent_date) and not _owing
+    if _undated:
+        _owing = list(shorts)
+    _owed = sum(_s['qty'] for _s in _owing)
+    _ratio = (_owed + tx.quantity) / _owed
+    _left = tx.quantity
+    for _i, _lot in enumerate(_owing):
+        # (the last lot takes the rest: the units add up to the row's)
+        _add = (_left if _i == len(_owing) - 1
+                else tx.quantity * _lot['qty'] / _owed)
+        _lot['qty'] = _lot['qty'] + _add
+        _left -= _add
+    _us_grow_rep_capacity(run, symbol, tx.date, _owing, _ratio, short=True)
+    run.rules.setdefault(tx.id, {})[tx.id] = R.US_STKDIV_06    # its rule (RuleTable)
+    _us_note(run, tx.date,
+          f"warning: ATTENTION: {symbol}: stock dividend of {tx.quantity:g} "
+          f"share(s) on {tx.date} while short {_owed:g}: booked as the "
+          f"short's to make good. The short owes the lender the new shares, "
+          f"so it grows to {_owed + tx.quantity:g} share(s) with its proceeds "
+          f"unchanged; nothing is received, nothing is covered and no gain "
+          f"is booked until the cover (US-STKDIV-06, an assumption: check "
+          f"the broker's statement). If the row is shares you bought, enter "
+          f"it as a purchase (a .tt BUYSELL line without "
+          f"type=stock_dividend).")
+    if _undated:
+        _us_note(run, tx.date,
+              f"warning: ATTENTION: {symbol}: the stock dividend of "
+              f"{tx.quantity:g} share(s) on {tx.date}: no short open that "
+              f"day was sold before its entitlement date {ent_date}, so "
+              f"none owed it by the dates; it is booked on the "
+              f"{_owed:g} share(s) short that day all the same (never as "
+              f"a $0 cover). Check the row against the broker's "
+              f"statement.")
+    if run.trace:
+        symbol_traces[symbol].append(
+            f"# {tx.date} STOCK DIVIDEND +{tx.quantity:g} sh while short | "
+            f"{len(_owing)} short lot(s) grow to {_owed + tx.quantity:.4f} "
+            f"sh, proceeds unchanged")
+    return True
+
+
+def _us_allot_exchanged_shares(run: _USRun, exch: List[Dict[str, Any]], units: Dict[int, float],
+                               ratio: float, ikey: _IKey, div_tx: TaxTransaction, ent_date: str
+                               ) -> Tuple[str, List[str]]:
+    """The new shares a stock dividend pays on entitled shares that a §356 exchange took
+    before the pay date (`exch`: their blocks, `_us_walk_reorg`; `units`: id(block) -> its
+    old shares in the pay date's units): each block's carried basis, on the lot of new
+    shares it became, gives up 1 - 1/ratio to the dividend's shares, booked as a lot with
+    the block's dates (§307, §1223(5); the boot gain recognized stays). A block whose new
+    shares are no longer that one lot as booked (sold in part, split, a wash sale's add, a
+    fraction paid in cash, an unknown cost) is left alone: its dividend shares are a $0 lot
+    and an ATTENTION line names the amount to move by hand. Returns (the dividend note's
+    clause, the ATTENTION lines) (backlog TJ-4987)."""
+    if not exch:
+        return "", []
+    moved = Decimal(0)
+    placed = 0.0
+    warn: List[str] = []
+    new_lots: List[_USLot] = []
+    give = 1 - D(1) / D(ratio)
+    sym = div_tx.symbol
+    for x in exch:
+        lot = x.get('lot')
+        new_qty = units[id(x)] * (ratio - 1)
+        amt = Decimal(0)
+        held = (lot is not None
+                and any(_l is lot for _ls in run.inventory_long.values() for _l in _ls))
+        clean = (lot is not None and x['plain'] and not x['tainted']
+                 and not lot.get('wash_deferred') and not lot.get(_US_LOT_USED))
+        if (lot is not None and held and clean
+                and abs(lot['qty'] - x['lot_qty']) <= run.epsilon
+                and lot['cost_basis'] == x['basis']):
+            amt = lot['cost_basis'] * give
+            lot['cost_basis'] -= amt
+            x['basis'] = lot['cost_basis']
+            moved += amt
+            placed += new_qty
+        else:
+            warn.append(
+                f"warning: ATTENTION: {sym}: the stock dividend on {div_tx.date}: "
+                f"{x['qty']:g} of the shares entitled to it left in the §356 "
+                f"exchange on {x['date']} ({x['account']})"
+                + (f" for {x['to']}" if x.get('to') else "")
+                + f", and the shares received are no longer the lot that exchange "
+                f"booked (sold or split since, a wash sale's add, a fraction paid "
+                f"in cash, or an unknown cost), so their {new_qty:g} new share(s) "
+                f"are booked at $0: move "
+                + _us_exchanged_by_hand(run, x, give)
+                + " to them by hand (§307; .tt ADJUST rows).")
+        new_lots.append({
+            'qty': new_qty,
+            'cost_basis': amt,
+            'wash_deferred': Decimal(0),
+            'date': x['acquired'],
+            'effective_acq_date': x['eff'],
+            'id': div_tx.id,
+            **({'tainted': True} if x['tainted'] else {}),
+        })
+    _us_insert_lots(run, ikey, new_lots)
+    _qty = sum(units.values())
+    _new = _qty * (ratio - 1)
+    said = (f"; {_qty:g} of them left in a §356 exchange on or after {ent_date}, "
+            f"before the pay date ("
+            + ", ".join(sorted({x['date'] for x in exch})) + "): "
+            + (f"the shares received for them give up {moved:,.2f} of the basis "
+               f"they carried, which the {placed:g} new share(s) paid on them "
+               f"carry" if placed > run.epsilon else "")
+            + ("; " if run.epsilon < placed < _new - run.epsilon else "")
+            + (f"{_new - placed:g} new share(s) paid on them are booked at $0, "
+               f"their basis to move by hand (the ATTENTION line)"
+               if _new - placed > run.epsilon else ""))
+    return said, warn
+
+
+def _us_exchanged_by_hand(run: _USRun, x: Dict[str, Any], give: Decimal) -> str:
+    """What a stock dividend's ATTENTION line asks to move by hand for an exchanged block
+    (`x`) whose shares received are not the lot the exchange booked: `give` of the basis that
+    block carried. Where all that happened to them is a sale (what is left of them, the lots
+    still naming the block, is at the same basis a share, with no wash sale's add), the part
+    on the shares still held and the part that left as the cost of the shares sold are named
+    apart."""
+    if x.get('lot') is None or x['tainted']:
+        return "their part of the basis that exchange carried"
+    whole = x['basis'] * give
+    said = f"{M.of(whole):,.2f} of the basis that exchange carried"
+    left = [_l for _ls in run.inventory_long.values() for _l in _ls
+            if _l.get('_exchanged') is x]
+    qty = sum(_l['qty'] for _l in left)
+    cost = sum((_l['cost_basis'] for _l in left), Decimal(0))
+    if (not x['plain'] or qty > x['lot_qty'] + run.epsilon
+            or any(_l.get('wash_deferred') or _l.get(_US_LOT_USED) for _l in left)
+            or abs(cost * D(x['lot_qty']) - x['basis'] * D(qty))
+            > _US_MONEY_EPSILON * D(x['lot_qty'])):
+        return (said + f" (off the {x['to']} shares still held and the cost of "
+                f"those sold since, by their shares)")
+    on_held = cost * give
+    sold = x['lot_qty'] - qty
+    if qty <= run.epsilon:
+        return said + f" (off the cost of the {sold:g} {x['to']} share(s) sold since)"
+    return (said + f" ({M.of(on_held):,.2f} off the {qty:g} {x['to']} share(s) still "
+            f"held, {M.of(whole - on_held):,.2f} off the cost of the {sold:g} sold since)")
+
+
+def _us_stkdiv_short_beside(run: _USRun, ikey: _IKey, symbol: str, tx: TaxTransaction) -> List[str]:
+    """The ATTENTION line of a stock dividend booked on the shares held while the same books
+    are short the security: a short owes its own part (US-STKDIV-06), which this row is not."""
+    _short = sum(_s['qty'] for _s in run.inventory_short.get(ikey, [])
+                 if _s['qty'] > run.epsilon)
+    if not _short > run.epsilon:
+        return []
+    return [f"warning: ATTENTION: {symbol}: the stock dividend of {tx.quantity:g} "
+            f"share(s) on {tx.date} is booked on the shares held; {_short:g} share(s) "
+            f"are also sold short in the same books, and a short owes the lender its "
+            f"own part (US-STKDIV-06): if the broker charged it, enter it by hand (.tt)."]
+
+
+def _us_walk_stock_dividend(*, _boot_blocks: _BootBlocks, ikey: _IKey, run: _USRun, symbol: str, symbol_traces: Dict[str, List[str]], tx: TaxTransaction) -> bool:
+    """A stock dividend's shares: the lots entitled to it (bought before the ex-date, else the
+    record date; the shares sold or exchanged since counted) share their basis with the new shares
+    (Pub. 550), whose lot carries its share (short: `_us_stock_dividend_owed`); True when spent."""
+    _lots = run.inventory_long.get(ikey, [])
+    _held = sum(l['qty'] for l in _lots)
+    # The shares ENTITLED to the dividend share their basis
+    # with the new ones (Pub. 550, "Stock bought at various
+    # times"): the lots bought before the ex-dividend date
+    # (with only a record date, before it). A lot bought
+    # after the entitlement date and before the pay date
+    # keeps its own basis (2026-10 filing audit F3: every
+    # lot held on the pay date was scaled, moving basis from
+    # the old lot to the new one and the gain the other
+    # way). With neither date the lots held on the pay date
+    # are taken as entitled, and a lot bought within the
+    # 90 days before it is named as the open question.
+    _ent_date = (tx.ex_date or tx.record_date or '').strip()
+    if _ent_date:
+        _ent = [l for l in _lots
+                if (l.get('date') or '') < _ent_date]
+    else:
+        _ent = list(_lots)
+    _ent_qty = sum(l['qty'] for l in _ent)
+    _sold_ent, _sold_units = _us_stkdiv_sold(run, ikey, symbol, tx, _ent_date)
     _sold_qty = sum(_sold_units.values())
-    if (_ent_qty + _sold_qty > run.epsilon
-            and not run.inventory_short.get(ikey)):
-        _ratio = ((_ent_qty + _sold_qty + tx.quantity)
-                  / (_ent_qty + _sold_qty))
+    _exch, _exch_units = _us_stkdiv_exchanged(run, _boot_blocks.exchanged, ikey, symbol, tx, _ent_date)
+    _paid_on = _ent_qty + _sold_qty + sum(_exch_units.values())
+    if not _held > run.epsilon and _us_stock_dividend_owed(
+            ikey=ikey, run=run, symbol=symbol, symbol_traces=symbol_traces, tx=tx,
+            ent_date=_ent_date):
+        return True
+    if _paid_on > run.epsilon:
+        _ratio = (_paid_on + tx.quantity) / _paid_on
         # Named before the spread: the lots' own, 0 to 90 days
         _recent = [l for l in _lots      # before it (TJ-2705)
                    if (l.get('date') or '') <= tx.date
@@ -567,11 +782,13 @@ def _us_walk_stock_dividend(*, ikey: _IKey, run: _USRun, symbol: str, symbol_tra
         _later = [l for l in _lots if l not in _ent]
         _moved, _manual = _us_allot_sold_shares(run,
             _sold_ent, _ratio, ikey, tx, _sold_units)
+        _xsaid, _xwarn = _us_allot_exchanged_shares(
+            run, _exch, _exch_units, _ratio, ikey, tx, _ent_date)
         _us_note(run, tx.date,
               f"note: {symbol}: stock dividend of "
               f"{tx.quantity:g} share(s) on {tx.date} — "
               f"nontaxable (§305(a)): the basis of the "
-              f"{_ent_qty + _sold_qty:g} share(s) "
+              f"{_paid_on:g} share(s) "
               + (f"bought before {_ent_date} "
                  f"({len(_ent)} lot(s) held)"
                  if _ent_date else "held")
@@ -586,6 +803,7 @@ def _us_walk_stock_dividend(*, ikey: _IKey, run: _USRun, symbol: str, symbol_tra
                  f"{_sold_qty * (_ratio - 1):g} new share(s) "
                  f"paid on them carry"
                  if _sold_ent else "")
+              + _xsaid
               + (f"; the {sum(l['qty'] for l in _later):g} "
                  f"bought on or after {_ent_date} keep their "
                  f"own basis" if _later else "")
@@ -605,6 +823,8 @@ def _us_walk_stock_dividend(*, ikey: _IKey, run: _USRun, symbol: str, symbol_tra
                   f"new share(s) are booked at $0: move "
                   f"{_amt:,.2f} of that sale's cost to them "
                   f"by hand (§307; .tt ADJUST rows).")
+        for _w in _xwarn + _us_stkdiv_short_beside(run, ikey, symbol, tx):
+            _us_note(run, tx.date, _w)
         if not _ent_date and len(_lots) > 1:
             if _recent:
                 _us_note(run, tx.date,
@@ -633,7 +853,7 @@ def _us_walk_stock_dividend(*, ikey: _IKey, run: _USRun, symbol: str, symbol_tra
                 + (f" (before {_ent_date})" if _ent_date
                    else ""))
         return True
-    if _held > run.epsilon and not run.inventory_short.get(ikey):
+    if _held > run.epsilon:
         # Shares held on the pay date, none bought before
         # the entitlement date: the dividend belongs to
         # shares the books do not show (history missing, or
@@ -810,8 +1030,8 @@ def _us_walk_spinoff(*, _spin_done: Set[RowId], ikey: _IKey, run: _USRun, symbol
             _take = _l['cost_basis'] * _frac
             _wd = _l.get('wash_deferred', Decimal(0))
             _l['cost_basis'] -= _take
-            if _wd:
-                _l['wash_deferred'] = _wd * (1 - _frac)
+            if _wd:     # (`_US_LOT_USED`: its shares stay used, whatever of the add goes, TJ-4986)
+                _l.update({'wash_deferred': _wd * (1 - _frac), _US_LOT_USED: True})
             _taken += _take
             _c = (_cost_left if _i == len(_plots) - 1
                   else _new_total * _take / (_pbasis * _frac)
@@ -851,7 +1071,17 @@ def _us_walk_spinoff(*, _spin_done: Set[RowId], ikey: _IKey, run: _USRun, symbol
     return False
 
 
-def _us_walk_reorg(*, _boot_blocks: Dict[Tuple[str, str], Tuple[List[_ReorgBlock], Decimal]], ikey: _IKey, run: _USRun, symbol: str, symbol_traces: Dict[str, List[str]], tx: TaxTransaction) -> bool:
+def _us_exchange_block(tx: TaxTransaction, symbol: str, drawn: _USLot, acq: str) -> Dict[str, Any]:
+    """One old-share block of a §356 exchange as a later stock dividend reads it (its ex-date
+    before the exchange: `_us_stkdiv_exchanged`, TJ-4987): the old shares and their dates, and,
+    once the new shares' row is walked (`_us_walk_reorg` fills them), the lot they became with
+    its units and basis as booked (`plain`: the whole carried basis is on that lot)."""
+    return {'account': tx.account, 'symbol': symbol, 'date': tx.date, 'qty': drawn['qty'],
+            'acquired': drawn['date'], 'eff': acq, 'tainted': bool(drawn.get('tainted')),
+            'to': '', 'lot': None, 'lot_qty': 0.0, 'basis': Decimal(0), 'plain': False}
+
+
+def _us_walk_reorg(*, _boot_blocks: _BootBlocks, ikey: _IKey, run: _USRun, symbol: str, symbol_traces: Dict[str, List[str]], tx: TaxTransaction) -> bool:
     """An s.356 reorganization's two legs: the old shares' lots each realize their share of
     the new shares' value plus boot less their basis and recognize up to their boot share
     (Reg. 1.356-1(b)), kept per block; the new shares' row takes the blocks' carried basis;
@@ -883,12 +1113,14 @@ def _us_walk_reorg(*, _boot_blocks: Dict[Tuple[str, str], Tuple[List[_ReorgBlock
                            'effective_acq_date': tx.date,
                            'tainted': True})
         _blocks: List[_ReorgBlock] = []
+        _xs: List[Dict[str, Any]] = []      # each block for a later stock dividend (TJ-4987)
         for _c in _drawn:
             _f = D(_c['qty']) / D(_q)
             _arb, _bb = _ar * _f, _boot * _f
             _rec = max(Decimal(0), min(_arb - _c['cost_basis'],
                                        _bb))
             _acq = cast("str", _c.get('effective_acq_date', _c['date']))
+            _xs.append(_us_exchange_block(tx, symbol, _c, _acq))
             _blocks.append((_f, _c['cost_basis'] - _bb + _rec,
                             _c['date'], _acq,
                             bool(_c.get('tainted')),
@@ -944,7 +1176,8 @@ def _us_walk_reorg(*, _boot_blocks: Dict[Tuple[str, str], Tuple[List[_ReorgBlock
                     (_arb - _c['cost_basis']) / D(_c['qty']),
                     _bb / D(_c['qty']))
         _boot_blocks[(tx.account, tx.corp_event_id)] = (
-            _blocks, _ar - _boot)
+            _blocks, _ar - _boot, _xs)
+        _boot_blocks.exchanged.extend(_xs)
         if run.trace:
             symbol_traces[symbol].append(
                 f"# {tx.date} §356 EXCHANGE {_q:10.4f} | "
@@ -954,7 +1187,7 @@ def _us_walk_reorg(*, _boot_blocks: Dict[Tuple[str, str], Tuple[List[_ReorgBlock
         _st = _boot_blocks.pop((tx.account, tx.corp_event_id),
                                None)
         if _st is not None:
-            _blocks, _src_value = _st
+            _blocks, _src_value, _xs = _st
             _val = D(abs(tx.net_amount))
             # The new shares' value in this leg's currency over
             # the same value in the old leg's: the currency
@@ -977,6 +1210,10 @@ def _us_walk_reorg(*, _boot_blocks: Dict[Tuple[str, str], Tuple[List[_ReorgBlock
             for _b, _l in zip(_blocks, _new):
                 if _b[7] is not None:
                     _b[7]['lots'].append(_l)
+            for _x, _l in zip(_xs, _new):
+                _x.update(to=symbol, lot=_l, lot_qty=_l['qty'],
+                          basis=_l['cost_basis'], plain=(_r == 1))
+                _l['_exchanged'] = _x       # (its parts keep naming the block)
             if run.trace:
                 symbol_traces[symbol].append(
                     f"# {tx.date} §356 NEW SHARES "
@@ -1049,7 +1286,7 @@ def _us_walk_rows(*, run: _USRun) -> Tuple[Optional[_USLotsNow], Optional[_USLot
     _la = _USDayLots(run, run.lots_at, run._la_next, _said)
     symbol_traces: Dict[str, List[str]] = {}
     _spin_done: Set[RowId] = set()
-    _boot_blocks: Dict[Tuple[str, str], Tuple[List[_ReorgBlock], Decimal]] = {}
+    _boot_blocks = _BootBlocks()
     _moves_done: Set[RowId] = set()
     _book_accounts = {t.account for t in run.taxable_sorted}
     _jdone: Set[str] = set()
@@ -1192,7 +1429,7 @@ def _us_walk_rows(*, run: _USRun) -> Tuple[Optional[_USLotsNow], Optional[_USLot
         # row is a data gap: booked as the $0 purchase it looks
         # like, with a warning.
         if is_stock_dividend(tx) and tx.quantity > 0:
-            if _us_walk_stock_dividend(ikey=ikey, run=run, symbol=symbol,
+            if _us_walk_stock_dividend(_boot_blocks=_boot_blocks, ikey=ikey, run=run, symbol=symbol,
                                        symbol_traces=symbol_traces, tx=tx):
                 continue
 

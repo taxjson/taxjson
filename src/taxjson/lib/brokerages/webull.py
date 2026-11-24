@@ -105,6 +105,22 @@ class _WbParse:
 
 
 
+# A trade row's Type Code -> the kind of security it names: the codes the
+# Trading Summaries (and this repository's fixtures and examples) use. A
+# code's kind is checked against the Security Description
+# (`_check_type_code`); a code that is not here is refused there, never
+# read as either kind.
+_TYPE_KINDS = {
+    'OPC': 'option', 'OPP': 'option',
+    'SHS': 'shares', 'STK': 'shares', 'EQ': 'shares',
+}
+_TYPE_CODES_SHOWN = (
+    "options: " + ", ".join(sorted(k for k, v in _TYPE_KINDS.items()
+                                   if v == 'option'))
+    + "; shares: " + ", ".join(sorted(k for k, v in _TYPE_KINDS.items()
+                                      if v == 'shares')))
+
+
 class WebullBrokerage(BaseBrokerage):
     _wb: Optional["_WbParse"] = None    # the parse's state, None between parses
 
@@ -250,6 +266,45 @@ class WebullBrokerage(BaseBrokerage):
             return Outcome.nonevent("row with no action code")
         return Outcome.build()
 
+    def _check_type_code(self, where: str, action_raw: str,
+                         is_contract: bool) -> None:
+        """A trade row's Type Code against its Security Description
+        (`is_contract`: the description reads as an option contract).
+        The code decides the security type when it is there (audit
+        S065-17): an OPC row whose description is not a readable contract
+        was booked as 1 SHARE of the underlying, and an SHS row whose
+        description happened to parse as a contract as 100 x the shares.
+        Every code the summaries use is read as its kind first
+        (`_TYPE_KINDS`: the guard knew OPC and SHS alone, so an OPP put or
+        an STK or EQ share row passed it unchecked), and a code that is
+        none of them is refused: the row's kind is then unknown (TJ-2388,
+        TJ-5022). A blank code is read by the description alone."""
+        st = self._wb
+        code = st.current_type
+        kind = _TYPE_KINDS.get(code, '')
+        if code and not kind:
+            raise BrokerageParseError(
+                f"{where}: {action_raw} row has Type Code {code!r}, not "
+                f"one this parser knows ({_TYPE_CODES_SHOWN}) — refusing "
+                f"to guess whether the row is shares or an option. "
+                f"Delete the row and enter the trade as a .tt BUYSELL "
+                f"line, and please report the code {code!r} (a made-up "
+                f"row with it is enough) so it can be read; if the cell "
+                f"is a typo, correct it from the statement.")
+        if kind == 'option' and not is_contract:
+            raise BrokerageParseError(
+                f"{where}: {action_raw} row has Type Code {code} (an "
+                f"option) but its Security Description "
+                f"{st.current_description!r} is not a readable contract "
+                f"(CALL/PUT ROOT MM/DD/YY STRIKE) — refusing to book "
+                f"it as shares.")
+        if kind == 'shares' and is_contract:
+            raise BrokerageParseError(
+                f"{where}: {action_raw} row has Type Code {code} "
+                f"(shares) but its Security Description "
+                f"{st.current_description!r} reads as an option "
+                f"contract — refusing to guess which it is.")
+
     @builds("trade", "expiry")
     def build(self, r) -> List[Dict[str, Any]]:
         """A BUY / SELL row: its facts (`_trade_facts`: the date, the net
@@ -263,24 +318,7 @@ class WebullBrokerage(BaseBrokerage):
         where, action_raw, currency = r.where, r.action_raw, r.currency
         account = st.account
         opt = self.parse_option_from_description(st.current_description)
-        # The row's Type Code decides the security type when it is
-        # there (audit S065-17): an OPC row whose description is not
-        # a readable contract was booked as 1 SHARE of the
-        # underlying, and an SHS row whose description happened to
-        # parse as a contract as 100 x the shares.
-        if st.current_type == 'OPC' and not opt:
-            raise BrokerageParseError(
-                f"{where}: {action_raw} row has Type Code OPC (an "
-                f"option) but its Security Description "
-                f"{st.current_description!r} is not a readable contract "
-                f"(CALL/PUT ROOT MM/DD/YY STRIKE) — refusing to book "
-                f"it as shares.")
-        if st.current_type == 'SHS' and opt:
-            raise BrokerageParseError(
-                f"{where}: {action_raw} row has Type Code SHS "
-                f"(shares) but its Security Description "
-                f"{st.current_description!r} reads as an option "
-                f"contract — refusing to guess which it is.")
+        self._check_type_code(where, action_raw, bool(opt))
         under_sym = ''
         if opt:
             symbol = self.format_occ_symbol(
@@ -456,8 +494,9 @@ class WebullBrokerage(BaseBrokerage):
             st.current_is_under = symbol_raw.startswith('@')
         if description_raw:
             st.current_description = description_raw
-        # Type Code (OPC option / SHS shares), carried over blank
-        # continuation rows like the description.
+        # Type Code (`_TYPE_KINDS`: OPC / OPP an option, SHS / STK / EQ
+        # shares), carried over blank continuation rows like the
+        # description.
         type_raw = self._cell(row, 'type').upper()
         if type_raw:
             st.current_type = type_raw

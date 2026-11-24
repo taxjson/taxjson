@@ -109,6 +109,9 @@ _RBC_SPLIT_ON_SHS_RE = re.compile(r'\bON\s+' + DESC_NUMBER_RE + r'\s+SHS\b',
                                   re.I)
 # Legacy description tokens for rows whose Activity label is unknown.
 _TRADE_DESC_RE = re.compile(r'\b(?:Buy|Sell)\b')
+# The verb the export ends a trade's description with ("NAME - Sell"):
+# after a separator, so a name ending "E-Buy" is a name.
+_TRADE_DESC_VERB_RE = re.compile(r'\s-\s*(Buy|Sell)\s*$')
 
 # A TSX fund's US-dollar class ("... ETF US DOLLAR UNITS", "... U S DLR
 # CURRENCY ETF"): RBC books it under the bare symbol in USD, which reads
@@ -184,6 +187,10 @@ class RbcRow:
     k: int = 0                # intra-day ordinal: 0 = the day's earliest row
     account: str = ''         # the Account column ('' when absent)
     value_blank: bool = False  # the Amount/Value cell was EMPTY (not "0")
+    # The Value cell (the cash before commission) of an export that has
+    # the Amount column too; None when the export has one money column or
+    # the cell is blank. Its sign is a trade's direction (`_refuse_trade_side`).
+    gross: Optional[float] = None
     qty_blank: bool = False    # the Quantity cell was EMPTY (not "0")
 
     def label(self) -> str:
@@ -435,6 +442,14 @@ def _pick_date_formats(path: Path, rows: List[RbcRow]) -> Tuple[str, str]:
         f"with month names (RBC's default) or ISO dates.")
 
 
+def _gross_cell(cell: Dict[str, str], num) -> Optional[float]:
+    """The Value cell of a row whose export has the Amount column too
+    (`RbcRow.gross`); None otherwise, or when the cell is blank."""
+    if 'Amount' in cell and cell.get('Value', ''):
+        return num('Value')
+    return None
+
+
 def read_rbc_rows(path: Path) -> RbcExport:
     """Read and strictly validate an RBC activity export. Shared by the
     brokerage parser and taxjson-corp-actions so both see the same rows."""
@@ -544,7 +559,7 @@ def read_rbc_rows(path: Path) -> RbcExport:
             code=m.group(1).upper() if m else '',
             qty=num('Quantity'), price=num('Price'), value=value,
             date_raw=cell.get('Date', ''),
-            account=cell.get('Account', ''),
+            account=cell.get('Account', ''), gross=_gross_cell(cell, num),
             value_blank=value_blank, qty_blank=not cell.get('Quantity'),
         )
         r.settle_raw = cell.get('Settlement Date', '')
@@ -1013,10 +1028,52 @@ def _row_content_key(r) -> Tuple:
             r.value, r.settle)
 
 
+def rbc_desc_side(desc: str) -> str:
+    """The direction a trade's Description states: 'sell' or 'buy' from
+    the verb the export ends it with ("NAME - Sell"); without one, from
+    the Buy / Sell word in it (`_TRADE_DESC_RE`, what `classify_rbc_row`
+    reads under an Activity it does not know), 'both' when it has the two;
+    '' when it has neither."""
+    return _desc_side_shown(desc)[0]
+
+
+def _desc_side_shown(desc: str) -> Tuple[str, str]:
+    """`rbc_desc_side` and how a message names what gave it: `ends
+    "- Sell"` (the closing verb) or `has the word "Sell"` (a word that may
+    be part of the security's name: the message says which, so it does
+    not blame a name for a verb)."""
+    m = _TRADE_DESC_VERB_RE.search(desc or '')
+    if m:
+        return m.group(1).lower(), f'ends "- {m.group(1)}"'
+    words = sorted(set(_TRADE_DESC_RE.findall(desc or '')))
+    if len(words) > 1:
+        return 'both', 'has both "Buy" and "Sell"'
+    if words:
+        return words[0].lower(), f'has the word "{words[0]}"'
+    return '', ''
+
+
+def rbc_trade_side(r) -> str:
+    """'sell' | 'buy' | '' for a row: the Activity when it is Buy or Sell;
+    for a row classified a trade by its Description alone (an Activity
+    this parser does not know, `classify_rbc_row`'s fallback), the
+    direction the Description states (TJ-2383, TJ-5021: such a row was
+    signed by its Quantity alone, so "NAME - Sell" with RBC's unsigned
+    quantity was a purchase, then refused as a shifted column). '' where
+    neither says (an exercise, an assignment, an expiry; a Description
+    with both words, which `_refuse_trade_side` refuses)."""
+    a = (r.activity or '').strip().lower()
+    if a in ('buy', 'sell'):
+        return a
+    if r.cls == 'trade' and a not in ('exercise', 'assignment'):
+        side = rbc_desc_side(r.desc)
+        return side if side in ('buy', 'sell') else ''
+    return ''
+
+
 def _signed_qty(r) -> float:
     q = r.qty
-    a = (r.activity or '').strip().lower()
-    if a == 'sell' or r.cls == 'retraction':
+    if rbc_trade_side(r) == 'sell' or r.cls == 'retraction':
         return -abs(q)
     if r.cls == 'transfer' and q > 0 and _RBC_TRANSFER_OUT_RE.match(
             r.desc or ''):
@@ -1515,6 +1572,7 @@ class _RbcParse(NamedTuple):
 
 class RbcBrokerage(BaseBrokerage):
     DEFAULT_ACCOUNT = "RBC"
+    SHORT_MARKS = "description"         # "… SHORT. …" / "… COVER SHORT. …"
 
     def _option_description_patterns(self):
         return _RBC_OPTION_PATTERNS
@@ -2258,15 +2316,15 @@ class RbcBrokerage(BaseBrokerage):
 
         qty = r.qty
         is_retraction = r.cls == 'retraction'
-        self._refuse_trade_qty(r, bool(is_assign_leg or occ and (
-            _RBC_OPTION_PATTERNS[1].search(desc))))
-        if activity.strip().lower() == 'sell' or is_retraction:
+        side = self._checked_trade_side(r, bool(occ), bool(
+            is_assign_leg or occ and _RBC_OPTION_PATTERNS[1].search(desc)))
+        if side == 'sell' or is_retraction:
             qty = -abs(qty)
         price = r.price
         net = r.value
         if (r.value_blank and abs(qty) > 1e-12 and (
-                r.cls == 'retraction' or activity.strip().lower() in (
-                    'buy', 'sell', 'exercise', 'assignment'))):
+                r.cls == 'retraction' or side or activity.strip().lower() in (
+                    'exercise', 'assignment'))):
             # A BLANK cash cell read as 0: a sale booked with no proceeds
             # (its whole ACB a loss), a buy at no cost (audit R1-82). A
             # real $0 trade carries an explicit "0".
@@ -2287,7 +2345,7 @@ class RbcBrokerage(BaseBrokerage):
                     r, qty, price, net, True, is_retraction, m))
         self._check_trade_money(r, qty, price, net, bool(occ),
                                 is_retraction, mult=opt_mult)
-        if not occ and activity.strip().lower() == 'buy':
+        if not occ and side == 'buy':
             self.warn_zero_cost_buy(self._at(r), r.symbol, qty, price, net)
 
         is_option_symbol = bool(occ)
@@ -2398,6 +2456,108 @@ class RbcBrokerage(BaseBrokerage):
             return 'C'
         return ''
 
+    def _checked_trade_side(self, r: RbcRow, is_option: bool,
+                            assign_leg: bool) -> str:
+        """The row's direction (`rbc_trade_side`), once the row is not
+        refused for it (`_refuse_trade_side`), for its cash
+        (`_refuse_side_against_value`) or for its Quantity
+        (`_refuse_trade_qty`)."""
+        self._refuse_trade_side(r)
+        self._refuse_side_against_value(r, is_option)
+        self._refuse_trade_qty(r, assign_leg)
+        return rbc_trade_side(r)
+
+    def _refuse_trade_side(self, r: RbcRow) -> None:
+        """Refuse a trade row whose Activity and Description name opposite
+        directions (Activity Sell, "NAME - Buy": booked by the Activity
+        alone, the other never read), and one an unknown Activity leaves
+        to a Description that has both words (TJ-5021)."""
+        a = r.activity.strip().lower()
+        said = rbc_desc_side(r.desc)
+        if a in ('buy', 'sell'):
+            m = _TRADE_DESC_VERB_RE.search(r.desc or '')
+            if m and m.group(1).lower() != a:
+                raise _err(Path(self._fname), r.line,
+                           f"Activity {r.activity.strip()!r} but the "
+                           f"Description ends \"- {m.group(1)}\" "
+                           f"({r.label()}) — one says purchase, the other "
+                           f"sale; refusing to guess which the row is. "
+                           f"Correct the cell that is wrong from the "
+                           f"statement (or delete the row and book the "
+                           f"trade in a .tt file).")
+        elif (r.cls == 'trade' and a not in ('exercise', 'assignment')
+              and said == 'both'):
+            raise _err(Path(self._fname), r.line,
+                       f"Activity {r.activity.strip()!r} is not one this "
+                       f"parser knows, and the Description has both \"Buy\" "
+                       f"and \"Sell\" ({r.label()}) — refusing to guess "
+                       f"which the row is. Set the Activity cell to Buy or "
+                       f"Sell from the statement (or delete the row and "
+                       f"book the trade in a .tt file).")
+
+    def _refuse_side_against_value(self, r: RbcRow, is_option: bool) -> None:
+        """Refuse a trade whose direction and whose cash disagree: a sale's
+        cash before commission is cash in, a purchase's cash out (the
+        review of TJ-5021: a row read as a sale by a word of its name, or
+        a Sell row, with negative cash was booked as a sale with negative
+        proceeds). Where the Description gave the direction (an Activity
+        not known), the cash must agree both ways. Where the Activity is
+        Buy or Sell it gives the direction, and only the dangerous
+        contradiction is refused, a sale that pays: a purchase whose cash
+        is written positive books by its magnitude, as it always did,
+        which is the right figure (the owner's ruling).
+
+        What is read: the Value cell (`gross`, the cash before
+        commission) of an export that has the Amount column too, so a
+        sale whose commission exceeds its proceeds (a positive Value, a
+        negative Amount) books. An export with one money column has only
+        the net, and there a sale that pays is either a commission larger
+        than its proceeds or a purchase's cash. Where the Description
+        gave the direction it is taken for an excess commission only
+        while what it pays is less than |Quantity| x Price (with no Price
+        nothing says, and the row is left to the money check). Under a
+        Sell Activity the Activity rules and the money check bounds the
+        commission, as before: a penny option close (proceeds 1.00, a
+        commission of 10.95, the net -9.95) pays more than its
+        |Quantity| x Price and is an ordinary row of such an export."""
+        side = rbc_trade_side(r)
+        cash = r.value if r.gross is None else r.gross
+        if not side or abs(cash) < 0.005:
+            return
+        if (side == 'sell') == (cash > 0):
+            return
+        by_activity = r.activity.strip().lower() == side
+        if r.gross is None and side == 'sell':
+            gross = abs(r.qty) * r.price * (
+                self.OPTION_MULTIPLIER if is_option else 1)
+            if by_activity or not r.price or abs(cash) < gross:
+                return     # the Activity's sale, an excess commission, no Price
+        if by_activity:
+            if side == 'buy':
+                return
+            who = f"Activity {r.activity.strip()!r}"
+        else:
+            who = (f"the Description {_desc_side_shown(r.desc)[1]} (the "
+                   f"Activity {r.activity.strip()!r} is not one this "
+                   f"parser knows)")
+        sale = side == 'sell'
+        money = (f"cash={r.value:g}" if r.gross is None
+                 else f"Value={r.gross:g} Amount={r.value:g}")
+        row = (f"line {r.line}: {r.date_raw} {r.activity or '?'} "
+               f"{r.symbol or '-'} qty={r.qty:g} {money} {r.currency} "
+               f"{r.desc[:70]!r}")
+        raise _err(Path(self._fname), r.line,
+                   f"{who}: a {'sale' if sale else 'purchase'}, but the "
+                   f"{'cash' if r.gross is None else 'Value'} "
+                   f"{M.shown(cash, 2):,.2f} is cash "
+                   f"{'paid out' if sale else 'received'}, a "
+                   f"{'purchase' if sale else 'sale'} ({row}) — a "
+                   f"sale's cash comes in and a purchase's goes out; "
+                   f"refusing to guess which the row is. Correct the cell "
+                   f"that is wrong from the statement (the Activity: Buy "
+                   f"or Sell; or the cash's sign), or delete the row and "
+                   f"book the trade in a .tt file.")
+
     def _refuse_trade_qty(self, r: RbcRow, assign_leg: bool) -> None:
         """Refuse a trade row whose Quantity contradicts it: a Buy with a
         negative Quantity (re-audit A2-0097: booked as a sale with negative
@@ -2407,12 +2567,22 @@ class RbcBrokerage(BaseBrokerage):
         reached `tjs run`'s row check, which stopped the account naming no
         row; the twin of a blank Value, R1-82; backlog TJ-4536)."""
         activity = r.activity.strip()
-        if activity.lower() == 'buy' and r.qty < 0:
+        if rbc_trade_side(r) == 'buy' and r.qty < 0:
+            if activity.lower() == 'buy':
+                raise _err(Path(self._fname), r.line,
+                           f"a Buy row with a NEGATIVE Quantity {r.qty:g} "
+                           f"({r.label()}) — the activity says purchase, "
+                           f"the quantity says sale; refusing to guess. "
+                           f"Fix the row (or book it in a .tt file).")
             raise _err(Path(self._fname), r.line,
-                       f"a Buy row with a NEGATIVE Quantity {r.qty:g} "
-                       f"({r.label()}) — the activity says purchase, the "
-                       f"quantity says sale; refusing to guess. Fix the "
-                       f"row (or book it in a .tt file).")
+                       f"a row read as a purchase (the Description "
+                       f"{_desc_side_shown(r.desc)[1]}; the Activity "
+                       f"{activity!r} is not one this parser knows) has a "
+                       f"NEGATIVE Quantity {r.qty:g} ({r.label()}) — a "
+                       f"purchase by one, a sale by the other; refusing "
+                       f"to guess. Set the Activity cell to Buy or Sell "
+                       f"from the statement (or book the trade in a .tt "
+                       f"file).")
         if abs(r.qty) < QTY_ZERO and not assign_leg:
             raise RbcFormatError(str(zero_units_refusal(
                 f"{shown_name(Path(self._fname))}:{r.line}",
@@ -2442,7 +2612,7 @@ class RbcBrokerage(BaseBrokerage):
         if mult is None:
             mult = self.OPTION_MULTIPLIER if is_option else 1
         gross = abs(qty) * price * mult
-        act = (r.activity or '').strip().lower()
+        act = rbc_trade_side(r)
         sale = act != 'buy' and (act == 'sell' or is_retraction or qty < 0)
         fee = (gross - net) if sale else (abs(net) - gross)
         low, high = implied_commission_bounds(gross, qty, is_option=is_option)

@@ -113,6 +113,18 @@ STAMPED = (
     ("*.tt", "lib/cli_diag.py:read_text_utf8 <- lib/missing_history.py:read_tt_openings",
      "*reports/wash_radar_*.rpt", "*work/missing_history.state",
      "the wash radar given --incomplete-history reads the same lines (TJ-4261)"),
+    ("*.tt", "lib/cli_diag.py:read_text_utf8 <- lib/missing_history.py:read_tt_openings",
+     "*work/*_base.json", "*work/missing_history.state",
+     "the equity merge given --incomplete-history holds the account's lines as rows "
+     "while it books the dated renames and applies the opening cut-off "
+     "(`hold_declared_openings`, TJ-5007 / TJ-5042): only these lines are read"),
+    ("*.tt", "lib/cli_diag.py:read_text_utf8 <- lib/missing_history.py:read_tt_openings",
+     "*work/*_raw.json", "*work/missing_history.state",
+     "the native books' merge holds the same lines the same way (TJ-5007 / TJ-5042)"),
+    ("*.tt", "lib/cli_diag.py:read_text_utf8 <- lib/missing_history.py:read_tt_openings",
+     "*work/*_mapped.json", "*work/missing_history.state",
+     "a crypto account's map stage holds the same lines while it books the dated "
+     "renames (TJ-5042)"),
     ("*.tt", "lib/cli_diag.py:read_text_utf8 <- lib/dated_events.py:read_declarations",
      "*work/*_ib.json", "*work/*_ib_tt.state",
      "the IB parse reads the project's .tt RENAME lines (`_ib_tt_state`, TJ-4129)"),

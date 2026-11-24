@@ -450,10 +450,16 @@ class TestIsinCountryFallback(unittest.TestCase):
            'Dividends,Data,USD,2026-01-02,QZN(NL9990000501) Cash Dividend '
            'USD 0.10 per Share,10\n')
 
-    def test_unmapped_country_without_a_position_warns(self):
-        _, txs, err = _parse(HEAD + self.DIV)
-        self.assertEqual(txs[0]['symbol'], 'QZN.US')
-        self.assertIn('QZN.US (ISIN NL)', err)
+    def test_unmapped_country_without_a_position_is_refused(self):
+        # It was booked on QZN.US with a warning ('QZN.US (ISIN NL)'): the
+        # ISIN's country names a domicile, no market (backlog TJ-5016;
+        # features/parsers/test_ib_income_listing_of_a_domicile_isin.py).
+        with self.assertRaises(BrokerageParseError) as cm:
+            _parse(HEAD + self.DIV)
+        self.assertIn("QZN (ISIN NL9990000501): the ISIN's country (NL)",
+                      str(cm.exception))
+        self.assertIn("refusing to book 1 row (1 dividend) on QZN.US, a guess",
+                      str(cm.exception))
 
     def test_position_on_the_listing_confirms_it_quietly(self):
         _, _, err = _parse(HEAD + TRADES_H + _trade(

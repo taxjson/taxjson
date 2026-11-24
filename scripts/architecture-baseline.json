@@ -764,7 +764,7 @@
    281
   ],
   "src/taxjson/engine/us/taxrules.py::USATaxRules._finish": [
-   197
+   192
   ],
   "src/taxjson/engine/us/taxrules.py::USATaxRules._prepare": [
    370
@@ -785,7 +785,7 @@
    173
   ],
   "src/taxjson/engine/us/walk.py::_us_walk_stock_dividend": [
-   180
+   158
   ],
   "src/taxjson/lib/brokerages/coinbase.py::CoinbaseBrokerage._build_convert": [
    198
@@ -860,7 +860,7 @@
    192
   ],
   "src/taxjson/lib/div_estimate.py::estimate": [
-   213
+   208
   ],
   "src/taxjson/lib/div_estimate.py::payments": [
    299
@@ -902,7 +902,7 @@
    431
   ],
   "src/taxjson/lib/opening.py::_realizations_left_out": [
-   184
+   180
   ],
   "src/taxjson/lib/option_boundary.py::straddling": [
    369
@@ -929,7 +929,7 @@
    212
   ],
   "src/taxjson/lib/pipeline.py::run_gains": [
-   494
+   452
   ],
   "src/taxjson/lib/positions_reports.py::_read_ib": [
    190
@@ -959,7 +959,7 @@
    177
   ],
   "src/taxjson/lib/renames.py::apply_dated_renames": [
-   182
+   169
   ],
   "src/taxjson/lib/slip_audit.py::_audit_account": [
    193
@@ -1052,7 +1052,7 @@
    151
   ],
   "src/taxjson/pipeline/stages.py::stage_account": [
-   497
+   473
   ],
   "src/taxjson/pipeline/stages.py::stage_cross_listings": [
    166

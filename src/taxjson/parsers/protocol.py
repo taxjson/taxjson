@@ -207,10 +207,12 @@ SURFACE = {
                 "settlement_date_t1", "signed_quantity", "strict_option_from_description",
                 "theoretical_gross", "trade_date_from_settlement", "tx_roc_adjust",
                 "warn_zero_cost_buy"),
-    # The constants a parser reads. The skip counters' label prefixes are
-    # this module's, the base's encoding, not the base's members.
+    # The constants a parser reads, and `SHORT_MARKS`, the one it sets:
+    # how its rows mark a short's cover, which taxjson-brokerage stamps on
+    # each trade row (backlog TJ-4993). The skip counters' label prefixes
+    # are this module's, the base's encoding, not the base's members.
     "constants": ("CURRENCY_EXT_FALLBACK", "CURRENCY_EXT_MAP", "DEFAULT_ACCOUNT",
-                  "MINI_OPTION_MULTIPLIER", "OPTION_MULTIPLIER"),
+                  "MINI_OPTION_MULTIPLIER", "OPTION_MULTIPLIER", "SHORT_MARKS"),
 }
 
 

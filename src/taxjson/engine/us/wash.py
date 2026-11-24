@@ -65,6 +65,17 @@ _RepEntry: TypeAlias = Dict[str, Any]
 # stood (after the last of those locals is bound, for the six that read a
 # later one), so every call site and the run holder are as before while no
 # helper keeps the engine's frame alive.
+# A lot's own record that its shares replaced a loss (US-WASH-20: a
+# replacement share replaces one loss share, once). True on the lot a
+# match adds its §1091(d) basis (a short: its proceeds cut) to, copied
+# with the lot when it is split or moved, and set by a §355 spin-off on
+# a parent lot that holds a deferral (engine/us/walk `_us_walk_spinoff`:
+# a lot matched before its purchase was booked takes its add there).
+# `_us_record_left_shares` reads it: where the add's money goes later
+# (a spin-off's child, in whole) says nothing of the shares' use.
+_US_LOT_USED = 'wash_used'
+
+
 def _us_split_covers(tx: TaxTransaction, seen_groups: Set[_RenameKey], *,
                      _acct_ratios: _AcctRatios) -> Optional[Callable[[str], bool]]:
     """Which accounts a SPLIT row applies to: None for every
@@ -165,16 +176,18 @@ def _us_set_ref(run: _USRun, rep: _RepRecord, ref_key: str, lot: Optional[_USLot
     run._rep_home[id(rep)].note_ref(rep, ref_key, lot)
 
 def _us_grow_rep_capacity(run: _USRun, sym: str, on_date: str, lots: List[_USLot],
-                          ratio: float) -> None:
+                          ratio: float, *, short: bool = False) -> None:
     """A stock dividend grew `lots` by `ratio`: the purchases they
     stand for hold that many more shares, so their replacement
     records' capacity grows with them, as after a split, and a
     later loss matches share for share in the new units
     (TJ-0492; the dividend itself is never a purchase,
-    US-STKDIV-01)."""
-    ix_ = _us_ix(run, run.long_replacements.get(_us_rkey_on(run, sym, on_date), []))
+    US-STKDIV-01). `short`: the short lots a stock dividend made
+    owe more shares (US-STKDIV-06), and the short sales' records."""
+    ix_ = _us_ix(run, (run.short_replacements if short
+                       else run.long_replacements).get(_us_rkey_on(run, sym, on_date), []))
     for lot in lots:
-        for r in ix_.holding('lot_ref', lot):
+        for r in ix_.holding('short_lot_ref' if short else 'lot_ref', lot):
             r['remaining_qty'] = r['remaining_qty'] * ratio
 
 def _us_allot_sold_shares(run: _USRun, sold: List[_GainRow], ratio: float, ikey_: _IKey,
@@ -376,7 +389,15 @@ def _us_record_left_shares(run: _USRun, lot: _USLot, qty: float, tx: TaxTransact
     start their own). Returns the chunk (None: not recorded)."""
     rep = (run._short_rep_of if short
            else run._long_rep_of).get(lot.get('id'))
+    # Shares that already replaced a loss never replace a second one:
+    # the lot says so itself (`_US_LOT_USED`, set where a match adds
+    # to it and kept wherever its basis later goes: a §355 spin-off
+    # that moved the whole add with the whole basis left the lot
+    # looking never matched, backlog TJ-4986). A deferral the lot
+    # holds another way (an option's, carried into its shares) or one
+    # a return of capital used up still counts, as before.
     if (rep is None or lot.get('tainted')
+            or lot.get(_US_LOT_USED)
             or lot.get('wash_deferred', Decimal(0))
             or lot.get('wash_basis_spent')
             or not run.detect_wash_sales):
@@ -536,6 +557,7 @@ def _us_apply_held_long(run: _USRun, rep: _RepRecord, match_qty: float, uf: floa
             _tack_lot['cost_basis'] += amt_d
             _tack_lot['wash_deferred'] = (
                 _tack_lot.get('wash_deferred', Decimal(0)) + amt_d)
+            _tack_lot[_US_LOT_USED] = True
         else:
             rep['pending_basis_add'] += amt_d
             rep.setdefault('pending_matches', []).append(
@@ -577,6 +599,7 @@ def _us_apply_held_short(run: _USRun, rep: _RepRecord, match_qty: float,
             _sl['proceeds'] -= amt_d
             _sl['wash_deferred'] = (
                 _sl.get('wash_deferred', Decimal(0)) + amt_d)
+            _sl[_US_LOT_USED] = True
         else:
             rep['pending_proceeds_reduction'] += amt_d
     return {
@@ -888,6 +911,7 @@ def _us_apply_left_replacement(run: _USRun, rep: _RepRecord, ch: _LeftChunk, mat
             ch['lots'] = [rest if x is lot_ else x for x in ch['lots']]
         lot_['cost_basis'] += share
         lot_['wash_deferred'] = lot_.get('wash_deferred', Decimal(0)) + share
+        lot_[_US_LOT_USED] = True
         if _tack and _tack < cast("str", lot_.get('effective_acq_date', lot_['date'])):
             lot_['effective_acq_date'] = _tack
     return {'date': ch['sale_tx'].date, 'amount': M.of(amt_d),

@@ -913,7 +913,7 @@ def _mh_journal(args, txs):
     return journal
 
 
-def _mh_drop_covers(args, txs, types):
+def _mh_drop_covers(args, txs, types, country=None):
     """The books without the covers of the shorts a .tt line declares
     (--missing-history); the books as given without it (main)."""
     # A short a .tt line declares (TJ-0844): its cover leaves the walks.
@@ -922,7 +922,7 @@ def _mh_drop_covers(args, txs, types):
                                                  short_opening_rows)
         txs = drop_answered_covers(txs, short_opening_rows(
             _opening_sizes(txs, args.missing_history, args.year,
-                           types or None).values()))
+                           types or None).values()), country)
     return txs
 
 
@@ -959,7 +959,7 @@ def _mh_short_rows(year_pool, txs, candidates, args, country, types, basis, jour
     return short_rows
 
 
-def _mh_covers_stale(txs, args, basis, journal, types, mh_name):
+def _mh_covers_stale(txs, args, basis, journal, types, mh_name, country=None):
     """The broker-marked covers no short in the data backs, and the
     OPENING cost=unknown entries today's detection would not propose:
     the stale ones (each named by its place), those whose purchase is in
@@ -971,7 +971,7 @@ def _mh_covers_stale(txs, args, basis, journal, types, mh_name):
     covers = [c for c in detect_unbacked_covers(
                   txs, include_options=args.include_options,
                   date_basis=basis, journal_symbols=journal,
-                  registered_accounts=types or None)
+                  registered_accounts=types or None, country=country)
               if not args.account or c.account == args.account]
 
     # --- 1c. missing-history entries today's detection would NOT propose
@@ -1006,9 +1006,51 @@ def _mh_covers_stale(txs, args, basis, journal, types, mh_name):
     # (audit 2026-10-23 #1).
     complete = [e for e in stale if e.reason == 'complete']
     stale = [e for e in stale if e.reason != 'complete']
+    complete = _mh_replaced(txs, args, mh_name) + [
+        e for e in complete if not _replaced_line(e, txs, args)]
     stale_pairs = {(e.symbol.upper(), e.account): e.file_name
                    for e in stale}
     return covers, stale, complete, stale_pairs
+
+
+def _replaced_log(txs, args):
+    """{line's file:line: its applied-log entry} of the OPENING
+    cost=unknown lines an opening snapshot replaces in these books
+    (lib/missing_history.synthesize_openings: the run's own verdict;
+    backlog TJ-5007). {} when the lines cannot be read or applied (said
+    by the read of the lines)."""
+    if not args.missing_history:
+        return {}
+    from taxjson.lib.missing_history import synthesize_openings
+    try:
+        _o, log = synthesize_openings(txs, _listed_pairs(args.missing_history),
+                                      flag_stale=False)
+    except (OSError, ValueError):
+        return {}
+    return {str(e.get('source')): e for e in log
+            if e.get('replaced_by_snapshot')
+            and (not args.account or e.get('account') == args.account)}
+
+
+def _replaced_line(e, txs, args) -> bool:
+    """Is the stale entry `e` a line an opening snapshot replaces?"""
+    return str(e.file_name) in _replaced_log(txs, args)
+
+
+def _mh_replaced(txs, args, mh_name):
+    """The OPENING cost=unknown lines an opening snapshot replaces, as
+    entries of reason 'replaced' (`marker`: the snapshot, "SYMBOL
+    dated DATE"): the run opens none of them, and their sales are in the
+    totals at the snapshot's cost."""
+    from taxjson.lib.missing_history import StaleMissingHistoryEntry
+    out = []
+    for where, e in sorted(_replaced_log(txs, args).items()):
+        snap = e['replaced_by_snapshot']
+        out.append(StaleMissingHistoryEntry(
+            e.get('declared_symbol') or e['symbol'], e['account'], 'replaced',
+            marker=f"{snap['symbol']} dated {snap['date']}",
+            file_name=where or mh_name))
+    return out
 
 
 def _mh_zero(args, txs, basis, country, linked_new, types):
@@ -1089,6 +1131,25 @@ def _mh_print_found(args, broker_shorts, stale_pairs, mh_name, stale, complete, 
             if DETAILS:
                 _P.para(stale_entry_message(e), "    ", "    ")
 
+    replaced = [e for e in complete if e.reason == 'replaced']
+    complete = [e for e in complete if e.reason != 'replaced']
+    if replaced:
+        # The REPLACED line heads the rows the checklist counts.
+        _P.heading(f"REPLACED BY AN OPENING SNAPSHOT — OPENING cost=unknown "
+                   f"entries that open nothing: {len(replaced)}")
+        _P.line(f"REPLACED in {_entries_file(replaced, mh_name)} - an "
+                f"opening snapshot dated on or after the line replaces it: "
+                f"the run opens nothing for it and its sales are in the "
+                f"totals at the snapshot's cost; delete it:")
+        for e in replaced:
+            _P.line(_entry_row(e, mh_name))
+            if DETAILS:
+                _P.para(f"{e.file_name}: the opening snapshot of {e.marker} "
+                        f"replaces this line as it replaces the earlier "
+                        f"rows (the snapshot is the position on its day). "
+                        f"Delete the line (keep it, dated after the "
+                        f"snapshot, only for units that came after it).",
+                        "    ", "    ")
     if complete:
         # The STALE line heads the rows the checklist counts.
         _P.heading(f"PURCHASE NOW IN THE BOOKS — OPENING cost=unknown "
@@ -1184,6 +1245,10 @@ def _mh_covered_by(args, yr, short_rows, txs, types, journal, basis, year_pool, 
         except (OSError, ValueError) as e:
             _diag(f"taxjson-missing-history: warning: could not read "
                   f"{args.missing_history}: {e}", file=sys.stderr)
+    # A line an opening snapshot replaces opens nothing: it covers no
+    # pair (listed under REPLACED; backlog TJ-5007).
+    _ph -= {(str(e['symbol']).upper(), str(e['account']).lower())
+            for e in _replaced_log(txs, args).values()}
 
     # The openings the run booked, walked with the books as the closing
     # summary walks them (first_run.uncovered_short_sales): a used-up
@@ -1553,7 +1618,7 @@ def main(argv=None):
         return 2
     country, _cost, basis = _mh_country(args, basis)
     journal = _mh_journal(args, txs)
-    txs = _mh_drop_covers(args, txs, types)
+    txs = _mh_drop_covers(args, txs, types, country)
     if args.write_purchases is not None:
         return _write_purchases(args, txs, country=country, basis=basis,
                                 types=types, journal=journal,
@@ -1567,7 +1632,7 @@ def main(argv=None):
                                 journal, linked_old)
 
     covers, stale, complete, stale_pairs = _mh_covers_stale(txs, args, basis, journal, types,
-                                                            mh_name)
+                                                            mh_name, country)
 
     zero_declared, zero_rows, zero_held = _mh_zero(args, txs, basis, country, linked_new, types)
 

@@ -19,6 +19,12 @@ the CUT-OFF (CA-OPEN-03, US-OPEN-03):
 * position rows only (trades, transfers, splits/renames into the
   symbol, cost adjustments); income rows (dividends, interest,
   withholding) always stay;
+* a `.tt` `OPENING ... cost=unknown` line (units held before the data,
+  lib/missing_history) is a position row like any other: merge2 holds
+  the account's lines as rows while it books the renames and cuts
+  (missing_history `hold_declared_openings`), the snapshot's row names
+  each one it replaced (`opening_cut_legs`), and no stage opens that
+  line again (`unknown_opening_replaced`; backlog TJ-5007);
 * a row of an old symbol follows only the renames dated on or after
   it: a ticker reused after its rename (bought under the old name
   later) is another holding and keeps its rows; the pass across
@@ -47,7 +53,9 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from taxjson.lib.row_types import is_opening_row
 from taxjson.lib import out as _out
-from taxjson.model.evidence import CutLeg, cut_leg, join_cut_legs
+from taxjson.model.evidence import (UNKNOWN_OPENING_LEG, CutLeg, EvidenceError, cut_leg,
+                                    cut_leg_action, join_cut_legs, parse_cut_leg,
+                                    split_cut_legs)
 
 # Rows a snapshot replaces: everything that moves a position or its
 # cost. Income (DIVIDEND, INTEREST, TAX, FEE, DIVIDEND_IN_LIEU) stays.
@@ -182,13 +190,36 @@ def _note_cut_legs(dropped: Dict[str, List], rows: List, report=None) -> None:
     name, where no snapshot was found to hold it, and a later purchase
     under the reused old name took it a second time (TJ-5005). A symbol
     that is not one token (a space, a `;`) cannot be named in a leg: said
-    on `report`, never left out without a word."""
+    on `report`, never left out without a word.
+
+    A `.tt` `OPENING ... cost=unknown` line among them (an
+    OPENING_BALANCE row) is named too, as a leg of action
+    UNKNOWN_OPENING_LEG at price 0: the stages that open the lines read
+    there that the snapshot replaced this one (`unknown_opening_replaced`;
+    backlog TJ-5007)."""
     legs: Dict[Tuple[str, str], List[CutLeg]] = {}
     unnamed = set()
     for acct, items in dropped.items():
         for t, hit in items:
             q = float(_get(t, 'quantity', 0.0) or 0.0)
             sym = str(_get(t, 'symbol'))
+            if q and _get(t, 'action') == UNKNOWN_OPENING_LEG:
+                if sym != hit and (len(sym.split()) != 1 or ';' in sym):
+                    if report is not None:
+                        _out.put(
+                            f"{ATTENTION_OPENING}{acct}: the opening "
+                            f"snapshot of {hit} replaces the OPENING "
+                            f"cost=unknown line of {sym!r}, renamed to it, "
+                            f"and a symbol with a space or a ';' cannot be "
+                            f"named on the snapshot's row: the line's "
+                            f"{q:g} units may be opened again at an "
+                            f"unknown cost. Delete the line: the snapshot "
+                            f"holds its units.", report)
+                    continue
+                legs.setdefault((acct, hit), []).append(
+                    cut_leg(_get(t, 'date'), q, 0.0, UNKNOWN_OPENING_LEG,
+                            '' if sym == hit else sym))
+                continue
             if not q or _get(t, 'action') not in ('BUYSELL', 'ASSIGN'):
                 continue
             if sym != hit and (len(sym.split()) != 1 or ';' in sym):
@@ -220,6 +251,102 @@ def _note_cut_legs(dropped: Dict[str, List], rows: List, report=None) -> None:
                 t['opening_cut_legs'] = text
             else:
                 t.opening_cut_legs = text
+
+
+def unknown_opening_replaced(rows: Iterable, account: str,
+                             symbols: Iterable[str], day: str
+                             ) -> Optional[Tuple[str, str]]:
+    """(snapshot symbol, snapshot date) when an opening snapshot of
+    `account` in `rows` replaces a `.tt` `OPENING ... cost=unknown` line
+    dated `day` (unknown_opening_reading, whatever the grounds), else
+    None."""
+    got = unknown_opening_reading(rows, account, symbols, day)
+    return None if got is None else got[:2]
+
+
+# How unknown_opening_reading found a line replaced.
+BY_LEG, BY_ROWS, BY_OTHER_ACCOUNT = 'leg', 'rows', 'other-account'
+
+
+def unknown_opening_reading(rows: Iterable, account: str,
+                            symbols: Iterable[str], day: str
+                            ) -> Optional[Tuple[str, str, str, Tuple]]:
+    """(snapshot symbol, snapshot date, grounds, rename) when an opening
+    snapshot of `account` in `rows` replaces a `.tt` `OPENING ...
+    cost=unknown` line dated `day` whose units these books carry under
+    one of `symbols` (the first is the one the units carried that day),
+    else None. The line is a position row like any other (CA-OPEN-03 /
+    US-OPEN-03; backlog TJ-5007), so it is replaced when:
+
+    * BY_LEG: the snapshot's row names it among the rows the merge left
+      out (`opening_cut_legs`, a leg of action UNKNOWN_OPENING_LEG on
+      that date: `_note_cut_legs`), which holds when the rename that
+      made it the snapshot's was left out with it. The merge said so;
+    * BY_ROWS: the cut-off's own test holds on these rows: the line is
+      dated on or before the snapshot and its symbol is the snapshot's,
+      through the account's own rename rows dated from the line to the
+      snapshot;
+    * BY_OTHER_ACCOUNT: that test holds only through a rename row of
+      another account (a rename is the security's event, so books that
+      pool the accounts follow it, while the account's own books cannot:
+      TJ-5241). `rename` is that row as (date, old, new, account); ()
+      on the other grounds. The caller refuses: one line, two readings.
+
+    Rows no snapshot can be read from (one symbol opened on two dates:
+    the merge refuses them) replace nothing here."""
+    rows = list(rows)
+    symbols = [s for s in symbols if s]
+    day = str(day)[:10]
+    for t in rows:
+        if not is_opening_row(t) or str(_get(t, 'account')) != account:
+            continue
+        snap = str(_get(t, 'symbol'))
+        for raw in split_cut_legs(str(_get(t, 'opening_cut_legs'))):
+            if cut_leg_action(raw) != UNKNOWN_OPENING_LEG:
+                continue
+            try:
+                leg = parse_cut_leg(raw)
+            except EvidenceError:
+                continue
+            if leg.date[:10] == day and (leg.symbol or snap) in symbols:
+                return snap, str(_get(t, 'date')), BY_LEG, ()
+    if not symbols:
+        return None
+    try:
+        snaps = snapshots(rows)
+    except OpeningError:
+        return None
+    mine = _rename_rows(t for t in rows if str(_get(t, 'account')) == account)
+    for (acct, snap), d in sorted(snaps.items()):
+        if acct == account and day <= d and _final_symbol(
+                symbols[0], mine, d, since=day) == snap:
+            return snap, d, BY_ROWS, ()
+    every = _rename_rows(rows)
+    for (acct, snap), d in sorted(snaps.items()):
+        if acct == account and day <= d and _final_symbol(
+                symbols[0], every, d, since=day) == snap:
+            other = next(
+                ((str(_get(t, 'date')), str(_get(t, 'symbol')),
+                  str(_get(t, 'symbol_new')).strip(), str(_get(t, 'account')))
+                 for t in rows
+                 if _get(t, 'action') == 'SPLIT'
+                 and str(_get(t, 'account')) != account
+                 and (str(_get(t, 'date')), str(_get(t, 'symbol')),
+                      str(_get(t, 'symbol_new')).strip()) in set(every) - set(mine)
+                 and day <= str(_get(t, 'date')) <= d), ())
+            return snap, d, BY_OTHER_ACCOUNT, other
+    return None
+
+
+def _rename_rows(txs: Iterable) -> List[Tuple[str, str, str]]:
+    """The rename SPLIT rows of `txs` as (date, old, new), in date order."""
+    return sorted(
+        (str(_get(t, 'date')), str(_get(t, 'symbol')),
+         str(_get(t, 'symbol_new')).strip())
+        for t in txs
+        if _get(t, 'action') == 'SPLIT'
+        and str(_get(t, 'symbol_new')).strip()
+        and str(_get(t, 'symbol_new')).strip() != _get(t, 'symbol'))
 
 
 def apply_opening_cutoff(txs: List, *, year: Optional[int] = None,
@@ -267,13 +394,7 @@ def apply_opening_cutoff(txs: List, *, year: Optional[int] = None,
                     f"a US lot's basis is its {base_currency.upper()} "
                     f"cost on its own purchase date: enter the lot in "
                     f"{base_currency.upper()} (US-OPEN-02).")
-    renames = sorted(
-        (str(_get(t, 'date')), str(_get(t, 'symbol')),
-         str(_get(t, 'symbol_new')).strip())
-        for t in txs
-        if _get(t, 'action') == 'SPLIT'
-        and str(_get(t, 'symbol_new')).strip()
-        and str(_get(t, 'symbol_new')).strip() != _get(t, 'symbol'))
+    renames = _rename_rows(txs)
     by_acct: Dict[str, Dict[str, str]] = {}
     for (acct, sym), day in snaps.items():
         by_acct.setdefault(acct, {})[sym] = day
@@ -302,9 +423,9 @@ def apply_opening_cutoff(txs: List, *, year: Optional[int] = None,
         bad = _realizations_left_out(dropped, txs, by_acct, year,
                                      renames, country=country,
                                      tax_date=tax_date,
-                                     earlier=earlier_cut)
+                                     earlier=earlier_cut, notes=(notes := {}))
         if bad:
-            raise OpeningError(_refusal(bad, by_acct, year, country))
+            raise OpeningError(_refusal(bad, by_acct, year, country, notes))
     if cut is not None:
         cut.extend(t for rows in dropped.values() for t, _hit in rows)
     _note_cut_legs(dropped, kept, report)
@@ -334,11 +455,13 @@ def _realizations_left_out(dropped: Dict[str, List], txs: List,
                            renames: Optional[List[Tuple[str, str, str]]]
                            = None, *, country: Optional[str] = None,
                            tax_date: Optional[str] = None,
-                           earlier: Optional[List] = None
+                           earlier: Optional[List] = None,
+                           notes: Optional[Dict[int, Dict]] = None
                            ) -> List[Tuple]:
     """The left-out rows that realize a gain or loss in `year` or later,
-    as (row, snapshot symbol, 'sale' | 'cover' | 'roc', quantity closed
-    or the return of capital's amount), earliest first.
+    as (row, snapshot symbol, 'sale' | 'cover' | 'roc' | 'mismatch',
+    quantity closed or the return of capital's amount), earliest first
+    (`notes`, 'mismatch': _walk_note).
 
     A SALE (a BUYSELL / ASSIGN of negative quantity) always counts —
     it may sell held shares or write an option, whose premium is
@@ -395,22 +518,7 @@ def _realizations_left_out(dropped: Dict[str, List], txs: List,
     where = {id(t): i for i, t in enumerate(txs)}
     splits = [(i, t) for i, t in enumerate(txs)
               if _get(t, 'action') == 'SPLIT']
-    open_qty: Dict[Tuple[str, str], float] = {}
-    # (currency, total cost) of each snapshot — currency None when its
-    # lots are in more than one — and its lots (lot date, cost).
-    open_cost: Dict[Tuple[str, str], Tuple[Optional[str], float]] = {}
-    lots: Dict[Tuple[str, str], List[Tuple[str, float]]] = {}
-    for t in txs:
-        if is_opening_row(t):
-            key = (str(_get(t, 'account')), str(_get(t, 'symbol')))
-            open_qty[key] = (open_qty.get(key, 0.0)
-                             + float(_get(t, 'quantity', 0.0) or 0.0))
-            cur = str(_get(t, 'currency')).upper()
-            amt = abs(float(_get(t, 'net_amount', 0.0) or 0.0))
-            pc, pa = open_cost.get(key, (cur, 0.0))
-            open_cost[key] = (cur if pc == cur else None, pa + amt)
-            lots.setdefault(key, []).append(
-                (str(_get(t, 'lot_date')), amt))
+    open_qty, open_cost, lots = _snapshot_facts(txs)
     # Each split event counts once whichever account (or source) carries
     # it, copies on nearby dates included (split_copies, CA-CORP-12).
     split_dups = split_copies([t for _i, t in splits])
@@ -444,6 +552,7 @@ def _realizations_left_out(dropped: Dict[str, List], txs: List,
             # a sale, a transfer, a cost the walk cannot undo).
             snap_cur, snap_cost = open_cost.get((acct, hit), (None, None))
             cost: Dict[str, Optional[float]] = {hit: snap_cost}
+            passed: List = []       # the cost=unknown lines walked through
             for _i, t in reversed(grp):
                 act = _get(t, 'action')
                 sym = str(_get(t, 'symbol'))
@@ -484,6 +593,7 @@ def _realizations_left_out(dropped: Dict[str, List], txs: List,
                         # No long shares, or no cost left after it: it
                         # may have gone beyond the cost.
                         bad.append((t, hit, 'roc', -net))
+                        _walk_note(notes, t, passed)
                     cost[sym] = (None if (c is None or not same_cur
                                           or (roc and c <= 0.005))
                                  else c - net)
@@ -504,14 +614,69 @@ def _realizations_left_out(dropped: Dict[str, List], txs: List,
                                  and c is not None)
                              else None)
                 if act not in ('BUYSELL', 'ASSIGN'):
+                    if act == 'OPENING_BALANCE' and q:
+                        passed.append(t)
                     continue
                 if q < 0:
                     if traded_in_year:
                         bad.append((t, hit, 'sale', -q))
                 elif q > 0 and before < -1e-9 and in_year:
-                    bad.append((t, hit, 'cover', min(q, -before)))
+                    held = [x for x in passed
+                            if float(_get(x, 'quantity', 0.0) or 0.0) > 0]
+                    bad.append((t, hit, 'mismatch' if held else 'cover',
+                                min(q, -before)))
+                    _walk_note(notes, t, held, before=before,
+                               snapshot=open_qty.get((acct, hit), 0.0))
     bad.sort(key=lambda b: _when(b[0], where[id(b[0])]))
     return bad
+
+
+def _snapshot_facts(txs: Iterable):
+    """Of the OPENING rows of `txs`, by (account, symbol): the units;
+    (currency, total cost), the currency None when its lots are in more
+    than one; and its lots as (lot date, cost)."""
+    open_qty: Dict[Tuple[str, str], float] = {}
+    open_cost: Dict[Tuple[str, str], Tuple[Optional[str], float]] = {}
+    lots: Dict[Tuple[str, str], List[Tuple[str, float]]] = {}
+    for t in txs:
+        if is_opening_row(t):
+            key = (str(_get(t, 'account')), str(_get(t, 'symbol')))
+            open_qty[key] = (open_qty.get(key, 0.0)
+                             + float(_get(t, 'quantity', 0.0) or 0.0))
+            cur = str(_get(t, 'currency')).upper()
+            amt = abs(float(_get(t, 'net_amount', 0.0) or 0.0))
+            pc, pa = open_cost.get(key, (cur, 0.0))
+            open_cost[key] = (cur if pc == cur else None, pa + amt)
+            lots.setdefault(key, []).append(
+                (str(_get(t, 'lot_date')), amt))
+    return open_qty, open_cost, lots
+
+
+def _walk_note(notes: Optional[Dict[int, Dict]], row, lines: List,
+               **facts) -> None:
+    """Record for `row` (a left-out realization) the `.tt` `OPENING ...
+    cost=unknown` lines the walk back passed before reaching it (the
+    merge holds them as OPENING_BALANCE rows: backlog TJ-5007), with the
+    walk's figures (`before`: the position it met; `snapshot`: the
+    snapshot's units): what _refusal names. A return of capital whose
+    cost the walk lost at such a line names it; a buy that reads as a
+    cover only because the line's units were taken off the snapshot's is
+    a 'mismatch' (the line and the rows before it hold more units than
+    the snapshot), never "a short cover"."""
+    if notes is not None and lines:
+        notes[id(row)] = dict(facts, lines=list(lines))
+
+
+def _line_shown(t) -> str:
+    """A held `.tt` `OPENING ... cost=unknown` line as a refusal names
+    it: its file and line (from the row's description, missing_history
+    `hold_declared_openings`), then the line."""
+    import re
+    m = re.match(r"MISSING-HISTORY opening \(([^)]*)\)",
+                 str(_get(t, 'description')))
+    q = float(_get(t, 'quantity', 0.0) or 0.0)
+    line = f"OPENING {_get(t, 'date')} {_get(t, 'symbol')} {q:g} cost=unknown"
+    return f"{m.group(1)} ({line})" if m else line
 
 
 def _nil_lot_held(lots, day: str, country: Optional[str]) -> bool:
@@ -526,13 +691,40 @@ def _nil_lot_held(lots, day: str, country: Optional[str]) -> bool:
     return any(d and d <= day and amt <= 0.005 for d, amt in lots)
 
 
+def _mismatch_refusal(t, hit: str, day: str, note: Dict) -> str:
+    """The OpeningError text for a buy of the tax year the snapshot's
+    units do not account for once a `.tt` `OPENING ... cost=unknown`
+    line's units are taken off them (`note`: _walk_note): the inputs
+    disagree, and no short was covered."""
+    lines = note['lines']
+    units = sum(float(_get(x, 'quantity', 0.0) or 0.0) for x in lines)
+    qty = abs(float(_get(t, 'quantity', 0.0) or 0.0))
+    return (f"account {_get(t, 'account')}: the opening balance of {hit} "
+            f"dated {day} ({note['snapshot']:g} units) does not fit the "
+            f"rows it replaces: walked back from the snapshot through "
+            f"{' and '.join(_line_shown(x) for x in lines)}, the position "
+            f"before the {_get(t, 'date')} buy of {qty:g} "
+            f"{_get(t, 'symbol')} is {note['before']:g}, so the line's "
+            f"{units:g} units and the rows before it hold "
+            f"{-note['before']:g} more than the snapshot (the buy would "
+            f"close a short position no row sold). Delete the OPENING "
+            f"cost=unknown line (the snapshot holds every unit held on "
+            f"its day) or correct its quantity, or correct the "
+            f"snapshot's.")
+
+
 def _refusal(bad: List[Tuple], by_acct: Dict[str, Dict[str, str]],
-             year: int, country: Optional[str]) -> str:
+             year: int, country: Optional[str],
+             notes: Optional[Dict[int, Dict]] = None) -> str:
     """The OpeningError text for the left-out realizations `bad`
-    (from _realizations_left_out), naming the first."""
+    (from _realizations_left_out), naming the first; `notes`: the
+    `.tt` `OPENING ... cost=unknown` lines its walk passed (_walk_note)."""
     from taxjson.lib.country import is_usa
     t, hit, kind, closed = bad[0]
     acct = str(_get(t, 'account'))
+    note = (notes or {}).get(id(t))
+    if kind == 'mismatch' and note:
+        return _mismatch_refusal(t, hit, by_acct[acct][hit], note)
     n = {k: sum(1 for b in bad if b[2] == k)
          for k in ('sale', 'cover', 'roc')}
     what = ' and '.join(
@@ -557,6 +749,14 @@ def _refusal(bad: List[Tuple], by_acct: Dict[str, Dict[str, str]],
                else 'ITA s.40(3)')
         why = (f" A return of capital beyond the cost is a gain of its "
                f"year ({law}); the snapshot's cost cannot show it.")
+    if kind == 'roc' and note:
+        why += (f" The walk back from the snapshot passes "
+                f"{' and '.join(_line_shown(x) for x in note['lines'])}, "
+                f"whose cost is unknown, so the cost left after the return "
+                f"of capital cannot be read: delete that line (the snapshot "
+                f"holds its units) or replace it with the purchase and its "
+                f"cost (a `.tt` BUYSELL line), and the cut-off reads the "
+                f"cost.")
     return (f"account {acct}: the opening balance of "
             f"{hit} dated {by_acct[acct][hit]}"
             f" would leave out {what} of the {year} tax "

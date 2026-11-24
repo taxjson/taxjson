@@ -51,7 +51,8 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from statistics import median
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import (Any, Callable, Dict, Iterable, List, Optional, Sequence,
+                    Set, Tuple)
 from taxjson.lib.json_contract import SCHEMAS
 from taxjson.model import money as M
 
@@ -169,9 +170,10 @@ class Payments(dict):
     as the position's flags. `short_paid`: {(account, symbol): [the pay
     dates of the positive rows paid while the books put the account
     short the symbol]}: counted as income, and the command warns
-    (backlog TJ-0073). What `assumed_quarterly` reads: `held`: {symbol
-    (now): [(account, its [(date, signed share balance after it)], by
-    date)]} (`_held_now`); `paid`: {symbol (now): [the date of every
+    (backlog TJ-0073). What `assumed_quarterly` and `_not_held` read:
+    `held`: {symbol (now): [(account, a [(date, signed share balance
+    after it)] of it, by date: each broker account's own (TJ-5051))]}
+    (`_held_now`); `paid`: {symbol (now): [the date of every
     income row of it with money left after reversals, whatever its
     currency or share count]}; `ends`: {account: the date of its last
     row in the books, whatever the as-of date} (`_paid_and_ends`)."""
@@ -195,8 +197,9 @@ def _held(rows: List[Tuple[str, Dict[str, Any]]],
                      Dict[Tuple[str, str], List[List[Tuple[str, float]]]]]:
     """({(account, symbol): [(date, signed share balance after it)]},
     {(account, broker account, symbol): [(date, balance)]}, {(account,
-    symbol after the last of `splits`): the parts of the first map's
-    lists that are its security's}) by trade
+    symbol after the last of `splits`): the parts of the second map's
+    lists that are its security's, each broker account's own; the first
+    map's for a symbol a row naming no broker account moves}) by trade
     date: each account's trade rows (_TRADES; `ok` reads a row's
     (action, symbol, date), or None to leave it out), scaled by every
     split of `splits` (date, symbol, new symbol, ratio) and moved to the
@@ -213,7 +216,16 @@ def _held(rows: List[Tuple[str, Dict[str, Any]]],
     The third map cuts the lists at each rename: the old symbol's
     entries to the rename's (its last, at 0) are the renamed security's
     and go on with it, those after it are another security's that took
-    the old symbol up (a ticker reused: backlog TJ-5052)."""
+    the old symbol up (a ticker reused: backlog TJ-5052). Its lists are
+    each broker account's, so one broker account's short does not net
+    away another's long when the entitlement is read (backlog TJ-5051),
+    unless a sale with no short marker of the broker's (missing_history
+    `broker_short_marker`; an opening balance states its own) puts one
+    short: shares that left under another broker account id than they
+    came in (an account renumbered) read as a short there, so the
+    account's lists stand for that symbol, as before."""
+    from types import SimpleNamespace
+    from taxjson.lib.missing_history import broker_short_marker
     walk: Dict[str, List[tuple]] = {}
     for acct, t in rows:
         key = ok(t)
@@ -223,26 +235,34 @@ def _held(rows: List[Tuple[str, Dict[str, Any]]],
             q = float(t.get("quantity") or 0.0)
         except (TypeError, ValueError):
             continue
+        marked = key[0] == "OPENING_BALANCE" or bool(broker_short_marker(
+            SimpleNamespace(description=str(t.get("description") or ""),
+                            quantity=q, open_close=t.get("open_close"))))
         walk.setdefault(acct, []).append(
             (key[2], 0 if key[0] == "OPENING_BALANCE" else 2,
              str(t.get("time") or ""), key[1], q, "",
-             str(t.get("source_account") or "")))
+             str(t.get("source_account") or ""), marked))
     out: Dict[Tuple[str, str], List[Tuple[str, float]]] = {}
     by_src: Dict[Tuple[str, str, str], List[Tuple[str, float]]] = {}
     parts: Dict[Tuple[str, str], List[List[Tuple[str, float]]]] = {}
     for acct, ts in walk.items():
         bal: Dict[Tuple[str, str], float] = {}      # (source, symbol)
         mixed = set()       # symbols a row naming no broker account moved
+        unmarked = set()    # one a sale with no short marker put a broker account short
         cut: Dict[str, int] = {}    # symbol: where its security's own entries start
         carried: Dict[str, List[List[Tuple[str, float]]]] = {}  # earlier names'
-        evs = [(d, 1, "", sym, ratio, new, "")
+        cut_s: Dict[Tuple[str, str], int] = {}      # the same, per (source, symbol)
+        carried_s: Dict[Tuple[str, str], List[List[Tuple[str, float]]]] = {}
+        evs = [(d, 1, "", sym, ratio, new, "", True)
                for d, sym, new, ratio in splits]
-        for d, rank, _tm, sym, q, new, src in sorted(ts + evs,
-                                                     key=lambda x: x[:3]):
+        for d, rank, _tm, sym, q, new, src, marked in sorted(
+                ts + evs, key=lambda x: x[:3]):
             if rank != 1:
                 bal[(src, sym)] = bal.get((src, sym), 0.0) + q
                 if not src:
                     mixed.add(sym)
+                elif q < 0 and bal[(src, sym)] < -1e-9 and not marked:
+                    unmarked.add(sym)
                 keys = [(src, sym)]
             else:
                 keys = []
@@ -255,6 +275,8 @@ def _held(rows: List[Tuple[str, Dict[str, Any]]],
                     continue
                 if sym in mixed:
                     mixed.add(new)
+                if sym in unmarked:
+                    unmarked.add(new)
             for s in dict.fromkeys(k[1] for k in keys):
                 out.setdefault((acct, s), []).append(
                     (d, sum(v for k, v in bal.items() if k[1] == s)))
@@ -267,11 +289,25 @@ def _held(rows: List[Tuple[str, Dict[str, Any]]],
                 carried.setdefault(new, []).extend(
                     carried.pop(sym, []) + [mine[cut.get(sym, 0):]])
                 cut[sym] = len(mine)
+                for k in [k for k in dict.fromkeys(keys) if k[0] and k[1] == sym]:
+                    mine = by_src[(acct, k[0], sym)]
+                    carried_s.setdefault((k[0], new), []).extend(
+                        carried_s.pop(k, []) + [mine[cut_s.get(k, 0):]])
+                    cut_s[k] = len(mine)
         for k in [k for k in by_src if k[0] == acct and k[2] in mixed]:
             del by_src[k]
         for (a, s), series in [i for i in out.items() if i[0][0] == acct]:
             own = series[cut.get(s, 0):]
             parts[(a, s)] = carried.get(s, []) + ([own] if own else [])
+        # Each broker account's own (a symbol a row naming none moved
+        # has no lists here, and keeps the account's).
+        own_s: Dict[str, List[List[Tuple[str, float]]]] = {}
+        for (_a, src, s), series in [i for i in by_src.items()
+                                     if i[0][0] == acct and i[0][2] not in unmarked]:
+            own = series[cut_s.get((src, s), 0):]
+            own_s.setdefault(s, []).extend(carried_s.get((src, s), [])
+                                           + ([own] if own else []))
+        parts.update(((acct, s), pieces) for s, pieces in own_s.items())
     return out, by_src, parts
 
 
@@ -824,11 +860,12 @@ def _latest_regular(slots: Dict[int, List[date]], months: int,
 # quarterly on assumption.
 ASSUME_MAX = 3
 ASSUMED = "quarterly"
-# The shares were held on a quarterly date when the books show them
-# long on every day from HELD_LEAD of a quarter before it (a record
-# date is weeks before its pay date, and the pay date can be early by
-# the grid's tolerance) through the date itself: a holder long that far
-# was entitled, whatever was sold after.
+# The shares were held on a date of a payer's grid when the books show
+# them long on every day from HELD_LEAD of its period before it (of a
+# quarter on the assumed schedule: a record date is weeks before its pay
+# date, and the pay date can be early by the grid's tolerance) through
+# the date itself: a holder long that far was entitled, whatever was
+# sold after.
 HELD_LEAD = 0.5
 # Days with no shares in any account that still count as held: a
 # transfer between the owner's accounts leaves one book days before it
@@ -846,10 +883,9 @@ def _long_through(series: List[List[Tuple[str, float]]], lo: str,
     account's short is not another's holding), so the test follows the
     position through a rename and a move between accounts. Up to
     TRANSIT_DAYS with nothing held, between days that are long, still
-    count."""
-    gap = None
-    for day in sorted({lo} | {d for s in series for d, _q in s
-                              if lo < d <= hi}):
+    count, a move under way on `hi` too (long again within TRANSIT_DAYS
+    of its start, after `hi`)."""
+    def _long(day: str) -> bool:
         total = 0.0
         for s in series:
             q = 0.0
@@ -858,7 +894,11 @@ def _long_through(series: List[List[Tuple[str, float]]], lo: str,
                     break
                 q = after
             total += max(q, 0.0)
-        if total <= 1e-9:
+        return total > 1e-9
+    gap = None
+    for day in sorted({lo} | {d for s in series for d, _q in s
+                              if lo < d <= hi}):
+        if not _long(day):
             gap = gap or day
             continue
         if gap and (gap == lo or (date.fromisoformat(day)
@@ -866,12 +906,27 @@ def _long_through(series: List[List[Tuple[str, float]]], lo: str,
                     > TRANSIT_DAYS):
             return False
         gap = None
+    if gap and gap != lo:
+        end = _iso(date.fromisoformat(gap) + timedelta(days=TRANSIT_DAYS))
+        gap = None if any(_long(d) for d in sorted(
+            {d for s in series for d, _q in s if hi < d <= end})) else gap
     return bool(series) and gap is None
 
 
-def _date_reading(pays: Any, sym: str, slot: date, as_of: str) -> str:
-    """What the books say of the quarterly date `slot` of `sym`, a date
-    the schedule has no payment on:
+def _period(freq: str) -> float:
+    """The days between two payments of the frequency `freq`
+    (FREQUENCIES: a month-based one's months of an average year)."""
+    months, days = next((m, d) for n, m, d in FREQUENCIES if n == freq)
+    return months * 365.25 / 12 if months else float(days)
+
+
+def _date_reading(pays: Any, sym: str, slot: date, as_of: str,
+                  freq: str = ASSUMED) -> str:
+    """What the books say of the date `slot` of `sym` on its `freq` grid
+    (quarterly: the assumed schedule's; a settled payer's own,
+    `_not_held`), a date the schedule has no payment on. The grid's
+    tolerance is GAP_TOL of its period, the lead HELD_LEAD of it, the
+    grace the frequency's (GRACE_DAYS):
 
     "paid"    an income row of the security is within the grid's
               tolerance of it, in any currency, with or without a share
@@ -879,10 +934,10 @@ def _date_reading(pays: Any, sym: str, slot: date, as_of: str) -> str:
               when `pays` is a plain dict): the schedule left the row
               out, the payer did not skip the date. (A return of
               capital booked as an adjustment is no income row.)
-    "held"    the accounts whose books run to the quarterly grace past
-              the date show, together, the shares long from HELD_LEAD
-              of a quarter before it through it (`_long_through`): the
-              payer skipped it;
+    "held"    the accounts whose books run to the grace past the date
+              show, together, the shares long from the lead before it
+              through it (`_long_through`, each broker account's
+              balance on its own): the payer skipped it;
     "end:ACCOUNT"  all the accounts together show them long so, but not
               without ACCOUNT, whose books end before the grace past
               the date (`Payments.ends`, its last row): they cannot say
@@ -893,7 +948,8 @@ def _date_reading(pays: Any, sym: str, slot: date, as_of: str) -> str:
               payment was due;
     ""        no trade row of the security, in books that reach the
               date: nothing explains the gap."""
-    tol = timedelta(days=int(_QUARTER * GAP_TOL))
+    period = _period(freq)
+    tol = timedelta(days=int(period * GAP_TOL))
     every = pays.get(sym) or []
     dates = (getattr(pays, "paid", None) or {}).get(sym) \
         or [p.pay_date for p in every]
@@ -902,14 +958,14 @@ def _date_reading(pays: Any, sym: str, slot: date, as_of: str) -> str:
         return "paid"
     series = (getattr(pays, "held", None) or {}).get(sym) or []
     ends = getattr(pays, "ends", None) or {}
-    reach = _iso(slot + timedelta(days=GRACE_DAYS[ASSUMED]))
+    reach = _iso(slot + timedelta(days=GRACE_DAYS[freq]))
     short = sorted(a for a in {a for a, _b in series}
                    | ({p.account for p in every} if not series else set())
                    if ends.get(a, reach) < reach)
     if not series:
         return "end:" + short[0] if short else ""
     try:
-        lo = _iso(slot - timedelta(days=int(_QUARTER * HELD_LEAD)))
+        lo = _iso(slot - timedelta(days=int(period * HELD_LEAD)))
     except OverflowError:
         return "unheld"             # before 0001-01-01: nothing held
     hi = min(_iso(slot), as_of)
@@ -1002,6 +1058,97 @@ def assumed_quarterly(sched: List[Payment], name: Optional[str],
     return True, excused, [_assumed_flag(len(sched))] + why
 
 
+def _walk_agrees(pays: Any, sym: str, now: Dict[str, float], lead: int,
+                 as_of: str) -> bool:
+    """Whether the books' walk of `sym` (`Payments.held`) can say on which
+    dates its shares were not held: each account's balance at its end is
+    the one held now (`now`: {account: shares}, `estimate`'s positions),
+    and on each date it was paid to `as_of` (`Payments.paid`) an account
+    was long it within `lead` days before. A walk that misses how shares
+    came in (a spin-off, a merger: no trade row of it) reads them not held
+    while they were (backlog TJ-5050)."""
+    series = [b for _a, b in (getattr(pays, "held", None) or {}).get(sym) or []]
+    ends: Dict[str, float] = {}
+    for acct, s in (getattr(pays, "held", None) or {}).get(sym) or []:
+        ends[acct] = ends.get(acct, 0.0) + (s[-1][1] if s else 0.0)
+    if not series or any(abs(ends.get(a, 0.0) - now.get(a, 0.0))
+                         > 1e-6 * max(1.0, abs(now.get(a, 0.0)))
+                         for a in set(ends) | set(now)):
+        return False
+    for d in (getattr(pays, "paid", None) or {}).get(sym) or []:
+        lo = _iso(date.fromisoformat(d) - timedelta(days=lead))
+        if d <= as_of and not any(
+                q > 1e-9 for s in series
+                for q in [next((b for x, b in reversed(s) if x <= lo), 0.0)]
+                + [b for x, b in s if lo < x <= d]):
+            return False
+    return True
+
+
+def _not_held(pays: Any, sym: str, name: str, step: Optional[int], base: str,
+              as_of: str, flags: List[str]) -> Set[str]:
+    """The dates of a settled payer's `name` grid after its base payment
+    (`base`: the forecast's, every `step` months, a week apart when 0)
+    and more than its grace overdue on `as_of` on which the books show
+    the shares not held (`_date_reading` "unheld": not long through the
+    lead before it), so none is counted as a missing payment, as on the
+    assumed schedule (backlog TJ-5050: a quarterly payer sold in December
+    and bought back in June read as stopped in July). `flags` names them,
+    and what was read. The caller checks the walk first (`_walk_agrees`)."""
+    out: List[str] = []
+    k = 0
+    while True:
+        k += 1
+        try:
+            d = (add_months(base, step * k) if step
+                 else _iso(date.fromisoformat(base) + timedelta(days=7 * k)))
+        except (ValueError, OverflowError):
+            break                   # past 9999-12-31: nothing overdue
+        slot = date.fromisoformat(d)
+        if (date.fromisoformat(as_of) - slot).days <= GRACE_DAYS[name]:
+            break
+        if _date_reading(pays, sym, slot, as_of, name) == "unheld":
+            out.append(d)
+    if out:
+        flags.append(f"{len(out)} {name} date(s) not counted as missed "
+                     f"payments: the books show no shares held through the "
+                     f"{int(_period(name) * HELD_LEAD)} days before "
+                     f"{'it' if len(out) == 1 else 'each'} "
+                     f"({', '.join(out[:3])}{' ...' if len(out) > 3 else ''})")
+    return set(out)
+
+
+def _schedule_read(sched: List[Payment],
+                   read: Tuple[Optional[str], Optional[int], Optional[str]],
+                   pays: Any, sym: str, as_of: str, flags: List[str],
+                   positions: Iterable[Dict[str, Any]] = ()
+                   ) -> Tuple[bool, Set[str], Optional[str], Optional[int], Payment]:
+    """(assumed, excused, the frequency's name, its step in months, the
+    payment the forecast runs from) of a payer's schedule `sched`, `read`
+    the detector's (name, step, the latest payment on its grid): one too
+    short to settle is quarterly, shown as assumed, until the books
+    contradict it (`assumed_quarterly`, its check lines in `flags`); a
+    settled one's overdue dates on which the shares were not held are
+    excused too (`_not_held`), where the walk agrees with `positions`
+    (`estimate`'s, held now) and with the payments (`_walk_agrees`).
+    `excused`: the overdue dates since that are no missing payment."""
+    name, step, on_grid = read
+    assumed, excused, why = assumed_quarterly(sched, name, pays, sym, as_of)
+    flags += why
+    if assumed:
+        name, step, on_grid = ASSUMED, 3, sched[-1].pay_date
+    base_pay = _on_schedule(sched, name, on_grid, flags)
+    now: Dict[str, float] = {}
+    for p in positions:
+        if p["symbol"] == sym:
+            now[p["account"]] = now.get(p["account"], 0.0) + float(p["qty"])
+    if name and not assumed and _walk_agrees(
+            pays, sym, now, int(_period(name) * HELD_LEAD), as_of):
+        excused = _not_held(pays, sym, name, step, base_pay.pay_date, as_of,
+                            flags)
+    return assumed, excused, name, step, base_pay
+
+
 def _assumed_flag(n: int) -> str:
     """The check line of a payer projected quarterly on assumption."""
     return (f"assumed quarterly: {n} payment(s) in the books, none "
@@ -1061,19 +1208,22 @@ def estimate(positions: Iterable[Dict[str, Any]],
              tax_year: int, base: str,
              fx: Callable[[str], Optional[float]],
              income_date: Optional[Callable] = None,
-             fx_on: Optional[Callable[[str, str], Optional[float]]] = None
-             ) -> Dict[str, Any]:
+             fx_on: Optional[Callable[[str, str], Optional[float]]] = None,
+             held: Sequence[Dict[str, Any]] = ()) -> Dict[str, Any]:
     """The estimate document. `positions`: {account, group ("taxable" |
-    "sheltered"), symbol, qty} held now (long shares only); `fx(cur)`:
-    the base-currency rate of `cur` (None: no rate in the books);
-    `fx_on(cur, date)`: its rate on a date (a withholding posted in
-    another currency than its dividend is compared at the pay date's
-    rates; `fx` when not given or it has none).
-    ValueError (`horizon_problem`) when the window or the tax year
-    leaves the calendar."""
+    "sheltered"), symbol, qty} held now (long shares only), the ones
+    estimated; `held`: every account's, those when not given (what the
+    walk's end is checked against, `_walk_agrees`, so a row reads the same
+    whichever account is asked for: TJ-5050); `fx(cur)`: the base-currency
+    rate of `cur` (None: no rate in the books); `fx_on(cur, date)`: its
+    rate on a date (a withholding posted in another currency than its
+    dividend is compared at the pay date's rates; `fx` when not given or
+    it has none). ValueError (`horizon_problem`) when the window or the
+    tax year leaves the calendar."""
     bad = horizon_problem(as_of, months, tax_year)
     if bad:
         raise ValueError(bad)
+    positions = list(positions)
 
     def _rate_on(cur: str, on: str) -> Optional[float]:
         if cur == base.upper():
@@ -1085,10 +1235,9 @@ def estimate(positions: Iterable[Dict[str, Any]],
     if isinstance(pays, Payments) and pays.rows:
         pays = payments(pays.rows, as_of=as_of)
     notes = getattr(pays, "notes", None) or {}
-    # The projection runs to the later of the window and the tax year
-    # (plus the month a December-record distribution is paid in): the
-    # rest-of-year total is the year's, whatever window was asked for
-    # (2026-10 audit R08).
+    # The projection runs to the later of the window and the tax year (plus
+    # the month a December-record distribution is paid in): the rest-of-year
+    # total is the year's, whatever window was asked for (2026-10 audit R08).
     reach = max(horizon, add_months(yend, 1))
     rows: List[Dict[str, Any]] = []
     omitted: List[Dict[str, Any]] = []
@@ -1118,15 +1267,8 @@ def estimate(positions: Iterable[Dict[str, Any]],
         latest = sched[-1]
         name, step, gap, on_grid = detect_schedule(
             [p.pay_date for p in sched])
-        # Too short a history to settle a schedule: quarterly, shown as
-        # assumed, until the books contradict it (`why`: its check
-        # lines). `excused`: the dates since on which no payment was due.
-        assumed, excused, why = assumed_quarterly(sched, name, pays, sym,
-                                                  as_of)
-        flags += why
-        if assumed:
-            name, step, on_grid = ASSUMED, 3, latest.pay_date
-        base_pay = _on_schedule(sched, name, on_grid, flags)
+        assumed, excused, name, step, base_pay = _schedule_read(
+            sched, (name, step, on_grid), pays, sym, as_of, flags, held or positions)
         ttm = ttm_per_share(sched, as_of)
         rate = 1.0 if cur == base.upper() else fx(cur)
         # The withholding rate: this account's latest payment, every

@@ -70,7 +70,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass, field
-from datetime import date as _date
+from datetime import date as _date, timedelta
 from pathlib import Path
 from typing import (Any, Callable, Dict, Iterable, List, Optional, Sequence,
                     Tuple)
@@ -909,6 +909,59 @@ def _tt_events(rows: Iterable[Dict[str, Any]], keyf: Callable[[str], str]
     return out
 
 
+class _MovedOut:
+    """The units a move of your own took out of an account that no pool a
+    broker sale reads held (`_tt_units_at`), at most the .tt units on hand
+    at the move: they are those .tt units, so the .tt purchase is spent
+    and covers no later arrival (backlog TJ-5003, TJ-1354).
+
+    The posting-lag safeguard: a transfer row can post up to
+    SLOW_MOVE_DAYS after the movement it records (the widest lag the
+    pairing of a move's two legs accepts), so the units that left may be
+    ones whose row posts later, and the .tt purchase the one that waits
+    for that row. Units arriving in the account from outside it within
+    SLOW_MOVE_DAYS after the move out (an arrival, an in-kind withdrawal;
+    the arrival being read too) answer it, and no .tt purchase is spent:
+    the sequence is ambiguous, and reads as it did before. A move out
+    nothing answers in those days spends the .tt units. A move of your
+    own back in answers nothing: its units are counted as held by other
+    means (`other`), which a later move out or broker sale takes first,
+    so they stand beside the spent purchase, never in its place."""
+
+    def __init__(self) -> None:
+        # [the last day a late row can answer it, key, units]
+        self._open: List[List[Any]] = []
+
+    def add(self, day: str, key: str, units: float) -> None:
+        """A move out on `day` took `units` of `key` no other pool held."""
+        d0 = _d(day)
+        if units > _EPS and d0 is not None:
+            self._open.append([(d0 + timedelta(days=SLOW_MOVE_DAYS)).isoformat(), key, units])
+
+    def answer(self, key: str, day: str, units: float) -> None:
+        """`units` of `key` arriving on `day` answer the moves out still open."""
+        for o in self._open:
+            if units <= _EPS:
+                break
+            if o[2] > _EPS and o[1] == key and day <= o[0]:
+                got = min(units, o[2])
+                o[2] -= got
+                units -= got
+
+    def spend(self, day: str, held: Dict[str, float]) -> None:
+        """Each move out nothing answered before `day` spends its .tt units."""
+        for o in self._open:
+            if o[2] > _EPS and o[0] < day:
+                held[o[1]] = held.get(o[1], 0.0) - min(o[2], max(0.0, held.get(o[1], 0.0)))
+                o[2] = 0.0
+
+    def split(self, key: str, new_key: str, ratio: float) -> None:
+        """A .tt SPLIT line scales the units of `key` and moves them to `new_key`."""
+        for o in self._open:
+            if o[1] == key:
+                o[1], o[2] = new_key, o[2] * ratio
+
+
 def _tt_units_at(events: Sequence[Tuple[str, str, int, str, str, float,
                                         str]],
                  consumed: Sequence[Tuple[str, str, str, float]],
@@ -953,8 +1006,9 @@ def _tt_units_at(events: Sequence[Tuple[str, str, int, str, str, float,
     withdrawal's units are in the account as an arrival's are. `other`
     (read by a broker sale alone; backlog TJ-1283): an opening balance's
     units and a move of your own in; `own_out`, a move of your own out
-    before the arrival's day, takes the units a broker sale can read and
-    no .tt purchase (backlog TJ-1327); `broker_split`, a broker row's
+    before the arrival's day, takes the units a broker sale can read
+    (backlog TJ-1327) and, for the rest, the .tt units on hand unless a
+    late row answers it (`_MovedOut`; TJ-5003); `broker_split`, a broker row's
     SPLIT, scales the units a broker sale can read, or moves them to the
     symbol it renames to, and leaves the .tt purchases alone."""
     arrival_time = str(a.row.get("time") or "") if a.row else ""
@@ -973,6 +1027,7 @@ def _tt_units_at(events: Sequence[Tuple[str, str, int, str, str, float,
     broker: Dict[str, float] = {}       # the broker rows' units
     other: Dict[str, float] = {}        # units held by other means
     redirect: Dict[str, str] = {}
+    owed = _MovedOut()
 
     def _take(pool: Dict[str, float], k: str, want: float) -> float:
         got = min(want, max(0.0, pool.get(k, 0.0)))
@@ -988,6 +1043,7 @@ def _tt_units_at(events: Sequence[Tuple[str, str, int, str, str, float,
         if d > a.date:
             break
         k2 = rk(k)
+        owed.spend(d, held)
         if kind == "trade":
             if v < 0 and not before(d, tm):
                 continue
@@ -1002,9 +1058,11 @@ def _tt_units_at(events: Sequence[Tuple[str, str, int, str, str, float,
                 continue
             held[k2] = held.get(k2, 0.0) + v
             arrived[k2] = arrived.get(k2, 0.0) - v
+            owed.answer(k2, d, -v)
         elif kind == "landed":
             if d < a.date or (d == a.date and tm <= a.time):
                 arrived[k2] = arrived.get(k2, 0.0) + v
+                owed.answer(k2, d, v)
         elif kind == "broker":
             if v < 0 and not before(d, tm):
                 continue
@@ -1017,7 +1075,8 @@ def _tt_units_at(events: Sequence[Tuple[str, str, int, str, str, float,
             other[k2] = other.get(k2, 0.0) + v
         elif kind == "own_out":
             if d < a.date:
-                _take(broker, k2, _take(other, k2, _take(arrived, k2, v)))
+                owed.add(d, k2, min(_take(broker, k2, _take(other, k2, _take(arrived, k2, v))),
+                                    max(0.0, held.get(k2, 0.0))))
         elif kind == "broker_split":
             if not before(d, tm):
                 continue
@@ -1030,6 +1089,7 @@ def _tt_units_at(events: Sequence[Tuple[str, str, int, str, str, float,
                 continue
             if v > 0:
                 arrived[k2] = arrived.get(k2, 0.0) + v
+                owed.answer(k2, d, v)
             else:
                 _take(held, k2, _take(broker, k2, _take(
                     other, k2, _take(arrived, k2, -v))))
@@ -1043,6 +1103,9 @@ def _tt_units_at(events: Sequence[Tuple[str, str, int, str, str, float,
                     pool[tk] = pool.get(tk, 0.0) + pool.pop(k2, 0.0)
             if tk != k2:
                 redirect[k2] = tk
+            owed.split(k2, tk, v)
+    owed.answer(rk(a.key), a.date, a.quantity)      # `a` itself may be the late row
+    owed.spend(a.date, held)
     return max(0.0, held.get(rk(a.key), 0.0))
 
 

@@ -772,19 +772,228 @@ _MON_MAP = {
     'NOV': '11', 'DEC': '12'}
 # Income rows take their exchange suffix from the security's ISIN
 # country until _reattribute_income_to_holdings rebinds them to the
-# listing actually held. An ISIN country outside this map falls back to
-# .US — and is reported when no held position confirms it. The table is
-# market data (lib/markets.isin_country_suffix).
+# listing actually held. The table is market data
+# (lib/markets.isin_country_suffix: a country's home market). An ISIN
+# country outside it names where the issuer is domiciled, not a market
+# (an Irish fund lists in London, Amsterdam or Frankfurt, an Irish or
+# Luxembourg company in New York): its suffix (the first place looked,
+# lib/markets.isin_domicile_suffix, else .US) is only where the row
+# waits; `fallback` keeps (the symbol, the country, the ISIN), and the
+# end of the parse books the row there only on evidence of the listing
+# (`_ib_settle_assumed_listings`, TJ-5016).
 def _isin_ext(isin: str, ticker: str, fallback: set) -> str:
-    from taxjson.lib.markets import isin_country_suffix
+    from taxjson.lib.markets import isin_country_suffix, isin_domicile_suffix
     if not isin or len(isin) < 2:
         return 'US'
     cc = isin[:2].upper()
     ext = isin_country_suffix(cc)
     if ext:
         return ext
-    fallback.add((f"{ticker}.US", cc))
-    return 'US'
+    ext = isin_domicile_suffix(cc) or 'US'
+    fallback.add((f"{ticker}.{ext}", cc, isin.upper()))
+    return ext
+
+
+def _ib_isin_venues(isin: str, fii_all) -> Tuple[set, set]:
+    """What the statement's Financial Instrument Information says of the
+    listing of the stock of `isin`: (the listing suffixes of the Listing
+    Exch codes the market data knows, lib/markets.ib_venue_suffix, a
+    Canadian venue being `TO` as the books spell it; the codes it does
+    not know)."""
+    from taxjson.lib.markets import canadian_suffixes, ib_venue_suffix
+    known, unknown = set(), set()
+    for (cat, _text), infos in (fii_all or {}).items():
+        for i in infos if cat in ('Stocks', 'Warrants') else ():
+            exch = (i.get('exch') or '').strip().upper()
+            if (i.get('isin') or '').upper() != isin or not exch:
+                continue
+            v = ib_venue_suffix(exch)
+            if v:
+                known.add('TO' if v in canadian_suffixes() else v)
+            else:
+                unknown.add(exch)
+    return known, unknown
+
+
+def _ib_income_kinds(rows) -> str:
+    """What `rows` (income and cost rows of one security) are, counted:
+    '1 dividend, 1 withholding tax'."""
+    def kind(t) -> str:
+        if t.get('action') == 'ADJUST' or t.get(ISSUER_ROC_KEY):
+            return 'return of capital'
+        return {'TAX': 'withholding tax',
+                'DIVIDEND_IN_LIEU': 'payment in lieu'}.get(t.get('action'), 'dividend')
+    many = {'dividend': 'dividends', 'payment in lieu': 'payments in lieu',
+            'return of capital': 'returns of capital'}
+    kinds = [kind(t) for t in rows]
+    return ', '.join(f"{kinds.count(k)} {many.get(k, k) if kinds.count(k) > 1 else k}"
+                     for k in dict.fromkeys(kinds))
+
+
+def _ib_held_as(h: str, transactions, open_syms) -> str:
+    """How the statement shows the listing `h` held, for a message: its
+    first dated row, its Open Positions row, or another statement's."""
+    days = sorted(str(t.get('date')) for t in transactions
+                  if t.get('symbol') == h and t.get('action') in _POSITION_ACTIONS
+                  and t.get('date'))
+    how = ([f"first row {days[0]}"] if days else []) + (
+        ["Open Positions"] if h in open_syms else [])
+    return f"{h} ({', '.join(how) or 'another statement of the account'})"
+
+
+def _ib_assumed_listing_refusal(rows, sym: str, cc: str, isin: str, name: str,
+                                held=(), venues=(), other_isins=(), cost=False) -> str:
+    """The refusal of income rows whose ISIN names no market and whose
+    listing nothing settles (`_ib_settle_assumed_listings`): the rows, why
+    `sym` is no more than a guess, the true cause, and the ticker.map line
+    that names the listing. The cause: the account holds listings of the
+    ticker (`held`, each as `_ib_held_as` words it) and the statement does
+    not show which the rows belong to (`other_isins`: the instrument list
+    gives the ticker these ISINs, not the rows'; `cost`: a return of
+    capital, which the one listing held under a currency's code does not
+    take unasked); or the instrument list gives the ISIN more than one
+    listing exchange (`venues`, worded); or nothing names a listing."""
+    from taxjson.lib.markets import isin_domicile_suffix, yahoo_suffix
+    root, ext = sym.rsplit('.', 1)
+    lines = sorted({o['_line'] for o in rows if o.get('_line')})
+    y = yahoo_suffix(ext)
+    keep = f"`QUOTE {sym} {f'{root}.{y}' if y else root}`"
+    why = ("is where the issuer is domiciled, not a market" if isin_domicile_suffix(cc)
+           else "has no home market in taxjson's table (CA, US, GB, AU), so the ISIN "
+                "does not say where it is listed")
+    head = (f"{name} line{'s' if len(lines) != 1 else ''} "
+            f"{', '.join(str(n) for n in lines)}: {root} (ISIN {isin}): the ISIN's "
+            f"country ({cc}) {why}")
+    tail = (f"refusing to book {len(rows)} row{'s' if len(rows) != 1 else ''} "
+            f"({_ib_income_kinds(rows)}) on {sym}, a guess")
+    if held:
+        names = [h.split(' (', 1)[0] for h in held]
+        moves = ' or '.join(f"`GLOBAL {sym} {h}`" for h in names)
+        if cost:
+            cause = (f"the account holds {root} as {held[0]}, a listing whose rows "
+                     f"carry no ISIN: its dividends and the tax withheld are booked "
+                     f"there, but a return of capital lowers a cost, and no dated row "
+                     f"shows {names[0]} is the holding it was paid on")
+        elif other_isins:
+            cause = (f"the account holds {root} as {' and '.join(held)}, which the "
+                     f"statement's instrument list gives another ISIN "
+                     f"({', '.join(sorted(other_isins))}): the statement does not "
+                     f"show a holding of this security")
+        elif len(held) == 1:
+            cause = (f"the account holds {root} as {held[0]}, which no dated row "
+                     f"shows held on the payment's date: a return of capital is not "
+                     f"moved onto such a listing")
+        else:
+            cause = (f"the account holds {root} as {' and '.join(held)}, and the "
+                     f"statement does not show which holding the rows belong to")
+        return (f"{head}, and {cause} — {tail}. Say which in the project's "
+                f"ticker.map: {moves} for the listing held; if it is {sym}, any line "
+                f"naming that symbol ({keep}).")
+    if venues:
+        return (f"{head}, and the statement's Financial Instrument Information gives "
+                f"the ISIN more than one listing exchange ({'; '.join(venues)}), which "
+                f"does not say which line paid — {tail}. Say which in the project's "
+                f"ticker.map: if it is {sym}, any line naming that symbol ({keep}); "
+                f"else `GLOBAL {sym} {root}.SUFFIX` with the symbol the account's "
+                f"trades of it carry (a line IB trades in euros is {root}.EUR).")
+    return (
+        f"{head}, and nothing "
+        f"says where {root} is listed: no trade, transfer or Open Positions row of the "
+        f"account's statements holds it, and no Financial Instrument Information row "
+        f"gives the ISIN a listing exchange taxjson knows — {tail}. "
+        f"Name its listing in the project's ticker.map: if it is {sym}, any "
+        f"line naming that symbol ({keep}); if it is listed elsewhere, "
+        f"`GLOBAL {sym} {root}.SUFFIX` with the symbol the account's trades of it "
+        f"carry (a line IB trades in euros is {root}.EUR). Or add the statement that "
+        f"holds its trades or its Open Positions row.")
+
+
+def _ib_settle_assumed_listings(transactions, assumed, held, open_syms, fii_all,
+                                isins_by_root, named, name: str) -> None:
+    """Book the income and cost rows still waiting on a listing their
+    ISIN's country alone gave (`assumed`, `_isin_ext`) where there is
+    evidence of the listing, and refuse the rest (TJ-5016: an Irish ISIN
+    put every such row on a London line). A row the rebind moved to a
+    held listing is not waiting. In order:
+
+    1. the account holds that very listing (`held`: this statement's
+       positions and trades, the account's other statements'): kept;
+    2. the project's ticker.map names that symbol (`named`): the user's
+       declaration (a GLOBAL line then moves it in the run). A line that
+       names another listing of the ticker declares nothing of this row
+       (a DELETE, a DISTINCT, a QUOTE or T1135 line of another security's
+       listing): it is no evidence;
+    3. the account holds other listings of the ticker (`_ib_held_as`):
+       exactly one, under a suffix the rebind does not read (a currency's
+       code: a line IB trades in euros is ROOT.EUR), no other ISIN's by
+       the instrument list (`isins_by_root`), takes the dividends, the
+       payments in lieu and the tax, said in an ATTENTION that names the
+       holding, the line that confirms it (and is then the user's
+       declaration, rule 2) and the line that places the rows elsewhere,
+       unless the instrument list gives the ticker the rows' ISIN; a return of
+       capital is not moved there (that holding carries no dates here:
+       the rebind's rule for a cost row, TJ-5011). Any other holding of
+       the ticker is what the rebind left the row off: refused, naming
+       the listings held;
+    4. the statement's Financial Instrument Information gives the ISIN
+       one listing exchange, one the market data knows: that venue's
+       listing. Two, or one known and one not: refused, naming them.
+
+    Else refused: nothing names a listing."""
+    for sym, cc, isin in sorted(assumed):
+        rows = [t for t in transactions if t.get('symbol') == sym
+                and (t.get('action') in _INCOME_ACTIONS
+                     or (t.get('action') == 'ADJUST' and t.get('type') == 'roc'))
+                and (t.get('_isin') or isin).upper() == isin]
+        if not rows or sym in held or sym.upper() in named:
+            continue
+        root = sym.rsplit('.', 1)[0]
+        known = (isins_by_root or {}).get(root) or set()
+        others = sorted(h for h in held if h and h != sym and '.' in h
+                        and h.rsplit('.', 1)[0] == root)
+        as_held = [_ib_held_as(h, transactions, open_syms) for h in others]
+        venues, strange = _ib_isin_venues(isin, fii_all)
+        if others:
+            cost = [t for t in rows if t.get('action') == 'ADJUST'
+                    or t.get(ISSUER_ROC_KEY)]
+            if (len(others) != 1 or _split_known_ext(others[0])[1] is not None
+                    or (known and isin not in known)):
+                raise BrokerageParseError(_ib_assumed_listing_refusal(
+                    rows, sym, cc, isin, name, held=as_held,
+                    other_isins=known - {isin} if known and isin not in known else ()))
+            if cost:
+                raise BrokerageParseError(_ib_assumed_listing_refusal(
+                    cost, sym, cc, isin, name, held=as_held, cost=True))
+            target = others[0]
+            lines = sorted({o['_line'] for o in rows if o.get('_line')})
+            if isin not in known:
+                # (said once a security; the instrument list giving the
+                # ticker this ISIN is the statement's own word: nothing)
+                # (the first sentence is the run's one console line)
+                emit_line(
+                    f"{ATTENTION_PREFIX} {name} line{'s' if len(lines) != 1 else ''} "
+                    f"{', '.join(str(n) for n in lines)}: {root} income booked on "
+                    f"{target}, the one listing of {root} the account holds, by its "
+                    f"name alone. The {len(rows)} row{'s' if len(rows) != 1 else ''} "
+                    f"({_ib_income_kinds(rows)}) name ISIN {isin}, whose country "
+                    f"names no market, and the rows of {as_held[0]} carry no ISIN. "
+                    f"If it is this security, add "
+                    f"`GLOBAL {sym} {target}` to the project's ticker.map: the line "
+                    f"says so, books the rows the same way and this is not said "
+                    f"again. If the rows belong elsewhere, `GLOBAL {sym} "
+                    f"{root}.SUFFIX` moves them, and any other line naming {sym} "
+                    f"keeps them on {sym}.")
+        elif len(venues) == 1 and not strange:
+            target = f"{root}.{next(iter(venues))}"
+        else:
+            raise BrokerageParseError(_ib_assumed_listing_refusal(
+                rows, sym, cc, isin, name, venues=(
+                    [f"{root}.{v}" for v in sorted(venues)]
+                    + [f"{x}, a venue not in taxjson's market data"
+                       for x in sorted(strange)] if len(venues) + len(strange) > 1
+                    else ())))
+        for t in rows:
+            t['symbol'] = target
 
 
 # Statement titles that are NOT an Activity Statement but share its CSV
@@ -3960,27 +4169,356 @@ def _ib_accrual_index(accrual_meta, ext_metas) -> Dict[str, List[Tuple[bool, Any
     return index
 
 
+def _ib_accrual_key(meta) -> tuple:
+    """What makes an accrual one dividend across the account's
+    statements: its ex date (its pay date where IB gives none), its
+    currency and its account."""
+    return (meta.get('ex_date') or ('pay', meta.get('pay_date')),
+            meta['currency'], meta.get('account') or '')
+
+
 def _ib_accrual_for(ticker: str, date: str, currency: str, index, account: str = ''):
-    """The accrual of the dividend a posting on `date` pays: same
+    """The accruals of the dividends a posting on `date` may pay: same
     ticker, a pay date within a week (the exact date first), the
     posting's currency first — two listings of one ticker can pay
     on the same day (audit S057-22 / S058-05), and IB posts some
     dividends a day or more after the accrued pay date
-    (S058-12). This statement's accruals first, then the
+    (S058-12). This statement's copy of an accrual first, then the
     account's other statements' (`index`, `_ib_accrual_index`). In a
     statement of several accounts, the posting's own account's alone
-    (`account`, the row's Account cell; TJ-2598)."""
-    best = None
-    for other, meta in index.get(ticker, ()):
+    (`account`, the row's Account cell; TJ-2598). One accrual, or none,
+    is the rule; several are the distributions of one security that
+    share the pay date (another ex date each), which nothing on a
+    Dividends row tells apart: `_ib_tied` matches the rows to them by
+    the statement's evidence (TJ-5013), never the first taken."""
+    best: Optional[tuple] = None
+    found: Dict[tuple, Any] = {}
+    for _other, meta in index.get(ticker, ()):
         dist = _ib_pay_distance(meta, date)
         if not _ib_same_holder(account, meta.get('account')):
             continue
         if dist is None or dist > 7:
             continue
-        rank = (dist, meta['currency'] != currency, other)
-        if best is None or rank < best[0]:
-            best = (rank, meta)
-    return best[1] if best else None
+        rank = (dist, meta['currency'] != currency)
+        if best is None or rank < best:
+            best, found = rank, {}
+        if rank == best:
+            found.setdefault(_ib_accrual_key(meta), meta)
+    # (an accrual a statement gives no ex date is the dated one of its
+    # currency, account and rate, not a second distribution)
+    dated = [m for m in found.values() if m.get('ex_date')]
+    return [m for m in found.values() if m.get('ex_date') or not any(
+        d['currency'] == m['currency']
+        and _ib_same_holder(d.get('account'), m.get('account'))
+        and (not m.get('po_rate') or m.get('po_rate') == d.get('po_rate'))
+        for d in dated)]
+
+
+def _ib_rate_facts(meta) -> tuple:
+    """What an accrual says of the shares and the rate: two accruals
+    alike in it give a row the same share count and rate."""
+    return (meta['currency'], tuple(meta.get('po_rows') or ()),
+            meta.get('po_rate') or 0.0, meta.get('po_qty') or 0.0)
+
+
+def _ib_states_rate(meta, rate) -> bool:
+    """Whether `rate`, which a row's description states, is one the
+    accrual `meta` states: a Po row's, or its rows' added."""
+    own = {M.units(r, 8) for r, _ in meta.get('po_rows') or ()}
+    own |= {M.units(g, 8) for g, _ in _ib_gross_rates(meta, {}) if g}
+    return M.units(rate or 0.0, 8) in own
+
+
+def _ib_explains(meta, rows, index, taken) -> Optional[tuple]:
+    """Whether the accrual `meta` explains `rows` as the rows it pays,
+    as (the keys (`_ib_accrual_key`) of the pay date's other accruals that
+    are no part of it, whether it took another accrual's rows to explain
+    them, the readings of its cash, `_ib_readings`: None where the cash
+    was not what explained them); None: it does not. Every row states a rate of
+    its own; or the rows' cash is the accrual's (`_ib_readings`, the
+    shares lent counted); or, the rows being of different character and
+    `meta` the first of the accruals no row was given to, the cash is
+    that of those accruals together (IB accrued a row for each character
+    under two ex dates). `taken`: the keys of the accruals given rows.
+    An accrual in another currency than the rows says nothing of their
+    cash: any may be the one."""
+    others = taken - {_ib_accrual_key(meta)}
+    apart = frozenset(_ib_accrual_key(m) for _o, m in index.get(meta['symbol'], ())
+                      if m is not meta) - {_ib_accrual_key(meta)}
+    if any(o.get('currency') != meta['currency'] for o in rows):
+        return apart, False, None
+    if all(o.get('_rated') and _ib_states_rate(meta, o.get('price')) for o in rows):
+        return apart, False, None
+    own = _ib_readings(rows, _ib_gross_rates(meta, {}))
+    if own:
+        return apart, False, own
+    free = [m for _o, m in index.get(meta['symbol'], ())
+            if _ib_accrual_key(m) not in others
+            and m['pay_dates'] & meta['pay_dates'] and m['currency'] == meta['currency']
+            and _ib_same_holder(m.get('account'), meta.get('account'))]
+    both = (_ib_readings(rows, _ib_gross_rates(meta, index, {id(meta): others}))
+            if _ib_split_sides(rows) and free and free[0] is meta else None)
+    return (frozenset(others), True, both) if both else None
+
+
+# The ways of matching a pay date's rows to its accruals that are tried
+# (`_ib_tied`): past it the rows' evidence is not weighed.
+_IB_TIE_WAYS = 4096
+
+
+def _ib_tied_ways(rows, found, index) -> Optional[list]:
+    """The ways the rows of one pay date (`rows`) can be given to the
+    accruals that share it (`found`) that the statement's evidence bears
+    out, each (the accrual of each row, {accrual id: the keys of the
+    accruals no part of it}): a row that states a rate is given to an
+    accrual stating it (where one does), and every accrual given rows
+    explains them (`_ib_explains`), so one accrual pays one
+    distribution.
+
+    Amounts can fit more than one way by coincidence (a payment in lieu
+    whose cash happens to be another accrual's; two distributions on 60
+    shares held and 40 lent, which add up as one of both rates as well),
+    so the ways are weighed by what else they say, in order, and the
+    best are returned (`_ib_tied` refuses where those still differ):
+    whole share counts, where the accruals' are whole, before a way that
+    needs a fraction of a share; the same shares lent under every accrual
+    (or the accruals read as one distribution accrued in parts, a Po row
+    for each character) before all the shares lent under one accrual and
+    none under the next; then the most accruals given rows of their own.
+    Each way is (the accrual of each row, {accrual id: the keys of the
+    accruals no part of it}, its reading for a message: `_ib_way_said`).
+    Returned: (the best ways, the other ways that need no fraction of a
+    share: readings the ranking set aside, which `_ib_tied` says).
+    None: more ways than are tried (`_IB_TIE_WAYS`)."""
+    from itertools import product
+    options = []
+    for o in rows:
+        hits = [m for m in found if o.get('_rated') and m['currency'] == o.get('currency')
+                and _ib_states_rate(m, o.get('price'))]
+        options.append(hits or list(found))
+    size = 1
+    for opt in options:
+        size *= len(opt)
+    if size > _IB_TIE_WAYS:
+        return None
+    counted = all(float(q).is_integer() for m in found
+                  for q in [m.get('po_qty') or 0.0] + [q for _r, q in m.get('po_rows') or ()])
+    ways: list = []
+    seen: list = []
+    for way in product(*options):
+        taken = frozenset(_ib_accrual_key(m) for m in way)
+        apart: Dict[int, frozenset] = {}
+        whole, lent = True, []
+        parts: list = []
+        for m in found:
+            mine = [o for o, x in zip(rows, way) if x is m]
+            if not mine:
+                continue
+            ok = _ib_explains(m, mine, index, taken)
+            if ok is None:
+                break
+            apart[id(m)] = ok[0]
+            parts.append((m, mine, ok[2], ok[1]))
+            if ok[2] is not None:
+                whole = whole and (not counted or any(
+                    _ib_whole_reading(mine, k, g) for k, g in ok[2].items()))
+                if not ok[1]:
+                    lent.append({M.units(k[1], 4) for k in ok[2]})
+        else:
+            # (two rows alike, their accruals swapped: one way)
+            same = sorted((_ib_income_key(o), id(x)) for o, x in zip(rows, way))
+            if same not in seen:
+                seen.append(same)
+                even = not lent or bool(set.intersection(*lent))
+                ways.append(((whole, even, len(apart)), way, apart, parts))
+    best = max((w[0] for w in ways), default=None)
+    return ([w[1:] for w in ways if w[0] == best],
+            [w[1:] for w in ways if w[0] != best and w[0][0]])
+
+
+def _ib_whole_reading(rows, shares, gross) -> bool:
+    """Whether a reading of an accrual's rows (`_ib_readings`: `shares`
+    held and lent, at `gross` a share) needs no fraction of a share: the
+    two counts, and each row of a side that is of one character (it is
+    booked at its own cash over the rate, `_ib_split_row_shares`)."""
+    if not all(float(M.units(v, 6)).is_integer() for v in shares):
+        return False
+    for lieu in (False, True):
+        side = [o for o in rows if (o.get('action') == 'DIVIDEND_IN_LIEU') == lieu]
+        if not _ib_split_by_character(side) and not all(
+                _ib_shares_paid(_ib_paid(o), gross) % 1 == 0 for o in side):
+            return False
+    return True
+
+
+def _ib_way_shares(parts) -> Dict[int, tuple]:
+    """The (shares, rate) a way of matching gives each rate-less dividend
+    row (by the row's id), as the end of the parse books them
+    (`_ib_split_row_shares`, `_ib_lone_shares`): what two ways are
+    compared by before one set aside is said (`_ib_tied`)."""
+    out: Dict[int, tuple] = {}
+    for m, mine, reads, _joint in parts:
+        if not reads:
+            continue
+        (held, lent), gross = sorted(reads.items())[0]
+        split = _ib_split_sides(mine)
+        for o in mine:
+            if o.get('_rated') or o.get('action') == 'ADJUST':
+                continue
+            lieu = o.get('action') == 'DIVIDEND_IN_LIEU'
+            side = [x for x in mine if (x.get('action') == 'DIVIDEND_IN_LIEU') == lieu]
+            cash, n = abs(_ib_paid(o)), (lent if lieu else held)
+            if split and _ib_split_by_character(side) and n:
+                got = (n, cash / n)
+            else:
+                rate = gross if split else (_ib_lone_rate(m, mine) or gross)
+                got = (cash / rate, rate)
+            out[id(o)] = (M.units(got[0], 4), M.units(got[1], 6))
+    return out
+
+
+def _ib_way_said(parts) -> str:
+    """One way of matching a pay date's rows to its accruals, for a
+    message: under each accrual, its rows' lines and the shares and rate
+    they are then paid on (`parts`: `_ib_tied_ways`)."""
+    out = []
+    for m, mine, reads, joint in parts:
+        lines = ', '.join(str(n) for n in sorted({o['_line'] for o in mine
+                                                  if o.get('_line')}))
+        cur = m['currency']
+        who = (f"the accrual of {m.get('po_qty') or 0:g} shares at "
+               f"{m.get('po_rate') or 0:g} {cur}"
+               f"{', ex date ' + m['ex_date'] if m.get('ex_date') else ''}")
+        if not reads:
+            out.append(f"line{'s' if ',' in lines else ''} {lines} under {who}, at the "
+                       f"rates the rows state")
+            continue
+        (held, lent), gross = sorted(reads.items())[0]
+        if joint:
+            who = (f"the pay date's accruals read as one distribution of "
+                   f"{M.units(gross, 8):g} {cur} a share")
+        out.append(f"line{'s' if ',' in lines else ''} {lines} under {who}: "
+                   f"{held:g} shares held"
+                   + (f" and {lent:g} lent" if lent else ""))
+    return '; '.join(out)
+
+
+def _ib_tied_head(rows, found) -> str:
+    """How the accruals `found` stand to the rows' date, for a message:
+    they share a pay date, or their pay dates are as near it."""
+    shared = set.intersection(*(set(m['pay_dates'] or {m['pay_date']}) for m in found))
+    if shared:
+        day = rows[0].get('date') if rows[0].get('date') in shared else min(shared, key=str)
+        return f"{len(found)} distributions share the pay date {day}"
+    days = sorted({str(d) for m in found for d in (m['pay_dates'] or {m['pay_date']})})
+    return (f"{len(found)} distributions are paid as near the date of "
+            f"{rows[0].get('date')} (pay dates {', '.join(days)})")
+
+
+def _ib_tied_refusal(rows, found, ways, name: str) -> str:
+    """The refusal of a pay date's rows that the statement's evidence
+    does not match to the accruals sharing it (`_ib_tied`): every row
+    named, each accrual, and the fix (the rate in the row's own
+    currency)."""
+    cur = rows[0].get('currency') or found[0]['currency']
+    lines = sorted({o['_line'] for o in rows if o.get('_line')})
+    accrued = '; '.join(
+        f"{m.get('po_qty') or 0:g} shares at {m.get('po_rate') or 0:g} {m['currency']}"
+        f"{', ex date ' + m['ex_date'] if m.get('ex_date') else ''}" for m in found)
+    why = ("match them more than one way" if ways
+           else "match them no way" if ways is not None
+           else "were not weighed (too many ways of matching them)")
+    return (
+        f"{name} line{'s' if len(lines) != 1 else ''} "
+        f"{', '.join(str(n) for n in lines)} (Dividends): {rows[0].get('symbol')}: "
+        f"{_ib_tied_head(rows, found)} (Change in Dividend "
+        f"Accruals: {accrued}), nothing on a Dividends row names the one it pays, and "
+        f"the rows' rates, amounts and shares {why} — refusing to guess the "
+        f"distribution each row pays, and with it the row's shares, rate and ex date. "
+        f"Write each row's per-share rate into its Description as IB prints it "
+        f"(`{cur} 0.10 per Share`), from IB's dividend report or the issuer's notice. "
+        f"A row that states its rate is read from it.")
+
+
+def _ib_tied(rows, found, index, name: str):
+    """The accrual each of `rows` pays, where the accruals `found` (two
+    or more distributions of one security, `_ib_accrual_for`) share the
+    rows' pay date (TJ-5013; before it every row took the first),
+    {accrual id: the accruals no part of it} for `_ib_gross_rates`, and
+    what there is to say of the match: [(kind, the lines, the words)],
+    for `_ib_rows_paid` to say once a security.
+
+    The evidence is the statement's: a rate a row states, the cash
+    against each accrual's shares and rate (the shares lent with it), and
+    the rows' characters (`_ib_tied_ways`, which weighs the ways the cash
+    fits). The best ways give every rate-less row the same accrual facts
+    and the same rows beside it: the first is taken, and a row whose ex
+    date they do not agree on is left without one, said (`_ex_open`).
+    Where the weighing set aside another reading in whole shares that
+    gives a row another share count or rate (`_ib_way_shares`), the reading taken and the
+    one set aside are both said, with the fix that settles it (`ranked`).
+    Where no way is borne out but the choice moves no share count or
+    rate (every row states its rate, or the accruals state the same
+    shares and rate) the rows are booked the same, without an ex date.
+    Anything else is refused, naming the rows and the fix: the first
+    accrual is never taken for the match."""
+    got = _ib_tied_ways(rows, found, index)
+    ways, aside = got if got is not None else (None, [])
+
+    def _shape(way) -> list:
+        # (a row in another currency than its accrual takes the share
+        # count alone, whatever rows are beside it)
+        return [(_ib_rate_facts(m), frozenset(j for j, x in enumerate(way) if x is m))
+                if o.get('currency') == m['currency'] else (m.get('po_qty') or 0.0,)
+                for o, m in zip(rows, way) if not o.get('_rated')]
+    if ways and any(_shape(w[0]) != _shape(ways[0][0]) for w in ways[1:]):
+        raise BrokerageParseError(_ib_tied_refusal(rows, found, ways, name))
+    open_ex = set()
+    said: list = []
+    if ways:
+        open_ex = {i for i in range(len(rows))
+                   if len({w[0][i].get('ex_date') for w in ways}) > 1}
+        other = [w for w in aside if _ib_way_shares(w[2]) != _ib_way_shares(ways[0][2])]
+        if other:
+            cur = rows[0].get('currency') or found[0]['currency']
+            lines = sorted({o['_line'] for o in rows if o.get('_line')})
+            said.append(('ranked', lines, (
+                f"the shares and rates booked are one of {len(other[:2]) + 1} "
+                f"readings the dividend rows' amounts fit — "
+                f"{_ib_tied_head(rows, found)}, nothing on a Dividends row names "
+                f"the one it pays, and the rows' amounts fit them more than one way "
+                f"in whole shares. Booked: {_ib_way_said(ways[0][2])}. Set aside: "
+                + ' Or: '.join(_ib_way_said(w[2]) + '.' for w in other[:2])
+                + f" The reading booked is the one with the same shares lent under "
+                f"each accrual, then with the most accruals paid; no amount depends "
+                f"on it, the rows' share counts and rates do. To settle "
+                f"it, write each row's per-share rate into its Description as IB "
+                f"prints it (`{cur} 0.40 per Share`): a row that states its rate is "
+                f"read from it, and this is not said again.")))
+    elif (all(o.get('_rated') for o in rows)
+          or len({_ib_rate_facts(m) for m in found}) == 1):
+        ways = [(tuple(found[0] for _o in rows), {}, [])]
+        open_ex = (set(range(len(rows)))
+                   if len({m.get('ex_date') for m in found}) > 1 else set())
+    else:
+        raise BrokerageParseError(_ib_tied_refusal(rows, found, ways, name))
+    for i in open_ex:
+        rows[i]['_ex_open'] = True
+    if open_ex:
+        lines = sorted({rows[i]['_line'] for i in open_ex if rows[i].get('_line')})
+        said.append(('no ex date', lines, (
+            f"no ex date recorded for {len(lines)} dividend "
+            f"row{'s' if len(lines) != 1 else ''} — "
+            f"{_ib_tied_head(rows, found)} (ex dates "
+            f"{', '.join(sorted(str(m.get('ex_date') or '?') for m in found))}) and "
+            f"nothing in the statement says which of them "
+            f"{'these rows pay' if len(lines) != 1 else 'this row pays'}: the shares "
+            f"and rate are the same either way; no ex date is recorded for "
+            f"{'them' if len(lines) != 1 else 'it'}, so what reads an ex date (a US "
+            f"project's short-sale and holding-period rules, the slip audit's T3 "
+            f"year) goes by the pay date. Nothing in a statement can say more; a "
+            f"statement in which the two are not paid on one day does.")))
+    return ways[0][0], ways[0][1], said
 
 
 def _ib_paid(tx) -> float:
@@ -4026,12 +4564,14 @@ def _ib_split_by_character(rows) -> bool:
     return len({_ib_character(o) for o in rows}) > 1
 
 
-def _ib_rows_paid(transactions, accruals):
+def _ib_rows_paid(transactions, accruals, name: str = ''):
     """The accrual each Dividends row pays (dividends, payments in lieu
     and a Canadian issuer's return of capital; by the row's id, None when
-    none), and the rows each accrual in the rows' own currency pays (by
+    none), the rows each accrual in the rows' own currency pays (by
     the accrual's id): a distribution's rows, whatever day IB posted each
-    (TJ-2598). A row of new cash posted on a later day than the pay date
+    (TJ-2598), and, for the accruals that share a pay date with another,
+    the accruals no part of each (`_ib_tied`, which matches such a pay
+    date's rows to them; TJ-5013). A row of new cash posted on a later day than the pay date
     (`_ib_late_rows`) that the accrual does not account for, where the
     other rows do add up to it, pays an accrual the statements do not
     hold (the next week's distribution): it is left with none, and a
@@ -4039,23 +4579,52 @@ def _ib_rows_paid(transactions, accruals):
     metas: Dict[int, Any] = {}
     paid: Dict[int, List[Dict[str, Any]]] = {}
     by_id: Dict[int, Any] = {}
+    apart: Dict[int, frozenset] = {}
+    income: List[Dict[str, Any]] = []
+    ties: Dict[tuple, tuple] = {}
     for tx in transactions:
         if not (tx.get('action') in ('DIVIDEND', 'DIVIDEND_IN_LIEU')
                 or (tx.get('action') == 'ADJUST' and tx.get('type') == 'roc')):
             continue
+        income.append(tx)
         ticker = (tx.get('symbol') or '').rsplit('.', 1)[0]
-        meta = metas[id(tx)] = _ib_accrual_for(
+        found = _ib_accrual_for(
             ticker, tx.get('date') or '', tx.get('currency') or '', accruals,
             tx.get('_acct') or '')
+        metas[id(tx)] = found[0] if found else None
         if tx.get('price'):
             tx['_rated'] = True     # its description states it; popped
+        if len(found) > 1:
+            ties.setdefault(tuple(id(m) for m in found), (found, []))[1].append(tx)
+    notes: Dict[tuple, list] = {}
+    for found, rows in ties.values():
+        way, parts, said = _ib_tied(rows, found, accruals, name)
+        apart.update(parts)
+        metas.update((id(o), m) for o, m in zip(rows, way))
+        for kind, lines, words in said:
+            notes.setdefault((kind, rows[0].get('symbol')), []).append((lines, words))
+    # Each said once a security (the run echoes an ATTENTION line): the
+    # first pay date's words, the other pay dates' rows named after them.
+    for (_kind, sym), each in notes.items():
+        lines, words = each[0]
+        more = sorted(n for ls, _w in each[1:] for n in ls)
+        # (the words' first clause is the run's one console line)
+        emit_line(
+            f"{ATTENTION_PREFIX} {name} line{'s' if len(lines) != 1 else ''} "
+            f"{', '.join(str(n) for n in lines)}: {sym}: {words}"
+            + (f" The same holds for line{'s' if len(more) != 1 else ''} "
+               f"{', '.join(str(n) for n in more)}, of "
+               f"{len(each) - 1} more pay date{'s' if len(each) != 2 else ''}."
+               if more else ""))
+    for tx in income:
+        meta = metas[id(tx)]
         if meta is not None and meta['currency'] == tx.get('currency'):
             paid.setdefault(id(meta), []).append(tx)
             by_id[id(meta)] = meta
     for key, rows in paid.items():
         late = _ib_late_rows(rows, by_id[key])
         rest = [o for o in rows if not any(o is x for x in late)]
-        rates = _ib_gross_rates(by_id[key], accruals)
+        rates = _ib_gross_rates(by_id[key], accruals, apart)
         if (late
                 and not _ib_readings(rows, rates) and _ib_readings(rest, rates)):
             paid[key] = rest
@@ -4066,7 +4635,7 @@ def _ib_rows_paid(transactions, accruals):
                     # "the description names none" (`tjs div-estimate`
                     # then borrows the nearest payment's).
                     o['no_share_count'] = NO_SHARE_COUNT_ACCRUAL
-    return metas, paid
+    return metas, paid, apart
 
 
 def _ib_late_rows(rows, meta) -> List[Dict[str, Any]]:
@@ -4160,7 +4729,7 @@ def _ib_readings(rows, rates) -> Dict[Tuple[float, float], float]:
     return found
 
 
-def _ib_gross_rates(meta, index) -> List[Tuple[float, float]]:
+def _ib_gross_rates(meta, index, apart=None) -> List[Tuple[float, float]]:
     """The (gross rate, shares) a distribution's accrual may state: its
     last Po row's (the rule for a lone row), and, where IB accrued the
     distribution in parts (a Po row for each character, under one ex date
@@ -4168,12 +4737,16 @@ def _ib_gross_rates(meta, index) -> List[Tuple[float, float]]:
     of one share count; where its Po rows share one rate and not one
     share count (the shares in two rows, or the count posted again with
     no Re), that rate on the counts added. The cash decides between them
-    (`_ib_readings`)."""
+    (`_ib_readings`). `apart`: {accrual id: the keys (`_ib_accrual_key`)
+    of the pay date's accruals that are distributions of their own, with
+    rows of their own, and so no part of it} (`_ib_tied`)."""
     own = list(meta.get('po_rows') or ())
     parts, seen = list(own), {(meta.get('ex_date'), tuple(own))}
+    skip = (apart or {}).get(id(meta), ())
     for _other, m in index.get(meta['symbol'], ()):
         key = (m.get('ex_date'), tuple(m.get('po_rows') or ()))
         if (m is meta or key in seen or m['currency'] != meta['currency']
+                or _ib_accrual_key(m) in skip
                 or not _ib_same_holder(m.get('account'), meta.get('account'))
                 or not (m['pay_dates'] & meta['pay_dates'])):
             continue
@@ -4194,7 +4767,7 @@ def _ib_same_holder(a, b) -> bool:
     return not a or not b or a == b
 
 
-def _ib_distribution_shares(rows, meta, index, name: str):
+def _ib_distribution_shares(rows, meta, index, name: str, apart=None):
     """The shares the rows one accrual pays (`_ib_rows_paid`) were paid
     on, when IB paid the distribution as rows of different character (a
     return of capital or a capital gain beside an ordinary dividend;
@@ -4219,7 +4792,7 @@ def _ib_distribution_shares(rows, meta, index, name: str):
     is refused (`_ib_split_row_shares`): its count would be a guess."""
     if not _ib_split_sides(rows):
         return None
-    rates = _ib_gross_rates(meta, index)
+    rates = _ib_gross_rates(meta, index, apart)
     refusal = _ib_distribution_refusal(rows, meta, rates, name)
     lieu = [o for o in rows if o.get('action') == 'DIVIDEND_IN_LIEU']
     if (not lieu and rates[0][1] and len({q for _, q in rates}) == 1
@@ -5829,6 +6402,7 @@ class IbBrokerage(BaseBrokerage):
             'account': 'IB',
             'description': description,
             '_isin': isin,      # income rebind check; popped
+            '_line': lineno,    # for a refusal naming the row; popped
         })
         return Outcome.consumed()
 
@@ -8094,7 +8668,8 @@ class IbBrokerage(BaseBrokerage):
         _ext_metas = [m for m in ((ctx or {}).get('accrual_facts') or ())
                       if other(m.get('file'), m.get('accounts'))]
         _accruals = _ib_accrual_index(rs.accrual_meta, _ext_metas)
-        _metas, _paid = _ib_rows_paid(st.transactions, _accruals)
+        _metas, _paid, _apart = _ib_rows_paid(st.transactions, _accruals,
+                                              shown_name(st.path))
         _shares: Dict[int, Any] = {}
 
         # Back-fill quantity/price for dividend rows that had no per-share rate
@@ -8115,7 +8690,9 @@ class IbBrokerage(BaseBrokerage):
             # never fired: audit A2-0602).
             _ex = (meta or {}).get('ex_date') or rs.accrual_ex.get(
                 (ticker, tx.get('date')))
-            if _ex and _ex <= (tx.get('date') or ''):
+            # (a row no evidence gives one of a pay date's ex dates:
+            # none, said by `_ib_tied`)
+            if _ex and _ex <= (tx.get('date') or '') and not tx.get('_ex_open'):
                 tx['ex_date'] = _ex
             if tx.get('price'):          # description already gave a rate
                 continue
@@ -8129,7 +8706,7 @@ class IbBrokerage(BaseBrokerage):
             _own = meta['currency'] == tx.get('currency') and rate > 0
             if _own and id(meta) not in _shares:
                 _shares[id(meta)] = _ib_distribution_shares(
-                    _paid[id(meta)], meta, _accruals, shown_name(st.path))
+                    _paid[id(meta)], meta, _accruals, shown_name(st.path), _apart)
             if _own and _shares[id(meta)]:
                 # A distribution paid as rows of different character (a
                 # return of capital beside an ordinary dividend): one
@@ -8160,6 +8737,7 @@ class IbBrokerage(BaseBrokerage):
             # (`_line` stays for `_ib_finish_income`, which pops it)
             tx.pop('_acct', None)
             tx.pop('_rated', None)
+            tx.pop('_ex_open', None)
 
     def _ib_finish_open_accruals(self, rs: "_IbRows") -> None:
         """The accruals no posted dividend paid (`_ib_finish`): each posted dividend of
@@ -8267,6 +8845,17 @@ class IbBrokerage(BaseBrokerage):
                   f"kept its ISIN listing: the account held more than one "
                   f"listing of the ticker that day (add a ticker.map rule "
                   f"if it belongs to the other).")
+        # A row still on the listing its ISIN's country alone gave, a
+        # domicile and no market: booked on evidence of the listing, else
+        # refused (TJ-5016).
+        _ib_settle_assumed_listings(
+            st.transactions, rs.isin_fallback,
+            set(rs.open_position_syms) | set((ctx or {}).get('held') or ()) | {
+                t.get('symbol') for t in st.transactions
+                if t.get('action') in _POSITION_ACTIONS},
+            rs.open_position_syms, rs.pre.get('fii_all'),
+            {**(ctx or {}).get('stock_isins', {}), **rs.pre['stock_isins']},
+            _project_map_names([st.path]), shown_name(st.path))
         _ib_stamp_security_ids(st.transactions, rs.pre)
         # Each income and cost row as the account's other statements may
         # hold it too (`_ib_cross_income_listings`), and the rows' lines
@@ -8284,23 +8873,6 @@ class IbBrokerage(BaseBrokerage):
                   f"was NOT moved to the held listing {_held}: that "
                   f"listing is a different security (another ISIN) with "
                   f"the same ticker.")
-        if rs.isin_fallback:
-            _held = set(rs.open_position_syms) | {
-                t.get('symbol') for t in st.transactions
-                if t.get('action') in _POSITION_ACTIONS}
-            _still = sorted(
-                (sym, cc) for sym, cc in rs.isin_fallback
-                if sym not in _held and any(
-                    t.get('symbol') == sym for t in st.transactions
-                    if t.get('action') in _INCOME_ACTIONS
-                    or t.get('action') == 'ADJUST'))
-            if _still:
-                emit_line(f"warning: {shown_name(st.path)}: income booked on "
-                      f"{', '.join(f'{s} (ISIN {c})' for s, c in _still)}"
-                      f" — the ISIN country has no exchange-suffix "
-                      f"mapping, so .US was assumed and no position in "
-                      f"this statement confirms that listing. Check the "
-                      f"symbol (a ticker.map rule fixes it).")
 
     def _ib_finish_assignments(self, rs: "_IbRows") -> None:
         """An assignment's option leg settled on its stock leg's date (`_ib_finish`), so

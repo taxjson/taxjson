@@ -82,7 +82,8 @@ US_WALK_PART_INPUTS = {
                           "symbol_traces", "tx"],
     "_us_walk_split": ["_main_split_groups", "run", "symbol", "tx"],
     "_us_walk_adjust": ["ikey", "run", "symbol", "symbol_traces", "tx"],
-    "_us_walk_stock_dividend": ["ikey", "run", "symbol", "symbol_traces", "tx"],
+    # (`_boot_blocks`: its `exchanged`, the §356 exchanges' old-share blocks, TJ-4987)
+    "_us_walk_stock_dividend": ["_boot_blocks", "ikey", "run", "symbol", "symbol_traces", "tx"],
     "_us_walk_spinoff": ["_spin_done", "ikey", "run", "symbol", "symbol_traces", "tx"],
     "_us_walk_reorg": ["_boot_blocks", "ikey", "run", "symbol", "symbol_traces", "tx"],
     "_us_walk_buy": ["ikey", "is_option_assign", "run", "symbol", "symbol_traces", "tx",

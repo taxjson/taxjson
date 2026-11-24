@@ -1134,6 +1134,80 @@ def _detect_qt_ticker_changes(ctx: QtAccountContext, by_name, where) -> None:
                     f"out).")
 
 
+def _row_clock(dt) -> Tuple[str, str]:
+    """(date, time) of a row's Transaction Date: the row's own clock, the
+    one rule for every row kind (TJ-2381, TJ-5017). The export stamps most
+    rows midnight, so a day's rows tie and keep the file's order
+    (CA-DATE-14 / US-DATE-13); a stock dividend, a cash in lieu, a
+    reinvestment or an interest row stamped a fixed 09:30:00 sorted after
+    a trade, a journal or a transfer listed below it. A return of capital
+    alone keeps 09:30:00 (`tx_roc_adjust`, the ruling on TJ-5018)."""
+    return dt.strftime('%Y-%m-%d'), dt.strftime('%H:%M:%S')
+
+
+_REINVESTED_CREDITS = ('DIVIDEND', 'DIVIDEND_IN_LIEU')
+_NO_CLOCK = '00:00:00'      # the export's midnight: a row with no clock
+_ROC_STAMP = '09:30:00'     # base.tx_roc_adjust's fixed time
+
+
+def _pays_reinvestment(row: Dict[str, Any], rei: Dict[str, Any]) -> bool:
+    """`row` is a credit of the reinvestment's day that can pay it: a
+    dividend or a payment in lieu of its security, a return of capital of
+    its security (an ADJUST of type roc: cash received lowers the cost, a
+    negative amount), or an interest credit, in its currency."""
+    if row is rei or (row.get('date'), row.get('currency')) != (
+            rei.get('date'), rei.get('currency')):
+        return False
+    action, net = row.get('action'), row.get('net_amount') or 0.0
+    if action == 'INTEREST':
+        return net > 0
+    if row.get('symbol') != rei.get('symbol'):
+        return False
+    if action == 'ADJUST':
+        return row.get('type') == 'roc' and net < 0
+    return action in _REINVESTED_CREDITS and net > 0
+
+
+def _credits_before_reinvestments(transactions: List[Dict[str, Any]],
+                                  reinvestments: set) -> None:
+    """A reinvestment is the dependent leg of the distribution that pays
+    it: in place, it is ordered after the credits of its day that can
+    (`_pays_reinvestment`) and share its clock, and after a return of
+    capital's stamp (the owner's rulings on TJ-5265). A credit at the reinvestment's own clock but listed after it
+    is moved just before it: rows at one moment keep the emitted order in
+    every stage (CA-DATE-14 / US-DATE-13), the cash ledgers' walks too
+    (bin/taxjson_fx_cash build_ledger, lib/fx_cash_v2). A return of
+    capital is stamped 09:30:00 by every importer (`tx_roc_adjust`), a
+    convention, not a clock: a reinvestment it pays that has no clock of
+    its own (the export's midnight) takes that stamp, since a
+    reinvestment cannot come before the cash that pays it. No real clock
+    is lent or changed: a reinvestment with a clock of its own keeps it,
+    and a credit at a later real clock stays where its clock puts it. At a fixed 09:30:00 the
+    reinvestment followed every credit of its day; at its own clock an
+    export listing the REI row first, or paying it by a return of
+    capital, overdrew the cash (the review of TJ-5017). Neither row
+    touches the other's figure: a credit moves no position and the
+    purchase no income."""
+    i = 0
+    while i < len(transactions):
+        r = transactions[i]
+        i += 1
+        if id(r) not in reinvestments:
+            continue
+        if r.get('time') == _NO_CLOCK and any(
+                t.get('action') == 'ADJUST' and t.get('time') == _ROC_STAMP
+                and _pays_reinvestment(t, r) for t in transactions):
+            r['time'] = _ROC_STAMP
+        late = [j for j in range(i, len(transactions))
+                if transactions[j].get('time') == r.get('time')
+                and _pays_reinvestment(transactions[j], r)]
+        credits = [transactions[j] for j in late]
+        for j in reversed(late):
+            del transactions[j]
+        transactions[i - 1:i - 1] = credits
+        i += len(credits)
+
+
 def _qt_real_order(path: Path, rows) -> List[tuple]:
     """Rows of one day tie (Questrade stamps 00:00:00) and keep the
     order they are emitted in (CA-DATE-14 / US-DATE-13): a
@@ -1245,6 +1319,8 @@ class _QtParse:
     # id(original leg group) -> its line (the account-wide plan names
     # originals by line).
     orig_line: Dict[int, int] = field(default_factory=dict)
+    # id(row) of each reinvestment's purchase (`_credits_before_reinvestments`).
+    reinvestments: set = field(default_factory=set)
 
 
 class QuestradeBrokerage(BaseBrokerage):
@@ -1791,8 +1867,7 @@ class QuestradeBrokerage(BaseBrokerage):
                 f"guess which part is the dividend. Split it into "
                 f"a share row and a cash row, or book it in a .tt "
                 f"file.")
-        date = self._date(row, 'Transaction Date',
-                          lineno).strftime('%Y-%m-%d')
+        date, time = _row_clock(self._date(row, 'Transaction Date', lineno))
         sym_raw, scur = self._resolve_symbol(row, currency, lineno)
         sym = self.apply_currency_suffix(sym_raw, scur)
         sd_key = ('STK DIV', sym, M.units(abs(qty), 6), 0.0)
@@ -1806,7 +1881,7 @@ class QuestradeBrokerage(BaseBrokerage):
             return []
         sd_tx = {
             'action': 'BUYSELL',
-            'date': date, 'time': '09:30:00',
+            'date': date, 'time': time,
             'date_settle': date,
             'symbol': sym,
             'quantity': qty, 'currency': currency,
@@ -1941,12 +2016,12 @@ class QuestradeBrokerage(BaseBrokerage):
         _net = self._num(row, 'Net Amount', lineno)
         if abs(_net) < 0.005:
             return Outcome.nonevent("zero interest row")
-        _d = self._date(row, 'Transaction Date', lineno)
+        _day, _clock = _row_clock(self._date(row, 'Transaction Date', lineno))
         return [{
             'action': 'INTEREST',
-            'date': _d.strftime('%Y-%m-%d'),
-            'time': '09:30:00',
-            'date_settle': _d.strftime('%Y-%m-%d'),
+            'date': _day,
+            'time': _clock,
+            'date_settle': _day,
             'symbol': 'CASH', 'quantity': 0.0,
             'currency': currency, 'net_amount': _net,
             'type': 'interest',
@@ -2031,7 +2106,10 @@ class QuestradeBrokerage(BaseBrokerage):
         st = self._qt
         tx = self._parse_reinvestment(r.cells, r.currency, r.desc, r.line,
                                       st.rev_originals, st.reversals)
-        return tx if isinstance(tx, Outcome) else [tx]
+        if isinstance(tx, Outcome):
+            return tx
+        st.reinvestments.add(id(tx))
+        return [tx]
 
     def _trade_shape(self, r) -> "_QtShape | Outcome":
         """The row's date and time, the option parsed from the description
@@ -2394,6 +2472,7 @@ class QuestradeBrokerage(BaseBrokerage):
         ca_legs, net_of_tax, no_book_value = st.ca_legs, st.net_of_tax, st.no_book_value
         journals, shown = st.journals, st.shown
         self._pair_reversals(transactions, rev_originals, reversals)
+        _credits_before_reinvestments(transactions, st.reinvestments)
         _kept = {id(t) for t in transactions}
         for _tx, _msg in sd_notes:
             if id(_tx) in _kept:
@@ -2694,10 +2773,15 @@ class QuestradeBrokerage(BaseBrokerage):
     def _parse_cash_in_lieu(self, row, currency, desc, lineno,
                             rev_originals, reversals):
         """CIL -> a same-day pair (the fraction acquired at $0, sold for
-        the cash). SIGNED (audit R1-66): Net Amount > 0 is the cash in
-        lieu; Net Amount < 0 is Questrade REVERSING an earlier CIL,
-        which cancels that original (paired in _pair_reversals) — abs()
-        booked it as a second sale, the cash counted twice as gain."""
+        the cash), both at the row's own clock (`_row_clock`): the sale is
+        the generated leg and has no clock of its own, so it takes its
+        parent's and is emitted right after it; rows at one moment keep
+        the emitted order (CA-DATE-14 / US-DATE-13), so nothing of the
+        day comes between the two. SIGNED (audit R1-66): Net Amount > 0
+        is the cash in lieu; Net Amount < 0 is Questrade REVERSING an
+        earlier CIL, which cancels that original (paired in
+        _pair_reversals) — abs() booked it as a second sale, the cash
+        counted twice as gain."""
         m = _CIL_RE.search(desc)
         frac = (desc_number(m.group(1), where=self._where(lineno),
                             field='CASH IN LIEU fraction') if m else 0.0)
@@ -2711,15 +2795,15 @@ class QuestradeBrokerage(BaseBrokerage):
         if net < 0:
             reversals.append((key, lineno, desc))
             return Outcome.consumed()     # read into parser state
-        date = self._date(row, 'Transaction Date', lineno).strftime('%Y-%m-%d')
-        base = {'date': date, 'date_settle': date, 'symbol': sym,
+        date, time = _row_clock(self._date(row, 'Transaction Date', lineno))
+        base = {'date': date, 'time': time, 'date_settle': date, 'symbol': sym,
                 'currency': currency, 'commission': 0.0,
                 'account': self.DEFAULT_ACCOUNT, 'description': desc}
         legs = [
-            {**base, 'action': 'BUYSELL', 'time': '09:30:00',
+            {**base, 'action': 'BUYSELL',
              'quantity': frac, 'price': 0.0, 'net_amount': 0.0,
              'gross_amount': 0.0},
-            {**base, 'action': 'BUYSELL', 'time': '09:30:01',
+            {**base, 'action': 'BUYSELL',
              'quantity': -frac, 'price': M.units(cash / frac, 8),
              'net_amount': cash, 'gross_amount': cash},
         ]
@@ -2825,7 +2909,7 @@ class QuestradeBrokerage(BaseBrokerage):
         if qty_s < 0:
             reversals.append((key, lineno, desc))
             return Outcome.consumed()     # read into parser state
-        date = self._date(row, 'Transaction Date', lineno).strftime('%Y-%m-%d')
+        date, time = _row_clock(self._date(row, 'Transaction Date', lineno))
         sdt = self._date(row, 'Settlement Date', lineno, required=False)
         date_settle = sdt.strftime('%Y-%m-%d') if sdt else date
         self.check_settle_order(date, date_settle, where=self._where(lineno),
@@ -2850,7 +2934,7 @@ class QuestradeBrokerage(BaseBrokerage):
             price = M.units(net / qty, 8)
         tx = {
             'action': 'BUYSELL',
-            'date': date, 'time': '09:30:00', 'date_settle': date_settle,
+            'date': date, 'time': time, 'date_settle': date_settle,
             'symbol': key[1],
             'quantity': qty, 'currency': currency,
             'price': price, 'net_amount': net, 'gross_amount': net,

@@ -36,6 +36,7 @@ from taxjson.parsers.toolbox.descriptions import (
     _DIV_QTY_ON_SHS_RE as _DIV_QTY_ON_SHS_RE, _parse_div_qty_rate as _parse_div_qty_rate)
 from taxjson.parsers.protocol import KNOWN_NONEVENT_PREFIX, Outcome, REPORTED_PREFIX, RowCounts
 from taxjson.model import money as M
+from taxjson.model.transaction import event_identity
 
 from taxjson.parsers.toolbox.numbers import DESC_NUMBER_RE as DESC_NUMBER_RE
 from taxjson.parsers.toolbox.numbers import (MINUS_CHARS, check_comma_grouping as check_comma_grouping,
@@ -243,7 +244,10 @@ def fill_identity(tx: Dict[str, Any]) -> tuple:
     one id, and only they are split fills
     (`BaseBrokerage.disambiguate_split_fills`; TJ-5038). A number is
     compared as a number (10 and 10.0 are one quantity, as the id's
-    float has them), the rest as text."""
+    float has them), the rest as text. The id's last components, a
+    corporate event's id and a rename's destination, are read as the id
+    reads them (model.transaction `event_identity`), so two rows the id
+    tells apart are never split fills, and two it does not are."""
     out: List[Any] = []
     for name, default in FILL_IDENTITY_FIELDS:
         value = tx.get(name)
@@ -251,6 +255,8 @@ def fill_identity(tx: Dict[str, Any]) -> tuple:
             value = default
         numeric = isinstance(default, float) and isinstance(value, (int, float, Decimal))
         out.append(value if numeric else str(value))
+    out.append(tuple(event_identity(tx.get('symbol') or '', tx.get('symbol_new'),
+                                    tx.get('corp_event_id'), tx.get('action') or '')))
     return tuple(out)
 
 
@@ -945,6 +951,13 @@ class BaseBrokerage:
     # Default account label used when the source CSV doesn't name an account.
     # The taxjson-brokerage CLI overrides this with --account <name>.
     DEFAULT_ACCOUNT: str = "Unknown"
+
+    # How the broker's export marks a short account's trades (the rows'
+    # `short_marks`, stamped by taxjson-brokerage): "description" when it
+    # writes "SHORT." on a short sale and "COVER SHORT." on the purchase
+    # that covers it, so a purchase with no such words is a long purchase
+    # (tax-logic CA-DISP-04); "" when the export has no such convention.
+    SHORT_MARKS: str = ""
 
     # The project's country ("canada" | "usa"), set by taxjson-brokerage
     # from --country; None when the parser runs without one. Parsers

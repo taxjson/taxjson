@@ -466,6 +466,40 @@ def _to_tax_transactions(items):
             for i, item in enumerate(items)]
 
 
+def _hold_openings(args, txs):
+    """(rows, held): the merged accounts' .tt `OPENING ... cost=unknown`
+    lines among the rows as position rows (--incomplete-history; lib/
+    missing_history `hold_declared_openings`), like any other from here
+    on: the dated renames see the holding and move it (backlog TJ-5042),
+    and the opening cut-off replaces a line dated on or before a snapshot
+    as it replaces the earlier purchases (TJ-5007). Working rows only:
+    `_release_openings` takes them out before the books are written (the
+    stages that compute open each line the cut-off left in). A line that
+    cannot be read ends the stage (exit 1)."""
+    if not args.incomplete_history:
+        return txs, {}
+    from taxjson.lib.missing_history import (TtOpeningError,
+                                             hold_declared_openings)
+    try:
+        return hold_declared_openings(txs, Path(args.incomplete_history))
+    except TtOpeningError as e:
+        emit_line(f"error: {e}")
+        sys.exit(1)
+
+
+def _release_openings(txs, opening_cut, held):
+    """The rows without the lines `_hold_openings` put among them, each
+    line the cut-off left out said as ATTENTION (never in silence)."""
+    if not held:
+        return txs
+    from taxjson.lib.missing_history import (release_declared_openings,
+                                             replaced_opening_messages)
+    from taxjson.lib.opening import ATTENTION_OPENING
+    for msg in replaced_opening_messages(txs, opening_cut, held):
+        emit_line(f"{ATTENTION_OPENING}{msg}")
+    return release_declared_openings(txs, held)
+
+
 @guard_main("taxjson-merge2")
 def main():
     args = _parse_args()
@@ -488,6 +522,9 @@ def main():
     # broker parser's own pair for that cash (Questrade's $0 buy and its
     # sale; CA-CORP-05): the fraction is sold once. No-op without one.
     txs = drop_broker_cil_pairs(txs)
+
+    # --- Stage 3a: the units held before the data, rows until 3b ------
+    txs, held_openings = _hold_openings(args, txs)
 
     # --- Stage 3: ticker-map ------------------------------------------
     if args.map_file:
@@ -547,6 +584,7 @@ def main():
     except OpeningError as e:
         emit_line(f"error: {e}")
         return 1
+    txs = _release_openings(txs, opening_cut, held_openings)
 
     # Post-mapping (a DELETE'd or renamed row is judged as the engine will
     # see it): one account carrying the same split twice.
@@ -698,6 +736,16 @@ def _parse_args() -> argparse.Namespace:
              "warn-and-skip. Use in orchestrated pipelines where every input "
              "is required — a silent skip emits a partial merge and "
              "understates gains.",
+    )
+    parser.add_argument(
+        '--incomplete-history', metavar='DIR', default=None,
+        help="The project folder whose accounts' .tt files open units at "
+             "an unknown cost (`OPENING <date> <SYMBOL> <qty> "
+             "cost=unknown`): the lines of the accounts merged are held "
+             "as position rows while the dated renames are booked and "
+             "the opening cut-off is applied (a rename moves them, a "
+             "later snapshot replaces them), and are not written to the "
+             "output: the stages that compute open them.",
     )
     args = parser.parse_args()
 

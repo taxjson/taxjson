@@ -134,6 +134,57 @@ an opening balance (`tjs opening`) or statements you kept.
   does not count. A row moved that way that the books then find
   nothing under (a capital gain on a pool empty that day) is listed
   too, with the ISIN's listing as where it may belong.
+- **An ISIN that names no market.** A country with a home market in
+  taxjson's table (`CA`, `US`, `GB`, `AU`) gives the row its first
+  listing. Any other ISIN country (`IE`, `LU`, `DE` ...) does not say
+  where the security trades: an Irish fund lists in London, Amsterdam
+  or Frankfurt, an Irish company in New York. Such a row is booked only
+  on evidence of its listing, in this order: the listing the account
+  holds (as above); a ticker.map line that names the symbol the parse
+  looked for (`ZZQ.L` for an Irish ISIN, `ZZQ.US` for the others); the
+  one listing the account holds the ticker under when its suffix is a
+  currency's code (a line IB trades in euros is `ZZQ.EUR`), for
+  dividends, payments in lieu and withholding (the run says so once a
+  security, "ZZQ income booked on ZZQ.EUR ... by its name alone", and
+  names the line that confirms it, `GLOBAL ZZQ.L ZZQ.EUR`, after which
+  it is your declaration and not said again; nothing is said where the
+  statement's instrument list gives the ticker the row's ISIN); the one
+  venue the statement's Financial Instrument
+  Information gives the ISIN (its Listing Exch, when taxjson knows it).
+  Otherwise the parse stops and says why: the listings the account
+  holds and that the statement does not show which the rows belong to
+  (a return of capital is never moved onto a holding no dated row
+  shows held that day), the venues the instrument list names when
+  there are two, or that nothing names a listing. It names the line to
+  add: any ticker.map line naming the symbol it looked for
+  (`QUOTE ZZQ.L ZZQ.L` for a London line), or `GLOBAL ZZQ.L ZZQ.US` to
+  the listing held. A ticker.map line that names another listing of
+  the ticker (a `DELETE`, `DISTINCT`, `QUOTE` or `T1135` line written
+  for another security) is no evidence, and neither is a `.tt` line (an
+  `OPENING` of `ZZQ.L` in the account's `.tt` file): the parse reads
+  the statements and ticker.map only.
+- **Two distributions on one pay date.** Nothing on a Dividends row
+  names the accrual it pays. Where a security has two Change in
+  Dividend Accruals rows of one pay date (a regular and a special
+  dividend, an ex date each; or two pay dates as near the row's date),
+  each row's share count, rate and ex date come from the accrual the
+  statement's evidence gives it: the rate the row states, its cash
+  against the accrual's shares and rate (with the shares lent), and the
+  rows' characters. Where the cash fits more than one way, a way with
+  whole share counts, then one with the same shares lent under each
+  accrual (or the accruals read as one distribution accrued in parts),
+  then one that gives more accruals rows of their own, is taken; where
+  a reading set aside is in whole shares too and gives a row another
+  share count or rate, the run says so once a security ("the shares
+  and rates booked are one of 2 readings"), with both readings and the
+  fix. A match that still stays open stops the parse, naming the rows (a
+  reversal and its re-post beside a second dividend, none stating a
+  rate, is one); writing each row's per-share rate into its Description
+  as IB prints it (`USD 0.10 per Share`, in the row's own currency)
+  settles it. Two accruals of the same shares and rate give the same
+  figures either way: the rows are booked, and an ex date the evidence
+  does not settle is left out, said by the run ("no ex date recorded
+  for 2 dividend rows"). No booked amount depends on the match.
 - **One payment in two exports.** Overlapping statements that hold the
   same dividend or return of capital book it once. Where one statement
   placed it by its dated rows and the other from undated evidence, the
@@ -208,7 +259,19 @@ refused.
   same-day rows (a sale and its rebuy, two currency conversions) keep
   the order they happened in, in the books and in the FX-on-cash
   ledger v2 alike. A file whose dates are mixed keeps its own order,
-  with a note.
+  with a note. Every row keeps the clock its Transaction Date gives
+  (midnight in the web export): a stock dividend, a cash in lieu, a
+  reinvestment and an interest row as a trade does, so shares a row
+  adds are there for a sale, a journal or a transfer listed after it
+  on its day. A cash in lieu's two legs (the fraction received, then
+  sold) share the row's clock, in that order. A reinvestment follows
+  the cash that pays it: a dividend of the same security, or an
+  interest credit, at its own clock is ordered before it even where
+  the export lists the REI row first. A return of capital is placed at
+  09:30:00, as every importer places one; a reinvestment it pays that
+  has no clock of its own (the export's midnight) is placed there too,
+  after it. A reinvestment with a real clock keeps it, and no credit
+  with a later clock moves it.
 - **Internal symbol codes** (`X000123`) on some dividend, spin-off and
   journal rows, and currency journals (Norbert's gambit): see
   [troubleshooting.md](troubleshooting.md#questrade-rbc-direct-and-webull).
@@ -220,7 +283,7 @@ snapshot them (`tjs fetch --positions`, below).
 **Auto-fetch:** Questrade activity can be downloaded through its API
 instead: see [Auto-fetch](#auto-fetch-questrade-interactive-brokers).
 
-Parser: `src/taxjson/lib/brokerages/questrade.py` — `_QT_COLUMNS`, `missing_columns`.
+Parser: `src/taxjson/lib/brokerages/questrade.py` — `_QT_COLUMNS`, `missing_columns`, `_row_clock`.
 
 Sources: [Checking your transaction history](https://forward.questrade.com/learning/questrade-basics/track-your-account-activity/checking-your-account-activity) (menu path, Excel export; no limit stated).
 
@@ -248,6 +311,21 @@ account's activity or transaction history page and its export link.
   a note. Keep both files: overlapping RBC downloads are de-duplicated.
 - **Strict reading.** Every number must parse and each date column has
   one format, so a re-saved file is refused rather than misread.
+- **A trade's direction** is its Activity (Buy, Sell). Under an
+  Activity taxjson does not know, a row whose Description has the word
+  Buy or Sell is a trade in that direction (`NAME - Sell` is a sale,
+  with the Quantity signed or not). A Description with both words, a
+  purchase with a negative Quantity, and a Buy or Sell row whose
+  Description ends with the other verb (`Sell` beside `NAME - Buy`)
+  are refused, naming the line. So is a sale whose Value (the cash
+  before commission) is negative, and a row read as a purchase from
+  its Description whose Value is positive: a sale's Value is cash in,
+  a purchase's cash out. The net Amount is not read for this: a sale
+  whose commission is larger than its proceeds still books. A Buy row
+  whose cash is written positive is the purchase, by its magnitude. In
+  an export with one money column a Sell row is read as before; a row
+  read as a sale from its Description that pays is a commission larger
+  than its proceeds only while it pays less than Quantity x Price.
 - **Notional distributions** raise the ACB; their income is on the
   fund's T3, not in the export.
 
@@ -261,7 +339,7 @@ cost label names, `Book Value (USD)` or `(usd)`, is the cost's). A
 label it reads given twice, or a row with a quantity and no symbol
 (not cash, not a total), is refused, naming it.
 
-Parser: `src/taxjson/lib/brokerages/rbc_direct.py` — `REQUIRED_COLUMNS`, `rbc_coverage_messages`, `DEFAULT_YEAR_END_POSTING`; positions: `src/taxjson/lib/positions_reports.py` — `rbc_holdings`.
+Parser: `src/taxjson/lib/brokerages/rbc_direct.py` — `REQUIRED_COLUMNS`, `rbc_coverage_messages`, `DEFAULT_YEAR_END_POSTING`, `rbc_trade_side`; positions: `src/taxjson/lib/positions_reports.py` — `rbc_holdings`.
 
 Sources: none found (no public RBC Direct Investing help page for these exports).
 
@@ -282,6 +360,12 @@ sits there or how to get it as CSV.
   Date, Action Code, Symbol, Security Description, Quantity, Price,
   Proceeds), never by position; a file mixing the two, or an unknown
   layout, is refused.
+- **Type Code.** `OPC` and `OPP` are options, `SHS`, `STK` and `EQ`
+  shares. A trade row's code is checked against its Security
+  Description: an option code with no readable contract (`CALL/PUT
+  ROOT MM/DD/YY STRIKE`) and a share code beside a contract are
+  refused, and so is any other code, naming the line and the code. A
+  blank code is read by the description alone.
 - **BUY and SELL rows only, no income.** Any other action code (a
   dividend, a transfer) is an `UNBOOKED` warning. Enter the T5's
   dividends and interest as `.tt` lines in the account's folder:
@@ -307,7 +391,7 @@ sits there or how to get it as CSV.
 **Positions report:** none taxjson knows. Type the positions into a
 `[[holding]]` TOML.
 
-Parser: `src/taxjson/lib/brokerages/webull.py` — `_HEADER_LABELS`, `_mark_assignments`.
+Parser: `src/taxjson/lib/brokerages/webull.py` — `_HEADER_LABELS`, `_TYPE_KINDS`, `_mark_assignments`.
 
 Sources: [How do I get my monthly statement and trade confirmation?](https://www.webull.ca/help/faq/358-How-do-I-get-my-monthly-statement-and-trade-confirmation) (the Documents menu);
 [Which tax documentation can I expect to receive?](https://www.webull.ca/help/faq/591-Which-tax-documentation-can-I-expect-to-receive) (T5008 and Trading Summary, late February).
@@ -503,6 +587,29 @@ zone, `[settings] local_timezone` (e.g. `"America/Toronto"`): a fill at
 year. There is no default: a project with a `crypto = true` account
 stops until it is set ([settings.md](settings.md#local_timezone));
 `tjs init` writes this machine's zone when it can.
+
+## Short sales: which purchase covers a short (Canada)
+
+A short the broker marks is a position of its own in a Canadian project (`tjs tax-logic` CA-DISP-04).
+Which purchase closes it follows each broker's own convention, read from the export a row came from:
+
+| The row comes from | A short sale is marked | The purchase that covers it |
+|---|---|---|
+| **RBC Direct Investing** | `SHORT.` in the Description | only a purchase with `COVER SHORT.` in the Description. Every other purchase in that broker's exports is a long purchase, whatever file it is in, even while the account is short. |
+| **Interactive Brokers** | Code `O` on the sale (the Code column is required) | a purchase while the account is short and holds no shares of its own covers, whatever its Code (one netted position per account); a purchase coded `O` is a long purchase. |
+| **Questrade**, a **`.tt` line**, the **generic importer**, **Webull**, **Wealthsimple** | no marker taxjson reads (how Questrade marks a short account's trades is not known) | a purchase while the account is short and holds no shares of its own covers. |
+
+`tjs run` says when the rows disagree, and never books it silently:
+
+- `Warning: Marked cover: …`: a purchase with no mark (a `.tt` line, say) was read as the cover, and a
+  purchase the broker marks as the cover then found less short than it buys. Both rows are named; remove
+  the unmarked row if the two are one trade.
+- `Warning: Long and short: …`: the account's rows end with shares held and a short of the same shares.
+  With RBC this is what a short covered by a purchase without `COVER SHORT.` looks like: the
+  export holding the marked cover is missing, or the broker really holds both.
+
+`tjs find-missing-history` reads the covers the same way. A US project nets one position per account
+and symbol: the first purchase closes the short, whatever the marks.
 
 ## How a file's broker is detected
 

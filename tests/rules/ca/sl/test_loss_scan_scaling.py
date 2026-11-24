@@ -244,9 +244,12 @@ def _digest(res):
 # account's purchase that backed it), and margin's 2024-12-18 purchase
 # covers its own 2 remaining contracts (a loss of 69.33) and buys 1 long
 # with the rest. 91 denied sales as before.
+# Re-captured for backlog TJ-4985 (a rename's destination is part of its
+# row's id): the id of the book's one rename row, named in two losses'
+# window rows, changed; every figure, denial and pool is the same.
 _PINNED = {
-    'digest': '1e3c2b780709340cb60de607f9a7c36b'
-              '83cb615ee49bba51aab6eee65bc69847',
+    'digest': '246c5603cc331225d776a443a9186d5e'
+              '3962526a61fda065d1a7c7d82a7c4b4d',
     'denied_sales': 91,
     'total_disallowed': 29180.315851,
     'total_permanent': 14732.53997,

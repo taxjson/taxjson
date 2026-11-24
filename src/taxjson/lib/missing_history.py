@@ -44,6 +44,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from taxjson.model.transaction import TaxTransaction
 from taxjson.lib.row_types import is_stock_dividend, open_close_codes
+from taxjson.lib.opening import BY_LEG, BY_OTHER_ACCOUNT, unknown_opening_reading
 from taxjson.lib.unbacked_close import OrderStarts, unbacked_close
 from taxjson.lib.corporate_timeline import (SplitTimeline, event_sort_key,
                                              normalize_symbol_new)
@@ -1186,6 +1187,13 @@ def detect_unbacked_covers(
     short-side walk, for the same reason): a short and its cover
     stamped alike is no evidence that the short predates the data."""
     run: Dict[Tuple[str, str], float] = {}
+    # A Canadian book's shorts of a broker that marks them in the
+    # description: an unmarked buy of that broker never covers one
+    # (`_long_by_its_broker`), so the netted `run` understates what a
+    # marked cover has to close (TJ-4993).
+    marked: Dict[Tuple[str, str], float] = {}
+    from taxjson.lib.country import is_canada
+    canada = country is not None and is_canada(country)
     orders = OrderStarts()
     out: List[UnbackedCover] = []
     transactions = list(transactions)
@@ -1206,8 +1214,10 @@ def detect_unbacked_covers(
             if new_sym:
                 nk = (new_sym, tx.account)
                 run[nk] = run.get(nk, 0.0) + run.pop(key, 0.0) * ratio
+                marked[nk] = marked.get(nk, 0.0) + marked.pop(key, 0.0) * ratio
             elif key in run:
                 run[key] *= ratio
+                marked[key] = marked.get(key, 0.0) * ratio
             continue
         if tx.action not in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE',
                              'TRANSFER'):
@@ -1217,13 +1227,19 @@ def detect_unbacked_covers(
         order_prev = orders.prev(key, tx, prev)
         own = books.step(tx)
         run[key] = prev + q
+        short_prev = marked.get(key, 0.0)
+        if (canada and tx.action == 'BUYSELL'
+                and (getattr(tx, 'short_marks', '') or '') == 'description'
+                and _BROKER_SHORT_RE.search((tx.description or '').upper())):
+            # (a marked short sale adds to it, a marked cover takes from it)
+            marked[key] = max(0.0, short_prev - q)
         if q <= 1e-9 or tx.action != 'BUYSELL':
             continue
         if _derivative_symbol(tx.symbol or '') and not include_options:
             continue
         if _BROKER_SHORT_RE.search((tx.description or '').upper()):
             marker = 'COVER SHORT.'
-            unbacked = q - max(0.0, -prev)
+            unbacked = q - max(0.0, -prev, short_prev)
         elif _close_unbacked(tx, prev, order_prev, own):
             marker = 'IB code C'
             unbacked = q - max(0.0, -prev)
@@ -1261,14 +1277,37 @@ def short_opening_rows(log: Iterable[Dict[str, Any]]) -> List[TaxTransaction]:
     return out
 
 
+def _marked_cover(tx: Any) -> bool:
+    """A purchase the broker itself marks as closing a short: RBC's "COVER
+    SHORT." description, IB's Trades code C."""
+    return (bool(_BROKER_SHORT_RE.search((tx.description or '').upper()))
+            or 'C' in open_close_codes(tx))
+
+
+def _long_by_its_broker(tx: Any, country: Optional[str]) -> bool:
+    """Whether the Canadian books read purchase `tx` as a long purchase
+    whatever short the account holds: a row of a broker that marks a short
+    account's trades in the description (`short_marks`: RBC) with
+    no cover mark on it (tax-logic CA-DISP-04; engine/ca/router). The US
+    engine nets one position, so nothing is such a row there."""
+    from taxjson.lib.country import is_canada
+    return (country is not None and is_canada(country)
+            and (getattr(tx, 'short_marks', '') or '') == 'description'
+            and not _marked_cover(tx))
+
+
 def drop_answered_covers(transactions: Iterable[TaxTransaction],
-                         shorts: Iterable[Any]) -> List[TaxTransaction]:
+                         shorts: Iterable[Any],
+                         country: Optional[str] = None) -> List[TaxTransaction]:
     """`transactions` without the units the short lines `shorts` (rows
     with a negative quantity: the short held before the data, TJ-0844)
     answer: the first buys from each line's date, as the engines close
-    it, its splits and renames followed. The rows are what the walks
-    read, so an answered cover is no unbacked one and its units back no
-    later sale."""
+    it, its splits and renames followed. In a Canadian book (`country`)
+    a purchase the books read as long by its broker's convention
+    (`_long_by_its_broker`: an unmarked RBC buy) answers
+    nothing: the marked cover does (TJ-4993, TJ-1357). The rows are what
+    the walks read, so an answered cover is no unbacked one and its units
+    back no later sale."""
     out: List[Any] = list(transactions)
     start = {(s.symbol, s.account): s for s in shorts
              if float(s.quantity or 0.0) < 0}
@@ -1294,7 +1333,8 @@ def drop_answered_covers(transactions: Iterable[TaxTransaction],
                 left[key] *= ratio
             continue
         q = float(tx.quantity or 0.0)
-        if tx.action != 'BUYSELL' or q <= 0 or left[key] <= 0:
+        if (tx.action != 'BUYSELL' or q <= 0 or left[key] <= 0
+                or _long_by_its_broker(tx, country)):
             continue
         take = min(q, left[key])
         left[key] -= take
@@ -2645,6 +2685,137 @@ def read_tt_openings(root: Any, accounts: Optional[Iterable[str]] = None
     return out
 
 
+def hold_declared_openings(txs: Sequence[TaxTransaction], root: Any
+                           ) -> Tuple[List[TaxTransaction],
+                                      Dict[int, TtOpening]]:
+    """(`txs` with the accounts' `.tt` `OPENING ... cost=unknown` lines
+    among them as OPENING_BALANCE rows, {id(row): its line}), for a merge
+    stage of project folder `root`: an unknown-cost opening is a position
+    row like any other from the start, so the stage's dated renames see
+    the holding (a SPLIT row moves it: backlog TJ-5042) and its opening
+    cut-off replaces it as it replaces earlier purchases (TJ-5007). Each
+    row is on the line's RAW symbol (the stage's own map spells it as it
+    spells the account's rows), dated the line's date at 00:00:00, placed
+    before the first row dated on or after it, at no cost, in its
+    security's rows' currency (else its listing's, else the account's
+    one currency, else none).
+
+    The rows are the stage's working rows only: `release_declared_openings`
+    takes them out before the books are written, and the stages that
+    compute (synthesize_openings) open each line the cut-off left in.
+    Only the lines of the accounts `txs` carries. Raises TtOpeningError."""
+    out = list(txs)
+    accounts = {str(t.account) for t in out if t.account}
+    if not accounts:
+        return out, {}
+    lines = read_tt_openings(root, accounts)
+    held: Dict[int, TtOpening] = {}
+    if not lines:
+        return out, held
+    from taxjson.lib.markets import suffix_currency
+    from taxjson.lib.markets_data import suffix_of
+    for t in lines:
+        day = str(t.date)[:10]
+        cur = next((r.currency for r in out
+                    if r.account == t.account and r.symbol == t.symbol
+                    and r.currency), '')
+        if not cur:
+            cur = suffix_currency(suffix_of(t.symbol)) or ''
+        if not cur:
+            curs = {r.currency for r in out
+                    if r.account == t.account and r.currency}
+            cur = curs.pop() if len(curs) == 1 else ''
+        qty = float(t.quantity)
+        row = TaxTransaction(
+            action='OPENING_BALANCE', date=day, time='00:00:00',
+            date_settle=day, symbol=t.symbol, quantity=qty, currency=cur,
+            price=0.0, net_amount=0.0, account=t.account,
+            description=(f'MISSING-HISTORY opening ({t.where}) — '
+                         f'held before the data, cost unknown '
+                         f'(qty={qty:g})'))
+        at = next((i for i, r in enumerate(out)
+                   if str(r.date or '')[:10] >= day), len(out))
+        out.insert(at, row)
+        held[id(row)] = t
+    return out, held
+
+
+def release_declared_openings(txs: Sequence[TaxTransaction],
+                              held: Dict[int, TtOpening]
+                              ) -> List[TaxTransaction]:
+    """`txs` without the rows `hold_declared_openings` put among them."""
+    if not held:
+        return list(txs)
+    return [t for t in txs if id(t) not in held]
+
+
+def replaced_opening_messages(kept: Sequence[TaxTransaction],
+                              cut: Sequence[TaxTransaction],
+                              held: Dict[int, TtOpening]) -> List[str]:
+    """One line per `.tt` `OPENING ... cost=unknown` line of `held` that
+    the opening cut-off left out (`cut`: its rows; `kept`: the rows it
+    kept, whose snapshot rows name them): what the merge stage says, so
+    a line that opens nothing is never dropped in silence (TJ-5007)."""
+    out = []
+    for row in cut:
+        t = held.get(id(row))
+        if t is None:
+            continue
+        hit = unknown_opening_reading(kept, row.account, [row.symbol],
+                                      row.date)
+        out.append(replaced_line_text(t, hit[:2] if hit else None))
+    return out
+
+
+def replaced_line_text(t: TtOpening, snap: Optional[Sequence[str]]) -> str:
+    """What is said of a `.tt` `OPENING ... cost=unknown` line `t` an
+    opening snapshot (`snap`: its symbol and date) replaces: the line by
+    its file and line, the snapshot, the reason and the remedy. A
+    negative line declares a short sold before the data: worded as one."""
+    by = (f"the opening snapshot of {snap[0]} dated {snap[1]}"
+          if snap else "an opening snapshot")
+    qty = float(t.quantity)
+    head = (f"{t.account}: {t.where} (OPENING {t.date} "
+            f"{t.declared or t.symbol} {qty:g} cost=unknown) is dated on "
+            f"or before {by}, which replaces it as it replaces the "
+            f"earlier rows: ")
+    if qty < 0:
+        return (head + "the short it declares is not opened (the snapshot "
+                "is the position on its day). Delete the line (keep it, "
+                "dated after the snapshot, only for a short sold after "
+                "it).")
+    return (head + "its units are not opened at an unknown cost. Delete "
+            "the line (keep it, dated after the snapshot, only for units "
+            "that came after it).")
+
+
+def two_readings_text(t: TtOpening, reading: Sequence[Any]) -> str:
+    """The refusal of a `.tt` `OPENING ... cost=unknown` line read two
+    ways (backlog TJ-5241): books that pool the accounts follow another
+    account's rename row to a snapshot that replaces the line, while its
+    own account's books, which have no row of that rename, open it.
+    `reading`: opening.unknown_opening_reading's, BY_OTHER_ACCOUNT."""
+    snap, day, _how, rename = reading
+    qty = float(t.quantity)
+    line = (f"OPENING {t.date} {t.declared or t.symbol} {qty:g} "
+            f"cost=unknown")
+    via = (f"the rename {rename[1]} -> {rename[2]} of {rename[0]} in "
+           f"account {rename[3]}'s rows" if rename
+           else "a rename in another account's rows")
+    fix = (f"`RENAME {rename[0]} {rename[1]} {rename[2]}`" if rename
+           else "the rename as a `RENAME <date> OLD NEW` line")
+    return (f"{t.where} ({line}) is read two ways. The books that pool "
+            f"the accounts follow {via} to the opening snapshot of {snap} "
+            f"dated {day} in account {t.account}, which replaces the line "
+            f"(it opens nothing). Account {t.account}'s own books have no "
+            f"row of that rename, so they open the line's {abs(qty):g} "
+            f"units at an unknown cost beside the snapshot's (its "
+            f"holdings and `tjs list` would carry them). One line gives "
+            f"one figure: add {fix} to a .tt file of account {t.account} "
+            f"(the snapshot then replaces the line in every pass), or "
+            f"delete the line if the snapshot holds its units.")
+
+
 def has_tt_openings(root: Any) -> bool:
     """The project's accounts have an `OPENING ... cost=unknown` .tt
     line (a malformed one counts: the run names it)."""
@@ -3209,7 +3380,8 @@ def _apply_fixed_openings(sorted_txs: Sequence[TaxTransaction],
                           chains: Dict[Tuple[str, str], Set[Tuple[str, str]]],
                           renames: Dict[Tuple[str, str],
                                         List[Tuple[str, str]]],
-                          *, warn: bool = False, pairs_in: Any = None
+                          *, warn: bool = False, pairs_in: Any = None,
+                          say: bool = False
                           ) -> List[Tuple[Optional[TaxTransaction],
                                           Dict[str, Any]]]:
     """[(OPENING_BALANCE row or None, applied-log entry)] for the .tt
@@ -3269,6 +3441,29 @@ def _apply_fixed_openings(sorted_txs: Sequence[TaxTransaction],
                           f"spelling.", file=sys.stderr)
             out.append((None, entry))
             continue
+        sym_on = _symbol_on(symbol, account, day, renames)
+        # A line an opening snapshot replaces opens nothing: it is a
+        # position row like any other (CA-OPEN-03 / US-OPEN-03; backlog
+        # TJ-5007), in every stage that opens the lines.
+        snap = unknown_opening_reading(
+            sorted_txs, account, [sym_on, symbol, t.symbol], day)
+        if snap is not None:
+            if snap[2] == BY_OTHER_ACCOUNT:
+                raise TtOpeningError(two_readings_text(t, snap))
+            entry['replaced_by_snapshot'] = {'symbol': snap[0],
+                                             'date': snap[1]}
+            entry['note'] = (f'replaced by the opening snapshot of '
+                             f'{snap[0]} dated {snap[1]} — the snapshot is '
+                             f'the position on its day; the line opens '
+                             f'nothing')
+            # Said here (`say`: the callers that speak) where no merge
+            # said it (it names each line its cut-off left out, BY_LEG):
+            # never in silence (TJ-5241).
+            if say and snap[2] != BY_LEG:
+                emit_line("warning: ATTENTION: opening: "
+                          + replaced_line_text(t, snap[:2]), file=sys.stderr)
+            out.append((None, entry))
+            continue
         if not member_rows:
             # Held with no row at all (issue #24): said once per run
             # (report_missing_history_log), a misspelling being held too.
@@ -3299,7 +3494,6 @@ def _apply_fixed_openings(sorted_txs: Sequence[TaxTransaction],
                         break
             _short_again(entry, _long_side_path(trades, day, opening),
                          opening)
-        sym_on = _symbol_on(symbol, account, day, renames)
         currency = _opening_currency(t, sym_on, account, member_rows,
                                      sorted_txs, pairs_in)
         row = TaxTransaction(
@@ -3609,7 +3803,7 @@ def synthesize_openings(
                                 f'opens nothing'})
     fixed_rows = _apply_fixed_openings(sorted_txs, fixed, chains,
                                        reverse_dated(sorted_txs), warn=warn,
-                                       pairs_in=pairs_in)
+                                       pairs_in=pairs_in, say=flag_stale)
     for row, entry in fixed_rows:
         if row is not None:
             out.append(row)

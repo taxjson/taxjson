@@ -9,6 +9,7 @@ from taxjson.lib import loss_overrides as _LO
 from taxjson.lib.stage_msg import emit_line
 import contextlib
 import copy
+from dataclasses import replace
 import functools
 import inspect
 import io
@@ -18,6 +19,7 @@ from taxjson.rules.country import USA as _USA, check_engine_allowed as _check_en
 from taxjson.lib.corporate_timeline import SplitTimeline, event_sort_key, renames_at_open
 
 from taxjson.model import money as M
+from taxjson.rules import ids as R
 from taxjson.lib.option_symbols import exercise_target, is_option_symbol, parse_option_underlying
 from taxjson.lib.row_types import LOT_MOVE_TYPE, SPINOFF_355_TYPE
 from taxjson.model.transaction import TaxTransaction
@@ -59,6 +61,21 @@ if TYPE_CHECKING:
     from taxjson.engine.rows import RowId, RuleTable
     from taxjson.engine.us.lot_store import _USInventory, _USLotsNow
     from taxjson.engine.us.trades import _GainRow
+
+
+def _us_conserved_rows(run: _USRun) -> List[TaxTransaction]:
+    """The taxable rows the conservation check replays (`_finish`): the trades, openings,
+    splits, own moves and listing journals; a stock dividend that made a short owe more
+    shares at its effect on the position (US-STKDIV-06: the walk named the rule on it)."""
+    _owed = {_i for _i, _recs in run.rules.items()
+             if _recs.get(_i) == R.US_STKDIV_06}
+    return [(replace(t, quantity=-t.quantity) if t.id in _owed else t)
+            for t in run.taxable_sorted
+            if (not run.non_capital(t.action, t.type)
+                and t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE',
+                                 'SPLIT'))
+            or (t.action == 'TRANSFER' and t.type == LOT_MOVE_TYPE)
+            or _is_listing_journal(t)]
 
 
 class USATaxRules(TaxRules):
@@ -688,12 +705,7 @@ class USATaxRules(TaxRules):
             _inv_qty[_sym] = _inv_qty.get(_sym, 0.0) \
                 - sum(l['qty'] for l in _lots)
         _verify_share_conservation(
-            [t for t in run.taxable_sorted
-             if (not run.non_capital(t.action, t.type)
-                 and t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE',
-                                  'SPLIT'))
-             or (t.action == 'TRANSFER' and t.type == LOT_MOVE_TYPE)
-             or _is_listing_journal(t)],
+            _us_conserved_rows(run),
             _inv_qty, self.country,
             zero_ratio_skips=True)      # US: ratio-0 skips the scale,
                                         # rename still migrates

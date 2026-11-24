@@ -11,39 +11,31 @@ until it is fixed. A fixed bug leaves this file, and the CHANGELOG names the rel
   [bug report template](.github/ISSUE_TEMPLATE/bug_report.md). The repository is public: reproduce it
   on a made-up file, never paste a real export, amounts or account numbers.
 
-## Irish-domiciled ETFs and listings outside the currency table get the wrong suffix
+## Listings outside the currency table get the currency's code as their suffix
 
-- **What happens:** an Interactive Brokers dividend or withholding row is given its listing from the
-  security's ISIN country, and every Irish (`IE`) ISIN maps to `.L` (London), though many Irish ETFs
-  trade elsewhere. When the account holds the security under another listing, the income is moved to
-  that holding (so most books are not affected); an income-only security keeps `.L`. Separately, a row
-  that names only a currency outside the shared table (CAD, USD, AUD, GBP) gets the currency code as its
-  suffix (`SAMPLE.EUR`; the IB parser warns), and a USD security listed outside the US gets `.US` unless
-  the export says otherwise.
+- **What happens:** an Interactive Brokers row that names only a currency outside the shared table
+  (CAD, USD, AUD, GBP) gets the currency code as its suffix (`SAMPLE.EUR`; the IB parser warns), and
+  a USD security listed outside the US gets `.US` unless the export says otherwise. A dividend or
+  withholding row is given its listing from the security's ISIN country only where that country has
+  a home market in the table (`CA`, `US`, `GB`, `AU`); when the account holds the security under
+  another listing the income is moved to that holding. A row of any other ISIN country (an Irish
+  fund's) is booked on the listing the account holds, a ticker.map line names or the statement's
+  instrument list gives, and the parse stops when nothing settles one. A row whose Description
+  carries no ISIN is booked on `.US`.
 - **Meanwhile:** add a ticker.map `GLOBAL` line that rewrites the parsed symbol to the right listing.
-- **Code:** `src/taxjson/lib/brokerages/ib_extractor.py` — `_isin_ext`, `_reattribute_income_to_holdings`; `src/taxjson/data/markets.toml` — `isin_country_suffix`, `currency_suffix`
+- **Code:** `src/taxjson/lib/brokerages/ib_extractor.py` — `_isin_ext`, `_reattribute_income_to_holdings`, `_ib_settle_assumed_listings`; `src/taxjson/data/markets.toml` — `isin_country_suffix`, `isin_domicile_suffix`, `currency_suffix`
 
 ## Opening balances: edges the cut-off does not see
 
 - **What happens:** an opening snapshot (`tjs opening`) replaces the account's earlier rows of its
-  symbols, but the cut-off runs at the merge stage, so a missing-history `OPENING … cost=unknown` line
-  dated before the snapshot is not left out. (A `[[distributions]]` return of capital dated before it
-  is not applied, as ATTENTION: the snapshot's cost stands for it.) One account holding the same symbol at two brokers with different snapshot dates cannot be
-  opened per broker (one snapshot date per symbol per account). A US project asks for a lot date on every
-  OPENING line, a retirement account's included, where the holding period does not matter.
-- **Meanwhile:** remove such an opening line, or date it after the snapshot; give the two
-  brokers' holdings of one symbol a common snapshot date; give a retirement account's lines any lot date.
+  symbols. (A `[[distributions]]` return of capital dated before it is not applied, as ATTENTION:
+  the snapshot's cost stands for it.) One account holding the same symbol at two brokers with
+  different snapshot dates cannot be opened per broker (one snapshot date per symbol per account). A
+  US project asks for a lot date on every OPENING line, a retirement account's included, where the
+  holding period does not matter.
+- **Meanwhile:** give the two brokers' holdings of one symbol a common snapshot date; give a
+  retirement account's lines any lot date.
 - **Code:** `src/taxjson/lib/opening.py` — `snapshots`
-
-## A negative futures price in a `.tt` file
-
-- **What happens:** IB and generic-importer futures rows keep the sign of a negative price (a buy at a
-  negative price receives money). In a `.tt` file a negative-price buy keeps its signed total; a
-  negative-price sell with a negative total is accepted only with its contract size on the line and
-  refused otherwise; a negative price with a positive total is not caught.
-- **Meanwhile:** book such a fill from the IB statement or a generic CSV, or as a `.tt` line with the
-  signed total (and the contract size on a sell), or enter the close's realized P/L by hand.
-- **Code:** `src/taxjson/lib/tt_format.py` — `_excess_commission_sale`
 
 ## Kraken fees taken in the traded coin are not in the fee reports
 
@@ -54,15 +46,15 @@ until it is fixed. A fixed bug leaves this file, and the CHANGELOG names the rel
 - **Meanwhile:** the gains are right; for a fee total, add the coin fees from the Kraken ledger.
 - **Code:** `src/taxjson/lib/brokerages/kraken.py` — `_ledger_trade_legs`; `src/taxjson/bin/taxjson_fees.py`
 
-## A stock dividend received while short covers part of the short
+## A stock dividend received while short: `tjs find-missing-history` still lists it as shares at $0
 
-- **What happens:** a stock dividend paid while the account holds an open short is booked like any $0
-  purchase, so it covers part of the short at $0 (a gain of the short's per-share proceeds). In fact the
-  short seller owes the lender the new shares: the short grows and its proceeds are spread over more
-  shares. In a US project the warning then says "no shares held". Both countries.
-- **Meanwhile:** replace the row in a `.tt` file with the entry that matches the broker's statement (for
-  example a $0 short sale of the new shares).
-- **Code:** `src/taxjson/lib/row_types.py` — `STOCK_DIVIDEND`
+- **What happens:** the gains run and its loss rules raise the short by the new shares (tax-logic
+  US-STKDIV-06, CA-STKDIV-02). `tjs find-missing-history` and the run's closing "position at a $0
+  cost" line add up the rows themselves and still list the row as shares held at $0 cost. A short
+  covered between the ex-dividend date and the pay date leaves the row booked as a $0 purchase.
+- **Meanwhile:** the books are right in the first case: ignore the two lines for that row. In the
+  second, replace the row in a `.tt` file with the entry that matches the broker's statement.
+- **Code:** `src/taxjson/lib/missing_history.py` — `detect_zero_basis_acquisitions`; `src/taxjson/lib/row_types.py` — `STOCK_DIVIDEND`
 
 ## Limitations and things taxjson does not do
 

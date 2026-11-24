@@ -312,6 +312,16 @@ def _us_inventory_rows(inv_long: _USInventory, inv_short: _USInventory, *, epsil
     return rows
 
 
+def _us_stkdiv_units(held: float, shares: float, epsilon: float) -> float:
+    """An account's units of a security after a stock dividend of `shares`, in the pre-run
+    pass's running position (`_us_scan_events`): more shares held, or, while the position is
+    short, more shares owed. The dividend is then the short's to make good: the short grows
+    and nothing is received (US-STKDIV-06; the walk's reading, engine/us/walk
+    `_us_stock_dividend_owed`). Counted as shares received, the later cover bought "past the
+    short" and replaced a loss with shares the books never held (backlog TJ-5006)."""
+    return held - shares if held < -epsilon else held + shares
+
+
 def _us_scan_events(*, _nkey: Callable[[str, str], _IKey], _rep_key: Callable[[str, str], str], _split_covers: Callable[[TaxTransaction, Set[_RenameKey]], Optional[Callable[[str], bool]]], affiliated_ids: Set[RowId], all_events: List[TaxTransaction], epsilon: float,
                        non_capital: Callable[[str, str], bool], per_account_basis: bool, sheltered_ids: Set[RowId]) -> Tuple[Dict[str, List[_RepRecord]], Dict[str, List[_RepRecord]], List[Tuple[TaxTransaction, str, Optional[str], float]]]:
     """The replacement scan over the book's events in order (the pre-pass of the US engine's
@@ -470,12 +480,12 @@ def _us_scan_events(*, _nkey: Callable[[str, str], _IKey], _rep_key: Callable[[s
             # dividend posted after a loss sale washed 5% of it).
             if not is_other_scope:
                 net_qty_state[_nkey(ev.account, sym)] = \
-                    prev + ev.quantity
+                    _us_stkdiv_units(prev, ev.quantity, epsilon)
             else:
                 _ok = (ev.account, sym)
                 _oprev = other_qty_state.get(_ok, 0.0)
-                other_qty_state[_ok] = (_oprev  # cov: a2-1596-us-other-stock-div
-                                        + ev.quantity)
+                other_qty_state[_ok] = _us_stkdiv_units(  # cov: a2-1596-us-other-stock-div
+                    _oprev, ev.quantity, epsilon)
                 # The shares it is paid on: the balance less this
                 # account's purchases on or after the entitlement
                 # date (TJ-0492; a context book has no lots).

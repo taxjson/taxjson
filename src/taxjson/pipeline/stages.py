@@ -1377,31 +1377,7 @@ def stage_account(name: str, acfg: Mapping[str, Any], settings: Settings,
     except Exception:
         pass
     _ctx.siblings = tuple(_sibling_prefixes)
-    for _stale in cache.glob(f"{name}_*.json"):
-        _stem = _stale.name[:-len(".json")]
-        if _stem in _present:
-            continue
-        if any(_stale.name.startswith(_pre)
-               for _pre in _sibling_prefixes):
-            continue
-        _sfx = _stale.name[len(name):]
-        if any(_sfx.endswith(x) for x in
-               ("_base.json", "_gains.json", "_gains_wash.json",
-                _GAINS_ALL_SUFFIX,
-                "_raw.json", "_raw_base.json", "_raw_gains.json",
-                "_raw_base_gains.json", "_merged.json", "_sorted.json",
-                "_filled.json", "_mapped.json", "_report.json",
-                "_pending_elections.json", "_manifest.json",
-                TRANSFER_COSTS_SUFFIX,
-                "_blend.diag", OWN_MOVES_SUFFIX)):
-            continue
-        # A parsed-source artifact with no surviving input group.
-        for _victim in (_stale, _stale.with_name(_stale.name + ".diag")):
-            if _victim.exists():
-                _victim.unlink()
-                _say("note", f"removed stale work/{_victim.name} (its "
-                     f"input files are gone)", indent="  ",
-                     file=sys.stdout)
+    _sweep_stale_parses(name, cache, _present, _sibling_prefixes, acct_dir)
 
     sources = tt_jsons + spellings_checked(cache, name, parsed + corp_files)
     # Shares that arrived by transfer from outside the books: booked at
@@ -1560,6 +1536,76 @@ def stage_account(name: str, acfg: Mapping[str, Any], settings: Settings,
 
     return {"base": base_json, "gains": gains_json, "sum": sum_path,
             "holdings_cmd": holdings_cmd, "stage_ctx": _ctx}
+
+
+def _sweep_stale_parses(name: str, cache: Path, present: Set[str],
+                        siblings: Sequence[str], acct_dir: Path) -> None:
+    """Broker groups REMOVED from inputs/: their parsed JSON, .diag and
+    corp files would otherwise persist forever (stale .diag lines in every
+    .sum, dead fees counted by `taxjson-fees-sum --cache`, dead sources fed
+    to the audit: 2026-09 audit). Of the work/<name>_<x>.json that no
+    export group, .tt file or corp file of the account names (`present`),
+    a longer account's (`siblings`: the 2026-09 adversarial audit) and the
+    books and the stages' own files beside them apart (each row's own
+    sweep takes those), what taxjson can vouch for goes, with its .diag;
+    the rest is moved to work/kept/ with its .diag, where no reader of
+    work/<name>_*.json sees it, and named once with where it went; a
+    folder, or a path through a link, is left and named (stage_table
+    `stale_parse_fates`, `move_aside`: TJ-5071, TJ-4275). A move that
+    fails stops the run, after naming what was moved."""
+    inputs = _PL.shown(acct_dir, cache.parent)
+    not_parses = ("_base.json", "_gains.json", "_gains_wash.json",
+                  _GAINS_ALL_SUFFIX,
+                  "_raw.json", "_raw_base.json", "_raw_gains.json",
+                  "_raw_base_gains.json", "_merged.json", "_sorted.json",
+                  "_filled.json", "_mapped.json", "_report.json",
+                  "_pending_elections.json", "_manifest.json",
+                  TRANSFER_COSTS_SUFFIX, "_blend.diag", OWN_MOVES_SUFFIX)
+    stale = [p for p in sorted(cache.glob(f"{name}_*.json"))
+             if p.name[:-len(".json")] not in present
+             and not p.name.startswith(tuple(siblings))
+             and not p.name[len(name):].endswith(not_parses)]
+    moved: List[str] = []
+    left: List[str] = []
+
+    def _say_moved() -> None:
+        if moved:
+            _say("note", f"moved {_count_noun(len(moved), 'file')} named like "
+                 f"a parse of account {name}'s exports, which no export in "
+                 f"{inputs}/ makes now, out of the books: {', '.join(moved)}; "
+                 f"taxjson reads nothing in work/{ST.KEPT_DIR}/ and deletes "
+                 f"nothing there", indent="  ", file=sys.stdout)
+    for _stale, _why in ST.stale_parse_fates(cache, name, stale).items():
+        _rel = f"work/{_stale.name}"
+        if _why == ST.LEFT:
+            left.append(_rel)
+        elif _why is not None:
+            try:
+                _to = ST.move_aside(cache, _stale)
+            except OSError as e:
+                _say_moved()
+                _die(f"cannot move {_rel} to work/{ST.KEPT_DIR}/: "
+                     f"{e.strerror or e}",
+                     f"No export in {inputs}/ makes it now and {_why}: "
+                     f"taxjson reads and deletes only what it wrote. Move "
+                     f"it out of work/, then run again.")
+            moved.append(f"{_rel} -> work/{ST.KEPT_DIR}/{_to.name} ({_why})")
+        else:
+            for _victim in (_stale, _stale.with_name(_stale.name + ".diag")):
+                if _victim.exists():
+                    _victim.unlink()
+                    _say("note", f"removed stale work/{_victim.name} (its "
+                         f"input files are gone)", indent="  ",
+                         file=sys.stdout)
+    _say_moved()
+    if left:
+        _say("note", f"left {_count_noun(len(left), 'entry', 'entries')} "
+             f"named like a parse of account {name}'s exports, which no "
+             f"export in {inputs}/ makes now, where "
+             f"{'it is' if len(left) == 1 else 'they are'} (a folder, or "
+             f"reached through a link): {', '.join(left)}; move "
+             f"{'it' if len(left) == 1 else 'them'} out of work/",
+             indent="  ", file=sys.stdout)
 
 
 # ---------------------------------------------------------------- the account's stage steps
@@ -1958,7 +2004,8 @@ def _crypto_mapped_build(i: ST.Inst, _r: ST.Ready) -> None:
         str(ST.output(ST.Inst("crypto_sorted", i.ctx))),
         "--map", str(i.ctx.ticker_map),
         "--global-only", "--kind", "crypto",
-        "--country", i.ctx.own.country], ST.output(i))
+        "--country", i.ctx.own.country] + _held_openings_arg(i),
+        ST.output(i))
 
 
 def _crypto_priced(i: ST.Inst) -> Path:
@@ -2037,8 +2084,19 @@ def _mh_prepare(i: ST.Inst) -> None:
 
 
 def _base_prepare(i: ST.Inst) -> None:
-    if i.ctx.dists:
-        _mh_prepare(i)
+    # The merge holds the .tt OPENING cost=unknown lines as rows
+    # (_held_openings_arg), and [[distributions]] sizes with them.
+    _mh_prepare(i)
+
+
+def _held_openings_arg(i: ST.Inst) -> List[str]:
+    """What a merge stage (taxjson-merge2, the crypto taxjson-ticker-map)
+    gets when the project's .tt files open units at an unknown cost: the
+    lines are position rows from the merge on, so a dated rename moves
+    them and an opening snapshot replaces them (backlog TJ-5007,
+    TJ-5042)."""
+    return (["--incomplete-history", str(i.ctx.mh)]
+            if i.ctx.mh is not None else [])
 
 
 def _base_build(i: ST.Inst, _r: ST.Ready) -> None:
@@ -2058,6 +2116,7 @@ def _base_build(i: ST.Inst, _r: ST.Ready) -> None:
         cmd += ["--year", str(a.year), "--tax-date", a.tax_date]
     if ticker_map:
         cmd += ["--map", str(ticker_map)]
+    cmd += _held_openings_arg(i)
     cmd += [str(p) for p in a.sources]
     _step("Sorting, de-duplicating, mapping tickers, converting "
           "currency")
@@ -2237,6 +2296,7 @@ def _raw_build(i: ST.Inst, _r: ST.Ready) -> None:
                                          "--country", a.country]
     if c.ticker_map:
         raw_cmd += ["--map", str(c.ticker_map)]
+    raw_cmd += _held_openings_arg(i)
     raw_cmd += [str(p) for p in a.sources]
     run_to_file(raw_cmd, ST.output(i), capture_diag=False)
 
@@ -3086,13 +3146,13 @@ _STAGES = ST.bound({
     "tt": ST.Steps(_tt_build, _tt_prepare, _tt_every_run),
     "crypto_merged": ST.Steps(_crypto_merged_build),
     "crypto_sorted": ST.Steps(_crypto_sorted_build),
-    "crypto_mapped": ST.Steps(_crypto_mapped_build),
+    "crypto_mapped": ST.Steps(_crypto_mapped_build, _mh_prepare),
     "crypto_filled": ST.Steps(_crypto_filled_build, _crypto_filled_prepare,
                               _crypto_filled_every_run),
     "crypto_base": ST.Steps(_crypto_base_build),
     "base": ST.Steps(_base_build, _base_prepare, _base_every_run),
     "gains": ST.Steps(_gains_build, _gains_prepare, _gains_every_run),
-    "raw": ST.Steps(_raw_build, every_run=_raw_every_run),
+    "raw": ST.Steps(_raw_build, _mh_prepare, every_run=_raw_every_run),
     "raw_gains": ST.Steps(_native_gains_build, _mh_prepare),
     "raw_base": ST.Steps(_raw_base_build),
     "raw_base_gains": ST.Steps(_native_gains_build, _mh_prepare),
@@ -3585,10 +3645,38 @@ def transfer_arrivals(root: Path, cache: Path,
                     own_out=own_out)
     # A .tt OPENING cost=unknown line is the user's own answer for the
     # position (cost unknown, reported by hand): it wins over the
-    # broker's book value.
-    from taxjson.lib.first_run import read_missing_history_pairs
-    TI.mark_missing_history(found, read_missing_history_pairs(root))
+    # broker's book value. Not a line an opening snapshot replaces: it
+    # opens nothing, so it answers for no arrival (backlog TJ-5007).
+    TI.mark_missing_history(found, _opening_pairs(root, tt_rows, renames))
     return found
+
+
+def _opening_pairs(root: Path, tt_rows: Dict[str, List[Dict[str, Any]]],
+                   renames: List[Tuple[str, str, str]]) -> set:
+    """{(SYMBOL, account)} the .tt OPENING cost=unknown lines open
+    (lib/missing_history.load_missing_history; empty when they cannot be
+    read), less each line an opening snapshot of its account's converted
+    .tt rows replaces (lib/opening.unknown_opening_reading, through the
+    declared `renames`): a replaced line opens nothing."""
+    from taxjson.lib.missing_history import (load_missing_history,
+                                             read_tt_openings)
+    from taxjson.lib.opening import unknown_opening_reading
+    try:
+        pairs = load_missing_history(root)
+        lines = read_tt_openings(root)
+    except (OSError, ValueError):
+        return set()
+    gone = set()
+    for t in lines:
+        rows = list(tt_rows.get(t.account) or []) + [
+            {"action": "SPLIT", "date": d, "symbol": old, "symbol_new": new,
+             "account": t.account} for d, old, new in renames]
+        if unknown_opening_reading(rows, t.account, [t.symbol], t.date):
+            gone.add(t.where)
+    fixed = getattr(pairs, "fixed", None) or {}
+    return {p for p in pairs
+            if p not in fixed
+            or not all(w in gone for w in str(fixed[p].where).split(" + "))}
 
 
 def _coverage_declarations(root: Path, cache: Path, accounts: List[str]):
@@ -4893,6 +4981,13 @@ def stage_blended_wash_pass(names: List[str],
     # back (US-BASIS-05): on the console, and --strict stops.
     echo_attention_lines(combined_wash, prefix="own-account move: ",
                          once=True)
+    # A share exchange inside a loss's window whose two rows are in two
+    # accounts (the loss in one, the exchange in another or in a registered
+    # account) is seen only here (TJ-4992): on the console, and in the
+    # closing list (lib/first_run.parser_warnings reads the mirror below).
+    from taxjson.lib.share_exchange_windows import ATTENTION_SHARE_EXCHANGE
+    echo_attention_lines(combined_wash, once=True,
+                         prefix=ATTENTION_SHARE_EXCHANGE[len(ATTENTION_PREFIX) + 1:])
     _mv = [ln for ln in _diag_lines(combined_wash)
            if ln.startswith(ATTENTION_PREFIX + " own-account move: ")]
     if _mv and strict:

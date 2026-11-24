@@ -1067,5 +1067,8 @@ class TestQuestradeReinvestmentAndCashInLieu(unittest.TestCase):
         self.assertAlmostEqual(legs[0]['net_amount'], 0.0)
         self.assertAlmostEqual(legs[1]['net_amount'], 3.10)
         self.assertAlmostEqual(legs[1]['price'], 7.75)
-        # Same-day, ordered: the acquisition precedes the sale.
-        self.assertLess(legs[0]['time'], legs[1]['time'])
+        # Same moment, ordered: the acquisition precedes the sale in the
+        # emitted order, both at the row's own clock (the sale was one
+        # second after a fixed 09:30:00: backlog TJ-5017).
+        self.assertEqual([t['time'] for t in legs],
+                         ['00:00:00', '00:00:00'])

@@ -43,6 +43,7 @@ from taxjson.lib.transfer_windows import (_ATTEST_BLESS_PAD_DAYS,
 from taxjson.lib.json_input import is_disposition
 from taxjson.model.result import gains_json
 from taxjson.lib.stage_msg import emit_line, say
+from taxjson.lib.share_exchange_windows import say_share_exchanges
 from taxjson.lib.tt_format import MANUAL_TRANSFER_DECLARATION
 from taxjson.lib.missing_history import (
     detect_missing_history,
@@ -1963,6 +1964,87 @@ def _manual_row(t: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _ca_stock_dividend_cost_lines(transactions, req, warn_year) -> List[Tuple[Any, str]]:
+    """Canada: (row id, the ATTENTION line) of each stock dividend the books hold at $0.
+
+    The parsers book a stock dividend as a neutral $0 event; the
+    Canadian cost is its declared amount, which the export does
+    not carry (tax-logic CA-STKDIV-01). The US engine words its
+    own rule (§305(a)/§307) when it spreads the basis.
+    An ATTENTION line, on the run console (re-audit A2-0265: the
+    NOTE sat in the .sum while the income and ACB were short).
+    Only for the run's own year and a taxable book, and quiet once
+    the cost is in the books (an ADJUST on the symbol from 31 days
+    before to 7 days after: a .tt line or a [[distributions]]
+    entry's record-date row). Adding it books the ACB only — the dividend
+    is reported from the slip (re-audit A2-0709, A2-0711, A2-1220,
+    A2-1224; CA-DIST-01). One received while the position is short asks
+    for no cost: the engine says which those are, and their lines are
+    dropped (`_gains_with_stock_dividend_lines`, CA-STKDIV-02)."""
+    out: List[Tuple[Any, str]] = []
+    if req.country != 'canada':
+        return out
+    from datetime import date as _d, timedelta as _td
+
+    def _cost_added(sd):
+        try:
+            d0 = _d.fromisoformat(str(sd.date)[:10])
+        except ValueError:
+            return False
+        lo, hi = (d0 - _td(days=31)).isoformat(), \
+            (d0 + _td(days=7)).isoformat()
+        return any(a.action == 'ADJUST' and a.symbol == sd.symbol
+                   and float(a.net_amount or 0) > 0
+                   and lo <= str(a.date)[:10] <= hi
+                   for a in transactions)
+    for _t in (transactions if req.taxable else ()):
+        if not (is_stock_dividend(_t) and float(_t.quantity or 0) > 0):
+            continue
+        if warn_year is not None and not str(_t.date).startswith(
+                str(warn_year)):
+            continue
+        if _cost_added(_t):
+            continue
+        out.append((_t.id, f"warning: ATTENTION: {_t.symbol}: stock dividend of "
+              f"{float(_t.quantity):g} share(s) on {_t.date} "
+              f"entered at $0 cost — in Canada it is a dividend at its "
+              f"declared amount, which is also the new shares' cost: "
+              f"add that cost ([[distributions]] in taxjson.toml or a "
+              f".tt ADJUST) for "
+              f"the correct ACB. That books the ACB only: report the "
+              f"dividend itself from the T5/T3 slip (taxjson does not "
+              f"count it as income)."))
+    return out
+
+
+def _gains_with_stock_dividend_lines(rules, sd_lines, transactions, **kw):
+    """`rules.compute_gains`, with Canada's $0-cost stock dividend lines (`sd_lines`) said
+    before the engine's own lines, as they always were, less those of the rows the engine
+    booked on a short (its `stock_dividends_owed`, dropped from the result here: no gains
+    document carries it): such a row has no cost to add (CA-STKDIV-02; backlog TJ-5281:
+    the line asked for one). The engine's lines are held while it runs, then said as they
+    were; on an error every line is said first."""
+    if not sd_lines:
+        results = rules.compute_gains(transactions, **kw)
+        results.pop('stock_dividends_owed', None)
+        return results
+    import contextlib
+    import io
+    held = io.StringIO()
+    owed: set = set()
+    try:
+        with contextlib.redirect_stderr(held):
+            results = rules.compute_gains(transactions, **kw)
+        owed = set(results.pop('stock_dividends_owed', None) or ())
+    finally:
+        for _id, _line in sd_lines:
+            if _id not in owed:
+                emit_line(_line)
+        if held.getvalue():     # (one call: a line's indented detail stays with it)
+            emit_line(held.getvalue().rstrip("\n"))
+    return results
+
+
 def run_gains(transactions, sheltered_transactions=(),
               affiliated_transactions=(), req: GainsRequest = None, *,
               trace_sink: Optional[Callable[[dict], None]] = None,
@@ -2010,56 +2092,14 @@ def run_gains(transactions, sheltered_transactions=(),
                if req.taxable else ()):
         emit_line(f"warning: {_w}")
     _roc_moved = apply_roc_record_dates(transactions, req)
-    if req.country == 'canada':
-        # The parsers book a stock dividend as a neutral $0 event; the
-        # Canadian cost is its declared amount, which the export does
-        # not carry (tax-logic CA-STKDIV-01). The US engine words its
-        # own rule (§305(a)/§307) when it spreads the basis.
-        # An ATTENTION line, on the run console (re-audit A2-0265: the
-        # NOTE sat in the .sum while the income and ACB were short).
-        # Only for the run's own year and a taxable book, and quiet once
-        # the cost is in the books (an ADJUST on the symbol from 31 days
-        # before to 7 days after: a .tt line or a [[distributions]]
-        # entry's record-date row). Adding it books the ACB only — the dividend
-        # is reported from the slip (re-audit A2-0709, A2-0711, A2-1220,
-        # A2-1224; CA-DIST-01).
-        from datetime import date as _d, timedelta as _td
-
-        def _cost_added(sd):
-            try:
-                d0 = _d.fromisoformat(str(sd.date)[:10])
-            except ValueError:
-                return False
-            lo, hi = (d0 - _td(days=31)).isoformat(), \
-                (d0 + _td(days=7)).isoformat()
-            return any(a.action == 'ADJUST' and a.symbol == sd.symbol
-                       and float(a.net_amount or 0) > 0
-                       and lo <= str(a.date)[:10] <= hi
-                       for a in transactions)
-        for _t in (transactions if req.taxable else ()):
-            if not (is_stock_dividend(_t) and float(_t.quantity or 0) > 0):
-                continue
-            if _warn_year is not None and not str(_t.date).startswith(
-                    str(_warn_year)):
-                continue
-            if _cost_added(_t):
-                continue
-            emit_line(f"warning: ATTENTION: {_t.symbol}: stock dividend of "
-                  f"{float(_t.quantity):g} share(s) on {_t.date} "
-                  f"entered at $0 cost — in Canada it is a dividend at its "
-                  f"declared amount, which is also the new shares' cost: "
-                  f"add that cost ([[distributions]] in taxjson.toml or a "
-                  f".tt ADJUST) for "
-                  f"the correct ACB. That books the ACB only: report the "
-                  f"dividend itself from the T5/T3 slip (taxjson does not "
-                  f"count it as income).")
+    _sd_lines = _ca_stock_dividend_cost_lines(transactions, req, _warn_year)
     _extra = engine_options(req)
     # The engine's option/right-replacement warnings are printed below,
     # after the year filter: printed by the engine they put a prior
     # year's warning in this year's .sum DIAGNOSTICS (audit S070-04).
     rules.emit_replacement_stderr = False
-    results = rules.compute_gains(
-        transactions,
+    results = _gains_with_stock_dividend_lines(
+        rules, _sd_lines, transactions,
         sheltered_transactions=sheltered_transactions,
         affiliated_transactions=affiliated_transactions,
         cross_asset=req.cross_asset,
@@ -2422,10 +2462,10 @@ def run_gains(transactions, sheltered_transactions=(),
     # replacement, so said once — the user decides whether one was an
     # in-kind contribution or a purchase after all.
     if _loss_rule:
-        _xw = transfers_in_loss_windows(
-            clean_txs, list(transactions) + list(sheltered_transactions)
-            + list(affiliated_transactions or []), req.country,
-            moves=_netted_moves)
+        _ctx = list(transactions) + list(sheltered_transactions) + list(affiliated_transactions or [])
+        # A share exchange booked as a rename is no purchase either: Canada's limit, said (docs/limits.md, TJ-4992).
+        say_share_exchanges(clean_txs, _ctx, req.country)
+        _xw = transfers_in_loss_windows(clean_txs, _ctx, req.country, moves=_netted_moves)
         if _xw:
             results['transfers_in_loss_windows'] = _xw
             _h, _det, _leg = transfer_window_message(_xw, req.country)

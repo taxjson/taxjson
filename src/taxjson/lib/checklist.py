@@ -2031,6 +2031,8 @@ def d_missing_history(ctx: Ctx) -> Result:
     in_affects = False
     in_remove = False
     in_stale = False
+    in_replaced = False
+    replaced: List[str] = []
     # An AFFECTS row whose detail says what makes it short other than a
     # missing purchase (find-missing-history --details): a trade after a
     # rename (backlog TJ-0442), an in-kind withdrawal NOT booked
@@ -2056,6 +2058,12 @@ def d_missing_history(ctx: Ctx) -> Result:
         if ln.startswith("STALE in "):
             in_stale = True
             continue
+        # Lines an opening snapshot replaces: they open nothing and
+        # their sales are in the totals (backlog TJ-5007); the row is
+        # marked, and said apart from the stale ones.
+        if ln.startswith("REPLACED in "):
+            in_stale = in_replaced = True
+            continue
         if (not ln.strip() or ln.startswith(("##", "NOT relevant",
                                               "To fix", "SHELTERED",
                                               "COVERED"))):
@@ -2063,7 +2071,7 @@ def d_missing_history(ctx: Ctx) -> Result:
             # no reportable gain: never counted as affecting the year
             # (audit S035-08); pairs the missing-history file covers are not work
             # to do (R1-339).
-            in_affects = in_remove = in_stale = False
+            in_affects = in_remove = in_stale = in_replaced = False
             continue
         if (in_affects and syms and ln.startswith("  ")
                 and not ln.startswith("   ")):
@@ -2083,6 +2091,9 @@ def d_missing_history(ctx: Ctx) -> Result:
             # word, `inputs/margin/hand.tt:1`): said with it.
             where = (f", {parts[2]}" if (in_remove or in_stale)
                      and len(parts) > 2 else "")
+            if in_replaced:
+                replaced.append(f"{parts[0]} ({parts[1]}{where})")
+                continue
             (remove if in_remove else stale if in_stale else syms).append(
                 f"{parts[0]} ({parts[1]}{where})")
             if in_remove or in_stale:
@@ -2127,8 +2138,15 @@ def d_missing_history(ctx: Ctx) -> Result:
                     f"{'y still opens its' if len(stale) == 1 else 'ies still open their'}"
                     f" units though the purchase is in the books now — "
                     f"delete: {_shown(stale)}")
+    if replaced:
+        said.append(f"{len(replaced)} {_mh_name(ctx)} entr"
+                    f"{'y is' if len(replaced) == 1 else 'ies are'} replaced "
+                    f"by an opening snapshot: "
+                    f"{'it opens' if len(replaced) == 1 else 'they open'} "
+                    f"nothing and the sales are in the totals — delete: "
+                    f"{_shown(replaced)}")
     if said:
-        only = bool(unknown) and not (remove or stale or syms)
+        only = bool(unknown) and not (remove or stale or syms or replaced)
         # The Next line follows the rows at an unknown cost (TJ-3213);
         # beside other findings, those first.
         do = ""
@@ -5340,18 +5358,57 @@ def _planning_config_digest(path: Path) -> Optional[str]:
     return "planning-settings:" + hashlib.sha256(blob).hexdigest()
 
 
+# The checklist fingerprint's entry for the close-year lock [settings]
+# prior_year_record names (`_prior_record_entry`).
+PRIOR_RECORD_KEY = "prior_year_record lock"
+
+
+def _prior_record_entry(ctx: Ctx) -> Optional[str]:
+    """The lock [settings] prior_year_record names, resolved, with its
+    content's hash, or `absent` (or `unreadable`): the handoff step reads
+    it, and the planning digest holds only the setting's text, so a lock
+    rewritten, restored or deleted since a verdict left it fresh (backlog
+    TJ-5089). None when the key is unset or not a path string (the digest
+    holds that)."""
+    import hashlib
+    import os
+    from taxjson.lib.filed_locks import PriorRecordError, prior_record_setting
+    try:
+        p = prior_record_setting(ctx.root, ctx.settings)
+    except PriorRecordError:
+        return None
+    if p is None:
+        return None
+    try:
+        where = Path(os.path.relpath(p.resolve(), Path(ctx.root).resolve())).as_posix()
+    except (OSError, RuntimeError, ValueError):
+        where = p.as_posix()
+    try:
+        what = hashlib.sha256(p.read_bytes()).hexdigest()
+    except FileNotFoundError:
+        what = "absent"
+    except OSError:
+        what = "unreadable"
+    return f"{where}={what}"
+
+
 def checklist_fingerprint(ctx: Ctx) -> Dict[str, str]:
     """What the kept verdicts were made from, {key: sha256}: every run
     input (input_fingerprint), the files only the checks read
     (_check_only_files) — a changed holdings snapshot made no verdict
-    stale before (audit 2026-10-24 A14) — and the taxjson.toml settings
+    stale before (audit 2026-10-24 A14) — the taxjson.toml settings
     only the checks read (PLANNING_CONFIG_KEY: an edited [estimate]
-    other_income left the kept AMT verdict fresh; backlog TJ-0923)."""
+    other_income left the kept AMT verdict fresh; backlog TJ-0923) and
+    the lock [settings] prior_year_record names, resolved, or its absence
+    (PRIOR_RECORD_KEY, `_prior_record_entry`: TJ-5089)."""
     import hashlib
     out = input_fingerprint(ctx.root, ctx.cfg)
     _plan = _planning_config_digest(Path(ctx.root) / "taxjson.toml")
     if _plan is not None:
         out[PLANNING_CONFIG_KEY] = _plan
+    _prior = _prior_record_entry(ctx)
+    if _prior is not None:
+        out[PRIOR_RECORD_KEY] = _prior
     for p in _check_only_files(ctx):
         try:
             out.setdefault(_check_key(ctx.root, p),

@@ -227,7 +227,7 @@
   "price": 0.0,
   "quantity": 5.0,
   "symbol": "SAMPLD.TO",
-  "time": "09:30:00",
+  "time": "00:00:00",
   "type": "stock_dividend"
  },
  {
@@ -244,7 +244,7 @@
   "price": 0.0,
   "quantity": 0.4,
   "symbol": "SAMPLD.TO",
-  "time": "09:30:00"
+  "time": "00:00:00"
  },
  {
   "account": "Questrade",
@@ -260,7 +260,7 @@
   "price": 9.0,
   "quantity": -0.4,
   "symbol": "SAMPLD.TO",
-  "time": "09:30:01"
+  "time": "00:00:00"
  },
  {
   "account": "Questrade",
@@ -345,7 +345,7 @@
   "price": 5.0,
   "quantity": 4.0,
   "symbol": "SAMPLR.TO",
-  "time": "09:30:00"
+  "time": "00:00:00"
  },
  {
   "account": "Questrade",
@@ -426,7 +426,7 @@
   "net_amount": 1.25,
   "quantity": 0.0,
   "symbol": "CASH",
-  "time": "09:30:00",
+  "time": "00:00:00",
   "type": "interest"
  },
  {

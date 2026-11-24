@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from taxjson.lib.brokerages.base import source_identity
-from taxjson.lib.cli_diag import guard_main
+from taxjson.lib.cli_diag import InputContentError, guard_main
 from taxjson.lib import out as _out
 from taxjson.model.transaction import TaxTransaction
 from taxjson.lib.tx_load import load_transactions
@@ -108,7 +108,12 @@ def sort_transactions(transactions: List[TaxTransaction]) -> List[TaxTransaction
 #     AMBIGUOUS — kept once, as the re-export reading, with an ATTENTION
 #     line naming both files and the row.
 # Rows without a `source` (hand-made JSON, generated corp-action rows)
-# keep the old id-only rule.
+# keep the old id-only rule: the id carries the corporate event and a
+# rename's destination (model/transaction `event_identity`), so two
+# events' rows are never one id, and the copies of one event still are.
+# Two renames of one holding on one day to DIFFERENT symbols are no
+# copies and cannot both be right: `rename_conflicts`, refused by
+# `deduplicate` (backlog TJ-4985).
 
 TT_SUFFIX = ".tt"
 # ATTENTION lines show this many example rows per file pair.
@@ -395,6 +400,56 @@ def plan_dedup(rows, source_accounts: Optional[Dict[str, Any]] = None,
     return plan
 
 
+class RenameDestinationConflict(InputContentError):
+    """Two rows rename one holding on one day to different symbols."""
+
+
+def rename_conflicts(rows) -> List[str]:
+    """One line per holding (account, symbol, date) whose SPLIT rows
+    name more than one rename destination: two exports that disagree on
+    a ticker change, a hand-kept line beside the broker's row. A rename
+    moves the whole holding to one symbol, so the engines would apply
+    the first and find nothing for the second: one of the rows is
+    false. With one id (the destination was no part of it) the second
+    was dropped as an identical row and never shown (backlog TJ-4985).
+    A plain split (no destination, or its own symbol) is not a rename."""
+    dests: Dict[Tuple[str, str, str], Dict[str, List[int]]] = {}
+    for i, t in enumerate(rows):
+        if str(_row_get(t, "action", "") or "") != "SPLIT":
+            continue
+        sym = str(_row_get(t, "symbol", "") or "")
+        new = str(_row_get(t, "symbol_new", "") or "").strip()
+        if not new or new == sym:
+            continue
+        key = (str(_row_get(t, "account", "") or ""), sym,
+               str(_row_get(t, "date", "") or ""))
+        dests.setdefault(key, {}).setdefault(new, []).append(i)
+    out: List[str] = []
+    for (acct, sym, day), by_new in sorted(dests.items()):
+        if len(by_new) < 2:
+            continue
+
+        def where(idx: List[int]) -> str:
+            names = sorted({str(_row_get(rows[i], "source", "") or "")
+                            for i in idx} - {""})
+            events = sorted({str(_row_get(rows[i], "corp_event_id", "")
+                                 or "") for i in idx} - {""})
+            said = [f"in {', '.join(names)}"] if names else []
+            said += [f"corporate action {e}" for e in events]
+            return f" ({'; '.join(said)})" if said else " (a row with no source file)"
+        both = " and ".join(f"{new}{where(idx)}"
+                            for new, idx in sorted(by_new.items()))
+        out.append(
+            f"dedup: {sym} is renamed on {day} in account {acct} to "
+            f"{len(by_new)} different symbols: {both}. A rename moves the "
+            f"whole holding to one symbol, so only one of them can be "
+            f"right: refused. Keep the right one: delete or "
+            f"correct the other row in the file named (a hand-kept .tt "
+            f"line: delete it; a corporate action's row: `tjs elect "
+            f"{acct} --set <event id>=ignore`).")
+    return out
+
+
 def _fill_income_facts(plan: DedupPlan, rows, k: int, i: int,
                        src: str) -> None:
     """Row i, a copy of the kept row k, is dropped: an income fact
@@ -491,7 +546,13 @@ def deduplicate(transactions: List[TaxTransaction], return_dropped: bool = False
     `report`, when given, is a file the ATTENTION/note lines go to.
     A row kept although another kept row shares its id (separate
     records) gets the id `<id>~<n>`.
+    Two renames of one holding on one day to different symbols are
+    refused first (`rename_conflicts`: RenameDestinationConflict, an
+    InputContentError naming both), before any row is dropped.
     """
+    conflicts = rename_conflicts(transactions)
+    if conflicts:
+        raise RenameDestinationConflict(" ".join(conflicts))
     plan = plan_dedup(transactions, source_accounts, source_brokers)
     for i, new_id in plan.relabel.items():
         transactions[i].id = new_id

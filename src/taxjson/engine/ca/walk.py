@@ -23,6 +23,7 @@ from taxjson.lib.option_symbols import exercise_target, is_option_symbol, parse_
 from taxjson.lib.contract_size import OPTION_CONTRACT_SHARES
 from taxjson.lib.row_types import (
     IN_KIND_CONTRIBUTION_TYPE, IN_KIND_DISPOSITION_TYPE, is_opening_row,
+    is_stock_dividend,
 )
 from taxjson.lib.pool_eps import pool_qty_eps
 from taxjson.rules import ids as R
@@ -659,6 +660,108 @@ def _ca_assign_close_units(run: _CanadaRun, it: _CanadaIteration, tx: TaxTransac
     return units
 
 
+# The result key (and the first walk's `_ev_memo` key) of the stock dividends
+# booked on a short (CA-STKDIV-02): their row ids.
+STOCK_DIVIDENDS_OWED = 'stock_dividends_owed'
+
+
+def _ca_stock_dividend_owed(run: _CanadaRun, it: _CanadaIteration, pool: AcbPool, tx: TaxTransaction,
+                            qty: float, symbol: str, trace_sym: str) -> bool:
+    """A stock dividend received by an account that is short the security (CA-STKDIV-02):
+    the short seller owes the lender the new shares, so the short grows by them and its
+    proceeds stay: nothing is acquired, nothing covered, no gain until the cover. Read as
+    the $0 purchase the row looks like, it covered that many shares for nothing (backlog
+    TJ-5006).
+
+    The receiving account's own position decides (`CanadaTaxRules._stock_dividends_owed`):
+    each account's rows are walked alone first, where a row of shares that meets a short
+    pool is named (`_ev_memo`: a set to fill), and the passes get it with its quantity
+    negative, the short's own units, which every one of them reads alike. Here, in the
+    passes' walk (`_ev_memo`: those rows' ids), such a row takes its units off the pool at
+    no proceeds, never as a sale: a short (or flat) pool grows short; a pool other accounts
+    leave long gives the units up at the same cost, no gain or loss booked (one holding no
+    more than the row owes gives up all it holds, its cost kept, and is short by the rest).
+    Said once, on every branch. False: any other row, shares
+    received among them (booked as before; a marked short open beside them is said)."""
+    if not is_stock_dividend(tx) or not qty:
+        return False
+    named = run._ev_memo.get(STOCK_DIVIDENDS_OWED)
+    eps = pool_qty_eps(symbol, pool.qty, qty)
+    units = abs(qty)
+    if isinstance(named, set):                  # an account's own first walk
+        if not (qty > 0 and pool.qty < -eps):
+            return False
+        named.add(tx.id)
+        # (its conservation replay reads the row at its effect, as a
+        # written move's leg: `_conserved_rows`)
+        run._ev_memo.setdefault('_move_effect', {})[tx.id] = -units
+    elif qty > 0 or tx.id not in (named or ()):
+        _short = it._msr.short.get((symbol, tx.account), 0.0) if qty > 0 else 0.0
+        if _short > eps and it.iteration == 0:
+            emit_line(f"warning: ATTENTION: {symbol}: stock dividend of {units:g} "
+                      f"share(s) on {tx.date}: {tx.account} holds the security "
+                      f"and is also short {_short:g} of it (a sale the broker "
+                      f"marked short). The row is booked as shares received on "
+                      f"the shares held; the part the short owes the lender is "
+                      f"not in it: enter that by hand (.tt), CA-STKDIV-02.")
+        return False
+    _rest = units
+    if pool.qty > units + eps:
+        pool.split((pool.qty - units) / pool.qty)   # the units off, the cost as it was
+        _rest = 0.0
+    elif pool.qty > eps:
+        # The pool holds no more than the row owes: its units go, never as
+        # a sale at $0 (that booked their cost as a loss nothing caused).
+        # Left flat, the pool keeps the cost for its next purchase; left
+        # short by the rest, the short carries it as a cost of its cover
+        # (proceeds below zero), where it comes back.
+        _rest, _cost = units - pool.qty, pool.total_cost
+        pool.split(0.0)
+        if _rest > eps:
+            pool.add_cost(-2 * _cost)
+    if _rest > eps:
+        # (`AcbPool.open` with the short's sign and no proceeds: the units
+        # add up exactly, where a ratio's product does not; a value the row
+        # carries is not proceeds.)
+        pool.open(-_rest, _ZERO, date=tx.date, settle=run.get_sort_date(tx))
+    if it.iteration == 0 and not isinstance(named, set):
+        emit_line(f"warning: ATTENTION: {symbol}: stock dividend of {units:g} "
+                  f"share(s) on {tx.date} while {tx.account} is short the "
+                  f"security: booked as the short's to make good. The short owes "
+                  f"the lender the new shares, so it grows by them with its "
+                  f"proceeds unchanged; nothing is acquired, nothing is covered "
+                  f"and no gain is booked until the cover (CA-STKDIV-02, an assumption: "
+                  f"check the broker's statement). It needs no declared amount. "
+                  f"If the row is shares you bought, enter it as a purchase (a "
+                  f".tt BUYSELL line without type=stock_dividend).")
+    if run.trace:
+        _ca_acb_trace(it, trace_sym).append(
+            f"# {tx.date} STOCK DIVIDEND while short {units:10.4f} | the short "
+            f"grows, proceeds unchanged | Pool_Qty: {pool.qty:10.4f} | "
+            f"Pool_ACB: {M.of(pool.total_cost):10.4f}")
+    return True
+
+
+def _past_position(tx: TaxTransaction, qty: float, closing_qty: float, internal_adj: Decimal,
+                   qeps: float) -> Tuple[float, bool]:
+    """A closing trade of `qty` units of which `closing_qty` close the position: (the share
+    of the trade's money this disposition takes, whether a part past the position at or
+    under the tolerance `qeps` is booked as a position of its own). The part past the
+    position is no position by its units when it is at or under the tolerance, but its
+    share of the trade's money is real (backlog TJ-4990, TJ-1347). Under a half cent
+    (MATERIAL_COST: what `AcbPool.drain` and the dust close call no cost) it is rounding,
+    and the whole trade's money goes to this disposition. Material, it is booked as any
+    trade past zero is, a position the other way at its share of the money (a sub-tolerance
+    position of material cost stands, as `AcbPool.drain` leaves one). No money of a trade
+    is dropped either way."""
+    leftover = abs(qty) - closing_qty
+    if leftover > qeps:
+        return closing_qty / abs(qty), False
+    material = (leftover > 0 and (abs(_ca_trade_money(tx)) + abs(internal_adj))
+                * M.of(leftover / abs(qty)) >= _HALF_CENT)
+    return (closing_qty / abs(qty) if material else 1.0), material
+
+
 def _walk_trade(*, account: str, internal_adj: Decimal, internal_dw: Decimal, internal_tainted: bool, is_option_assign: bool,
                    is_other_scope: bool, it: _CanadaIteration, pool: AcbPool, qty: float, run: _CanadaRun, symbol: str, trace_sym: str, tx: TaxTransaction, internal_sources: Sequence[Dict[str, Any]] = ()) -> Tuple[Decimal, Optional[Decimal]]:
     """A trade row of the walk (a buy, a sale, a short's open or cover, an option leg's
@@ -669,7 +772,7 @@ def _walk_trade(*, account: str, internal_adj: Decimal, internal_dw: Decimal, in
     disallowed_amt = _ZERO
     realized_pl = None
     qty = _ca_assign_close_units(run, it, tx, qty)      # a close row: the account's own only
-    if not qty:
+    if not qty or (not is_other_scope and _ca_stock_dividend_owed(run, it, pool, tx, qty, symbol, trace_sym)):
         return (disallowed_amt, realized_pl)
     # A coin pool's residue is real property (S069-13):
     # per-asset tolerance (pool_qty_eps).
@@ -756,6 +859,9 @@ def _walk_trade(*, account: str, internal_adj: Decimal, internal_dw: Decimal, in
         else:
             avg_cost_unit_d = Decimal(0)
         closing_qty = min(abs(qty), abs(pool.qty))
+        # (the part past the position: booked below, or rounding kept here; TJ-4990)
+        leftover = abs(qty) - closing_qty
+        _close_share, _over_material = _past_position(tx, qty, closing_qty, internal_adj, _qeps)
         _recognized = _ZERO
         _grant_units_closed = 0.0
         _grant_closed = None
@@ -785,8 +891,8 @@ def _walk_trade(*, account: str, internal_adj: Decimal, internal_dw: Decimal, in
             cost_basis = _plain_close
 
         # Apportion adjustment
-        chunk_adj = internal_adj * M.of(closing_qty / abs(qty))
-        proceeds = _ca_trade_money(tx) * M.of(closing_qty / abs(qty))
+        chunk_adj = internal_adj * M.of(_close_share)
+        proceeds = _ca_trade_money(tx) * M.of(_close_share)
         effective_proceeds = proceeds + (chunk_adj if pool.qty < 0 else -chunk_adj)
 
         gain = (effective_proceeds - cost_basis) if pool.qty > 0 else (cost_basis - effective_proceeds)
@@ -866,8 +972,7 @@ def _walk_trade(*, account: str, internal_adj: Decimal, internal_dw: Decimal, in
             # gain by the closing qty share. Matches the
             # convention sum-gains uses to roll up
             # per-trade fees.
-            tx_qty_abs = abs(qty) if abs(qty) > 1e-9 else 1.0
-            fee_share = closing_qty / tx_qty_abs
+            fee_share = _close_share if abs(qty) > 1e-9 else closing_qty
             # A tainted disposition draws on units of unknown cost
             # (an OPENING_BALANCE still in the pool): computed as any
             # other (the opening added no cost) and marked, so the
@@ -906,8 +1011,7 @@ def _walk_trade(*, account: str, internal_adj: Decimal, internal_dw: Decimal, in
                 if _dw_abs > _qeps else _ZERO)
             # ...and an exercised option's, in the
             # premium this sale absorbs (TJ-0061).
-            _dw_out += internal_dw * M.of(closing_qty
-                                          / abs(qty))
+            _dw_out += internal_dw * M.of(_close_share)
             _dw_cut = (
                 pool.wash_cut
                 * M.of(min(1.0, closing_qty / _dw_abs))
@@ -1044,8 +1148,7 @@ def _walk_trade(*, account: str, internal_adj: Decimal, internal_dw: Decimal, in
         # premium roll-in) across the new opening, matching
         # tt_gains.pl:325-330 which apportions chunk_adj per
         # chunk's qty share.
-        leftover = abs(qty) - closing_qty
-        if leftover > _qeps:
+        if leftover > _qeps or _over_material:
             leftover_ratio = leftover / abs(qty)
             leftover_adj = internal_adj * M.of(leftover_ratio)
             eff_cost_leftover = (

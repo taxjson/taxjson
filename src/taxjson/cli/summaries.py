@@ -464,10 +464,11 @@ def cmd_div_estimate(args: argparse.Namespace) -> None:
         _die(f"{missing} — run `tjs run` first.")
     groups = _account_group_of(root)
     rows: List[Tuple[str, Dict[str, Any]]] = []
-    positions: List[Dict[str, Any]] = []
+    held: List[Dict[str, Any]] = []
     missing: List[str] = []
     # A payer's history is read from every account (one schedule per
-    # listing); the account filter picks the positions estimated.
+    # listing), and so are the shares held now (the walk's check:
+    # TJ-5050); the account filter picks the positions estimated.
     for n in sorted(accounts_cfg):
         if accounts_cfg[n].crypto:
             continue
@@ -485,10 +486,8 @@ def cmd_div_estimate(args: argparse.Namespace) -> None:
             # planning-us#4).
             rows += [(n, t) for t in _tt_openings(root, ntx, native=True)
                      if str(t.get("account") or n) == n]
-        if account and n != account:
-            continue
         if native is None or not inv.exists():
-            if _has_inputs(root, n):
+            if _has_inputs(root, n) and not (account and n != account):
                 missing.append(n)
             continue
         for h in (_load_json_or_die(inv).get("inventory") or []):
@@ -497,8 +496,9 @@ def cmd_div_estimate(args: argparse.Namespace) -> None:
             if (not sym or qty <= 1e-9 or sym.startswith("CASH.")
                     or is_option_symbol(sym.upper())):
                 continue
-            positions.append({"account": n, "group": groups.get(n, ""),
-                              "symbol": sym, "qty": qty})
+            held.append({"account": n, "group": groups.get(n, ""),
+                         "symbol": sym, "qty": qty})
+    positions = [p for p in held if not account or p["account"] == account]
     if missing:
         _view_msg("warning", f"no native books for {', '.join(missing)} "
                   f"(work/<account>_raw.json, _raw_gains.json): not "
@@ -547,7 +547,7 @@ def cmd_div_estimate(args: argparse.Namespace) -> None:
     doc = DE.estimate(positions, pays, as_of=as_of,
                       months=months, tax_year=year, base=base, fx=_fx,
                       income_date=rules.income_date if rules else None,
-                      fx_on=_fx_on)
+                      fx_on=_fx_on, held=held)
     if getattr(args, "json", False):
         _json_out(doc, schema="div-estimate")
         return

@@ -17,7 +17,10 @@ string, each in the spelling of the code that writes it:
   "<date> <quantity> <price> <action>[ <symbol>]" joined by ";", the
   numbers a float's repr; the symbol is the row's own when a rename
   made it the snapshot's (lib/opening `_note_cut_legs`). Read by the assignment
-  premium ledger (engine/premium_ledger `_AssignPremiumLedger`).
+  premium ledger (engine/premium_ledger `_AssignPremiumLedger`). A leg of
+  action UNKNOWN_OPENING_LEG is a `.tt` `OPENING ... cost=unknown` line the
+  snapshot replaced (price 0; backlog TJ-5007): read by the openings
+  (lib/opening `unknown_opening_replaced`), never by the ledger.
 - `corp_cash`: the cash a corporate action paid (cash in lieu, boot),
   "<amount> <CUR>[ @<paid>]" joined by "; ", the amount `.10g`
   (lib/corp_actions `_corp_cash`); in a .tt line the token `cash=`, its
@@ -268,6 +271,19 @@ def cut_leg_symbol(leg: str) -> str:
     before it reads one."""
     bits = leg.split()
     return bits[4] if len(bits) == 5 else ''
+
+
+# The action of a leg that records a `.tt` `OPENING ... cost=unknown`
+# line a snapshot replaced (the row's action; backlog TJ-5007).
+UNKNOWN_OPENING_LEG = 'OPENING_BALANCE'
+
+
+def cut_leg_action(leg: str) -> str:
+    """The action of an unread leg ('' when it has none): what tells an
+    unknown-cost opening's leg (UNKNOWN_OPENING_LEG) from a share row's
+    before the ledger files one."""
+    bits = leg.split()
+    return bits[3] if len(bits) in (4, 5) else ''
 
 
 def parse_cut_legs(text: Optional[str]) -> Tuple[CutLeg, ...]:

@@ -292,7 +292,7 @@ def _uncovered_sales(root: Path, cfg: Dict[str, Any],
             txs, settings.year, sheltered=sheltered,
             covered=FR.read_missing_history_pairs(root),
             date_basis=settings_tax_date(settings), journal=journal,
-            cache=root / "work")
+            country=settings.country or None, cache=root / "work")
         booked = FR.engine_booking(root / "work", rows, settings.year,
                                    date_basis=settings_tax_date(settings))
     except Exception:                               # noqa: BLE001
@@ -328,7 +328,7 @@ def _unanswered_covers(root: Path, cfg: Dict[str, Any],
             date_basis=settings_tax_date(settings),
             journal=walk_journal_symbols(root / "work",
                                          tm if tm.is_file() else None),
-            cache=root / "work")
+            country=settings.country or None, cache=root / "work")
     except Exception:                               # noqa: BLE001
         return []
     return [c for c in covers if not account or c.account == account]

@@ -821,6 +821,9 @@ def _brokerage_clean_row(extractor: Any, t: Any, valid_keys: set[str], dropped_k
     clean['source'] = _source
     if _source_key:
         clean['source_key'] = _source_key
+    # How the export marks a short account's trades (CA-DISP-04), on trade rows.
+    if getattr(extractor, 'SHORT_MARKS', '') and clean.get('action') == 'BUYSELL':
+        clean['short_marks'] = extractor.SHORT_MARKS
     return _row_line, t, clean
 
 

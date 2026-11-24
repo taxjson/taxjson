@@ -529,8 +529,10 @@ def derived(work: Path, ident: Mapping[str, Any]) -> Optional[Path]:
 def _sweepable(root: Path, p: Path) -> bool:
     """`p` a file the sweep may remove: in the project's work/ or reports/
     (or the records' folders), no link on the way from the project folder
-    (each part's lstat: a folder link inside work/ leads out of it), and a
-    file or a link itself (the link alone goes)."""
+    (each part's lstat: a folder link inside work/ leads out of it) but
+    work/ itself, when it is a link to a folder in the project, the run's
+    work/, which it writes through (`_linked_work`: TJ-5071), and a file
+    or a link itself (the link alone goes)."""
     try:
         rel = Path(os.path.abspath(p)).relative_to(root)
     except ValueError:
@@ -539,14 +541,29 @@ def _sweepable(root: Path, p: Path) -> bool:
         return False
     try:
         cur = root
-        for part in rel.parts[:-1]:
+        for i, part in enumerate(rel.parts[:-1]):
             cur = cur / part
-            if not stat.S_ISDIR(os.lstat(cur).st_mode):
+            if not stat.S_ISDIR(os.lstat(cur).st_mode) and not (
+                    i == 0 and part == "work" and _linked_work(root)):
                 return False
         mode = os.lstat(p).st_mode
     except OSError:
         return False
     return stat.S_ISREG(mode) or stat.S_ISLNK(mode)
+
+
+def _linked_work(root: Path) -> bool:
+    """Whether the project's work/ is a link to a folder in the project
+    (`.w`, say: every command refuses one leading out of it), resolved
+    once: the sweeps treat that folder as work/."""
+    work = Path(root) / "work"
+    try:
+        if not os.path.islink(work):
+            return False
+        real, top = Path(os.path.realpath(work)), Path(os.path.realpath(root))
+        return real != top and real.is_relative_to(top) and real.is_dir()
+    except (OSError, ValueError):
+        return False
 
 
 def _vouched(p: Path) -> Optional[bool]:
@@ -564,6 +581,97 @@ def _vouched(p: Path) -> Optional[bool]:
     except OSError:
         return False
     return rec["out"] == _R.sha256_file(p)
+
+
+# Where the stale-parse cleanup moves what it cannot vouch for (work/kept/:
+# no reader of work/<account>_*.json sees it there, and no sweep goes in).
+KEPT_DIR = "kept"
+# Why a file is moved there (`stale_parse_fates`), and what is left alone.
+OTHER_BYTES = "its bytes are not the ones taxjson's record of it holds"
+NO_RECORD = "taxjson has no record of writing it"
+LEFT = "left"
+
+
+def _has_records(work: Path) -> bool:
+    """Whether work/ holds records (work/.deps/: an output's, or the last
+    run's list, run.json)."""
+    try:
+        return any((Path(work) / _R.DEPS_DIR).glob("*.json"))
+    except OSError:
+        return False
+
+
+def stale_parse_fates(work: Path, account: str,
+                      stale: Sequence[Path]) -> Dict[Path, Optional[str]]:
+    """What an account's stale-parse cleanup (pipeline/stages
+    `_sweep_stale_parses`) does with each of `stale`, the
+    work/<account>_<x>.json no export group, .tt file or corp file of the
+    account names now (by absolute path). taxjson never deletes or reads a
+    file it did not write (TJ-5071, TJ-4275): None, it goes, only when it
+    can vouch for it; otherwise why it is moved aside (`move_aside`):
+    OTHER_BYTES (its record holds other bytes: edited since, or written by
+    a run that stopped before it recorded them) or NO_RECORD; LEFT for one
+    the sweep may not touch (`_sweepable`: a folder, a path through a
+    link other than work/ itself), which stays where it is.
+
+    With records in work/ (`_has_records`), what goes is what its record
+    vouches for (`_vouched`), and the _transfers.json beside a parse that
+    goes (the parse's companion, which has no record of its own:
+    `companions`; a file, not a link). With none at all (a work/ from
+    before the records), a file, not a link, named as an export group's
+    parse (<account>_<group>.json, and the _corp.json and _transfers.json
+    beside it: `_group`)."""
+    work = Path(os.path.abspath(work))
+    records = _has_records(work)
+    out: Dict[Path, Optional[str]] = {}
+    for p in [Path(os.path.abspath(q)) for q in stale]:
+        if not _sweepable(work.parent, p):
+            out[p] = LEFT
+        elif records:
+            ok = _vouched(p)
+            out[p] = None if ok is True else OTHER_BYTES if ok is False else NO_RECORD
+        else:
+            stem = p.name[len(account) + 1:-len(".json")]
+            ours = not os.path.islink(p) and p.name.startswith(f"{account}_") \
+                and p.name.endswith(".json") and (_group(stem) or any(
+                    stem.endswith(s) and _group(stem[:-len(s)])
+                    for s in ("_corp", "_transfers")))
+            out[p] = None if ours else NO_RECORD
+    for p, fate in list(out.items()):
+        parse = p.with_name(p.name[:-len("_transfers.json")] + ".json")
+        if records and fate == NO_RECORD and p.name.endswith("_transfers.json") \
+                and not os.path.islink(p) and parse in out and out[parse] is None:
+            out[p] = None
+    return out
+
+
+def move_aside(work: Path, p: Path) -> Path:
+    """`p` (a file of work/, or a link: the link itself, still leading
+    where it led) moved to work/kept/ (KEPT_DIR), with the .diag beside
+    it, under its own name or, when that is taken, <stem>-<n><suffix>;
+    returns where it went. OSError when work/kept/ is not a folder of its
+    own (a link, a file) or the move fails."""
+    kept = Path(os.path.abspath(work)) / KEPT_DIR
+    if not os.path.lexists(kept):
+        kept.mkdir(mode=0o700)
+    if not stat.S_ISDIR(os.lstat(kept).st_mode):
+        raise OSError(f"{KEPT_DIR}/ in work/ is not a folder")
+    dest, n = kept / p.name, 1
+    while os.path.lexists(dest) or os.path.lexists(f"{dest}.diag"):
+        n += 1
+        dest = kept / f"{p.stem}-{n}{p.suffix}"
+    to = os.readlink(p) if os.path.islink(p) else None
+    if to is not None and not os.path.isabs(to):
+        # Read from the folder the link is in, work/ resolved (`_linked_work`).
+        os.symlink(os.path.relpath(os.path.join(os.path.realpath(p.parent), to),
+                                   os.path.realpath(kept)), dest)
+        os.unlink(p)
+    else:
+        os.rename(p, dest)
+    diag = p.with_name(p.name + ".diag")
+    if _sweepable(Path(os.path.abspath(work)).parent, diag):
+        os.rename(diag, f"{dest}.diag")
+    return dest
 
 
 def _run_file(work: Path) -> Path:
@@ -887,10 +995,6 @@ def _has_mh(i: Inst) -> bool:
     return i.ctx.mh is not None
 
 
-def _dists(i: Inst) -> bool:
-    return i.ctx.dists
-
-
 def _native(i: Inst) -> bool:
     return not i.crypto and not i.ctx.raw_mixed
 
@@ -1172,7 +1276,7 @@ ROWS: Tuple[Stage, ...] = (
     Stage("crypto_sorted", ACCOUNT, "{work}/{a}_sorted.json",
           (Out("crypto_merged"),), when=_crypto),
     Stage("crypto_mapped", ACCOUNT, "{work}/{a}_mapped.json",
-          (Out("crypto_sorted"), File("@ticker_map")), when=_crypto_map),
+          (Out("crypto_sorted"), File("@ticker_map")) + _mh(), when=_crypto_map),
     Stage("crypto_filled", ACCOUNT, "{work}/{a}_filled.json",
           (Out("crypto_mapped", when=_has_map), Out("crypto_sorted", when=_no_map),
            Out("crypto_map")), when=_crypto),
@@ -1187,7 +1291,7 @@ ROWS: Tuple[Stage, ...] = (
     # checked (tests/test_record_edges, TJ-4184).
     Stage("base", ACCOUNT, "{work}/{a}_base.json",
           SOURCES + (Out("rates"), Out("sources"), Out("fingerprint"),
-                     File(TRANSFER_COSTS), File("@ticker_map")) + _mh(_dists),
+                     File(TRANSFER_COSTS), File("@ticker_map")) + _mh(),
           when=_equity),
     # 5: gains
     Stage("gains", ACCOUNT, "{work}/{a}_gains.json", BOOK + GAINS_READS),
@@ -1197,7 +1301,7 @@ ROWS: Tuple[Stage, ...] = (
     # written into this merge (_raw_book_journals).
     Stage("raw", ACCOUNT, "{work}/{a}_raw.json",
           SOURCES + (Out("sources"), File("@ticker_map"), Tree("sidecars"),
-                     Out("rates", keep=FILE)), when=_equity),
+                     Out("rates", keep=FILE)) + _mh(), when=_equity),
     # Not built when the raw row's every_run finds the native books pool
     # mixed currencies (`raw_mixed`): after it.
     Stage("raw_gains", ACCOUNT, "{work}/{a}_raw_gains.json",

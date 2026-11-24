@@ -49,6 +49,23 @@ class _MarkedShortRouter:
     two first (_split_crossing_marked_rows), so a row belongs wholly to
     one pool.
 
+    Which purchase closes a marked short follows the broker's convention,
+    which each row carries (`short_marks`, stamped from its parser; backlog
+    TJ-4993, TJ-1357):
+      - a broker that marks a short account's trades in the description
+        (RBC: "SHORT." / "COVER SHORT."): only the marked
+        purchase closes the short, and every unmarked purchase of that
+        broker's exports is a long purchase, whatever file it is in;
+      - any other row (IB, whose account holds one netted position;
+        Questrade, whose marking is not known, TJ-5236; a .tt line; the
+        generic importer): the reading above, a purchase covers while the
+        account is short and holds no long.
+    `note` remembers a purchase read as a cover by that last reading, and
+    a marked cover that then finds less short than it buys is one of
+    `late_covers`; `both_open` lists the accounts that end long and short
+    the same shares. The run says each (`_say_late_covers`,
+    `_say_both_open`): never silent.
+
     An option series' written contracts are that pool too (CA-OPT-12,
     backlog TJ-2735): a written option is an obligation of the account
     that wrote it, not property, so the account's own position decides
@@ -63,6 +80,10 @@ class _MarkedShortRouter:
         from taxjson.lib.row_types import open_close_codes
         self._short_re = _BROKER_SHORT_RE
         self._codes = open_close_codes
+        # The last unmarked purchase read as a cover, by position (`note`), and
+        # each (that purchase, the marked cover that found the short gone).
+        self._fallback: Dict[Tuple[str, str], TaxTransaction] = {}
+        self.late_covers: List[Tuple[TaxTransaction, TaxTransaction]] = []
         self.short: _Positions = _ShortUnits()      # by symbol too (TJ-4978)
         self.long: _Positions = {}
         # A close row's contracts past the account's own (_is_close_row),
@@ -129,7 +150,41 @@ class _MarkedShortRouter:
         return (q > 0 and self.short.get(k, 0.0) > eps
                 and (self._covers(t)
                      or (self._codes(t) != ('O',)
+                         and (t.short_marks or '') != 'description'
                          and self.long.get(k, 0.0) <= eps)))
+
+    def note(self, t: TaxTransaction) -> None:
+        """Before row `t` (as the broker gave it, uncut) is walked: remember an
+        unmarked share purchase about to be read as a cover, and record a
+        marked cover that finds less short than it buys after such a purchase
+        (`late_covers`; TJ-5235). A short the account opens afterwards is a
+        new one: what closes it says nothing of the remembered purchase."""
+        q = float(t.quantity or 0.0)
+        if not q or not (self._is_stock(t) and self._is_trade(t)):
+            return
+        k = (t.symbol, t.account)
+        eps = pool_qty_eps(t.symbol, q)
+        if q < 0:
+            if self._wants_short(t, q, k, eps):
+                self._fallback.pop(k, None)
+            return
+        short = self.short.get(k, 0.0)
+        if self._covers(t):
+            if short < q - eps and k in self._fallback:
+                self.late_covers.append((self._fallback.pop(k), t))
+        elif short > eps and self._wants_short(t, q, k, eps):
+            self._fallback[k] = t
+
+    def both_open(self) -> List[Tuple[str, str, float, float]]:
+        """(symbol, account, units held, units short) of each account that
+        holds shares and is short the same shares, as the walk stands."""
+        out = []
+        for (sym, acct), units in self.short.items():
+            held = self.long.get((sym, acct), 0.0)
+            eps = pool_qty_eps(sym, units, held)
+            if units > eps and held > eps and not is_option_symbol(sym):
+                out.append((sym, acct, held, units))
+        return sorted(out)
 
     def crossing_units(self, t: TaxTransaction) -> Optional[float]:
         """The units of a trade's first part when it crosses from one
@@ -370,6 +425,34 @@ class _MarkedShortRouter:
             dst.clear()
             for k, units in src.items():        # item by item: `short` keeps its index
                 dst[k] = units
+
+
+def _say_late_covers(pairs: Sequence[Tuple[TaxTransaction, TaxTransaction]]) -> None:
+    """One ATTENTION per marked cover that found the short already covered
+    by an unmarked purchase (a .tt line, a row of an export with no cover
+    marks; TJ-5235): both rows, what the books did, the remedy."""
+    for first, marked in pairs:
+        def row(t: TaxTransaction) -> str:
+            return f"{float(t.quantity):g} on {t.date}" + (f" ({t.source})" if t.source else "")
+        emit_line(f"warning: ATTENTION: marked cover: {marked.symbol} ({marked.account}): the purchase of "
+                  f"{row(first)} carries no cover mark and was read as covering the account's short, and "
+                  f"the broker's marked cover of {row(marked)} then found less short than it buys. The "
+                  f"marked purchase's units past the short are booked as a long purchase: one short is "
+                  f"covered twice, or the first purchase bought shares. If the two rows are one trade, "
+                  f"remove the unmarked one; if the first bought shares, the short it was read as "
+                  f"covering was not its own: correct or remove the row that opens that short.")
+
+
+def _say_both_open(found: Sequence[Tuple[str, str, float, float]]) -> None:
+    """One ATTENTION per account whose rows end with shares held and a short
+    of the same shares open (TJ-4993): both positions and the remedy."""
+    for sym, acct, held, short in found:
+        emit_line(f"warning: ATTENTION: long and short: {sym} ({acct}): the account's rows end with "
+                  f"{held:g} held and {short:g} short of the same shares. A purchase closes a short the "
+                  f"broker marks only when it is marked as its cover (RBC: `COVER SHORT.` in "
+                  f"the description; an IB buy coded C), so a purchase with no mark stays a long beside "
+                  f"the short. If the broker holds both, nothing is wrong. If the short was covered, the "
+                  f"export that holds the marked cover is missing: add it (`tjs list` shows both rows).")
 
 
 def _row_part(t: TaxTransaction, units: float, code: str, part_id: Optional[str], *,
@@ -704,6 +787,7 @@ def _split_crossing_marked_rows(transactions: List['TaxTransaction'],
             router.split(t.symbol, (t.symbol_new or '').strip() or t.symbol,
                          float(t.quantity or 0.0))
             continue
+        router.note(t)
         units = router.crossing_units(t)
         if units is None:
             router.walk(t)
@@ -714,6 +798,8 @@ def _split_crossing_marked_rows(transactions: List['TaxTransaction'],
         router.walk(first)
         router.walk(rest)
         parts[id(t)] = (first, rest)
+    _say_late_covers(router.late_covers)
+    _say_both_open(router.both_open())
     if not parts:
         return transactions
     out: List['TaxTransaction'] = []

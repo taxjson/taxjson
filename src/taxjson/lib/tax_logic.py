@@ -220,6 +220,7 @@ ENGINE_RULES: "frozenset[str]" = frozenset({
     # US: the walk's own records (engine/us/walk)
     R.US_ROC_02,       # a return of capital beyond a lot's basis: a deemed gain
     R.US_CORP_05,      # a §356 exchange's boot: the gain recognized
+    R.US_STKDIV_06,    # a stock dividend while short: the short grows (ASSUMED)
     # characterize: a foreign issuer's return of capital (characterize/foreign_roc)
     R.CA_ACB_08,       # booked as a foreign dividend (s.90(1))
     R.CA_ACB_09,       # booked as a cost reduction (Canada)
@@ -247,6 +248,56 @@ def _stable_text() -> str:
             "shipped in taxjson/data/markets.toml, extended or overridden "
             "by ticker.map `STABLE SYMBOL USD|NO` lines; the run notes once "
             "per coin when the built-in list decided")
+
+
+# A stock dividend posted while the position is short (CA-STKDIV-02,
+# US-STKDIV-06; ASSUMED in both: no statute states the entry; TJ-5006).
+_CA_STKDIV_SHORT = (
+    "A stock dividend received by an account that is short the security is "
+    "the short seller's to make good: the lender is owed the new shares, so "
+    "the short grows by them and its proceeds stay as they were. Nothing is "
+    "acquired and nothing covered: no gain is booked until the short is "
+    "covered, over all the shares then owed; the row is no purchase for the "
+    "superficial-loss rule and no share held 30 days after a loss, and it "
+    "asks for no declared amount (a value on it is not proceeds). The run "
+    "says so in an ATTENTION line; a row that is shares you bought is "
+    "entered as a purchase. The account that received the row decides, by "
+    "its own position at the row as its own books read it: another "
+    "account's short never makes a holder's receipt the short's, and "
+    "another account's holding never makes a short's row a receipt, so the "
+    "books pooled across your accounts read each row as its account's books "
+    "do (there the shares owed leave the pool's units at no proceeds and "
+    "with no gain or loss). An account that holds the security and also has "
+    "a sale its broker marked short has the row booked as shares received, "
+    "and an ATTENTION line names the short. ASSUMED: the Act and the CRA's "
+    "folios state no entry for it; a $0 purchase, the row's own shape, "
+    "would cover that many shares for nothing.")
+_US_STKDIV_SHORT = (
+    "A stock dividend posted while the position is short is the short "
+    "seller's to make good: the lender is owed the new shares, so the short "
+    "lots sold before the entitlement date (with no date on the row, every "
+    "open one) grow by them pro rata, their proceeds and dates as they "
+    "were. Nothing is bought and nothing covered: the gain is booked when "
+    "the short is covered, over all the shares then owed; the row is no "
+    "purchase for the wash-sale rule, and the cover buys no share past the "
+    "enlarged short. The run says so in an ATTENTION line; a row that is "
+    "shares you bought is entered as a purchase. Where no open short was "
+    "sold before the entitlement date, a second ATTENTION line says the row "
+    "was booked on the open shorts all the same. The position is short "
+    "when the account holds no share of the security and a short is open. "
+    "ASSUMED: no Code section or IRS publication states the entry; a $0 "
+    "purchase, the row's own shape, would cover that many shares for "
+    "nothing.")
+# A stock dividend's entitled shares given up in a §356 exchange before
+# the pay date (US-STKDIV-05's last sentences; TJ-4987).
+_US_STKDIV_EXCHANGED = (
+    " Entitled shares given up in a §356 exchange in that time keep their "
+    "part the same way: the shares received for them give up that share of "
+    "the basis they carried (the boot gain recognized stays), and where "
+    "those shares are no longer the lot the exchange booked (sold or split "
+    "since, a wash sale's addition, a fraction paid in cash, an unknown "
+    "cost) the new shares are booked at $0 and an ATTENTION line names the "
+    "amount.")
 
 
 # What a ticker change does to the option contracts on the old ticker
@@ -1096,7 +1147,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "corporate-action row; a .tt line `RENAME YYYY-MM-DD OLD "
                  "NEW` in any account's .tt file, which applies to every "
                  "account of the same kind (securities or crypto, "
-                 "CA-CRYPTO-RENAME) whose books hold OLD before the date and is recorded once; a "
+                 "CA-CRYPTO-RENAME) whose books hold OLD before the date (units a `.tt` `OPENING "
+                 "... cost=unknown` line opens on or before the date are held: they carry to NEW at "
+                 "their unknown cost) and is recorded once; a "
                  ".tt SPLIT line; or, legacy, a ticker.map line `RENAME "
                  "OLD NEW YYYY-MM-DD`, still read): on that date the pool, "
                  "its ACB and acquisition dates carry from OLD to NEW (into a NEW already held, the "
@@ -1220,8 +1273,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Its declared amount (a dividend, and by law also the new "
                  "shares' cost) is not in the broker's export: add it "
                  "([[distributions]] in taxjson.toml or a .tt ADJUST) — "
-                 "that books the ACB "
-                 "only; the dividend itself is reported from the T5/T3 "
+                 "that books the ACB only; the dividend itself is reported from the T5/T3 "
                  "slip (taxjson does not count it as income). A taxable "
                  "run of the dividend's year says so until the cost is in "
                  "the books. The new shares are "
@@ -1229,6 +1281,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "ANOTHER security (another class) paid as a stock "
                  "dividend are not booked: the parse says UNBOOKED; enter "
                  "them by hand."),
+            Rule(R.CA_STKDIV_02, _CA_STKDIV_SHORT, cont=True),
             Rule(R.CA_DIST_01,
                  "[[distributions]] (taxjson.toml): a non-cash distribution "
                  "(a reinvested capital-gains distribution, a late return-of-capital "
@@ -1334,8 +1387,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "ATTENTION. A .tt purchase of the security in that "
                  "account dated on or before the arrival — the .tt SPLIT "
                  "lines before the arrival replayed, a .tt sale before it "
-                 "(an earlier day, or earlier on the day by its time) "
-                 "consumed — for all its units, or a .tt OPENING "
+                 "(an earlier day, or earlier on the day by its time) consumed, and a move of your own out of the account before the arrival's day too, for the units no broker row accounts for (a move of your own back in is no such row: its units stand beside the spent purchase; unless units arrive in the account from outside it within 45 days after that move, this arrival included: a transfer row can post that late) "
+                 "— for all its units, or a .tt OPENING "
                  "cost=unknown line for it (CA-ACB-11), covers it instead "
                  "(no book value, no ATTENTION). .tt purchases for some "
                  "of the units cover nothing: the arrival is said as "
@@ -1790,40 +1843,38 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "listing is used as the broker converted it — the "
                  "report's currency decides.", cont=True),
             Rule(R.CA_OPEN_03,
-                 "The snapshot replaces the account's earlier history of "
-                 "its symbols: the account's other trade, transfer, split "
-                 "and cost-adjustment rows of a snapshot symbol (or of one "
-                 "renamed into it on or after the row's own date, whichever "
-                 "account's books carry the rename: a "
-                 "ticker reused after its rename is another holding and "
-                 "keeps its rows) dated on or "
-                 "before the snapshot day are left out of the books "
-                 "(income rows stay; other symbols and other accounts keep "
-                 "theirs), so no share is counted twice. A sale of the tax "
-                 "year among them, or a buy of the tax year that closes "
-                 "a short position (a cover, read from the position "
-                 "walked back from the snapshot's, undoing each split of "
-                 "the security once whichever account's rows carry it), "
-                 "stops the run, and so does a return of capital of the "
-                 "tax year among them that may have gone beyond the ACB "
-                 "(a gain of its year, CA-ACB-07, that the snapshot's "
-                 "cost cannot carry): one received with no shares held, "
-                 "or that left the cost — walked back from the "
-                 "snapshot's, undoing the buys and cost adjustments "
-                 "between — at nil or unknown (another currency, a "
-                 "transfer or a sale between). A taxjson.toml "
-                 "[[distributions]] return of capital dated before the "
-                 "snapshot is not applied (the snapshot's cost stands "
-                 "for it) and is named as ATTENTION; one dated on the "
-                 "snapshot day itself is applied on top of the "
-                 "snapshot's cost (a year-end statement's book cost "
-                 "often does not carry it yet) and said in a NOTE, to "
-                 "be removed if the statement's cost does. An option "
-                 "exercised or assigned on or before the snapshot day "
-                 "into a snapshot symbol, its share leg left out, adds "
-                 "its premium to nothing: the snapshot's cost holds it "
-                 "(s.49(3)). One "
-                 "symbol has one snapshot date per account.", cont=True),
+                 "The snapshot replaces the account's earlier history of its symbols: the "
+                 "account's other trade, transfer, split and cost-adjustment rows of a snapshot "
+                 "symbol (or of one renamed into it on or after the row's own date, whichever "
+                 "account's books carry the rename: a ticker reused after its rename is another "
+                 "holding and keeps its rows) dated on or before the snapshot day are left out "
+                 "of the books (income rows stay; other symbols and other accounts keep "
+                 "theirs), so no share is counted twice. A `.tt` line `OPENING <date> <SYMBOL> "
+                 "<qty> cost=unknown` dated on or before the snapshot day is such a row: the "
+                 "snapshot replaces it, nothing is opened at an unknown cost, and the run names "
+                 "the line as ATTENTION (a line one pass would replace and another open stops "
+                 "the run, naming the line, both readings and the remedy: only another "
+                 "account's rename row ties it to the snapshot, so the books that pool the "
+                 "accounts replace it and the account's own books cannot; the `RENAME` line the "
+                 "refusal prints, in that account's .tt file, or deleting the line, settles it; "
+                 "and a buy of the tax year that the snapshot's units do not account for once "
+                 "the line's are taken off stops the run as inconsistent input). A sale of the "
+                 "tax year among them, or a buy of the tax year that closes a short position (a "
+                 "cover, read from the position walked back from the snapshot's, undoing each "
+                 "split of the security once whichever account's rows carry it), stops the run, "
+                 "and so does a return of capital of the tax year among them that may have gone "
+                 "beyond the ACB (a gain of its year, CA-ACB-07, that the snapshot's cost "
+                 "cannot carry): one received with no shares held, or that left the cost — "
+                 "walked back from the snapshot's, undoing the buys and cost adjustments "
+                 "between — at nil or unknown (another currency, a transfer or a sale between). "
+                 "A taxjson.toml [[distributions]] return of capital dated before the snapshot "
+                 "is not applied (the snapshot's cost stands for it) and is named as ATTENTION; "
+                 "one dated on the snapshot day itself is applied on top of the snapshot's cost "
+                 "(a year-end statement's book cost often does not carry it yet) and said in a "
+                 "NOTE, to be removed if the statement's cost does. An option exercised or "
+                 "assigned on or before the snapshot day into a snapshot symbol, its share leg "
+                 "left out, adds its premium to nothing: the snapshot's cost holds it "
+                 "(s.49(3)). One symbol has one snapshot date per account.", cont=True),
         ]),
         ("Dispositions (Schedule 3)", [
             Rule(R.CA_DISP_01, "Gain = proceeds - ACB - outlays."),
@@ -1850,8 +1901,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "\"SHORT.\" / \"COVER SHORT.\", an IB sale coded O, "
                  "a buy coded C) is a position of its own: opening it "
                  "never sells shares you hold, in that account or "
-                 "another, and a purchase in another account never "
-                 "covers it. A row that does both is two parts, its "
+                 "another, and a purchase in another account never covers it. A purchase the broker does not mark covers the "
+                 "account's short only while the account holds no long, and by its broker's convention (docs/brokers.md): in an RBC export, which marks a short account's trades in the description (\"SHORT.\" / \"COVER SHORT.\"), only the marked purchase closes the short and every unmarked purchase is a long purchase, whatever file it is in; an IB or Questrade row, a .tt line and the generic importer's rows cover as said. A marked cover that finds the short already covered by an unmarked purchase, and an account whose rows end long and short the same shares, are said (ATTENTION), the rows named. A row that does both is two parts, its "
                  "money pro rata: a buy past the account's short buys "
                  "long with the rest, and a sale coded C;O past the "
                  "account's own long opens a short with the rest."),
@@ -1919,7 +1970,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule(R.CA_SL_07,
                  "Only purchases count: writing an option or shorting again never replaces, including "
                  "after a loss on covering a short; nor does buying back a written option, in any account: "
-                 "it closes an obligation (CA-OPT-12) and acquires nothing. A share short's cover replaces only by the shares it buys past the short."),
+                 "it closes an obligation (CA-OPT-12) and acquires nothing. A share short's cover replaces only by the shares it buys past the short. Nor do the shares a share-exchange merger brings when it is booked as a cost carry-over (CA-CORP-04; a registered account's merger): the books carry it as a rename, so nothing is denied for it, and the run names each one whose shares arrive inside a loss's 30-day window, in any of your accounts, while the shares are still held at the end of day 30 (ATTENTION, at the end of the run) for you to review."),
             Rule(R.CA_SL_08,
                  "CRA's formula, for each sale on its own: denied units = the least of "
                  "the units sold, the units acquired in the window and the units held "
@@ -3688,7 +3739,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "corporate-action row; a .tt line `RENAME YYYY-MM-DD OLD "
                  "NEW` in any account's .tt file, which applies to every "
                  "account of the same kind (securities or crypto, "
-                 "US-CRYPTO-RENAME) whose books hold OLD before the date and is recorded once; a "
+                 "US-CRYPTO-RENAME) whose books hold OLD before the date (units a `.tt` `OPENING "
+                 "... cost=unknown` line opens on or before the date are held: they carry to NEW at "
+                 "their unknown basis) and is recorded once; a "
                  ".tt SPLIT line; or, legacy, a ticker.map line `RENAME "
                  "OLD NEW YYYY-MM-DD`, still read): on that date the basis "
                  "lots and their holding periods carry from OLD to NEW, "
@@ -4150,8 +4203,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "ATTENTION. A .tt purchase of the security in that "
                  "account dated on or before the arrival — the .tt SPLIT "
                  "lines before the arrival replayed, a .tt sale before it "
-                 "(an earlier day, or earlier on the day by its time) "
-                 "consumed — for all its units, or a .tt OPENING "
+                 "(an earlier day, or earlier on the day by its time) consumed, and a move of your own out of the account before the arrival's day too, for the units no broker row accounts for (a move of your own back in is no such row: its units stand beside the spent purchase; unless units arrive in the account from outside it within 45 days after that move, this arrival included: a transfer row can post that late) "
+                 "— for all its units, or a .tt OPENING "
                  "cost=unknown line for it, covers it instead. .tt "
                  "purchases for some of the units cover nothing: the "
                  "arrival is said as ATTENTION and NOT booked until the "
@@ -4284,43 +4337,41 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "stops the run (its basis is the dollar cost on its own "
                  "purchase date — enter it converted).", cont=True),
             Rule(R.US_OPEN_03,
-                 "The snapshot replaces the account's earlier history of "
-                 "its symbols: the account's other trade, transfer, split "
-                 "and basis-adjustment rows of a snapshot symbol (or of one "
-                 "renamed into it on or after the row's own date, whichever "
-                 "account's books carry the rename: a "
-                 "ticker reused after its rename is another holding and "
-                 "keeps its rows) dated on "
-                 "or before the snapshot day are left out of the books "
-                 "(income rows stay; other symbols and other accounts keep "
-                 "theirs), so no share is counted twice. A sale of the tax "
-                 "year among them (on tax_date = \"trade\" by its trade "
-                 "date: one traded Dec 31 that settles in January is the "
-                 "year before's), or a buy of the tax year that closes "
-                 "a short position (a cover, read from the position "
-                 "walked back from the snapshot's, undoing each split of "
-                 "the security once whichever account's rows carry it), "
-                 "stops the run, and so does a return of capital of the "
-                 "tax year among them that may have gone beyond the "
-                 "basis (a §301(c)(3) gain of its year, US-ROC-02, that "
-                 "the snapshot's cost cannot carry): one received with "
-                 "no shares held, one that left the position's cost — "
-                 "walked back from the snapshot's — at nil or unknown, "
-                 "or one received while a snapshot lot bought on or "
-                 "before it has a nil basis (each lot takes its own "
-                 "share of a return of capital). A taxjson.toml "
-                 "[[distributions]] return of capital dated before the "
-                 "snapshot is not applied (the snapshot's cost stands "
-                 "for it) and is named as ATTENTION; one dated on the "
-                 "snapshot day itself is applied on top of the "
-                 "snapshot's cost (a year-end statement's book cost "
-                 "often does not carry it yet) and said in a NOTE, to "
-                 "be removed if the statement's cost does. An option "
-                 "exercised or assigned on or before the snapshot day "
-                 "into a snapshot symbol, its share leg left out, adds "
-                 "its premium to nothing: the snapshot's cost holds it "
-                 "(Pub. 550). One "
-                 "symbol has one snapshot date per account.", cont=True),
+                 "The snapshot replaces the account's earlier history of its symbols: the "
+                 "account's other trade, transfer, split and basis-adjustment rows of a "
+                 "snapshot symbol (or of one renamed into it on or after the row's own date, "
+                 "whichever account's books carry the rename: a ticker reused after its rename "
+                 "is another holding and keeps its rows) dated on or before the snapshot day "
+                 "are left out of the books (income rows stay; other symbols and other "
+                 "accounts keep theirs), so no share is counted twice. A `.tt` line `OPENING "
+                 "<date> <SYMBOL> <qty> cost=unknown` dated on or before the snapshot day is "
+                 "such a row: the snapshot replaces it, nothing is opened at an unknown cost, "
+                 "and the run names the line as ATTENTION (a line one pass would replace and "
+                 "another open stops the run, naming the line, both readings and the remedy: "
+                 "only another account's rename row ties it to the snapshot, so the books that "
+                 "pool the accounts replace it and the account's own books cannot; the "
+                 "`RENAME` line the refusal prints, in that account's .tt file, or deleting "
+                 "the line, settles it; and a buy of the tax year that the snapshot's units do "
+                 "not account for once the line's are taken off stops the run as inconsistent "
+                 "input). A sale of the tax year among them (on tax_date = \"trade\" by its "
+                 "trade date: one traded Dec 31 that settles in January is the year before's), "
+                 "or a buy of the tax year that closes a short position (a cover, read from "
+                 "the position walked back from the snapshot's, undoing each split of the "
+                 "security once whichever account's rows carry it), stops the run, and so does "
+                 "a return of capital of the tax year among them that may have gone beyond the "
+                 "basis (a §301(c)(3) gain of its year, US-ROC-02, that the snapshot's cost "
+                 "cannot carry): one received with no shares held, one that left the "
+                 "position's cost — walked back from the snapshot's — at nil or unknown, or "
+                 "one received while a snapshot lot bought on or before it has a nil basis "
+                 "(each lot takes its own share of a return of capital). A taxjson.toml "
+                 "[[distributions]] return of capital dated before the snapshot is not applied "
+                 "(the snapshot's cost stands for it) and is named as ATTENTION; one dated on "
+                 "the snapshot day itself is applied on top of the snapshot's cost (a year-end "
+                 "statement's book cost often does not carry it yet) and said in a NOTE, to be "
+                 "removed if the statement's cost does. An option exercised or assigned on or "
+                 "before the snapshot day into a snapshot symbol, its share leg left out, adds "
+                 "its premium to nothing: the snapshot's cost holds it (Pub. 550). One symbol "
+                 "has one snapshot date per account.", cont=True),
             Rule(R.US_STKDIV_01,
                  "A stock dividend is not income (§305(a)): the basis of "
                  "the shares entitled to it — the lots bought before the "
@@ -4347,7 +4398,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "in an earlier year, or one the "
                  "wash-sale rule touched, is left as booked: its new "
                  "shares are booked at $0 and an ATTENTION line names "
-                 "the amount to move by hand.", cont=True),
+                 "the amount to move by hand." + _US_STKDIV_EXCHANGED, cont=True),
             Rule(R.US_STKDIV_04,
                  "A broker's stock-dividend row carries no record or "
                  "ex-dividend date: the lots held on the pay date are "
@@ -4367,8 +4418,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "on the row), the new shares are booked as a $0 "
                  "purchase with a warning — still not a wash-sale "
                  "replacement: add the missing history (or adjust the "
-                 "sold lots) so §307 can spread the basis.",
-                 cont=True),
+                 "sold lots) so §307 can spread the basis.", cont=True),
+            Rule(R.US_STKDIV_06, _US_STKDIV_SHORT, cont=True),
         ]),
         ("Wash sales (§1091)", [
             Rule(R.US_WASH_01,

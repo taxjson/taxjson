@@ -274,6 +274,10 @@ def money_lineage(rid: str, raw: Dict[str, Any], base_row: Dict[str, Any],
                 f"{rate_date} in the rates file.")
     notional = nominal
     settled = base_row.get("type") == "futures_settlement"
+    # A settled row whose net the audit cannot re-derive (a broker
+    # cancellation it cannot place: futures_native_nets, TJ-5193).
+    unplaced = (getattr(futures_native, "unplaced", None) or {}).get(rid) \
+        if settled else None
     if (settled and nominal < 0 and M.of(src.get("quantity") or 0) > 0
             and not M.of(src.get("price") or 0) < 0):
         # A buy's cost written as the cash paid out: the notional is its
@@ -290,7 +294,7 @@ def money_lineage(rid: str, raw: Dict[str, Any], base_row: Dict[str, Any],
     computed = float(M.of(nominal) * rate)
     # Tolerance: the converter multiplied the same floats, so only
     # re-derivation slack (repr round-trip) is allowed.
-    ties = abs(computed - book) <= max(TIE, abs(book) * 1e-9)
+    ties = abs(computed - book) <= max(TIE, abs(book) * 1e-9) and not unplaced
     fx.update({"priced_by_fill": priced_by_fill, "nominal_net": nominal,
                "computed_net": computed, "book_net": book, "ties": ties})
     if settled:
@@ -299,7 +303,9 @@ def money_lineage(rid: str, raw: Dict[str, Any], base_row: Dict[str, Any],
     if not ties:
         _what = "" if field == "net_amount" else \
             f" ({field.replace('_', ' ')})"
-        if native:
+        if unplaced:
+            failures.append(unplaced)
+        elif native:
             failures.append(
                 f"AMOUNT cross-check FAILED{_what}: the "
                 f"{'priced' if pre is not None else 'parsed'} row "
@@ -642,9 +648,20 @@ def pool_other_rows_check(events: List[Dict[str, Any]],
     return out
 
 
+class FuturesNets(Dict[str, float]):
+    """id -> the native settled net of a futures fill
+    (`futures_native_nets`); `unplaced`: id -> the failure of a settled
+    row whose net cannot be re-derived, naming the broker cancellation of
+    its account and symbol that the audit cannot place."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.unplaced: Dict[str, str] = {}
+
+
 def futures_native_nets(source_index: Dict[str, List[Dict[str, Any]]],
                         base_index: Dict[str, Dict[str, Any]],
-                        country: str) -> Dict[str, float]:
+                        country: str) -> FuturesNets:
     """id -> native settled net of every futures fill the base book
     carries on the settlement basis, RE-DERIVED from the parsed broker
     rows (lib/futures.settle_futures over them, under the book's own
@@ -655,29 +672,121 @@ def futures_native_nets(source_index: Dict[str, List[Dict[str, Any]]],
     each account's book in its conversion (taxjson_convert_currency.
     process_transactions): a blended audit's base file holds several
     accounts, and settling them as one book matched one account's close
-    against another's opening (backlog TJ-0312)."""
+    against another's opening (backlog TJ-0312).
+
+    A broker cancellation (a `type=trade_cancel` row, lib/trade_cancel)
+    is netted with the fill it reverses first, as the run's merge nets
+    them before the ticker map (taxjson_merge2 `cancel_trade_pairs`): a
+    whole one drops the pair, one of part of a fill reduces the fill,
+    which the books hold under a new id (a close after it read nothing
+    to close and a P/L of 0: backlog TJ-5193). The parsed rows of a
+    settled symbol that the books do not hold are read for that netting
+    only. A cancellation the audit cannot place (it nets one the books
+    hold as a trade of its own, or the books net one whose fill is in
+    none of the parsed rows) fails every settled row of its account and
+    symbol, naming it (`unplaced`)."""
     from taxjson.lib.futures import (FUTURES_SETTLEMENT, method_for,
                                      settle_futures_dicts)
-    rows = []
-    for rid, hits in source_index.items():
-        b = base_index.get(rid)
-        if not hits or not b or b.get("type") != FUTURES_SETTLEMENT:
-            continue
-        r = dict(hits[0]["row"])
-        r["symbol"] = b.get("symbol")          # after ticker.map
+    from taxjson.lib.trade_cancel import pair_cancellations
+    out = FuturesNets()
+
+    def _acct(rid: str, r: Dict[str, Any]) -> str:
         # The book the row was settled in: its account's.
-        r["account"] = str(b.get("account") or r.get("account") or "")
-        rows.append(r)
+        return str((base_index.get(rid) or {}).get("account")
+                   or r.get("account") or "")
+    settled = {rid for rid, hits in source_index.items() if hits
+               and (base_index.get(rid) or {}).get("type") == FUTURES_SETTLEMENT}
+    names: Dict[Tuple[str, str], str] = {}  # (account, parsed symbol): the books'
+    for rid in settled:
+        r = source_index[rid][0]["row"]
+        names[(_acct(rid, r), str(r.get("symbol") or ""))] = \
+            str(base_index[rid].get("symbol") or "")
+    books: Dict[str, List[Dict[str, Any]]] = {}
+    rid_of: Dict[int, str] = {}
+    for rid, hits in source_index.items():
+        r = hits[0]["row"] if hits else {}
+        a = _acct(rid, r)
+        if (a, str(r.get("symbol") or "")) not in names \
+                or (rid in base_index and rid not in settled):
+            continue
+        row = dict(r, account=a)
+        rid_of[id(row)] = rid
+        books.setdefault(a, []).append(row)
+    rows: List[Dict[str, Any]] = []
+    for a, book in books.items():
+        book.sort(key=lambda r: (str(r.get("date") or "9999-99-99"),
+                                 str(r.get("time") or "00:00:00")))
+        partials: List[Any] = []
+        kept, pairs, unmatched = pair_cancellations(book, partials=partials)
+
+        def _in(r: Dict[str, Any]) -> bool:
+            return rid_of.get(id(r)) in base_index
+        # Why the books and this netting disagree on a cancellation:
+        # the books keep it, keep the fill it reverses whole, or drop
+        # one this netting finds no fill for (None: they agree).
+        why: Dict[int, Optional[str]] = {
+            id(c): _BOOKED if _in(c) else _WHOLE if _in(o) else None
+            for o, c in pairs + [(o, c) for o, c, _r in partials]}
+        why.update({id(c): None if _in(c) else _NO_FILL for c in unmatched})
+        for c, w in [(c, why.get(id(c))) for c in book]:
+            if not w:
+                continue
+            _unplaced(out.unplaced, c, w,
+                      source_index.get(rid_of[id(c)]) or [],
+                      [rid for rid in settled if _acct(rid, {}) == a
+                       and base_index[rid].get("symbol")
+                       == names.get((a, str(c.get("symbol") or "")))])
+        for r in kept:
+            kid = rid_of.get(id(r))
+            if kid is None and (r.get("action") not in ("BUYSELL", "ASSIGN")
+                                or not r.get("quantity")):
+                continue            # a FEE row the cancellation leaves: no fill
+            if kid is not None and kid not in base_index:
+                continue            # a parsed row the books leave out (not netted)
+            r["symbol"] = (base_index[kid].get("symbol") if kid is not None
+                           else names.get((a, str(r.get("symbol") or "")),
+                                          r.get("symbol")))   # after ticker.map
+            rows.append(r)
     try:
-        settled = settle_futures_dicts(rows, method_for(country))
+        done = settle_futures_dicts(rows, method_for(country))
     except ValueError:
-        return {}
-    out: Dict[str, float] = {}
-    for r in settled:
+        return out
+    for r in done:
         rid = r.get("id")
         if rid and rid in base_index and rid not in out:
             out[rid] = float(r.get("net_amount") or 0.0)
     return out
+
+
+_BOOKED = ("is booked as a trade of its own, though the parsed rows hold "
+           "the fill it reverses")
+_WHOLE = "is left out of the books, but the fill it reverses is booked whole"
+_NO_FILL = ("is left out of the books, but none of the parsed rows is the "
+            "fill it reverses")
+
+
+def _unplaced(into: Dict[str, str], ca: Dict[str, Any], why: str,
+              hits: List[Dict[str, Any]], rids: List[str]) -> None:
+    """The failure of each settled row of `rids` (an account's and a
+    symbol's), naming the broker cancellation `ca` the audit cannot place
+    (`futures_native_nets`) and `why` (_BOOKED, _WHOLE, _NO_FILL)."""
+    line = (hits[0]["row"].get("source_line") if hits else None)
+    where = (f" ({hits[0]['label']}" + (f", line {line}" if line else "") + ")"
+             if hits else "")
+
+    def _n(v: Any) -> str:
+        try:
+            return f"{float(v or 0):g}"
+        except (TypeError, ValueError):
+            return str(v)
+    text = (f"FX cross-check FAILED: the settled P/L cannot be re-derived: "
+            f"the broker cancellation (type=trade_cancel) of "
+            f"{_n(ca.get('quantity'))} {ca.get('symbol')} @ {_n(ca.get('price'))} "
+            f"on {ca.get('date')}{where} {why} "
+            f"— re-run `tjs run` and audit again; if it stays, the books "
+            f"netted it otherwise than the audit can (report it).")
+    for rid in rids:
+        into.setdefault(rid, text)
 
 
 def build_check_index(paths: List[Path]) -> Tuple[

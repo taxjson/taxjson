@@ -284,22 +284,25 @@ def _dir_arg(d: Path) -> str:
     return shlex.quote(rel)
 
 
-def _later_projects(plan: Plan) -> List[Tuple[int, Path]]:
-    """(year, folder) of the later years' projects beside this one: the
-    year folders (lib/project_layout `year_dirs`), and any other folder
-    beside it holding a taxjson.toml, a link to a folder included (`2025
-    -> y2025`: year_dirs leaves links out), whose year is later (beside
-    year folders only: two unrelated projects may share a parent) or
-    whose `prior_year_record` names this year's lock. Each folder once,
-    by where it leads; only the folders directly beside this one are
-    read, none walked into."""
+def _later_projects(plan: Plan) -> List[Tuple[int, Path, Optional[str], bool]]:
+    """(year, folder, why, locked) of the later years' projects beside this
+    one: the year folders (lib/project_layout `year_dirs`), and any other
+    folder beside it holding a taxjson.toml, a link to a folder included
+    (`2025 -> y2025`: year_dirs leaves links out), whose year is later
+    (beside year folders only: two unrelated projects may share a parent)
+    or whose `prior_year_record` names this year's lock. Each folder once,
+    by where it leads; only the folders directly beside this one are read,
+    none walked into. `why` is None, or why a folder beside this one cannot
+    say whether it is a later year closed (`_cannot_tell`, TJ-5088): listed
+    all the same, `locked` when its filed/ holds a later year's lock (the
+    latest is the year), else at its name's year or the next one."""
     root, year = plan.root, plan.year
     lock = root / "filed" / f"{year}.json"
     multi = _PL.multi_root(root)
-    out: Dict[Path, Tuple[int, Path]] = {}
+    out: Dict[Path, Tuple[int, Path, Optional[str], bool]] = {}
     for y, d in (_PL.year_dirs(multi) if multi is not None else []):
         if y > year and d.resolve() != root:
-            out[d.resolve()] = (y, d)
+            out[d.resolve()] = (y, d, None, False)
     try:
         beside = sorted(root.parent.iterdir())
     except OSError:
@@ -308,7 +311,13 @@ def _later_projects(plan: Plan) -> List[Tuple[int, Path]]:
         try:
             real = d.resolve()
             if real == root or real in out or not d.is_dir() \
-                    or real in root.parents or not (d / _PL.CONFIG).is_file():
+                    or real in root.parents:
+                continue
+            broken = _cannot_tell(plan, d, year)
+            if broken is not None:
+                out[real] = (broken[0], d, broken[1], broken[2])
+                continue
+            if not (d / _PL.CONFIG).is_file():
                 continue
             st = _PL.read_config_soft(d).get("settings")
         except (OSError, RuntimeError):
@@ -325,34 +334,127 @@ def _later_projects(plan: Plan) -> List[Tuple[int, Path]]:
                 names = q.resolve() == lock.resolve()
         if names and (y is None or y > year) \
                 or (multi is not None and y is not None and y > year):
-            out[real] = (y if y is not None else year + 1, d)
+            out[real] = (y if y is not None else year + 1, d, None, False)
     return sorted(out.values(), key=lambda t: (t[0], str(t[1])))
+
+
+def _cannot_tell(plan: Plan, d: Path, year: int
+                 ) -> Optional[Tuple[int, str, bool]]:
+    """(year, why, locked) when the folder `d` beside this project may be a
+    later year closed and cannot say (TJ-5088): its taxjson.toml cannot say
+    which year it is (`_unread`) and its filed/ holds a later year's lock
+    (`locked`), or cannot be listed. Only a folder holding a taxjson.toml
+    (a link to nothing too) or named as a later year (`2025`, a link so
+    named too) is one: a folder of another name with no taxjson.toml is no
+    project. None when it can say, or is none."""
+    named = int(d.name) if _PL.YEAR_DIR_RE.match(d.name) else None
+    if named is not None and named <= year:
+        named = None
+    if named is None and not os.path.lexists(d / _PL.CONFIG):
+        return None
+    why = _unread(plan, d)
+    if why is None:
+        return None
+    later, unlisted = _later_locks(d, year)
+    if later:
+        return later[-1], why, True
+    if unlisted:
+        return (named or year + 1,
+                f"{plan.rel(d / 'filed')} cannot be listed ({unlisted}) and "
+                f"{why}", False)
+    return None
+
+
+def _unread(plan: Plan, d: Path) -> Optional[str]:
+    """Why the project folder `d`'s taxjson.toml cannot say which year it
+    is: it is missing or a link to nothing, it cannot be read or parsed, or
+    its [settings] year is not one; None when it can."""
+    cfg = d / _PL.CONFIG
+    rel = plan.rel(cfg)
+    if not os.path.lexists(cfg):
+        return f"{rel} is missing"
+    if os.path.islink(cfg) and not os.path.exists(cfg):
+        return f"{rel} is a link to nothing ({os.readlink(cfg)})"
+    try:
+        doc = _PL.read_config(d)
+    except _PL.LayoutError as e:
+        why = str(e).replace(str(cfg), rel)
+        cannot = f"cannot read {rel}: "
+        return (f"{rel} cannot be read: {why[len(cannot):]}"
+                if why.startswith(cannot) else why)
+    st = doc.get("settings")
+    y = st.get("year") if isinstance(st, dict) else None
+    if isinstance(y, int) and not isinstance(y, bool):
+        return None
+    if y is None:
+        return f"{rel} sets no [settings] year"
+    return (f"{rel} sets [settings] year = {_PL.toml_value(y)}, "
+            f"{'a string' if isinstance(y, str) else 'not a whole number'}, "
+            f"not a year")
+
+
+def _later_locks(d: Path, year: int) -> Tuple[List[int], Optional[str]]:
+    """(the years after `year` whose lock (filed/<year>.json, a link or
+    not) the project folder `d` holds, oldest first; why its filed/ cannot
+    be listed, None when it can or there is none)."""
+    try:
+        names = [p.name for p in (d / "filed").iterdir()]
+    except (FileNotFoundError, NotADirectoryError):
+        return [], None
+    except OSError as e:
+        return [], e.strerror or str(e)
+    return sorted(int(n[:-5]) for n in names
+                  if n.endswith(".json") and n[:-5].isdigit()
+                  and int(n[:-5]) > year), None
 
 
 def _later_years(plan: Plan) -> None:
     """A later year closed (a lock in this project's filed/ or in a later
     year's project beside it, `_later_projects`; a missing lock of a
     closed year too) is a refusal: its return took its carry-in from this
-    year's record, so the newest year is reopened first. A later year only
-    started is recorded (`started`): the report names it."""
+    year's record, so the newest year is reopened first. So is a folder
+    beside this one that may be a later year closed and cannot say (its
+    taxjson.toml cannot say which year it is, or its filed/ cannot be
+    listed: TJ-5088): it is named, with why; a year's readable folder
+    first. A later year only started is recorded (`started`): the report
+    names it."""
     root, year = plan.root, plan.year
-    closed: List[Tuple[int, str, Optional[Path]]] = []
+    closed: List[Tuple[int, str, Optional[Path], Optional[str], bool]] = []
     with contextlib.suppress(OSError):
         for p in sorted((root / "filed").glob("*.json")):
             if p.stem.isdigit() and int(p.stem) > year:
-                closed.append((int(p.stem), plan.rel(p), None))
-    for y, d in _later_projects(plan):
+                closed.append((int(p.stem), plan.rel(p), None, None, True))
+    for y, d, why, locked in _later_projects(plan):
         p = d / "filed" / f"{y}.json"
-        if os.path.lexists(p) or _PL.lock_missing_frozen(d, y):
-            closed.append((y, plan.rel(p), d))
+        if why is None and not os.path.lexists(p):
+            unlisted = _later_locks(d, year)[1]
+            why = (f"{plan.rel(d / 'filed')} cannot be listed ({unlisted})"
+                   if unlisted else None)
+        if why is not None or os.path.lexists(p) \
+                or _PL.lock_missing_frozen(d, y):
+            closed.append((y, plan.rel(p), d, why or _unread(plan, d),
+                           locked or os.path.lexists(p)))
         else:
             plan.started.append((y, d))
     if not closed:
         return
-    y, shown, d = max(closed, key=lambda c: c[0])
+    y, shown, d, why, locked = max(closed, key=lambda c: (c[0], c[3] is None))
     how = (f"`tjs -C {_dir_arg(d)} unclose-year`"
            if d is not None else
            f"`tjs unclose-year` with [settings].year = {y}")
+    if d is not None and why is not None:
+        fix = [plan.rel(q) for q, bad in (
+            (d / _PL.CONFIG, _unread(plan, d)),
+            (d / "filed", _later_locks(d, year)[1])) if bad]
+        _die((f"{plan.rel(d)} holds the lock of {y} ({shown}), a later "
+              f"year than {year}, but {why}" if locked else
+              f"{plan.rel(d)} may hold the lock of a later year than "
+              f"{year}: {why}"),
+             f"It may be a later year closed on what {year} carried into "
+             f"it, which is reopened first. Repair {' and '.join(fix)}, "
+             f"then reopen the newest year first ({how}), then {year}; if "
+             f"{plan.rel(d)} is not a later year of this project, move it "
+             f"out of this folder's parent. {_NOTHING}")
     _die(f"{y} is closed too ({shown}), on what {year} carried into it",
          f"Reopen the newest year first ({how}), then {year}. To amend "
          f"{year} and keep both filed, see docs/filing.md (After "

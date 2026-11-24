@@ -95,14 +95,10 @@ def read_missing_history_pairs(path: Optional[Path]) -> Set[Tuple[str, str]]:
         return set()
 
 
-def logged_openings(cache: Optional[Path]
-                    ) -> Dict[Tuple[str, str], List[TaxTransaction]]:
-    """{(SYMBOL, account): [OPENING_BALANCE rows]} — the .tt OPENING
-    cost=unknown lines the account's gains file (the plain one, this
-    run's) says its run booked (its `missing_history_log`): each row on
-    the date and the symbol the engine opened it, keyed by the pair the
-    line declares. {} without a readable gains file."""
-    out: Dict[Tuple[str, str], List[TaxTransaction]] = {}
+def _gains_logs(cache: Optional[Path]) -> List[Tuple[str, List[Any]]]:
+    """[(account, its plain gains file's `missing_history_log`)] of this
+    run's gains files in `cache` (work/); [] without a readable one."""
+    out: List[Tuple[str, List[Any]]] = []
     if cache is None:
         return out
     from taxjson.lib.report_model import resolve_gains_files
@@ -118,9 +114,33 @@ def logged_openings(cache: Optional[Path]
             continue
         log = doc.get("missing_history_log") if isinstance(doc, dict) \
             else None
-        for e in log or []:
-            if not isinstance(e, dict) or e.get("account") != acct \
-                    or not e.get("inserted"):
+        out.append((acct, [e for e in log or [] if isinstance(e, dict)
+                           and e.get("account") == acct]))
+    return out
+
+
+def replaced_openings(cache: Optional[Path]) -> Set[Tuple[str, str]]:
+    """{(SYMBOL, account in lower case)} of the .tt OPENING cost=unknown
+    lines the account's gains file says an opening snapshot replaced
+    (its `missing_history_log`, `replaced_by_snapshot`): such a line
+    opens nothing, so it covers no sale (backlog TJ-5007). Empty without
+    a readable gains file."""
+    return {(str(e.get("symbol") or "").upper(), str(acct).lower())
+            for acct, log in _gains_logs(cache) for e in log
+            if e.get("replaced_by_snapshot")}
+
+
+def logged_openings(cache: Optional[Path]
+                    ) -> Dict[Tuple[str, str], List[TaxTransaction]]:
+    """{(SYMBOL, account): [OPENING_BALANCE rows]} — the .tt OPENING
+    cost=unknown lines the account's gains file (the plain one, this
+    run's) says its run booked (its `missing_history_log`): each row on
+    the date and the symbol the engine opened it, keyed by the pair the
+    line declares. {} without a readable gains file."""
+    out: Dict[Tuple[str, str], List[TaxTransaction]] = {}
+    for acct, log in _gains_logs(cache):
+        for e in log:
+            if not e.get("inserted"):
                 continue
             try:
                 qty = float(e.get("opening_qty") or 0.0)
@@ -162,12 +182,14 @@ def uncovered_short_sales(txs: Sequence[TaxTransaction], year: Any, *,
     (backlog TJ-0958)."""
     txs = list(txs)
     cov = {(s.upper(), a.lower()) for s, a in covered}
+    # (A line an opening snapshot replaced opens nothing: it covers none.)
+    cov -= replaced_openings(cache)
     logged = {k: v for k, v in logged_openings(cache).items() if k in cov}
     if logged:
         rows = [r for rows in logged.values() for r in rows]
         # (A short line, TJ-0844, is no units a sale draws on: its cover
         # leaves the walk instead.)
-        txs = drop_answered_covers(txs, rows) + [r for r in rows
+        txs = drop_answered_covers(txs, rows, country) + [r for r in rows
                                                  if r.quantity > 0]
         cov -= set(logged)
     linked_old = {(l.old_symbol, l.account)
@@ -202,7 +224,7 @@ def unanswered_covers(txs: Sequence[TaxTransaction], year: Any, *,
     shorts = [r for rows in logged_openings(cache).values() for r in rows
               if r.quantity < 0]
     return [c for c in detect_unbacked_covers(
-                drop_answered_covers(txs, shorts), date_basis=date_basis,
+                drop_answered_covers(txs, shorts, country), date_basis=date_basis,
                 journal_symbols=journal or set(),
                 registered_accounts=sheltered or None, country=country)
             if not is_registered_account(c.account, sheltered or None,
@@ -846,6 +868,19 @@ def parser_warnings(cache: Path, accounts: Sequence[str]
                 it = {"account": acct, "text": ln[len(head):]}
                 if ln.startswith(head) and it not in found:
                     found.append(it)
+        # The pooled pass's marked lines (pipeline/stages mirrors its .diag
+        # per account): what only the accounts together show, a share
+        # exchange in one account inside a loss's window in another
+        # (TJ-4992). Once, under the first account that mirrors it.
+        try:
+            lines = (cache / f"{acct}_blend.diag").read_text(
+                errors="replace").splitlines()
+        except OSError:
+            lines = []
+        for ln in lines:
+            if ln.startswith(head) and not any(
+                    f["text"] == ln[len(head):] for f in found):
+                found.append({"account": acct, "text": ln[len(head):]})
         # The run's own end-of-run lines for the account: a cost row on a
         # listing no dated row shows held (pipeline/stages
         # `_flag_undated_listings`, lib/stage_msg.UNDATED_LISTING_GAIN).

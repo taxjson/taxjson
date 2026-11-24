@@ -255,7 +255,10 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
     legacy ticker.map line) in `txs` (TaxTransactions on their RAW symbols,
     before the undated renames apply): a SPLIT row OLD -> NEW (ratio 1) on the
     date in every account that holds OLD (or an open option on it: its open
-    contracts follow, _book_option_series) before it, unless the account
+    contracts follow, _book_option_series) before it (a `.tt` `OPENING ...
+    cost=unknown` line is such a holding: the merge stages hold the lines as
+    OPENING_BALANCE rows here, missing_history `hold_declared_openings`,
+    TJ-5042), unless the account
     already books a rename of OLD within WINDOW_DAYS (to NEW: nothing to add;
     to another symbol: refused). OLD is the declared symbol and every raw
     spelling the undated renames (`mapping`, e.g. `GLOBAL RAW OLD`) map onto it
@@ -295,23 +298,7 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
         # rename row that moved another symbol into OLD (on the date:
         # any such row — `into` keeps the latest, which the booked row
         # must follow).
-        held: Dict[str, Any] = {}
-        into: Dict[str, Any] = {}
-        for t in out:
-            d = t.date or ""
-            if d > dr.date:
-                continue
-            if d == dr.date:
-                if rename_target(t) in olds:
-                    held[t.account] = t
-                    if t.account not in into \
-                            or row_stamp(t) >= row_stamp(into[t.account]):
-                        into[t.account] = t
-                continue
-            if ((t.action in _POSITION_ACTIONS + ("SPLIT",)
-                 and t.symbol in olds)
-                    or rename_target(t) in olds):
-                held[t.account] = t
+        held, into = _holders(out, dr, olds)
         held = {**_option_holders(out, dr, olds), **held}
         booked: Dict[str, str] = {}
         for t in out:
@@ -428,6 +415,38 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
                       file=stream)
         _follow_exercise_targets(out, dr, olds)
     return out
+
+
+def _holders(rows: List[Any], dr: DatedRename, olds: set
+             ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """({account: a row of it} for the accounts with an OLD position
+    before the rename's date, {account: its latest rename row into OLD on
+    the date}): OLD rows, or a rename row that moved another symbol into
+    OLD (on the date: any such row, which the booked row must follow).
+    Units held before the data and opened on the day itself (an
+    OPENING_BALANCE row: a `.tt` `OPENING ... cost=unknown` line the
+    merge holds) are held too: an opening is booked first on its day, so
+    the rename carries it (missing_history `_symbol_after`; TJ-5042)."""
+    held: Dict[str, Any] = {}
+    into: Dict[str, Any] = {}
+    for t in rows:
+        d = t.date or ""
+        if d > dr.date:
+            continue
+        if d == dr.date:
+            if rename_target(t) in olds:
+                held[t.account] = t
+                if t.account not in into \
+                        or row_stamp(t) >= row_stamp(into[t.account]):
+                    into[t.account] = t
+            elif t.action == "OPENING_BALANCE" and t.symbol in olds:
+                held.setdefault(t.account, t)
+            continue
+        if ((t.action in _POSITION_ACTIONS + ("SPLIT",)
+             and t.symbol in olds)
+                or rename_target(t) in olds):
+            held[t.account] = t
+    return held, into
 
 
 def _series_positions(rows: List[Any], dr: DatedRename, olds: set, before: Any
@@ -817,6 +836,74 @@ def _raw_rename_rows(root: Path, acct: str) -> List[Dict[str, Any]]:
         except ValueError:
             continue
     return rows
+
+
+# What `tjs renames` says of a carried position with units a .tt
+# OPENING cost=unknown line opened (backlog TJ-5042).
+_UNKNOWN_AMONG = ("; units opened at an unknown cost among them (an OPENING "
+                  "cost=unknown line): not in the book cost")
+
+
+def _unknown_openings(root: Path, rows: List[Dict[str, Any]]
+                      ) -> List[Dict[str, Any]]:
+    """The OPENING_BALANCE rows the gains stages open for one account's
+    book `rows` (its .tt `OPENING ... cost=unknown` lines, as
+    missing_history.synthesize_openings places them): the books on disk
+    never carry them. [] without such lines, or when they cannot be read
+    (the run names that)."""
+    from taxjson.lib.missing_history import (load_missing_history,
+                                             missing_history_arg,
+                                             synthesize_openings)
+    from taxjson.model.transaction import TaxTransaction
+    if not rows:
+        return []
+    fields = TaxTransaction.__dataclass_fields__
+    try:
+        mh = missing_history_arg(root)
+        if mh is None:
+            return []
+        txs = [TaxTransaction(**{k: v for k, v in r.items() if k in fields})
+               for r in rows]
+        have = {id(t) for t in txs}
+        out, _log = synthesize_openings(txs, load_missing_history(mh),
+                                        flag_stale=False)
+    except (OSError, TypeError, ValueError):
+        return []
+    acct = rows[0].get("_acct")
+    return [dict(action="OPENING_BALANCE", date=t.date, time=t.time,
+                 symbol=t.symbol, quantity=t.quantity, net_amount=0.0,
+                 currency=t.currency, account=t.account, _acct=acct)
+            for t in out if id(t) not in have
+            and t.action == "OPENING_BALANCE"]
+
+
+def _unknown_at_renames(rows: List[Dict[str, Any]]) -> set:
+    """The ids of the rename rows of one account's `rows` that carry
+    units opened at an unknown cost (an OPENING_BALANCE row's, until the
+    position is flat)."""
+    qty: Dict[str, float] = {}
+    taint: Dict[str, bool] = {}
+    out = set()
+    for r in sorted(rows, key=_walk_key):
+        a = str(r.get("action") or "").upper()
+        sym = str(r.get("symbol") or "")
+        q = float(r.get("quantity") or 0.0)
+        if a == "SPLIT":
+            new = rename_target(r)
+            if taint.get(sym):
+                out.add(id(r))
+            if q:
+                qty[sym] = qty.get(sym, 0.0) * q
+            if new:
+                qty[new] = qty.get(new, 0.0) + qty.pop(sym, 0.0)
+                taint[new] = taint.get(new, False) or taint.pop(sym, False)
+        elif a in _POSITION_ACTIONS:
+            qty[sym] = qty.get(sym, 0.0) + q
+            if a == "OPENING_BALANCE" and q > 0:
+                taint[sym] = True
+            if abs(qty[sym]) < 1e-9:
+                taint[sym] = False
+    return out
 
 
 def _walk_key(r: Dict[str, Any]) -> Tuple[str, int, str]:
@@ -1242,10 +1329,16 @@ def report(root: Path, cfg: Dict[str, Any],
     for r in rows:
         by_acct.setdefault(r["_acct"], []).append(r)
     snaps: Dict[int, Tuple[float, float]] = {}
+    unknown: set = set()
     _country = _project_country(cfg)
     for acct, rs in by_acct.items():
-        snaps.update(_walk_states(rs, _country,
+        # With the units held before the data (the .tt OPENING
+        # cost=unknown lines the gains stages open): a rename carries
+        # them too (backlog TJ-5042).
+        walked = rs + _unknown_openings(root, rs)
+        snaps.update(_walk_states(walked, _country,
                                   _assign_costs(rs, _country)))
+        unknown |= _unknown_at_renames(walked)
     accounts = accounts_of(cfg)
     # The view's note only: the late-trade checks (hints=False: the
     # run's, edge-cases') read the gains files mid-run, before the
@@ -1280,7 +1373,10 @@ def report(root: Path, cfg: Dict[str, Any],
                 != "taxable",
                 "qty": M.units(q, 6),
                 "qty_after": M.units(q * (e["ratio"] or 1.0), 6),
-                "book_cost": M.shown(c, 2)})
+                "book_cost": M.shown(c, 2),
+                # Units opened at an unknown cost among them (a .tt
+                # OPENING cost=unknown line): book_cost leaves them out.
+                **({"cost_unknown": True} if id(r) in unknown else {})})
         lines = [w for dr in matching_lines(dated, e, ren)
                  for w in (dr.where,) + tuple(dr.also)]
         ids = e.get("source_ids") or []
@@ -1450,7 +1546,7 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
         for c in e["carried"]:
             cost = ("" if c["sheltered"] else
                     f"; book cost {M.shown(c['book_cost'], 2):,.2f} {e['currency']} "
-                    f"carried")
+                    f"carried") + _UNKNOWN_AMONG * bool(c.get("cost_unknown"))
             d.item(f"{c['account']}: held {c['qty']:g} {e['old']} "
                    f"-> {c['qty_after']:g} {e['new']}{cost}", "  ")
         for a in e["accounts"]:

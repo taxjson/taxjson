@@ -96,7 +96,12 @@ class TestShippedData(unittest.TestCase):
         self.assertEqual(markets.suffix_country("L"), "GBR")
         self.assertEqual(markets.currency_suffix("aud"), "AX")
         self.assertIsNone(markets.currency_suffix("EUR"))
-        self.assertEqual(markets.isin_country_suffix("IE"), "L")
+        # An Irish ISIN names a domicile, no market: `.L` is where its
+        # listing is looked for first, not its listing (TJ-5016).
+        self.assertIsNone(markets.isin_country_suffix("IE"))
+        self.assertEqual(markets.isin_domicile_suffix("IE"), "L")
+        self.assertIsNone(markets.isin_domicile_suffix("GB"))
+        self.assertEqual(markets.isin_country_suffix("GB"), "L")
 
     def test_one_fiat_list_covers_every_former_copy(self):
         former = {  # Coinbase / Kraken / IB currency tags / Yahoo pairs
@@ -660,11 +665,15 @@ class TestOneVenueTable(_MapCase):
         self.assertEqual(IB._split_known_ext("ZZQ.L"), ("ZZQ", "L"))
         self.assertEqual(IB._split_known_ext("ZZQ.V"), ("ZZQ.V", None))
         fb = set()
-        for cc, ext in (("CA", "TO"), ("AU", "AX"), ("GB", "L"),
-                        ("IE", "L"), ("US", "US")):
+        for cc, ext in (("CA", "TO"), ("AU", "AX"), ("GB", "L"), ("US", "US")):
             self.assertEqual(IB._isin_ext(cc + "0000000000", "ZZQ", fb), ext)
+        self.assertEqual(fb, set())
+        # A country with no home market here: where the row waits for
+        # evidence of its listing (TJ-5016).
+        self.assertEqual(IB._isin_ext("IE0000000000", "ZZQ", fb), "L")
         self.assertEqual(IB._isin_ext("DE0000000000", "ZZQ", fb), "US")
-        self.assertIn(("ZZQ.US", "DE"), fb)
+        self.assertEqual(fb, {("ZZQ.L", "IE", "IE0000000000"),
+                              ("ZZQ.US", "DE", "DE0000000000")})
         former_tags = {
             'CAD', 'USD', 'EUR', 'GBP', 'AUD', 'CHF', 'JPY', 'HKD', 'SEK',
             'NOK', 'DKK', 'NZD', 'SGD', 'CNH', 'CNY', 'MXN', 'ILS', 'ZAR',

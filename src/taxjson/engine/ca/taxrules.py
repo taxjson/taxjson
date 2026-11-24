@@ -7,6 +7,9 @@ from __future__ import annotations
 
 from taxjson.lib import loss_overrides as _LO
 from taxjson.lib.stage_msg import emit_line
+import contextlib
+import io
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Set, Tuple, cast
 
 from taxjson.rules.country import CANADA as _CANADA, check_engine_allowed as _check_engine_allowed
@@ -40,7 +43,8 @@ from taxjson.engine.ca.router import (
 )
 from taxjson.engine.ca.holders import _SLIndexes, _CanadaRun
 
-from taxjson.engine.ca.walk import _conserved_rows
+from taxjson.engine.ca.walk import STOCK_DIVIDENDS_OWED, _conserved_rows
+from taxjson.lib.row_types import is_stock_dividend
 from taxjson.engine.ca.solve import _ca_solve
 from taxjson.engine.ca.denial import _ca_live_rules
 
@@ -93,22 +97,63 @@ class CanadaTaxRules(TaxRules):
         wash detection; passing them only ever increases the set of
         candidate-replacement trades.
         """
-        _run = self._prepare(
+        _kw: Dict[str, Any] = dict(
             affiliated_transactions=affiliated_transactions,
-            cost_timeline=cost_timeline,
-            detect_wash_sales=detect_wash_sales,
-            loss_overrides=loss_overrides,
             option_buyback_loss_superficial=option_buyback_loss_superficial,
             option_grant_basis=option_grant_basis,
             option_grant_since=option_grant_since,
             option_premium_timing=option_premium_timing,
             sheltered_transactions=sheltered_transactions,
-            trace=trace,
-            transactions=transactions,
             year_end=year_end,
             year_end_basis=year_end_basis)
+        transactions, _owed = self._stock_dividends_owed(transactions, _kw)
+        _run = self._prepare(
+            cost_timeline=cost_timeline,
+            detect_wash_sales=detect_wash_sales,
+            loss_overrides=loss_overrides,
+            trace=trace,
+            transactions=transactions, **_kw)
+        _run._ev_memo[STOCK_DIVIDENDS_OWED] = frozenset(_owed)
         books = _ca_solve(run=_run)
-        return self._finish(books=books, run=_run)
+        res = self._finish(books=books, run=_run)
+        if _owed:       # (lib/pipeline run_gains reads and drops it: no gains document carries it)
+            res[STOCK_DIVIDENDS_OWED] = _owed
+        return res
+
+    def _stock_dividends_owed(self, transactions: List[TaxTransaction], kw: Dict[str, Any]
+                              ) -> Tuple[List[TaxTransaction], List[RowId]]:
+        """The book with each stock dividend received by an account that is short the
+        security written as what it is there, the short growing by the shares at no proceeds
+        (CA-STKDIV-02: the row's quantity negative), and those rows' ids. One reading for
+        every pass: the walk, the superficial-loss pass (its day-30 balances and its purchases
+        read the rows' quantities) and the conservation check; as shares received, a loss was
+        denied against shares the books never held (backlog TJ-5006, TJ-5280).
+
+        The account that received the row decides, by its own position, as its own run reads
+        it: each account's rows are walked once first on their own, silently and with no loss
+        rule (units do not depend on the denials), and a row of shares that meets a short pool
+        there is the short's. So the pooled books of several accounts and each account's own
+        books read a row alike: a holder's receipt stays one while another account's short
+        leaves the pool net short (the pool alone made it the short's, and the holder's shares
+        were gone from the pooled books)."""
+        owed: Set[RowId] = set()
+        for acct in sorted({t.account for t in transactions
+                            if is_stock_dividend(t) and t.quantity > 0}):
+            with contextlib.redirect_stderr(io.StringIO()):
+                probe = self._prepare(
+                    cost_timeline=None, detect_wash_sales=False, loss_overrides=(), trace=False,
+                    transactions=[t for t in transactions if t.account == acct],
+                    **dict(kw, sheltered_transactions=None, affiliated_transactions=None))
+                found: Set[RowId] = set()
+                probe._ev_memo[STOCK_DIVIDENDS_OWED] = found
+                _ca_solve(run=probe)
+            owed |= found
+        if not owed:
+            return transactions, []
+        return ([replace(t, quantity=-t.quantity)
+                 if t.id in owed and is_stock_dividend(t) and t.quantity > 0 else t
+                 for t in transactions],
+                sorted(owed, key=str))
 
     def _prepare(self, *, affiliated_transactions: Optional[List[TaxTransaction]], cost_timeline: Optional[str], detect_wash_sales: bool, loss_overrides: Sequence[Dict[str, Any]], option_buyback_loss_superficial: bool, option_grant_basis: str, option_grant_since: Optional[int], option_premium_timing: str, sheltered_transactions: Optional[List[TaxTransaction]], trace: bool, transactions: List[TaxTransaction], year_end: Optional[str], year_end_basis: Optional[str]) -> _CanadaRun:
         """The Canadian engine's preamble: the input contract, the books named, deduped and
