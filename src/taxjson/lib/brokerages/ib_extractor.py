@@ -1,4 +1,4 @@
-from taxjson.lib.stage_msg import emit_line
+from taxjson.lib.stage_msg import emit_line, undated_listing_note
 from taxjson.lib.out import END_OF_RUN_MARK
 import csv
 import io
@@ -329,11 +329,111 @@ def _listing_replay(transactions: List[Dict[str, Any]], open_qty=None):
     return held_on
 
 
+# An ISIN's shape: two letters, nine letters or digits, a check digit. A
+# `Security ID` of another shape (a nine-character CUSIP) is not one: a
+# CUSIP alone does not say whether the issuer is American or Canadian.
+_ISIN_RE = re.compile(r'[A-Z]{2}[A-Z0-9]{9}[0-9]')
+# The instrument `Type` values that name a depositary receipt.
+_IB_RECEIPT_TYPES = frozenset({'ADR', 'GDR', 'NVDR', 'CDR', 'DR'})
+
+
+def _ib_stamp_security_ids(transactions: List[Dict[str, Any]],
+                           pre: Dict[str, Any]) -> None:
+    """Each share row's `isin`, and `security_type` where the statement
+    calls the instrument a depositary receipt: what its Financial
+    Instrument Information section gives the row's symbol (`Security
+    ID`, `Type`), for every stock and warrant, not only one that paid a
+    dividend (backlog TJ-4957); an income row keeps the ISIN its own
+    description prints (`_isin`, popped here). An instrument whose
+    Listing Exch is another market's than the row's (the section lists
+    the TSX instrument and the row is the ticker's US listing) is not
+    the row's: no stamp. `isin` is exactly one ISIN: where the section
+    gives the ticker two on the row's own market (an ISIN that changed
+    inside the statement) `isin` is left out and both are the row's
+    `isins`, a list: the report reads each.
+    `tjs t1135` reads the issuer's country from it."""
+    from taxjson.lib.markets import canadian_suffixes, ib_venue_suffix
+    from taxjson.lib.markets_data import suffix_of
+    ca = canadian_suffixes()
+    infos = [i for (cat, _text), lst in (pre.get('fii_all') or {}).items()
+             if cat in ('Stocks', 'Warrants') for i in lst]
+
+    def _market(sfx: str) -> str:
+        return 'TO' if sfx in ca else sfx
+
+    def _venue(i: Dict[str, Any]) -> str:
+        v = ib_venue_suffix((i.get('exch') or '').upper()) \
+            if i.get('exch') else None
+        return _market(v) if v else ''
+
+    def _of(i: Dict[str, Any]) -> str:
+        return _venue(i) or {'CA': 'TO', 'US': 'US'}.get(
+            (i.get('isin') or '').upper()[:2], '')
+    for t in transactions:
+        own = (t.pop('_isin', None) or '').upper()
+        sym = str(t.get('symbol') or '')
+        if '.' not in sym or sym.startswith('F:') or is_option_symbol(sym):
+            continue
+        ids = {x.upper() for x in (pre.get('stock_isins') or {}).get(
+            sym.rsplit('.', 1)[0], ())}
+        mine = [i for i in infos if (i.get('isin') or '').upper() in ids]
+        want = _market(suffix_of(sym))
+        # Its own market's instrument: by the venue where the statement
+        # names one, by the ISIN's country too where it lists several.
+        mine = [i for i in mine
+                if not want or (_of(i) if len(ids) > 1 else _venue(i))
+                in ('', want)]
+        ids = sorted({(i.get('isin') or '').upper() for i in mine
+                      if _ISIN_RE.fullmatch((i.get('isin') or '').upper())})
+        if _ISIN_RE.fullmatch(own):
+            ids = [own]
+        if len(ids) == 1:
+            t['isin'] = ids[0]
+        elif ids:
+            t['isins'] = list(ids)
+        kinds = {(i.get('type') or '').upper() for i in mine
+                 if (i.get('isin') or '').upper() in ids}
+        if kinds & _IB_RECEIPT_TYPES:
+            t['security_type'] = sorted(kinds & _IB_RECEIPT_TYPES)[0]
+
+
+def _ib_listings_named(transactions: List[Dict[str, Any]], extra_held,
+                       fallback_held) -> tuple:
+    """The listings `_reattribute_income_to_holdings` places a row by, each
+    {ticker: its listings' suffixes}: `own`, this statement's (its Open
+    Positions `extra_held`, its trades and transfers); `fb`, the other
+    statements' (`fallback_held`) for a ticker this one has none of;
+    `held`, the two together; `named`, every listing any of them names."""
+    held: Dict[str, set] = {}
+    for full in (extra_held or ()):
+        root, ext = _split_known_ext(full)
+        if ext:
+            held.setdefault(root, set()).add(ext)
+    for t in transactions:
+        if t.get('action') in _POSITION_ACTIONS:
+            root, ext = _split_known_ext(t.get('symbol'))
+            if ext:
+                held.setdefault(root, set()).add(ext)
+    own = {root: set(exts) for root, exts in held.items()}
+    named: Dict[str, set] = {root: set(exts) for root, exts in held.items()}
+    fb: Dict[str, set] = {}
+    for full in (fallback_held or ()):
+        root, ext = _split_known_ext(full)
+        if not ext:
+            continue
+        named.setdefault(root, set()).add(ext)
+        if root not in held:
+            fb.setdefault(root, set()).add(ext)
+    held.update(fb)
+    return held, own, named, fb
+
+
 def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
                                     extra_held=None, fallback_held=None,
                                     isins_by_root=None,
                                     mismatches=None, open_qty=None,
-                                    ambiguous=None) -> None:
+                                    ambiguous=None, undated=None,
+                                    elsewhere=None) -> None:
     """Rewrite each DIVIDEND/TAX suffix to match the position held for the same
     ticker in this file, correcting ISIN-vs-listing mismatches. Leaves the
     ISIN-derived suffix untouched when the account holds no position for that
@@ -370,26 +470,53 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
     position — `open_qty` (the Open Positions quantities, when the
     section is present) less the statement's net, else the least
     opening the trades need. Rows still ambiguous are added to
-    `ambiguous` as (symbol, date)."""
-    held: Dict[str, set] = {}
-    for full in (extra_held or ()):
-        root, ext = _split_known_ext(full)
-        if ext:
-            held.setdefault(root, set()).add(ext)
-    for t in transactions:
-        if t.get('action') in _POSITION_ACTIONS:
-            root, ext = _split_known_ext(t.get('symbol'))
-            if ext:
-                held.setdefault(root, set()).add(ext)
-    fb: Dict[str, set] = {}
-    for full in (fallback_held or ()):
-        root, ext = _split_known_ext(full)
-        if ext and root not in held:
-            fb.setdefault(root, set()).add(ext)
-    held.update(fb)
+    `ambiguous` as (symbol, date); a row of a `fallback_held` root, whose
+    listings carry no dates here (which was held that day is not known,
+    backlog TJ-5011), to `undated` instead.
+
+    A cost row (a return of capital: an ADJUST, or a foreign issuer's
+    marked row) is never moved off its ISIN listing onto a listing this
+    statement's own dated rows show was not held on its date (a CA-ISIN
+    row went onto a US line first bought weeks later), nor onto a listing
+    only the account's other statements name, unless one of those
+    statements' rows of the listing leaves room for a holding on the
+    row's date (`elsewhere`: {listing: [`_ib_note_held` facts of each
+    other statement of the broker account]}; `_ib_could_predate`): a
+    listing bought a year back and added to here, with no Open Positions
+    section, still takes the row; one another statement first buys, coded
+    an opening, after the payment does not. Without `elsewhere` (no
+    account context) every other statement's listing takes it. A row on a
+    listing other than its ISIN's that neither shows held counts the
+    ISIN's listing as another. And wherever a
+    cost row ends, on a listing no dated row of the statement shows held
+    that day while the account's exports (this statement, `fallback_held`)
+    name another listing of the ticker, it is added to `undated` too:
+    each entry {'tx', 'why' ('split': the fallback case above; 'moved':
+    a row moved off its ISIN's listing, no other listing named, onto one
+    no dated row of this statement shows held, for the run to flag where
+    the books find nothing there to reduce; else 'unshown'), 'listings'
+    (every listing named, the row's included),
+    'flat' (the others this statement's rows show not held that day,
+    as above)}."""
+    held, own, named, fb = _ib_listings_named(
+        transactions, extra_held, fallback_held)
     if not held:
         return
     _held_on = _listing_replay(transactions, open_qty)
+    def _room(root, e, day) -> bool:
+        """Another statement's rows of ROOT.E leave room for a holding of
+        it on `day` (any other statement's listing, with no context)."""
+        if elsewhere is None:
+            return e in (named.get(root) or ()) and e not in (own.get(root) or ())
+        return any(_ib_could_predate(i, day)
+                   for i in elsewhere.get(f"{root}.{e}") or ())
+
+    def _shown_flat(root, e, day) -> bool:
+        """This statement's rows show listing ROOT.E not held on `day`,
+        and no other statement's rows leave room for it."""
+        return (e in (own.get(root) or ()) and not _held_on(root, e, day)
+                and not _room(root, e, day))
+
     for t in transactions:
         # ROC ADJUSTs come out of the same ISIN-suffixed Dividends section
         # as income rows, so they need the same held-listing rebind — an
@@ -401,12 +528,17 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
         root, ext = _split_known_ext(t.get('symbol'))
         if ext is None:
             continue
+        day = t.get('date') or ''
+        mine = own.get(root) or set()
+        cost = is_roc_adjust or bool(t.get(ISSUER_ROC_KEY))
+        split = False
         suffixes = held.get(root)
         if suffixes and len(suffixes) > 1:
-            on_day = {e for e in suffixes
-                      if _held_on(root, e, t.get('date') or '')}
+            on_day = {e for e in suffixes if _held_on(root, e, day)}
             if len(on_day) == 1:
                 suffixes = on_day
+            elif root in fb and undated is not None:
+                split = True
             elif ambiguous is not None:
                 ambiguous.add((t.get('symbol'), t.get('date')))
         if suffixes and len(suffixes) == 1:
@@ -419,7 +551,29 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
                         mismatches.add((t.get('symbol'), row_isin,
                                         f"{root}.{want}"))
                     continue
-                t['symbol'] = f"{root}.{want}"
+                if (not cost or (want in mine and _held_on(root, want, day))
+                        or _room(root, want, day)):
+                    # (a cost row stays off a listing neither this
+                    # statement's rows show held that day nor another
+                    # statement's rows leave room for)
+                    t['symbol'] = f"{root}.{want}"
+        if undated is None or not (cost or split):
+            continue
+        at = _split_known_ext(t.get('symbol'))[1]
+        others = (named.get(root) or set()) - {at}
+        shown = at in mine and _held_on(root, at, day)
+        if at != ext and not shown and not _room(root, at, day):
+            others = others | {ext}      # (its ISIN's listing is another)
+        moved = cost and at != ext and not shown and not others
+        if moved:
+            others = {ext}               # (where it may belong)
+        if split or (others and not shown):
+            undated.append({
+                'tx': t, 'why': ('split' if split else
+                                 'moved' if moved else 'unshown'),
+                'listings': sorted(f"{root}.{e}" for e in others | {at}),
+                'flat': sorted(f"{root}.{e}" for e in others
+                               if _shown_flat(root, e, day))})
 
 
 def _ib_level_key(cat: str, sym: str, cur: str, acct: str,
@@ -2088,6 +2242,7 @@ def _account_tt_links(paths) -> Dict[tuple, str]:
     rows already book that change (audit review H6)."""
     from taxjson.lib.tt_format import strip_tt_comment, tt_lines
     from taxjson.lib.dated_events import tt_files
+    from taxjson.lib.futures_prefixes import canonical_futures_symbol
     out: Dict[tuple, str] = {}
     dirs = []
     for path in paths:
@@ -2106,10 +2261,17 @@ def _account_tt_links(paths) -> Dict[tuple, str]:
                 continue        # the .tt stage names an unreadable file
             for n, raw in enumerate(tt_lines(text), 1):
                 parts = strip_tt_comment(raw).split()
-                if (len(parts) >= 5 and parts[0] == 'SPLIT'
-                        and parts[3].upper() != parts[4].upper()):
-                    out.setdefault((parts[3].upper(), parts[4].upper()),
-                                   f"{shown_name(tt)}:{n}")
+                if len(parts) < 5 or parts[0] != 'SPLIT':
+                    continue
+                # As the .tt reader spells them (a future's `/` or `\`
+                # `F:`: lib/futures_prefixes, backlog TJ-5150).
+                try:
+                    old, new = (canonical_futures_symbol(p.upper())
+                                for p in parts[3:5])
+                except ValueError:
+                    continue    # the .tt stage refuses the line, naming it
+                if old != new:
+                    out.setdefault((old, new), f"{shown_name(tt)}:{n}")
     return out
 
 
@@ -2329,8 +2491,8 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
             # Listings this statement trades or holds (raw symbol,
             # category, currency) — the account-wide income rebind uses
             # them (prepare_files).
-            out['held_rows'].append((g('Symbol'), g('Asset Category'),
-                                     g('Currency')))
+            out['held_rows'].append((g('Symbol'), g('Asset Category'), g('Currency'),
+                                     sec, g('Date/Time') or g('Date'), g('Quantity') or g('Qty'), g('Direction') or g('Code')))
             _sroot = re.sub(r'\s+', '.', g('Symbol'))
             _sday = (g('Date/Time') or g('Date')).replace(',', ' ').split()
             if _sday and _IB_DATE_RE.match(_sday[0]):
@@ -2424,7 +2586,7 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
                 mult, mult_bad = None, mult_raw
             info = {'mult': mult, 'mult_bad': mult_bad,
                     'name': g('Description'), 'expiry': g('Expiry'),
-                    'conid': g('Conid'), 'exch': g('Listing Exch'),
+                    'conid': g('Conid'), 'exch': g('Listing Exch'), 'type': g('Type'),
                     'isin': g('Security ID'), 'underlying': g('Underlying')}
             texts = [s.strip() for s in g('Symbol').split(',')
                      if s.strip()]
@@ -2485,7 +2647,7 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
                 continue
             out['cash'][(line, cur)] = out['cash'].get((line, cur),
                                                        0.0) + tot
-    for _sym, _cat, _cur in out['held_rows']:
+    for _sym, _cat, _cur, *_more in out['held_rows']:
         out['stock_listing'].setdefault(
             re.sub(r'\s+', '.', _sym), _ib_stock_symbol(_cat, _sym, _cur,
                                                         out['fii']))
@@ -2871,6 +3033,11 @@ class _IbParse:
     # / A2-0024; IbBrokerage.reconcile_files).
     ca_seen: List[Dict[str, Any]] = field(default_factory=list)
     ca_pairs: List[tuple] = field(default_factory=list)
+    # Each income and cost row with its line, its broker row's identity
+    # and whether its listing came from undated evidence: an overlapping
+    # statement's copy of the row may have put it on another listing
+    # (`_ib_cross_income_listings`, backlog TJ-5011).
+    listed_income: List[Dict[str, Any]] = field(default_factory=list)
     # `Ca` rows whose original never appeared: offered to the account's
     # other statements (`resolve_unmatched_ca`; audit S059-04).
     unmatched_ca: List[Dict[str, Any]] = field(default_factory=list)
@@ -3167,6 +3334,154 @@ def _ib_same_account(mine: set, accts) -> bool:
     `statement_accounts()`, a fact another statement of the account left):
     either side unknown counts as the same (TJ-2466)."""
     return not accts or not mine or bool(set(accts) & mine)
+
+
+def _ib_note_held(ctx: Dict[str, Any], name: str, pre: Dict[str, Any]) -> None:
+    """The listings one statement holds or trades, in the account's
+    context (`prepare_files`): `held`, every statement's together (the
+    income rebind's names, S060-00), and `held_by_file`, each statement's
+    own, for a cost row's listing (backlog TJ-5011): per listing, its
+    first dated row in the statement (`first`, the day; `opening`: it is
+    a purchase the broker codes an opening, or a transfer in: no units
+    before it), what its rows add (`net`) and what the Open Positions
+    hold (`open`, None without a row there)."""
+    mine = ctx.setdefault('held_by_file', {}).setdefault(name, {})
+    for sym, cat, cur, sec, when, qty, code in pre['held_rows']:
+        full = _ib_stock_symbol(cat, sym, cur, pre['fii'])
+        ctx['held'].add(full)
+        info = mine.setdefault(full, {'first': '', 'opening': False,
+                                      'net': 0.0, 'open': None})
+        try:
+            units = float((qty or '0').replace(',', ''))
+        except ValueError:
+            units = 0.0
+        if sec == 'Open Positions':
+            info['open'] = (info['open'] or 0.0) + units
+            continue
+        day = ((when or '').replace(',', ' ').split() or [''])[0]
+        if not _IB_DATE_RE.match(day):
+            continue
+        codes = {c for c in re.split(r'[;,\s]+', (code or '').upper()) if c}
+        if sec == 'Transfers':
+            # (its 7th cell is the Direction: an arrival adds its units)
+            units = -abs(units) if 'OUT' in codes else abs(units)
+            arrival = 'OUT' not in codes
+        else:
+            arrival = units > 0 and 'O' in codes and 'C' not in codes
+        info['net'] += units
+        if not info['first'] or day < info['first']:
+            info.update(first=day, opening=arrival)
+
+
+def _ib_held_elsewhere(ctx: Dict[str, Any], name: str, accounts: set
+                       ) -> Dict[str, List[Dict[str, Any]]]:
+    """{listing: its `_ib_note_held` facts in each OTHER statement of the
+    broker account} for the statement `name` of `accounts`: another broker
+    account's statement in the same folder says nothing of this one's
+    holdings."""
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for other, listings in (ctx.get('held_by_file') or {}).items():
+        if other == name or not _ib_same_account(
+                accounts, (ctx.get('file_accounts') or {}).get(other)):
+            continue
+        for full, info in listings.items():
+            out.setdefault(full, []).append(info)
+    return out
+
+
+def _ib_could_predate(info: Dict[str, Any], day: str) -> bool:
+    """Whether a statement's rows of a listing (`_ib_note_held`) leave room
+    for a holding of it on `day`: its first dated row is on or before the
+    day, or is after it and neither a coded opening purchase nor a
+    transfer in (a sale, an uncoded purchase: units may be older than the
+    row); or the Open Positions hold more than its rows add (older units,
+    proven: IB codes an addition `O` too); with no dated row, the Open
+    Positions hold it, bought no export says when."""
+    if info.get('open') is not None and info['open'] > (info.get('net') or 0.0) + 1e-9:
+        return True
+    return (not info.get('first') or info['first'] <= day
+            or not info.get('opening'))
+
+
+def _ib_income_key(tx: Dict[str, Any]) -> tuple:
+    """The broker's row an income or cost row was read from, whatever
+    listing it was put on: its kind, date, ticker, ISIN, currency, money
+    and wording (an Activity Statement's Dividends row carries no
+    transaction id)."""
+    return (tx.get('action'), tx.get('type') or '', tx.get('date'),
+            _split_known_ext(tx.get('symbol'))[0],
+            tx.get('isin') or tuple(tx.get('isins') or ()),
+            _norm_ccy(tx.get('currency')), str(tx.get('net_amount')),
+            str(tx.get('gross_amount')), tx.get('description') or '')
+
+
+def _ib_cross_income_listings(files) -> None:
+    """One broker income or cost row that two statements of one broker
+    account both hold is one row on one listing (pass 6). Each statement
+    places an ISIN-named row by its own evidence, so a statement holding
+    the ticker's trades and one holding the income alone put the same row
+    on two listings, and the books, which keep identical rows once,
+    booked both (backlog TJ-5011, the review's overlap case). The copy
+    placed from undated evidence takes the listing of the copy the dated
+    rows placed, said in an ATTENTION naming both; two copies placed with
+    equal standing on different listings are refused: nothing says which
+    is right, and the row is never booked twice."""
+    def _where(i, e) -> str:
+        return (f"{_ib_nm(files, i)} line {e['line']}" if e['line']
+                else _ib_nm(files, i))
+
+    for i, (_p, ex, _t) in enumerate(files):
+        for j in range(i + 1, len(files)):
+            other = files[j][1]
+            if not _ib_same_acct(ex, other):
+                continue
+            theirs: Dict[tuple, list] = {}
+            for e in other._ib.listed_income:
+                theirs.setdefault(e['key'], []).append(e)
+            used: set = set()
+            for a in ex._ib.listed_income:
+                cands = [b for b in theirs.get(a['key'], ())
+                         if id(b) not in used]
+                if not cands:
+                    continue
+                # (an identical copy first: two payments alike on two
+                # listings pair each with its own)
+                b = next((c for c in cands if c['tx'].get('symbol')
+                          == a['tx'].get('symbol')), cands[0])
+                used.add(id(b))
+                sa, sb = a['tx'].get('symbol'), b['tx'].get('symbol')
+                if sa == sb:
+                    continue
+                what = ('return of capital' if a['tx'].get('action') == 'ADJUST'
+                        or a['tx'].get(ISSUER_ROC_KEY) else 'income')
+                if a['marked'] == b['marked']:
+                    raise BrokerageParseError(
+                        f"{_where(i, a)} and {_where(j, b)} are one {what} "
+                        f"row of {a['tx'].get('date')} that the two "
+                        f"statements put on two listings ({sa}, {sb}), each "
+                        f"by its own "
+                        f"{'undated' if a['marked'] else 'dated'} evidence: "
+                        f"it would be booked twice. Replace both exports "
+                        f"with one statement of the account that holds the "
+                        f"trades behind both placings: its Open Positions "
+                        f"section, or every trade of the ticker from before "
+                        f"the holdings' purchases.")
+                keep, drop = (b, a) if a['marked'] else (a, b)
+                ki, di = (j, i) if a['marked'] else (i, j)
+                was = drop['tx'].get('symbol')
+                drop['tx']['symbol'] = keep['tx'].get('symbol')
+                drop['marked'] = False
+                emit_line(
+                    f"{ATTENTION_PREFIX} one payment in two exports: "
+                    f"{_where(ki, keep)} and {_where(di, drop)} are one "
+                    f"{what} row of {keep['tx'].get('date')}. It is booked "
+                    f"once, on {keep['tx'].get('symbol')}, where the dated "
+                    f"rows of {_ib_nm(files, ki)} place it; "
+                    f"{_ib_nm(files, di)} alone had left it on {was}, a "
+                    f"listing none of its rows shows held that day. One "
+                    f"statement of the account that holds the payment and "
+                    f"the ticker's trades, in place of the two, books it "
+                    f"the same way.")
 
 
 def _ib_same_acct(a, b) -> bool:
@@ -4487,8 +4802,8 @@ class IbBrokerage(BaseBrokerage):
             ctx['ca_links'].extend(pre['ca_links'])
             for root, full in pre['stock_listing'].items():
                 ctx['stock_listing'].setdefault(root, full)
-            for sym, cat, cur in pre['held_rows']:
-                ctx['held'].add(_ib_stock_symbol(cat, sym, cur, pre['fii']))
+            # (the listings held: all together, and this statement's own)
+            _ib_note_held(ctx, name, pre)
             # Postings and accrual facts carry their statement's broker
             # accounts: another IB account's dividend never pays this
             # account's accrual (audit A2-1035 / A2-1039).
@@ -4642,6 +4957,7 @@ class IbBrokerage(BaseBrokerage):
         _ib_cross_held_cas(files)                # 3b / 4b. the Ca rows a parse held
         _ib_cross_xfer_cas(files)                # 4. Transfers `Ca` cancellations
         _ib_cross_refunds(files)                 # 5. commission refunds
+        _ib_cross_income_listings(files)         # 6. one income row, one listing
 
     # ------------------------------------------------------------ helpers
 
@@ -7841,7 +8157,7 @@ class IbBrokerage(BaseBrokerage):
                 tx['quantity'] = q
                 tx['price'] = M.units(abs(amt) / meta['po_qty'], 8)
         for tx in st.transactions:
-            tx.pop('_line', None)
+            # (`_line` stays for `_ib_finish_income`, which pops it)
             tx.pop('_acct', None)
             tx.pop('_rated', None)
 
@@ -7918,22 +8234,51 @@ class IbBrokerage(BaseBrokerage):
         # every position regardless of section order.
         _isin_mismatch: set = set()
         _ambiguous: set = set()
+        _undated: list = []
         _reattribute_income_to_holdings(
             st.transactions, extra_held=rs.open_position_syms,
             fallback_held=(ctx or {}).get('held'),
+            elsewhere=(None if ctx is None else
+                       _ib_held_elsewhere(ctx, Path(st.path).name,
+                                          self.statement_accounts())),
             isins_by_root={**(ctx or {}).get('stock_isins', {}),
                            **rs.pre['stock_isins']},
             mismatches=_isin_mismatch,
             open_qty=(rs.open_position_qty if 'Open Positions' in rs.header_maps
                       else None),
-            ambiguous=_ambiguous)
+            ambiguous=_ambiguous, undated=_undated)
+        # A row whose listing no dated row of the statement shows held,
+        # the account's exports naming another: what is known is that the
+        # account may have held either; the run flags a cost row placed so
+        # (pipeline/stages._flag_undated_listings).
+        _marked = set()
+        for _u in sorted(_undated, key=lambda u: (
+                u['tx'].get('_line') or 0, str(u['tx'].get('symbol')))):
+            _t = _u['tx']
+            _marked.add(id(_t))
+            emit_line(undated_listing_note(
+                shown_name(st.path), _t.get('_line'),
+                'return of capital' if (_t.get('action') == 'ADJUST'
+                                        or _t.get(ISSUER_ROC_KEY))
+                else 'income', str(_t.get('symbol')), str(_t.get('date')),
+                _u['listings'], why=_u['why'], flat=_u['flat']))
         for _sym, _day in sorted(_ambiguous):
             emit_line(f"note: {shown_name(st.path)}: income on {_sym} of {_day} "
                   f"kept its ISIN listing: the account held more than one "
                   f"listing of the ticker that day (add a ticker.map rule "
                   f"if it belongs to the other).")
-        for t in st.transactions:
-            t.pop('_isin', None)
+        _ib_stamp_security_ids(st.transactions, rs.pre)
+        # Each income and cost row as the account's other statements may
+        # hold it too (`_ib_cross_income_listings`), and the rows' lines
+        # dropped.
+        for _t in st.transactions:
+            _n = _t.pop('_line', None)
+            if (_t.get('action') in _INCOME_ACTIONS
+                    or (_t.get('action') == 'ADJUST'
+                        and _t.get('type') == 'roc')):
+                st.listed_income.append({
+                    'tx': _t, 'line': _n, 'marked': id(_t) in _marked,
+                    'key': _ib_income_key(_t)})
         for _sym, _isin, _held in sorted(_isin_mismatch):
             emit_line(f"warning: {shown_name(st.path)}: income on {_sym} (ISIN {_isin}) "
                   f"was NOT moved to the held listing {_held}: that "

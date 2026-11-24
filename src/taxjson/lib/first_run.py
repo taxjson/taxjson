@@ -23,6 +23,11 @@ that lists and fixes it (docs/getting-started.md, step 5):
     cost (lib/transfer_in) — `tjs transfers`;
   * accounts with open positions and no holdings file to check them
     against — `tjs sanity`;
+  * the positions not yet compared with the broker's holdings files,
+    when the project has any (`holdings = [...]`, a holdings/ snapshot):
+    the run compares nothing, `tjs sanity` is that step (render_blocks'
+    `holdings`, never in run_summary.json: a holdings file is a
+    check-only input, and no reports/ file follows it);
   * income paid on a security the books do not hold — a holding with no
     purchase at all; `tjs sanity`.
 
@@ -841,17 +846,74 @@ def parser_warnings(cache: Path, accounts: Sequence[str]
                 it = {"account": acct, "text": ln[len(head):]}
                 if ln.startswith(head) and it not in found:
                     found.append(it)
+        # The run's own end-of-run lines for the account: a cost row on a
+        # listing no dated row shows held (pipeline/stages
+        # `_flag_undated_listings`, lib/stage_msg.UNDATED_LISTING_GAIN).
+        try:
+            lines = (cache / f"{acct}_listing_evidence.diag").read_text(
+                errors="replace").splitlines()
+        except OSError:
+            lines = []
+        for ln in lines:
+            it = {"account": acct, "text": ln[len(_MARKED):]}
+            if ln.startswith(_MARKED + _UNDATED_TOPIC) and it not in found:
+                found.append(it)
     return found
 
 
-def _parser_items(doc: Dict[str, Any]) -> List[Tuple[str, str]]:
+# The run's `undated listing` lines (lib/stage_msg.UNDATED_LISTING_GAIN):
+# their topic, the words that end a line's first sentence, and the
+# remedy as the one-line list names it.
+_UNDATED_TOPIC = "undated listing: "
+_UNDATED_REMEDY = ("replace the split exports (Open Positions) or add "
+                   "TOBASE: `tjs run --details`")
+# How many such rows the one-line list names before it counts the rest.
+_UNDATED_SHOWN = 2
+
+
+def _undated_concise(texts: List[str]) -> List[Tuple[str, str]]:
+    """The run's `undated listing` lines in the one-line list, each row
+    in its shortest form with its account, file and line kept (`return of
+    capital DAY: A or B? (account: file line N)`): one row with the
+    remedy; several a line each (the first _UNDATED_SHOWN) and one line
+    counting them. The whole message, the remedy in it, is on the console
+    mid-run and under --details."""
+    heads = []
+    for t in texts:
+        core, _, where = t[len(_UNDATED_TOPIC):].split(
+            "). The books ")[0].rpartition(" (")
+        core = core.replace(" on ", ": ", 1)
+        if " may belong to " in core:
+            core = core.replace(" may belong to ", " or ", 1) + "?"
+        else:
+            core = core.replace(" that no dated row shows held",
+                                ", not shown held", 1)
+        heads.append(f"{core} ({where})")
+    if len(heads) == 1:
+        # (a colon, not a dash, after the file: the list drops a
+        # parenthesis before a dash when a line is long)
+        return [("Warning", f"Undated listing: {heads[0]}: {_UNDATED_REMEDY}")]
+    rows = [("Warning", h) for h in heads[:_UNDATED_SHOWN]]
+    more = len(heads) - _UNDATED_SHOWN
+    return rows + [("Warning", f"Undated listing: {len(heads)} such rows"
+                    + (f", {more} more than shown" if more > 0 else "")
+                    + " — the remedy: `tjs run --details`")]
+
+
+def _parser_items(doc: Dict[str, Any], concise: bool = False
+                  ) -> List[Tuple[str, str]]:
     """The marked parser warnings (parser_warnings) as the list shows
     them: one `Warning:` each, its account in front (`[margin] `, as the
     .sum names another account's message) and its text as the run's
-    console shows it."""
+    console shows it. `concise`: the run's `undated listing` lines in
+    their short form (_undated_concise), after the others."""
     from taxjson.lib.out import shown_topic
+    ws = doc.get("parser_warnings") or []
+    short = [w["text"] for w in ws
+             if concise and w["text"].startswith(_UNDATED_TOPIC)]
     return [("Warning", f"[{w['account']}] {shown_topic(w['text'])}")
-            for w in doc.get("parser_warnings") or []]
+            for w in ws if w["text"] not in short] + (
+                _undated_concise(short) if short else [])
 
 
 def _booked_twice(root: Path) -> List[str]:
@@ -886,7 +948,8 @@ def _n(count: int, one: str, many: str) -> str:
 
 
 def render(doc: Dict[str, Any], *, mh_name: str = "missing_history.tt",
-           width_: Optional[int] = None) -> List[str]:
+           width_: Optional[int] = None,
+           holdings: Sequence[str] = ()) -> List[str]:
     """The summary's lines (none when clean), on the run's console
     (docs/output-style.md, The run's console): a `==> ` heading, one
     `Warning:` (a number the totals miss) or `Info:` (a check not yet
@@ -895,7 +958,7 @@ def render(doc: Dict[str, Any], *, mh_name: str = "missing_history.tt",
     and the closing `Info:` line."""
     from taxjson.lib import out
     return out.join_blocks(render_blocks(doc, mh_name=mh_name,
-                                         width_=width_))
+                                         width_=width_, holdings=holdings))
 
 
 def _distinct(items: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1061,10 +1124,46 @@ def _unknown_cost_detail(items: Sequence[Dict[str, Any]], yr: Any) -> str:
 # The closing block's one-line form (docs/output-style.md, Essentials
 # first): at most this many lines under its heading.
 CONCISE_BUDGET = 6
+# Its line while the project has holdings files: `tjs run` compares
+# nothing with them; `tjs sanity` is its own step (TJ-5170). Never
+# folded away (render_blocks), as a Warning is not.
+HOLDINGS_TO_COMPARE = ("positions not yet compared with the broker's "
+                       "holdings files — `tjs sanity`")
+
+
+def holdings_detail(holdings: Sequence[str]) -> str:
+    """The --details form of HOLDINGS_TO_COMPARE, naming where the
+    files are (`holdings`: holdings_dir.where_used)."""
+    return (f"positions not yet compared with the broker's holdings files "
+            f"({'; '.join(holdings)}): `tjs run` does not compare them. Run "
+            f"`tjs sanity`: it compares the quantities, and the costs of "
+            f"the taxable accounts.")
+
+
+def _holdings_items(holdings: Sequence[str], detail: bool
+                    ) -> List[Tuple[str, str]]:
+    """The closing list's line naming `tjs sanity` while the project has
+    holdings files (`holdings`, where they are: holdings_dir.where_used):
+    one `Info:`, in full with `detail`; none without them."""
+    if not holdings:
+        return []
+    return [("Info", holdings_detail(holdings) if detail
+             else HOLDINGS_TO_COMPARE)]
+
+
+def _heading(doc: Dict[str, Any]) -> List[str]:
+    """The closing list's heading, naming the step of
+    docs/getting-started.md its lines belong to: step 6 (check against
+    the broker) when they are only the holdings ones (the accounts with
+    no holdings file, the files `tjs sanity` compares), else step 5."""
+    step = 6 if is_clean(dict(doc, unchecked_accounts=[])) else 5
+    return [f"==> Before you trust these numbers "
+            f"(docs/getting-started.md, step {step})"]
 
 
 def concise_items(doc: Dict[str, Any],
-                  width_: Optional[int] = None) -> List[Tuple[str, str]]:
+                  width_: Optional[int] = None,
+                  holdings: Sequence[str] = ()) -> List[Tuple[str, str]]:
     """Each finding as (kind, one line naming the command with the
     detail): the default view of the run's closing block. Every warning
     class render_blocks says is here; the explanation is in --details.
@@ -1125,7 +1224,7 @@ def concise_items(doc: Dict[str, Any],
         items.append(("Warning", f"{_n(len(inc), 'security', 'securities')}"
                       f" paid income the books do not hold ({_syms(inc)}) — "
                       f"`tjs sanity`"))
-    items += _parser_items(doc)
+    items += _parser_items(doc, concise=True)
     if mat:
         items.append(("Info", f"{_n(len(mat), 'position', 'positions')} "
                       f"read short by the history check "
@@ -1136,6 +1235,7 @@ def concise_items(doc: Dict[str, Any],
         items.append(("Info", f"{_n(len(zd), 'position', 'positions')} at "
                       f"the $0 cost you declared ({_syms(zd)}) — "
                       f"`tjs spinoffs`"))
+    items += _holdings_items(holdings, detail=False)
     un = doc.get("unchecked_accounts") or []
     if un:
         items.append(("Info", f"{len(un)} "
@@ -1145,36 +1245,46 @@ def concise_items(doc: Dict[str, Any],
     return items
 
 
+def _fold(items: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
+    """The concise items within CONCISE_BUDGET (the closing line one of
+    them): every Warning stays, and the line naming `tjs sanity`; the
+    other Info lines that do not fit fold into one."""
+    room = CONCISE_BUDGET - 1
+    if len(items) <= room:
+        return items
+    warns = [i for i in items if i[0] == "Warning"]
+    kept = [i for i in items if i[1] == HOLDINGS_TO_COMPARE]
+    infos = [i for i in items
+             if i[0] != "Warning" and i[1] != HOLDINGS_TO_COMPARE]
+    keep = max(0, room - len(warns) - len(kept) - 1)
+    rest = infos[keep:]
+    return warns + kept + infos[:keep] + (
+        [("Info", f"{len(rest)} more check(s) not yet made — "
+                  f"`tjs checklist --run`")] if rest else [])
+
+
 def render_blocks(doc: Dict[str, Any], *,
                   mh_name: str = "missing_history.tt",
                   width_: Optional[int] = None,
                   concise: bool = False,
-                  details_hint: bool = False) -> List[List[str]]:
+                  details_hint: bool = False,
+                  holdings: Sequence[str] = ()) -> List[List[str]]:
     """render() as its entries (the heading, each finding, the closing
     line), each a list of lines: lib/out.show_blocks prints them with a
     blank line after an entry of more than one line. `concise`: the
     run's default console — one line per finding (concise_items), at
     most CONCISE_BUDGET lines under the heading (the Info findings folded
     into one when there are more), and the closing line naming
-    `tjs run --details` when `details_hint`."""
-    if is_clean(doc) and not (concise and details_hint):
+    `tjs run --details` when `details_hint`. `holdings`: where the
+    project's holdings files are (holdings_dir.where_used), for the line
+    naming `tjs sanity`; worked out by the caller, never stored."""
+    if is_clean(doc) and not holdings and not (concise and details_hint):
         return []
     from taxjson.lib import out
     if concise:
         w = out.width() if width_ is None else width_
-        heading = ["==> Before you trust these numbers "
-                   "(docs/getting-started.md, step 5)"]
-        items = concise_items(doc, w)
-        room = CONCISE_BUDGET - 1
-        if len(items) > room:
-            warns = [i for i in items if i[0] == "Warning"]
-            infos = [i for i in items if i[0] != "Warning"]
-            keep = max(0, room - len(warns) - 1)
-            items = warns + infos[:keep]
-            rest = infos[keep:]
-            if rest:
-                items.append(("Info", f"{len(rest)} more check(s) not yet "
-                              f"made — `tjs checklist --run`"))
+        heading = _heading(doc)
+        items = _fold(concise_items(doc, w, holdings))
         closing = ("Info: Then `tjs checklist --run` (the next step); "
                    "each message's detail: `tjs run --details`"
                    if details_hint else
@@ -1271,6 +1381,7 @@ def render_blocks(doc: Dict[str, Any], *,
                      f"contribution's sale, a withdrawal's purchase) is "
                      f"NOT in `tjs sum`; the in-kind warning above "
                      f"names the INKIND line for each."))
+    items += _holdings_items(holdings, detail=True)
     un = doc.get("unchecked_accounts") or []
     if un:
         items.append(("Info", f"{_n(len(un), 'account', 'accounts')} with "
@@ -1286,8 +1397,7 @@ def render_blocks(doc: Dict[str, Any], *,
     items += _parser_items(doc)
     w = out.width() if width_ is None else width_
     hang = "" if w > 0 else "  "
-    blocks = [["==> Before you trust these numbers "
-               "(docs/getting-started.md, step 5)"]]
+    blocks = [_heading(doc)]
     for kind, it in items:
         blocks.append(out.wrap(f"{kind}: {it}", w, "", hang))
     blocks.append(out.wrap("Info: Then run `tjs checklist --run`: it "

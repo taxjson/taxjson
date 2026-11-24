@@ -207,6 +207,143 @@ class TestExecutionClocks(unittest.TestCase):
         self.assertEqual(rows[0]["time"], "09:30:00")
 
 
+class TestClocksOfEventRows(unittest.TestCase):
+    """TJ-5018: with a clock in the date format, a transfer and an income
+    row keep their time as a trade does (both were stamped 09:30:00). A
+    cost adjustment does not, by rule: every importer stamps one
+    09:30:00, the clock on its row being the broker's posting, so it
+    follows its day's rows stamped 09:30:00 or earlier and precedes a
+    trade clocked later (CA-DATE-14 / US-DATE-13)."""
+
+    HEAD = "Date,Action,Symbol,Qty,Price,Amount,Currency\n"
+    MAP = _mapping('amount = "Amount"', 'date = "%Y-%m-%d %H:%M:%S"',
+                   'DIV = "dividend"\nPIL = "dividend_in_lieu"\nTAX = "tax"\n'
+                   'INT = "interest"\nFEE = "fee"\nTIN = "transfer_in"\n'
+                   'TOUT = "transfer_out"\nROC = "roc"\nADJ = "adjust"')
+
+    def _rows(self, *lines, mapping=None):
+        return _parse(self.HEAD + "".join(line + "\n" for line in lines),
+                      mapping or self.MAP)[0]
+
+    def test_a_transfer_and_an_income_row_keep_the_clock(self):
+        rows = self._rows("2025-03-03 12:00:00,B,SYN.TO,10,10,100,CAD",
+                          "2025-03-03 13:01:02,DIV,SYN.TO,,,5,CAD",
+                          "2025-03-03 13:01:03,PIL,SYN.TO,,,5,CAD",
+                          "2025-03-03 13:01:04,TAX,SYN.TO,,,-1,CAD",
+                          "2025-03-03 13:01:05,INT,,,,2,CAD",
+                          "2025-03-03 13:01:06,FEE,,,,-3,CAD",
+                          "2025-03-03 14:00:00,TIN,SYN.TO,5,,,CAD",
+                          "2025-03-03 15:59:00,TOUT,SYN.TO,15,,,CAD")
+        self.assertEqual([(r["action"], r["time"]) for r in rows],
+                         [("BUYSELL", "12:00:00"), ("DIVIDEND", "13:01:02"),
+                          ("DIVIDEND_IN_LIEU", "13:01:03"), ("TAX", "13:01:04"),
+                          ("INTEREST", "13:01:05"), ("FEE", "13:01:06"),
+                          ("TRANSFER", "14:00:00"), ("TRANSFER", "15:59:00")])
+
+    def test_without_a_clock_they_are_stamped_as_before(self):
+        rows = self._rows("2025-03-03,DIV,SYN.TO,,,5,CAD", "2025-03-03,TIN,SYN.TO,5,,,CAD",
+                          mapping=self.MAP.replace(" %H:%M:%S", ""))
+        self.assertEqual([r["time"] for r in rows], ["09:30:00", "09:30:00"])
+
+    @rule(R.CA_DATE_14)
+    @rule(R.US_DATE_13)
+    def test_a_cost_adjustment_is_stamped_the_day_s_open_as_every_importer_s(self):
+        from taxjson.lib.brokerages.base import roc_adjust_row
+        rows = self._rows("2025-03-03 13:00:00,ROC,SYN.TO,,,5,CAD",
+                          "2025-03-03 15:59:00,ADJ,SYN.TO,,,-4,CAD")
+        self.assertEqual([(r["action"], r.get("type", ""), r["time"]) for r in rows],
+                         [("ADJUST", "roc", "09:30:00"), ("ADJUST", "", "09:30:00")])
+        self.assertEqual(roc_adjust_row(symbol="SYN.TO", currency="CAD", date="2025-03-03",
+                                        desc="", amount=5.0, account="A")["time"],
+                         "09:30:00")
+
+    @rule(R.CA_DATE_14)
+    def test_the_stamp_places_a_return_of_capital_among_the_day_s_trades(self):
+        # 10 held at 100; 5 sold for 50; a return of capital of 5 posted
+        # at 13:00, stamped 09:30:00. The trades settle on their trade
+        # date, so the stamp alone places it: before a sale at noon (the
+        # 10 units cost 95: gain 2.50, 5 left at 47.50), after one at
+        # 09:00 or at 09:30:00 (gain 0, 5 left at 45).
+        mapping = self.MAP + "\n[options]\nsettle_on_trade_date = true\n"
+        for clock, gain, left in (("12:00:00", 2.5, 47.5), ("09:00:00", 0.0, 45.0),
+                                  ("09:30:00", 0.0, 45.0)):
+            with self.subTest(sale=clock):
+                g = _gains(self._rows("2025-02-03 10:00:00,B,SYN.TO,10,10,100,CAD",
+                                      f"2025-03-03 {clock},S,SYN.TO,-5,10,50,CAD",
+                                      "2025-03-03 13:00:00,ROC,SYN.TO,,,5,CAD",
+                                      mapping=mapping), 2025)
+                self.assertAlmostEqual(g["summary"]["total_gain"], gain)
+                self.assertEqual([(i["symbol"], i["qty"], round(i["total_cost"], 2))
+                                  for i in g["inventory"]], [("SYN.TO", 5.0, left)])
+
+    @rule(R.CA_DATE_14)
+    def test_a_trade_that_settles_later_follows_the_return_of_capital(self):
+        # The default settlement: the sale stands at its settlement date,
+        # after the pay day, whatever its clock.
+        for clock in ("09:00:00", "12:00:00"):
+            with self.subTest(sale=clock):
+                g = _gains(self._rows("2025-02-03 10:00:00,B,SYN.TO,10,10,100,CAD",
+                                      f"2025-03-03 {clock},S,SYN.TO,-5,10,50,CAD",
+                                      "2025-03-03 13:00:00,ROC,SYN.TO,,,5,CAD"), 2025)
+                self.assertAlmostEqual(g["summary"]["total_gain"], 2.5)
+
+
+class TestSplitFillsAcrossOverlappingExports(unittest.TestCase):
+    """TJ-5038: two purchases alike but for their descriptions already
+    have two ids. The second was marked a split fill ("second fill [fill
+    #2]"), so an overlapping export holding it alone (unmarked there)
+    added a third row: 30 shares at 300 for 20 at 200. And two exports
+    listing identical rows of a day in opposite orders marked different
+    rows: the marks went on before a newest-first export was reversed."""
+
+    HEAD = "Date,Action,Symbol,Qty,Price,Amount,Currency,Note\n"
+    MAP = _mapping('amount = "Amount"\ndescription = "Note"')
+
+    @staticmethod
+    def _ids(rows):
+        import dataclasses
+        from taxjson.model.transaction import TaxTransaction as T
+        names = {f.name for f in dataclasses.fields(T)}
+        return [T(**{k: v for k, v in r.items() if k in names}).id for r in rows]
+
+    def _rows(self, *lines):
+        return _parse(self.HEAD + "".join(line + "\n" for line in lines), self.MAP)[0]
+
+    def test_rows_their_descriptions_tell_apart_are_not_marked(self):
+        first = "2025-03-03,B,SYN.TO,10,10,100,CAD,first fill"
+        second = "2025-03-03,B,SYN.TO,10,10,100,CAD,second fill"
+        both, alone = self._rows(first, second), self._rows(second)
+        self.assertEqual([r["description"] for r in both], ["first fill", "second fill"])
+        ids = self._ids(both)
+        self.assertEqual(len(set(ids)), 2)
+        self.assertEqual(self._ids(alone), ids[1:])
+
+    def test_identical_rows_are_still_marked(self):
+        line = "2025-03-03,B,SYN.TO,10,10,100,CAD,fill"
+        rows = self._rows(line, line)
+        self.assertEqual([r["description"] for r in rows], ["fill", "fill [fill #2]"])
+        self.assertEqual(len(set(self._ids(rows))), 2)
+
+    def test_the_marks_follow_the_order_a_newest_first_export_is_read_in(self):
+        # Alike in every field of the id, apart in the fee (no part of
+        # it; both within the amount's tolerance): the row without a mark
+        # is the day's first in both exports.
+        head = self.HEAD.replace("Note", "Fee,Note")
+        mapping = _mapping('amount = "Amount"\nfee = "Fee"\ndescription = "Note"',
+                           'fee_sign = "charged"', "[options]\nallow_large_fees = true")
+        days = ["2025-02-03,B,SYN.TO,1,10,10,CAD,0,early",
+                "2025-03-03,B,SYN.TO,10,10,100,CAD,0.5,fill",
+                "2025-03-03,B,SYN.TO,10,10,100,CAD,0.9,fill",
+                "2025-04-01,B,SYN.TO,1,10,10,CAD,0,late"]
+        seen = []
+        for lines in (days, days[::-1]):
+            rows = _parse(head + "".join(line + "\n" for line in lines), mapping)[0]
+            seen.append([(r["date"], r["description"], r["fee"]) for r in rows])
+        self.assertEqual(seen[0], seen[1])
+        self.assertEqual(seen[0][1:3], [("2025-03-03", "fill", 0.5),
+                                        ("2025-03-03", "fill [fill #2]", 0.9)])
+
+
 _FUT_MAP = _mapping('amount = "Amount"\nfee = "Fee"',
                     'fee_sign = "charged"',
                     "[options]\nallow_large_fees = true")

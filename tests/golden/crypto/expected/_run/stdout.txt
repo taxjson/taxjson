@@ -20,6 +20,6 @@
 ==> Writing cross-account reports to reports/
 ==> Writing fees report reports/fees.rpt
 ==> Done. Reports are in reports/
-==> Before you trust these numbers (docs/getting-started.md, step 5)
+==> Before you trust these numbers (docs/getting-started.md, step 6)
 Info: 1 account with open positions and no holdings file to check them against: crypto (3). Run `tjs sanity` with the broker's positions.
 Info: Then run `tjs checklist --run`: it checks every step and names the next one.

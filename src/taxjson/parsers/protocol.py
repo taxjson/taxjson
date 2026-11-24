@@ -84,8 +84,9 @@ ROW_KINDS = ("trade", "expiry", "assign", "split", "rename", "stock_dividend",
              "interest", "fee", "transfer", "roc", "adjust")
 # The kinds of the cash events a broker's export holds (lib/cash_lines
 # `conv`, `move`, `balance`, `flow`; Interactive Brokers' statement period
-# and its notes), claimed as `cash_kinds`.
-CASH_KINDS = ("FXCONV", "CASHMOVE", "CASHBAL", "FLOW", "PERIOD", "NOTE")
+# and its notes; Kraken's Hybrid Earn rows of cash, PARKED: no move, the
+# cash stays in the book), claimed as `cash_kinds`.
+CASH_KINDS = ("FXCONV", "CASHMOVE", "CASHBAL", "FLOW", "PERIOD", "NOTE", "PARKED")
 _ACTION_KINDS = {"ASSIGN": "assign", "DIVIDEND": "dividend",
                  "DIVIDEND_IN_LIEU": "dividend_in_lieu", "TAX": "tax",
                  "INTEREST": "interest", "FEE": "fee", "TRANSFER": "transfer"}

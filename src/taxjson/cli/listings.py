@@ -20,7 +20,7 @@ from taxjson.cli.common import (
     _discover_tx_accounts, _dist_adjust_rows, _gains_row_date, _ISO_DATE_RE,
     _leaps_closed, _leaps_contracts, _leaps_empty_doc, _leaps_rule,
     _leaps_scope_guard, _load_json_or_die, _print_scope_split,
-    _real_world_legs, _refuse_cash_older_than_inputs, _require_books, _scope_split,
+    _die_cash_ids, _real_world_legs, _refuse_cash_older_than_inputs, _require_books, _scope_split,
     _settle_basis,
     _staking_view, _TRADE_ACTIONS, _trade_total, _tx_fee,
     _view_income_rules, _view_msg, _view_window, _vprint,
@@ -43,7 +43,8 @@ from taxjson.pipeline.stages import (
 # would take cmd_gains over 150 lines.
 
 
-def _tx_display_line(tx: dict, settle: bool = False) -> Optional[str]:
+def _tx_display_line(tx: dict, settle: bool = False,
+                     settled: bool = False) -> Optional[str]:
     """Human-readable line for `tjs events`. Money amounts (total,
     fee, dividend/tax/interest/adjust amount) are shown to 2 decimals; quantity
     and per-share price keep their significant digits (a 0.0375 dividend rate
@@ -101,8 +102,20 @@ def _tx_display_line(tx: dict, settle: bool = False) -> Optional[str]:
     # its pay year, a warrant exercise became a sale at 0, and a size of
     # a million (`x1e+06`) did not read back (backlog TJ-0390, TJ-0377,
     # TJ-0385; A2-0621).
-    from taxjson.lib.tt_format import tt_tail
+    # `settled`: the round-trippable view also writes a row's other
+    # date when the line's date is not both (`settled=`, `traded=`:
+    # backlog TJ-5211, TJ-5213). A row no .tt line can say (taxjson-convert-tt
+    # refuses it: a move in kind, a reward's FEE row) ends with
+    # `not_tt=<why>`, which the reader refuses if the line is pasted,
+    # saying why: printed plain it read as cash (backlog TJ-5212).
+    from taxjson.lib.tt_format import NOT_TT_KEY, date_token, not_tt_why, tt_tail
+    basis = "settle" if settle else "trade"
     tail = tt_tail(tx, action)
+    why = not_tt_why(tx, basis)
+    if why:
+        tail += f" {NOT_TT_KEY}={why}"
+    elif settled:
+        tail += date_token(tx, basis)
 
     from taxjson.lib.row_types import is_opening_row
     if is_opening_row(tx):
@@ -128,9 +141,10 @@ def _tx_display_line(tx: dict, settle: bool = False) -> Optional[str]:
         from taxjson.lib.tt_format import MANUAL_TRANSFER_DECLARATION
         decl = (" DECLARED" if tx.get("description")
                 == MANUAL_TRANSFER_DECLARATION else "")
-        return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(net)}{decl}"
+        return (f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} "
+                f"{money(net)}{decl}{tail}")
     if action == "SPLIT":
-        return f"SPLIT {date} {time} {sym} {tx.get('symbol_new') or sym} {sig(qty)}"
+        return f"SPLIT {date} {time} {sym} {tx.get('symbol_new') or sym} {sig(qty)}{tail}"
     if action in ("DIVIDEND", "DIVIDEND_IN_LIEU", "TAX"):
         # Signed so a reversal row reads as negative instead of masquerading
         # as more income/tax.
@@ -316,7 +330,7 @@ def _tx_view_text(accounts: List[str], root: Path,
     capped: Dict[str, float] = {}
     stake: Dict[str, float] = {}
     for _d, _t, acct, tx in rows:
-        line = _tx_display_line(tx, settle=settle_dates)
+        line = _tx_display_line(tx, settle=settle_dates, settled=not prefix)
         if line is None:
             skipped += 1
             continue
@@ -1272,8 +1286,13 @@ def cmd_cash(args: argparse.Namespace) -> None:
     tt_line: FXCONV, CASHMOVE, CASHOPEN; a fee as a `#FEE` comment
     line), oldest to latest, with per-currency totals. A broker's move
     that no .tt line declares shows `?` where its own / kept / spot /
-    cost= / proceeds= goes; one in the base currency needs none (a
-    `#CASHMOVE` comment line). Statement balances are not listed (`tjs
+    cost= / proceeds= goes (and its `row=` where a line without one would
+    fit a Kraken Hybrid Earn row alike); one in the base currency needs none (a
+    `#CASHMOVE` comment line); a stablecoin send decided in the account's
+    sends.json shows that decision (`spot` for a gift or a payment, `kept`
+    for `self`). A .tt CASHMOVE line written for a Kraken Hybrid Earn row
+    is left out and said in a Warning, as the ledger refuses it (lib/
+    cash_events `parked_lines`). Statement balances are not listed (`tjs
     fx-cash --ledger v2` reconciles them). `[PERIOD] [ACCOUNT]` as
     `tjs events`."""
     from taxjson.lib import cash_events as CE
@@ -1301,13 +1320,33 @@ def cmd_cash(args: argparse.Namespace) -> None:
         by_label.setdefault(str(t.get("account")), []).append(t)
     try:
         cash = CE.collect(root, cfg, country, by_label, work=cache)
+    except CE.CashIdConflict as e:
+        _die_cash_ids(e.conflicts)
     except (OSError, ValueError) as e:
         _die(str(e))
-    CE.apply_declarations(cash["events"], cash["lines"])
-    for p in list(cash["problems"]) + list(cash.get("warnings") or []):
+    CE.apply_declarations(cash["events"], cash["lines"], _base)
+    # What the ledger refuses is not listed or counted here either
+    # (backlog TJ-4951, TJ-4953): a .tt CASHMOVE line written for a Kraken
+    # Hybrid Earn row (cash that never moved), one that fits such a row
+    # and a cash move alike, or whose row= names none, said instead
+    # (lib/cash_events `refused_lines`); a stablecoin
+    # send a line and its sends.json decision declare two ways, said too
+    # (the move itself is listed, as the line declares it).
+    turned = [(kind, lns, text) for kind, lns, text in CE.refused_lines(cash["lines"], _base)
+              if keep(lns[0]["date"]) and (not account or lns[0].get("label") == account)]
+    refused = [ln for _kind, lns, _text in turned for ln in lns]
+    said = [(f"{text}: not listed or counted here, and `tjs fx-cash --ledger v2` refuses "
+             f"it — {CE.parked_fix(lns[0])}" if kind == "parked" else
+             f"{text} (not listed or counted here; `tjs fx-cash --ledger v2` gives no "
+             f"figure until then)") for kind, lns, text in turned] + [
+        CE.send_conflict_text(e) for e in cash["events"]
+        if e.get("send_conflict") and keep(e["date"])
+        and (not account or e.get("label") == account)]
+    for p in list(cash["problems"]) + list(cash.get("warnings") or []) + said:
         _view_msg("warning", p)
     evs = [e for e in list(cash["events"])
-           + [x for x in cash["lines"] if not x.get("matched")]
+           + [x for x in cash["lines"] if not x.get("matched")
+              and not any(x is ln for ln in refused)]
            if e.get("date") and keep(e["date"])
            and (not account or e.get("label") == account)]
     evs.sort(key=lambda e: (e["date"], e.get("label") or "", e["kind"]))
@@ -1346,7 +1385,7 @@ def cmd_cash(args: argparse.Namespace) -> None:
                    "totals": {"deposits": dep, "withdrawals": wd,
                               "converted": conv, "fees": fees,
                               "credits": credits},
-                   "problems": list(cash["problems"])}, schema="cash")
+                   "problems": list(cash["problems"]) + said}, schema="cash")
         return
     if not rows:
         _out.put("(no cash events in this window)")

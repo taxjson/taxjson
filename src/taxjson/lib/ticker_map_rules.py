@@ -18,7 +18,7 @@ from types import MappingProxyType
 from typing import Dict, List, Optional, Tuple
 
 from taxjson.lib.cli_diag import InputContentError
-from taxjson.lib.futures_prefixes import FUTURES_PREFIXES
+from taxjson.lib.futures_prefixes import FUTURES_PREFIX_GROUP, FUTURES_PREFIXES
 from taxjson.lib.ca_listing import book_listing
 
 
@@ -299,8 +299,8 @@ def _parse_map_text(text: str, name: str = "ticker.map",
             where = f"{name}:{lineno}"
             parts = line.split()
             kw = parts[0].upper()
-            syms = [book_listing(p) for p in parts[1:]]     # TJ-4607
-            if kw in RETIRED_KEYWORDS:
+            syms = _line_syms(kw, parts, where, line, problems)     # TJ-4607
+            if kw in RETIRED_KEYWORDS or syms is None:
                 # TRADINGVIEW: a removed feature's line — ignored, never
                 # a problem (`tjs run` asks once to delete it).
                 continue
@@ -492,6 +492,24 @@ def _parse_map_text(text: str, name: str = "ticker.map",
     return tmap, problems, notes
 
 
+def _line_syms(kw: str, parts, where: str, line: str,
+               problems: List[str]) -> Optional[List[str]]:
+    """A rename line's symbols as the books spell them (ca_listing
+    book_listing, backlog TJ-4607); None, with the problem naming the
+    line, when one is a futures symbol that names no contract
+    (`//QZM26.US`: lib/futures_prefixes, backlog TJ-5150), so the line's
+    rule is dropped as a malformed line's is. Any other line's are not
+    read here: a lookup line's (parse_side_line reads its own, a free-text
+    EXTRACT description too), a retired or an unknown keyword's."""
+    if kw not in _MAP_KEYWORDS:
+        return []
+    try:
+        return [book_listing(p) for p in parts[1:]]
+    except ValueError as e:
+        problems.append(f"{where}: {e}: {line!r}")
+        return None
+
+
 def _self_pair(kw: str, parts, where: str, line: str, case: dict,
                problems: List[str], notes: List[str]) -> None:
     """A two-symbol line (`parts`, as written) whose symbols are one in
@@ -667,17 +685,26 @@ def bare_target_warnings(symbols, mapping: Dict[str, str]) -> List[str]:
             if frm in held and bare_rename_target(frm, to)]
 
 
+# An option symbol as map_symbol reads it: its underlying (a futures
+# prefix kept, in any of the spellings lib/option_symbols reads: `F:`,
+# `/`, `\`), the OCC block and the market. With `F:` alone, a rule for
+# `/QZ.US` left `/QZ260620C00010000.US` unmapped (backlog TJ-5037).
+_MAP_OPTION_RE = re.compile(
+    r'^(' + FUTURES_PREFIX_GROUP + r'?[A-Z0-9\.]+?)(\d{6}[CP]\d+)\.(\S+)$',
+    re.IGNORECASE)
+
+
 def map_symbol(symbol: str, mapping: Dict[str, str]) -> str:
     """The rename a mapping implies for ONE symbol — exact match first,
     else options map through their UNDERLYING (SAMPLM.US -> SAMPLM.TO also
-    renames SAMPLM260116C00150000.US -> ...TO). Pure-string twin of
+    renames SAMPLM260116C00150000.US -> ...TO; an option on a future, in
+    each prefix spelling, through its future's rule). Pure-string twin of
     apply_mapping so non-transaction consumers (tjs sanity) apply
     the same consolidation the pipeline does."""
     if symbol in mapping:
         return mapping[symbol]
     # Option check (e.g. SAMPLM260116C00150000.US or F:SAMPLX251220P00053000.US)
-    match = re.match(r'^((?:F:)?[A-Z0-9\.]+?)(\d{6}[CP]\d+)\.(\S+)$',
-                     symbol, re.IGNORECASE)
+    match = _MAP_OPTION_RE.match(symbol)
     if match:
         underlying, contract, ext = match.groups()
         lookup = f"{underlying}.{ext}"

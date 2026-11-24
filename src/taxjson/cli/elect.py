@@ -262,6 +262,21 @@ def _option_brief(desc: str) -> str:
     return head if len(head) <= 52 else head[:49].rstrip() + "..."
 
 
+def _cil_parts(ev: Dict[str, Any]) -> List[tuple]:
+    """A pending event's `cash_in_lieu_parts` as (day, fraction, cash)
+    tuples; [] when the document (work/pending_elections.json, perhaps
+    an older release's) holds none it can read."""
+    out: List[tuple] = []
+    parts = ev.get("cash_in_lieu_parts") or ()
+    for part in parts if isinstance(parts, list) else ():
+        if not (isinstance(part, list) and len(part) == 3
+                and all(isinstance(x, (int, float))
+                        and not isinstance(x, bool) for x in part[1:])):
+            return []
+        out.append((str(part[0] or ""), part[1], part[2]))
+    return out
+
+
 def _print_pending(root: Path, inputs_dir: Path, cache: Path,
                    agg: Dict[str, Any], wrong: List[Dict[str, str]],
                    country: str, details: bool = False) -> None:
@@ -300,7 +315,8 @@ def _print_pending(root: Path, inputs_dir: Path, cache: Path,
                 float(ev.get("fraction_in_lieu") or 0.0),
                 float(ev.get("cash_in_lieu") or 0.0),
                 str(ev.get("cash_in_lieu_currency") or ev.get("currency")
-                    or ""), str(ev.get("cash_in_lieu_date") or ""))
+                    or ""), str(ev.get("cash_in_lieu_date") or ""),
+                parts=_cil_parts(ev))
             if _cil:
                 doc.para(f"cash in lieu: {_cil}", indent="  ")
         if ev.get("sheltered"):

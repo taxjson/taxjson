@@ -37,9 +37,12 @@ from __future__ import annotations
 
 
 import json
+import math
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from taxjson.lib.futures_prefixes import canonical_futures_symbol
 from taxjson.lib.loss_override_note import KEYWORD, _money, parse_line
 from taxjson.lib.sale_groups import disposition_groups
 from taxjson.model import money as M
@@ -175,7 +178,10 @@ def read_state(cache: Path) -> List[Dict[str, Any]]:
 
 def load_file(path) -> List[Dict[str, Any]]:
     """The overrides of a --loss-overrides file (the state's form, or a
-    bare list). Raises ValueError on a file that is not one."""
+    bare list). Raises ValueError on a file that is not one, or on an
+    entry whose quantity, when given, is not a finite number of units
+    above 0, as an ALLOWLOSS line's (loss_override_note.parse_line): a
+    JSON number, or a string of one in plain digits (`_entry_qty`)."""
     doc = json.loads(Path(path).read_text(encoding="utf-8"))
     items = doc.get("overrides") if isinstance(doc, dict) else doc
     if not isinstance(items, list):
@@ -187,10 +193,49 @@ def load_file(path) -> List[Dict[str, Any]]:
                 and str(it.get("reason") or "").strip()):
             raise ValueError(f"{path}: entry {i + 1} needs account, date, "
                              f"symbol and reason")
+        # The symbol as the books spell it: a future's `/` or `\` prefix
+        # is `F:`, as an ALLOWLOSS line's (backlog TJ-5150).
         out.append(dict(it, where=it.get("where") or f"{path}#{i + 1}",
-                        qty=(abs(float(it["qty"]))
-                             if it.get("qty") not in (None, "") else None)))
+                        symbol=_entry_symbol(it["symbol"], path, i + 1),
+                        qty=_entry_qty(it.get("qty"), path, i + 1)))
     return out
+
+
+# A quantity given as a string: digits, a point, a sign, an exponent; no
+# `_` (Python's float reads `1_00` as 100), no thousands comma, no word.
+_QTY_TEXT_RE = re.compile(r"[0-9.eE+-]+")
+
+
+def _entry_symbol(raw: Any, path, n: int) -> Any:
+    """An entry's symbol with a future's `/` or `\\` prefix `F:`; one
+    that names no contract (`//QZM26.US`) refuses the entry, naming it."""
+    try:
+        return canonical_futures_symbol(raw)
+    except ValueError as e:
+        raise ValueError(f"{path}: entry {n}: {e}") from None
+
+
+def _entry_qty(raw: Any, path, n: int) -> Optional[float]:
+    """An entry's units sold (None when not given: the line names the
+    sale by its date and symbol alone). `Infinity` matched every sale as
+    equal and a 0 skipped the units test, so either widened the override
+    to a sale it did not name (backlog TJ-4999): refused, as a bool, a
+    NaN, a word, `1,000` or `1_00` is (the ALLOWLOSS line refuses the
+    last too)."""
+    if raw is None or raw == "":
+        return None
+    try:
+        if isinstance(raw, bool) or not isinstance(raw, (int, float, str)) \
+                or (isinstance(raw, str) and not _QTY_TEXT_RE.fullmatch(raw)):
+            raise ValueError(raw)
+        q = abs(float(raw))
+    except (ValueError, OverflowError):
+        q = None
+    if q is None or not math.isfinite(q) or q == 0:
+        raise ValueError(f"{path}: entry {n}: qty {raw!r} is not a number "
+                         f"of units sold (a finite number above 0, or "
+                         f"null when the line gives none)")
+    return q
 
 
 def flags(cache: Path) -> List[str]:

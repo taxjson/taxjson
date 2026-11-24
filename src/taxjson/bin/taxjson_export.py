@@ -13,7 +13,7 @@ tables, as written by `--holdings-toml`).
 
 from taxjson.project.toml_io import TOML_ERRORS, read_toml
 from taxjson.lib.stage_msg import emit_line
-from taxjson.lib.futures_prefixes import FUTURES_PREFIX_GROUP
+from taxjson.lib.futures_prefixes import FUTURES_PREFIX_GROUP, canonical_futures_symbol
 import argparse
 import re
 import sys
@@ -1656,6 +1656,16 @@ def _holding_trades(trades_by_symbol: Optional[Dict[str, List[Dict[str, Any]]]],
             lines.append("]")
 
 
+def _holding_sym(v: Any, path: Any, i: int) -> Any:
+    """A [[holding]] row's symbol with a future's `/` or `\\` prefix `F:`
+    (lib/futures_prefixes, backlog TJ-5150); one that names no contract
+    (`//QZM26.US`) stops the tool, naming the row."""
+    try:
+        return canonical_futures_symbol(v)
+    except ValueError as e:
+        _die(f"{path}: [[holding]] {i}: {e}")
+
+
 def _holdings_toml_to_inventory(doc: Dict[str, Any],
                                 path: Any = "<toml>") -> Dict[str, Any]:
     """Adapt a holdings TOML document (`[[holding]]` tables: this tool's
@@ -1741,7 +1751,7 @@ def _holdings_toml_to_inventory(doc: Dict[str, Any],
     for i, h in enumerate(holdings, start=1):
         # A quantity 'abc' was a float() traceback in --report and
         # --holdings-toml (A2-1441): refused here, naming the row.
-        sym = h.get("symbol")
+        sym = _holding_sym(h.get("symbol"), path, i)     # TJ-5150
         if not isinstance(sym, str) or not sym.strip():
             _die(f"{path}: [[holding]] {i}: symbol is {sym!r}, not a "
                  f"ticker")

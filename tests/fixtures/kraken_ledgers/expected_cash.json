@@ -1,5 +1,6 @@
 [
  {
+  "_broker_id": "LQ9ABC-AAAAA-000001",
   "account": "",
   "amount": 900.0,
   "currency": "USD",
@@ -14,6 +15,7 @@
   "where": "sample.csv"
  },
  {
+  "_broker_id": "LQ9ABC-AAAAA-000034",
   "account": "",
   "amount": -61.37,
   "currency": "USD",
@@ -28,6 +30,7 @@
   "where": "sample.csv"
  },
  {
+  "_broker_id": "LQ9ABC-AAAAA-000034",
   "account": "",
   "amount": -0.43,
   "currency": "USD",
@@ -39,6 +42,21 @@
   "where": "sample.csv:29"
  },
  {
+  "_broker_id": "LQ9ABC-AAAAA-000037",
+  "account": "",
+  "amount": -100.0,
+  "currency": "USD",
+  "date": "2025-09-01",
+  "desc": "Kraken hybridearnwithdrawal USD",
+  "kind": "PARKED",
+  "line_where": "sample.csv:32",
+  "origin": "broker",
+  "settle": "2025-09-01",
+  "text": "-100.00 USD Kraken hybridearnwithdrawal USD: into Hybrid Earn, the account's cash throughout (no move)",
+  "where": "sample.csv"
+ },
+ {
+  "_broker_id": "99900012:conv",
   "account": "",
   "date": "2025-06-15",
   "desc": "Kraken USD->CAD",
@@ -53,6 +71,7 @@
   "where": "sample.csv:20"
  },
  {
+  "_broker_id": "99900013:spread",
   "account": "",
   "amount": -20.0,
   "currency": "USD",
@@ -105,6 +124,6 @@
   "origin": "broker",
   "settle": "2025-09-01",
   "statement": "sample.csv",
-  "where": "sample.csv: ledger balance"
+  "where": "sample.csv: ledger balance + 100.00 parked in Hybrid Earn"
  }
 ]

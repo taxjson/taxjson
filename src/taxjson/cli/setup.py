@@ -14,13 +14,16 @@ from taxjson.lib.json_contract import versioned
 from taxjson.lib.years_report import years_report
 from taxjson.lib.cli_diag import write_text_atomic, tax_year as _tax_year_arg
 
-from taxjson.cli.checklist_run import checklist_run_helpers, default_run_sub
+from taxjson.cli.checklist_run import (
+    _checklist_config, _checklist_results, _checklist_sections,
+    _checklist_walk, _checklist_whole, _die_state, checklist_run_helpers,
+    default_run_sub,
+)
 from taxjson.cli.common import (
     _FROZEN_NOTE_PREFIX, _os_path_lexists, _year_dir_arg,
 )
 from taxjson.pipeline.config import (
-    _config_shown, _country, _read_config_text, _refuse_outside_dir_links,
-    load_config,
+    _config_shown, _country, _read_config_text, load_config,
 )
 from taxjson.pipeline.diagnostics import _count_noun
 from taxjson.pipeline.inputs import _normalize_country, _US_EXPERIMENTAL_NOTE
@@ -33,13 +36,6 @@ from taxjson.pipeline.run import (
 )
 from taxjson.pipeline.sanity import _json_out
 from taxjson.model import money as M
-
-
-def _die_state(e: Exception) -> None:
-    """Stop on a checklist.json that cannot be read or written: the
-    message, then its fix (`chmod u+w` the folder; backlog TJ-0218)."""
-    fix = getattr(e, "fix", "")
-    _die(str(e), *([fix] if fix else []))
 
 
 # The taxjson.toml template — every key, documented, per country — and
@@ -239,36 +235,6 @@ def cmd_checklist(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
-def _checklist_sections(args: argparse.Namespace) -> List[str]:
-    """tjs checklist: the command line's first checks, before the
-    project is looked for: the old --skip refused (naming --done
-    --force), and the sections --section names, each known (none:
-    []), with --only refused beside it. Returns the sections."""
-    from taxjson.lib import checklist as cl
-    if getattr(args, "skip", None):
-        _named = ",".join(t.strip() for tok in args.skip
-                          for t in str(tok).split(",") if t.strip())
-        _die_input(f"--skip was replaced by --done --force: `tjs "
-                   f"checklist --done {_named or 'ID'} --force`",
-                   "It marks the step done over the last check's finding "
-                   "(shown [f], the finding beside it). Nothing was "
-                   "written.")
-    section: List[str] = []
-    if args.section:
-        try:
-            section = cl.resolve_sections(args.section)
-        except KeyError as e:
-            _die(f"unknown section {e.args[0]!r}",
-                 "Sections: " + "; ".join(cl.section_label(sec)
-                                          for sec in cl.SECTIONS)
-                 + ". Several: `--section 6,7`.")
-        if not section:
-            _die("--section names no section")
-        if args.only:
-            _die("--section and --only: one or the other")
-    return section
-
-
 def _checklist_marks(ctx: Any, marks: List[Union[Tuple[str, None], Tuple[str, str]]],
                      args: argparse.Namespace, root: Path, cfg: Dict[str, Any],
                      year: Optional[int], ids: List[str]) -> List[Dict[str, Any]]:
@@ -359,245 +325,6 @@ def _checklist_marks(ctx: Any, marks: List[Union[Tuple[str, None], Tuple[str, st
                            for w in _out.wrap(ln, stream=sys.stdout)],
                           sys.stdout)
     return recorded
-
-
-def _checklist_results(args: argparse.Namespace, ctx: Any, only: Optional[List[str]],
-                       show_all: bool, jobs: int, _warn: Callable[..., None],
-                       _note: Callable[..., None]) -> Tuple[List[Any], Any]:
-    """tjs checklist: the verdicts to show. With --run each step is
-    checked and the verdicts kept in work/ (shown once, not kept, when
-    they cannot be stored); without it, the kept ones. Returns the
-    verdicts and what the view says about them (when made, what
-    changed since)."""
-    from taxjson.lib import checklist as cl
-    try:
-        if args.run:
-            results = cl.evaluate(ctx, only=only, quick=args.quick,
-                                  progress=(cl.stderr_progress
-                                            if show_all or args.json
-                                            else cl.once_progress()),
-                                  jobs=jobs)
-            try:
-                doc = cl.save_results(ctx, results)
-            except OSError as e:
-                # A read-only project, a full disk: the verdicts are
-                # shown this once and not kept.
-                _warn(f"the verdicts could not be stored in "
-                      f"work/{cl.RESULTS_FILE} ({e.strerror or e}): "
-                      f"shown now, not kept", prog="tjs checklist")
-                info = cl.fresh_info()
-            else:
-                results, info = cl.load_results(ctx, only=only, doc=doc)
-        else:
-            if args.quick or args.jobs is not None:
-                _note("--quick and -j go with --run; showing the stored "
-                      "verdicts.", prog="tjs checklist")
-            results, info = cl.load_results(ctx, only=only)
-    except cl.StateFileError as e:
-        _die_state(e)
-    return results, info
-
-
-def _checklist_whole(ctx, cl, only, results) -> Optional[List[Any]]:
-    """Every step's kept verdict, the scoped view's `results` over them,
-    for a scoped view (`--section`, `--only`) with nothing left in it:
-    its last line names the next step elsewhere (backlog TJ-0048). None
-    for the whole list, or while the scope has something left."""
-    if not only or not all(r.passed for r in results):
-        return None
-    try:
-        rest, _info = cl.load_results(ctx)
-    except (cl.StateFileError, OSError):
-        return None
-    mine = {r.id: r for r in results}
-    return [mine.get(r.id, r) for r in rest]
-
-
-def _checklist_config(root: Path) -> Tuple[Dict[str, Any], str]:
-    """(taxjson.toml, "" or why every other command refuses it) for the
-    checklist. A config the strict loader refuses — a crypto account and
-    no local_timezone (what `init` writes on a UTC machine), an old map
-    file `tjs migrate` moves — is the configure item's finding, not
-    an error instead of the list: the TOML is
-    read leniently and the checks that need the strict config are
-    blocked. Only a file with no readable (or plausible) year, country
-    or account names still stops here, with the loader's own message."""
-    import contextlib
-    import io
-    from taxjson.lib.country import CountryError, settings_country
-    buf = io.StringIO()
-    try:
-        with contextlib.redirect_stderr(buf):
-            return load_config(root), ""
-    except SystemExit as e:
-        strict = e
-        text = e.code if isinstance(e.code, str) else buf.getvalue()
-    try:
-        cfg = read_toml(root / "taxjson.toml")
-        table = cfg.get("settings")
-        accounts = cfg.get("accounts") or {}
-        year = table.get("year") if isinstance(table, dict) else None
-        # The loader's plausible range (_normalize_settings): a typo'd
-        # year still stops here, never a list for tax year 1850.
-        # An account that is no table (`margin = 42`) died later on
-        # a.get in the detectors (audit 2026-10-24 A16): the loader's
-        # own message instead.
-        ok = (isinstance(accounts, dict)
-              and isinstance(year, int) and not isinstance(year, bool)
-              and 1900 <= year <= date_cls.today().year + 1
-              and all(re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", str(n))
-                      and str(n).upper() != "COMBINED"
-                      and isinstance(a, dict) for n, a in accounts.items()))
-        if ok:
-            table["country"] = settings_country(table)
-    except (OSError, UnicodeError, ValueError, TypeError, CountryError):
-        ok = False
-    if not ok:
-        if not isinstance(strict.code, str) and buf.getvalue():
-            sys.stderr.write(buf.getvalue())
-        raise strict
-    # A folder taxjson writes into that is a link leaving the project
-    # is refused as every command refuses it (load_config), lenient
-    # read or not: the checklist wrote work/checklist_results.json
-    # through such a work/ link (audit 2026-10-24 A17).
-    _refuse_outside_dir_links(root, accounts)
-    # The loader's message without its `tjs checklist: error:`
-    # headline prefix, on one line.
-    msg = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", text).split())
-    msg = re.sub(r"^(?:Error:\s*|.*?: error:\s*)", "", msg, count=1)
-    return cfg, msg or "taxjson.toml is refused by every other command"
-
-
-def _walk_interrupted(sid: str, ctx) -> None:
-    from taxjson.lib.out import error
-    _out.put("", sys.stderr)
-    error(f"interrupted at {sid} — it is not recorded",
-          prog="tjs checklist",
-          details=[f"The marks made so far are kept in "
-                   f"{ctx.root / 'checklist.json'}."])
-    sys.exit(1)
-
-
-def _checklist_walk(ctx, cl, only, quick: bool = False,
-                    scope: str = "") -> None:
-    """Interactive pass over the open steps, one detector at a time: each
-    step is shown as soon as its own check finishes (the whole list can
-    take a minute on a big book), with why it matters and what was found,
-    then the user's decision is recorded. Ends with the summary; exit 1
-    while anything is still open (also after [q]uit)."""
-    from taxjson.lib.out import kv_lines, wrap
-    country = _country(ctx.settings)
-    ids = [sid for sid in cl.item_ids() if not only or sid in only]
-    keys = "[d]one  [f]orce done  [r]e-check  [n]ext  [q]uit  (Enter = next)"
-    doc = _out.Doc(exact=True, width_=0, live=True)
-    doc.line("CHECKLIST WALK")
-    doc.line(f"For each open step: {keys}\n")
-    seen = 0
-    quit_early = False
-    for sid in ids:
-        r = cl.evaluate(ctx, only=[sid], quick=quick,
-                        progress=cl.stderr_progress)[0]
-        _walk_store(ctx, cl, r)
-        if r.passed:
-            for ln in wrap(f"{cl.SYMBOL[r.effective]} {sid}"
-                           + (f": {r.detail}" if r.detail else "")
-                           + (f" (marked {cl.mark_text(r.override)})"
-                              if r.override else ""), None, "  ", "      "):
-                doc.line(ln)
-            continue
-        seen += 1
-        _, section, title, cmd, why = cl.item_meta(sid, country)
-        show = True
-        while True:
-            if show:
-                doc.line(f"\n{section.upper()} — {sid}")
-                for ln in wrap(title, None, "  ", "  "):
-                    doc.line(ln)
-                for ln in kv_lines([
-                        ("why", why), ("proves", cmd),
-                        ("found", f"{cl.SYMBOL[r.effective]} {r.detail}"
-                         + (f" (marked {cl.mark_text(r.override)}"
-                            + (f": {r.note}" if r.note else "") + ")"
-                            if r.override else ""))], "  "):
-                    doc.line(ln)
-            show = False
-            try:
-                ans = input("  > ").strip().lower()
-            except EOFError:
-                doc.blank()
-                quit_early = True
-                break
-            except KeyboardInterrupt:
-                _walk_interrupted(sid, ctx)
-            if ans in ("d", "done", "f", "force"):
-                # EOF or Ctrl-C at the note/reason prompt was a traceback
-                # (re-audit A2-1394): this step is not recorded, the
-                # marks made so far are kept.
-                try:
-                    note = input("  note (optional): " if ans[0] == "d"
-                                 else "  reason (optional): ").strip()
-                except (EOFError, KeyboardInterrupt):
-                    _walk_interrupted(sid, ctx)
-            if ans in ("q", "quit"):
-                quit_early = True
-                break
-            if ans in ("d", "done"):
-                if cl.finding_over_done(r):
-                    # (as `--done` is refused: the mark would not show —
-                    # a question step's finding that asks nothing too,
-                    # audit 2026-10-25 first-project#1)
-                    doc.line(f"  {sid} is {r.status}: a done mark would not "
-                             f"show over it — [f] accepts it as it is")
-                    continue
-                cl.set_override(
-                    ctx.root, ctx.year, sid, "done", note=note,
-                    answers=(cl.question_answers(ctx.root, ctx.cfg, sid,
-                                                 today=ctx.today, run=ctx.run)
-                             if sid in cl.QUESTION_STEPS else None))
-                doc.line(f"  recorded: {sid} done")
-                break
-            if ans in ("f", "force"):
-                cl.set_override(ctx.root, ctx.year, sid, cl.MARK_FORCED,
-                                note=note)
-                doc.line(f"  recorded: {sid} done (forced)")
-                break
-            if ans in ("r", "recheck", "re-check"):
-                r = cl.evaluate(ctx, only=[sid], progress=cl.stderr_progress)[0]
-                _walk_store(ctx, cl, r)
-                if r.passed:
-                    for ln in wrap(f"now: {cl.SYMBOL[r.effective]} "
-                                   f"{r.detail}", None, "  ", "    "):
-                        doc.line(ln)
-                    break
-                show = True
-                continue
-            if ans in ("", "n", "next"):
-                break
-            doc.line(f"  unknown key {ans!r} — {keys}")
-        if quit_early:
-            break
-    doc.line(f"\n{seen} open step(s) visited. Summary "
-             f"(`tjs checklist --run` re-checks everything):\n")
-    results, info = cl.load_results(ctx, only=only)
-    doc.line(cl.render_summary(results, ctx.year, country, root=ctx.root,
-                               info=info, scope=scope,
-                               whole=_checklist_whole(ctx, cl, only,
-                                                      results)))
-    if quit_early or not all(r.passed for r in results):
-        # Open steps remain: the one quit on, the ones passed over, a
-        # DONE mark that did not settle the step's finding — the exit
-        # follows the verdicts as kept, like `--run`'s (audit
-        # 2026-10-24 A18).
-        sys.exit(1)
-
-
-def _walk_store(ctx, cl, r) -> None:
-    """A walked step's verdict goes to the store like a --run's; a store
-    that cannot be written never stops the walk."""
-    try:
-        cl.save_results(ctx, [r])
-    except OSError:
-        pass
 
 
 def _frozen_record(root: Path, year) -> Optional[Dict[str, Any]]:
@@ -1884,7 +1611,9 @@ def _implicit_grant_since(doc: Dict[str, Any]) -> Optional[int]:
 def _new_year_publish(top: Path, folder: Path, config_text: str,
                       files: Dict[str, bytes],
                       holdings: Optional[str],
-                      holdings_link: Optional[str] = None) -> None:
+                      holdings_link: Optional[str] = None,
+                      undo: Optional[List[Callable[[], None]]] = None
+                      ) -> None:
     """`tjs new-year`: the new year's files made in a staging folder
     beside the years, then moved into place — the whole folder in one
     rename when it does not exist yet, else file by file with
@@ -1893,7 +1622,12 @@ def _new_year_publish(top: Path, folder: Path, config_text: str,
     simply be run again (GitHub #40). `holdings`: the empty folder to
     make, relative to the year (holdings/, or what holdings_dir names),
     or None; with `holdings_link`, its last level is that link instead
-    of an empty folder. OSError when it cannot be done."""
+    of an empty folder. OSError when it cannot be done. `undo`: the
+    list (a lib/write_step `WriteStep`'s, `_new_year_place`) each move's
+    take-back is added to before the move, whatever stops it then
+    taking them back (a Ctrl-C at the second move left the year folder
+    half filled: backlog TJ-5079); without it a failed move takes them
+    back itself."""
     import os
     import shutil
     import tempfile
@@ -1926,24 +1660,85 @@ def _new_year_publish(top: Path, folder: Path, config_text: str,
             if os.path.lexists(folder / n):
                 raise FileExistsError(17, "already exists",
                                       str(folder / n))
-        moved: List[Path] = []
+        steps = [] if undo is None else undo
         try:
             for n in names:
+                steps.append(_moved_back(folder / n))   # before the move
                 os.rename(stage / n, folder / n)
-                moved.append(folder / n)
         except OSError:
-            for m in reversed(moved):
-                try:
-                    if m.is_dir() and not m.is_symlink():
-                        shutil.rmtree(m)
-                    else:
-                        m.unlink()
-                except OSError:
-                    pass
+            if undo is None:
+                for step in reversed(steps):
+                    try:
+                        step()
+                    except OSError:
+                        pass
             raise
     finally:
         if stage.exists():
             shutil.rmtree(stage, ignore_errors=True)
+
+
+def _moved_back(m: Path) -> Callable[[], None]:
+    """The take-back of new-year's move of a file or folder to `m`, made
+    before the move (`_new_year_publish`): what is at `m` removed, once
+    the move was made (each name was checked free first)."""
+    import os
+    import shutil
+
+    def step() -> None:
+        if m.is_dir() and not m.is_symlink():
+            shutil.rmtree(m)
+        elif os.path.lexists(m):
+            m.unlink()
+    return step
+
+
+def _new_year_place(top: Path, folder: Path, config_text: str,
+                    files: Dict[str, bytes], holdings: Optional[str],
+                    holdings_link: Optional[str]) -> None:
+    """`_new_year_publish` as one step, all or nothing (lib/write_step
+    `WriteStep`, the year's taxjson.toml its commit file, as close-year's:
+    backlog TJ-4627): whatever stops it before taxjson.toml is in place,
+    Ctrl-C included, takes back each file moved, a Ctrl-C pressed again
+    meanwhile waiting (backlog TJ-5079). It says what was and was not
+    made (`_new_year_stopped`)."""
+    import os
+    from taxjson.lib.write_step import WriteStep
+    was_there = os.path.lexists(folder)
+    state = WriteStep()
+    state.begin(folder / _PL.CONFIG)
+    try:
+        state.hold_interrupts()
+        _new_year_publish(top, folder, config_text, files, holdings,
+                          holdings_link, state.undo)
+        state.committed = True
+        state.raise_held()          # a Ctrl-C held meanwhile: said now
+    except BaseException as e:
+        _new_year_stopped(e, folder.name, _settled(state), was_there)
+        raise
+    finally:
+        state.release()
+
+
+def _new_year_stopped(e: BaseException, year: str, written: bool,
+                      was_there: bool) -> None:
+    """What tjs new-year says when it stops (`_new_year_place`): a
+    Ctrl-C, `interrupted — ` and whether the year folder was made (exit
+    130); one that cannot be made, the line it gave (exit 2); any other
+    error, one Error, then goes on as it did (a bug: a traceback)."""
+    left = (f"{year}/ is as it was" if was_there else f"there is no {year}/")
+    if isinstance(e, KeyboardInterrupt):
+        _out.put("", sys.stderr)            # end the ^C line
+        _out.fail("interrupted — " + (f"{year}/ was made in full" if written
+                                      else f"nothing was created: {left}"),
+                  prog=_cmd_prog(), code=130)
+    if written or isinstance(e, (SystemExit, BrokenPipeError)):
+        return
+    if isinstance(e, OSError):
+        _die_input(f"cannot create {year}/: {e.strerror or e}",
+                   "Nothing was created.")
+    _say("error", f"stopped before {year}/ was made: nothing was created",
+         prog=_cmd_prog())
 
 
 def _unfreeze_text(text: str) -> str:
@@ -1983,7 +1778,7 @@ def cmd_new_year(args: argparse.Namespace) -> None:
     out — lib/project_layout.new_year_text; a Canadian project's
     default option grant-timing cutoff kept) and an empty holdings/,
     made in a staging folder and moved into place only when complete
-    (_new_year_publish)."""
+    (_new_year_publish), as one step (_new_year_place)."""
     import shlex as _shlex
     root = Path(args.dir).resolve()
     top = _years_folder(root)
@@ -2055,12 +1850,12 @@ def cmd_new_year(args: argparse.Namespace) -> None:
     hold, hold_rel, make_hold, hold_link, hold_shared = _new_year_holdings(
         folder, new_settings, prev, top)
     try:
-        _new_year_publish(top, folder, new_text,
-                          {n: (prev / n).read_bytes() for n in copied},
-                          hold_rel if make_hold else None, hold_link)
+        _copies = {n: (prev / n).read_bytes() for n in copied}
     except OSError as e:
         _die_input(f"cannot create {year}/: {e.strerror or e}",
                    "Nothing was created.")
+    _new_year_place(top, folder, new_text, _copies,
+                    hold_rel if make_hold else None, hold_link)
     _yd = _shlex.quote(str(folder))
     shared = _PL.shared_inputs(folder)
     _hold_made = ([f"{hold_rel} (a link to {hold_link}, as in "
@@ -2435,8 +2230,8 @@ def cmd_align(args: argparse.Namespace) -> None:
     ticker.map rules and taxjson.toml keys of another year's project
     that differ from this one's; --write brings chosen ones into THIS
     project (asked one by one on a terminal, or --all), backing up each
-    file it changes. The other year is never written."""
-    from taxjson.lib.safe_write import write_user_file
+    file it changes, all or nothing (`_align_write`). The other year is
+    never written."""
     root = Path(args.dir).resolve()
     top = _years_folder(root)
     other = top / str(args.from_year)
@@ -2482,55 +2277,11 @@ def cmd_align(args: argparse.Namespace) -> None:
     keys = [k for k in c["keys"] if not k.get("order")
             and not _REQ.lowers(k["key"], k["here"], k["there"])
             and _ask(f"set {k['key']} = {_setting_text(k['there'])}")]
-    done = []
     skipped: List[Tuple[str, List[str]]] = []
     tm, map_text, lines, cfg, cfg_text = _align_texts(root, lines, other, skipped, keys)
-    from taxjson.lib.safe_write import (OutsideLinkError, link_outside,
-                                        write_atomic)
-    for p, t in ((tm, map_text), (cfg, cfg_text)):
-        tgt = link_outside(p, root) if t is not None else None
-        if tgt is not None:
-            _die_input(f"{p.name} is a symlink to {tgt}, outside the "
-                       f"project — never written through: replace the "
-                       f"link with a copy", "Nothing was written.")
-    written: List[Tuple[Path, Optional[bytes]]] = []
-    files: List[Dict[str, Any]] = []
-    failed = cfg
-    try:
-        for p, t, what in ((tm, map_text, f"ticker.map: {len(lines)} "
-                            f"line(s) added"),
-                           (cfg, cfg_text, f"taxjson.toml: {len(keys)} "
-                            f"key(s) set")):
-            if t is None:
-                continue
-            failed = p
-            real = p.resolve() if p.is_symlink() else p
-            old = real.read_bytes() if real.is_file() else None
-            bak = write_user_file(p, t, root)
-            written.append((real, old))
-            files.append({"file": p.name,
-                          "backup": bak.name if bak else None})
-            done.append(what + (f" (the previous file kept as {bak.name})"
-                                if bak else ""))
-    except (OSError, OutsideLinkError) as e:
-        # Put back what was already written: all or nothing.
-        for real, old in written:
-            try:
-                if old is None:
-                    real.unlink()
-                else:
-                    write_atomic(real, old, keep_mode=True)
-            except OSError:
-                pass
-        # Named from where the command was run (`tjs -C 2025 align`
-        # from the folder holding the years: 2025/ticker.map), with the
-        # fix, as format and format-map name it (backlog TJ-0604).
-        if isinstance(e, OSError):
-            from taxjson.lib.cli_diag import cannot_write
-            _h, _fix = cannot_write(_config_shown(failed), e, failed)
-            _die_input(_h, *([_fix] if _fix else []), "Nothing was changed.")
-        _die_input(f"could not write {_config_shown(failed)}: {e}",
-                   "Nothing was changed.")
+    done, files = _align_write(root, [
+        (tm, map_text, f"ticker.map: {len(lines)} line(s) added"),
+        (cfg, cfg_text, f"taxjson.toml: {len(keys)} key(s) set")])
     doc = _out.Doc(exact=True, width_=0, live=True)
     if not args.json:
         doc.line("\n".join(done) if done else "Nothing brought over.")
@@ -2674,6 +2425,163 @@ def _align_texts(root: Path, lines: List[Any], other: Path,
                        "fix the setting in one year first.")
         cfg_text = text
     return tm, map_text, lines, cfg, cfg_text
+
+
+def _align_write(root: Path, todo: List[Tuple[Path, Optional[str], str]]
+                 ) -> Tuple[List[str], List[Dict[str, Any]]]:
+    """tjs align --write: the files written as one step, all or nothing
+    (lib/write_step `WriteStep`, the last file written its commit file,
+    as close-year's: backlog TJ-4627). A file that cannot be written (a
+    link out of the project, a read-only file) is refused before
+    anything is: a read-only taxjson.toml left a new ticker.map.bak and
+    the map rewritten beside "Nothing was changed." (backlog TJ-4625).
+    Whatever stops it between the writes, Ctrl-C included, puts back
+    each file written and removes the backup the write made, a Ctrl-C
+    pressed again meanwhile waiting: a Ctrl-C at the second write left
+    the map changed and the settings not (backlog TJ-5079). The message
+    says what was and was not written (`_align_stopped`). `todo`:
+    (file, its new text or None, what the write does). Returns (what
+    was done, the files written with their backups)."""
+    from taxjson.lib import safe_write as _SW
+    from taxjson.lib.write_step import WriteStep
+    todo = [w for w in todo if w[1] is not None]
+    for p, _t, _what in todo:
+        tgt = _SW.link_outside(p, root)
+        if tgt is not None:
+            _die_input(f"{p.name} is a symlink to {tgt}, outside the "
+                       f"project — never written through: replace the "
+                       f"link with a copy", "Nothing was written.")
+        try:
+            _SW.refuse_read_only(_real_file(p))
+        except OSError as e:
+            _align_stopped(e, p, [], None, [])
+    done: List[str] = []
+    files: List[Dict[str, Any]] = []
+    left: List[str] = []
+    if not todo:
+        return done, files
+    state = WriteStep()
+    state.begin(_real_file(todo[-1][0]))
+    at = todo[0][0]
+    try:
+        state.hold_interrupts()
+        for at, text, what in todo:
+            state.undo.append(_align_undo(at, left))      # before the write
+            bak = _SW.write_user_file(at, text, root)
+            files.append({"file": at.name,
+                          "backup": bak.name if bak else None})
+            done.append(what + (f" (the previous file kept as {bak.name})"
+                                if bak else ""))
+        state.committed = True
+        state.raise_held()          # a Ctrl-C held meanwhile: said now
+    except BaseException as e:
+        written = _settled(state)
+        _align_stopped(e, at, left, (done if len(done) == len(todo) else
+                                     [w for _p, _t, w in todo])
+                       if written else None,
+                       [_config_shown(p) for p, _t, _w in todo])
+        raise
+    finally:
+        state.release()
+    return done, files
+
+
+def _real_file(p: Path) -> Path:
+    """The file a write of `p` replaces: a link's target (write_user_file
+    follows a link inside the project)."""
+    return p.resolve() if p.is_symlink() else p
+
+
+def _backups_of(real: Path) -> List[Path]:
+    """The backups beside `real` (lib/safe_write `backup_copy`:
+    `<name>.bak`, `<name>.bakN`)."""
+    pat = re.compile(re.escape(real.name) + r"\.bak\d*")
+    try:
+        return sorted(q for q in real.parent.iterdir() if pat.fullmatch(q.name))
+    except OSError:
+        return []
+
+
+def _align_undo(p: Path, left: List[str]) -> Callable[[], None]:
+    """The undo step of align's write of `p`, made before the write: the
+    file's bytes put back (a file it made removed), then the backup the
+    write made removed (one of `_backups_of` that was not there and holds
+    those bytes; an older backup stays). A file that cannot be put back
+    keeps its backup and is named in `left`."""
+    import os
+    from taxjson.lib.safe_write import write_atomic
+    real = _real_file(p)
+    old = real.read_bytes() if real.is_file() else None
+    before = set(_backups_of(real))
+
+    def undo() -> None:
+        made = [b for b in _backups_of(real) if b not in before]
+        try:
+            if old is None:
+                if os.path.lexists(real):
+                    real.unlink()
+            elif not real.is_file() or real.read_bytes() != old:
+                write_atomic(real, old, keep_mode=True)
+        except OSError as e:
+            left.append(f"{_config_shown(p)} could not be put back "
+                        f"({e.strerror or e})"
+                        + (f": its previous text is {made[0].name}"
+                           if made else ""))
+            return
+        for b in made:
+            try:
+                if b.read_bytes() == old:
+                    b.unlink()
+            except OSError:
+                pass
+    return undo
+
+
+def _settled(state: Any) -> bool:
+    """`state.settle()` (lib/write_step) on the way out of an exception,
+    called again when a Ctrl-C comes in as it is called: whether its
+    commit file is written."""
+    while True:
+        try:
+            state.hold_interrupts()
+            return state.settle()
+        except KeyboardInterrupt:
+            pass
+
+
+def _align_stopped(e: BaseException, at: Path, left: List[str],
+                   written: Optional[List[str]], names: List[str]) -> None:
+    """What tjs align --write says when it stops (`_align_write`) at the
+    write of `at`: `written`, the changes, when every file was written
+    before it stopped, else None (each of the files `names` put back,
+    but those `left` says). A Ctrl-C: `interrupted — ` and what was and
+    was not written, exit 130. Before the last write: a file that cannot
+    be written keeps its line and its fix, exit 2, as before (named from
+    where the command was run, backlog TJ-0604); any other error is one
+    Error, then goes on as it did (a bug: a traceback)."""
+    from taxjson.lib.cli_diag import cannot_write
+    from taxjson.lib.safe_write import OutsideLinkError
+    back = "; ".join(left)
+    same = (f"{back}; nothing else was changed" if left else
+            "nothing was written: " + " and ".join(names)
+            + (" is as it was" if len(names) == 1 else " are as they were"))
+    if isinstance(e, KeyboardInterrupt):
+        _out.put("", sys.stderr)            # end the ^C line
+        _out.fail("interrupted — " + ("the changes were written: "
+                                      + "; ".join(written)
+                                      if written is not None else same),
+                  prog=_cmd_prog(), code=130)
+    if written is not None or isinstance(e, (SystemExit, BrokenPipeError)):
+        return
+    tail = f"{back}; nothing else was changed." if left else \
+        "Nothing was changed."
+    if isinstance(e, OSError):
+        _h, _fix = cannot_write(_config_shown(at), e, at)
+        _die_input(_h, *([_fix] if _fix else []), tail)
+    if isinstance(e, OutsideLinkError):
+        _die_input(f"could not write {_config_shown(at)}: {e}", tail)
+    _say("error", f"stopped before the changes were written: {same}",
+         prog=_cmd_prog())
 
 
 def _align_write_result(c: Dict[str, Any], here: str, there: str, *,

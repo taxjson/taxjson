@@ -274,6 +274,12 @@ def money_lineage(rid: str, raw: Dict[str, Any], base_row: Dict[str, Any],
                 f"{rate_date} in the rates file.")
     notional = nominal
     settled = base_row.get("type") == "futures_settlement"
+    if (settled and nominal < 0 and M.of(src.get("quantity") or 0) > 0
+            and not M.of(src.get("price") or 0) < 0):
+        # A buy's cost written as the cash paid out: the notional is its
+        # magnitude, as the settlement reads it (lib/futures _money;
+        # backlog TJ-5162). A buy at a negative price keeps its credit.
+        notional = -nominal
     if settled:
         # A futures fill converts its settled P/L, not the notional the
         # broker row carries (lib/futures.py).
@@ -1982,7 +1988,11 @@ def main(argv=None) -> int:
     # prints the source row (SELL 120 ABC.US) and its MAPPING, yet
     # `audit ABC.US` matched nothing because the books carry the
     # ticker.map target (ABC.TO) (S048-17).
-    _want_syms = [str(w).upper() for w in (args.symbol or [])]
+    # (A future's `/` or `\` prefix is `F:`, as the books spell it:
+    # lib/futures_prefixes, backlog TJ-5150.)
+    from taxjson.lib.futures_prefixes import canonical_futures_symbol
+    _want_syms = [canonical_futures_symbol(str(w).upper())
+                  for w in (args.symbol or [])]
     for _m in (tmap, emap) if _want_syms else ():
         if _m is None:
             continue

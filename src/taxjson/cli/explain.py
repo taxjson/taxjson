@@ -177,7 +177,7 @@ def cmd_renames(args: argparse.Namespace) -> None:
     books nothing. Exit 1 while a late trade is unresolved; with
     --pending, also while a suggestion is open or a declaration books
     nothing."""
-    from taxjson.lib.renames import pending_renames, render, report
+    from taxjson.lib.renames import pending_renames, render, report, run_notes_missing
     root = Path(args.dir).resolve()
     cfg = load_config(root)
     # No books is no check, as `splits` and `spinoffs` say: it read "no
@@ -204,7 +204,8 @@ def cmd_renames(args: argparse.Namespace) -> None:
                        undated=[])
         _json_out(doc, schema="renames")
     else:
-        for ln in render(doc, pending=pending):
+        _no_notes = run_notes_missing(root, doc)
+        for ln in render(doc, pending=pending) + ([_no_notes] if _no_notes else []):
             page.line(ln)
     if doc["unresolved"] or (pending and doc["pending"]):
         raise SystemExit(1)

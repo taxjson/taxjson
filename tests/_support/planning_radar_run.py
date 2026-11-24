@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 
 import _paths
+from _support.planning_radar_row import base_rows, radar_country
 
 
 REPO_ROOT = _paths.REPO
@@ -17,7 +18,8 @@ REPO_ROOT = _paths.REPO
 def _radar(taxable_txs, date, *extra):
     with tempfile.TemporaryDirectory() as tmp:
         f = Path(tmp) / "t.json"
-        f.write_text(json.dumps({"transactions": taxable_txs}))
+        f.write_text(json.dumps({"transactions": base_rows(
+            taxable_txs, radar_country(extra))}))
         r = subprocess.run(
             [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar", "--country", "canada",
              "--taxable", str(f), "--date", date, *extra],

@@ -635,6 +635,9 @@ def guard_main(prog: str, *, value_errors: bool = False):
     away (`| head`) is a quiet exit 141."""
     import functools
     import json
+    # A command's symbol argument that names no contract (`//QZM26.US`):
+    # a refusal of the argument, not a traceback (backlog TJ-5150).
+    from taxjson.lib.futures_prefixes import FuturesSymbolError
 
     def deco(fn):
         @functools.wraps(fn)
@@ -663,7 +666,7 @@ def guard_main(prog: str, *, value_errors: bool = False):
             except _INPUT_ERRORS + (json.JSONDecodeError, OSError) as e:
                 error(prog, describe_input_error(e))
                 raise SystemExit(2)
-            except InputContentError as e:
+            except (InputContentError, FuturesSymbolError) as e:
                 error(prog, str(e))
                 raise SystemExit(2)
             except TypeError as e:

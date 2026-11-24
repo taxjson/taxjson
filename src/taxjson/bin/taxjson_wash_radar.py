@@ -599,6 +599,39 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _other_currency(doc: Any, rows: list, path: Path,
+                    country: str) -> Optional[str]:
+    """The refusal of a book whose rows (or metadata.target_currency) are
+    in another currency than the country's base, which every amount the
+    radar reads is taken to be: on USD books a Canadian radar computed a
+    loss of 50 from a USD cost of 100 and proceeds of 50, a VIOLATION at
+    exit 0 with nothing said (backlog TJ-5068); the rate of each date can
+    change the amount and whether there is a loss at all. A row with no
+    currency is the base's. None when the book is the base currency's."""
+    from taxjson.lib.country import home_currency
+    base = home_currency(country)
+    meta = doc.get("metadata") if isinstance(doc, dict) else None
+    tgt = (str(meta.get("target_currency") or "").strip().upper()
+           if isinstance(meta, dict) else "")
+    other: Dict[str, int] = {}
+    for t in rows:
+        c = str(t.get("currency") or "").strip().upper()
+        if c and c != base:
+            other[c] = other.get(c, 0) + 1
+    if tgt and tgt != base:
+        other.setdefault(tgt, 0)
+    if not other:
+        return None
+    got = ", ".join(f"{c} ({n} row(s))" if n else
+                    f"{c} (metadata.target_currency)"
+                    for c, n in sorted(other.items()))
+    return (f"{path}: amounts in {got}, not {base}, the currency of the "
+            f"return — the radar reads every amount as {base}. Convert the "
+            f"books first (taxjson-convert-currency --to {base} --rates "
+            f"FILE: the rates it converts at), or pass the converted "
+            f"work/<account>_base.json (`tjs wash-radar` does)")
+
+
 def _load_books(args: argparse.Namespace, us_mode: bool,
                 _tax_day: Any) -> tuple[list, set, set | None]:
     """Every book's rows, each with its group, file and window epochs
@@ -638,6 +671,10 @@ def _load_books(args: argparse.Namespace, us_mode: bool,
             path = Path(f)
             doc = load_json_doc_or_exit(_prog, path)
             rows = rows_or_exit(_prog, doc, path, "transactions")
+            _other = _other_currency(doc, rows, path, args.country)
+            if _other:
+                _out.error(_other, prog=_prog)
+                sys.exit(2)
             try:
                 objs = [coerce_transaction_row(
                     {k: v for k, v in t.items() if not str(k).startswith('_')},

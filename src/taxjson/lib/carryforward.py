@@ -411,10 +411,13 @@ class LedgerCarryBack(NamedTuple):
     one value handoff's comparison reads (backlog TJ-1448): `amounts` ({year:
     the part of this project's loss a claim under it carries back}), `unknown`
     (why the ledger could not be used) and `incomplete` (the years whose nets
-    it left sales out of, as text)."""
+    it left sales out of, as text). `proposed`: those amounts as text, when
+    they are the ledger's proposal for this year's T1A (the oldest [carryover]
+    claimed year first) and another split was open (backlog TJ-4882)."""
     amounts: Mapping[int, float] = MappingProxyType({})
     unknown: Optional[str] = None
     incomplete: str = ""
+    proposed: str = ""
 
 
 class CarryComparison(NamedTuple):
@@ -422,11 +425,51 @@ class CarryComparison(NamedTuple):
     claim under the record year, made once where it is compared. `unchecked`:
     the note when that comparison could not run. `caveat`: the note when it
     ran on a ledger that left sales out. `split_note`: the note when the record
-    itself was locked on one (backlog TJ-1461)."""
+    itself was locked on one (backlog TJ-1461). `order_notes`: the notes when
+    the years a carry-back went to, this project's or the record's, are the
+    ledger's proposal and not a figure the person gave (backlog TJ-4882)."""
     issues: List[Dict[str, Any]]
     unchecked: Optional[str] = None
     caveat: Optional[str] = None
     split_note: Optional[str] = None
+    order_notes: Tuple[str, ...] = ()
+
+
+def _order_notes(cfg: Dict[str, Any], block: Dict[str, Any], ry: int,
+                 carry_back: LedgerCarryBack, country: str) -> Tuple[str, ...]:
+    """handoff's notes on the years a T1A carry-back went to, where they are
+    `tjs carryover`'s proposal (the oldest [carryover] claimed year first,
+    another split open) and not a figure the person gave: the record's own
+    carry-back (its lock's `carried_back_split`), which this project's ledger
+    reads, and the part of this project's loss the claim under the record year
+    was compared with (backlog TJ-4882)."""
+    ncl = block.get("net_capital_loss")
+    if country != "canada" or not isinstance(ncl, dict):
+        return ()
+    from taxjson.lib.carry_back import split_text
+    from taxjson.lib.project_tables import claimed_losses
+    notes: List[str] = []
+    if ncl.get("carried_back_split") == "oldest_first" and isinstance(
+            ncl.get("carried_back_to"), dict):
+        notes.append(
+            f"The {ry} record split its T1A carry-back between the "
+            f"{CLAIMED_KEY} years by `tjs carryover`'s proposal, the oldest "
+            f"first ({split_text(ncl['carried_back_to'])}): no [carryover] "
+            f"carried_back entry gave the years. This project's ledger reads "
+            f"that split. If {ry}'s T1A named other years, say so in the "
+            f"{ry} project (`carried_back = {{ {ry} = {{ YEAR = AMOUNT }} }}`) "
+            f"and re-close it with --force.")
+    if "applied" in ncl and ry in claimed_losses(cfg)[0] \
+            and not carry_back.unknown and carry_back.proposed:
+        back = carry_back.amounts.get(ry) or 0.0
+        notes.append(
+            f"{CLAIMED_KEY} {ry} was compared taking {M.shown(back, 2):,.2f} of "
+            f"this project's loss as carried back to {ry}: `tjs carryover`'s "
+            f"proposal for this year's T1A, the oldest {CLAIMED_KEY} year first "
+            f"({carry_back.proposed}). If the T1A names other years, say so: "
+            f"`carried_back = {{ {ry + 1} = {{ YEAR = AMOUNT }} }}` under "
+            f"[carryover].")
+    return tuple(notes)
 
 
 def handoff_issues(root: Path, cfg: Dict[str, Any],
@@ -577,7 +620,8 @@ def handoff_issues(root: Path, cfg: Dict[str, Any],
                  f"Enter it in the {ry} project's {CLAIMED_KEY} and close "
                  f"{ry} again there with --force, or fix the entry here "
                  f"(the Capital Loss Carryover Worksheet decides).")
-    return CarryComparison(out, unchecked, caveat, split_note)
+    return CarryComparison(out, unchecked, caveat, split_note,
+                           _order_notes(cfg, block, ry, carry_back, country))
 
 
 def us_deduction_used(record: Dict[str, Any]

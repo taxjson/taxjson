@@ -40,22 +40,63 @@ class ViewError(ValueError):
 
 
 def cash_in_lieu_line(received: float, fraction: float, cash: float,
-                      currency: str, paid: str, sold: bool = False) -> str:
+                      currency: str, paid: str, sold: bool = False,
+                      parts=()) -> str:
     """A spin-off's cash in lieu of a fraction, in words: the fraction of
     the new shares the holding was entitled to that was paid in cash,
     and the cash ('' when none was paid). The ratio the broker's row
     gives counts the delivered shares only (backlog TJ-0166), while
     s.86.1 books the fraction with them (CA-CORP-05). `sold`: the
-    booking sells the fraction for the cash."""
+    booking sells the fraction for the cash. `parts`: the event's
+    `cash_in_lieu_parts`, [(day, fraction, cash)], when the cash was
+    paid on more than one day: each day's cash is named (TJ-5057)."""
     if cash < 0.005:
         return ""
-    money = f"{M.shown(cash, 2):,.2f} {currency}".rstrip() + (f" on {paid}" if paid
-                                                   else "")
+    money = f"{M.shown(cash, 2):,.2f} {currency}".rstrip()
+    if len(parts or ()) > 1:
+        money += " (" + ", ".join(
+            f"{M.shown(c, 2):,.2f} on {d}" if d else f"{M.shown(c, 2):,.2f}"
+            for d, _f, c in parts) + ")"
+    elif paid:
+        money += f" on {paid}"
     if fraction <= 1e-9:
         return f"{money}, for a fraction the export does not size"
     return (f"{fraction:g} of the {received + fraction:g} new shares, "
             f"paid in cash: {money}"
             + (" (booked as their sale)" if sold else ""))
+
+
+def _event_cil_line(ev, frac: float, cil: float,
+                    booked: List[Dict[str, Any]]) -> str:
+    """cash_in_lieu_line for a spin-off event and the rows booked for
+    it (a sale among them is the fraction's)."""
+    return cash_in_lieu_line(
+        float(ev.qty_received or 0), frac, cil,
+        getattr(ev, "cash_in_lieu_currency", "") or
+        getattr(ev, "currency", ""),
+        getattr(ev, "cash_in_lieu_date", "") or "",
+        sold=any(r.get("action") == "BUYSELL"
+                 and float(r.get("quantity") or 0) < 0 for r in booked))
+
+
+def _event_cil_parts(ev) -> List[Dict[str, Any]]:
+    """A spin-off event's cash in lieu by the day it was paid, for the
+    view's `cash_in_lieu_parts`: [{date, amount, currency}], [] when it
+    was paid on one day (`cash_in_lieu` says it; TJ-5057)."""
+    cur = (getattr(ev, "cash_in_lieu_currency", "") or
+           getattr(ev, "currency", ""))
+    return [{"date": d, "amount": M.shown(c, 2), "currency": cur}
+            for d, _f, c in getattr(ev, "cash_in_lieu_parts", None) or ()]
+
+
+def _parts_text(s: Dict[str, Any]) -> str:
+    """'; by day: 12.00 on D1, 14.00 on D2' for a spin-off whose cash in
+    lieu was paid on more than one day, else ''."""
+    parts = s.get("cash_in_lieu_parts") or []
+    if len(parts) < 2:
+        return ""
+    return "; by day: " + ", ".join(
+        f"{p['amount']:,.2f} on {p['date']}" for p in parts)
 
 
 def _rows(path: Path) -> List[Dict[str, Any]]:
@@ -282,14 +323,8 @@ def spinoffs(root: Path, cfg: Dict[str, Any], account: Optional[str] = None, *,
                 ent = ev.ratio_new + frac
                 ratio = (f"{ent / ev.old_count:.6g} new per share "
                          f"({ent:g} for {ev.old_count:g})")
-            cil_text = cash_in_lieu_line(
-                float(ev.qty_received or 0), frac, cil,
-                getattr(ev, "cash_in_lieu_currency", "") or
-                getattr(ev, "currency", ""),
-                getattr(ev, "cash_in_lieu_date", "") or "",
-                sold=any(r.get("action") == "BUYSELL"
-                         and float(r.get("quantity") or 0) < 0
-                         for r in by_ev.get(eid, []))) if ev else ""
+            cil_text = _event_cil_line(
+                ev, frac, cil, by_ev.get(eid, [])) if ev else ""
             broker_fmv = float(getattr(ev, "target_fmv", 0) or 0) or \
                 float(getattr(ev, "fmv", 0) or 0) if ev else 0.0
             broker_cur = ((getattr(ev, "target_currency", "") or
@@ -415,6 +450,7 @@ def spinoffs(root: Path, cfg: Dict[str, Any], account: Optional[str] = None, *,
                 # broker's USD value was labelled CAD).
                 "fmv_currency": fmv_cur,
                 "cash_in_lieu": cil_text,
+                "cash_in_lieu_parts": _event_cil_parts(ev) if ev else [],
                 "broker_fmv": broker_fmv,
                 "broker_currency": broker_cur, "income": M.shown(income, 2),
                 "new_qty": new_qty, "new_cost": M.shown(new_cost, 2),
@@ -626,7 +662,7 @@ def render_spinoffs(doc: Dict[str, Any],
               ("booked", f"income {M.shown(s['income'], 2):,.2f} {s['currency']}, "
                          f"{s['new_qty']:g} new shares costing "
                          f"{M.shown(s['new_cost'], 2):,.2f} {s['currency']}")]
-             + ([("cash in lieu", s["cash_in_lieu"])]
+             + ([("cash in lieu", s["cash_in_lieu"] + _parts_text(s))]
                 if s.get("cash_in_lieu") else [])
              + [("held now", f"{s['held_now']:g}")], "  ")
         d.items(s["why"], "  ")

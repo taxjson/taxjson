@@ -51,7 +51,11 @@ def pool_is_flat(symbol: str, qty: float, cost: Any = 0.0) -> bool:
     fewer than the tolerance (pool_qty_eps) and less than MATERIAL_COST
     of cost. A sub-micro position bought (or consolidated) at a real
     cost is held: it shows in the inventory and its cost amount counts
-    (backlog TJ-0649)."""
+    (backlog TJ-0649). Exactly the tolerance with no material cost is no
+    holding here, as the short router and the trade walk read it (a
+    marked short of exactly the tolerance: tests/test_engine_check_pins_ca
+    `TestADustMarkedShortIsNoPosition`), though `AcbPool.drain` leaves
+    such units in the pool (backlog TJ-5140)."""
     q = float(qty or 0.0)
     if not q:
         return True

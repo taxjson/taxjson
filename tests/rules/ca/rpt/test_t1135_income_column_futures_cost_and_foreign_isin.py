@@ -290,26 +290,33 @@ class TestForeignIsinOnACanadianListing(unittest.TestCase):
     """A foreign issuer's shares bought on a Canadian exchange are
     foreign property wherever listed; the listing alone says Canadian,
     so when the rows carry a foreign ISIN (IB stamps issuer_country) the
-    symbol is named for a `T1135 SYMBOL COUNTRY` line, as the mirror
-    case (a Canadian ISIN on a foreign listing) is."""
+    ISIN decides: a row under its country (TJ-4957; until then the
+    symbol was named for a `T1135 SYMBOL COUNTRY` line and counted as
+    Canadian), named with the line for someone who knows otherwise."""
 
     BOOK = [tx("BUYSELL", "2025-02-01", "QZF.TO", 10, -900.0),
             tx("DIVIDEND", "2025-06-17", "QZF.TO", 0, 20.0,
                type="dividend", issuer_country="US")]
 
     @rule(R.CA_RPT_02)
-    def test_it_is_named_with_the_line_to_add(self):
+    def test_it_is_counted_and_named_with_the_line_to_add(self):
         rep = report(self.BOOK, {"margin_gains.json": gains_of(self.BOOK)})
-        self.assertEqual(rep["properties"], [])
-        self.assertEqual(rep["foreign_issuer_symbols"], ["QZF.TO"])
-        self.assertEqual(rep["foreign_issuer_countries"], {"QZF.TO": "USA"})
-        self.assertIn("1 symbol(s) on a Canadian listing carry a foreign "
-                      "ISIN: QZF.TO (USA)", rep["_stderr"])
-        self.assertIn("`T1135 QZF.TO USA`", rep["_stderr"])
+        self.assertEqual(
+            [(r["symbol"], r["country"], r["country_source"], r["max_cost"],
+              r["income"]) for r in rep["properties"]],
+            [("QZF.TO", "USA", "isin", 900.0, 20.0)])
+        self.assertEqual(rep["listing_overruled_symbols"], ["QZF.TO"])
+        # No symbol is counted against its ISIN: the old keys are gone.
+        self.assertNotIn("foreign_issuer_symbols", rep)
+        self.assertNotIn("foreign_issuer_countries", rep)
+        self.assertNotIn("foreign ISIN", rep["_stderr"])
         acts = _out.act_lines(render_brief(rep))
-        self.assertTrue(any("QZF.TO" in a and "foreign-ISIN" in a
-                            for a in acts), acts)
-        self.assertIn("QZF.TO", " ".join(render_report(rep).split()))
+        self.assertTrue(any("counted by ISIN, not listing: QZF.TO (USA)"
+                            in a for a in acts), acts)
+        self.assertIn("QZF.TO: USA by its ISIN (US, margin); its listing "
+                      "says Canadian. Cost: 900.00 CAD at most in the year. "
+                      "If you know otherwise: `T1135 QZF.TO CA`",
+                      " ".join(render_report(rep).split()))
 
     @rule(R.CA_RPT_02)
     def test_a_line_for_it_settles_it(self):
@@ -318,21 +325,24 @@ class TestForeignIsinOnACanadianListing(unittest.TestCase):
                 rep = report(self.BOOK,
                              {"margin_gains.json": gains_of(self.BOOK)},
                              overrides=ov)
-                self.assertEqual(rep["foreign_issuer_symbols"], [])
+                self.assertEqual(rep["listing_overruled_symbols"], [])
                 self.assertEqual(len(rep["properties"]), rows)
-                self.assertNotIn("foreign ISIN", rep["_stderr"])
+                self.assertEqual([r["country_source"]
+                                  for r in rep["properties"]],
+                                 ["override"] * rows)
 
     @rule(R.CA_RPT_02)
     def test_a_canadian_isin_on_a_canadian_listing_is_not_named(self):
         rows = [dict(r.to_dict(), issuer_country="CA") for r in self.BOOK]
         rep = report(rows, {"margin_gains.json": {"transactions": []}})
-        self.assertEqual(rep["foreign_issuer_symbols"], [])
+        self.assertEqual(rep["listing_overruled_symbols"], [])
+        self.assertEqual(rep["properties"], [])
 
     @rule(R.CA_RPT_02)
-    def test_the_issuers_country_from_tobase_map_needs_no_warning(self):
+    def test_the_issuers_country_from_tobase_map_agrees(self):
         rep = report(self.BOOK, {"margin_gains.json": gains_of(self.BOOK)},
                      issuer_countries={"QZF.TO": "USA"})
-        self.assertEqual(rep["foreign_issuer_symbols"], [])
+        self.assertEqual(rep["classification_conflicts"], [])
         self.assertEqual(props(rep)["QZF.TO"]["max_cost"], 900.0)
 
 

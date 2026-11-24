@@ -38,15 +38,13 @@ from taxjson.pipeline.messages import (
     _cmd_prog, _die, _die_input, _out_relpath, _out_wrap,
     _PROG, _run_concise, _say, _say_once, _step,
 )
-from taxjson.pipeline.sanity import (
-    _has_inputs, _sanity_items_from_config, cmd_sanity,
-)
+from taxjson.pipeline.sanity import _has_inputs
 from taxjson.pipeline.stages import (
     _accounts_with_symbol_codes, _duplicate_crypto_exports,
     _duplicate_input_files, _listing_suffix_stale,
     _migrate_edit, _missing_history_arg,
     _rates_inputs, _read_work_doc, _record_skipped_accounts,
-    _resolve_manifest, _say_export_coverage, _say_in_kind,
+    _resolve_manifest, _say_export_coverage, _say_in_kind, flag_undated_account,
     _say_listing_spellings, _say_option_transition, _say_similar_losses,
     _say_tobase_map, _say_tobase_until, _say_transfer_windows,
     _say_xlist_losses,
@@ -1003,11 +1001,26 @@ def _run_reports(root: Path, settings: Settings, cache: Path, ticker_map_arg: Op
         _warn_unused_renames(_rename_records,
                              strict=getattr(args, "strict", False))
         _check_renamed_late(root, strict=getattr(args, "strict", False))
+        _check_year_end_exact(cache, strict=getattr(args, "strict", False))
+    _check_cash_ids(root, cfg, strict=getattr(args, "strict", False))
     if _blend_names and not args.account and not pending_accounts:
         stage_blended_wash_pass(_blend_names, settings, cache,
                                 reports_dir, sheltered_base,
                                 incomplete_history=mh_arg,
                                 strict=getattr(args, "strict", False))
+    if args.account and not pending_accounts:
+        # No pass across accounts: the undated-listing check from the
+        # account's own books (TJ-5202); what they did with the row is
+        # said only where no other taxable account shares their pools.
+        from taxjson.lib.country import basis_pooled_across_accounts
+        _apart = (basis_pooled_across_accounts(_country(settings))
+                  and sum(1 for _a in accounts.values()
+                          if not _a.sheltered and not _a.crypto) > 1)
+        for _n, _o, _c in taxable_outputs:
+            if not _c:
+                flag_undated_account(_n, cache, settings, _o["gains"],
+                                     pooled_apart=_apart,
+                                     strict=getattr(args, "strict", False))
     if _crypto_blend_names and not args.account and not pending_accounts:
         stage_blended_wash_pass(_crypto_blend_names, settings, cache,
                                 reports_dir, sheltered_base,
@@ -1056,6 +1069,7 @@ def _run_reports(root: Path, settings: Settings, cache: Path, ticker_map_arg: Op
             for _stale in (cache / f"{_n}_gains_wash.json",
                            cache / f"{_n}_gains_wash.traces",
                            cache / f"{_n}_gains_wash.json.diag",
+                           cache / f"{_n}_listing_evidence.diag",
                            reports_dir / f"{_n}_wash.sum"):
                 if _stale.exists():
                     _stale.unlink()
@@ -1306,88 +1320,6 @@ def _run_finish(cache: Path, settings: Settings, rates: Path, reports_dir: Path,
     _step(f"Done. Reports are in {_out_relpath(reports_dir, root)}/")
 
 
-def _run_holdings_check(args: argparse.Namespace, accounts: Dict[str, AccountSettings],
-                        root: Path, cfg: Dict[str, Any]) -> None:
-    """A full `tjs run`'s positions checked against the broker's holdings
-    files, when the project declares any: a warning, never a failing exit
-    (_cmd_run)."""
-    # Broker-positions cross-check, when taxjson.toml declares any
-    # account's `holdings` files. A WARNING, never a failing exit:
-    # same-day trades that haven't reached the CSVs yet differ
-    # routinely, and a hard failure there would teach the user to
-    # ignore it. Only a self-vs-external compare catches a stranded
-    # position that every internal report agrees on (shares stranded
-    # by a split, an option class split).
-    if not args.account and (
-            any(_a.holdings for _a in accounts.values())
-            or _holdings_folder_in_use(root, cfg)):
-        from taxjson.lib import out as _out
-        from taxjson.lib.out import width as _ow
-        if _ow(sys.stdout) <= 0:
-            _out.put("")        # print(), PLAN step 15
-        _step("Checking positions against the broker's holdings files")
-        _san_kinds: Dict[str, List[str]] = {}
-        _san_notes = _sanity_items_from_config(
-            accounts, root,
-            settings_of(cfg).year, kinds=_san_kinds)[1]
-        for _n in _san_notes:
-            if _n in (_san_kinds.get("info") or ()):
-                # (a holdings/ snapshot of an account checked against
-                # its own `holdings` files: nothing unchecked, TJ-0020)
-                _say("note", *_split_msg(_n), indent="  ")
-                continue
-            # One unreadable holdings file drops that account from the
-            # compare while sanity itself still exits 0 — say so here,
-            # or the run reads as fully checked (2026-09 audit R1-324).
-            _say("warning", *_split_msg(f"holdings check incomplete: {_n}"),
-                 indent="  ")
-        try:
-            if _ow(sys.stdout) > 0:
-                # Shown to a person: what differs, in a few lines
-                # (`tjs sanity` has the tables).
-                _sanity_console(root)
-            else:
-                cmd_sanity(argparse.Namespace(dir=str(root), items=[],
-                                              tolerance=None, json=False,
-                                              brief_extras=True))
-        except SystemExit as _e:
-            if isinstance(_e.code, str) and _e.code != _SANITY_REFUSED:
-                # A message exit is a CONFIG problem (missing holdings
-                # file, unknown account, malformed .toml) — not a
-                # position difference (2026-09 CLI audit B13). Its
-                # reason and the command stay on the one line the
-                # default view shows: "could not run" alone named no
-                # file and no fix (backlog TJ-0485).
-                _why = str(_e.code).splitlines()
-                _say("warning", "holdings check could not run",
-                     *_why, _SANITY_FIX, indent="  ",
-                     short=_sanity_failed_line(_why))
-            elif _e.code == _SANITY_REFUSED or (isinstance(_e.code, int)
-                                                and _e.code >= 2):
-                # An input refusal (a holdings file that is not a whole
-                # snapshot, a date that is no day) or a usage error (an
-                # account taxjson.toml pairs with a file has no books,
-                # backlog TJ-0630): its Error is above; never "positions
-                # differ … missing history". On a terminal
-                # _sanity_console says so: one line naming the command,
-                # not that text as the reason.
-                _say("warning", "holdings check could not run",
-                     _SANITY_REFUSED, indent="  ")
-            elif _e.code and _ow(sys.stdout) <= 0:
-                # (shown to a person, _sanity_console said it)
-                _say("warning", "positions differ from the broker "
-                     "holdings files",
-                     "On a first project the likely cause is missing "
-                     "history (purchases before your download starts: "
-                     "`tjs find-missing-history`, "
-                     "docs/getting-started.md step 5); later, same-day "
-                     "trades not yet in the CSVs are the usual one; "
-                     "anything else is a booking problem (see `tjs "
-                     "sanity`).", indent="  ")
-        except Exception as _e:  # noqa: BLE001 — never break a run
-            _say("warning", f"holdings sanity skipped: {_e}", indent="  ")
-
-
 def _cmd_run(args: argparse.Namespace) -> None:
     root, cfg, accounts, settings = _run_config(args)
 
@@ -1447,7 +1379,6 @@ def _cmd_run(args: argparse.Namespace) -> None:
     _run_finish(cache, settings, rates, reports_dir, sheltered_outputs, taxable_outputs, root,
                 accounts, args, cfg, _booked_twice, _fp_started, inputs_dir)
 
-    _run_holdings_check(args, accounts, root, cfg)
     if not args.account:
         _first_run_summary(root, cfg, cache, mh_arg)
     if args.account:
@@ -1468,123 +1399,6 @@ def _cmd_run(args: argparse.Namespace) -> None:
              short=f"single-account run ({args.account}) skipped the "
                    f"cross-account {_rule_n} pass, so `tjs run` fully "
                    f"before filing")
-
-
-# Discrepancies the run's console names before `+N more`.
-_SANITY_SHOWN = 8
-# What the run says under "holdings check could not run" when sanity
-# refused an input (exit 2) and printed its Error: never "no result",
-# never "positions differ" (audit 2026-10-25 brokers-inputs#1).
-_SANITY_REFUSED = ("The Error above names the file to fix; then "
-                   "`tjs sanity`.")
-# ... and under it when sanity stopped with a message (exit 1): the
-# reason is the line above.
-_SANITY_FIX = "Fix what it names; then `tjs sanity`."
-
-
-def _sanity_failed_line(why: List[str]) -> str:
-    """The default view's one line for a holdings check that stopped
-    with a message: the reason (its label and a closing parenthesis
-    dropped) and the command (backlog TJ-0485)."""
-    from taxjson.lib.out import _CAPTURED_RE
-    head = re.sub(r"\x1b\[[0-9;]*m", "", why[0] if why else "").strip()
-    m = _CAPTURED_RE.match(head)
-    if m:
-        head = head[m.end():]
-    head = re.sub(r"\s*\([^()]*\)\s*$", "", head).rstrip(" .:")
-    return ("holdings check could not run"
-            + (f": {head}" if head else "") + " — `tjs sanity`")
-
-
-def _holdings_folder_in_use(root: Path, cfg: Dict[str, Any]) -> bool:
-    """The year's holdings/ folder holds a snapshot `tjs sanity`
-    compares (lib/holdings_dir)."""
-    from taxjson.lib import holdings_dir as _HD
-    folder, note = _HD.folder_for(root, settings_of(cfg).year)
-    return folder is not None or bool(note)
-
-
-def _sanity_console(root: Path) -> None:
-    """The run's holdings check as a person reads it on the console:
-    one message per finding with its few lines (`tjs sanity` lists
-    every row). Exits as cmd_sanity does (1 on a quantity difference,
-    a message on a config problem)."""
-    import contextlib
-    import io
-    import json as _json
-    buf = io.StringIO()
-    code: Any = 0
-    try:
-        with contextlib.redirect_stdout(buf):
-            cmd_sanity(argparse.Namespace(dir=str(root), items=[],
-                                          tolerance=None, json=True,
-                                          brief_extras=True))
-    except SystemExit as e:
-        code = e.code
-    if isinstance(code, str):
-        raise SystemExit(code)
-    if isinstance(code, int) and code >= 2:
-        # An input refusal (exit 2): its Error is on stderr already.
-        raise SystemExit(_SANITY_REFUSED)
-    try:
-        doc = _json.loads(buf.getvalue())
-    except ValueError:
-        raise SystemExit(f"holdings check returned no result "
-                         f"({buf.getvalue()[:200]!r})")
-    rows = doc.get("discrepancies") or []
-
-    def _n(k: int, one: str, many: str) -> str:
-        return f"{k} {one if k == 1 else many}"
-    if rows:
-        first = rows if len(rows) <= _SANITY_SHOWN else rows[:5]
-        shown = [f"{'+'.join(r.get('accounts') or [])} {r['symbol']}: "
-                 f"taxjson {r['taxjson_qty']:g}, broker "
-                 f"{r['holdings_qty']:g}" for r in first]
-        if len(first) < len(rows):
-            per: Dict[str, int] = {}
-            for r in rows:
-                a = "+".join(r.get("accounts") or [])
-                per[a] = per.get(a, 0) + 1
-            shown.append(f"+{len(rows) - len(first)} more"
-                         + (" (by account: " + ", ".join(
-                             f"{a} {k}" for a, k in sorted(per.items()))
-                            + ")" if len(per) > 1 else ""))
-        _say("warning", f"{_n(len(rows), 'position differs', 'positions differ')}"
-             f" from the broker's holdings files", *shown,
-             "`tjs sanity` lists them. Fewer shares than the broker: "
-             "usually missing history (`tjs find-missing-history`); "
-             "more: a trade after the last export.",
-             file=sys.stdout)
-    else:
-        # An account with open positions and no holdings file was never
-        # compared: not an all-clear for it (pre-release review L4) —
-        # nor one whose `holdings` file is missing, positions or not
-        # ("every checked account" read as all of them: TJ-0064).
-        _unchk = list(doc.get("uncovered_accounts") or [])
-        _unchk += [a for a in doc.get("accounts_not_checked") or []
-                   if a not in _unchk]
-        _say("note", "positions match the broker's holdings files"
-             + (f" (checked accounts only; {len(_unchk)} unchecked: "
-                f"{', '.join(_unchk)})" if _unchk
-                else " (every checked account)"
-                if not doc.get("complete", True)
-                else ""),
-             file=sys.stdout)
-    diffs = doc.get("cost_differences") or []
-    if diffs:
-        unexpl = sum(1 for d in diffs if d.get("reasons") == ["unexplained"])
-        _say("note", f"{len(diffs)} of "
-             f"{_n((doc.get('cost') or {}).get('compared', 0), 'position', 'positions')}"
-             f" differ from the reports' cost ({unexpl} unexplained)",
-             "`tjs sanity` lists them with their reasons (a broker's "
-             "book value is not always your ACB).", file=sys.stdout)
-    inc = doc.get("income_share_mismatches") or []
-    if inc:
-        _say("note", f"{_n(len(inc), 'dividend row states', 'dividend rows state')}"
-             f" a share count the books did not hold",
-             "`tjs sanity` lists them.", file=sys.stdout)
-    if rows:
-        raise SystemExit(1)
 
 
 def _short_positions_cands(base_json: Path, account: str,
@@ -1864,10 +1678,14 @@ def _first_run_summary(root: Path, cfg: Dict[str, Any], cache: Path,
     count is nonzero, silent when clean; the counts also go to
     reports/run_summary.json. Advisory — never breaks a run."""
     from taxjson.lib import first_run as FR
+    from taxjson.lib.holdings_dir import where_used
     try:
         doc = FR.collect(root, cfg, missing_history=mh_file,
                          arrivals=transfer_arrivals(root, cache,
                                                     accounts_of(cfg)))
+        # Worked out here, never written to run_summary.json: a holdings
+        # file is a check-only input, and no reports/ file follows it.
+        holdings = where_used(root, cfg.get("accounts"))
     except Exception as e:                          # noqa: BLE001
         emit_line(f"tjs: warning: the closing summary could not be built "
                   f"({type(e).__name__}: {e}).", file=sys.stderr)
@@ -1887,7 +1705,8 @@ def _first_run_summary(root: Path, cfg: Dict[str, Any], cache: Path,
     # (a project with only .tt OPENING cost=unknown lines: named so)
     show_blocks(FR.render_blocks(doc, mh_name="missing_history.tt",
                                  concise=_run_concise(sys.stdout),
-                                 details_hint=run_state.current.details_hidden),
+                                 details_hint=run_state.current.details_hidden,
+                                 holdings=holdings),
                 sys.stdout)
 
 
@@ -2185,6 +2004,49 @@ def _check_renamed_late(root: Path, *, strict: bool) -> None:
         _die(f"--strict: {len(rows)} trade(s) in a renamed ticker after "
              f"its rename are not declared — aborting",
              "See the warnings above and `tjs renames`.")
+
+
+def _check_year_end_exact(cache: Path, *, strict: bool) -> None:
+    """A year-end position the engine could not read exactly on the
+    project's tax_date (its own rows cross the two date orders: an
+    ATTENTION of each account's gains stage, echoed there; TJ-4984):
+    --strict stops."""
+    from taxjson.lib.stage_msg import YEAR_END_INEXACT
+    said = set()
+    for p in sorted(cache.glob("*_gains.json.diag")):
+        try:
+            said.update(ln for ln in p.read_text(errors="replace").splitlines()
+                        if ln.startswith(YEAR_END_INEXACT))
+        except OSError:
+            continue
+    if said and strict:
+        _die(f"--strict: {len(said)} year-end position(s) are not exact on "
+             f"the project's tax_date — aborting",
+             "See the warnings above (\"… at the end of … not exact\") and "
+             "docs/troubleshooting.md.")
+
+
+def _check_cash_ids(root: Path, cfg: Dict[str, Any], *, strict: bool) -> None:
+    """A broker's id that two exports of a taxable account hold on a cash
+    event with different content (lib/cash_events `id_conflicts`, from
+    the parse's sidecars; backlog TJ-5034): an ATTENTION per id, whole,
+    whatever the ledger and fx_cash_gains settings are (the cash
+    commands refuse it; the run said nothing without fx_cash_gains:
+    TJ-5221), and --strict stops. Nothing where the sidecars are not
+    all there (a `run --account`, a country not set: said elsewhere)."""
+    from taxjson.lib import cash_events as CE
+    from taxjson.lib.country import CountryError, settings_country
+    try:
+        found = CE.id_conflicts(root, cfg, settings_country(settings_of(cfg)))
+    except (CountryError, OSError, ValueError):
+        return
+    for text in found:
+        _say("attention", *_split_msg(text), whole=True)
+    if found and strict:
+        _die(f"--strict: {len(found)} broker's id(s) on cash events are in two "
+             f"exports with different content — aborting",
+             "See the warnings above: keep only the export with the right copy "
+             "of each row.")
 
 
 def _filed_run_gains(cmd_tail, out_path):
@@ -3292,9 +3154,10 @@ def _fx_cash_after_run(root: Path, cache: Path,
                                                                     cache)
             write_atomic(rpt, V2.render(doc, verdict, country, width_=0)
                          + "\n")
-            _say("note", f"{V2.headline(doc, verdict)} -> "
-                 f"{_out_relpath(rpt, root)}", indent="  ",
-                 file=sys.stdout)
+            _w = V2.warned(doc, _out_relpath(rpt, root))
+            _say("note", f"{V2.headline(doc, verdict)}"
+                 + (f"; {_w}" if _w else f" -> {_out_relpath(rpt, root)}"),
+                 indent="  ", file=sys.stdout)
             return
         ledger, verdict, base, year, country = _fx_cash_doc(root, cache)
     except SystemExit as e:
@@ -3376,6 +3239,9 @@ def _fx_cash_native(root: Path, cache: Path, prog: str = "tjs fx-cash"):
     try:
         fx = load_fx_history(cache / "to_base.csv", base)
     except (OSError, ValueError) as e:
+        from taxjson.lib.cli_diag import InputContentError
+        if isinstance(e, InputContentError):
+            raise       # a refused rates row: the command's guard, exit 2
         sys.exit(exit_text(f"{prog}: error: {e}"))
     return txs, base, int(year), country, fx
 

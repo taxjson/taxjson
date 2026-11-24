@@ -19,6 +19,11 @@ from taxjson.lib import ticker_map_suggest as TS
 
 from _support.symbols_suggest_hints import _book, _project, _tx
 
+# A project configuring the account whose parse work/ holds: only a
+# configured account's files are evidence (backlog TJ-5039).
+_CFG = ('[settings]\nyear = 2025\ncountry = "canada"\n\n'
+        '[accounts.margin]\ntype = "taxable"\n')
+
 
 class TestConditionalHint(unittest.TestCase):
     def test_gather_still_reads_it(self):
@@ -51,6 +56,9 @@ class TestConditionalHint(unittest.TestCase):
     def test_an_opening_balance_is_evidence(self):
         with tempfile.TemporaryDirectory() as td:
             root = _project(td)
+            # (the conversion of a .tt the account still reads)
+            (root / "inputs" / "tfsa").mkdir(parents=True)
+            (root / "inputs" / "tfsa" / "start.tt").write_text("")
             _book(root / "work", "tfsa_tt_start.json",
                   [_tx("QZLR.TO", 20, action="OPENING")])
             offer, _ = TS.pending(root)
@@ -70,6 +78,40 @@ class TestConditionalHint(unittest.TestCase):
             _book(root / "work", "tfsa_base.json", [_tx("QZLR.TO")])
             offer, _ = TS.pending(root)
         self.assertEqual(offer, [])
+
+    def test_a_stale_or_hidden_file_is_not_evidence(self):
+        # TJ-5039: a parse left in work/ by an account taxjson.toml no
+        # longer has (removed or renamed; tfsa_closed beside the
+        # configured tfsa), a copy (a backup, an old name), a dot-file or
+        # the conversion of a .tt no longer in inputs/ made `pending`
+        # offer the TOBASE line with certainty "evidence".
+        for name in ("removed_ib.json", "tfsa_closed_ib.json",
+                     "tfsa_old_questrade.json", "tfsa_ib.json.bak.json",
+                     ".margin_ib.json", ".tfsa_ib.json.bak.json",
+                     "tfsa_tt_gone.json"):
+            with self.subTest(file=name):
+                with tempfile.TemporaryDirectory() as td:
+                    root = _project(td)
+                    _book(root / "work", name, [_tx("QZLR.TO")])
+                    offer, _ = TS.pending(root)
+                    self.assertEqual(offer, [])
+                    self.assertNotIn("QZLR.TO", TS.books_symbols(root))
+                    self.assertNotIn(root / "work" / name,
+                                     TS.book_source_files(root))
+        # The same rows in a configured account's own books are evidence:
+        # an export group's parse, corporate-action rows or transfer
+        # evidence (a parser's or a generic mapping's group).
+        for name in ("tfsa_ib.json", "tfsa_questrade_corp.json",
+                     "tfsa_generic-qzbank_transfers.json"):
+            with self.subTest(file=name):
+                with tempfile.TemporaryDirectory() as td:
+                    root = _project(td)
+                    _book(root / "work", name, [_tx("QZLR.TO")])
+                    offer, _ = TS.pending(root)
+                    self.assertEqual([s.line for s in offer],
+                                     ["TOBASE QZLR.US QZLR.TO"])
+                    self.assertIn(root / "work" / name,
+                                  TS.book_source_files(root))
 
     def test_cli_shows_nothing(self):
         from tax_rules.dual import cli
@@ -95,8 +137,9 @@ class TestOtherConditionalSources(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             (root / "work").mkdir()
-            (root / "work" / "margin_x.json.diag").write_text(diag)
-            _book(root / "work", "margin_x.json", [_tx(s) for s in rows])
+            (root / "taxjson.toml").write_text(_CFG)
+            (root / "work" / "margin_ib.json.diag").write_text(diag)
+            _book(root / "work", "margin_ib.json", [_tx(s) for s in rows])
             return [s.line for s in TS.pending(root)[0]]
 
     def test_rbc_option_adjustment_needs_the_new_description(self):
@@ -167,6 +210,9 @@ class TestOtherConditionalSources(unittest.TestCase):
             root = Path(td)
             work = root / "work"
             work.mkdir()
+            (root / "taxjson.toml").write_text(
+                _CFG.replace("margin", "qt")
+                + '\n[accounts.rrsp]\ntype = "sheltered"\n')
             (work / f"qt{SC.SUFFIX}").write_text(json.dumps({
                 "format": SC.FORMAT, "account": "qt", "resolved": {},
                 "mapped": {}, "unresolved": {"X000003": {

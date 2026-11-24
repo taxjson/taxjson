@@ -730,7 +730,7 @@ The figures go on real returns, so correctness is checked in layers, not by test
   ACB or FIFO and the superficial-loss / wash-sale decision, and ties each figure to the pipeline's
   saved gains; any disagreement exits 1. The other filing commands (`sum`, `carryover`, `form-export`,
   `t1135`) are checked against it.
-- **15,500+ tests** (`scripts/ci.sh` prints the exact count): every fix lands with a regression test that
+- **16,500+ tests** (`scripts/ci.sh` prints the exact count): every fix lands with a regression test that
   failed before it. This figure is the one the deck and the website quote (`tests/test_deck.py`).
 - **Property fuzzers.** Seeded generators build thousands of random books per run and check
   conservation, determinism and ordering laws (the engine, custody transfers, settlement-lag and split

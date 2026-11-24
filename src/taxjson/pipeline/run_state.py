@@ -72,6 +72,9 @@ class RunState:
     # The accounts whose gains this run built or echoed, in run order: (name,
     # base book, gains book, taxable equity), for _report_short_positions.
     short_sources: List[Tuple[str, Path, Path, bool]] = field(default_factory=list)
+    # The cost rows this run's blended pass flagged on a listing no dated
+    # row shows held (stages._flag_undated_listings), as --strict names them.
+    undated_rows: List[str] = field(default_factory=list)
     # The currency-suffix groups staged this run: {(work dir, account):
     # {broker: csvs}} (stage_listing_suffix; the first pass re-reads a group
     # whose listings changed once every account is parsed).

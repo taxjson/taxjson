@@ -24,8 +24,6 @@ amounts under 1,000.
 
 Formerly: test_fix_1029_r3_commands
 """
-import contextlib
-import io
 import os
 import tempfile
 import unittest
@@ -82,24 +80,21 @@ class TestTJ0353SanityUnreadableBooksExit2(unittest.TestCase):
             self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
             self.assertIn("run `tjs run`", r.stderr)
 
-    def test_the_run_and_the_checklist_still_name_it(self):
-        from taxjson.pipeline import run as pipeline_run
+    def test_sanity_and_the_checklist_still_name_it(self):
         from taxjson.pipeline.config import load_config
         from taxjson.lib import checklist as cl
         from datetime import date
         with tempfile.TemporaryDirectory() as td:
             root = _run_project(Path(td))
             _gains_file(root).write_text("{ broken")
-            # The run's holdings check on a terminal: the Error is on
-            # stderr, and the run's warning points at it.
-            err = io.StringIO()
-            with contextlib.redirect_stderr(err), \
-                    self.assertRaises(SystemExit) as cm:
-                pipeline_run._sanity_console(root)
-            self.assertEqual(cm.exception.code, pipeline_run._SANITY_REFUSED)
-            self.assertIn("the books of 'margin' cannot be read",
-                          err.getvalue())
-            self.assertIn("re-run `tjs run`", err.getvalue())
+            # `tjs sanity` on a terminal (the run's own check until
+            # TJ-5170): the Error names the books and the run that
+            # rebuilds them, exit 2.
+            r = _tjs(root, "sanity", env_extra={"TAXJSON_WIDTH": "100"})
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            err = " ".join(r.stderr.split())
+            self.assertIn("the books of 'margin' cannot be read", err)
+            self.assertIn("re-run `tjs run`", err)
             # The checklist's step: attention, naming the books, and its
             # Next is the run that rebuilds them.
             ctx = cl.Ctx(root=root, cfg=load_config(root), year=2025,

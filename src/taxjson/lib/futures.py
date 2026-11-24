@@ -158,13 +158,33 @@ def _D(x) -> Decimal:
     return Decimal(repr(float(x or 0.0)))
 
 
+def buy_receives(tx: Any) -> bool:
+    """A plain-futures BUY at a negative price whose money is negative:
+    it RECEIVES cash, so its cost is negative (WTI, April 2020; the
+    schema's exemption, audit A2-0302). The one test of it: the engines
+    (engine/replacement.receives_on_buy) and the settlement rewrite
+    (_money) both read a buy's money through it, so a fill is one
+    trade in the native and the base-currency figures (backlog
+    TJ-5162)."""
+    return (_D(tx.quantity) > 0 and _D(tx.net_amount) < 0
+            and _D(tx.price) < 0 and is_plain_future(tx.symbol or ""))
+
+
 def _money(tx: TaxTransaction) -> Decimal:
-    """The fill's native money in pool terms (engine convention): a
-    buy's cost, a sell's proceeds, both SIGNED — a buy at a negative
-    price (WTI, April 2020) receives money, a negative cost; the
-    magnitude booked a loss as a gain (audit A2-0092). Every parser
-    gives a positive-price buy a positive cost."""
-    return _D(tx.net_amount)
+    """The fill's native money in pool terms (the engines' convention,
+    engine _ca_trade_money): a sell's proceeds SIGNED; a buy's cost as
+    its MAGNITUDE — books spell a buy's total as the cost or as the
+    cash paid out (a .tt line, a JSON book) — except a buy at a
+    negative price (buy_receives), which receives money: a negative
+    cost, kept signed (the magnitude booked that loss as a gain, audit
+    A2-0092). Reading every buy signed made a cash-signed cost a
+    credit here while the engines' native view took its magnitude: a
+    40,000 loss was a 108,000 gain in the base-currency figures
+    (backlog TJ-5162)."""
+    n = _D(tx.net_amount)
+    if _D(tx.quantity) > 0 and not buy_receives(tx):
+        return abs(n)
+    return n
 
 
 def _part(tx: TaxTransaction, qty: Decimal, frac: Decimal, net: Decimal,

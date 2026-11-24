@@ -12,6 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, List
 
+from taxjson.lib.futures_prefixes import canonical_futures_symbol
 from taxjson.model import money as M
 from taxjson.model.transaction import TaxTransaction
 
@@ -160,6 +161,45 @@ def _row_number(d: Decimal):
     return M.from_money(d)
 
 
+# The fields of a row that name a security (an option on a future carries
+# its underlying's prefix at the head of its own symbol).
+_SYMBOL_FIELDS = ('symbol', 'symbol_new', 'exercise_of')
+
+
+def fold_row_symbols(row: dict, ctx: str = "") -> dict:
+    """`row` with each symbol as the books spell a future: a `/` or `\\`
+    prefix `F:` (lib/futures_prefixes canonical_futures_symbol), as every
+    parser and the .tt reader write it, so a hand-made JSON book's
+    `/QZM26.US` is one security with an export's `F:QZM26.US` (backlog
+    TJ-5160). An id the row states is kept; one computed from the content
+    (TaxTransaction.compute_id) hashes the `F:` spelling, as a .tt row's.
+    A futures symbol that names no contract (`//QZM26.US`) is refused, a
+    ValueError naming the row (`ctx`)."""
+    for k in _SYMBOL_FIELDS:
+        if isinstance(row.get(k), str):
+            try:
+                row[k] = canonical_futures_symbol(row[k])
+            except ValueError as e:
+                raise ValueError(f"{ctx or 'a row'}: {k}: {e}") from None
+    return row
+
+
+def _check_row_evidence(clean_t: dict, _ctx: str) -> None:
+    """A row's reward evidence (on its DIVIDEND leg only) and its
+    `cash_leg` (one of row_types CASH_LEG_KINDS: an unknown kind read as
+    none at all would move the row's cash with no word)."""
+    if clean_t.get('staking_reward') is not None:
+        validate_staking_reward(clean_t['staking_reward'], _ctx)
+        if clean_t.get('action') != 'DIVIDEND':
+            raise ValueError(f"{_ctx}: staking_reward belongs on the DIVIDEND income leg only")
+    if clean_t.get('cash_leg') not in (None, ''):
+        from taxjson.lib.row_types import CASH_LEG_KINDS
+        if clean_t['cash_leg'] not in CASH_LEG_KINDS:
+            raise ValueError(
+                f"{_ctx}: cash_leg={clean_t['cash_leg']!r} is not one of "
+                f"{', '.join(CASH_LEG_KINDS)} — fix the input data.")
+
+
 def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
     """One row's coercion + validation — the shared body of
     load_transactions and pipeline.load_stdin_transactions, so the
@@ -201,10 +241,7 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
     _ctx = (f"{ctx_prefix}: transaction at index {i} "
             f"(id={t.get('id', '?')!r}, symbol="
             f"{t.get('symbol', '?')!r})")
-    if clean_t.get('staking_reward') is not None:
-        validate_staking_reward(clean_t['staking_reward'], _ctx)
-        if clean_t.get('action') != 'DIVIDEND':
-            raise ValueError(f"{_ctx}: staking_reward belongs on the DIVIDEND income leg only")
+    _check_row_evidence(clean_t, _ctx)
     # Type funnel (stage-tools audit): every numeric field must be a
     # real number (a numeric STRING is coerced with float(); null,
     # bools, lists, non-numeric strings are refused) and every string
@@ -242,10 +279,11 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
                  'dealer_country', 'issuer_country', 'broker_time',
                  'security_name', 'open_close', 'broker_basis',
                  'broker_lots', 'exercise_of', 'corp_cash', 'no_cash',
+                 'cash_leg',
                  'no_share_count', 'contract_size_basis',
-                 'lot_date', 'opening_cut_legs', 'journal_pair',
+                 'lot_date', 'opening_cut_legs', 'journal_pair', 'isin',
                  'event_source', 'listing_currency', 'settle_native',
-                 'commission_refunds', 'trade_currency', 'swap_fee'):
+                 'commission_refunds', 'trade_currency', 'swap_fee', 'security_type'):
         if _fld not in clean_t:
             continue
         _v = clean_t[_fld]
@@ -317,7 +355,7 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
             f"{_ctx}: SPLIT ratio must be > 0 (got "
             f"{clean_t.get('quantity')!r}) — a zero/negative ratio "
             f"is never a real corporate action.")
-    tx = TaxTransaction(**clean_t)
+    tx = TaxTransaction(**fold_row_symbols(clean_t, _ctx))
     # Where the row came from, for require_computable_rows' messages.
     tx._row_ctx = _ctx
     if _missing:
@@ -338,6 +376,16 @@ def load_transactions(path: Path) -> List[TaxTransaction]:
       when an in-memory pipeline composes loaders).
     * The FUZZ #K hard input guards (via coerce_transaction_row).
     """
+    return [coerce_transaction_row(t, i, f"load_transactions({path})")
+            for i, t in enumerate(read_book_rows(path))]
+
+
+def read_book_rows(path: Path) -> list:
+    """A book's rows as the file holds them (load_transactions' reader,
+    before each row's coercion): UTF-8 with or without a BOM, `#`
+    comments stripped, an object with a "transactions" list or a bare
+    list. Raises InputReadError (not UTF-8), JSONDecodeError naming the
+    file, or ValueError (no list of rows)."""
     from taxjson.lib.cli_diag import InputReadError
     with open(path, 'rb') as f:
         raw = f.read()
@@ -373,5 +421,4 @@ def load_transactions(path: Path) -> List[TaxTransaction]:
         raise ValueError(f"{path}: expected a JSON object with a "
                          f"\"transactions\" list (or a bare list of "
                          f"rows), got {type(txs).__name__}")
-    return [coerce_transaction_row(t, i, f"load_transactions({path})")
-            for i, t in enumerate(txs)]
+    return txs

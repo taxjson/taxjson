@@ -135,6 +135,26 @@ class TestGenericSplits(unittest.TestCase):
             _parse(_SPLIT_CSV.replace("SPLIT,XEI,,2,100,", "SPLIT,XEI,,,100,"), _SPLIT_TOML)
         self.assertIn("positive ratio", str(cm.exception))
 
+    def test_a_rename_with_a_ratio_of_zero_is_refused(self):
+        # TJ-5019: a 0 in the ratio cell read as a blank one and the
+        # rename went through at 1-for-1; a negative ratio was refused.
+        for cell in ("0", "0.0", "-1"):
+            with self.subTest(cell=cell), self.assertRaises(ValueError) as cm:
+                _parse(_SPLIT_CSV.replace("RENAME,XEI,XEJ,,", f"RENAME,XEI,XEJ,{cell},"),
+                       _SPLIT_TOML)
+            self.assertIn("line 4", str(cm.exception))
+            self.assertIn("positive ratio", str(cm.exception))
+            self.assertIn("leaves the cell blank", str(cm.exception))
+            self.assertIn("unmap [columns].ratio", str(cm.exception))
+        with self.assertRaises(ValueError) as cm:
+            _parse(_SPLIT_CSV.replace("SPLIT,XEI,,2,100,", "SPLIT,XEI,,0,100,"), _SPLIT_TOML)
+        self.assertIn("positive ratio", str(cm.exception))
+        self.assertNotIn("leaves the cell blank", str(cm.exception))
+        # A rename with its own ratio keeps it.
+        txs, _ = _parse(_SPLIT_CSV.replace("RENAME,XEI,XEJ,,", "RENAME,XEI,XEJ,0.5,"),
+                        _SPLIT_TOML)
+        self.assertEqual([t["quantity"] for t in txs if t["action"] == "SPLIT"], [2.0, 0.5])
+
     def test_the_quantity_cell_is_never_the_ratio(self):
         # The ratio column is required for split; shares received or held
         # sit in the quantity cell and must not scale the pool (TJ-2077).

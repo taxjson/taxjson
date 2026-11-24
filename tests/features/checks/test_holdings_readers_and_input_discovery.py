@@ -156,11 +156,14 @@ class TestHoldingsFolderReadsBrokerReports(unittest.TestCase):
             self.assertIn("QTY_MISMATCH", r.stdout)
             self.assertIn("holdings/margin_holdings.csv", r.stdout)
             self.assertNotIn("no holdings file", r.stdout)
-            # The run's own check reads it too.
+            # The run compares nothing (TJ-5170): the report in
+            # holdings/ makes its closing list name `tjs sanity`.
             r = _tjs(p, "run", "--no-input")
-            self.assertIn("==> Checking positions against the broker's "
-                          "holdings files", r.stdout)
-            self.assertIn("ZZE.TO  QTY_MISMATCH", r.stdout)
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            self.assertNotIn("Checking positions", r.stdout)
+            self.assertNotIn("QTY_MISMATCH", r.stdout)
+            self.assertIn("Info: positions not yet compared with the "
+                          "broker's holdings files", r.stdout)
 
     def test_unclaimed_report_names_the_csv_fix(self):
         with tempfile.TemporaryDirectory() as td:
@@ -205,10 +208,11 @@ class TestHoldingsCheckNamesWhyItCouldNotRun(unittest.TestCase):
     """TJ-0485: a holdings file with no [[holding]] tables ended the
     run's default view with a bare "Warning: holdings check could not
     run" — no file, no reason, no command; only --details added the
-    Error. The one line now names the reason and `tjs sanity`, and
-    the detailed form says what to do. Since TJ-0643 such a file is an
-    input sanity cannot read (exit 2): its Error, naming the file from
-    the project, comes first, then the run's warning and the command."""
+    Error. Since TJ-0643 such a file is an input sanity cannot read
+    (exit 2): its Error names the file from the project. Since TJ-5170
+    the run compares nothing (`tjs sanity` is its own step): `tjs
+    sanity` says the Error, on its one line and captured, and the run
+    names `tjs sanity` in its closing list."""
 
     def test_reason_and_command_on_the_one_line(self):
         with tempfile.TemporaryDirectory() as td:
@@ -220,19 +224,20 @@ class TestHoldingsCheckNamesWhyItCouldNotRun(unittest.TestCase):
             r = _tjs(p, "run", "--no-input", width="120")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             out = r.stdout + r.stderr
+            self.assertNotIn("has no [[holding]] array", out)
+            self.assertNotIn("holdings check", out)
+            self.assertIn("Info: positions not yet compared with the "
+                          "broker's holdings files — `tjs sanity`\n", out)
+            r = _tjs(p, "sanity", width="120")
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
             self.assertIn("Error: holdings/margin_holdings.toml has no "
                           "[[holding]] array (a holdings file has "
-                          "[[holding]] tables)\n"
-                          "Warning: holdings check could not run — "
-                          "`tjs sanity`", out)
-            r = _tjs(p, "run", "--no-input")
-            self.assertIn("tjs run: error: holdings/margin_holdings.toml "
+                          "[[holding]] tables)\n", r.stderr)
+            r = _tjs(p, "sanity")
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertIn("tjs sanity: error: holdings/margin_holdings.toml "
                           "has no [[holding]] array (a holdings file has "
-                          "[[holding]] tables)\n"
-                          "  warning: holdings check could not run\n"
-                          "    The Error above names the file to fix; then "
-                          "`tjs sanity`.",
-                          r.stdout + r.stderr)
+                          "[[holding]] tables)", r.stderr)
 
 
 _QT_HEADER = ("Transaction Date,Settlement Date,Action,Symbol,Description,"

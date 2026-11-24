@@ -9,7 +9,8 @@ from datetime import datetime
 # this an option?" — a recipe for subtle classification disagreements
 # (e.g. wash-sale vs ticker-map disagreeing on whether `F:CL...` counts).
 from taxjson.lib.option_symbols import parse_option_underlying, is_option_symbol
-from taxjson.lib.futures_prefixes import FUTURES_PREFIX_GROUP, FUTURES_PREFIXES
+from taxjson.lib.futures_prefixes import (FUTURES_PREFIX_GROUP, FUTURES_PREFIXES,
+                                          canonical_futures_symbol)
 from taxjson.lib.ca_listing import book_listing
 
 get_underlying = parse_option_underlying
@@ -300,7 +301,7 @@ def parse_side_line(kw: str, line: str):
         yid = toks[1]
         if yid.upper().endswith("-USD") and len(yid) > 4:
             yid = yid[:-4]
-        return "crypto", toks[0].upper(), yid
+        return "crypto", canonical_futures_symbol(toks[0].upper()), yid
     if kw == "T1135":
         from taxjson.lib.t1135_country import (NOT_FOREIGN,
                                                NOT_FOREIGN_WORDS,
@@ -352,7 +353,8 @@ def parse_side_line(kw: str, line: str):
         if len(toks) != 2 or toks[1].upper() not in ("USD", "NO"):
             raise ValueError("STABLE needs `STABLE SYMBOL USD` (a "
                              "US-dollar stablecoin) or `STABLE SYMBOL NO`")
-        return "stable", toks[0].upper(), toks[1].upper() == "USD"
+        return ("stable", canonical_futures_symbol(toks[0].upper()),
+                toks[1].upper() == "USD")
     if kw == "MULT":
         if len(toks) != 2:
             raise ValueError("MULT needs `MULT SYMBOL N` (SYMBOL an option "
@@ -364,7 +366,9 @@ def parse_side_line(kw: str, line: str):
         if not (0 < n < float("inf")):
             raise ValueError(f"MULT contract size {toks[1]!r} must be a "
                              f"positive number")
-        return "mult", toks[0].upper(), n
+        # The option (or its root) as the books spell it: a future's `/`
+        # or `\` prefix is `F:` (backlog TJ-5150).
+        return "mult", canonical_futures_symbol(toks[0].upper()), n
     if kw == "VENUE":
         if len(toks) != 2:
             raise ValueError("VENUE needs `VENUE IBCODE SUFFIX` (SUFFIX a "
@@ -397,7 +401,7 @@ def extract_symbol(desc: str, cur: str, sym: str) -> str:
     from taxjson.lib.ca_listing import (canonical_ca_listing,
                                         is_ca_pref_series)
     from taxjson.lib.option_symbols import is_option_symbol
-    s = sym.upper()
+    s = canonical_futures_symbol(sym.upper())
     if s.startswith(FUTURES_PREFIXES) or is_option_symbol(s):
         return s
     canon = canonical_ca_listing(s, cur if cur == "CAD" else "")

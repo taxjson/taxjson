@@ -173,21 +173,43 @@ def _final_symbol(sym: str, renames: List[Tuple[str, str, str]],
     return sym
 
 
-def _note_cut_legs(dropped: Dict[str, List], rows: List) -> None:
+def _note_cut_legs(dropped: Dict[str, List], rows: List, report=None) -> None:
     """Name on each OPENING row of `rows` the share rows it replaced
     (`opening_cut_legs`): the premium ledger reads whether an option's
-    delivery is among them (backlog TJ-1332)."""
+    delivery is among them (backlog TJ-1332). A row under another symbol
+    that a rename made the snapshot's is named with its own symbol: an
+    option exercised under the old name stages its premium under that
+    name, where no snapshot was found to hold it, and a later purchase
+    under the reused old name took it a second time (TJ-5005). A symbol
+    that is not one token (a space, a `;`) cannot be named in a leg: said
+    on `report`, never left out without a word."""
     legs: Dict[Tuple[str, str], List[CutLeg]] = {}
+    unnamed = set()
     for acct, items in dropped.items():
         for t, hit in items:
             q = float(_get(t, 'quantity', 0.0) or 0.0)
-            if (not q or str(_get(t, 'symbol')) != hit
-                    or _get(t, 'action') not in ('BUYSELL', 'ASSIGN')):
+            sym = str(_get(t, 'symbol'))
+            if not q or _get(t, 'action') not in ('BUYSELL', 'ASSIGN'):
+                continue
+            if sym != hit and (len(sym.split()) != 1 or ';' in sym):
+                if (acct, sym, hit) not in unnamed and report is not None:
+                    _out.put(
+                        f"{ATTENTION_OPENING}{acct}: the opening snapshot "
+                        f"of {hit} replaces rows of {sym!r}, renamed to it, "
+                        f"and a symbol with a space or a ';' cannot be "
+                        f"named on the snapshot's row: an option exercised "
+                        f"or assigned into {sym!r} before the rename is not "
+                        f"known to be held in the snapshot's cost, and its "
+                        f"premium may be counted a second time: check "
+                        f"such an exercise's shares in `tjs list`.",
+                        report)
+                unnamed.add((acct, sym, hit))
                 continue
             px = (float(_get(t, 'price', 0.0) or 0.0)
                   or abs(float(_get(t, 'net_amount', 0.0) or 0.0) / q))
             legs.setdefault((acct, hit), []).append(
-                cut_leg(_get(t, 'date'), q, px, _get(t, 'action')))
+                cut_leg(_get(t, 'date'), q, px, _get(t, 'action'),
+                        '' if sym == hit else sym))
     for t in rows:
         if not legs or not is_opening_row(t):
             continue
@@ -285,7 +307,7 @@ def apply_opening_cutoff(txs: List, *, year: Optional[int] = None,
             raise OpeningError(_refusal(bad, by_acct, year, country))
     if cut is not None:
         cut.extend(t for rows in dropped.values() for t, _hit in rows)
-    _note_cut_legs(dropped, kept)
+    _note_cut_legs(dropped, kept, report)
     for acct in sorted(dropped):
         rows = dropped[acct]
         syms = sorted({hit for _t, hit in rows})

@@ -1,5 +1,5 @@
 # The rows of sample.csv the parser must count as skipped (row accounting:
-# tests/parser_conformance.py, `tjs parser-check`). 59 Data rows: 30 consumed, 29 skipped.
+# tests/parser_conformance.py, `tjs parser-check`). 61 Data rows: 30 consumed, 31 skipped.
 # Statement: Period read (period end), BrokerName and Title non-events (2 skips).
 # Account Information: metadata, read by the prescan, and the Accounts Included line (2 skips).
 # Cash Report: 16 lines, read by the prescan and reconciled per currency at the end (16 skips);
@@ -24,8 +24,11 @@
 # Change in Dividend Accruals: the dividends' Po rows (the ex_date on each DIVIDEND; the shares
 #   and gross rate of QZRX, 100 at 0.40, and QZRV, 50 at 0.40).
 # Interest: credit interest (INTEREST).
-# Financial Instrument Information: stock, option and futures rows (multipliers, names; 3 skips).
-expected_skips = 29
+# Financial Instrument Information: stock, option and futures rows (multipliers, names; 5 skips):
+#   each stock's Security ID is its ISIN, stamped on every row of the instrument (`isin`: SAMPLF's
+#   US one, QZAS's Cayman one on its assignment's shares, with no dividend paid), and QZSD's Type
+#   ADR is its rows' `security_type`: what `tjs t1135` reads the issuer's country from (TJ-4957).
+expected_skips = 31
 # The kinds its rows and its broker's cash events have (parsers.protocol ROW_KINDS and
 # CASH_KINDS): the conformance kit asks for a row, or an event, of each.
 kinds = "trade, expiry, assign, split, rename, stock_dividend, trade_cancel, dividend, dividend_in_lieu, tax, interest, fee, transfer, roc"

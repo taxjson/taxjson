@@ -60,7 +60,7 @@ class TestYearOnlyDeferralSumsAccounts(unittest.TestCase):
         for full in (True, False):
             rep = _report(base, {"a_gains_wash.json": {"transactions": []}},
                           full_history=full)
-            self.assertEqual(rep["deferred_wash_not_in_cost"], {})
+            self.assertNotIn("deferred_wash_not_in_cost", rep)
             (p,) = rep["properties"]
             self.assertEqual(p["year_end_cost"], 63000.0)
 
@@ -424,7 +424,7 @@ class TestYearOnlyDeferralNetOfTheYearsAdditions(unittest.TestCase):
                                 "deferred_wash": 3000.0}]}
         rep = _report(base, {"margin_gains_wash.json": gains},
                       full_history=False)
-        self.assertEqual(rep["deferred_wash_not_in_cost"], {})
+        self.assertNotIn("deferred_wash_not_in_cost", rep)
         (p,) = rep["properties"]
         # 7000 paid, the 2000 denied in 2024 and the 3000 denied in 2025.
         self.assertEqual(p["year_end_cost"], 10000.0)

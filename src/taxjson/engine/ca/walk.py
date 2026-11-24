@@ -6,7 +6,7 @@ Moved from lib/core.py (PLAN step 10).
 
 from __future__ import annotations
 
-from taxjson.lib.stage_msg import emit_line
+from taxjson.lib.stage_msg import YEAR_END_INEXACT, emit_line
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 from datetime import datetime
@@ -32,7 +32,7 @@ from taxjson.engine.consts import (
 )
 from taxjson.engine.journal import _opening_source, _is_listing_journal
 from taxjson.engine.rows import _currency_mismatch_advice
-from taxjson.engine.ca.pools import _pools_copy
+from taxjson.engine.ca.pools import _pools_copy, pool_is_flat
 from taxjson.engine.ca.run_helpers import (
     _futures_names, _ca_short_lot_open, _ca_open_short_option, _ca_walk_date, _ca_stock_short_key,
     _ca_tl_after, _ca_trade_money,
@@ -241,6 +241,78 @@ def _trace_name(pkey: str, symbol: str) -> str:
     return f"{symbol} ({'written' if is_option_symbol(symbol) else 'short'})"
 
 
+def _warn_adjust_on_empty_pool(symbol: str, tx: TaxTransaction, empty_roc: bool,
+                               kept: Optional[AcbPool] = None) -> None:
+    """The warning of an ADJUST row that finds no holding (`_adjust_holding`): a return of
+    capital booked as a gain (`empty_roc`), else an amount the next position would take;
+    `kept`, the pool of a holding under the unit tolerance whose cost the row would take."""
+    if kept is not None:
+        cut, cost = -M.of(tx.net_amount), M.of(kept.total_cost)
+        emit_line(f"warning: ATTENTION: {symbol}: the return of capital "
+            f"of {cut:.2f} on {tx.date} would leave no cost on a "
+            f"holding of {abs(kept.qty):g} unit(s), too few to tell "
+            f"from no position once they carry none: booked as a "
+            f"capital gain in that year, and the holding keeps its "
+            f"cost of {cost:.2f} for its sale. The total is right; "
+            f"{min(cut, cost):.2f} of that gain belongs to the "
+            f"sale (the ACB is reduced first, ITA s.53(2)(h)): if "
+            f"the sale falls in another year, move that amount "
+            f"between the two years by hand.")
+    elif empty_roc:
+        emit_line(f"warning: {symbol} return of capital "
+            f"of {-M.of(tx.net_amount):.2f} on "
+            f"{tx.date} hits an EMPTY pool — the "
+            f"position was fully sold before it "
+            f"posted, so there is no ACB to "
+            f"reduce: booked as a capital gain in "
+            f"that year (ITA s.40(3), ACB nil). "
+            f"If it belongs to the sold position, "
+            f"re-date the ADJUST before the final "
+            f"sale instead.")
+    else:
+        emit_line(f"warning: {symbol} ADJUST of "
+            f"{M.of(tx.net_amount):.2f} on {tx.date} "
+            f"hits an EMPTY pool — the position was "
+            f"fully sold before this ADJUST posted, so "
+            f"the amount would leak into the NEXT "
+            f"position's ACB instead of the one that "
+            f"earned it. Re-date the ADJUST before "
+            f"the final sale (adjusting that "
+            f"disposition's gain) or apply it "
+            f"manually.")
+
+
+# The deemed gain's note: of a return of capital that found no holding, and
+# of one on a holding kept under the unit tolerance (`_adjust_holding`).
+_EMPTY_ROC_NOTES = (
+    'DEEMED GAIN — return of capital received with no shares held (ITA s.40(3), ACB nil)',
+    'DEEMED GAIN — return of capital on a holding under the unit tolerance, its cost kept (ITA s.40(3))')
+
+
+def _adjust_holding(pool: AcbPool, symbol: str, tx: TaxTransaction) -> Tuple[bool, bool]:
+    """What an ADJUST row finds in the pool, read before it changes the cost: (no holding,
+    a holding kept out of the row's reach).
+
+    No holding is the pools' own test (`pool_is_flat`, the one `AcbPool.drain` applies):
+    fewer units than the tolerance at a material cost are a position. Read by the count
+    alone, a return of capital on one share consolidated to 0.0000005 was a gain on an
+    empty pool, the cost kept for the later sale's loss (TJ-5001).
+
+    Kept out of reach: a long holding of no more units than the tolerance whose cost the
+    row's reduction would take under MATERIAL_COST. Without a cost those units are no
+    position to the pool or to the sale that closes them (`_walk_trade`: it opens a short,
+    the gain lost), so the row is booked as it is on no holding, the amount a gain in its
+    year and the cost left for the sale: the right total, said (`_warn_adjust_on_empty_pool`).
+    Until the pool itself knows such units are held (backlog TJ-5140)."""
+    flat = pool_is_flat(symbol, pool.qty, pool.total_cost)
+    kept = (not flat and pool.qty > 0
+            and abs(pool.qty) <= pool_qty_eps(symbol, pool.qty)
+            and not str(tx.id or '').startswith('WASH_')
+            and M.of(tx.net_amount) < _MINUS_HALF_CENT
+            and M.of(pool.total_cost) + M.of(tx.net_amount) < _HALF_CENT)
+    return flat or kept, kept
+
+
 def _walk_adjust(*, is_other_scope: bool, it: _CanadaIteration, pool: AcbPool, run: _CanadaRun, symbol: str, trace_sym: str, tx: TaxTransaction) -> Tuple[Union[Decimal, float], str]:
     """An ADJUST row of the walk against the symbol's pool: a return of capital or a user
     adjustment folded into the pool's cost (a drained pool's return of capital a gain
@@ -253,7 +325,9 @@ def _walk_adjust(*, is_other_scope: bool, it: _CanadaIteration, pool: AcbPool, r
     # position as empty, parked its superficial-loss
     # deferral in pending_wash, and the closing sale
     # never recovered it (2026-10 filing audit F2).
-    _aeps = pool_qty_eps(symbol, pool.qty)
+    _flat, _kept = _adjust_holding(pool, symbol, tx)    # (TJ-5001, TJ-5140)
+    _long = pool.qty > 0 and not _flat
+    _short = pool.qty < 0 and not _flat
     if not is_other_scope:
         # A user ROC ADJUST landing on a DRAINED pool
         # (position fully sold before the distribution
@@ -272,9 +346,10 @@ def _walk_adjust(*, is_other_scope: bool, it: _CanadaIteration, pool: AcbPool, r
         # (it used to leak into the NEXT purchase's
         # ACB, understating that position's later
         # gain).
-        _empty_roc = (abs(pool.qty) <= _aeps
+        _empty_roc = (_flat
                       and not str(tx.id or '').startswith('WASH_')
                       and M.of(tx.net_amount) < _MINUS_HALF_CENT)
+        _gone = _empty_roc and not _kept
         # An s.86.1 spin-off distributed after the parent
         # was sold: s.86.1 reduces the cost of the
         # original shares even when they were disposed of
@@ -287,7 +362,7 @@ def _walk_adjust(*, is_other_scope: bool, it: _CanadaIteration, pool: AcbPool, r
                 pool, symbol, it.iteration_realized_gains,
                 parent_qty=tx.corp_parent_qty,
                 account=tx.account)
-            if (_empty_roc and tx.id in run.taxable_ids
+            if (_gone and tx.id in run.taxable_ids
                 and tx.corp_election == 'rollover_s_86_1'
                 and not _s861_holding_moved(
                     it.current_tx_list,
@@ -316,7 +391,7 @@ def _walk_adjust(*, is_other_scope: bool, it: _CanadaIteration, pool: AcbPool, r
                     f"return is filed, it needs an "
                     f"adjustment.")
             _empty_roc = False
-        elif (_empty_roc and it.iteration == 0
+        elif (_gone and it.iteration == 0
                 and tx.corp_election == 'rollover_s_86_1'):
             emit_line(
                 f"warning: {symbol}: the s.86.1 spin-off "
@@ -330,10 +405,10 @@ def _walk_adjust(*, is_other_scope: bool, it: _CanadaIteration, pool: AcbPool, r
                 f"sale (a .tt ADJUST) to book it there.")
         # (an s.86.1 reduction's own line is said above)
         _s861_said = bool(_s861_recs) or (
-            _empty_roc
+            _gone
             and tx.corp_election == 'rollover_s_86_1')
         if (not _s861_said
-                and abs(pool.qty) <= _aeps
+                and _flat
                 and not str(tx.id or '').startswith('WASH_')
                 and abs(M.of(tx.net_amount)) > _HALF_CENT
                 and it.iteration == 0):
@@ -341,34 +416,13 @@ def _walk_adjust(*, is_other_scope: bool, it: _CanadaIteration, pool: AcbPool, r
             # whole book each pass, so an unconditional
             # warning printed once PER ITERATION — one
             # data problem masqueraded as several.
-            if _empty_roc:
-                emit_line(f"warning: {symbol} return of capital "
-                    f"of {-M.of(tx.net_amount):.2f} on "
-                    f"{tx.date} hits an EMPTY pool — the "
-                    f"position was fully sold before it "
-                    f"posted, so there is no ACB to "
-                    f"reduce: booked as a capital gain in "
-                    f"that year (ITA s.40(3), ACB nil). "
-                    f"If it belongs to the sold position, "
-                    f"re-date the ADJUST before the final "
-                    f"sale instead.")
-            else:
-                emit_line(f"warning: {symbol} ADJUST of "
-                    f"{M.of(tx.net_amount):.2f} on {tx.date} "
-                    f"hits an EMPTY pool — the position was "
-                    f"fully sold before this ADJUST posted, so "
-                    f"the amount would leak into the NEXT "
-                    f"position's ACB instead of the one that "
-                    f"earned it. Re-date the ADJUST before "
-                    f"the final sale (adjusting that "
-                    f"disposition's gain) or apply it "
-                    f"manually.")
+            _warn_adjust_on_empty_pool(symbol, tx, _empty_roc, pool if _kept else None)
         if _s861_recs:
             # Moved to the sales: nothing left for the
             # empty pool (it would reach the next
             # purchase's cost).
             _applied_adj = _ZERO
-        if (pool.qty < -_aeps
+        if (_short
                 and not str(tx.id or '').startswith('WASH_')):
             # A SHORT pool's total_cost holds the short
             # sale's proceeds: a return of capital while
@@ -393,7 +447,7 @@ def _walk_adjust(*, is_other_scope: bool, it: _CanadaIteration, pool: AcbPool, r
             if tx.id in run.taxable_ids:
                 it.iteration_realized_gains.append(_ca_deemed_gain(
                     tx, symbol, pool, _excess,
-                    note='DEEMED GAIN — return of capital received with no shares held (ITA s.40(3), ACB nil)'))
+                    note=_EMPTY_ROC_NOTES[_kept]))
         if str(tx.id or '').startswith('WASH_'):
             # Superficial-loss deferral: the invariant is
             # "reduce future gains by the denied loss".
@@ -411,9 +465,9 @@ def _walk_adjust(*, is_other_scope: bool, it: _CanadaIteration, pool: AcbPool, r
             # keeps the creation-sign proxy (the trigger
             # opens on the loss side).
             _mag = abs(_applied_adj)
-            if pool.qty > _aeps:
+            if _long:
                 _applied_adj = _mag
-            elif pool.qty < -_aeps:
+            elif _short:
                 _applied_adj = -_mag  # cov: a2-1596-wash-short-pool-sign
             else:
                 # FLAT pool: the sign cannot be decided
@@ -446,7 +500,7 @@ def _walk_adjust(*, is_other_scope: bool, it: _CanadaIteration, pool: AcbPool, r
             # goes along in the same share (TJ-1274).
             it.global_pools.give_up_to_child(
                 _ck, pool, min(_ONE, -_applied_adj / _tc_before))
-        if (_applied_adj < 0 and pool.qty > _aeps
+        if (_applied_adj < 0 and _long
                 and not str(tx.id or '').startswith('WASH_')
                 and pool.deferred_wash > _NANO):
             # The s.53(1)(f) additions are part of the
@@ -460,7 +514,7 @@ def _walk_adjust(*, is_other_scope: bool, it: _CanadaIteration, pool: AcbPool, r
             # having been short by any premium it held
             # as well (TJ-1217, TJ-1219).
             pool.cut_for_roc()
-        if (_applied_adj > 0 and pool.qty > _aeps
+        if (_applied_adj > 0 and _long
                 and tx.type == 'roc'
                 and pool.wash_cut > _NANO):
             # A return of capital reversed: the ACB it
@@ -471,7 +525,7 @@ def _walk_adjust(*, is_other_scope: bool, it: _CanadaIteration, pool: AcbPool, r
         # below zero is a deemed capital gain in that
         # year. Rare enough to warrant human eyes rather
         # than silent computation — flag, don't book.
-        if (pool.qty > _aeps and pool.total_cost < D('-0.005')
+        if (_long and pool.total_cost < D('-0.005')
                 and not str(tx.id or '').startswith('WASH_')):
             # ITA s.40(3): a return of capital that drives
             # the ACB below zero is a capital gain in the
@@ -1062,6 +1116,211 @@ def _walk_move_legs(run: _CanadaRun, it: _CanadaIteration, tx: Optional[TaxTrans
                      warned=run._move_notes, limit_date=None if tx is None else tx.date)
 
 
+def _assign_rolls(*, is_other_scope: bool, it: _CanadaIteration, run: _CanadaRun,
+                  symbol: str, tx: TaxTransaction) -> bool:
+    """Does this option exercise or assignment (an `is_assign_premium_leg`
+    row of `_walk_rows`) roll its premium into its shares, or is its own
+    P&L realized here?
+
+    It rolls when its underlying trades as stock in its account. A
+    sheltered or affiliated pair keeps the premium-roll semantics
+    regardless of the TAXABLE stock set: its pools are not computed
+    here, and the cash-settled note would be spurious for a complete
+    sheltered pair (re-audit). It rolls too (nothing staged, nothing
+    realized) when its delivery, under the underlying's old name, is in
+    an opening snapshot of the symbol it was renamed to, whose cost
+    holds the premium (TJ-5005).
+
+    Otherwise it is cash-settled (index options like XSP/SPX: the
+    underlying never trades as stock in this book). No stock leg can
+    ever consume a staged premium, so the row falls through to NORMAL
+    disposition accounting: the option's own P&L is realized here
+    instead of being staged forever and dropped. The note keeps the
+    missing-data case diagnosable. (A row that carries an amount is
+    routed like any other: its cash cannot tell a settlement from a
+    commission or cash in lieu; where a snapshot holds its delivery the
+    ledger says so, `_say_amount_on_delivered_row`.)"""
+    if is_other_scope:
+        return True
+    ledger = it.pending_adjustments
+    _und = run._assign_underlying(tx)
+    if _und and (tx.account, _und) in run.taxable_stock_symbols:
+        return True
+    if ledger.renamed_delivery_underlying(tx):
+        return True
+    emit_line(f"note: {symbol}: assignment treated as "
+              f"cash-settled ("
+              f"{parse_option_underlying(symbol) or exercise_target(tx) or '?'}"
+              f" never trades as stock in this book) — "
+              f"option P&L realized directly. If a stock "
+              f"leg is missing from your input, add it "
+              f"and re-run.")
+    return False
+
+
+# The rows that change a pool (a dividend or a fee on its symbol does not).
+_POOL_ACTIONS = ('BUYSELL', 'ASSIGN', 'TRANSFER', 'OPENING_BALANCE', 'SPLIT', 'ADJUST', 'DISALLOW')
+
+
+def _pool_sig(p: Optional[AcbPool]) -> Any:
+    """A year-end pool by what `_pools_copy` keeps of it, to tell whether a row changed it."""
+    return None if p is None else (p.qty, p.total_cost, p.currency, p.deferred_wash,
+                                   p.account_premiums, p.account_lots)
+
+
+class _YearEndPools:
+    """The pools (and each account's units short) at the end of `run.year_end`,
+    read as the walk passes it: `at` before each row, `end` after the last; the
+    walk hands back `pools` and `shorts`. The copy is taken before the first row
+    past the year end, after the year's own-move legs (TJ-3226, TJ-3241, TJ-3257).
+    On the walk's settlement dates that is the whole of it. A tax_date = "trade"
+    project (`year_end_basis`) reads the year on trade dates (TJ-0343: a sale
+    traded Dec 31 that settles in January has left the pool), and there a row
+    traded after the year end can stand before rows traded in the year (a
+    January 2 purchase settled that day, a December 29 sale settling January
+    3): the one cut left every later in-year row out, silently (TJ-4984). So
+    from that first row to the last row traded in the year (`open`: the fold
+    takes no checkpoint there) the pools are read one by one: a pool stands as
+    it was before the first row traded after the year end that changed it (or
+    an own-move leg dated after it), a row traded in the year gives the pools
+    it changed as they stand after it, and what a row changed is read off the
+    pools themselves (a split, a rename's two keys, a spin-off's two pools, a
+    denied loss's addition are rows like any other). A row touches the pools
+    it changed and its own symbol's (and the one it renames to: a split of a
+    pool the later-traded sale emptied changes nothing, and on trade dates it
+    would have). A taxable row of the year that touches a pool a later-traded
+    row touched cannot be read on trade dates (the books took the two in the
+    other order): the pools it touches take none of it as it stands; one it
+    changed among them takes the row's own change as far as that says
+    (`_crossed`), and a warning names them: not exact."""
+
+    __slots__ = ('pools', 'shorts', 'open', '_run', '_it', '_last', '_stay', '_prev')
+
+    def __init__(self, run: _CanadaRun, it: _CanadaIteration, start: int,
+                 pools: Optional[_Pools], shorts: Dict[Tuple[str, str], float]) -> None:
+        self.pools, self.shorts, self.open = pools, shorts, False
+        self._run, self._it = run, it
+        self._last = -1             # the last row traded in the year (a trade-date year end)
+        self._stay: Tuple[Set[Any], Set[Any]] = (set(), set())
+        self._prev: Optional[Tuple[Optional[TaxTransaction], bool, _Pools,
+                                   Dict[Tuple[str, str], float]]] = None
+        if run.year_end and pools is None and run.year_end_basis == 'trade':
+            for _i in range(start, len(it.current_tx_list)):
+                if self._day(it.current_tx_list[_i]) <= run.year_end:
+                    self._last = _i
+
+    def _day(self, tx: TaxTransaction) -> str:
+        return _ca_walk_date(self._run, self._it, tx, self._run.year_end_basis == 'trade')
+
+    def _take(self) -> None:
+        self.pools = _pools_copy(self._it.global_pools)
+        self.shorts = dict(self._it._msr.short)
+
+    def at(self, i: int, tx: TaxTransaction) -> None:
+        """Before row `i` is walked."""
+        run, it = self._run, self._it
+        if self.open:
+            self._settle()
+            self.open = i <= self._last
+        elif run.year_end and self.pools is None and self._day(tx) > run.year_end:
+            _walk_year_end_legs(run, it)       # the year's moves only (TJ-3226, TJ-3241)
+            self._take()
+            self.open = i < self._last
+        if self.open:
+            now = (_pools_copy(it.global_pools), dict(it._msr.short))
+            if it._msr_legs:
+                _walk_move_legs(run, it, tx)    # dated after the year end: the pools they change stay
+                self._prev = (None, False, *now)
+                self._settle()
+                now = (_pools_copy(it.global_pools), dict(it._msr.short))
+            self._prev = (tx, self._day(tx) <= str(run.year_end), *now)
+
+    def end(self) -> None:
+        """After the last row."""
+        if self.open:
+            self._settle()
+            self.open = False
+        if self._run.year_end and self.pools is None:
+            _walk_year_end_legs(self._run, self._it)   # the year's moves, the snapshot, then the rest (TJ-3257)
+            self._take()
+
+    @staticmethod
+    def _crossed(mine: AcbPool, b: AcbPool, a: AcbPool) -> AcbPool:
+        """The year-end pool `mine` (as it stood before a later-traded row
+        changed it) after a row of the year that took the walk's pool from `b`
+        to `a`: units leaving take their share of its cost and denied losses
+        at its own average; any other change (units arriving, a cost
+        adjustment, a split's units) is added as the walk booked it."""
+        dq = a.qty - b.qty
+        if mine.qty and dq and (dq < 0) != (mine.qty < 0) and abs(dq) <= abs(mine.qty):
+            left = D(mine.qty + dq) / D(mine.qty)
+            return mine.part(mine.qty + dq, mine.total_cost * left, M.of(mine.deferred_wash) * left)
+        return mine.part(mine.qty + dq, mine.total_cost + (a.total_cost - b.total_cost),
+                         M.of(mine.deferred_wash) + (M.of(a.deferred_wash) - M.of(b.deferred_wash)))
+
+    def _own(self, tx: Optional[TaxTransaction]) -> Set[str]:
+        """The pools a taxable row's own symbols name, changed or not."""
+        if tx is None or tx.action not in _POOL_ACTIONS or tx.id in self._run.sheltered_ids \
+                or tx.id in self._run.affiliated_ids:
+            return set()
+        _sfx, _ = _futures_names()
+        return {k for _s in (tx.symbol, tx.symbol_new) if _s for k in (_s, _s + _sfx)}
+
+    def _settle(self) -> None:
+        """What was walked last (a row, or the move legs before one): the pools
+        and the units short it touched, into the year end's or out of them."""
+        assert self._prev is not None and self.pools is not None, "set when the window opens (at)"
+        tx, in_year, b_pools, b_shorts = self._prev
+        a_pools, a_shorts = _pools_copy(self._it.global_pools), dict(self._it._msr.short)
+        p_changed = [k for k in dict.fromkeys([*b_pools, *a_pools])
+                     if _pool_sig(b_pools.get(k)) != _pool_sig(a_pools.get(k))]
+        s_changed = [k for k in dict.fromkeys([*b_shorts, *a_shorts])
+                     if b_shorts.get(k, 0.0) != a_shorts.get(k, 0.0)]
+        touched = set(p_changed) | self._own(tx)
+        if not in_year:
+            self._stay[0].update(touched)
+            self._stay[1].update(s_changed)
+            return
+        pools, shorts = dict(self.pools), dict(self.shorts)
+        crossing = bool(touched & self._stay[0])
+        crossed: Dict[int, AcbPool] = {}
+        for k in p_changed:
+            b, a, mine = b_pools.get(k), a_pools.get(k), pools.get(k)
+            if not crossing:
+                if a is None:
+                    pools.pop(k, None)
+                else:
+                    pools[k] = a
+            elif k in self._stay[0] and b is not None and a is not None and mine is not None:
+                if id(mine) not in crossed:
+                    crossed[id(mine)] = self._crossed(mine, b, a)
+                pools[k] = crossed[id(mine)]
+        if crossing:
+            self._stay[0].update(touched)
+            assert tx is not None, "the move legs are never the year's (at)"
+            self._say(sorted({_s for _s in (tx.symbol, tx.symbol_new) if _s}))
+        for sk in s_changed:
+            shorts[sk] = (a_shorts.get(sk, 0.0) if sk not in self._stay[1]
+                          else shorts.get(sk, 0.0) + a_shorts.get(sk, 0.0) - b_shorts.get(sk, 0.0))
+        self.pools, self.shorts = pools, shorts
+
+    def _say(self, names: List[str]) -> None:
+        """The warning for a pool read across both date orders, once a run."""
+        _said = self._run._ev_memo.setdefault('_ye_crossed', set())
+        if tuple(names) in _said:
+            return
+        _said.add(tuple(names))
+        emit_line(f"{YEAR_END_INEXACT}{', '.join(names)}: the pool at the end of {self._run.year_end} (by "
+                  f"trade date) is not exact\n"
+                  f"  A row traded after that day settles before a row traded by it, and both touch this "
+                  f"pool (a trade, a split or a ticker change), so the books took them in the other "
+                  f"order. The year-end pool is the one before the later-traded row with each row of the "
+                  f"year applied as far as it can be: units sold leave at that pool's average, which is "
+                  f"not the average the sale's gain used, and where a split or a ticker change is among "
+                  f"the crossing rows the units are not exact either.\n"
+                  f"  Check this year-end pool (`tjs edge-cases`) against your records.")
+
+
 def _walk_rows(*, it: _CanadaIteration, run: _CanadaRun, fold: Optional[_WalkFold] = None) -> Tuple[Optional[_Pools], Dict[Tuple[str, str], float]]:
     """The walk over one iteration's rows of the Canadian engine's
     fixed-point loop: pools, realized gains, losses, traces and the cost
@@ -1081,10 +1340,11 @@ def _walk_rows(*, it: _CanadaIteration, run: _CanadaRun, fold: Optional[_WalkFol
         _start, _ye_pools, _ye_shorts = fold.start, fold.ye_pools, fold.ye_shorts
         if _start and it._tl is not None:
             _tl_prev = [it.current_tx_list[_start - 1]]
+    _ye = _YearEndPools(run, it, _start, _ye_pools, _ye_shorts)
     for _i in range(_start, len(it.current_tx_list)):
         tx = it.current_tx_list[_i]
-        if fold is not None and _i in fold.marks:
-            fold.save(_i, it, _ye_pools, _ye_shorts)
+        if fold is not None and _i in fold.marks and not _ye.open:
+            fold.save(_i, it, _ye.pools, _ye.shorts)
         if it._tl is not None:
             _tl_d = _ca_walk_date(run, it, tx)
             if _tl_prev:
@@ -1103,17 +1363,12 @@ def _walk_rows(*, it: _CanadaIteration, run: _CanadaRun, fold: Optional[_WalkFol
             it._tl.row_ids.append('' if tx.action == 'DISALLOW'
                                else str(tx.id or ''))
             _tl_prev[:] = [tx]
-        # A tax_date = "trade" project (`year_end_basis`): its
-        # year ends before the first row TRADED after year_end,
-        # so a sale traded Dec 31 that settles in January (this
-        # year's disposition on trade dates) has left the pool
-        # (backlog TJ-0343, the mirror of the US settle case).
-        if (run.year_end and _ye_pools is None
-                and _ca_walk_date(run, it, tx, run.year_end_basis == 'trade')
-                > run.year_end):
-            _walk_year_end_legs(run, it)       # the year's moves only (TJ-3226, TJ-3241)
-            _ye_pools = _pools_copy(it.global_pools)
-            _ye_shorts = dict(it._msr.short)
+        # The year-end pools, on the walk's dates or, a tax_date =
+        # "trade" project (`year_end_basis`), on trade dates: a sale
+        # traded Dec 31 that settles in January (this year's
+        # disposition on trade dates) has left the pool (backlog
+        # TJ-0343, the mirror of the US settle case; TJ-4984).
+        _ye.at(_i, tx)
         if it._msr_legs:
             _walk_move_legs(run, it, tx)        # the moves before this row (TJ-1180, TJ-3226)
         symbol = tx.symbol
@@ -1244,37 +1499,10 @@ def _walk_rows(*, it: _CanadaIteration, run: _CanadaRun, fold: Optional[_WalkFol
         trigger_info = ""
         adjustment_shown: Union[Decimal, float] = 0.0
         
-        is_option_assign = False
-        if is_assign_premium_leg(tx):
-            _und = (None if is_other_scope
-                    else run._assign_underlying(tx))
-            if (_und and (tx.account, _und)
-                    in run.taxable_stock_symbols) \
-                    or is_other_scope:
-                # Sheltered/affiliated assignment pairs keep the
-                # premium-roll semantics regardless of the
-                # TAXABLE stock set — their pools aren't
-                # computed here, and the cash-settled note would
-                # be spurious for a complete sheltered pair
-                # (re-audit).
-                is_option_assign = True
-            else:
-                # Cash-settled assignment/exercise (index
-                # options like XSP/SPX — the underlying never
-                # trades as stock in this book). No stock leg
-                # can ever consume a staged premium, so fall
-                # through to NORMAL disposition accounting: the
-                # option's own P&L is realized here instead of
-                # being staged forever and dropped. The note
-                # keeps the missing-data case diagnosable.
-                emit_line(f"note: {symbol}: assignment treated as "
-                      f"cash-settled ("
-                      f"{parse_option_underlying(symbol) or exercise_target(tx) or '?'}"
-                      f" never trades as stock in this book) — "
-                      f"option P&L realized directly. If a stock "
-                      f"leg is missing from your input, add it "
-                      f"and re-run.")
-        
+        is_option_assign = (is_assign_premium_leg(tx)
+                            and _assign_rolls(is_other_scope=is_other_scope, it=it,
+                                              run=run, symbol=symbol, tx=tx))
+
         if action == 'DISALLOW':
             note = "DISALLOWANCE"
             adjustment_shown = tx.net_amount
@@ -1358,10 +1586,7 @@ def _walk_rows(*, it: _CanadaIteration, run: _CanadaRun, fold: Optional[_WalkFol
                                               'pool_symbol': pool_sym}    # the pool the figures belong to
     # The last row's timeline step and the year-end default, once the
     # rows are walked.
-    if run.year_end and _ye_pools is None:
-        _walk_year_end_legs(run, it)       # the year's moves, the snapshot, then the rest (TJ-3257)
-        _ye_pools = _pools_copy(it.global_pools)
-        _ye_shorts = dict(it._msr.short)
+    _ye.end()
     _walk_move_legs(run, it, None)             # the moves after the last row (TJ-3226, TJ-3247)
     if it._tl is not None and _tl_prev:
         _ca_tl_after(run, it, len(it._tl_dates) - 1, _tl_prev[0])
@@ -1377,4 +1602,4 @@ def _walk_rows(*, it: _CanadaIteration, run: _CanadaRun, fold: Optional[_WalkFol
             l for l in it.iteration_losses if not l.get('_void')]
         for g in it.iteration_realized_gains:
             g.pop('_void', None)
-    return _ye_pools, _ye_shorts
+    return _ye.pools, _ye.shorts

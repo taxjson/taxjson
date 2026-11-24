@@ -35,6 +35,7 @@ from tax_rules import rule, rule_absent
 from tax_rules.dual import SRC, cli, cli_both, gains_both, projects_both
 from _support.filing_run_record import record_full_run
 from _support.partition_gains import _tx, _gains_doc
+from _support.planning_radar_row import base_rows
 from taxjson.rules import ids as R
 from _style import CapturedWidth
 
@@ -69,13 +70,14 @@ def _radar(taxable, as_of, country, sheltered=None):
     """{ticker: row} of `taxjson-wash-radar --json` over these rows."""
     with tempfile.TemporaryDirectory() as td:
         t = Path(td) / "margin_base.json"
-        t.write_text(json.dumps({"transactions": taxable}))
+        t.write_text(json.dumps({"transactions": base_rows(taxable, country)}))
         cmd = [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar",
                "--country", country, "--taxable", str(t), "--date", as_of,
                "--all", "--json"]
         if sheltered:
             s = Path(td) / "sheltered_base.json"
-            s.write_text(json.dumps({"transactions": sheltered}))
+            s.write_text(json.dumps({"transactions": base_rows(sheltered,
+                                                               country)}))
             cmd += ["--sheltered", str(s)]
         env = dict(os.environ, PYTHONPATH=str(SRC))
         r = subprocess.run(cmd, capture_output=True, text=True, env=env,
@@ -237,10 +239,12 @@ class TestRadarDateBasis(unittest.TestCase):
 
 
 def _base_files(rows, sheltered=None):
-    files = {"work/margin_base.json": json.dumps({"transactions": rows})}
+    """The base books, each country's in its own currency (`base_rows`)."""
+    def book(r):
+        return lambda c: json.dumps({"transactions": base_rows(r, c)})
+    files = {"work/margin_base.json": book(rows)}
     if sheltered is not None:
-        files["work/sheltered_base.json"] = json.dumps(
-            {"transactions": sheltered})
+        files["work/sheltered_base.json"] = book(sheltered)
     return files
 
 
@@ -405,8 +409,11 @@ class TestWording(unittest.TestCase):
                 _row("2025-03-20", "BND.US", 100, 1250.0)]
         with tempfile.TemporaryDirectory() as td:
             p = projects_both(td, year=2025, files=_base_files(rows))
-            g = gains_both([_tx(x) for x in rows], year=2025)
             for c in COUNTRIES:
+                # (the gains of the book the project holds: a row's id
+                # is of its currency too)
+                g = gains_both([_tx(x) for x in base_rows(rows, c)],
+                               year=2025)
                 (p[c] / "work" / "margin_gains_wash.json").write_text(
                     _gains_doc(g[c]))
             # --details: the notes name the IRA (Essentials first).

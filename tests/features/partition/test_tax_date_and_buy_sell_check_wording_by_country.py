@@ -15,6 +15,7 @@ from tax_rules import rule, rule_absent
 from tax_rules.dual import cli, projects_both
 from taxjson.rules import ids as R
 from _style import CapturedWidth
+from _support.planning_radar_row import base_rows
 
 
 # Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
@@ -101,10 +102,10 @@ class TestBuySellCheckWordingByCountry(unittest.TestCase):
         sheltered = [_trade_row(_ago(100), "IRA.US", 10, 100.0, "ira")]
         p = projects_both(cls._td.name, year=date.today().year,
                           accounts=acc, files={
-                              "work/margin_base.json": json.dumps(
-                                  {"transactions": taxable}),
-                              "work/sheltered_base.json": json.dumps(
-                                  {"transactions": sheltered})})
+                              "work/margin_base.json": lambda c: json.dumps(
+                                  {"transactions": base_rows(taxable, c)}),
+                              "work/sheltered_base.json": lambda c: json.dumps(
+                                  {"transactions": base_rows(sheltered, c)})})
         cls.out = {}
         for c, root in p.items():
             for cmd, sym in (("buy-check", "OPN.US"),

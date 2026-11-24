@@ -62,7 +62,10 @@ Supported reports (detected by CONTENT, never by file name):
                       `cost_kind = "average" | "lots"`; `acquired =
                       "YYYY-MM-DD"` dates THAT lot (several tables of
                       one symbol are several lots); as of [meta]
-                      `as_of`, else the date of `generated_at`.
+                      `as_of`, else the date of `generated_at`. A
+                      future's `/` or `\\` prefix is read `F:`, as the
+                      books spell it (lib/futures_prefixes, backlog
+                      TJ-5150; `raw_symbol` keeps it as written).
 
 Unsupported (UNSUPPORTED below says why for each): Questrade, Webull,
 Coinbase and Kraken have no positions export the parser code knows.
@@ -81,7 +84,7 @@ from typing import Any, Dict, List, Optional
 from taxjson.project.toml_io import read_toml
 from taxjson.lib.symbol_case import book_symbol
 from taxjson.lib.privacy import mask_id
-from taxjson.lib.futures_prefixes import FUTURES_PREFIXES
+from taxjson.lib.futures_prefixes import FUTURES_PREFIXES, canonical_futures_symbol
 from taxjson.lib.ib_listing import _IB_EXT_RE, _ib_currency_ext
 from taxjson.lib.brokerages.detect import (_first_text, _preamble_date, _rows,
                                           kind_label, positions_only_text)
@@ -790,6 +793,16 @@ def toml_as_of(meta: Any, name: str) -> str:
     return _iso_day(meta.get('as_of')) or _iso_day(meta.get('generated_at'))
 
 
+def _holding_symbol(sym: str, where: str) -> str:
+    """A [[holding]] row's symbol as the books spell it: upper case, a
+    future's `/` or `\\` prefix `F:` (lib/futures_prefixes, backlog
+    TJ-5150); one that names no contract (`//QZM26.US`) refuses the row."""
+    try:
+        return canonical_futures_symbol(book_symbol(sym))
+    except ValueError as e:
+        raise PositionsReportError(f"{where}: {e}") from None
+
+
 def _read_toml(path: Path) -> PositionsReport:
     from taxjson.lib.brokerages.base import shown_name
     name = shown_name(path)
@@ -979,7 +992,7 @@ def _read_toml(path: Path) -> PositionsReport:
             accts.add(acct)
         rep.rows.append(PositionRow(
             broker='toml', account=acct, account_key=akey,
-            symbol=book_symbol(sym), raw_symbol=sym,
+            symbol=_holding_symbol(sym, where), raw_symbol=sym,
             quantity=qty, currency=cur, cost=cost,
             cost_currency=(str(h.get('cost_currency') or '').strip()
                            .upper() or cur),

@@ -105,6 +105,17 @@ class CorporateAction:
     fraction_in_lieu: float = 0.0
     cash_in_lieu_date: str = ""
     cil_broker_booked: bool = False
+    # The cash in lieu by the day it was paid, [(day, fraction, cash)],
+    # when it was paid on MORE than one day: two broker accounts of one
+    # taxjson account (`combine_broker_copies`), or an RBC account's
+    # cash-in-lieu rows of two days. `cash_in_lieu` and
+    # `fraction_in_lieu` stay the totals and `cash_in_lieu_date` the
+    # first day; the emitters sell each day's fraction on its own day
+    # (`_cil_sale_parts`; backlog TJ-5057: one sale on the first day
+    # moved a January payment into December). Empty: one day.
+    # NOT part of the event id.
+    cash_in_lieu_parts: List[Tuple[str, float, float]] = field(
+        default_factory=list)
     # True when the broker actually DELIVERS fractional shares (IB):
     # qty_received is the exact delivered quantity, so emitters must
     # not snap a real 0.5-share delivery to whole+cash-in-lieu — that
@@ -1870,7 +1881,7 @@ def parse_questrade_corporate_actions(
                 break
 
         currency = rows[0]['currency']
-        cil_cash, cil_frac, cil_cur, cil_date = _qt_spinoff_cil(
+        cil_cash, cil_frac, cil_cur, cil_date, cil_parts = _qt_spinoff_cil(
             rows, cil_rows, cil_used)
         from taxjson.lib.brokerages.base import income_facts_from_description
 
@@ -1896,7 +1907,7 @@ def parse_questrade_corporate_actions(
             cash_in_lieu=cil_cash,
             cash_in_lieu_currency=cil_cur,
             fraction_in_lieu=cil_frac,
-            cash_in_lieu_date=cil_date,
+            cash_in_lieu_date=cil_date, cash_in_lieu_parts=cil_parts,
             cil_broker_booked=cil_cash > 0,
             # Who is entitled: the parent lots held before it (a US
             # §355 allocation, TJ-0951).
@@ -2048,8 +2059,8 @@ def _qt_split_chain(rows: List[dict], cil_rows=()) -> List[List[dict]]:
         return [rows]
     rest = [r for rs in groups.values() if rs not in live for r in rs]
     if rest:
-        cash, _frac, cur, day = _qt_spinoff_cil(rest, cil_rows, set(),
-                                                dry=True)
+        cash, _frac, cur, day, _parts = _qt_spinoff_cil(
+            rest, cil_rows, set(), dry=True)
         if cash:
             left = ', '.join(sorted({r['symbol'] for r in rest}))
             emit_line(f"warning: ATTENTION: Questrade cash in lieu of "
@@ -2064,13 +2075,21 @@ def _qt_split_chain(rows: List[dict], cil_rows=()) -> List[List[dict]]:
 
 def _qt_spinoff_cil(chain: List[dict], cil_rows: List[Dict[str, str]],
                     used: set, dry: bool = False
-                    ) -> Tuple[float, float, str, str]:
-    """(cash, fraction, currency, date) of the Questrade CIL rows paying a
-    spin-off chain's fraction ("CASH IN LIEU OF .5"): the chain's symbol,
-    its broker account, paid from 3 days before to 45 days after the
-    distribution (the RBC pairing's window). SIGNED: a reversal (negative
-    Net Amount) cancels its posting, as in the parser. (0, 0, '', '')
-    when none. Each row pays one chain (`used`; untouched when `dry`)."""
+                    ) -> Tuple[float, float, str, str, list]:
+    """(cash, fraction, currency, date, parts) of the Questrade CIL rows
+    paying a spin-off chain's fraction ("CASH IN LIEU OF .5"): the chain's
+    symbol, its broker account, paid from 3 days before to 45 days after
+    the distribution (the RBC pairing's window). SIGNED: a reversal
+    (negative Net Amount) cancels its posting, as in the parser. (0, 0,
+    '', '', []) when none. Each row pays one chain (`used`; untouched
+    when `dry`). The date is the first day a payment that stands was
+    made and `parts` the payments by day when they were made on more
+    than one (`cash_in_lieu_parts`; the earliest row's date dated all of
+    the cash, TJ-5057); with a reversal that cancels no payment, the
+    earliest payment row's date and no parts, as before. A payment made
+    again after a reversal keeps the reversed payment's day
+    (`cil_paid_days`)."""
+    from types import SimpleNamespace
     from taxjson.lib.brokerages.base import desc_number, parse_strict_number
     from taxjson.lib.brokerages.questrade import _CIL_RE as _QT_CIL_RE
 
@@ -2081,7 +2100,7 @@ def _qt_spinoff_cil(chain: List[dict], cil_rows: List[Dict[str, str]],
     accts = {r['account'] for r in chain if r['account']}
     start = min(r['date'] for r in chain)
     cash = frac = 0.0
-    cur, dates, took = '', [], []
+    cur, dates, took, posted = '', [], [], []
     for row in cil_rows:
         if id(row) in used or _bare(row.get('Symbol')) not in syms:
             continue
@@ -2107,12 +2126,20 @@ def _qt_spinoff_cil(chain: List[dict], cil_rows: List[Dict[str, str]],
         cur = cur or (row.get('Currency') or '').strip().upper()
         if net > 0:
             dates.append(day)
+        posted.append(SimpleNamespace(value=net, date=day, frac=f,
+                                      account=acct))
         took.append(id(row))
     if cash < 0.005 or frac <= 1e-9:
-        return 0.0, 0.0, '', ''
+        return 0.0, 0.0, '', '', []
     if not dry:
         used.update(took)
-    return cash, frac, cur, min(dates)
+    paid = cil_paid_days(
+        posted, lambda c: c.frac,
+        None if dry else lambda text: emit_line(f"note: Questrade: {text}."))
+    if not paid:
+        return cash, frac, cur, min(dates), []
+    return (cash, frac, cur, min(day for day, _c in paid),
+            dated_cil_parts((day, c.frac, c.value) for day, c in paid))
 
 
 parse_questrade_corporate_actions.accepts_context = True
@@ -2793,6 +2820,145 @@ _RBC_CIL_QTY_RE = re.compile(
     rf'CASH\s+IN\s+LIEU\s+OF\s+({_RBC_NUM})\s+(?:FRAC\w*\s+)?SH', re.I)
 
 
+def _rbc_cil_row_fraction(c) -> float:
+    """The fraction one RBC cash-in-lieu row states: its own quantity
+    (under one share), else the number in its description; 0 when
+    neither."""
+    q = abs(c.qty or 0.0)
+    if not 0 < q < 1:
+        m = _RBC_CIL_QTY_RE.search(c.desc or '')
+        q = _num_text(m.group(1), where=c.desc[:60]) if m else 0.0
+    return q if 0 < q < 1 else 0.0
+
+
+def _rbc_cil_payments(cils: List[Any]) -> Tuple[List[Any], List[Any]]:
+    """(the payments that stand, the reversals that cancel none) of an
+    event's RBC cash-in-lieu rows: a reversal (a negative value) cancels
+    the payment of the same amount, the latest on or before it, else the
+    first."""
+    pays = [c for c in cils if c.value > 0]
+    loose: List[Any] = []
+    for c in sorted((c for c in cils if c.value < 0),
+                    key=lambda c: getattr(c, 'date', '')):
+        same = [p for p in pays if abs(p.value + c.value) < 0.005]
+        day = getattr(c, 'date', '')
+        hit = (max((p for p in same if getattr(p, 'date', '') <= day),
+                   key=lambda p: getattr(p, 'date', ''), default=None)
+               or (same[0] if same else None))
+        if hit is not None:
+            pays.remove(hit)            # the payment it cancels
+        else:
+            loose.append(c)
+    return pays, loose
+
+
+def cil_paid_days(cils: List[Any], frac: Optional[Callable[[Any], float]] = None,
+                  say: Optional[Callable[[str], None]] = None
+                  ) -> Optional[List[Tuple[str, Any]]]:
+    """[(the day it counts as paid, the payment)] for the payments of an
+    event's cash-in-lieu rows (`.value`, `.date`; `.account` when the
+    rows are of more than one broker account) that stand, in posting
+    order; None when a reversal cancels no payment of its amount (the
+    cash cannot be put on its days).
+
+    A reversal and the payment made again correct the AMOUNT, not the
+    day (owner, 2026-11-23): the payment that replaces a reversed one
+    keeps the reversed payment's day, whatever day or order the broker
+    posts the pair on and whether the amount changed. And no other
+    payment is ever re-dated. A reversal (a negative value) of amount x
+    dated r reads the standing payments of x in ITS OWN account (a
+    payment in another account keeps its own day):
+      * one dated r: it is cancelled, whatever the rows' order. When an
+        earlier one stands, that is all (the pair was the earlier one's
+        correction, or a posting taken back the same day); when none
+        does, the next one after r replaces the cancelled one (a
+        reversal posted with its payment, made again later);
+      * else one before r and one after: the earliest before is
+        cancelled and the earliest after is its replacement;
+      * else two or more before r: the latest is cancelled, a duplicate,
+        and the original keeps its day; nothing replaces it;
+      * else one before r: it is cancelled, and the next payment of the
+        account after r replaces it only where the books show it does:
+        it states the cancelled payment's fraction (`frac`), or one of
+        the two states none and no earlier payment stands. Otherwise
+        that payment keeps its own day, and `say` is told;
+      * else (only after r): the earliest is cancelled; nothing replaces
+        it."""
+    pays = [[getattr(c, 'date', ''), c] for c in cils if c.value > 0]
+    size = frac or (lambda _c: 0.0)
+
+    def first(rows):
+        return min(rows, key=lambda e: e[1].date, default=None)
+    for c in sorted((c for c in cils if c.value < 0),
+                    key=lambda c: getattr(c, 'date', '')):
+        day, acct = getattr(c, 'date', ''), getattr(c, 'account', '')
+        mine = [e for e in pays if getattr(e[1], 'account', '') == acct]
+        same = [e for e in mine if abs(e[1].value + c.value) < 0.005]
+        if not same:
+            return None
+        before = [e for e in same if e[1].date < day]
+        today = [e for e in same if e[1].date == day]
+        after = [e for e in same if e[1].date > day]
+        again = None
+        if today:
+            hit = today[0]
+            again = None if before else first(after)
+        elif before and after:
+            hit, again = first(before), first(after)
+        elif len(before) > 1:
+            hit = max(before, key=lambda e: e[1].date)
+        elif before:
+            hit = before[0]
+            nxt = first([e for e in mine
+                         if e is not hit and e[1].date >= day])
+            if nxt is not None:
+                f0, f1 = size(hit[1]), size(nxt[1])
+                stated = f0 > 1e-9 and f1 > 1e-9
+                alone = not any(e is not hit and e[1].date < day
+                                for e in mine)
+                if (abs(f0 - f1) < 1e-9) if stated else alone:
+                    again = nxt
+                elif say is not None:
+                    say(f"the cash in lieu of {M.shown(nxt[1].value, 2):.2f} "
+                        f"paid on {nxt[1].date} follows the reversal "
+                        f"of {day} of the {M.shown(hit[1].value, 2):.2f} paid "
+                        f"on {hit[1].date}, and the books do not show it "
+                        f"replaces that payment (another fraction, or "
+                        f"another payment standing): it keeps its own "
+                        f"day")
+        else:
+            hit = first(after)
+        pays.remove(hit)
+        if again is not None:
+            again[0] = min(again[0], hit[0])
+    return [(day, c) for day, c in pays]
+
+
+def rbc_cil_dated(cils: List[Any], *, sized: bool = True
+                  ) -> Tuple[str, List[Tuple[str, float, float]]]:
+    """(`cash_in_lieu_date`, `cash_in_lieu_parts`) of an event's RBC
+    cash-in-lieu rows: the first day a payment that stands counts as
+    paid (`cil_paid_days`: a payment made again after a reversal keeps
+    the reversed payment's day), and the payments by day when they are
+    of more than one. The earliest row's date used to date all of the
+    cash: a payment made in January beside one in December was sold in
+    December (backlog TJ-5057). With a reversal that cancels no payment
+    the cash cannot be put on its days: the earliest row's date and no
+    parts, as before. `sized`: a spin-off's rows state their fractions
+    (a merger's sale is sized by the ratio, and split by the cash)."""
+    paid = cil_paid_days(
+        cils, _rbc_cil_row_fraction if sized else None,
+        lambda text: emit_line(f"note: RBC: {text}."))
+    if not paid:
+        return min((c.date for c in cils), default=''), []
+    fracs = [_rbc_cil_row_fraction(c) if sized else 0.0 for _d, c in paid]
+    if not all(fracs):
+        fracs = [0.0] * len(paid)
+    parts = dated_cil_parts(
+        (day, f, c.value) for (day, c), f in zip(paid, fracs))
+    return min(day for day, _c in paid), parts
+
+
 def rbc_spinoff_cil_fraction(cils: List[Any]) -> float:
     """The fraction RBC paid cash for, from its CIL rows: the row's own
     quantity (under one share), else the number its description states;
@@ -2803,30 +2969,15 @@ def rbc_spinoff_cil_fraction(cils: List[Any]) -> float:
     reversal of no such payment takes off the fraction it states.
     Summing every positive posting kept a cancelled payment's fraction
     beside its corrected one's (TJ-0759)."""
-    def _frac(c) -> float:
-        q = abs(c.qty or 0.0)
-        if not 0 < q < 1:
-            m = _RBC_CIL_QTY_RE.search(c.desc or '')
-            q = _num_text(m.group(1), where=c.desc[:60]) if m else 0.0
-        return q if 0 < q < 1 else 0.0
-    pays = [c for c in cils if c.value > 0]
+    pays, loose = _rbc_cil_payments(cils)
     total = 0.0
-    for c in sorted((c for c in cils if c.value < 0),
-                    key=lambda c: getattr(c, 'date', '')):
-        same = [p for p in pays if abs(p.value + c.value) < 0.005]
-        day = getattr(c, 'date', '')
-        hit = (max((p for p in same if getattr(p, 'date', '') <= day),
-                   key=lambda p: getattr(p, 'date', ''), default=None)
-               or (same[0] if same else None))
-        if hit is not None:
-            pays.remove(hit)            # the payment it cancels
-            continue
-        q = _frac(c)
+    for c in loose:
+        q = _rbc_cil_row_fraction(c)
         if not q:
             return 0.0
         total -= q
     for c in pays:
-        q = _frac(c)
+        q = _rbc_cil_row_fraction(c)
         if not q:
             return 0.0
         total += q
@@ -3467,20 +3618,72 @@ def _corp_cash(*parts) -> str:
         if a and abs(float(a)) >= 0.005 and math.isfinite(float(a)) and c)
 
 
+def dated_cil_parts(parts) -> List[Tuple[str, float, float]]:
+    """[(day, fraction, cash)] summed by day, in date order; [] when the
+    cash was all paid on one day (the event's `cash_in_lieu_date` says
+    which): what `CorporateAction.cash_in_lieu_parts` holds."""
+    days: Dict[str, List[float]] = {}
+    for day, frac, cash in parts:
+        tot = days.setdefault(day or '', [0.0, 0.0])
+        tot[0] += frac or 0.0
+        tot[1] += cash or 0.0
+    if len(days) < 2:
+        return []
+    return [(day, f, c) for day, (f, c) in sorted(days.items())]
+
+
+def _cil_sale_parts(event: CorporateAction, frac: float, cash: float
+                    ) -> List[Tuple[str, float, float]]:
+    """(day paid, fraction, cash) for each sale of the event's fraction
+    paid in cash: one per day the cash was paid, never before the event
+    (`cash_in_lieu_parts`), or the whole of it on `cash_in_lieu_date`.
+    `frac` and `cash` are the totals the emitter sells; the parts add up
+    to them exactly (the last takes what is left). A day's share of the
+    fraction is its own fraction when every day states one, else its
+    share of the cash (cash in lieu is paid at one price per share)."""
+    first = max(event.date, getattr(event, 'cash_in_lieu_date', '') or '')
+    days: Dict[str, List[float]] = {}
+    for day, f, c in getattr(event, 'cash_in_lieu_parts', None) or ():
+        tot = days.setdefault(max(event.date, day or ''), [0.0, 0.0])
+        tot[0] += f
+        tot[1] += c
+    tot_f = sum(f for f, _c in days.values())
+    tot_c = sum(c for _f, c in days.values())
+    if len(days) < 2 or tot_c <= 0 or any(c <= 0 for _f, c in days.values()):
+        return [(first, frac, cash)]
+    sized = all(f > 1e-9 for f, _c in days.values())
+    out: List[Tuple[str, float, float]] = []
+    left_f, left_c = frac, cash
+    for i, (day, (f, c)) in enumerate(sorted(days.items())):
+        if i == len(days) - 1:
+            out.append((day, left_f, left_c))
+            break
+        part_c = c if abs(cash - tot_c) < 1e-9 else cash * c / tot_c
+        if sized:
+            part_f = f if abs(frac - tot_f) < 1e-9 else frac * f / tot_f
+        else:
+            part_f = frac * c / tot_c
+        out.append((day, part_f, part_c))
+        left_f, left_c = left_f - part_f, left_c - part_c
+    return out
+
+
 def _fraction_cash(event: CorporateAction, cil_amt: float, cil_cur: str,
-                   frac_qty: float, frac_value: float, frac_cur: str):
-    """(amount, currency, paid) of the cash for the fractional
+                   frac_qty: float, frac_value: float, frac_cur: str
+                   ) -> List[Tuple[float, str, str]]:
+    """The (amount, currency, paid) parts of the cash for the fractional
     entitlement: the broker's own cash in lieu when it reported one, with
     the later day it paid it (the rows carrying this cash stay on the
     event's date, and the cash ledger counted it before it came: TJ-1063,
-    TJ-1106), else the snapped fraction's value (the implicit cash in
+    TJ-1106) — one part per day when it was paid on more than one
+    (TJ-5057) — else the snapped fraction's value (the implicit cash in
     lieu, see _snap_qty_to_whole_shares)."""
     if cil_amt and cil_amt > 0:
-        paid = getattr(event, 'cash_in_lieu_date', '') or ''
-        return cil_amt, cil_cur, paid if paid > event.date else ''
+        return [(c, cil_cur, paid if paid > event.date else '')
+                for paid, _f, c in _cil_sale_parts(event, 0.0, cil_amt)]
     if frac_qty > 0 and frac_value > 0:
-        return frac_value, frac_cur, ''
-    return 0.0, '', ''
+        return [(frac_value, frac_cur, '')]
+    return []
 
 
 # Reserved key resolve_event puts on the (copied) hints dict: a currency
@@ -3641,8 +3844,8 @@ def _emit_taxable_exchange(event: CorporateAction, hints: dict,
     # The cash the holder received (fx-cash, A2-1014): the broker's
     # cash in lieu (folded into the proceeds above), else the snapped
     # fraction's value.
-    _cash = _corp_cash(_fraction_cash(event, cil_amt, cil_cur, frac_qty,
-                                      cost - fmv_acquired, cost_cur))
+    _cash = _corp_cash(*_fraction_cash(event, cil_amt, cil_cur, frac_qty,
+                                       cost - fmv_acquired, cost_cur))
     if _cash:
         rows[0]['corp_cash'] = _cash
     # Emit the target BUY only when at least one whole share was
@@ -3742,29 +3945,31 @@ def _emit_basis_carryover_rename(event: CorporateAction, hints: dict,
                         or event.target_currency or event.currency)
         # Sold for the cash on the day the broker paid it (an RBC CIL
         # row dated after the exchange): dated on the exchange, the
-        # cash ledger counted cash not yet received (TJ-0866).
-        paid = max(event.date, getattr(event, 'cash_in_lieu_date', '') or '')
-        rows.append({
-            'action': 'BUYSELL',
-            'date': paid,
-            # After the SPLIT so the fractional lot exists to sell against.
-            'time': (_bump_time(event.time, 1) if paid == event.date
-                     else event.time),
-            'date_settle': paid,
-            'symbol': event.target_symbol,
-            'quantity': -frac,
-            'currency': cil_currency,
-            'price': cash_in_lieu / frac,
-            'net_amount': cash_in_lieu,
-            'fee': 0.0,
-            'corp_cash': _corp_cash((cash_in_lieu, cil_currency)),
-            'account': event.account,
-            'description': (
-                f"Merger {event.source_symbol}→{event.target_symbol}: "
-                f"cash-in-lieu for {frac:.6g} fractional share(s) "
-                f"({cil_note})"
-            ),
-        })
+        # cash ledger counted cash not yet received (TJ-0866). One sale
+        # per day it was paid on (TJ-5057).
+        for paid, part, cash in _cil_sale_parts(event, frac, cash_in_lieu):
+            rows.append({
+                'action': 'BUYSELL',
+                'date': paid,
+                # After the SPLIT so the fractional lot exists to sell
+                # against.
+                'time': (_bump_time(event.time, 1) if paid == event.date
+                         else event.time),
+                'date_settle': paid,
+                'symbol': event.target_symbol,
+                'quantity': -part,
+                'currency': cil_currency,
+                'price': cash / part,
+                'net_amount': cash,
+                'fee': 0.0,
+                'corp_cash': _corp_cash((cash, cil_currency)),
+                'account': event.account,
+                'description': (
+                    f"Merger {event.source_symbol}→{event.target_symbol}: "
+                    f"cash-in-lieu for {part:.6g} fractional share(s) "
+                    f"({cil_note})"
+                ),
+            })
     return rows
 
 
@@ -3959,7 +4164,7 @@ def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
         event.cash_in_lieu_currency or tgt_cur, frac_qty,
         (frac_qty * _fmv_paid / event.qty_received
          if event.qty_received and _fmv_paid > 0 else 0.0), _fmv_paid_cur)
-    _cash = _corp_cash((_boot_paid, tgt_cur), _frac_cash)
+    _cash = _corp_cash((_boot_paid, tgt_cur), *_frac_cash)
     if _cash:
         rows[0]['corp_cash'] = _cash
     if whole_qty > 0:
@@ -4144,7 +4349,7 @@ def _emit_distribution(event: CorporateAction, hints: dict,
     if total_fmv <= 0:
         description += "; ZERO VALUE — no FMV given"
     # The fraction is paid in cash (fx-cash, A2-1014).
-    _cash = '' if sell_frac else _corp_cash(_fraction_cash(
+    _cash = '' if sell_frac else _corp_cash(*_fraction_cash(
         event, _cil_evidence(event),
         event.cash_in_lieu_currency or currency, frac_qty,
         total_fmv - adjusted_fmv, currency))
@@ -4196,28 +4401,44 @@ def _emit_distribution(event: CorporateAction, hints: dict,
             'account': event.account, 'description': description,
         })
     if sell_frac:
-        cash_cur = (event.cash_in_lieu_currency or event.target_currency
-                    or currency)
-        paid = max(event.date, getattr(event, 'cash_in_lieu_date', '')
-                   or '')
+        rows.extend(_fraction_sales(
+            event, frac_paid, frac_cash,
+            event.cash_in_lieu_currency or event.target_currency
+            or currency, same_day_bump=2,
+            description=lambda part: (
+                f"{description_base}: cash in lieu of {part:.6g} "
+                f"fractional share(s), sold for the cash at its value as "
+                f"income")))
+    return rows
+
+
+def _fraction_sales(event: CorporateAction, frac: float, cash: float,
+                    cash_cur: str, *, same_day_bump: int,
+                    description) -> List[dict]:
+    """The sale(s) of a spin-off's fraction paid in cash: one per day the
+    cash was paid, never before the spin-off (`_cil_sale_parts`; two
+    broker accounts paid on two days are two sales, each in its own
+    year: backlog TJ-5057). `same_day_bump`: the seconds after the event
+    a sale of its own day is timed, after the buy. When the brokerage
+    parser books that cash itself (Questrade), each sale is marked to
+    replace its pair (CIL_TAKEOVER_TYPE, drop_broker_cil_pairs)."""
+    rows: List[dict] = []
+    for paid, part, part_cash in _cil_sale_parts(event, frac, cash):
         sale = {
             'action': 'BUYSELL',
             'date': paid,
-            # After the buy when paid the same day.
-            'time': _bump_time(event.time, 2 if paid == event.date else 0),
+            'time': _bump_time(event.time,
+                               same_day_bump if paid == event.date else 0),
             'date_settle': paid,
             'symbol': event.target_symbol,
-            'quantity': -frac_paid, 'currency': cash_cur,
-            'price': frac_cash / frac_paid, 'net_amount': frac_cash,
+            'quantity': -part, 'currency': cash_cur,
+            'price': part_cash / part, 'net_amount': part_cash,
             'fee': 0.0,
-            'corp_cash': _corp_cash((frac_cash, cash_cur)),
+            'corp_cash': _corp_cash((part_cash, cash_cur)),
             'account': event.account,
-            'description': (f"{description_base}: cash in lieu of "
-                            f"{frac_paid:.6g} fractional share(s), sold "
-                            f"for the cash at its value as income"),
+            'description': description(part),
         }
         if getattr(event, 'cil_broker_booked', False):
-            # Replaces Questrade's own $0 pair (drop_broker_cil_pairs).
             sale['type'] = CIL_TAKEOVER_TYPE
         rows.append(sale)
     return rows
@@ -4383,7 +4604,15 @@ def read_tt_sales(paths) -> List[dict]:
             except ValueError:
                 continue
             if qty < 0:
-                out.append({'date': parts[1], 'symbol': parts[3].upper(),
+                # As the .tt reader spells it (a future's `/` or `\` `F:`:
+                # lib/futures_prefixes, backlog TJ-5150).
+                from taxjson.lib.futures_prefixes import \
+                    canonical_futures_symbol
+                try:
+                    sym = canonical_futures_symbol(parts[3].upper())
+                except ValueError:
+                    continue
+                out.append({'date': parts[1], 'symbol': sym,
                             'quantity': qty, 'source': f"{p.name}:{n}"})
     return out
 
@@ -4397,7 +4626,7 @@ def _tt_fraction_last_day(event: CorporateAction) -> str:
     """The last day a .tt sale of the spin-off's fraction is read as its
     cash in lieu ('' when the event's dates are unreadable)."""
     from datetime import date, timedelta
-    paid = max(event.date, getattr(event, 'cash_in_lieu_date', '') or '')
+    paid = max(day for day, _f, _c in _cil_sale_parts(event, 0.0, 1.0))
     try:
         return (date.fromisoformat(paid[:10])
                 + timedelta(days=_TT_FRACTION_DAYS)).isoformat()
@@ -4624,7 +4853,7 @@ def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
     if _ps <= 0 and event.qty_received:
         _bv, _bcur = spinoff_broker_value(event)
         _ps, _ps_cur = _bv / event.qty_received, _bcur or _ps_cur
-    _cash = _corp_cash(_fraction_cash(
+    _cash = _corp_cash(*_fraction_cash(
         event, _cil_evidence(event),
         event.cash_in_lieu_currency or _ps_cur, frac_qty,
         frac_qty * _ps, _ps_cur))
@@ -4668,9 +4897,8 @@ def _allocated_spinoff_selling_fraction(event: CorporateAction, *,
     the full allocated cost, the parent's cost reduced by all of it, then
     the fraction sold for the cash — its gain is the cash less its share
     of the allocated cost (CA-CORP-05). The sale is dated the day the
-    cash was paid (never before the spin-off). When the brokerage parser
-    books that cash itself (Questrade), the sale is marked to replace its
-    pair (CIL_TAKEOVER_TYPE)."""
+    cash was paid (never before the spin-off), one sale per day when it
+    was paid on more than one (`_fraction_sales`)."""
     qty = whole_qty + frac
     cash_cur = (event.cash_in_lieu_currency or event.target_currency
                 or event.currency)
@@ -4693,26 +4921,12 @@ def _allocated_spinoff_selling_fraction(event: CorporateAction, *,
             'account': event.account,
             'description': description + ' (parent cost reduction)',
         })
-    paid = max(event.date, getattr(event, 'cash_in_lieu_date', '') or '')
-    sale = {
-        'action': 'BUYSELL',
-        'date': paid,
-        # After the buy when paid the same day.
-        'time': (_bump_time(event.time, 1) if paid == event.date
-                 else event.time),
-        'date_settle': paid,
-        'symbol': event.target_symbol,
-        'quantity': -frac, 'currency': cash_cur,
-        'price': cash / frac, 'net_amount': cash, 'fee': 0.0,
-        'corp_cash': _corp_cash((cash, cash_cur)),
-        'account': event.account,
-        'description': (f"{description_base}: cash in lieu of {frac:.6g} "
-                        f"fractional share(s), sold for the cash on its "
-                        f"share of the allocated cost"),
-    }
-    if getattr(event, 'cil_broker_booked', False):
-        sale['type'] = CIL_TAKEOVER_TYPE
-    rows.append(sale)
+    rows.extend(_fraction_sales(
+        event, frac, cash, cash_cur, same_day_bump=1,
+        description=lambda part: (
+            f"{description_base}: cash in lieu of {part:.6g} fractional "
+            f"share(s), sold for the cash on its share of the allocated "
+            f"cost")))
     return rows
 
 
@@ -5392,6 +5606,20 @@ def _larger_copy(a: CorporateAction, b: CorporateAction) -> CorporateAction:
                                       e.fmv, e.target_fmv, e.cash_in_lieu))
 
 
+def _own_cil_parts(e: CorporateAction) -> List[Tuple[str, float, float]]:
+    """One event copy's cash in lieu as dated parts: its own parts, else
+    all of it on the day it was paid (never before the event; an undated
+    payment is the event's day's)."""
+    if e.cash_in_lieu_parts:
+        return [(max(e.date, d or ''), f, c)
+                for d, f, c in e.cash_in_lieu_parts]
+    cash = e.cash_in_lieu or 0.0
+    if cash < 0.005:
+        return []
+    return [(max(e.date, e.cash_in_lieu_date or ''),
+             e.fraction_in_lieu or 0.0, cash)]
+
+
 def _carry_read_id(copies: List[CorporateAction]) -> None:
     """Each copy of one event without the id an export's spelling gave
     it (`read_event_id`: a copy read upper case) takes another copy's,
@@ -5511,6 +5739,9 @@ def combine_broker_copies(events: List[CorporateAction], *,
             if tgt is None:
                 merged.append(h)
                 continue
+            # Each account's cash on the day it was paid: the first day
+            # alone sold a January fraction in December (TJ-5057).
+            parts = dated_cil_parts(_own_cil_parts(tgt) + _own_cil_parts(h))
             merged[merged.index(tgt)] = dataclasses.replace(
                 tgt,
                 qty_disposed=tgt.qty_disposed + h.qty_disposed,
@@ -5521,9 +5752,11 @@ def combine_broker_copies(events: List[CorporateAction], *,
                 cash_in_lieu_currency=(tgt.cash_in_lieu_currency
                                        or h.cash_in_lieu_currency),
                 fraction_in_lieu=tgt.fraction_in_lieu + h.fraction_in_lieu,
-                cash_in_lieu_date=min(
+                # (With parts, the first part's day, always.)
+                cash_in_lieu_date=parts[0][0] if parts else min(
                     (d for d in (tgt.cash_in_lieu_date, h.cash_in_lieu_date)
                      if d), default=''),
+                cash_in_lieu_parts=parts,
                 cil_broker_booked=(tgt.cil_broker_booked
                                    or h.cil_broker_booked),
                 # A broker that delivers real fractions (IB) makes the

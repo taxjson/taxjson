@@ -94,11 +94,13 @@ SCHEMAS: Dict[str, int] = {
     "watch": 1,
     # Before you file
     "form-export": 1,
-    "t1135": 1,
+    "t1135": 2,
     "reconcile-slips": 1,
     "slip-audit": 1,
     "slip-audit --import-cra": 1,
-    "carryover": 1,
+    # 2: `carried_back_inferred` is gone from a Canadian row (a balance typed
+    # in settles no carry-back: backlog TJ-4886).
+    "carryover": 2,
     "option-boundary": 1,
     "handoff": 1,
     # Explain and check

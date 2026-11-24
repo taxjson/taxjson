@@ -6,13 +6,15 @@ The dedup contract has two layers:
    UID. Brokers that report per-fill txids (Kraken, Coinbase) use this
    to preserve every distinct execution.
 
-2. **Synthetic UID**: when no `id` is set, taxjson_sort.generate_uid
-   composes one from (brokerage, account, symbol, date, time). That's
-   coarse — two trades on the same date with the same symbol and no
-   sub-second time would collapse. The escape hatch is
-   `TaxTransaction.compute_id()` which DOES include description, so a
-   parser that calls `disambiguate_split_fills()` (mutates description
-   with `[fill #N]`) produces distinct auto-ids and dedup keeps them.
+2. **Content id**: when no `id` is set — none, null or a blank string
+   (backlog TJ-5041) — the row's id is `TaxTransaction.compute_id()`,
+   and taxjson_sort.generate_uid falls back to it too: action, date,
+   time, symbol, quantity, money, account, type, settle date and
+   description. It includes description, so a parser that calls
+   `disambiguate_split_fills()` (mutates description with `[fill #N]`)
+   produces distinct auto-ids and dedup keeps them. The old fallback,
+   (brokerage, account, symbol, date, time), collapsed two different
+   trades of one moment.
 
 The scenarios below cover all three failure modes that cost us real
 data in the past: byte-identical rows from a single split-fill order,
@@ -121,6 +123,67 @@ class TestDedup(unittest.TestCase):
         tx1.id = None
         tx2.id = None
         self.assertNotEqual(generate_uid(tx1), generate_uid(tx2))
+
+
+class TestBlankId(unittest.TestCase):
+    """TJ-5041: a JSON row's `"id": ""` (or spaces) is no id. It was kept,
+    so two different purchases of one moment shared the id "" and
+    `taxjson-sort --dedup` kept one: 20 shares and their cost of 200 gone
+    with no word. A null or absent id already gave each its content id."""
+
+    _ROWS = [{"action": "BUYSELL", "date": "2025-02-03", "time": "10:00:00",
+              "date_settle": "2025-02-03", "symbol": "QZRX.TO",
+              "quantity": q, "price": 10, "net_amount": 10 * q,
+              "currency": "CAD", "account": "margin"} for q in (10, 20)]
+
+    def _book(self, blank):
+        import json
+        from _tmpfiles import private_tmpfile
+        rows = [dict(r, id=blank) if blank is not ... else dict(r)
+                for r in self._ROWS]
+        with private_tmpfile("w", suffix=".json", delete=False) as f:
+            f.write(json.dumps({"transactions": rows}))
+        return f.name
+
+    def test_a_blank_id_is_the_content_id(self):
+        from pathlib import Path
+        from taxjson.lib.tx_load import load_transactions
+        absent = [t.id for t in load_transactions(Path(self._book(...)))]
+        self.assertEqual(len(set(absent)), 2)
+        for blank in ("", "   ", None):
+            with self.subTest(id=blank):
+                rows = load_transactions(Path(self._book(blank)))
+                self.assertEqual([t.id for t in rows], absent)
+                self.assertEqual(len(deduplicate(rows)), 2)
+        self.assertEqual(TaxTransaction(action="BUYSELL", date="2025-01-01",
+                                        symbol="QZA.TO", id=" ").id,
+                         TaxTransaction(action="BUYSELL", date="2025-01-01",
+                                        symbol="QZA.TO").id)
+
+    def test_generate_uid_falls_back_to_the_content_id(self):
+        a, b = (TaxTransaction(**{k: v for k, v in r.items()})
+                for r in self._ROWS)
+        a.id = b.id = ""
+        self.assertNotEqual(generate_uid(a), generate_uid(b))
+        self.assertEqual(generate_uid(a), a.compute_id())
+        self.assertEqual(len(deduplicate([a, b])), 2)
+
+    def test_sort_dedup_keeps_both_purchases(self):
+        import contextlib
+        import io
+        import json
+        from unittest import mock
+        from taxjson.bin import taxjson_sort
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch("sys.argv", ["taxjson-sort", self._book(""),
+                                     "--dedup"]), \
+                contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            taxjson_sort.main()
+        rows = json.loads(out.getvalue())["transactions"]
+        self.assertEqual(sorted((r["quantity"], r["net_amount"])
+                                for r in rows), [(10.0, 100.0), (20.0, 200.0)])
+        self.assertTrue(all(r["id"] for r in rows), rows)
 
 
 if __name__ == '__main__':

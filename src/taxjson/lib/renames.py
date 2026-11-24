@@ -42,7 +42,8 @@ from taxjson.lib.rename_decl import (KIND_ANY, LATE_FOLD, SOURCE_IB_CONID,
                                      SOURCE_MAP, SOURCE_TT, WINDOW_DAYS,
                                      DatedRename, _days)
 from taxjson.lib.rename_rows import (TICKER_MAP_SOURCE, _g, _option_root,
-                                     rename_events, rename_target)
+                                     rename_events, rename_target,
+                                     underlying_change)
 
 import re
 import sys
@@ -55,6 +56,8 @@ from taxjson.model import money as M
 # Rows that move a position (a late one names the old ticker after its
 # rename).
 _POSITION_ACTIONS = ("BUYSELL", "ASSIGN", "TRANSFER", "OPENING_BALANCE")
+# A contract count below this is a closed position (_book_option_series).
+_SERIES_EPS = 1e-9
 
 
 class RenameConflict(ValueError):
@@ -156,7 +159,11 @@ def late_rows(rows: Iterable[Any], events: List[Dict[str, Any]],
     SPLIT is dated at the start of its day, 00:00:00, so an OLD row that
     day is already late), or, in an account with no rename row of its
     own, on or after the event's date — the same rows `late=fold`
-    re-books (apply_dated_renames)."""
+    re-books (apply_dated_renames). An option row answers to its
+    underlying's renames and to its own contract's (the row a declared
+    rename books per open contract, _book_option_series; a .tt SPLIT of
+    the contract): the latest it comes after, the underlying's on a tie
+    (TJ-5008)."""
     by_old: Dict[str, List[Dict[str, Any]]] = {}
     for e in events:
         by_old.setdefault(e["old"], []).append(e)
@@ -173,12 +180,12 @@ def late_rows(rows: Iterable[Any], events: List[Dict[str, Any]],
         if str(_g(r, "action")).upper() not in _POSITION_ACTIONS:
             continue
         sym = str(_g(r, "symbol"))
-        cands = by_old.get(sym)
-        if cands is None:
-            root = _option_root(sym)
-            cands = by_old.get(root) if root else None
+        root = _option_root(sym)
+        cands = by_old.get(sym, []) + (by_old.get(root, []) if root else [])
         if not cands:
             continue
+        if root:
+            cands = sorted(cands, key=lambda e: e["date"])      # (stable)
         acct = acct_of(r)
         hit = None
         for e in cands:
@@ -196,12 +203,17 @@ def matching_lines(dated: Iterable[DatedRename], event: Dict[str, Any],
                    ) -> List[DatedRename]:
     """The dated declarations that name `event`: the line's OLD (through
     the stage's undated renames, `mapping`) is the event's old symbol and
-    its date is within WINDOW_DAYS of the event's."""
+    its date is within WINDOW_DAYS of the event's — or the event moves
+    one option contract from the line's OLD to its NEW (underlying_change:
+    the row a declared rename books per open contract, TJ-5008)."""
     from taxjson.lib.ticker_map_rules import map_symbol
     out = []
+    under = underlying_change(event["old"], event["new"])
     for dr in dated:
         gap = _days(dr.date, event["date"])
-        if (map_symbol(dr.old, mapping or {}) == event["old"]
+        old = map_symbol(dr.old, mapping or {})
+        if ((old == event["old"]
+             or (old, map_symbol(dr.new, mapping or {})) == under)
                 and gap is not None and gap <= WINDOW_DAYS):
             out.append(dr)
     return out
@@ -239,35 +251,33 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
                         country: str = "",
                         mapping: Optional[Dict[str, str]] = None
                         ) -> List[Any]:
-    """Book each dated RENAME (a .tt line through the run's effective
-    map, or a legacy ticker.map line) in `txs` (TaxTransactions on their
-    RAW symbols, before the undated renames apply): a SPLIT row OLD ->
-    NEW (ratio 1) on the date in every account that holds OLD before it,
-    unless the account already books a rename of OLD within WINDOW_DAYS
-    (to NEW: nothing to add; to another symbol: refused). OLD is the
-    declared symbol and every raw spelling the undated renames
-    (`mapping`, e.g. `GLOBAL RAW OLD`) map onto it (third pre-release
-    review, 4). The renames apply in DATE order whatever order they were
-    declared in, so a chain A -> B -> C carries the position twice: an
-    account holds B before the second date when an earlier rename row
-    moved A into B (H3) — on the same date too: any rename row into B
-    that day, booked here for A -> B or the broker's / a .tt SPLIT
-    (second pre-release review, 11; third, 3); the B -> C row is then
-    stamped no earlier than it. `late=fold` (DatedRename.late_for)
-    re-books the account's OLD rows (and options on OLD) AFTER its own
-    rename row in `country`'s engine order (after_rename_row: the rows
-    late_rows calls late — an OLD row the account books before its
-    broker's rename row is still OLD) as NEW; the event's late= applies
-    to the accounts that held OLD before the date, an account that never
-    did folds only on a line of its own (second pre-release review, 5
-    and 8). `kind`: the accounts' kind (KIND_SECURITIES on the equity
-    merge, KIND_CRYPTO on the crypto map stage) — a .tt RENAME applies
-    only to accounts of its declaring account's kind
-    (DatedRename.applies_to). Returns the new list."""
+    """Book each dated RENAME (a .tt line through the run's effective map, or a
+    legacy ticker.map line) in `txs` (TaxTransactions on their RAW symbols,
+    before the undated renames apply): a SPLIT row OLD -> NEW (ratio 1) on the
+    date in every account that holds OLD (or an open option on it: its open
+    contracts follow, _book_option_series) before it, unless the account
+    already books a rename of OLD within WINDOW_DAYS (to NEW: nothing to add;
+    to another symbol: refused). OLD is the declared symbol and every raw
+    spelling the undated renames (`mapping`, e.g. `GLOBAL RAW OLD`) map onto it
+    (third pre-release review, 4). The renames apply in DATE order whatever
+    order they were declared in, so a chain A -> B -> C carries the position
+    twice: an account holds B before the second date when an earlier rename row
+    moved A into B (H3) — on the same date too: any rename row into B that day,
+    booked here for A -> B or the broker's / a .tt SPLIT (second pre-release
+    review, 11; third, 3); the B -> C row is then stamped no earlier than it.
+    `late=fold` (DatedRename.late_for) re-books the account's OLD rows (and
+    options on OLD) AFTER its own rename row in `country`'s engine order
+    (after_rename_row: the rows late_rows calls late — an OLD row the account
+    books before its broker's rename row is still OLD) as NEW; the event's
+    late= applies to the accounts that held OLD before the date, an account
+    that never did folds only on a line of its own (second pre-release review,
+    5 and 8). `kind`: the accounts' kind (KIND_SECURITIES on the equity merge,
+    KIND_CRYPTO on the crypto map stage) — a .tt RENAME applies only to
+    accounts of its declaring account's kind (DatedRename.applies_to). Returns
+    the new list."""
     from taxjson.lib.ticker_map_rules import map_symbol
     from taxjson.model.transaction import TaxTransaction
-    stream = stream or sys.stderr
-    mapping = mapping or {}
+    stream, mapping = stream or sys.stderr, mapping or {}
     # Stable: two renames on one date keep their declared order.
     dated = sorted((dr for dr in dated if dr.applies_to(kind)),
                    key=lambda dr: dr.date)
@@ -302,6 +312,7 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
                  and t.symbol in olds)
                     or rename_target(t) in olds):
                 held[t.account] = t
+        held = {**_option_holders(out, dr, olds), **held}
         booked: Dict[str, str] = {}
         for t in out:
             new = rename_target(t)
@@ -375,6 +386,7 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
                     if t.account not in own \
                             or row_stamp(t) < row_stamp(own[t.account]):
                         own[t.account] = t
+        _book_option_series(out, dr, olds, own, country, ours, stream)
         moved: Dict[str, int] = {}
         kept: Dict[str, int] = {}
         m = {o: dr.new for o in olds}
@@ -415,6 +427,289 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
                       f"late=fold` or `late=separate`) settles them.",
                       file=stream)
         _follow_exercise_targets(out, dr, olds)
+    return out
+
+
+def _series_positions(rows: List[Any], dr: DatedRename, olds: set, before: Any
+                      ) -> Tuple[Dict[Tuple[str, str], float],
+                                 Dict[Tuple[str, str], Any], set]:
+    """Each account's option contracts as its rows `before(t)` leave them:
+    ({(account, contract): units, bought + / written -}, the contract's
+    last such row, the contracts on OLD with a rename row of their own for
+    this change). A rename row of a contract carries its units to the new
+    symbol, so a contract opened again after an earlier change is a new
+    position (TJ-5008 review, 3); a ratio SPLIT scales them. A contract on
+    OLD with a rename row of its own within WINDOW_DAYS of the date (a
+    broker's adjustment, a .tt SPLIT of the contract) is left to that row:
+    it keeps its units here (it was held at the change) and is named in
+    the third value."""
+    net: Dict[Tuple[str, str], float] = {}
+    last: Dict[Tuple[str, str], Any] = {}
+    gone: set = set()
+    for t in rows:
+        sym = t.symbol or ""
+        root = _option_root(sym)
+        if root is None:
+            continue
+        key, tgt = (t.account, sym), rename_target(t)
+        gap = _days(t.date, dr.date)
+        own_row = bool(tgt) and root in olds and gap is not None \
+            and gap <= WINDOW_DAYS
+        if own_row:
+            gone.add(key)
+        if not before(t) or own_row:
+            continue
+        if tgt:
+            net[(t.account, tgt)] = (net.get((t.account, tgt), 0.0)
+                                     + net.pop(key, 0.0) * (t.quantity or 1.0))
+            last[(t.account, tgt)] = t
+        elif t.action == "SPLIT":
+            net[key] = net.get(key, 0.0) * (t.quantity or 1.0)
+        elif t.action in _POSITION_ACTIONS:
+            net[key] = net.get(key, 0.0) + (t.quantity or 0.0)
+            last[key] = t
+    return net, last, gone
+
+
+def _open_on(net: Dict[Tuple[str, str], float], olds: set, day: str
+             ) -> List[Tuple[str, str]]:
+    """The (account, contract) of `net` on OLD still open and not expired
+    before `day`."""
+    from taxjson.lib.option_symbols import parse_option_expiry
+    return [k for k in sorted(net)
+            if _option_root(k[1]) in olds and abs(net[k]) >= _SERIES_EPS
+            and (parse_option_expiry(k[1]) or "9999") >= day]
+
+
+def _option_holders(rows: List[Any], dr: DatedRename, olds: set
+                    ) -> Dict[str, Any]:
+    """{account: a row of it} for the accounts holding an option contract
+    on OLD at the date: open (bought or written) and not expired before
+    it. A contract closed or expired earlier is no holding: the account
+    does not carry the event or inherit its late= (TJ-5008 review, 2)."""
+    net, last, _gone = _series_positions(
+        rows, dr, olds, lambda t: (t.date or "") < dr.date)
+    return {a: last[(a, sym)] for a, sym in _open_on(net, olds, dr.date)}
+
+
+def _book_option_series(out: List[Any], dr: DatedRename, olds: set,
+                        own: Dict[str, Any], country: str, ours: set,
+                        stream: Any) -> None:
+    """An option follows its underlying's change (CA-ACB-RENAME /
+    US-BASIS-RENAME; TJ-5008): in each account with a rename row of this
+    change (`own`: the one booked here or its broker's), every contract
+    on OLD the account still holds at that row — bought or written, its
+    rows not after the row netted (_series_positions; after_rename_row:
+    the later ones are late rows) — gets a SPLIT row of its own beside
+    it, ratio 1, to the same expiry, right, strike and market on NEW
+    (map_symbol), inserted into `out`: premium, contracts and dates
+    carry, no disposition. Left on OLD: a contract closed out before the
+    row, one that expired before it (its missing-expiry warning names
+    the export's symbol), and one with a rename row of its own within
+    WINDOW_DAYS of the date. Then the late rows of each moved contract
+    (_fold_late_rows)."""
+    from taxjson.lib.option_symbols import parse_option_expiry
+    from taxjson.lib.ticker_map_rules import map_symbol
+    from taxjson.model.transaction import TaxTransaction
+
+    def before(t: Any) -> bool:
+        row = own.get(t.account)
+        return row is not None and t is not row \
+            and not after_rename_row(t, row, country)
+    net, last, gone = _series_positions(out, dr, olds, before)
+    m = {o: dr.new for o in olds}
+    added: Dict[str, List[Any]] = {}
+    # -> [new symbol, the moved units left, the units held on NEW]
+    moved: Dict[Tuple[str, str], List[Any]] = {}
+    stuck: List[str] = []
+    for acct, sym in _open_on(net, olds, ""):
+        row = own.get(acct)
+        if row is None or (acct, sym) in gone \
+                or (parse_option_expiry(sym) or "9999") < (row.date or ""):
+            continue
+        new = map_symbol(sym, m)
+        if new == sym:
+            stuck.append(f"{acct}: {sym}")
+            continue
+        moved[(acct, sym)] = [new, net[(acct, sym)], net[(acct, sym)]]
+        added.setdefault(acct, []).append(TaxTransaction(
+            action="SPLIT", date=row.date, time=row_stamp(row)[1],
+            date_settle=row.date_settle or row.date, symbol=sym,
+            symbol_new=new, quantity=1.0, price=0.0, net_amount=0.0,
+            currency=last[(acct, sym)].currency or "", account=acct,
+            description=(f"Ticker change {dr.old}→{dr.new}: the option "
+                         f"contract follows its underlying (a dated "
+                         f"RENAME; no disposition: premium, contracts "
+                         f"and dates carried)"),
+            source=_booked_source(dr),
+            event_source=dr.source or SOURCE_MAP))
+    for acct, rows in added.items():
+        at = next(i for i, t in enumerate(out) if t is own[acct]) + 1
+        out[at:at] = rows
+        ours.update(id(t) for t in rows)
+    if added:
+        emit_line(f"note: {dr.where}: RENAME {dr.old} -> {dr.new}: "
+                  f"{sum(len(v) for v in added.values())} open option "
+                  f"contract(s) on {dr.old} follow it to {dr.new} ("
+                  + "; ".join(f"{a}: {', '.join(t.symbol for t in v)}"
+                              for a, v in sorted(added.items())) + ").",
+                  file=stream)
+    if stuck:
+        emit_line(f"warning: {dr.where}: RENAME {dr.old} -> {dr.new}: "
+                  f"{len(stuck)} open option contract(s) on {dr.old} "
+                  f"stay under it\n"
+                  f"  Their symbols cannot be re-spelled on {dr.new} "
+                  f"({'; '.join(stuck)}). Move each with a .tt line of its "
+                  f"own: `SPLIT {dr.date} 00:00:00 <the contract> <the "
+                  f"contract on {dr.new}> 1`.", file=stream)
+    _fold_late_rows(out, dr, olds, own, country, moved, added, stream)
+
+
+# The note for the late rows booked as NEW against a moved contract
+# (_fold_late_rows): its fixed words, and how `tjs renames` reads it
+# back from the run's .diag (_booked_as_new).
+_FOLD_WORDS = "belong to option contract(s) it moved to"
+_FOLD_NOTE_RE = re.compile(
+    r"^note: (?P<where>\S+): RENAME (?P<old>\S+) -> (?P<new>\S+): \d+ "
+    r"row\(s\) of account (?P<acct>\S+) under \S+ after the change "
+    + re.escape(_FOLD_WORDS) + r" .*? whatever late= says \((?P<rows>.*)\)\.$")
+_FOLD_ROW_RE = re.compile(r"^(\d{4}-\d\d-\d\d) (\w+) (\S+) (\S+) "
+                          r"-> (\S+) \[(.*)\]$")
+
+
+def _fold_late_rows(out: List[Any], dr: DatedRename, olds: set,
+                    own: Dict[str, Any], country: str,
+                    moved: Dict[Tuple[str, str], List[Any]],
+                    added: Dict[str, List[Any]], stream: Any) -> None:
+    """While units the event moved are left in the account (bought or
+    written), EVERY row after the change under that contract's OLD symbol
+    is the same contract, which the broker still names by its old root:
+    it is booked as the NEW contract whatever late= says — a close (a
+    sale or buy-to-close, an expiry, an assignment or exercise), an
+    addition, and a close of more than is held alike — and a note names
+    the rows per account (owner rulings on the TJ-5008 reviews). late=
+    guards rows that could be another company's under a reused ticker;
+    while the account holds the moved contract, a row of that very
+    contract is its own, and left on OLD it made a second position
+    beside the NEW one (a written contract on OLD beside a bought one on
+    NEW). Only MOVED units count (`moved[key][1]`): what the event moved,
+    with the rows under OLD booked here added (the same contract), less
+    each close under either root, never raised by a purchase under NEW;
+    once none is left, a later row under the OLD symbol follows late= as
+    a share's late row does, though the account opened the NEW contract
+    again. A close of more than the account holds of the NEW contract
+    (`moved[key][2]`, every row counted) opens the excess the other way
+    (a sale of 2 against 1 bought: 1 written), and an ATTENTION line
+    names the row and the excess. An assignment's or exercise's share leg
+    of that day under OLD follows its contract."""
+    by_new = {(a, v[0]): (a, sym) for (a, sym), v in moved.items()}
+    booked = {id(t) for v in added.values() for t in v}
+    folded: Dict[str, List[str]] = {}
+    legs: set = set()
+    for t in out:
+        key = (t.account, t.symbol)
+        if id(t) in booked or t.action not in _POSITION_ACTIONS \
+                or (key not in moved and key not in by_new) \
+                or not after_rename_row(t, own[t.account], country):
+            continue
+        left, dq = moved[by_new.get(key, key)], (t.quantity or 0.0)
+        closes = bool(left[1]) and (dq < 0) != (left[1] < 0)
+        if key not in moved:
+            # Under NEW: a close takes moved units, a purchase adds none.
+            if closes:
+                left[1] = 0.0 if abs(dq) >= abs(left[1]) else left[1] + dq
+            left[2] += dq
+            continue
+        if abs(left[1]) < _SERIES_EPS:
+            continue                    # no moved unit left: late= decides
+        folded.setdefault(t.account, []).append(
+            f"{t.date} {t.action} {t.symbol} {dq:g} -> {left[0]} "
+            f"[{t.source or ''}]")
+        over = abs(dq) - abs(left[2])
+        if closes and over > _SERIES_EPS:
+            emit_line(
+                f"warning: ATTENTION: rename: {dr.where}: RENAME {dr.old} -> "
+                f"{dr.new}: {t.account}: {t.date} {t.action} {t.symbol} "
+                f"{dq:g} closes {over:g} more than the {abs(left[2]):g} "
+                f"contract(s) the account held of it\n"
+                f"  The row is booked as {left[0]} (the contract the "
+                f"change moved): it closes the {abs(left[2]):g} held and "
+                f"opens {over:g} {'written' if dq < 0 else 'bought'} "
+                f"on {left[0]}. If the excess is another position (an "
+                f"opening purchase missing from the files, another "
+                f"company's contract), add the missing row or split "
+                f"this one.", file=stream)
+        t.symbol = left[0]
+        if t.action == "ASSIGN":
+            legs.add((t.account, t.date))
+        left[2] += dq
+        # The row is the moved contract's: an addition joins the moved
+        # units; a close takes them, and past the last one what it
+        # opened the other way (the excess) is theirs too.
+        left[1] = left[1] + dq if not closes or abs(dq) < abs(left[1]) \
+            else (left[2] if (left[2] < 0) == (dq < 0) else 0.0)
+    for t in out:
+        if t.action == "ASSIGN" and t.symbol in olds \
+                and (t.account, t.date) in legs:
+            folded[t.account].append(
+                f"{t.date} {t.action} {t.symbol} {t.quantity or 0.0:g} -> "
+                f"{dr.new} [{t.source or ''}]")
+            t.symbol = dr.new
+    for acct, rows in sorted(folded.items()):
+        emit_line(f"note: {dr.where}: RENAME {dr.old} -> {dr.new}: "
+                  f"{len(rows)} row(s) of account {acct} under {dr.old} "
+                  f"after the change {_FOLD_WORDS} {dr.new} and still "
+                  f"held: the same contracts, booked as {dr.new} "
+                  f"whatever late= says ({'; '.join(rows)}).", file=stream)
+
+
+def run_notes_missing(root: Path, doc: Dict[str, Any]) -> Optional[str]:
+    """The line `tjs renames` adds when the books carry an option
+    contract's rename and no diagnostics of the last run are left
+    (work/*.diag): the rows booked as NEW against it are read from them
+    (_booked_as_new), so none can be listed. None otherwise."""
+    cache = Path(root) / "work"
+    if not any(underlying_change(e["old"], e["new"]) for e in doc["renames"]) \
+            or (cache.is_dir() and any(cache.glob("*.diag"))):
+        return None
+    return ("Info: the rows under an old symbol booked as the new contract "
+            "are read from the last run's diagnostics (work/*.diag), and "
+            "none is there: run `tjs run` to list them.")
+
+
+def _booked_as_new(root: Path, accounts: Iterable[str]
+                   ) -> List[Dict[str, Any]]:
+    """The late rows the run booked as NEW against a moved contract
+    (_fold_late_rows), read back from the notes of the accounts' merge
+    stage (work/*.diag): account, date, action, the symbol as the export
+    spells it, units, the symbol booked, the row's file, the declaring
+    line. Display only (`tjs renames`); no .diag: none."""
+    out: List[Dict[str, Any]] = []
+    seen: set = set()       # a note once (a copy of it in another .diag)
+    accounts = list(accounts)
+    cache = Path(root) / "work"
+    for p in sorted(cache.glob("*.diag")) if cache.is_dir() else []:
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            m = _FOLD_NOTE_RE.match(line) if _FOLD_WORDS in line else None
+            if not m or m["acct"] not in accounts or line in seen:
+                continue
+            seen.add(line)
+            # (every row of the note: two rows alike are two rows)
+            for item in m["rows"].split("; "):
+                r = _FOLD_ROW_RE.match(item)
+                if not r:
+                    continue
+                out.append({
+                    "account": m["acct"], "date": r[1], "action": r[2],
+                    "symbol": r[3], "qty": float(r[4]), "booked_as": r[5],
+                    "file": r[6], "declared": m["where"],
+                    "why": "a row of a contract the change moved and the "
+                           "account still held: the same contract, "
+                           "whatever late= says"})
     return out
 
 
@@ -956,6 +1251,15 @@ def report(root: Path, cfg: Dict[str, Any],
     # run's, edge-cases') read the gains files mid-run, before the
     # blended pass rebuilds them, and warned they were stale.
     denied = _denied_into_cost(root, cfg) if hints else {}
+    # The accounts whose option contracts a change moved, by the
+    # underlyings: an account holding only contracts carries the stock's
+    # row with no units, which is no line of the view (TJ-5008 review).
+    by_contract: Dict[Tuple[str, str], set] = {}
+    for e in events:
+        under = underlying_change(e["old"], e["new"])
+        if under:
+            by_contract.setdefault(under, set()).update(e["accounts"])
+    folds = _booked_as_new(root, accounts)
     out_events = []
     for e in events:
         if account and account not in e["accounts"]:
@@ -964,6 +1268,8 @@ def report(root: Path, cfg: Dict[str, Any],
         for r in e["rows"]:
             q, c = snaps.get(id(r), (0.0, 0.0))
             acct = r["_acct"]
+            if not q and acct in by_contract.get((e["old"], e["new"]), ()):
+                continue
             if account and acct != account:
                 # The account asked for only: another account's holding
                 # and cost were in its report (backlog TJ-0851).
@@ -992,7 +1298,15 @@ def report(root: Path, cfg: Dict[str, Any],
             "denied_not_in_cost": M.shown(sum(
                 a for d, a in denied.get(e["old"], [])
                 if d and d <= e["date"]), 2),
-            "late": declared_late(dated, e, ren)})
+            "late": declared_late(dated, e, ren),
+            # The late rows under the old symbol the run booked as NEW
+            # against this event (a moved contract still held; an
+            # assignment's share leg): _fold_late_rows.
+            "booked_as_new": [
+                x for x in folds
+                if x["symbol"] == e["old"] and x["booked_as"] == e["new"]
+                and x["date"] >= e["date"]
+                and (not account or x["account"] == account)]})
     late = []
     for r, e in late_rows(rows, events, _project_country(cfg)):
         if account and r["_acct"] != account:
@@ -1139,6 +1453,11 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
                     f"carried")
             d.item(f"{c['account']}: held {c['qty']:g} {e['old']} "
                    f"-> {c['qty_after']:g} {e['new']}{cost}", "  ")
+        for a in e["accounts"]:
+            # (an account holding only option contracts on OLD: report)
+            if a not in {c["account"] for c in e["carried"]}:
+                d.item(f"{a}: no {e['old']} held; its option contracts "
+                       f"on it follow the change (their own lines)", "  ")
         _dn = float(e.get("denied_not_in_cost") or 0)
         if _dn > 0.005 and any(not c["sheltered"] for c in e["carried"]):
             # The book cost is the trades' replay: a denied loss the
@@ -1148,6 +1467,16 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
                      f"losses on {e['old']} by {e['date']} is in the "
                      f"replacement shares' cost in the books, not here "
                      f"(`tjs list` shows the adjusted cost).", "  ", "  ")
+        took = e.get("booked_as_new") or []
+        if took:
+            _hang(d, f"{len(took)} row(s) under {e['old']} after the change "
+                     f"booked as {e['new']} whatever late= says (the "
+                     f"contract was still held; declared at "
+                     f"{took[0]['declared']}):", "  ", "    ")
+            for x in took:
+                d.line(f"    {x['date']}  {x['account']:<8} "
+                       f"{x['action']:<8} {x['symbol']} {x['qty']:+g}"
+                       + (f"  ({x['file']})" if x["file"] else ""))
         mine = [x for x in late if x["symbol"] and late_of(x, e)]
         if mine:
             # (late= is per account: each row says its own when the

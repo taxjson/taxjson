@@ -36,6 +36,12 @@ def _write_atomic(path: Path, text: str) -> None:
 def main():
     try:
         _main()
+    except json.JSONDecodeError as exc:
+        # A book that is not valid JSON is an input that cannot be read:
+        # exit 2, as docs/commands.md's exit table gives it (backlog
+        # TJ-5154; lib/tx_load names the file in the message).
+        emit_line(f"taxjson-convert-tt: error: {exc}", file=sys.stderr)
+        sys.exit(2)
     except ValueError as exc:
         # Malformed .tt lines raise deliberately-loud ValueErrors;
         # surface them as clean CLI errors, not tracebacks
@@ -77,8 +83,10 @@ def _main():
         choices=("settle", "trade"),
         default=None,
         help=(
-            "json->tt only: which date a .tt line (one date) carries — "
-            "the settlement date or the trade date. Default: the "
+            "json->tt only: which of a row's two dates leads its .tt "
+            "line — the settlement date (the trade date then in "
+            "`traded=`) or the trade date (the settlement date in "
+            "`settled=`); both are kept either way. Default: the "
             "project's tax_date when the input sits in a project's work/ "
             "(Canada: settle, US: trade); outside a project it is "
             "required when a row's trade and settle dates differ."
@@ -109,17 +117,24 @@ def _main():
                           file=sys.stderr)
                 sys.exit(2)
         if date_basis is None:
-            data = json.loads(input_path.read_text(encoding='utf-8'))
-            rows = (data.get('transactions', data)
-                    if isinstance(data, dict) else data)
+            # The rows as every tool reads a book (a BOM, `#` comments:
+            # lib/tx_load), as json_to_tt_lines reads them (backlog
+            # TJ-5151).
+            from taxjson.lib.tx_load import read_book_rows
+            rows = read_book_rows(input_path)
             if any(isinstance(t, dict) and t.get('date_settle')
                    and t.get('date') and t['date_settle'] != t['date']
                    for t in rows or []):
                 emit_line("taxjson-convert-tt: error: rows have a trade date "
-                          "and a different settlement date, and a .tt line "
-                          "keeps one: pass --date-basis settle (Canada, CRA) "
-                          "or --date-basis trade (US, IRS) — no taxjson.toml "
-                          "beside the input to read tax_date from.",
+                          "and a different settlement date: a .tt line keeps "
+                          "both, one as the line's date and the other in a "
+                          "token, so say which leads: pass --date-basis settle "
+                          "(Canada, CRA: the line's date is the settlement "
+                          "date, `traded=` the trade date) or --date-basis "
+                          "trade (US, IRS: the line's date is the trade "
+                          "date, `settled=` the settlement date) — no "
+                          "taxjson.toml beside the input to read tax_date "
+                          "from.",
                           file=sys.stderr)
                 sys.exit(2)
             date_basis = 'settle'       # every row has one date: moot

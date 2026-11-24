@@ -445,6 +445,7 @@
             "fee": 1.0,
             "gross_amount": 210.0,
             "id": "f7ffbe1f68f3901f",
+            "isin": "CA9990000029",
             "net_amount": 209.0,
             "open_close": "C",
             "price": 21.0,

@@ -156,6 +156,87 @@ class ReimportNamingTheAccount(unittest.TestCase):
             self.assertEqual(len(_slip_tables(root)), 1)
 
 
+class AmendmentWithinItsCurrency(unittest.TestCase):
+    """TJ-5043: an amended slip replaces the original of its own currency.
+    One broker account holds a CAD and a USD T5 from one issuer; a USD
+    amendment superseded the CAD original in one import, and replaced a
+    CAD original already in slips.toml: the CAD slip was lost. Typed
+    slips already group by currency (slip_audit.apply_amendments)."""
+
+    def _pl(self, cur, status, shown, boxes):
+        s = CS.CraSlip(shown, 2025, "T5", status, QT, currency=cur,
+                       boxes=boxes)
+        return CS.Placement(s, account="margin")
+
+    @rule(R.CA_SLIP_04)
+    def test_in_one_import(self):
+        cad = self._pl("CAD", "original", "original_cad.pdf", {"24": 100.0})
+        for cur, add, gone, said in (
+                ("USD", ["original_cad.pdf", "amended_usd.pdf"], [], 1),
+                ("CAD", ["amended_usd.pdf"],
+                 ["original_cad.pdf (original): replaced by the amended "
+                  "slip amended_usd.pdf"], 0)):
+            with self.subTest(amendment=cur):
+                amd = self._pl(cur, "amended", "amended_usd.pdf",
+                               {"24": 55.0})
+                plan = CS.plan_import([(cad, ""), (amd, "")], [])
+                self.assertEqual([p.slip.shown for p, _k in plan.add], add)
+                self.assertEqual(plan.superseded, gone)
+                self.assertEqual(len(plan.notes), said, plan.notes)
+
+    @rule(R.CA_SLIP_04)
+    def test_against_slips_toml(self):
+        cad = _existing()           # a CAD original, keyed
+        for cur, added, replaced in (("USD", 1, 0), ("CAD", 0, 1)):
+            with self.subTest(amendment=cur):
+                amd = self._pl(cur, "amended", "amended_usd.pdf",
+                               {"24": 55.0})
+                plan = CS.plan_import([(amd, "")], [cad])
+                self.assertEqual((len(plan.add), len(plan.replace)),
+                                 (added, replaced))
+                if replaced:
+                    self.assertEqual(plan.replace[0][0].currency, "CAD")
+        # The USD original beside the CAD one is not "already there".
+        usd = self._pl("USD", "original", "original_usd.pdf", {"24": 100.0})
+        self.assertEqual(len(CS.plan_import([(usd, "")], [cad]).add), 1)
+
+    @rule(R.CA_SLIP_04)
+    def test_another_currency_original_is_said(self):
+        # An amended slip with no original of its own currency, beside one
+        # of another currency of the same issuer and broker account: added,
+        # nothing replaced, and said, naming both: whether it amends that
+        # slip is the person's to decide.
+        amd = self._pl("USD", "amended", "amended_usd.pdf", {"24": 55.0})
+        cad = self._pl("CAD", "original", "original_cad.pdf", {"24": 100.0})
+        for where, placed, existing, other in (
+                ("import", [(cad, ""), (amd, "")], [],
+                 "only original_cad.pdf (CAD)"),
+                ("slips.toml", [(amd, "")], [_existing()],
+                 "only [[slip]] #1 (CAD)")):
+            with self.subTest(where=where):
+                plan = CS.plan_import(placed, existing)
+                self.assertEqual(plan.replace, [])
+                self.assertEqual(plan.superseded, [])
+                self.assertIn("amended_usd.pdf",
+                              [p.slip.shown for p, _k in plan.add])
+                note, = plan.notes
+                self.assertTrue(note.startswith(
+                    "amended_usd.pdf (amended, USD): no USD original of its "
+                    "issuer and broker account to replace, " + other), note)
+                self.assertIn("nothing replaced", note)
+        # Nothing to say: no original at all; or another issuer's.
+        self.assertEqual(CS.plan_import([(amd, "")], []).notes, [])
+        self.assertEqual(CS.plan_import(
+            [(amd, "")], [_existing(issuer="ANOTHER BROKER")]).notes, [])
+        # An original of its own currency there too: it is replaced, and
+        # the other currency's is not named.
+        usd = CS.Existing(2, "T5", "margin", "", QT, "original", "USD",
+                          {"24": 50.0}, frozenset(("k" * 10,)), True)
+        plan = CS.plan_import([(amd, "")], [_existing(), usd])
+        self.assertEqual([e.index for e, _p, _k in plan.replace], [2])
+        self.assertEqual(plan.notes, [])
+
+
 class UnderFiftyBesideATrust(unittest.TestCase):
     """TJ-1209: a T3 typed by its lines or naming no fund: its income is
     no T5 income of the payer."""

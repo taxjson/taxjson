@@ -556,7 +556,14 @@ def main(argv=None) -> int:
     if args.ticker_map is not None and args.ticker_map.exists():
         from taxjson.lib.ticker_map_rules import merge_renames
         from taxjson.lib.map_file import _parse_map_file
-        tmap, _problems, _notes = _parse_map_file(args.ticker_map)
+        tmap, problems, _notes = _parse_map_file(args.ticker_map)
+        if problems:
+            # A malformed or contradictory line's rule is dropped: the
+            # distribution's symbol then names no holding and the book
+            # was rewritten with no adjustment, at exit 0 (backlog
+            # TJ-5044). `tjs run` refuses the same map up front.
+            _say_map_problems(args.ticker_map, problems)
+            return 2
         renames = merge_renames(tmap, to_base=True)
     doc, applied = apply_distributions(doc, load_rows(args.config), account,
                                        args.date_basis, phantoms=phantoms,
@@ -573,6 +580,30 @@ def main(argv=None) -> int:
               f"applied" + (f" to {account}'s books" if account else ""),
               file=sys.stderr)
     return 0
+
+
+def _say_map_problems(ticker_map: Path, problems: List[str]) -> None:
+    """The refusal of a --ticker-map with problems (lib/map_file
+    `_parse_map_file`), headed by the files they are in: the map given,
+    and the tobase.map a project's ticker.map is read with (its lines'
+    problems start `tobase.map:`), as `tjs run` names them (pipeline/run
+    `_refuse_map_problems`, backlog TJ-0125)."""
+    from taxjson.lib.tobase_map import TOBASE_MAP, tobase_path
+    files: List[str] = []
+    for p in problems:
+        f = (str(tobase_path(ticker_map.parent))
+             if ticker_map.name == "ticker.map"
+             and p.startswith(f"{TOBASE_MAP}:") else str(ticker_map))
+        if f not in files:
+            files.append(f)
+    files.sort(key=lambda f: f != str(ticker_map))
+    cli_diag.error(PROG, f"{len(problems)} problem(s) in "
+                         f"{' and '.join(files)}; nothing was written",
+                   details=[f"- {p}" for p in problems] + [
+                       "`tjs run` refuses these lines too: a malformed line "
+                       "gives no rule, and contradictory lines no single "
+                       "one. Fix each line (notes after `#`) or delete it, "
+                       "then run the tool again."])
 
 
 if __name__ == "__main__":

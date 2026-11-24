@@ -116,12 +116,33 @@ def spin_entitlement(ex_date: str, parent_qty: float, before: float, held: float
     `before`, `held`: the shares held from before the date, and on the
     pay date. An ex-date settles it; a record date alone does not when
     the shares traded with a due bill (ex after the pay date, the usual
-    case for a large spin-off; TJ-1161)."""
+    case for a large spin-off; TJ-1161). A count equal to one of the two
+    at the share precision is that one; only then does a count printed
+    in whole shares (within one share) pick a holding, and one within a
+    share of both picks neither. Paid on 1, with 0.4 held before and 1
+    that day, is not the 0.4 (TJ-4988); nor is it surely the whole
+    holding: a whole count equal to the shares held that day and within
+    a share of those held before (100, with 99.6 before and 100 that
+    day) may be either, rounded, and picks neither; a count with a
+    fraction is the holding it equals."""
     if ex_date:
         return 'dated'
-    if parent_qty > 0 and abs(parent_qty - before) < 1.0:
+    if parent_qty <= 0:
+        return 'unknown'
+    exact = 0.5 * 10 ** -_SHARE_QTY_PLACES
+    if abs(parent_qty - before) <= exact:
         return 'dated'
-    if parent_qty > 0 and abs(parent_qty - held) < 1.0:
+    near_before = abs(parent_qty - before) < 1.0
+    if abs(parent_qty - held) <= exact:
+        part = parent_qty % 1.0
+        whole = min(part, 1.0 - part) <= exact
+        return 'unknown' if whole and near_before else 'due_bill'
+    near_held = abs(parent_qty - held) < 1.0
+    if near_before and near_held:
+        return 'unknown'
+    if near_before:
+        return 'dated'
+    if near_held:
         return 'due_bill'
     return 'unknown'
 

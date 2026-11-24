@@ -270,7 +270,11 @@ def _todays():
 
 
 class TestHoldingsCheck(_Runs):
-    def test_holdings_check_is_a_few_messages(self):
+    def test_the_run_names_sanity_in_one_line(self):
+        """TJ-5170: `tjs sanity` is a step of its own. With a holdings
+        file the run compares nothing (no step, no message of its own):
+        its closing list names `tjs sanity` in one line; the tables are
+        `tjs sanity`'s, shown or captured."""
         p, tmp = self._copy("canada")
         self.addCleanup(shutil.rmtree, tmp, True)
         cfg = p.root / "taxjson.toml"
@@ -281,18 +285,21 @@ class TestHoldingsCheck(_Runs):
         r = p.run("run", "--no-input")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(out.console_lint(r.stdout), [], r.stdout)
-        tail = r.stdout[r.stdout.index(
-            "==> Checking positions against the broker's holdings files"):]
-        body = tail[:tail.index("==> Before you trust")].splitlines()[1:]
-        # Messages and their continuations only — the tables are
-        # `tjs sanity`'s.
-        self.assertTrue(body and body[0].startswith(("Warning: ", "Info: ")),
-                        tail)
-        self.assertIn("`tjs sanity`", _flat(" ".join(body)))
+        assert_console(self, r.stderr)
+        self.assertNotIn("Checking positions", r.stdout)
+        self.assertNotIn("tjs sanity:", r.stdout + r.stderr)
+        tail = r.stdout[r.stdout.index("==> Before you trust"):].splitlines()
+        self.assertIn("Info: positions not yet compared with the broker's "
+                      "holdings files — `tjs sanity`", tail)
         self.assertNotIn("SANITY —", r.stdout)
-        # Captured for a program (width 0): the sanity report as before.
+        # Captured for a program (width 0): the run's line in full, and
+        # the sanity report only from `tjs sanity`.
         r0 = p.run("run", "--no-input", TAXJSON_WIDTH="0")
-        self.assertIn("SANITY —", r0.stdout)
+        self.assertNotIn("SANITY —", r0.stdout)
+        self.assertIn("Run `tjs sanity`: it compares the quantities",
+                      _flat(r0.stdout))
+        s = p.run("sanity", TAXJSON_WIDTH="0")
+        self.assertIn("SANITY —", s.stdout)
 
 
 class TestFiledYears(_Runs):

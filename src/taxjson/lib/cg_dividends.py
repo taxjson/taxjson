@@ -60,6 +60,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from taxjson.lib.futures_prefixes import canonical_futures_symbol
 from taxjson.model import money as M
 
 MAP_NAME = "capital_gains_dividends.map"
@@ -121,6 +122,16 @@ class Entry:
         return iso[:4] == self.when
 
 
+def _book_sym(sym: str, where: str) -> str:
+    """An entry's symbol as the books spell it (a future's `/` or `\\`
+    prefix `F:`: lib/futures_prefixes, backlog TJ-5150); a futures symbol
+    that names no contract is refused, naming the entry."""
+    try:
+        return canonical_futures_symbol(sym.strip().upper())
+    except ValueError as e:
+        raise CgDividendMapError(f"{where}: {e}") from None
+
+
 def parse_map(text: str) -> List[Entry]:
     out: List[Entry] = []
     for n, raw in enumerate(text.splitlines(), 1):
@@ -134,7 +145,7 @@ def parse_map(text: str) -> List[Entry]:
                 f"{where}: expected SYMBOL WHEN AMOUNT [ACCOUNT] (e.g. "
                 f"`ABD.TO 2025 all` or `ABD.TO 2025-06-16 1.25`), got "
                 f"{raw.strip()!r}")
-        sym, when, amt = parts[0].upper(), parts[1], parts[2]
+        sym, when, amt = _book_sym(parts[0], where), parts[1], parts[2]
         if not (_YEAR_RE.match(when) or _DATE_RE.match(when)):
             raise CgDividendMapError(
                 f"{where}: WHEN must be a year (2025) or a date "
@@ -230,7 +241,7 @@ def entries_from_config(cfg: dict) -> Optional[List[Entry]]:
             raise CgDividendMapError(
                 f"{where}: account {acct!r} is not an [accounts.*] section "
                 f"of taxjson.toml")
-        key = (sym.strip().upper(), when, acct)
+        key = (_book_sym(sym, where), when, acct)
         if key in seen:
             raise CgDividendMapError(
                 f"{where}: {key[0]} {when}"

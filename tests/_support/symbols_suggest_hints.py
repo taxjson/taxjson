@@ -31,13 +31,15 @@ def _project(td: str, other_rows=None, holdings=None) -> Path:
     (work / "margin_rbc_direct.json.diag").write_text(err)
     if other_rows is not None:
         _book(work, "tfsa_ib.json", other_rows)
-    # The account whose parse work/ holds: a book is an account's
-    # (lib/clean holds_books).
+    # The accounts whose parses work/ holds: a book is an account's
+    # (lib/clean holds_books), and only a configured account's files are
+    # evidence (ticker_map_suggest.book_source_files, backlog TJ-5039).
     cfg = ('[settings]\nyear = 2025\ncountry = "canada"\n\n'
-           '[accounts.margin]\ntype = "taxable"\n')
+           '[accounts.margin]\ntype = "taxable"\n\n'
+           '[accounts.tfsa]\ntype = "sheltered"\n')
     if holdings:
         (root / "h.toml").write_text(holdings)
-        cfg += '\n[accounts.tfsa]\nholdings = ["h.toml"]\n'
+        cfg += 'holdings = ["h.toml"]\n'
     (root / "taxjson.toml").write_text(cfg)
     return root
 

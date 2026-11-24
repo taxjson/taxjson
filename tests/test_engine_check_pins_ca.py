@@ -79,24 +79,27 @@ class TestRocReversalGivesBackOnlyWhatTheAcbHolds(unittest.TestCase):
 
 
 class TestRenameMergeOnTheSameTradeDate(unittest.TestCase):
-    """`_walk_split`, a rename onto a ticker that already has a pool: the
-    source's acquisition dates replace the target's only when STRICTLY
-    earlier (as `_move_pool_units`' merge). Bought on the same trade date,
-    the target's own acquisition stands, and with it its settle date, the
-    one the planning views measure the s.54 window from (CA-SL-01,
-    A2-0958): here also the earlier of the two."""
+    """`_walk_split`, a rename onto a ticker that already has a pool
+    (`AcbPool._merge_dates`): bought on the same trade date, the merged
+    holding shows the later of the two settle dates, the one the planning
+    views measure the s.54 window from (CA-SL-01, A2-0958), as one pool
+    holding both purchases does (the owner's ruling on backlog TJ-4241;
+    the target's own earlier settle date stood: TJ-2722)."""
 
     @rule(R.CA_ACB_RENAME, R.CA_SL_01)
-    def test_the_targets_settle_date_stays(self):
-        res, _ = _run([
-            _trade('2025-03-03', 10, -500, sym='ZZQ.TO', settle='2025-03-04'),
-            _trade('2025-03-03', 10, -800, sym='SYQ.TO', settle='2025-03-05'),
-            _rename('2025-04-01', 'SYQ.TO', 'ZZQ.TO')])
-        held, = res['inventory']
-        self.assertEqual((held['symbol'], held['qty'], held['total_cost']),
-                         ('ZZQ.TO', 20.0, 1300.0))
-        self.assertEqual((held['last_acq_date'], held['last_acq_settle']),
-                         ('2025-03-03', '2025-03-04'))
+    def test_the_later_settle_date_shows(self):
+        for target, source in (('2025-03-04', '2025-03-05'),
+                               ('2025-03-05', '2025-03-04')):
+            with self.subTest(target=target, source=source):
+                res, _ = _run([
+                    _trade('2025-03-03', 10, -500, sym='ZZQ.TO', settle=target),
+                    _trade('2025-03-03', 10, -800, sym='SYQ.TO', settle=source),
+                    _rename('2025-04-01', 'SYQ.TO', 'ZZQ.TO')])
+                held, = res['inventory']
+                self.assertEqual((held['symbol'], held['qty'], held['total_cost']),
+                                 ('ZZQ.TO', 20.0, 1300.0))
+                self.assertEqual((held['last_acq_date'], held['last_acq_settle']),
+                                 ('2025-03-03', '2025-03-05'))
 
 
 class TestHalfACentOfCostIsAHolding(unittest.TestCase):

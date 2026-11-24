@@ -556,7 +556,8 @@ def _input_copies(plan: Plan, cfg: Dict[str, Any], st: Dict[str, Any],
         s = shared / rel
         parts = rel.split("/")
         try:
-            if p.is_symlink() or inside not in p.parent.resolve().parents \
+            if p.is_symlink() or _through_link(own, p) \
+                    or inside not in p.parent.resolve().parents \
                     or (s.exists() and os.path.samefile(p, s)):
                 plan.left.append(p)
                 continue
@@ -593,6 +594,20 @@ def _input_copies(plan: Plan, cfg: Dict[str, Any], st: Dict[str, Any],
                         and f"{_PL.INPUTS}/{rel}" not in (hashes or {})
                         and s.name.lower() != _CS.TT_NAME):
                     plan.unread += 1
+
+
+def _through_link(own: Path, p: Path) -> bool:
+    """`p`, a file below the year's inputs/ (`own`), is reached through a
+    link: inputs/ itself or a folder between it and `p` is one (an
+    account folder linked to a folder of the person's). The file at the
+    link's end is the person's: removed, it was gone while the link
+    stayed (backlog TJ-5080)."""
+    d = own
+    for part in p.relative_to(own).parts[:-1]:
+        if d.is_symlink():
+            return True
+        d = d / part
+    return d.is_symlink()
 
 
 def _tobase_copy(plan: Plan, st: Dict[str, Any]) -> None:

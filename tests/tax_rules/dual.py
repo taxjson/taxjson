@@ -37,7 +37,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Optional, Union
 
 from taxjson.model.transaction import TaxTransaction
 from taxjson.lib.country import CANADA, COUNTRIES, HOME_CURRENCY, USA
@@ -104,12 +104,13 @@ def settings_for(country: str, **extra: Any) -> str:
 
 def projects_both(tmp, *, year: int = 2025,
                   accounts: str = '[accounts.margin]\ntype = "taxable"\n',
-                  files: Optional[Dict[str, str]] = None,
+                  files: Optional[Dict[str, Union[str, Callable[[str], str]]]] = None,
                   canada: Optional[Dict[str, Any]] = None,
                   usa: Optional[Dict[str, Any]] = None,
                   tail: str = "") -> Dict[str, Path]:
     """Two projects under `tmp` with the same accounts and files (paths
-    relative to the project root, e.g. "work/margin_gains.json") and each
+    relative to the project root, e.g. "work/margin_gains.json"; a text
+    may be a function of the country, each project its own) and each
     country's own settings. `canada=`/`usa=` add per-country settings;
     `tail` is appended to both tomls (extra tables)."""
     extra = {CANADA: canada or {}, USA: usa or {}}
@@ -122,7 +123,7 @@ def projects_both(tmp, *, year: int = 2025,
         for rel, text in (files or {}).items():
             p = root / rel
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(text)
+            p.write_text(text(c) if callable(text) else text)
         out[c] = root
     return out
 

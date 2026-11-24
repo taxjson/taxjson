@@ -1078,7 +1078,7 @@ def plan_import(placed: List[Tuple[Placement, str]],
     (the same type, account, fund, broker account, issuer, currency
     and boxes; an amended slip with the figures of an original there
     replaces it) is not added again; an amended slip replaces the original of the
-    same issuer, account, fund and broker account — in this import or
+    same issuer, account, fund, broker account and currency — in this import or
     already in slips.toml — or, with no original in slips.toml, the
     earlier amended slip there (the issuer's second amendment), and an
     original whose amended slip is there is not added. A slip of no key
@@ -1090,9 +1090,10 @@ def plan_import(placed: List[Tuple[Placement, str]],
     from taxjson.lib.slip_audit import _root
     plan = ImportPlan()
 
+    # Its currency too, as typed slips are grouped (backlog TJ-5043).
     def ident(pl: Placement, key: str) -> Tuple:
         return (pl.slip.type, pl.account or "", _root(pl.security)
-                if pl.security else "", key)
+                if pl.security else "", key, pl.slip.currency)
 
     def same_slip(e: Existing, pl: Placement, key: str) -> bool:
         # No key (its account named, its broker account not known): any
@@ -1102,6 +1103,7 @@ def plan_import(placed: List[Tuple[Placement, str]],
         return (e.type == pl.slip.type and e.account == pl.account
                 and e.security == (_root(pl.security) if pl.security
                                    else "")
+                and e.currency == pl.slip.currency
                 and (not key or key in e.keys))
 
     def same_issuer(e: Existing, pl: Placement) -> bool:
@@ -1172,7 +1174,6 @@ def plan_import(placed: List[Tuple[Placement, str]],
         # back in beside it (#110).
         dup = [e for e in existing if same_slip(e, pl, k)
                and same_issuer(e, pl)
-               and e.currency == pl.slip.currency
                and _boxes_key(e.boxes) == sb
                and not (pl.slip.status == "amended"
                         and e.status != "amended")
@@ -1204,7 +1205,6 @@ def plan_import(placed: List[Tuple[Placement, str]],
         # count twice, so it is said (backlog TJ-1277).
         loose = [e for e in existing if k and not e.keys
                  and same_slip(e, pl, "") and same_issuer(e, pl)
-                 and e.currency == pl.slip.currency
                  and e.status == pl.slip.status
                  and _boxes_key(e.boxes) == sb and e.index not in taken]
         if loose:
@@ -1275,6 +1275,49 @@ def plan_import(placed: List[Tuple[Placement, str]],
                     f"imported")
                 continue
         plan.add.append((pl, k))
+    return _other_currency_notes(plan, live, existing)
+
+
+def _other_currency_notes(plan: ImportPlan,
+                          live: List[Tuple[Placement, str]],
+                          existing: List[Existing]) -> ImportPlan:
+    """`plan` with a note for each amended slip it adds that has no
+    original of its own currency to replace, beside an original of
+    another currency of the same issuer, account, fund and broker account
+    (in this import or in slips.toml), naming both. An amended slip
+    replaces the original of its own currency only (backlog TJ-5043), so
+    nothing is replaced: whether it amends that slip is the person's to
+    decide."""
+    from taxjson.lib.slip_audit import _root
+
+    def fund(pl: Placement) -> str:
+        return _root(pl.security) if pl.security else ""
+
+    for pl, k in plan.add:
+        s = pl.slip
+        if s.status != "amended":
+            continue
+        here = [q.slip for q, kq in live if q.slip.status != "amended"
+                and (q.slip.type, q.account, fund(q), kq)
+                == (s.type, pl.account, fund(pl), k)
+                and _norm(q.slip.issuer) == _norm(s.issuer)]
+        there = [e for e in existing if e.status != "amended"
+                 and (e.type, e.account, e.security)
+                 == (s.type, pl.account, fund(pl))
+                 and (not k or k in e.keys)
+                 and (not e.imported or _norm(e.issuer) == _norm(s.issuer))]
+        if any(x.currency == s.currency for x in [*here, *there]):
+            continue
+        other = ([f"{x.shown} ({x.currency})" for x in here]
+                 + [f"[[slip]] #{e.index} ({e.currency})" for e in there])
+        if other:
+            plan.notes.append(
+                f"{s.shown} (amended, {s.currency}): no {s.currency} "
+                f"original of its issuer and broker account to replace, "
+                f"only " + ", ".join(other) + " — added beside it, nothing "
+                "replaced (an amended slip replaces the original of its own "
+                "currency). If it amends that slip, delete that slip's "
+                "[[slip]] table in slips.toml")
     return plan
 
 

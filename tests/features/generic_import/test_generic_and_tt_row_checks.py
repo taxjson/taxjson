@@ -320,7 +320,9 @@ class TestTtEmitterDates(unittest.TestCase):
         from taxjson.lib.tt_format import tx_to_tt_line
         line = tx_to_tt_line(self._SELL)
         self.assertTrue(line.startswith("BUYSELL 2026-01-02 "), line)
-        self.assertTrue(line.endswith(" 1.00000"), line)   # commission
+        # the commission, then the trade date the line's date is not
+        # (backlog TJ-5213)
+        self.assertTrue(line.endswith(" 1.00000 traded=2025-12-31"), line)
 
     def test_trade_date_basis(self):
         from taxjson.lib.tt_format import tx_to_tt_line
@@ -343,7 +345,10 @@ class TestTtEmitterDates(unittest.TestCase):
         err = buf.getvalue()
         back = parse_tt_line(lines[0])
         self.assertEqual(back["date_settle"], "2026-01-02")
-        self.assertIn("1 row(s)", err)          # trade != settle note
+        # Both dates are on the line (`traded=`, backlog TJ-5213): the
+        # note that counted such rows has nothing left to say.
+        self.assertEqual(back["date"], "2025-12-31")
+        self.assertNotIn("row(s)", err)
         # The futures row's contract size now rides along as `x1000`
         # (S026-22) instead of the "cannot hold" warning.
         self.assertTrue(lines[1].endswith(" x1000"), lines[1])

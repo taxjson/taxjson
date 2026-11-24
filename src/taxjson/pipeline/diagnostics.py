@@ -3,7 +3,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from taxjson.project.settings import settings_of
 from taxjson.project.toml_io import TOML_ERRORS, read_toml
@@ -394,13 +394,15 @@ UNBOOKED_PREFIX = "warning: UNBOOKED:"
 ATTENTION_PREFIX = "warning: ATTENTION:"
 
 
-def echo_attention_lines(out_path: Path, prefix: str = "",
+def echo_attention_lines(out_path: Path, prefix: Union[str, Tuple[str, ...]] = "",
                          exclude: Optional[str] = None,
                          once: bool = False) -> None:
     """Print the ATTENTION lines of a stage's persisted .diag (only
-    those whose text starts with `prefix`, none starting with `exclude`)
-    on the console. `once`: an engine pass's line — shown once per run
-    whichever pass says it (_echo_captured)."""
+    those whose text starts with `prefix`, or with one of several, none
+    starting with `exclude`) on the console. `once`: an engine pass's
+    line — shown once per run whichever pass says it (_echo_captured)."""
+    starts = tuple(ATTENTION_PREFIX + " " + p
+                   for p in ((prefix,) if isinstance(prefix, str) else prefix))
     diag_path = out_path.with_name(out_path.name + ".diag")
     try:
         lines = diag_path.read_text(errors="replace").splitlines()
@@ -411,7 +413,7 @@ def echo_attention_lines(out_path: Path, prefix: str = "",
         if echoing and line[:1] in (" ", "\t") and line.strip():
             _echo_captured(line, once=once)
             continue
-        echoing = (line.startswith(ATTENTION_PREFIX + " " + prefix)
+        echoing = (line.startswith(starts)
                    and not (exclude and line.startswith(
                        ATTENTION_PREFIX + " " + exclude)))
         if echoing:
@@ -471,7 +473,7 @@ _DIAG_MARKER_RE = re.compile(
 # pass's stderr. They belong to <acct>_wash.sum only — read into the
 # baseline <acct>.sum they were one run stale (R1-259).
 _POST_PASS_DIAG_SUFFIXES = ("_blend.diag", "_cryptoblend.diag",
-                            "_gains_wash.json.diag")
+                            "_gains_wash.json.diag", "_listing_evidence.diag")
 _DIAG_DATE_RE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
 # An account's file as the messages name it: inputs/<account>/<file>
 # (the .tt line locations, lib/dated_events._where; the parsers' and the

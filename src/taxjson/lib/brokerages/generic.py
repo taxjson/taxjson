@@ -176,7 +176,9 @@ from taxjson.lib.option_symbols import is_option_symbol, parse_option_expiry
 from taxjson.lib.dates import settlement_date
 from taxjson.parsers.protocol import Outcome, builds
 from taxjson.model import money as M
-from taxjson.lib.futures_prefixes import FUTURES_PREFIX_RE, FUTURES_PREFIXES
+from taxjson.lib.futures_prefixes import (FUTURES_PREFIX_RE, FUTURES_PREFIXES,
+                                          FuturesSymbolError,
+                                          canonical_futures_symbol)
 
 # Row-level cross-check tolerance — the same 1% + $0.05 the .tt
 # converter uses for hand-entered totals.
@@ -1729,7 +1731,7 @@ class _GenParse:
     # Each consumed row's date, file order (newest-first detection).
     row_dates: List[str] = dc_field(default_factory=list)
     # Each repeated header's (line, row-date index): the segments' bounds
-    # (`after_marks` finds the transactions' by the lines the template noted).
+    # (`_oldest_first` finds the transactions' by the lines the template noted).
     segments: List[Tuple[int, int]] = dc_field(default_factory=list)
     # (where, target, raw signed quantity) per trade row, for the
     # file-level sign-convention check after the loop.
@@ -1974,9 +1976,9 @@ class GenericBrokerage(BaseBrokerage):
         sym = symbol_raw.strip()
         # A futures contract is spelled F: everywhere downstream (IB,
         # check-dates, the engines): '/ESZ5' and '\\ESZ5' are the same
-        # contract as 'F:ESZ5' (audit A2-0107 / A2-0294).
-        if sym.startswith(FUTURES_PREFIXES) and not sym.startswith("F:"):
-            sym = "F:" + FUTURES_PREFIX_RE.sub("", sym, count=1).lstrip()
+        # contract as 'F:ESZ5' (audit A2-0107 / A2-0294), as every reader
+        # of a symbol a person writes spells it (backlog TJ-5150).
+        sym = canonical_futures_symbol(sym)
         # One security, one spelling (audit S010-04): the ACB pool and
         # the superficial-loss match key on the exact symbol string.
         #  * An OCC symbol padded to 21 characters ('SAMPLE   250321C...')
@@ -2346,8 +2348,11 @@ class GenericBrokerage(BaseBrokerage):
                 f"[extract] option pattern ({mapping['_path']}), does not "
                 f"match the row. Map [columns].symbol or give an "
                 f"[extract].symbol pattern (or map the row to skip).")
-        symbol = (self._listing_symbol(symbol_raw, currency)
-                  if symbol_raw else "")
+        try:
+            symbol = (self._listing_symbol(symbol_raw, currency)
+                      if symbol_raw else "")
+        except FuturesSymbolError as e:     # `//QZM26.US` (TJ-5150)
+            raise BrokerageParseError(f"generic importer: {where}: {e}") from None
         qty = qty_v or 0.0
         price = price_v or 0.0
         amount = amount_v or 0.0
@@ -2615,10 +2620,13 @@ class GenericBrokerage(BaseBrokerage):
     def _build_income(self, r, f) -> List[Dict[str, Any]]:
         """An income-style row: the amount IS the money (a blank refused,
         never 0); a dividend or a payment in lieu, a tax, an interest or
-        a fee row under the mapping's sign conventions."""
+        a fee row under the mapping's sign conventions. The row keeps the
+        clock its date format gives, as a trade does (it was stamped
+        09:30:00 whatever the cell said; TJ-5018)."""
         st = self._gen
         where, raw_action, target, desc = r.where, r.raw_action, r.target, r.desc
         date, currency = f.date, f.currency
+        time = f.clock or "09:30:00"
         row_account, symbol = f.row_account, f.symbol
         amount_v, qty, amount = f.amount_v, f.qty, f.amount
         tax_sign, fee_sign = st.tax_sign, st.fee_sign
@@ -2639,7 +2647,7 @@ class GenericBrokerage(BaseBrokerage):
             _pil = target == "dividend_in_lieu"
             return [{
                 "action": "DIVIDEND_IN_LIEU" if _pil else "DIVIDEND",
-                "date": date, "time": "09:30:00",
+                "date": date, "time": time,
                 # Income is dated its payment day: no
                 # settlement cycle.
                 "date_settle": date,
@@ -2657,7 +2665,7 @@ class GenericBrokerage(BaseBrokerage):
         elif target in ("tax", "interest", "fee"):
             return [{
                 "action": target.upper(),
-                "date": date, "time": "09:30:00",
+                "date": date, "time": time,
                 "date_settle": date,
                 "symbol": symbol, "quantity": 0.0,
                 "currency": currency,
@@ -2691,8 +2699,9 @@ class GenericBrokerage(BaseBrokerage):
         with a positive quantity, a buy with a positive amount), the
         unread transfer amounts, the expiry-dated closes, the late
         settles, the assignment shapes, the settle-on-trade-date note and
-        the unbooked rows noted. The split-fill marks are the template's
-        and the segments' order follows them (`after_marks`)."""
+        the unbooked rows noted, then each newest-first segment put
+        oldest first (`_oldest_first`). The split-fill marks are the
+        template's, on the rows in that order."""
         st = self._gen
         pasted, fut_crossing = st.pasted, st.fut_crossing
         trade_amounts, trade_signs = st.trade_amounts, st.trade_signs
@@ -2822,9 +2831,9 @@ class GenericBrokerage(BaseBrokerage):
                   f"action in [actions] or by a [[classify]] rule (or to "
                   f"\"skip\" if it really is not an event)."
                   f"{shipped_layout_hint(path)}")
-        return transactions
+        return self._oldest_first(transactions)
 
-    def after_marks(self, transactions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _oldest_first(self, transactions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Per header-delimited segment (re-audit A2-1084), a newest-first
         export is read bottom-up: a row with no clock is stamped 09:30:00
         (a trade whose date format has one keeps its time), so a day's
@@ -2832,9 +2841,11 @@ class GenericBrokerage(BaseBrokerage):
         US-DATE-13), and one row emits at most one transaction, so
         reversing a segment reverses its rows; a segment's transactions
         are those past its header's line (the template noted each row's
-        line). After the template's fill marks, so a row's id does not
-        change. Two newest-first exports concatenated went both ways over
-        the whole file and were read top-down."""
+        line). Before the template's fill marks (the end of `finish`):
+        the second of two identical rows is then the same row in an
+        export listing them the other way round (TJ-5038; it ran after
+        the marks). Two newest-first exports concatenated went both ways
+        over the whole file and were read top-down."""
         st = self._gen
         lines = [self.row_line(tx) for tx in transactions]
         r_bounds = [0] + [r for _, r in st.segments] + [len(st.row_dates)]
@@ -2896,7 +2907,7 @@ class GenericBrokerage(BaseBrokerage):
                   **({"broker_account": row_account} if row_account else {})}
         if target in ("transfer_in", "transfer_out"):
             return self._transfer_row(where, target, raw_action, qty_v,
-                                      amount_v, cells, common)
+                                      amount_v, cells, common, clock)
         if target == "opening":
             return self._opening_row(where, raw_action, qty_v, price_v,
                                      amount_v, cells, common)
@@ -2904,8 +2915,12 @@ class GenericBrokerage(BaseBrokerage):
                                 amount_v, common)
 
     def _transfer_row(self, where, target, raw_action, qty_v, amount_v, cells,
-                      common):
-        """An in-kind transfer as the broker parsers emit it. The direction
+                      common, clock=""):
+        """An in-kind transfer as the broker parsers emit it, at the clock
+        its date format gives (`clock`; 09:30:00 without one): the units
+        arrive or leave among the day's trades where the export puts them
+        (stamped 09:30:00 whatever the cell said, units a noon purchase
+        bought left before it; TJ-5018). The direction
         is the target's (`transfer_in`, `transfer_out`: exports seldom sign
         the units, so the action says which way), the quantity cell the
         units (its sign may agree with the target, never contradict it).
@@ -2935,7 +2950,7 @@ class GenericBrokerage(BaseBrokerage):
             self._transfer_amounts_unread.append(where)
         qty = abs(qty_v) if target == "transfer_in" else -abs(qty_v)
         bv, mv = cells.num("book_value"), cells.num("market_value")
-        return {"action": "TRANSFER", "time": "09:30:00",
+        return {"action": "TRANSFER", "time": clock or "09:30:00",
                 "quantity": qty, "price": 0.0, "net_amount": 0.0, "fee": 0.0,
                 **({"book_value": abs(bv)} if bv is not None else {}),
                 **({"market_value": abs(mv)} if mv else {}),
@@ -3008,8 +3023,15 @@ class GenericBrokerage(BaseBrokerage):
 
     def _adjust_row(self, where, target, raw_action, qty_v, price_v, amount_v,
                     common):
-        """A cost adjustment as a .tt ADJUST line books it, at 09:30:00 as
-        every cost event. `roc`, a return of capital, is the base class's
+        """A cost adjustment, at 09:30:00 as every parser stamps one,
+        whatever clock the row's date cell carries (CA-DATE-14 /
+        US-DATE-13; the ruling on TJ-5018): the clock on such a row is when
+        the broker's books posted it, not when the amount became payable.
+        At 09:30:00 it follows its day's rows stamped 09:30:00 or earlier
+        (every trade of a date-only export) and precedes those clocked
+        later; whether it should stand ahead of every trade of its day is
+        an open ruling (backlog TJ-5142). A .tt ADJUST line keeps the time
+        written on it. `roc`, a return of capital, is the base class's
         shared shape (`tx_roc_adjust`): the amount cell is the cash
         received, signed as the export signs cash, so a receipt lowers the
         pool's cost and a broker's reversal row nets it out again; `adjust`
@@ -3048,7 +3070,8 @@ class GenericBrokerage(BaseBrokerage):
         the row's new-ticker cell (read for both targets: a split that
         changes the ticker renames too; a rename needs one), `ratio_v` its
         ratio cell, new units per old unit (2 for a 2-for-1 split, 0.1 for a
-        1-for-10 consolidation): a split needs one, a rename with none is 1.
+        1-for-10 consolidation): a split needs one, a rename with none (a
+        blank cell; a 0 is refused) is 1.
         The quantity cell is never the ratio: exports put the shares
         received or held there (TJ-2077). Money on the row (a cash-in-lieu
         sale, a fee) is refused: the split books none, and a .tt line sells
@@ -3066,13 +3089,22 @@ class GenericBrokerage(BaseBrokerage):
                 f"has a blank new-ticker cell ([columns].symbol_new) — name "
                 f"the new ticker there, or map the row to split for a ratio "
                 f"alone.")
-        ratio = ratio_v if ratio_v else (1.0 if target == "rename" else None)
+        # A blank cell alone is a rename's 1-for-1: a 0 written there is a
+        # ratio the export got wrong, refused as a negative one is (it
+        # read as blank and renamed at 1; TJ-5019).
+        ratio = ratio_v if ratio_v is not None else (
+            1.0 if target == "rename" else None)
         if ratio is None or ratio <= 0:
             raise ValueError(
                 f"generic importer: {where}: {raw_action} row (-> {target}) "
                 f"needs a positive ratio in the ratio cell (new units per "
                 f"old unit: 2 for a 2-for-1 split, 0.1 for a 1-for-10 "
-                f"consolidation), got {ratio_v!r}.")
+                f"consolidation), got {ratio_v!r}."
+                + (" A rename at 1-for-1 leaves the cell blank; if the "
+                   "export writes 0 there on every row that is no split, "
+                   "unmap [columns].ratio and read the ratio from the "
+                   "description with an [extract].ratio pattern."
+                   if target == "rename" else ""))
         if ratio >= 1000:
             raise ValueError(
                 f"generic importer: {where}: {raw_action} row (-> {target}) "

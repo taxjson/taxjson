@@ -35,7 +35,11 @@ from taxjson.lib import out
 from taxjson.lib.out import concise_line, split_message
 
 __all__ = ["say", "message_lines", "console_lines", "emit_line", "reword",
-           "is_continuation", "NOTE_HEAD", "parse_codes_note"]
+           "is_continuation", "NOTE_HEAD", "parse_codes_note",
+           "YEAR_END_INEXACT", "UNDATED_LISTING", "UNSHOWN_LISTING",
+           "MOVED_LISTING",
+           "UNDATED_LISTING_GAIN",
+           "undated_listing_note", "parse_undated_listing_note"]
 
 
 def message_lines(kind: str, text: str, details: Iterable[str] = (), *,
@@ -423,6 +427,98 @@ def emit_line(text: str, *, file: Optional[TextIO] = None, indent: str = "") -> 
             out.concise_show(b[0], file)
         return
     out.show_blocks(blocks, file)
+
+
+# The head of the engines' ATTENTION for a year-end position read across
+# both date orders (not exact: engine/us/lots._USDayLots, engine/ca/walk
+# ._YearEndPools; TJ-4984): `run --strict` stops on it and the checklist's
+# run step lists it (pipeline/run._check_year_end_exact, lib/checklist).
+YEAR_END_INEXACT = "warning: ATTENTION: year end: "
+
+
+# An income or cost row a statement with no position in its ticker could
+# place only from the listings the account's other exports name, which
+# carry no dates there (the IB parser's note, lib/brokerages/ib_extractor
+# `_ib_finish_income`): the words every such note holds (TJ-5011).
+UNDATED_LISTING = ("kept its ISIN listing: the account's other exports name "
+                   "more than one listing of the ticker")
+# A cost row on a listing no dated row of its statement shows held that
+# day, the account's exports naming another listing of the ticker.
+UNSHOWN_LISTING = ("is on a listing no dated row of this statement shows "
+                   "held that day, and the account's exports name another "
+                   "listing of the ticker")
+# A cost row moved off its ISIN's listing onto the one listing the
+# account's statements name, which no dated row of its own statement
+# shows held that day (said by the run only where the books found
+# nothing there to reduce).
+MOVED_LISTING = ("was moved off its ISIN's listing onto the listing the "
+                 "account's statements hold or trade, which no dated row "
+                 "of this statement shows held that day")
+_UNDATED_WHY = {"split": UNDATED_LISTING, "unshown": UNSHOWN_LISTING,
+                "moved": MOVED_LISTING}
+# The head of the run's ATTENTION for such a row that is a cost row (a
+# return of capital), with what the books did with it
+# (pipeline/stages._flag_undated_listings): `run --strict` stops on
+# it and the checklist's run step lists it (lib/checklist).
+UNDATED_LISTING_GAIN = "warning: ATTENTION: undated listing: "
+_UNDATED_RE = re.compile(
+    r"^note: (?P<file>.*?)(?: line (?P<line>\d+))?: (?P<what>[a-z ]+) on "
+    r"(?P<symbol>\S+) of (?P<day>\d{4}-\d{2}-\d{2}) (?P<why>"
+    + "|".join(re.escape(v) for v in _UNDATED_WHY.values())
+    + r") \((?P<listings>[^()]*)\)"
+    r"(?:; its own rows show (?P<flat>[^;()]*?) not held that day)?")
+
+
+def undated_listing_note(file: str, line: Optional[int], what: str,
+                         symbol: str, day: str, listings: Iterable[str],
+                         *, why: str = "split",
+                         flat: Iterable[str] = ()) -> str:
+    """The parser's note for a row (`what`: income, return of capital) of
+    `file`:`line` on `symbol`, a listing no dated row of its statement
+    shows held on `day`, while the account's exports name `listings` of
+    the ticker: the statement has no position in the ticker and the other
+    exports' listings are undated there (`why` "split"), or its own rows
+    do not show the listing held (`why` "unshown"), or the row was moved
+    there off its ISIN's listing, the other of `listings` (`why` "moved").
+    `flat`: the other listings its own rows show not held that day."""
+    names = sorted(set(listings) | {symbol})
+    flat = sorted(set(flat) - {symbol})
+    others = [n for n in names if n != symbol and n not in flat]
+    where = f"{file} line {line}" if line else file
+    said = (f"; its own rows show {', '.join(flat)} not held that day"
+            if flat else "")
+    if why == "split":
+        tail = (" with no dates this statement can use, so the account may "
+                f"have held {' or '.join(others)} that day instead (one "
+                "statement covering the payment and the ticker's trades "
+                "places it).")
+    elif why == "moved":
+        tail = (f": if the account did not hold {symbol} that day, the "
+                f"payment belongs to {' or '.join(others)}.")
+    elif others:
+        tail = (f", so the account may have held {' or '.join(others)} that "
+                "day instead (a statement with the account's Open Positions "
+                "section, or every trade of the ticker since before the "
+                "purchase, places it).")
+    else:
+        tail = (", so no export shows where the holding was that day (a "
+                "statement with the account's Open Positions section, or "
+                "every trade of the ticker since before the purchase, places "
+                "it).")
+    return (f"note: {where}: {what} on {symbol} of {day} {_UNDATED_WHY[why]} "
+            f"({', '.join(names)}){said}{tail}")
+
+
+def parse_undated_listing_note(line: str) -> Optional[Dict[str, str]]:
+    """What an undated_listing_note line names: file, line ('' when the
+    note has none), what, symbol, day, listings and flat (comma-separated)
+    and why ("split", "unshown" or "moved"); None for any other line."""
+    m = _UNDATED_RE.match(line)
+    if not m:
+        return None
+    got = {k: v or "" for k, v in m.groupdict().items()}
+    got["why"] = next(k for k, v in _UNDATED_WHY.items() if v == got["why"])
+    return got
 
 
 # The note's fixed head: the console echoes it from the parse .diag and

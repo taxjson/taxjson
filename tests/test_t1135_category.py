@@ -61,7 +61,7 @@ class TestTakenFromTheInstrument(unittest.TestCase):
         self.assertEqual(rep["category_review_symbols"], [])
         text = render_brief(rep)
         self.assertIn("CAT: the form's category", text)
-        self.assertRegex(text, r"QZA\.US +USA +2 ")
+        self.assertRegex(text, r"QZA\.US +USA +assumed +2 ")
 
 
 class TestTickerMapLine(unittest.TestCase):

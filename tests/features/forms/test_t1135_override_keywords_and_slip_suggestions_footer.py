@@ -140,8 +140,8 @@ class TestT1135Overrides(unittest.TestCase):
                                    full_history=False)
         rep["crypto_symbols"] = ["ZZC"]
         text = " ".join(render_report(rep).split())
-        self.assertIn("a Canadian corp on a US exchange is not "
-                      "(`T1135 SYMBOL CA`)", text)
+        self.assertIn("a ticker.map `T1135 SYMBOL COUNTRY` line (`CA`: not "
+                      "foreign property", text)
         self.assertIn("(`T1135 SYMBOL CA` once checked)", text)
         self.assertNotIn("(`SYMBOL CA", text)
 

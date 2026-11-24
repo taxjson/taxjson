@@ -128,7 +128,10 @@ def _benchmark(args: argparse.Namespace, root: Path
                       "[settings] benchmark")
         if sym is None:
             return None
-    raw, sym = sym, sym.strip().upper()
+    # As the books spell it: a future's `/` or `\` prefix is `F:`
+    # (lib/futures_prefixes, backlog TJ-5150).
+    from taxjson.lib.futures_prefixes import canonical_futures_symbol
+    raw, sym = sym, canonical_futures_symbol(sym.strip().upper())
     if not sym or any(c.isspace() for c in sym):
         _die_input(f"{where} {raw!r} is not one symbol",
                    "Write it as the books spell it (XYZQ.TO, XYZQ.US) or as "

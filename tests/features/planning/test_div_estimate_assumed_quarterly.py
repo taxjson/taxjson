@@ -429,6 +429,50 @@ class TestTwoOrThreePayments(unittest.TestCase):
         self.assertEqual((r["frequency"], r["frequency_assumed"]),
                          ("semi-annual", False))
 
+    def test_a_reused_old_ticker_stays_the_old_tickers(self):
+        """Backlog TJ-5052: ZZO.TO renamed ZZA.TO; ZZA sold, then an
+        unrelated security trades under ZZO.TO while ZZA is not held. Its
+        holding is no evidence for ZZA's quarters: the estimate is the
+        one without it (assumed quarterly), and the balances after the
+        rename stay ZZO.TO's. It read ZZA as held all along: one
+        payment, irregular."""
+        rows = [_trade("2024-01-02", "ZZO.TO", 100),
+                ("margin", _div("2024-03-15", "ZZO.TO", 100, 0.5)),
+                ("margin", {"action": "SPLIT", "date": "2024-04-01",
+                            "symbol": "ZZO.TO", "symbol_new": "ZZA.TO",
+                            "quantity": 1.0, "account": "margin"}),
+                _trade("2024-04-15", "ZZA.TO", -100),
+                _trade("2025-07-02", "ZZA.TO", 100),
+                ("margin", _div("2025-09-15", "ZZA.TO", 100, 0.5))]
+        reused = [_trade("2024-05-01", "ZZO.TO", 100),
+                  _trade("2025-05-01", "ZZO.TO", -100)]
+        got = []
+        for books in (rows, rows + reused):
+            doc = _est(books, [_pos("ZZA.TO", 100)], as_of="2025-12-20")
+            r = doc["rows"][0]
+            got.append((r["frequency"], r["frequency_assumed"], r["status"],
+                        r["window_amount_base"]))
+        self.assertEqual(got[0][:2], ("quarterly", True))
+        self.assertEqual(got[1], got[0])
+        held = DE.payments(rows + reused, as_of="2025-12-20").held
+        self.assertNotIn(("margin", [("2024-05-01", 100.0),
+                                     ("2025-05-01", 0.0)]),
+                         held["ZZA.TO"])
+        self.assertEqual(held["ZZO.TO"], [("margin", [("2024-05-01", 100.0),
+                                                      ("2025-05-01", 0.0)])])
+        # A second rename of the reused ticker carries its own part on.
+        again = rows + reused + [
+            ("margin", {"action": "SPLIT", "date": "2025-06-01",
+                        "symbol": "ZZO.TO", "symbol_new": "ZZB.TO",
+                        "quantity": 1.0, "account": "margin"})]
+        held = DE.payments(again, as_of="2025-12-20").held
+        self.assertNotIn("ZZO.TO", held)
+        self.assertEqual(held["ZZB.TO"][0], ("margin", [("2024-05-01", 100.0),
+                                                        ("2025-05-01", 0.0),
+                                                        ("2025-06-01", 0.0)]))
+        self.assertEqual(held["ZZA.TO"][0], ("margin", [("2024-01-02", 100.0),
+                                                        ("2024-04-01", 0.0)]))
+
     def test_nine_months_apart(self):
         divs = _divs(["2025-09-10", "2026-06-10"])
         rows = [_trade("2025-08-01", "ZZA.TO", 100),

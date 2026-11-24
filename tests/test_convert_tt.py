@@ -135,5 +135,149 @@ INTEREST 2025-01-02 09:30:00 USD 385.77000
                 )
 
 
+class TestJsonReadAsEveryToolReadsIt(unittest.TestCase):
+    """TJ-5035: the JSON-to-.tt writer read the book with its own json.load:
+    a BUYSELL with no net_amount became a .tt line with a total of
+    0.00000 (read back as a purchase at no cost, with only a total
+    mismatch warning), and a BOM or a `#` comment, which every other
+    tool reads, was a JSONDecodeError."""
+
+    _ROW = {"action": "BUYSELL", "date": "2025-02-03", "time": "10:00:00",
+            "date_settle": "2025-02-03", "symbol": "QZRX.TO",
+            "quantity": 10, "price": 10, "net_amount": 100,
+            "currency": "CAD", "account": "margin"}
+
+    def _file(self, text, bom=False):
+        from _tmpfiles import private_tmpfile
+        with private_tmpfile("wb", suffix=".json", delete=False) as f:
+            f.write((b"\xef\xbb\xbf" if bom else b"") + text.encode())
+        return Path(f.name)
+
+    def test_a_trade_with_no_amount_is_refused(self):
+        from taxjson.lib.cli_diag import InputContentError
+        # What its line carried: a quantity of 0 beside the row's total,
+        # or a total of 0.
+        for drop, wrote in (("net_amount", "a total of 0, read as a cost"),
+                            ("quantity", "a quantity of 0 beside the "
+                                         "row's total")):
+            with self.subTest(missing=drop):
+                row = {k: v for k, v in self._ROW.items() if k != drop}
+                p = self._file(json.dumps({"transactions": [row]}))
+                with self.assertRaises(InputContentError) as cm:
+                    list(json_to_tt_lines(p))
+                msg = str(cm.exception)
+                self.assertIn(f"required field(s) {drop} missing", msg)
+                self.assertIn(f"would carry {wrote}", msg)
+                self.assertIn(str(p), msg)
+                self.assertIn("nothing was written", msg)
+        # An explicit 0 is an amount: written as it is.
+        p = self._file(json.dumps({"transactions": [dict(self._ROW,
+                                                         net_amount=0)]}))
+        line, = json_to_tt_lines(p)
+        self.assertIn(" 0.00000 ", line)
+
+    def test_bom_and_comments_read_as_the_loader_reads_them(self):
+        plain = list(json_to_tt_lines(self._file(json.dumps(
+            {"transactions": [self._ROW]}))))
+        self.assertEqual(len(plain), 1)
+        text = ("# a note\n" + json.dumps({"transactions": [self._ROW]})
+                + "  # trailing\n")
+        for bom in (False, True):
+            with self.subTest(bom=bom):
+                self.assertEqual(list(json_to_tt_lines(
+                    self._file(text, bom=bom))), plain)
+
+    def test_the_tool_refuses_in_one_line(self):
+        import contextlib
+        import io
+        from unittest import mock
+        from taxjson.bin import taxjson_convert_tt
+        row = {k: v for k, v in self._ROW.items() if k != "net_amount"}
+        p = self._file(json.dumps({"transactions": [row]}))
+        out = p.with_name("out.tt")
+        err = io.StringIO()
+        with mock.patch("sys.argv", ["taxjson-convert-tt", str(p),
+                                     str(out), "--date-basis", "settle"]), \
+                contextlib.redirect_stderr(err), \
+                self.assertRaises(SystemExit) as cm:
+            taxjson_convert_tt.main()
+        # The tool's refusal of an input it cannot convert (a malformed
+        # .tt line's too).
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("taxjson-convert-tt: error:", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
+        self.assertFalse(out.exists())
+
+    def test_a_book_it_cannot_read_exits_2(self):
+        # TJ-5154: a book that is not valid JSON (and, since TJ-5035, one
+        # that is not UTF-8) is an input that cannot be read: exit 2, as
+        # docs/commands.md's exit table gives it, naming the file; a row
+        # it cannot convert stays exit 1 (test_the_tool_refuses_in_one_line).
+        import contextlib
+        import io
+        from unittest import mock
+        from taxjson.bin import taxjson_convert_tt
+        for raw, says in ((b'{"transactions": [', "Expecting value"),
+                          (b'{"transactions": [{"symbol": "QZ\xe9.TO"}]}',
+                           "not UTF-8")):
+            for basis in ([], ["--date-basis", "settle"]):
+                with self.subTest(says=says, basis=basis):
+                    from _tmpfiles import private_tmpfile
+                    with private_tmpfile("wb", suffix=".json",
+                                         delete=False) as f:
+                        f.write(raw)
+                    p = Path(f.name)
+                    out = p.with_name("out.tt")
+                    err = io.StringIO()
+                    with mock.patch("sys.argv", ["taxjson-convert-tt",
+                                                 str(p), str(out), *basis]), \
+                            contextlib.redirect_stderr(err), \
+                            self.assertRaises(SystemExit) as cm:
+                        taxjson_convert_tt.main()
+                    self.assertEqual(cm.exception.code, 2, err.getvalue())
+                    self.assertIn("taxjson-convert-tt: error:", err.getvalue())
+                    self.assertIn(says, err.getvalue())
+                    self.assertIn(p.name, err.getvalue())
+                    self.assertNotIn("Traceback", err.getvalue())
+                    self.assertFalse(out.exists())
+
+    def test_the_tool_with_no_date_basis_reads_it_alike(self):
+        # TJ-5151: outside a project and with no --date-basis, the tool
+        # read the book itself to see whether one is needed: a BOM or a
+        # `#` comment was "Unexpected UTF-8 BOM" / "Expecting value".
+        import contextlib
+        import io
+        from unittest import mock
+        from taxjson.bin import taxjson_convert_tt
+        plain = list(json_to_tt_lines(self._file(json.dumps(
+            {"transactions": [self._ROW]}))))
+        two = dict(self._ROW, date_settle="2025-02-05")
+        for rows, bom, code in (([self._ROW], True, None),
+                                ([self._ROW], False, None),
+                                ([two], True, 2)):
+            with self.subTest(bom=bom, two_dates=code is not None):
+                p = self._file("# a note\n" + json.dumps(
+                    {"transactions": rows}) + "\n", bom=bom)
+                self.assertFalse((p.parent / "taxjson.toml").exists())
+                out = p.with_name("out.tt")
+                err = io.StringIO()
+                with mock.patch("sys.argv", ["taxjson-convert-tt", str(p),
+                                             str(out)]), \
+                        contextlib.redirect_stderr(err):
+                    try:
+                        taxjson_convert_tt.main()
+                        got = None
+                    except SystemExit as e:
+                        got = e.code
+                self.assertEqual(got, code, err.getvalue())
+                self.assertNotIn("BOM", err.getvalue())
+                self.assertNotIn("Expecting value", err.getvalue())
+                if code is None:
+                    self.assertEqual(out.read_text().splitlines(), plain)
+                else:
+                    self.assertIn("pass --date-basis", err.getvalue())
+                    self.assertFalse(out.exists())
+
+
 if __name__ == '__main__':
     unittest.main()

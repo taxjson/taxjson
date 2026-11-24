@@ -1169,12 +1169,14 @@ def _sum_return_ca(d: Doc,
             and _fx_note.get("status") == "computed"):
         _acts.append(_out.act(
             f"FX on foreign cash (line 15300), not in the rows: "
-            f"reportable {money(_fx_note['reportable'])}",
+            f"reportable {money(_fx_note['reportable'])}"
+            + (f"; {_fx_note['warned']}" if _fx_note.get("warned") else ""),
             "tjs fx-cash"))
     elif _fx_note.get("ledger") == "v2":
         _acts.append(_out.act("FX on foreign cash (line 15300): "
-                              "not computed, not in the rows",
-                              "tjs fx-cash"))
+                              "not computed, not in the rows"
+                              + (f"; {_fx_note['warned']}" if _fx_note.get("warned")
+                                 else ""), "tjs fx-cash"))
     elif _fx_note.get("active"):
         _acts.append(_out.act("FX on foreign cash (line 15300): "
                               "not in the rows; its estimate is "
@@ -2305,7 +2307,16 @@ def _carry_back_or_warn(root: Optional[Path], cfg: Dict[str, Any], year: Any,
                   f"{left_out_text(left_out)}", prog=_cmd_prog(),
                   details=["`tjs close-year` stops on this until they have a "
                            "cost, or locks the split with --force."])
-    return cb._replace(amount=min(cb.amount, unused))
+    for _h in cb.not_in_nets or []:
+        # Not "carry-back of this year's loss": `tjs close-year` relays this
+        # one, where `tjs carryover` used to refuse the entries (TJ-4886).
+        from taxjson.lib.carry_back import not_in_nets_text
+        _out.warn(f"the balance carried in and [carryover] carried_back differ "
+                  f"on these books' nets (`tjs carryover`): "
+                  f"{not_in_nets_text(_h)}", prog=_cmd_prog())
+    from taxjson.lib.carry_back import trim_to
+    back = min(cb.amount, unused)
+    return cb._replace(amount=back, to=trim_to(cb.to, back) or None)
 
 
 def _left_out_shown(root: Optional[Path], cfg: Dict[str, Any], year: Any,
@@ -2359,11 +2370,25 @@ def _unused_losses_line(root: Optional[Path], cfg: Dict[str, Any], year: Any,
     if cb.amount > 0.005:
         return (f"  Unused capital losses:{gap}{money(unused - cb.amount)}"
                 f"{gap}(carry forward; {money(cb.amount)} carried back: "
-                f"[carryover] claimed, T1A){left_out}")
+                f"[carryover] claimed, T1A){_by_year_line(cb)}{left_out}")
     if unused:
         return (f"  Unused capital losses:{gap}{money(unused)}{gap}"
                 f"(carry forward){left_out}")
     return filed or None    # no loss in the books, one in the return (TJ-1496)
+
+
+def _by_year_line(cb: CarryBack) -> str:
+    """The years the carry-back goes to, on a line of its own, when the T1A
+    has a choice to make or the person made it: the ledger's proposal (the
+    oldest [carryover] claimed year first, another split open) or their
+    by-target [carryover] carried_back entry; "" otherwise (backlog TJ-4882)."""
+    from taxjson.lib.carry_back import split_text
+    if not cb.to or not (cb.to_split or len(cb.to) > 1):
+        return ""
+    return (f"\n    T1A carry-back by year: {split_text(cb.to)}"
+            + (" ([carryover] carried_back)" if cb.to_split == "entry" else
+               " (proposed, the oldest claimed year first: `tjs carryover "
+               "--details`)" if cb.to_split else ""))
 
 
 def _add_carry_back_split(root: Optional[Path], cfg: Dict[str, Any],
@@ -2372,7 +2397,12 @@ def _add_carry_back_split(root: Optional[Path], cfg: Dict[str, Any],
     When the ledger could not be used they are left out, not 0, and
     `carry_back_unknown` says why: close-year's lock reads them (backlog
     TJ-1422, TJ-1472). `carry_back_incomplete`: the ledger left sales out, and
-    close-year stops on it (backlog TJ-1436)."""
+    close-year stops on it (backlog TJ-1436). `losses_carried_back_to`: the
+    carry-back by the year it goes to, with `carry_back_split` ("oldest_first":
+    the ledger's proposal, another split open; "entry": [carryover]
+    carried_back says it) and `carry_back_stated_to` (the earlier years'
+    carry-backs whose years the person gave), which the lock records (backlog
+    TJ-4882)."""
     cb = _carry_back_or_warn(root, cfg, year, est)
     if cb.unknown:
         est["carry_back_unknown"] = cb.unknown
@@ -2384,6 +2414,14 @@ def _add_carry_back_split(root: Optional[Path], cfg: Dict[str, Any],
         est["carry_back_incomplete"] = cb.incomplete
     if cb.stated:
         est["carry_back_stated"] = cb.stated
+    if cb.to:
+        est["losses_carried_back_to"] = cb.to
+    if cb.to_split:
+        est["carry_back_split"] = cb.to_split
+    if cb.stated_to:
+        est["carry_back_stated_to"] = cb.stated_to
+    if cb.not_in_nets:
+        est["carried_in_not_in_nets"] = cb.not_in_nets
     ncl = _own_filed_lock(root, cfg, year)
     if ncl and "filed_gain" in ncl:
         # These figures are the books'. What the lock holds, beside them.
@@ -2439,6 +2477,12 @@ def _fx_cash_v2_status(root: Path, cache: Path) -> Dict[str, Any]:
           "headline": V2.headline(doc, verdict),
           "reasons": [p["text"] for p in doc["problems"]],
           "problems": doc["problems"], "year": year, "currency": base}
+    # (How many warnings, for the `tjs sum` line: said where the report
+    # of the last run holds them, else `tjs fx-cash` shows them.)
+    warned = V2.warned(
+        doc, "reports/fx_cash.rpt" if (Path(root) / "reports" / "fx_cash.rpt").is_file() else "")
+    if warned:      # (the key only with warnings: the status's shape as it was)
+        st["warned"] = warned
     if verdict is not None:
         st.update(net_gain=doc["net_gain"],
                   reportable=verdict["reportable"], rule=verdict["rule"],

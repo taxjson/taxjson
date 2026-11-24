@@ -202,9 +202,11 @@ def gain_matches(g, args) -> bool:
         return False
     date_key = 'date_settle' if args.tax_date == 'settle' else 'date'
     effective_date = g.get(date_key) or g.get('date', '')
-    # Case-insensitive, like `tjs audit` and buy-check (S029-19).
+    # Case-insensitive, like `tjs audit` and buy-check (S029-19); a
+    # future's `/` or `\` prefix is `F:` (lib/futures_prefixes, TJ-5150).
+    from taxjson.lib.futures_prefixes import canonical_futures_symbol
     if args.symbol and not str(g.get('symbol') or '').upper().startswith(
-            args.symbol.upper()):
+            canonical_futures_symbol(args.symbol.upper())):
         return False
     if args.date and effective_date != args.date:
         return False

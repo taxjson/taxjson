@@ -70,6 +70,7 @@ from taxjson.project.accounts import accounts_of, typed_account
 from taxjson.project.toml_io import parse_toml
 from taxjson.project.settings import settings_of
 from taxjson.lib import project_layout as _PL
+from taxjson.lib.futures_prefixes import canonical_futures_symbol
 from taxjson.lib.json_contract import SCHEMAS
 from taxjson.model import money as M
 
@@ -549,6 +550,16 @@ def load_slips_file(path: Path, cfg: Dict[str, Any], year: Optional[int]
     return slips, reports, avg
 
 
+def _slip_sym(sym: str, where: str) -> str:
+    """A slip's symbol as the books spell it (a future's `/` or `\\`
+    prefix `F:`: lib/futures_prefixes, backlog TJ-5150); one that names
+    no contract (`//QZM26.US`) refuses the entry, naming it."""
+    try:
+        return canonical_futures_symbol(sym)
+    except ValueError as e:
+        raise SlipsError(f"{where}: {e}") from None
+
+
 def _slip_from_table(t: Any, where: str, accounts: Dict[str, Any]) -> Slip:
     if not isinstance(t, dict):
         raise SlipsError(f"{where}: not a table")
@@ -611,7 +622,9 @@ def _slip_from_table(t: Any, where: str, accounts: Dict[str, Any]) -> Slip:
         cat = BOX_CAT[typ].get(box)
         if cat:
             amounts[cat] = amounts.get(cat, 0.0) + f
-    sec = str(t.get("security") or "").strip()
+    # A future's `/` or `\` prefix is `F:`, as the books spell it
+    # (lib/futures_prefixes, backlog TJ-5150).
+    sec = _slip_sym(str(t.get("security") or "").strip(), where)
     lines: List[Line] = []
     for j, ln in enumerate(t.get("line") or [], 1):
         w = f"{where} line #{j}"
@@ -621,7 +634,8 @@ def _slip_from_table(t: Any, where: str, accounts: Dict[str, Any]) -> Slip:
         if bad:
             raise SlipsError(f"{w}: unknown key(s) {', '.join(bad)} "
                              f"(known: {', '.join(sorted(_LINE_KEYS))})")
-        sym = str(ln.get("symbol") or "").strip().upper()
+        sym = _slip_sym(
+            str(ln.get("symbol") or "").strip().upper(), w)
         if not sym:
             raise SlipsError(f"{w}: symbol is required (as the books "
                              f"spell it, or its root)")

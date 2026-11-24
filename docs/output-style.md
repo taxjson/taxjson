@@ -363,8 +363,7 @@ run builds every stage, so each step is said every run):
 | `==> Checking the filed years` | filed/ locks exist |
 | `==> Calculating FX gains on cash (fx_cash_gains = true)` | opted in |
 | `==> Done. Reports are in reports/` | the run finished |
-| `==> Checking positions against the broker's holdings files` | `holdings` configured (one message per finding; `tjs sanity` has the tables) |
-| `==> Before you trust these numbers (docs/getting-started.md, step 5)` | something is incomplete: a `Warning:` per number the totals miss, a `Warning:` per parser warning marked for the list (a booking to check against the statement), an `Info:` per check not made, `Info: Then run tjs checklist ...` |
+| `==> Before you trust these numbers (docs/getting-started.md, step 5)` | something is incomplete: a `Warning:` per number the totals miss, a `Warning:` per parser warning marked for the list (a booking to check against the statement), an `Info:` per check not made (with holdings files, `Info: positions not yet compared with the broker's holdings files — tjs sanity`: the run compares nothing, `tjs sanity` is a step of its own; kept by the six-line fold, as a `Warning:` is; the heading names step 6 when its lines are only about the broker's holdings: this one, the accounts with no holdings file), `Info: Then run tjs checklist ...` |
 
 ## Numbers, dates
 

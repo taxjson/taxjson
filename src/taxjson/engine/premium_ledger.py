@@ -9,9 +9,11 @@ from taxjson.lib.stage_msg import emit_line
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple, TypeAlias
 
 from taxjson.model import money as M
-from taxjson.lib.option_symbols import exercise_target, is_option_symbol, parse_option_strike
+from taxjson.lib.option_symbols import (
+    exercise_target, is_option_symbol, parse_option_strike, parse_option_underlying,
+)
 from taxjson.lib.row_types import is_opening_row
-from taxjson.model.evidence import parse_cut_leg, split_cut_legs
+from taxjson.model.evidence import cut_leg_symbol, parse_cut_leg, split_cut_legs
 
 from taxjson.engine.assign import (
     _MARKED_LEG_MAX_LAG_DAYS, _ASSIGN_LEG_LEAD_DAYS, _assign_delivery_shares, _assign_direction,
@@ -115,7 +117,10 @@ class _AssignPremiumLedger:
     TJ-0962) — unless its own leg dated after the snapshot is marked, or
     is a purchase at the strike the snapshot is too small to hold, which
     then does not hold it, unless the snapshot replaced the delivery's
-    row (TJ-1167, TJ-1297, TJ-1332)."""
+    row (TJ-1167, TJ-1297, TJ-1332). So does an assignment whose
+    delivery, under the underlying's name of that day, a snapshot of the
+    symbol it was renamed to replaced (`_renamed_into_snapshot`,
+    TJ-5005)."""
 
     def __init__(self, stream: Iterable[TaxTransaction],
                  is_leg: Callable[[TaxTransaction], bool],
@@ -130,6 +135,15 @@ class _AssignPremiumLedger:
         self._snap: Dict[_LegKey, str] = {}
         self._snap_qty: Dict[_LegKey, float] = {}
         self._snap_cut: Dict[_LegKey, List[str]] = {}
+        # The share rows a snapshot of ANOTHER symbol replaced, by the
+        # (account, symbol) they were under: a rename made them the
+        # snapshot's (lib/opening `_note_cut_legs`; TJ-5005).
+        # Each is [snapshot day, the leg unread, its shares no exercise
+        # has claimed yet (None: unread), the snapshot's symbol]: one
+        # exercise claims a leg's shares, never two. `_renamed_held`: each exercise's verdict,
+        # by the option row (its id), made once.
+        self._snap_was: Dict[_LegKey, List[List[Any]]] = {}
+        self._renamed_held: Dict[Any, bool] = {}
         self._kept_days: Dict[_LegKey, List[str]] = {}
         # A stock row by its id (a paired leg dated after a snapshot,
         # _delivered_after_snapshot; TJ-1167).
@@ -145,7 +159,12 @@ class _AssignPremiumLedger:
                 self._snap_qty[k] = (self._snap_qty.get(k, 0.0)
                                      + float(t.quantity or 0.0))
                 for leg in split_cut_legs(t.opening_cut_legs):
-                    self._snap_cut.setdefault(k, []).append(leg)
+                    was = cut_leg_symbol(leg)
+                    if was:
+                        self._snap_was.setdefault((t.account, was), []).append(
+                            [(t.date or '')[:10], leg, None, t.symbol])
+                    else:
+                        self._snap_cut.setdefault(k, []).append(leg)
             elif (t.action in ('BUYSELL', 'ASSIGN')
                     and not is_option_symbol(t.symbol)):
                 self._kept_days.setdefault((t.account, t.symbol), []).append(
@@ -201,6 +220,9 @@ class _AssignPremiumLedger:
         key = (opt_tx.account, underlying)
         if (self._in_snapshot(key, (opt_tx.date or '')[:10])
                 and not self._delivered_after_snapshot(opt_tx, key)):
+            self._say_amount_on_delivered_row(opt_tx, underlying)
+            return
+        if self._renamed_into_snapshot(opt_tx, key):
             return
         lst = self._e.setdefault(key, [])
         for e in lst:
@@ -233,6 +255,195 @@ class _AssignPremiumLedger:
             return False
         return not any(day <= d <= snap
                        for d in self._kept_days.get(key, ()))
+
+    def _say_amount_on_delivered_row(self, opt_tx: TaxTransaction,
+                                     snapshot_of: str) -> None:
+        """An exercise or assignment row that carries an amount beyond its
+        fee, booked as DELIVERED into shares an opening snapshot holds:
+        nothing more is booked for it, so if the amount was a cash
+        settlement its gain or loss is in no row. The row's cash cannot
+        tell a settlement from a commission or cash in lieu (owner,
+        2026-11-23: read as delivered, as before, and said): one
+        ATTENTION a row, with both readings and what settles each."""
+        net = abs(M.of(opt_tx.net_amount or 0.0))
+        if (net < M.of(0.005)
+                or abs(net - abs(M.of(opt_tx.fee or 0.0))) < M.of(0.005)):
+            return                      # no amount, or its fee alone
+        memo = ('amount', opt_tx.id if opt_tx.id is not None else id(opt_tx))
+        if memo in self._renamed_held:
+            return
+        self._renamed_held[memo] = True
+        emit_line(
+            f"warning: ATTENTION: {opt_tx.symbol}: the exercise or "
+            f"assignment row of {(opt_tx.date or '')[:10]} carries "
+            f"{M.shown(net, 2):,.2f} {opt_tx.currency or ''} and is booked "
+            f"as DELIVERED: its shares are in the opening snapshot of "
+            f"{snapshot_of}, whose cost is taken to hold the premium, so "
+            f"nothing more is booked for the row and that amount is in no "
+            f"gain. If shares were delivered, write the row with no "
+            f"amount (a charge or cash in lieu as a row of its own). If "
+            f"it was settled in cash, write it as a closing BUYSELL of "
+            f"the option at the settlement amount: an ASSIGN row is read "
+            f"as a delivery where its underlying trades as stock.")
+
+    def renamed_delivery_underlying(self, opt_tx: TaxTransaction) -> Optional[str]:
+        """The underlying an exercise or assignment names (its option
+        root, or a warrant's exercise target) when a snapshot of the
+        symbol it was renamed to replaced its delivery
+        (`_renamed_into_snapshot`), else None. For the engines' walks:
+        such an exercise is a delivery whose premium the snapshot's cost
+        holds, never a cash settlement, though no stock row of the old
+        name is left in the books for the engines' resolver to find
+        (TJ-5005)."""
+        und = exercise_target(opt_tx) or parse_option_underlying(opt_tx.symbol)
+        if und and self._renamed_into_snapshot(opt_tx, (opt_tx.account, und)):
+            return und
+        return None
+
+    def _renamed_into_snapshot(self, opt_tx: TaxTransaction, key: _LegKey) -> bool:
+        """Did an OPENING snapshot of the symbol `key`'s underlying was
+        renamed to replace this assignment's delivery? The option names
+        the underlying of its day, and so does the delivery: a snapshot
+        after the rename is of the new symbol, which `_in_snapshot` does
+        not find, so the premium the snapshot's cost already holds was
+        staged under the old name and taken by a later, unrelated
+        purchase under that name, or realized on the option as a cash
+        settlement when no row of the old name was left (TJ-5005, the
+        branch TJ-0962 left open).
+
+        The delivery is among the share rows the snapshot replaced under
+        the old name (`_snap_was`), with the guards of the same-symbol
+        case: the exercise is dated on or before the snapshot
+        (`_in_snapshot`); the row is in the assignment's direction and
+        pairing window, and is marked ASSIGN or at the strike
+        (`_delivery_cut`); the rows come to the shares it delivers (one
+        row when its size is unknown), and those shares are claimed: a
+        row is one exercise's delivery, never a second one's. Not when a
+        marked delivery of its own is still in the books: that row takes
+        the premium (TJ-1167). The verdict is made once for an exercise
+        (the walks ask again). Rows in the window that are neither
+        marked nor at the strike are not taken for the delivery, and the
+        run says which row to mark."""
+        memo = opt_tx.id if opt_tx.id is not None else id(opt_tx)
+        if memo not in self._renamed_held:
+            self._renamed_held[memo] = self._claim_renamed_cut(opt_tx, key)
+        return self._renamed_held[memo]
+
+    def _claim_renamed_cut(self, opt_tx: TaxTransaction, key: _LegKey) -> bool:
+        """`_renamed_into_snapshot`'s verdict, claiming the cut rows'
+        shares when it is yes."""
+        cut = self._snap_was.get(key)
+        if not cut or any(
+                leg is not None and leg.action == 'ASSIGN'
+                for leg in map(self._leg_row.get,
+                               self._pairs.get(opt_tx.id, ()))):
+            return False
+        day = (opt_tx.date or '')[:10]
+        d = self._direction(opt_tx)
+        size = _assign_delivery_shares(opt_tx)
+        strike = (None if exercise_target(opt_tx) or size is None
+                  else parse_option_strike(opt_tx.symbol))
+
+        def at_strike(px: Decimal) -> bool:
+            return bool(strike and abs(px - M.of(strike))
+                        <= M.of(max(0.005, 1e-6 * strike)))
+        marked: List[List[Any]] = []
+        priced: List[List[Any]] = []
+        plain = ''
+        for entry in cut:
+            snap, raw, left = entry[:3]
+            leg = parse_cut_leg(raw)
+            qty = float(leg.quantity)
+            if left is None:
+                entry[2] = left = abs(qty)
+            gap = _day_gap(leg.date, day)
+            if (not day or day > snap or left <= 1e-9 or gap is None
+                    or gap > (_ASSIGN_LEG_LEAD_DAYS if leg.date < day
+                              else _MARKED_LEG_MAX_LAG_DAYS)
+                    or (d is not None and (1 if qty > 0 else -1) != d)):
+                continue
+            if leg.action == 'ASSIGN':
+                marked.append(entry)
+            elif at_strike(M.of(leg.price)):
+                priced.append(entry)
+            else:
+                plain = plain or leg.date
+        fit = marked + priced
+        have = sum(e[2] for e in fit)
+        enough = bool(fit) and (not size or have >= size - 1e-6)
+        by_mark = bool(marked) and (
+            not size or sum(e[2] for e in marked) >= size - 1e-6)
+        later = (None if by_mark or not enough
+                 else self._row_after_renamed_snapshot(opt_tx, fit, d, at_strike))
+        if enough and later is None:
+            need = size or fit[0][2]
+            for e in fit:
+                took = min(need, e[2])
+                e[2] -= took
+                need -= took
+                if need <= 1e-9:
+                    break
+            self._say_amount_on_delivered_row(
+                opt_tx, f"{fit[0][3]} ({key[1]} renamed)")
+            return True
+        head = (f"{opt_tx.symbol}: exercised or assigned on {day}, and "
+                f"{key[1]} was renamed before an opening snapshot replaced "
+                f"its rows")
+        # What does settle it: the premium does not follow a rename to a
+        # row under the new name (the option names the old one: backlog
+        # TJ-5120), so marking that row is no remedy.
+        rewrite = (f"write the option under the renamed ticker "
+                   f"({later[2]}), and its premium rolls into that row"
+                   if later else "")
+        if later and later[0]:
+            emit_line(
+                f"warning: ATTENTION: {head}: its delivery, the ASSIGN row "
+                f"of {later[1]}, follows the snapshot under the new name "
+                f"{later[2]}. The option names {key[1]}, so its premium is "
+                f"not rolled into those shares: it stays on the option, as "
+                f"a cash settlement would. To roll it, {rewrite}.")
+        elif later or plain or fit:
+            why = (f"a replaced row at the strike and the row of {later[1]} "
+                   f"after the snapshot can each be its delivery" if later
+                   else f"the replaced rows marked ASSIGN or at the strike "
+                        f"come to {have:g} shares, fewer than it delivers"
+                   if fit else
+                   f"the replaced row of {plain} is neither marked ASSIGN "
+                   f"nor at the strike")
+            emit_line(
+                f"warning: ATTENTION: {head}: {why}, so the snapshot's cost "
+                f"is not taken to hold its premium. If a replaced row is "
+                f"its delivery, write that row as ASSIGN"
+                + (f"; if the row of {later[1]} is, write it as ASSIGN and "
+                   f"{rewrite}" if later else "") + ".")
+        return False
+
+    def _row_after_renamed_snapshot(self, opt_tx: TaxTransaction,
+                                    fit: List[List[Any]], d: Optional[int],
+                                    at_strike: Callable[[Decimal], bool]
+                                    ) -> Optional[Tuple[bool, str, str]]:
+        """A share row of the snapshot's (renamed) symbol dated after the
+        snapshot that can be this exercise's delivery instead of the
+        rows the snapshot replaced: in its direction and posting lag,
+        marked ASSIGN or at the strike: (is it marked, its day, its
+        symbol), a marked row first; None when there is none. A plain
+        row at the strike before the snapshot and another after it
+        cannot be told apart."""
+        day = (opt_tx.date or '')[:10]
+        found = None
+        for snap, sym in sorted({(e[0], e[3]) for e in fit}):
+            for (i, when, q) in self._legs.get((opt_tx.account, sym), ()):
+                gap = _day_gap(when[:10], day)
+                if (when[:10] <= snap or gap is None
+                        or gap > _MARKED_LEG_MAX_LAG_DAYS or abs(q) < 1e-12
+                        or (d is not None and (1 if q > 0 else -1) != d)):
+                    continue
+                row = self._leg_row.get(self._leg_id.get(i))
+                if row is not None and row.action == 'ASSIGN':
+                    return True, when[:10], sym
+                if at_strike(self._leg_px.get(i, _ZERO)):
+                    found = found or (False, when[:10], sym)
+        return found
 
     def _delivered_after_snapshot(self, opt_tx: TaxTransaction, key: _LegKey) -> bool:
         """Is one of this assignment's own legs dated after the snapshot

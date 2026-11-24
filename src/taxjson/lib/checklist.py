@@ -1034,6 +1034,65 @@ def _run_clean_inputs(ctx: Ctx, oldest_report: float) -> Tuple[bool, List[str]]:
     return False, []
 
 
+def _cash_id_conflicts(ctx: Ctx) -> List[str]:
+    """The run step's problems for a broker's id that two exports hold
+    on a cash event with different content (lib/cash_events
+    `id_conflicts`: the run's ATTENTION, the cash commands' refusal;
+    backlog TJ-5034, TJ-5221). None where the parse's sidecars cannot be
+    read (books older than the inputs: said by this step)."""
+    from taxjson.lib import cash_events as CE
+    try:
+        return CE.id_conflicts(ctx.root, ctx.cfg, ctx.settings.country, ctx.cache)
+    except (OSError, ValueError, LookupError, TypeError, AttributeError):
+        return []
+
+
+def _year_end_inexact(sums: List[Path]) -> List[str]:
+    """The run step's problem for the year-end positions the engine could
+    not read exactly on the project's tax_date (the ATTENTION lines in
+    the reports' DIAGNOSTICS, lib/stage_msg.YEAR_END_INEXACT; TJ-4984)."""
+    from taxjson.lib.stage_msg import YEAR_END_INEXACT
+    said: set[str] = set()
+    for s in sums:
+        try:
+            said.update(ln.strip()[len(YEAR_END_INEXACT):]
+                        for ln in s.read_text(encoding="utf-8", errors="replace").splitlines()
+                        if ln.strip().startswith(YEAR_END_INEXACT))
+        except OSError:
+            continue
+    if not said:
+        return []
+    return [f"{len(said)} year-end position(s) not exact on the project's "
+            f"tax_date ({'; '.join(sorted(said))}) — check each against the "
+            f"broker's December 31 statement (`run --strict` stops on them)"]
+
+
+def _undated_listing(cache: Path) -> List[str]:
+    """The run step's problem for the cost rows on a listing no dated row
+    of their statement shows held, the account's exports naming another
+    (the run's ATTENTION lines, lib/stage_msg.UNDATED_LISTING_GAIN, in
+    each account's work/<account>_listing_evidence.diag, which `tjs run
+    --account` writes too; TJ-5011, TJ-5201, TJ-5202): each row as its
+    line's first sentence names it."""
+    from taxjson.lib.stage_msg import UNDATED_LISTING_GAIN
+    said: List[str] = []
+    for p in sorted(cache.glob("*_listing_evidence.diag")):
+        try:
+            lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for ln in lines:
+            if ln.startswith(UNDATED_LISTING_GAIN):
+                head = ln[len(UNDATED_LISTING_GAIN):].split("). The books ")[0] + ")"
+                if head not in said:
+                    said.append(head)
+    if not said:
+        return []
+    return [f"{len(said)} cost row(s) on a listing no dated row shows held, "
+            f"where the account's exports name another ({'; '.join(said)}) "
+            f"— see the Warning of `tjs run` (`run --strict` stops on them)"]
+
+
 def d_run_clean(ctx: Ctx) -> Result:
     sums = sorted(ctx.reports.glob("*.sum")) if ctx.reports.is_dir() else []
     if not sums:
@@ -1110,7 +1169,7 @@ def d_run_clean(ctx: Ctx) -> Result:
             f"delete work/<name>_* and reports/<name>* (a renamed "
             f"account) or restore the account")
     stale, changed = _run_clean_inputs(ctx, oldest_report)
-    problems += changed
+    problems += changed + _year_end_inexact(sums) + _cash_id_conflicts(ctx) + _undated_listing(ctx.cache)
     # One export (or broker account) in two accounts: every row of it is
     # booked in both, and every figure counts it twice. The run warned
     # and this step said done (backlog TJ-0478). First: it moves every
@@ -1908,10 +1967,12 @@ def _sanity_differences(out: str) -> str:
 
 
 def d_sanity(ctx: Ctx) -> Result:
-    from taxjson.lib.holdings_dir import folder_for
+    """The step's verdict is `tjs sanity`'s own, run here (`--run`; a
+    plain `tjs checklist` shows the one it stored): `tjs run` compares
+    nothing with the holdings files, and writes no verdict of its own."""
+    from taxjson.lib.holdings_dir import in_use
     from taxjson.lib.report_model import resolve_gains_files
-    no_files = (not any(a.holdings for a in ctx.accounts.values())
-                and folder_for(ctx.root)[0] is None)
+    no_files = not in_use(ctx.root, ctx.accounts)
     if no_files:
         _hold = _PL.shown(_PL.holdings_folder(ctx.root), ctx.root)
         manual = Result("sanity", "manual",
@@ -3162,10 +3223,12 @@ def d_form_export(ctx: Ctx) -> Result:
 
 
 def _t1135_unresolved(rep: Dict[str, Any]) -> Result:
-    """The t1135 step while the ISIN and the listing of a holding
-    disagree on its being foreign property and the threshold test
-    depends on it (`tjs t1135 --json` `classification_status`
-    "unresolved"; backlog TJ-4956): neither "file it" nor done."""
+    """The t1135 step while a holding's being foreign property is open
+    (its sources disagree, an option's listing and its share do, or it
+    is a depositary receipt that is Canadian by its own ISIN) and
+    the threshold test depends on it (`tjs t1135 --json`
+    `classification_status` "unresolved"; backlog TJ-4956, TJ-4957):
+    neither "file it" nor done."""
     syms = [str(s) for s in rep.get("classification_unresolved_symbols")
             or []]
     over = rep.get("over_threshold_as_counted")
@@ -3174,13 +3237,43 @@ def _t1135_unresolved(rep: Dict[str, Any]) -> Result:
              if syms else "a holding")
     return Result("t1135", "attention",
                   f"the T1135 test is not resolved: {named} may "
-                  f"{'not ' if over else ''}be foreign property (ISIN and "
-                  f"listing disagree), and the result "
+                  f"{'not ' if over else ''}be foreign property (`tjs "
+                  f"t1135` says why), and the result "
                   f"({'over' if over else 'below'} the threshold as "
                   f"counted) depends on it — add the `T1135` "
                   f"line{'s' if len(syms) > 1 else ''} `tjs t1135` names "
                   f"to ticker.map, then `tjs run`",
                   cmd="tjs t1135")
+
+
+def _t1135_review(rep: Dict[str, Any]) -> Optional[Result]:
+    """The t1135 step while a security's country is named for review
+    (`tjs t1135 --json` `country_review`: sources that disagree, an
+    ISIN prefix no country has, a depositary receipt, a suffix no
+    market has): a `T1135` line settles each (backlog TJ-4957)."""
+    syms = [str(s) for s in rep.get("country_review_symbols") or []]
+    if not syms:
+        return None
+    return Result("t1135", "attention",
+                  f"{len(syms)} securit{'y' if len(syms) == 1 else 'ies'} "
+                  f"to review for the T1135's country: "
+                  f"{', '.join(syms[:2])}"
+                  f"{f' +{len(syms) - 2} more' if len(syms) > 2 else ''} — "
+                  f"add the `T1135` line `tjs t1135 --details` names for "
+                  f"each to ticker.map, then `tjs run`",
+                  cmd="tjs t1135 --details")
+
+
+def _t1135_assumed(rep: Dict[str, Any]) -> str:
+    """The t1135 step's word on the securities whose country is assumed
+    from their listing (no ISIN in the exports): counted in the detail,
+    never a reason for attention on its own, since most Canadian
+    brokers' exports carry no ISIN (backlog TJ-4957)."""
+    n = len(rep.get("assumed_symbols") or [])
+    if not n:
+        return ""
+    return (f"; {n} countr{'y' if n == 1 else 'ies'} assumed from the "
+            f"listing (`tjs t1135 --details`)")
 
 
 def d_t1135(ctx: Ctx) -> Result:
@@ -3201,10 +3294,20 @@ def d_t1135(ctx: Ctx) -> Result:
                       cmd="tjs t1135")
     if rep.get("classification_status") == "unresolved":
         return _t1135_unresolved(rep)
+    _rev = _t1135_review(rep)
     if rep.get("filing_required"):
+        # Over the threshold the filing comes first; what is to review
+        # (the country a row is under) is said beside it.
+        _n = len(rep.get("country_review_symbols") or [])
         return Result("t1135", "manual",
                       "cost of foreign property exceeded the threshold — file "
-                      "the T1135 (`tjs t1135` for the tables)")
+                      "the T1135 (`tjs t1135` for the tables)"
+                      + (f"; {_n} securit{'y' if _n == 1 else 'ies'} to "
+                         f"review for the country first (`tjs t1135 "
+                         f"--details`)" if _n else "")
+                      + _t1135_assumed(rep))
+    if _rev is not None:
+        return _rev
     # The cash an account holds outside Canada (tax-logic CA-RPT-20): a
     # cost the FX-on-cash ledger v2 could not give leaves the total
     # open, so below the line is no verdict (backlog TJ-0454).
@@ -3252,7 +3355,8 @@ def d_t1135(ctx: Ctx) -> Result:
                       f"below the CAD 100,000 threshold so far on these "
                       f"books (through {rep.get('as_of') or '?'}) — re-check "
                       f"after Dec 31; foreign property outside them (a "
-                      f"foreign bank account, cash) is not counted",
+                      f"foreign bank account, cash) is not counted"
+                      + _t1135_assumed(rep),
                       actionable=False)
     # An account's Canadian dollars the books give no balance of (CA-RPT-
     # 20): yours to add before the verdict stands.
@@ -3272,7 +3376,8 @@ def d_t1135(ctx: Ctx) -> Result:
     return Result("t1135", "done",
                   "below the CAD 100,000 threshold on these books — "
                   "foreign property outside them (a foreign bank account, "
-                  "cash) is not counted; add it if you hold any")
+                  "cash) is not counted; add it if you hold any"
+                  + _t1135_assumed(rep))
 
 
 def d_carryover(ctx: Ctx) -> Result:

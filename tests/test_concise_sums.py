@@ -122,7 +122,10 @@ class TestT1135(unittest.TestCase):
     def test_default_and_details(self):
         r = _run("canada", "t1135")
         self.assertEqual(r.returncode, 0, r.stderr)
-        assert_concise(self, r.stdout, r.stderr, budget=6,
+        # One line over the usual six: the count and cost of the
+        # countries assumed from the listing is a `! ` line of its own
+        # (TJ-4957), beside the two this book already has.
+        assert_concise(self, r.stdout, r.stderr, budget=7,
                        legend="Amounts are cost (ACB)")
         self.assertIn("Maximum total cost in 2024: ", r.stdout)
         # The crypto account's US dollars are a cash row (tax-logic

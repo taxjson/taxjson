@@ -32,12 +32,15 @@ row that changed it, lib/cost_timeline; backlog TJ-0417) is read day by
 day — every superficial loss denied in any year, every option premium and
 warrant cost, where the engine applied it.
 
-Domicile classification is by market suffix (.US → USA, .L → GBR,
-.AX → AUS; .TO/.V/.CN/.NE → Canadian, i.e. not SFP), overridable per symbol
-via `T1135 SYMBOL COUNTRY [CATEGORY]` lines in the project's ticker.map;
-each property's form category (1-6) is 6 for an option, a futures
-contract or crypto and 2 for any other listed security unless a line
-gives it:
+A security's country is decided in order, and each row says by which
+(lib/t1135_issuer): a `T1135 SYMBOL COUNTRY [CATEGORY]` line in the
+project's ticker.map; the ISIN an export gives it (its first two
+letters: where the issuer is registered) and tobase.map's issuer
+country; the same security's ISIN in another account; else, assumed,
+its market suffix (.US → USA, .L → GBR, .AX → AUS; .TO/.V/.CN/.NE →
+Canadian, i.e. not SFP). Each property's form category (1-6) is 6 for an
+option, a futures contract or crypto and 2 for any other listed security
+unless a line gives it:
 
     #     symbol  country  (ISO-3 code, or CA/CAN/CANADA/EXCLUDE to exclude)
     T1135 SAMPLW.US  CA       # interlisted Canadian corp held on NYSE — not SFP
@@ -89,6 +92,7 @@ from taxjson.model import money as M
 from taxjson.model.result import GainRow
 from taxjson.lib.exchange_rates import norm_currency
 from taxjson.lib import out as _out
+from taxjson.lib import t1135_issuer as _TI
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 # Filing threshold: ITA 233.3(1) "reporting entity" — SFP total cost more
@@ -99,10 +103,9 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 FILING_THRESHOLD = 100_000.0
 DETAILED_THRESHOLD = 250_000.0
 
-# Market suffix → ISO-3166 alpha-3 country of the exchange. This is the
-# 90% heuristic: domicile (what T1135 cares about) usually matches the
-# listing exchange for the retail case. Interlisted exceptions are
-# ticker.map T1135 lines.
+# Market suffix → ISO-3166 alpha-3 country of the exchange: the country
+# a security is ASSUMED to be of when no T1135 line and no ISIN says
+# (lib/t1135_issuer's last step).
 # The market data's one venue table (lib/markets); a Canadian exchange
 # is None — not specified foreign property (.VN was a '??' REVIEW here,
 # audit A2-1077).
@@ -119,8 +122,12 @@ _NON_CAPITAL = ("DIVIDEND", "DIVIDEND_IN_LIEU", "TAX", "INTEREST", "FEE",
 
 
 # Sentinel country code for symbols we cannot classify (an unknown market
-# suffix). Deliberately ugly so it reads as "review me".
+# suffix, or sources that disagree on the issuer's country:
+# lib/t1135_issuer). Deliberately ugly so it reads as "review me".
 REVIEW = "??"
+# The sources that read a country from an ISIN (lib/t1135_issuer): the
+# security's own export, or another account's of the same security.
+_ISIN_SOURCES = (_TI.ISIN, _TI.LEARNED)
 
 # The override COUNTRY vocabulary (S051-16) is lib/t1135_country's.
 # Bucket for suffix-less symbols — equity parsers always stamp a market
@@ -297,63 +304,36 @@ def classify_country(symbol: str,
     return CRYPTO
 
 
-def foreign_isin_symbols(rows: List[Dict[str, Any]],
-                         overrides: Dict[str, Optional[str]],
-                         user_keys: Any = ()) -> Dict[str, str]:
-    """{symbol: the issuer's country (ISO alpha-3, else as the ISIN
-    gives it)} of the shares a Canadian listing classifies as not
-    foreign property whose rows carry another country's ISIN (IB
-    stamps `issuer_country` on a dividend's or a return of capital's
-    row): a non-resident corporation's shares are specified foreign
+def _by_listing(symbol: str) -> Optional[str]:
+    """What a symbol's listing alone says (classify_country with no
+    line): the last step of a country's order, `assumed`
+    (lib/t1135_issuer; tax-logic CA-RPT-02)."""
+    return classify_country(symbol, {})
+
+
+def foreign_isin_symbols(decisions: List[Any]) -> Dict[str, str]:
+    """{symbol: country} of the shares on a Canadian listing that an
+    ISIN puts on the form (`decisions`: lib/t1135_issuer.Decision, the
+    year's): a non-resident corporation's shares are specified foreign
     property wherever they are listed (tax-logic CA-RPT-02; backlog
-    TJ-0455). A symbol a ticker.map T1135 line decides (`user_keys`)
-    is the user's, never named."""
-    from taxjson.lib.option_symbols import is_option_symbol
-    from taxjson.lib.t1135_country import iso3_of
-    out: Dict[str, str] = {}
-    for t in rows:
-        ic = str(t.get("issuer_country") or "").strip().upper()
-        sym = str(t.get("symbol") or "")
-        if (not ic or ic in ("CA", "CAN") or not sym or "." not in sym
-                or sym in out or sym in user_keys
-                or is_option_symbol(sym) or is_plain_future(sym)
-                or classify_country(sym, overrides) is not None):
-            continue
-        out[sym] = iso3_of(ic) or ic
-    return out
+    TJ-0455, TJ-4957). The ISIN decides; the report names them, with
+    the line to add by someone who knows otherwise."""
+    return {d.symbol: d.country for d in decisions
+            if d.source in _ISIN_SOURCES and d.listing is None
+            and d.country not in (None, REVIEW)}
 
 
-def issuer_mismatch_symbols(rows: List[Dict[str, Any]],
-                            overrides: Dict[str, Optional[str]],
-                            user_keys: Any = ()
-                            ) -> Dict[str, Tuple[str, Optional[str], str]]:
-    """{symbol: (the country it is counted under, the country its rows'
-    ISIN names as ISO alpha-3 or None when the prefix is no country's,
-    the prefix as stamped)} of the shares counted under one foreign
-    country whose rows carry another's ISIN (an Irish issuer on a US
-    exchange: `.US` says USA, IB's `issuer_country` IE; backlog
-    TJ-4958). Foreign property either way, so the total is the same:
-    what moves is the country its row is under. Named for a `T1135
-    SYMBOL COUNTRY` line, never reclassified from the ISIN (a prefix is
-    not a residence). Not named: a symbol a ticker.map T1135 line
-    decides (`user_keys`), a Canadian ISIN (canadian_issuer_symbols), a
-    symbol with no country (REVIEW, CRYPTO), an option, a futures
-    contract."""
-    from taxjson.lib.option_symbols import is_option_symbol
-    from taxjson.lib.t1135_country import iso3_of
-    out: Dict[str, Tuple[str, Optional[str], str]] = {}
-    for t in rows:
-        ic = str(t.get("issuer_country") or "").strip().upper()
-        sym = str(t.get("symbol") or "")
-        if (not ic or ic in ("CA", "CAN") or not sym or "." not in sym
-                or sym in out or sym in user_keys
-                or is_option_symbol(sym) or is_plain_future(sym)):
-            continue
-        counted = classify_country(sym, overrides)
-        if counted in (None, REVIEW, CRYPTO) or counted == iso3_of(ic):
-            continue
-        out[sym] = (counted, iso3_of(ic), ic)
-    return out
+def issuer_mismatch_symbols(decisions: List[Any]
+                            ) -> Dict[str, Tuple[str, Optional[str]]]:
+    """{symbol: (its listing's country, the country its ISIN decides:
+    ISO alpha-3, None for Canada, not foreign property)} of the shares
+    on a foreign listing whose ISIN names another country (an Irish
+    issuer on a US exchange, a Canadian one listed only in New York;
+    backlog TJ-4958, TJ-4957). Named like foreign_isin_symbols'."""
+    return {d.symbol: (str(d.listing), d.country) for d in decisions
+            if d.source in _ISIN_SOURCES
+            and d.listing not in (None, REVIEW, CRYPTO)
+            and d.country != REVIEW and d.country != d.listing}
 
 
 def property_category(symbol: str, categories: Dict[str, int],
@@ -1590,106 +1570,70 @@ def _custody_and_cash(custody: Optional[Dict[str, Optional[str]]],
     return cust, cash_pools
 
 
-def _renames(timeline: Dict[str, Any]
-             ) -> Tuple[Dict[str, Set[str]], Dict[str, Set[str]]]:
-    """The ticker changes of the engine's timeline, the ones walk_costs
-    carries an override over: ({new symbol: the symbols renamed to
-    it}, {old symbol: the symbols it was renamed to})."""
-    from taxjson.lib import cost_timeline as _CT
-    preds: Dict[str, Set[str]] = {}
-    succs: Dict[str, Set[str]] = {}
-    for r in _CT.rows(timeline):
-        old, new = str(r.get("symbol") or ""), str(r.get("renamed_to") or "")
-        if old and new and old != new:
-            preds.setdefault(new, set()).add(old)
-            succs.setdefault(old, set()).add(new)
-    return preds, succs
-
-
-def _reach(symbol: str, edges: Dict[str, Set[str]]) -> Set[str]:
-    """`symbol` and every symbol `edges` lead to from it."""
-    seen, todo = {symbol}, [symbol]
-    while todo:
-        for n in edges.get(todo.pop(), ()):
-            if n not in seen:
-                seen.add(n)
-                todo.append(n)
-    return seen
-
-
-def _decided(user_keys: Any, succs: Dict[str, Set[str]]) -> Set[str]:
-    """The symbols a ticker.map T1135 line decides: the line's own and,
-    as the override follows a ticker change (walk_costs' carry), every
-    symbol it was renamed to afterwards. A line for the old symbol is
-    not reopened by an ISIN on the new one."""
+def _row_symbols(rows: List[Dict[str, Any]]) -> Set[str]:
+    """Every symbol the rows name, a ticker change's new one too."""
     out: Set[str] = set()
-    for k in user_keys:
-        out |= _reach(k, succs)
+    for t in rows:
+        for k in ("symbol", "symbol_new"):
+            if t.get(k):
+                out.add(str(t[k]))
     return out
 
 
-def _first_symbols(symbol: str, preds: Dict[str, Set[str]]) -> List[str]:
-    """The symbol(s) the security of `symbol` first had in the books: a
-    T1135 line for them reaches `symbol` through every ticker change
-    (itself when it never changed; every symbol of a loop of
-    changes)."""
-    back = _reach(symbol, preds)
-    first = sorted(x for x in back if not preds.get(x))
-    return first or sorted(back)
+def _line_symbol(d: Any, holdings: Any) -> str:
+    """The symbol a security's T1135 lines are named on: its latest
+    one that no other security of the books ever had, else its latest.
+    A line decides the whole security through its ticker changes,
+    before and after, so one line covers the year; it also decides
+    every holding of its own symbol, which is why a ticker another
+    security had (bought again after the change, a merger partner) is
+    passed over (backlog TJ-4964 (b): the lines were once named on the
+    security's first symbol, `_first_symbols`, and a line carried
+    forward only, `_decided`)."""
+    def _last(sym: str) -> Tuple[str, str]:
+        legs = holdings.by_symbol.get(sym) or []
+        return (legs[-1].start if legs else "", sym)
+    names = sorted(d.symbols, key=_last)
+    return ([x for x in names if not holdings.shared(x)] or names)[-1]
 
 
-def _isin_conflict(symbol: str, counted: Optional[str],
-                   issuer: Optional[str], stamp: str, affects: str,
-                   preds: Dict[str, Set[str]], succs: Dict[str, Set[str]],
-                   listed: Optional[Dict[str, Optional[str]]] = None
-                   ) -> Dict[str, Any]:
-    """One `classification_conflicts` entry: `symbol`, counted under
-    `counted` (None: not foreign property), whose rows' ISIN prefix
-    `stamp` names `issuer` (ISO alpha-3, "CAN", or None when it is no
-    country's). `listed`: how each symbol of the security is counted
-    ({symbol: country, None for Canadian}; its `symbols`).
+def _isin_conflict(d: Any, holdings: Any) -> Dict[str, Any]:
+    """One `classification_conflicts` entry: a share whose country
+    nothing may be picked for (`d`, its lib/t1135_issuer.Decision;
+    `kind` its `review`: two ISINs or an ISIN and tobase.map that
+    disagree, an ISIN prefix no country has, two T1135 lines of one
+    security, one ticker two securities had in the year). Counted as
+    foreign property under `??` until a line decides it.
 
-    `lines`, each one the ticker.map parser accepts. A conflict that
-    moves the total (`affects` "total"): `foreign` and `not_foreign`,
-    both on the symbol the security first had, so either line decides
-    the whole year through its ticker changes — as counted may be
-    neither, when a change crossed from a Canadian listing to a foreign
-    one (`foreign` None when the ISIN's prefix gives no country to
-    write). One that is foreign either way ("country"): `as_counted`
-    and `other`, on the symbol. `_foreign` / `_canadian`: the lines as
-    overrides, what walk_as walks; `_chain`: every symbol of the
-    security."""
-    here = "CA" if counted is None else counted
+    `countries`: what the sources each say (CAN, ISO alpha-3; none for
+    a prefix that is no country's). `affects` "total" when one of them
+    is Canada (for a prefix of no country: when the listing is
+    Canadian), so the other reading takes it off the form: `lines`
+    `foreign` (None with no one country to write) and `not_foreign`,
+    each a line the ticker.map parser accepts, on `symbol`
+    (_line_symbol); `_foreign` / `_canadian` the same as overrides,
+    what walk_as walks; `_chain` every symbol of the security.
+    "country" when it is foreign property under each: `lines`
+    `choices`, any one of which settles it."""
+    sym = _line_symbol(d, holdings)
+    abroad = [g for g in d.given if g != _TI.CAN]
+    total = (_TI.CAN in d.given) if d.given else d.listing is None
     out: Dict[str, Any] = {
-        "symbol": symbol,
-        "counted_as": "CAN" if counted is None else counted,
-        "issuer_country": issuer,
-        "isin_country_code": stamp,
-        "affects": affects,
-        "held_in_year": affects != "total",
-        "_chain": _reach(symbol, preds) | _reach(symbol, succs),
-    }
-    if affects != "total":
-        out["lines"] = {
-            "as_counted": [f"T1135 {symbol} {here}"],
-            "other": (None if issuer is None
-                      else [f"T1135 {symbol} {issuer}"])}
+        "symbol": sym, "kind": d.review, "counted_as": REVIEW,
+        "issuer_country": None, "isin_country_code": d.prefix or None,
+        "countries": list(d.given),
+        "affects": "total" if total else "country",
+        "held_in_year": not total, "_chain": set(d.symbols) | {sym}}
+    if not total:
+        out["lines"] = {"choices": [f"T1135 {sym} {g}" for g in abroad]}
         return out
-    listed = listed or {symbol: counted}
-    first = _first_symbols(symbol, preds)
-    # The country a foreign reading is under: the ISIN's, else (a
-    # Canadian ISIN) the foreign listing's.
-    abroad = sorted(v for v in listed.values()
-                    if v not in (None, REVIEW, CRYPTO))
-    country = issuer if issuer != "CAN" else (abroad[0] if abroad else None)
-    out["symbols"] = {k: ("CAN" if v is None else v)
-                      for k, v in sorted(listed.items())}
+    country = abroad[0] if len(abroad) == 1 else None
+    out["symbols"] = {x: REVIEW for x in sorted(out["_chain"])}
     out["lines"] = {
-        "foreign": (None if country is None
-                    else [f"T1135 {x} {country}" for x in first]),
-        "not_foreign": [f"T1135 {x} CA" for x in first]}
-    out["_foreign"] = {x: country or REVIEW for x in first}
-    out["_canadian"] = {x: None for x in first}
+        "foreign": [f"T1135 {sym} {country}"] if country else None,
+        "not_foreign": [f"T1135 {sym} CA"]}
+    out["_foreign"] = {sym: country or REVIEW}
+    out["_canadian"] = {sym: None}
     return out
 
 
@@ -1700,23 +1644,22 @@ def _line(c: Dict[str, Any], which: str) -> str:
     meant to be)."""
     lines = (c.get("lines") or {}).get(which)
     if lines:
-        return " and ".join(f"`{x}`" for x in lines)
+        return " or ".join(f"`{x}`" for x in lines)
     return f"`T1135 {c['symbol']} COUNTRY`"
 
 
 def _line_note(c: Dict[str, Any], which: str) -> str:
     """What a reader needs to use _line's text: what COUNTRY stands
-    for, or that the line names the security's earlier symbol."""
-    lines = (c.get("lines") or {}).get(which)
-    if not lines:
-        return (f"COUNTRY: the issuer's country, its three-letter code; "
-                f"the ISIN's prefix {c.get('isin_country_code') or '?'} "
-                f"names no country")
-    old = sorted({x.split()[1] for x in lines} - {c["symbol"]})
-    if old:
-        return (f"{', '.join(old)}: {c['symbol']} before its ticker "
-                f"change")
-    return ""
+    for."""
+    if (c.get("lines") or {}).get(which):
+        return ""
+    if c.get("kind") == _TI.RECEIPT:
+        return ("COUNTRY: the country of the company behind the receipt, "
+                "its three-letter code")
+    return ("COUNTRY: the issuer's country, its three-letter code"
+            + (f"; the ISIN's prefix {c['isin_country_code']} names no "
+               f"country" if c.get("kind") == _TI.NO_COUNTRY
+               and c.get("isin_country_code") else ""))
 
 
 def _noted(text: str, *notes: str) -> str:
@@ -1724,151 +1667,164 @@ def _noted(text: str, *notes: str) -> str:
     return f"{text} ({'; '.join(kept)})" if kept else text
 
 
-def _issuer_conflicts(txs: List[Dict[str, Any]],
-                      overrides: Dict[str, Optional[str]], decided: Any,
-                      preds: Dict[str, Set[str]], succs: Dict[str, Set[str]]
-                      ) -> Tuple[List[str], Dict[str, str],
-                                 List[Dict[str, Any]]]:
-    """The symbols whose rows' ISIN (`issuer_country`) and listing
-    disagree on whether they are foreign property, each kind warned
-    about: (a Canadian ISIN on a foreign listing, counted as foreign;
-    {a foreign ISIN on a Canadian listing: its country}, counted as
-    Canadian; the `classification_conflicts` entries, one a security).
-    A security is a conflict too when its ISIN agrees with the symbol
-    that carries it and disagrees with a listing it had before or after
-    a ticker change. A symbol a ticker.map T1135 line decides
-    (`decided`: the line's, and what it was renamed to) is the
-    user's."""
-    from taxjson.lib.out import warn as _warn
-    from taxjson.lib.option_symbols import is_option_symbol
-    from taxjson.lib.t1135_country import iso3_of
-    stamps: Dict[str, str] = {}
-    for t in txs:
-        ic = str(t.get("issuer_country") or "").strip().upper()
-        sym = str(t.get("symbol") or "")
-        if ic and "." in sym and sym not in decided \
-                and not is_option_symbol(sym) and not is_plain_future(sym):
-            stamps.setdefault(sym, ic)
-    # A Canadian issuer on a foreign listing (its ISIN says CA — IB
-    # stamps issuer_country on the rows) is not specified foreign
-    # property, yet the listing suffix classifies it foreign. Named, not
-    # guessed: the user confirms with a `T1135 SYMBOL CA` line in ticker.map
-    # (re-audit A2-0332).
-    canadian_issuer = sorted({
-        str(t.get("symbol")) for t in txs
-        if str(t.get("issuer_country") or "").upper() == "CA"
-        and t.get("symbol") and t.get("symbol") not in decided
-        and classify_country(str(t.get("symbol")), overrides)
-        not in (None, CRYPTO)})
-    # The mirror case (backlog TJ-0455): a foreign issuer on a Canadian
-    # listing (its rows' ISIN names another country — a US corporation
-    # bought on the TSX) is specified foreign property wherever listed,
-    # yet the listing suffix classifies it Canadian, while the estimate
-    # takes its dividends as foreign from the same ISIN. Named with the
-    # line to add, not guessed; tobase.map's issuer country, when it
-    # knows the issuer, has already classified it (issuer_countries).
-    foreign_issuer = foreign_isin_symbols(txs, overrides, decided)
-    # One conflict a security: the symbol whose own listing disagrees
-    # first, then one whose ISIN disagrees with another listing of its
-    # chain only.
-    conflicts: List[Dict[str, Any]] = []
-    seen: Set[str] = set()
-    own = set(canadian_issuer) | set(foreign_issuer)
-    for sym in sorted(stamps, key=lambda x: (x not in own, x)):
-        if sym in seen:
+# The reviews that leave a share's country open (a conflict); a
+# depositary receipt is named and keeps its ISIN's country.
+_OPEN_REVIEWS = (_TI.NO_COUNTRY, _TI.DISAGREE, _TI.LINES_DISAGREE,
+                 _TI.REUSED)
+
+
+def _years(first: str, last: str) -> str:
+    return first[:4] if first[:4] == last[:4] else f"{first[:4]} to {last[:4]}"
+
+
+def _earlier_conflict(d: Any, holdings: Any) -> Dict[str, Any]:
+    """The `classification_conflicts` entry of a share whose ticker had
+    another holding (any account, any year) with an ISIN that says
+    otherwise on being foreign property (`kind` `earlier_holding`;
+    backlog TJ-5106): a ticker bought again after it was sold is not
+    taken for the same security, and its earlier ISIN is not thrown
+    away either. Counted as decided; the threshold test is walked the
+    other way too. `earlier`: those holdings ({account, country,
+    isin_country_code, first, last}: the days of their rows)."""
+    sym = d.symbol
+    here = _TI.CAN if d.country is None else d.country
+    abroad = (d.country if d.country is not None
+              else d.given[0] if len(d.given) == 1 else None)
+    return {
+        "symbol": sym, "kind": _TI.EARLIER, "counted_as": here,
+        "issuer_country": None, "isin_country_code": None,
+        "countries": list(d.given), "earlier": list(d.other),
+        "affects": "total", "held_in_year": False, "symbols": {sym: here},
+        "lines": {"foreign": [f"T1135 {sym} {abroad}"] if abroad else None,
+                  "not_foreign": [f"T1135 {sym} CA"]},
+        "_foreign": {sym: abroad or REVIEW}, "_canadian": {sym: None},
+        "_chain": {sym}}
+
+
+def _receipt_conflict(d: Any, holdings: Any) -> Dict[str, Any]:
+    """The `classification_conflicts` entry of a depositary receipt
+    that is not foreign property by its own ISIN (a Canadian issuer's
+    receipt for a foreign company's shares; one with no ISIN on a
+    Canadian listing too): its country stays the receipt's, off the
+    form as counted, and the threshold test is walked with it counted
+    as well, as an option against its share is (backlog TJ-5105). A
+    receipt whose ISIN is foreign is foreign property either way: named
+    for review, no entry."""
+    sym = _line_symbol(d, holdings)
+    return {
+        "symbol": sym, "kind": _TI.RECEIPT, "counted_as": _TI.CAN,
+        "issuer_country": None, "isin_country_code": d.prefix or None,
+        "countries": [_TI.CAN], "affects": "total", "held_in_year": False,
+        "symbols": {x: _TI.CAN for x in sorted(set(d.symbols) | {sym})},
+        "lines": {"foreign": None, "not_foreign": [f"T1135 {sym} CA"]},
+        "_foreign": {sym: REVIEW}, "_canadian": {sym: None},
+        "_chain": set(d.symbols) | {sym}}
+
+
+def _issuer_conflicts(countries: Any, symbols: Set[str], year: int
+                      ) -> List[Dict[str, Any]]:
+    """The year's shares whose country nothing may be picked for
+    (lib/t1135_issuer: sources of one rank disagree, or the ISIN's
+    prefix is no country's), one `classification_conflicts` entry a
+    security (_isin_conflict). An ISIN that disagrees with the listing
+    is no conflict: the ISIN decides (tax-logic CA-RPT-02; the interim
+    walk of TJ-4956 is these entries' now)."""
+    out: List[Dict[str, Any]] = []
+    seen: Set[Any] = set()
+    for s in sorted(symbols):
+        if not _TI.is_share(s) or not countries.h.in_year(s, year):
             continue
-        home = stamps[sym] in ("CA", "CAN")
-        chain = (_reach(sym, preds) | _reach(sym, succs)) - set(decided)
-        listed = {x: classify_country(x, overrides) for x in chain | {sym}
-                  if "." in x}
-        if not any((v is None) != home for v in listed.values()):
+        d = countries.decide(s)
+        key = frozenset(d.symbols)
+        if key in seen:
             continue
-        seen |= chain | {sym}
-        conflicts.append(_isin_conflict(
-            sym, listed[sym], "CAN" if home else iso3_of(stamps[sym]),
-            stamps[sym], "total", preds, succs, listed))
-    by = {c["symbol"]: c for c in conflicts}
-    down = [by[x] for x in canadian_issuer if x in by]
-    up = [by[x] for x in sorted(foreign_issuer) if x in by]
-    rest = [c for c in conflicts if c["symbol"] not in own]
-    if down:
-        _warn(f"{len(canadian_issuer)} symbol(s) on a foreign listing "
-              f"carry a Canadian ISIN: {', '.join(canadian_issuer[:6])}"
-              f"{' ...' if len(canadian_issuer) > 6 else ''}",
-              details=_dl(["Shares of a Canadian corporation are not "
-                           "specified foreign property (unless held with "
-                           "a custodian outside Canada: [accounts.NAME] "
-                           "custodian_country), but they are counted here "
-                           "by their listing — add "
-                           + _noted(_line(down[0], "not_foreign"),
-                                    _line_note(down[0], "not_foreign"))
-                           + f"{' (a line for each)' if len(down) > 1 else ''}"
-                           + " to ticker.map once confirmed."]))
-    if up:
-        _fi = sorted(foreign_issuer)
-        _warn(f"{len(_fi)} symbol(s) on a Canadian listing carry a "
-              f"foreign ISIN: "
-              + ", ".join(f"{x} ({_isin_words(by[x]) if x in by else foreign_issuer[x]})"
-                          for x in _fi[:6])
-              + f"{' ...' if len(_fi) > 6 else ''}",
-              details=_dl(["A non-resident corporation's shares are "
-                           "specified foreign property wherever they "
-                           "are listed, but they are counted here as "
-                           "Canadian by their listing — add "
-                           + _noted(_line(up[0], "foreign"),
-                                    _line_note(up[0], "foreign"))
-                           + f"{' (a line for each)' if len(up) > 1 else ''}"
-                           + " to ticker.map once confirmed, or "
-                           + _line(up[0], "not_foreign")
-                           + " for a corporation resident in Canada."]))
-    if rest:
-        _warn(f"{len(rest)} symbol(s) carry an ISIN that disagrees with "
-              f"a listing they had before or after a ticker change: "
-              + ", ".join(f"{c['symbol']} ({_isin_words(c)}; "
-                          + ", ".join(f"{k} counted under {v}" for k, v
-                                      in c["symbols"].items()) + ")"
-                          for c in rest[:6])
-              + f"{' ...' if len(rest) > 6 else ''}",
-              details=_dl(["One security through its ticker change, "
-                           "counted as foreign property under one symbol "
-                           "and not under the other — add "
-                           + _noted(_line(rest[0], "foreign"),
-                                    _line_note(rest[0], "foreign"))
-                           + " or " + _line(rest[0], "not_foreign")
-                           + f"{' (a line for each)' if len(rest) > 1 else ''}"
-                           + " to ticker.map once confirmed."]))
-    return canadian_issuer, foreign_issuer, conflicts
+        if d.review in _OPEN_REVIEWS:
+            seen.add(key)
+            out.append(_isin_conflict(d, countries.h))
+        elif d.review == _TI.RECEIPT and d.country is None:
+            seen.add(key)
+            out.append(_receipt_conflict(d, countries.h))
+        elif d.review == _TI.EARLIER:
+            out.append(_earlier_conflict(d, countries.h))
+    return out
 
 
 def _isin_words(c: Dict[str, Any]) -> str:
-    """The country a conflict's ISIN names, or that its prefix names
-    none."""
-    return c.get("issuer_country") or (
-        f"ISIN prefix {c.get('isin_country_code') or '?'}: no country")
+    """What is open in a conflict, in a few words."""
+    kind = c.get("kind")
+    if kind == "option":
+        return (f"its share {c.get('underlying')} is "
+                + ("not resolved" if c.get("issuer_country") is None
+                   else "not foreign property"
+                   if c.get("issuer_country") == _TI.CAN
+                   else "foreign property"))
+    if kind == _TI.NO_COUNTRY:
+        return f"ISIN prefix {c.get('isin_country_code') or '?'}: no country"
+    if kind == _TI.RECEIPT:
+        return ("a depositary receipt that is Canadian by its own ISIN: the "
+                "company behind it may be foreign")
+    if kind == _TI.EARLIER:
+        return ("another holding of the ticker carried an ISIN that says "
+                "otherwise: " + ", ".join(
+                    f"{e['country']} ({e['account']}, "
+                    f"{_years(e['first'], e['last'])})"
+                    for e in c.get("earlier") or []))
+    said = ", ".join(c.get("countries") or [])
+    if kind == _TI.LINES_DISAGREE:
+        return f"two T1135 lines of one security: {said}"
+    if kind == _TI.REUSED:
+        return f"one ticker, two securities in the year: {said}"
+    return f"its sources disagree: {said}"
 
 
-def _mismatch_conflicts(mismatch: Dict[str, Tuple[str, Optional[str], str]]
+def _mismatch_conflicts(countries: Any, symbols: Set[str], decided: Any,
+                        shares: List[Dict[str, Any]], year: int
                         ) -> List[Dict[str, Any]]:
-    """issuer_mismatch_symbols' symbols as `classification_conflicts`
-    entries, and their warning (TJ-4958)."""
-    out = [_isin_conflict(s, c, i, stamp, "country", {}, {})
-           for s, (c, i, stamp) in sorted(mismatch.items())]
-    if out:
-        from taxjson.lib.out import warn as _warn
-        _warn(f"{len(out)} symbol(s) counted under one foreign country "
-              f"carry another's ISIN: "
-              + ", ".join(f"{c['symbol']} ({_isin_words(c)}, counted "
-                          f"under {c['counted_as']})" for c in out[:6])
-              + f"{' ...' if len(out) > 6 else ''}",
-              details=_dl(["Foreign property under either country, so "
-                           "the total is the same; the country its row "
-                           "is under is the one counted. Add "
-                           + _noted(_line(out[0], "other"),
-                                    _line_note(out[0], "other"))
-                           + f"{' (a line for each)' if len(out) > 1 else ''}"
-                           + " to ticker.map once confirmed, or "
-                           + _line(out[0], "as_counted")
-                           + " to keep it."]))
+    """The listed options whose own listing and whose share disagree on
+    being foreign property, each a `classification_conflicts` entry of
+    its own (`kind` "option"; tax-logic CA-RPT-22; backlog TJ-4963). An
+    option keeps its listing's country; the threshold test is worked
+    out with it counted as its share is, too, and stands only when both
+    readings agree. An option of a share that is itself open (`shares`,
+    _issuer_conflicts' entries) is one as well: both are walked each
+    way. `decided`: the symbols a T1135 line decides (the line's own,
+    and what the walk carried it to), never named. An option that
+    expired before the year, an option on a future, and one whose
+    listing has no country are not."""
+    from taxjson.lib.option_symbols import (is_option_symbol,
+                                            parse_option_expiry,
+                                            parse_option_underlying)
+    open_ = {x: c for c in shares if c["affects"] == "total"
+             for x in c["_chain"]}
+    out: List[Dict[str, Any]] = []
+    for s in sorted(symbols):
+        if s in decided or "." not in s or not is_option_symbol(s) \
+                or (parse_option_expiry(s) or "9999") < f"{year}-01-01":
+            continue
+        und = parse_option_underlying(s) or ""
+        own = _by_listing(s)
+        if not _TI.is_share(und) or ":" in und or own in (REVIEW, CRYPTO):
+            continue
+        d = countries.decide(und)
+        if und not in open_ and (own is None) == (d.country is None):
+            continue
+        abroad = own or (d.country if d.country != REVIEW else None)
+        if abroad is None and und in open_:
+            ln = open_[und]["lines"].get("foreign")
+            abroad = ln[0].split()[2] if ln else None
+        here = _TI.CAN if own is None else own
+        out.append({
+            "symbol": s, "kind": "option", "underlying": und,
+            "counted_as": here,
+            "issuer_country": (None if d.country == REVIEW
+                               else _TI.CAN if d.country is None
+                               else d.country),
+            "isin_country_code": d.prefix or None, "affects": "total",
+            "held_in_year": False, "symbols": {s: here},
+            "lines": {"foreign": [f"T1135 {s} {abroad}"] if abroad else None,
+                      "not_foreign": [f"T1135 {s} CA"]},
+            "_foreign": {s: abroad or REVIEW}, "_canadian": {s: None},
+            "_chain": {s}})
     return out
 
 
@@ -1883,24 +1839,27 @@ UNRESOLVED = "unresolved"           # some, and the test depends on them
 def classification_check(walk: Dict[str, Any], threshold: float,
                          conflicts: List[Dict[str, Any]],
                          walk_as: Any) -> Dict[str, Any]:
-    """Whether the threshold test stands while a holding's ISIN and its
-    listing disagree on its being foreign property (backlog TJ-4956,
-    TJ-4958): the report's `classification_*` and `max_total_cost_low`
-    / `_high` keys.
+    """Whether the threshold test stands while a holding's being
+    foreign property is open (backlog TJ-4956, TJ-4957, TJ-4963): the
+    report's `classification_*` and `max_total_cost_low` / `_high`
+    keys. Open: a share whose sources of one rank disagree
+    (_issuer_conflicts), counted as foreign under `??`, and an option
+    whose listing and whose share disagree (_mismatch_conflicts),
+    counted by its listing.
 
-    The books count a symbol by its listing. `walk_as({symbol:
-    country})` is the cost walk with ticker.map lines of `conflicts`
-    (_isin_conflict) added, exactly those: every conflicted security's
+    `walk_as({symbol: country})` is the cost walk with ticker.map
+    lines of `conflicts` added, exactly those: every conflict's
     `foreign` line gives the highest maximum the conflicts allow, every
     `not_foreign` line the lowest. Both are exact, and as counted lies
     between them: a security's pools are its own, a cost amount is
-    never negative, and a line on the symbol the security first had
-    counts it one way through the whole year, so day by day the total
-    with every such security foreign is at least, and with every one
-    Canadian at most, the total under any other answer — as counted
-    included, which is neither reading when a ticker change crossed
-    from a Canadian listing to a foreign one. (A custodian abroad
-    counts its part either way, Custody: both walks do.)
+    never negative, and a line counts its security one way through the
+    whole year and its ticker changes, so day by day the total with
+    every one foreign is at least, and with every one Canadian at
+    most, the total under any other answer, as counted included. (A
+    custodian abroad counts its part either way, Custody: both walks
+    do.) An option conflict with no row in the year under either
+    reading is dropped from `conflicts`: a trader's expired contracts
+    are not a list to read.
 
     The test is open (UNRESOLVED) when it reads "not over" as counted
     and the highest is over the threshold or has a holding of a cost
@@ -1919,6 +1878,10 @@ def classification_check(walk: Dict[str, Any], threshold: float,
         hi = walk_as({k: v for c in total for k, v in c["_foreign"].items()})
         for c in total:
             c["held_in_year"] = bool(c["_chain"] & set(hi["per_symbol"]))
+        gone = {id(c) for c in total if c.get("kind") == "option"
+                and not c["held_in_year"]}
+        conflicts[:] = [c for c in conflicts if id(c) not in gone]
+        total = [c for c in total if id(c) not in gone]
         at_least = max(hi["max_total_cost"], counted)
         # A row the foreign reading adds, of unknown cost: no figure.
         unknown = sorted(k for k, v in hi["per_symbol"].items()
@@ -1990,6 +1953,201 @@ def verdict_keys(max_total: float, threshold: float, detailed: float,
             "simplified_method_available": simplified}
 
 
+def _unused_overrides(user_keys: Set[str], written: Dict[str, str],
+                      txs: List[Dict[str, Any]]) -> List[str]:
+    """The T1135 lines that match no symbol of the books, each named in
+    a warning: an override that matches nothing (a ticker change, a
+    ticker.map consolidation, a typo) silently reversed the filing
+    verdict (S051-17). `written`: {booked symbol: as written}."""
+    from taxjson.lib.out import warn as _warn
+    # A ticker change's new symbol too: a line the report names for a
+    # renamed holding nothing traded since is not "unused" (TJ-5048).
+    seen = _row_symbols(txs)
+    unused = sorted(k for k in user_keys if k not in seen)
+    for k in unused:
+        shown = (f"`T1135 {written[k]}` (booked as {k})" if k in written
+                 else f"`T1135 {k}`")
+        _warn(f"ticker.map: {shown} matches no symbol in the books — "
+              f"the override is not applied",
+              details=_dl(["Renamed, consolidated by ticker.map, or a "
+                           "typo?"]))
+    return unused
+
+
+def _expired_held(walk: Dict[str, Any]) -> List[str]:
+    """The long options the walk still holds after their expiry date,
+    named in a warning (S052-22)."""
+    expired = list(walk.get("expired_options_held") or [])
+    if expired:
+        from taxjson.lib.out import warn as _warn
+        _warn(f"{len(expired)} long option(s) still held in the books "
+              f"after their expiry date: {', '.join(expired[:6])}"
+              f"{' ...' if len(expired) > 6 else ''}",
+              details=_dl(["Their cost is still counted in the T1135 "
+                           "figures — add the missing expiry or exercise "
+                           "row and re-run."]))
+    return expired
+
+
+def _row_source(countries: Any, symbol: str,
+                overrides: Dict[str, Optional[str]]) -> Dict[str, Any]:
+    """A property row's `country_source` keys (lib/t1135_issuer.
+    Decision.facts): what decided the country it is under."""
+    d = countries.decide(symbol)
+    if d.source != _TI.OVERRIDE and symbol in overrides \
+            and not _TI.is_share(symbol):
+        # A T1135 line the walk carried over an option's ticker change.
+        return {"country_source": _TI.OVERRIDE}
+    return d.facts()
+
+
+def _cost_sum(entries: List[Dict[str, Any]]) -> float:
+    return round_half_up(sum((Decimal(str(e["max_cost"])) for e in entries),
+                             Decimal(0)), 2)
+
+
+def _country_review(decisions: List[Dict[str, Any]],
+                    rows: List[Dict[str, Any]],
+                    conflicts: List[Dict[str, Any]]
+                    ) -> List[Dict[str, Any]]:
+    """The securities named for review (`country_review`): {symbol,
+    reason, lines: the ticker.map lines any one of which settles it}.
+    A share nothing may be picked for (a conflict of the year's rows),
+    a depositary receipt (its ISIN is the receipt's and is used: the
+    company behind it may be of another country; one that is Canadian
+    by that ISIN is a conflict too, _receipt_conflict), a suffix no
+    market has. An option conflict is not one: it is open only while the test
+    depends on it."""
+    named = {r["symbol"] for r in rows if not r.get("cash")}
+    out: List[Dict[str, Any]] = []
+    for c in conflicts:
+        if c.get("kind") == "option" \
+                or not (c["held_in_year"] or c["_chain"] & named):
+            continue
+        ln = c["lines"]
+        out.append({"symbol": c["symbol"], "reason": c["kind"],
+                    "lines": list(ln.get("choices") or [])
+                    + list(ln.get("foreign") or [])
+                    + list(ln.get("not_foreign") or [])})
+    for e in decisions:
+        if e.get("country_review") == _TI.EARLIER_COUNTRY:
+            # Foreign under each, another country before: named with
+            # both lines, never walked (the total cannot move).
+            out.append({"symbol": e["symbol"],
+                        "reason": _TI.EARLIER_COUNTRY,
+                        "earlier": e["country_earlier"],
+                        "lines": [f"T1135 {e['symbol']} {c}" for c in sorted(
+                            {x["country"] for x in e["country_earlier"]}
+                            | {e["country"]})]})
+        if e.get("country_review") == _TI.RECEIPT \
+                and e["symbol"] not in {x["symbol"] for x in out}:
+            word = "CA" if e["country"] == _TI.CAN else e["country"]
+            out.append({"symbol": e["symbol"], "reason": _TI.RECEIPT,
+                        "lines": ([] if word == REVIEW
+                                  else [f"T1135 {e['symbol']} {word}"])})
+    seen = {e["symbol"] for e in out}
+    for r in rows:
+        if r["country"] == REVIEW and r["symbol"] not in seen \
+                and r.get("country_source") == _TI.UNCLASSIFIED:
+            out.append({"symbol": r["symbol"], "reason": _TI.UNCLASSIFIED,
+                        "lines": []})
+    return out
+
+
+def _country_report(countries: Any, symbols: Set[str],
+                    rows: List[Dict[str, Any]],
+                    conflicts: List[Dict[str, Any]], walk_with: Any,
+                    year: int) -> Dict[str, Any]:
+    """The report's keys on what decided each share's country
+    (tax-logic CA-RPT-02; backlog TJ-4957):
+
+    `country_decisions`: every share of the year, on the form or off
+    it: {symbol, country (CAN: not foreign property), foreign_property,
+    country_source and its keys, listing_country (what the listing
+    alone says), max_cost, year_end_cost}. A share that is not foreign
+    property has no row, so its costs are read from one more cost walk
+    with those shares counted (`walk_with`).
+    `assumed_symbols`, `assumed_foreign_cost`,
+    `assumed_not_foreign_cost`: the shares whose country is the
+    listing's alone, and their maximum costs summed.
+    `listing_overruled_symbols`: the shares an ISIN counts otherwise
+    than their listing would (foreign_isin_symbols,
+    issuer_mismatch_symbols).
+    `country_review`, `country_review_symbols`: _country_review."""
+    held = {r["symbol"]: r for r in rows
+            if _TI.is_share(r["symbol"]) and not r.get("cash")
+            and not r.get("custody_account")}
+    off = sorted(s for s in symbols if _TI.is_share(s) and s not in held
+                 and countries.decide(s).country is None
+                 and countries.h.in_year(s, year))
+    if off:
+        per = walk_with({**countries.overrides(symbols),
+                         **{s: REVIEW for s in off}})["per_symbol"]
+        held.update({s: per[s] for s in off if s in per})
+    picked = {s: countries.decide(s) for s in sorted(held)}
+    decisions = [{
+        "symbol": s, "country": _TI.CAN if d.country is None else d.country,
+        "foreign_property": d.country is not None, **d.facts(),
+        "listing_country": _TI.CAN if d.listing is None else d.listing,
+        "max_cost": held[s]["max_cost"],
+        "year_end_cost": held[s]["year_end_cost"]}
+        for s, d in picked.items()]
+    assumed = [e for e in decisions if e["country_source"] == _TI.ASSUMED]
+    overruled = {**foreign_isin_symbols(list(picked.values())),
+                 **issuer_mismatch_symbols(list(picked.values()))}
+    review = _country_review(decisions, rows, conflicts)
+    said = _said_review({"country_review": review})
+    if said:
+        from taxjson.lib.out import warn as _warn
+        _warn(f"{len(said)} securit{'y' if len(said) == 1 else 'ies'} "
+              f"to review for the T1135's country: "
+              + ", ".join(f"{e['symbol']} ({_review_words(e, conflicts)})"
+                          for e in said[:6])
+              + f"{' ...' if len(said) > 6 else ''}",
+              details=_dl(["Add its `T1135 SYMBOL COUNTRY` line to "
+                           "ticker.map once you know the country (CA: not "
+                           "foreign property)"
+                           + (": " + " or ".join(
+                               f"`{x}`" for x in said[0]["lines"])
+                              if said[0]["lines"] else "")
+                           + f"{' (a line for each)' if len(said) > 1 else ''}"
+                           + "; then `tjs run` and `tjs t1135`."]))
+    return {
+        "country_decisions": decisions,
+        "assumed_symbols": [e["symbol"] for e in assumed],
+        "assumed_foreign_cost": _cost_sum(
+            [e for e in assumed if e["foreign_property"]]),
+        "assumed_not_foreign_cost": _cost_sum(
+            [e for e in assumed if not e["foreign_property"]]),
+        "listing_overruled_symbols": sorted(overruled),
+        "country_review": review,
+        "country_review_symbols": [e["symbol"] for e in review]}
+
+
+def _said_review(rep: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The `country_review` entries the country's own lines name: a
+    suffix no market has keeps the line it always had (its row's
+    "unclassified" note)."""
+    return [e for e in rep.get("country_review") or []
+            if e["reason"] != _TI.UNCLASSIFIED]
+
+
+def _review_words(e: Dict[str, Any],
+                  conflicts: List[Dict[str, Any]]) -> str:
+    """Why a `country_review` entry is named, in a few words."""
+    if e["reason"] == _TI.RECEIPT:
+        return ("depositary receipt: the company behind it may be of "
+                "another country")
+    if e["reason"] == _TI.EARLIER_COUNTRY:
+        return ("another holding of the ticker carried an ISIN of "
+                + ", ".join(f"{x['country']} ({x['account']}, "
+                            f"{_years(x['first'], x['last'])})"
+                            for x in e.get("earlier") or []))
+    c = next((c for c in conflicts if c["symbol"] == e["symbol"]
+              and c.get("kind") != "option"), None)
+    return _isin_words(c) if c else e["reason"]
+
+
 def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
                  overrides: Dict[str, Optional[str]],
                  base_currency: str,
@@ -2022,12 +2180,16 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
     pools are the engine's either way (the year-only replay it chose is
     gone).
 
-    `issuer_countries` ({symbol: ISO alpha-3}, lib/tobase_map.
-    t1135_countries): the country of a foreign issuer the interlisted
-    pairs book under its US listing (BMU for a Bermuda issuer, not the
-    .US suffix's USA); a user override wins. `key_renames` (the map's
-    renames to the base symbol): a user `T1135 SYMBOL` line naming a
-    listing a TOBASE line books under another symbol follows it.
+    A security's country is decided in order (lib/t1135_issuer;
+    tax-logic CA-RPT-02): `overrides`, the ticker.map T1135 lines; the
+    ISIN the books' rows carry and `issuer_countries` ({symbol: ISO
+    alpha-3}, lib/tobase_map.t1135_countries: the issuer of a pair
+    booked under its US listing, BMU for a Bermuda one); the same
+    security's ISIN in another account (the registered accounts',
+    `sheltered_paths`, too); else the listing, `assumed`. Each row
+    says which (`country_source`). `key_renames` (the map's renames to
+    the base symbol): a user `T1135 SYMBOL` line naming a listing a
+    TOBASE line books under another symbol follows it.
 
     `categories` ({SYMBOL: 1-6}, load_categories) and `kinds` (the
     master's units and funds, lib/tobase_map.t1135_kinds) give each
@@ -2073,26 +2235,32 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         if nk != k and nk in (categories or {}):
             continue        # the user's line for the booked symbol wins
         cats[nk] = v
-    overrides = dict(issuer_countries or {})
-    overrides.update(mapped)            # the walk adds rename targets
-    # Before the custody keys and the walk's rename targets are added:
-    # what another classification of a symbol starts from (TJ-4956).
-    listed = dict(overrides)
-    cust, cash_pools = _custody_and_cash(custody, overrides, txs, cash)
     # The cost amounts are the engine's pools, read from its cost
     # timeline (backlog TJ-0417): every superficial loss denied in any
     # year is in them where the engine put it (G7-0, S008-07).
     timeline = full_history_pass(
         base_paths, sheltered_paths, phantoms, tax_date, option_timing,
         income_rules).get("cost_timeline") or {}
+    # The country of each security and what decided it (CA-RPT-02): the
+    # registered accounts' rows too; a holding ends with the engine's pool.
+    symbols = _row_symbols(txs)
+    countries = _TI.Countries(
+        _TI.Holdings(txs, lambda t: _tx_date(t, tax_date),
+                     load_transactions(list(sheltered_paths)), timeline),
+        year, mapped, dict(issuer_countries or {}), _by_listing)
+    overrides = countries.overrides(symbols)  # the walk adds custody keys
+    cust, cash_pools = _custody_and_cash(custody, overrides, txs, cash)
     walk = walk_costs(txs, year, overrides, tax_date, today=today,
                       timeline=timeline, custody=cust, cash=cash_pools)
 
-    def _walk_as(other: Dict[str, Optional[str]]) -> Dict[str, Any]:
-        ov = {**listed, **other}
+    def _walk_with(ov: Dict[str, Optional[str]]) -> Dict[str, Any]:
         c2, pools2 = _custody_and_cash(custody, ov, txs, cash)
         return walk_costs(txs, year, ov, tax_date, today=today,
                           timeline=timeline, custody=c2, cash=pools2)
+
+    def _walk_as(lines: Dict[str, Optional[str]]) -> Dict[str, Any]:
+        # The walk as ticker.map would give it with `lines` added.
+        return _walk_with(countries.with_lines(lines).overrides(symbols))
     # A category follows its symbol through a rename, as the walk has
     # carried its country.
     for t in sorted((t for t in txs
@@ -2140,24 +2308,13 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
               details=_dl(["Pass each account's <account>_gains.json (or "
                            "_gains_wash.json) with --gains; `tjs "
                            "t1135` does."]))
-    # An override that matches nothing (a ticker change, a ticker.map
-    # consolidation, a typo) silently reversed the filing verdict
-    # (S051-17): name it.
-    seen = {t.get("symbol") for t in txs if t.get("symbol")}
-    unused_overrides = sorted(k for k in user_keys if k not in seen)
-    for k in unused_overrides:
-        from taxjson.lib.out import warn as _warn
-        shown = (f"`T1135 {written[k]}` (booked as {k})" if k in written
-                 else f"`T1135 {k}`")
-        _warn(f"ticker.map: {shown} matches no symbol in the books — "
-              f"the override is not applied",
-              details=_dl(["Renamed, consolidated by ticker.map, or a "
-                           "typo?"]))
-    # A T1135 line decides its symbol through every later ticker change.
-    preds, succs = _renames(timeline)
-    decided = _decided(user_keys, succs)
-    canadian_issuer, foreign_issuer, conflicts = _issuer_conflicts(
-        txs, overrides, decided, preds, succs)
+    unused_overrides = _unused_overrides(user_keys, written, txs)
+    # What nothing may be picked for: a share whose sources disagree,
+    # an option whose listing and share do (`overrides` holds what a
+    # line decides, the walk's carry over an option's change included).
+    conflicts = _issuer_conflicts(countries, symbols, year)
+    conflicts += _mismatch_conflicts(countries, symbols, set(overrides),
+                                     conflicts, year)
     futures = set(walk.get("futures_symbols") or ())
 
     def _category(key: str) -> Tuple[Optional[int], str]:
@@ -2185,6 +2342,12 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         return ({"custody_account": cust.keys[key][1]}
                 if key in cust.keys else {})
 
+    def _source(key: str) -> Dict[str, Any]:
+        if key in cust.cash_rows or key in cust.keys:
+            return {"country_source": "cash" if key in cust.cash_rows
+                    else "custodian"}
+        return _row_source(countries, key, overrides)
+
     rows = []
     # The cash rows after the properties (CA-RPT-20).
     for symbol in sorted(walk["per_symbol"],
@@ -2204,7 +2367,7 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
             # A futures contract with a superficial loss added to its
             # cost (walk_costs; backlog TJ-0505).
             "futures": bool(s.get("futures")),
-            **_custody_field(symbol),
+            **_custody_field(symbol), **_source(symbol),
         })
     # Income or gain on a foreign symbol whose cost never showed up in the
     # walk (e.g. fully disposed via a corp action the walk didn't model)
@@ -2231,7 +2394,7 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
             "max_cost": 0.0, "year_end_cost": 0.0,
             **_money_cols(symbol, ig),
             "unknown_acb": False,
-            **_custody_field(symbol),
+            **_custody_field(symbol), **_source(symbol),
             "futures": is_plain_future(symbol),
         })
 
@@ -2254,15 +2417,9 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
                 c[k] = M.shown(c[k], 2)
 
     max_total = walk["max_total_cost"]
-    # A foreign listing whose ISIN names a third country (TJ-4958): a
-    # row of the year's, to review.
-    mismatch = issuer_mismatch_symbols(txs, overrides, decided)
-    _taken = {x for c in conflicts for x in c["_chain"]}
-    mismatch = {r["symbol"]: mismatch[r["symbol"]] for r in rows
-                if r["symbol"] in mismatch and not r.get("cash")
-                and r["symbol"] not in _taken}
-    conflicts += _mismatch_conflicts(mismatch)
     cls = classification_check(walk, threshold, conflicts, _walk_as)
+    by_issuer = _country_report(countries, symbols, rows, conflicts,
+                                _walk_with, year)
     year_end = f"{year}-12-31"
     year_complete = today > year_end
     # The cash a ledger could not cost (CA-RPT-20): its rows, and the
@@ -2273,15 +2430,7 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         n.get("unknown") for n in not_counted)
     as_of = year_end if year_complete else (
         walk.get("last_date") or min(today, year_end))
-    expired = list(walk.get("expired_options_held") or [])
-    if expired:
-        from taxjson.lib.out import warn as _warn
-        _warn(f"{len(expired)} long option(s) still held in the books "
-              f"after their expiry date: {', '.join(expired[:6])}"
-              f"{' ...' if len(expired) > 6 else ''}",
-              details=_dl(["Their cost is still counted in the T1135 "
-                           "figures — add the missing expiry or exercise "
-                           "row and re-run."]))
+    expired = _expired_held(walk)
     return {
         "year": year,
         "base_currency": base_currency,
@@ -2318,7 +2467,8 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         "by_country": by_country,
         "review_symbols": [r["symbol"] for r in rows
                            if r["country"] in (REVIEW, CRYPTO)
-                           or (r["symbol"] in mismatch
+                           or (r["symbol"] in by_issuer[
+                               "country_review_symbols"]
                                and not r.get("cash"))],
         "crypto_symbols": [r["symbol"] for r in rows
                            if r["country"] == CRYPTO],
@@ -2330,20 +2480,21 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         "futures_symbols": sorted(futures),
         "missing_history_applied": phantoms is not None,
         "unused_overrides": unused_overrides,
-        # Superficial losses left out of the cost columns: none — the
-        # pools are the engine's, every addition where it applied it
-        # (kept for --json readers; --year-wash-only once filled it).
-        "deferred_wash_not_in_cost": {},
-        "full_history_wash": True,
+        # (Schema 2: `deferred_wash_not_in_cost`, always {}, and
+        # `full_history_wash`, always true, are gone: the pools are the
+        # engine's, every superficial-loss addition where it applied
+        # it.)
         "tax_date_basis": tax_date,
         "year_complete": year_complete,
         "as_of": as_of,
         "expired_options_held": expired,
-        "canadian_issuer_symbols": canadian_issuer,
-        # Shares on a Canadian listing whose ISIN names another country,
-        # counted as Canadian (backlog TJ-0455): {symbol: ISO alpha-3}.
-        "foreign_issuer_symbols": sorted(foreign_issuer),
-        "foreign_issuer_countries": dict(sorted(foreign_issuer.items())),
+        # What decided each share's country, the ones assumed from
+        # their listing, the ones an ISIN counts against it and the
+        # ones to review (_country_report; CA-RPT-02).
+        # (Schema 2: `canadian_issuer_symbols`, `foreign_issuer_symbols`
+        # and `foreign_issuer_countries`, the symbols counted against
+        # their ISIN, are gone: the ISIN decides, TJ-4957.)
+        **by_issuer,
         # The accounts read as held with a custodian outside Canada
         # ({account: ISO alpha-3}): their Canadian issuers' shares are
         # rows (`custody_account`), category 6, at their share of the
@@ -2505,13 +2656,12 @@ def _cash_open(rep: Dict[str, Any]) -> str:
 
 
 def _conflict_words(c: Dict[str, Any]) -> str:
-    """What disagrees in a conflict, in the verdict's parenthesis."""
-    counted = set((c.get("symbols") or {}).values())
-    if "CAN" in counted and len(counted) > 1:
-        return "ISIN and listings disagree through its ticker change"
-    if c.get("issuer_country") == "CAN":
-        return "a Canadian ISIN on a foreign listing"
-    return "a foreign ISIN on a Canadian listing"
+    """What is open in a conflict, in the verdict's parenthesis."""
+    if c.get("kind") == "option":
+        return ("an option on a "
+                + ("Canadian" if c.get("counted_as") == _TI.CAN
+                   else "foreign") + f" listing; {_isin_words(c)}")
+    return _isin_words(c)
 
 
 def _verdict_open(rep: Dict[str, Any], limit: int = 2
@@ -2526,7 +2676,7 @@ def _verdict_open(rep: Dict[str, Any], limit: int = 2
     cs = _open_conflicts(rep)
     syms = [c["symbol"] for c in cs]
     it = "it" if len(syms) == 1 else "them"
-    what = _conflict_words(cs[0]) if cs else "ISIN and listing disagree"
+    what = _conflict_words(cs[0]) if cs else "its sources disagree"
     complete = rep.get("year_complete", True)
     so_far = "" if complete else " so far"
     floor = (" at least" if _acb_unknown(rep)
@@ -2585,10 +2735,11 @@ def _verdict_head(rep: Dict[str, Any]) -> Optional[str]:
 
 
 def _verdict_tail(rep: Dict[str, Any], limit: int = 2) -> List[str]:
-    """The lines under the verdict about the holdings whose ISIN and
-    listing disagree (backlog TJ-4956): the lines to add while the test
-    is open; that the test reads the same either way when it does (the
-    holdings of the year only)."""
+    """The lines under the verdict about the holdings whose being
+    foreign property is open (backlog TJ-4956, TJ-4963): the lines to
+    add while the test is open; that the test reads the same either way
+    when it does (the holdings of the year only, their options
+    included)."""
     open_ = _verdict_open(rep, limit)
     if open_:
         return ([] if _verdict_head(rep)
@@ -2605,8 +2756,19 @@ def _verdict_tail(rep: Dict[str, Any], limit: int = 2) -> List[str]:
         span = f" (the maximum stays {_money(low)} {cur})"
     else:
         span = f" (the maximum is {_money(low)} to {_money(high)} {cur})"
-    return [f"Counting {_few(syms)} the other way (ISIN and listing "
-            f"disagree) does not change this{span}."]
+    kinds = {c.get("kind") for c in rep.get("classification_conflicts")
+             or [] if c.get("affects") == "total" and c.get("held_in_year")}
+    why = ("an option and its share disagree" if kinds == {"option"}
+           else "a depositary receipt and the company behind it"
+           if kinds == {_TI.RECEIPT}
+           else "another holding's ISIN says otherwise"
+           if kinds == {_TI.EARLIER}
+           else "its sources disagree" if kinds <= set(_OPEN_REVIEWS)
+           else "sources disagree, options with their shares"
+           if kinds <= set(_OPEN_REVIEWS) | {"option"}
+           else "each is open")
+    return [f"Counting {_few(syms)} the other way ({why}) does not "
+            f"change this{span}."]
 
 
 def _part(rep: Dict[str, Any]) -> Tuple[Optional[bool], str]:
@@ -2670,6 +2832,163 @@ def _brief_verdict(rep: Dict[str, Any], thr: str, complete: bool,
     return lines + _verdict_tail(rep)
 
 
+# A row's FROM cell: what decided its country (`country_source`).
+_FROM = {_TI.OVERRIDE: "line", _TI.ISIN: "ISIN", _TI.TOBASE: "tobase.map",
+         _TI.LEARNED: "learned", _TI.ASSUMED: "assumed",
+         _TI.LISTING: "listing", "custodian": "custodian",
+         "cash": "account"}
+
+
+def _from(row: Dict[str, Any]) -> str:
+    if row.get("country_review") in _OPEN_REVIEWS:
+        return "review"
+    return _FROM.get(str(row.get("country_source") or ""), "-")
+
+
+def _from_notes(r: Dict[str, Any]) -> List[str]:
+    """A row's note on what decided its country (--details)."""
+    if r.get("country_review") in _OPEN_REVIEWS:
+        return []               # the warning above the table says why
+    src = r.get("country_source")
+    acct = r.get("country_source_account") or "?"
+    if src == _TI.ISIN:
+        also = r.get("country_learned_accounts") or []
+        return [f"country from the ISIN in {acct}'s export"
+                + (f", for {', '.join(also)} too" if also else "")]
+    if src == _TI.LEARNED:
+        return [f"country learned from the ISIN in {acct}'s export of the "
+                f"same security"]
+    if src == _TI.OVERRIDE:
+        return ["country from a ticker.map T1135 line"
+                + (f" (`{r['country_line']}`)"
+                   if r.get("country_line") else "")]
+    if src == _TI.TOBASE:
+        return ["country from tobase.map's issuer country"]
+    if src == _TI.ASSUMED:
+        return ["country assumed from the listing: no ISIN in the exports"]
+    return []
+
+
+def _listing_words(code: str) -> str:
+    return "Canadian" if code == _TI.CAN else code
+
+
+def _overruled(rep: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The `country_decisions` entries an ISIN counts otherwise than
+    their listing would: the ones that move on or off the form first."""
+    named = set(rep.get("listing_overruled_symbols") or ())
+    es = [e for e in rep.get("country_decisions") or []
+          if e["symbol"] in named]
+    return sorted(es, key=lambda e: (
+        e["foreign_property"] == (e["listing_country"] != _TI.CAN),
+        e["symbol"]))
+
+
+def _country_acts(rep: Dict[str, Any]) -> List[str]:
+    """The default view's `! ` lines on the countries (CA-RPT-02): the
+    securities to review and the ones an ISIN counts against their
+    listing."""
+    out: List[str] = []
+    rev = _said_review(rep)
+    if rev:
+        cs = rep.get("classification_conflicts") or []
+        short = {_TI.RECEIPT: "depositary receipt",
+                 _TI.EARLIER_COUNTRY: "another ISIN before"}
+        out.append(f"{len(rev)} to review for the country: " + _few(
+            [f"{e['symbol']} ({short.get(e['reason']) or _review_words(e, cs)})"
+             for e in rev], 1))
+    over = _overruled(rep)
+    if over:
+        names = [f"{e['symbol']} ({_listing_words(e['country'])})"
+                 for e in over]
+        head = f"{len(over)} counted by ISIN, not listing: "
+        # An act line is never wrapped: one name where two run long.
+        out.append(head + (_few(names) if len(head + _few(names)) <= 76
+                           else _few(names, 1)))
+    return out
+
+
+def _assumed_act(rep: Dict[str, Any]) -> List[str]:
+    """The default view's `! ` line on the countries assumed from the
+    listing: how many, and their cost. The last of the lines: it asks
+    for a look, not for a fix."""
+    n = len(rep.get("assumed_symbols") or [])
+    if not n:
+        return []
+    cost = _cost_sum([e for e in rep.get("country_decisions") or []
+                      if e["country_source"] == _TI.ASSUMED])
+    return [f"{n} countr{'y' if n == 1 else 'ies'} assumed from the "
+            f"listing (no ISIN): cost {_money(cost)} "
+            f"{rep['base_currency']}"]
+
+
+def _country_warns(rep: Dict[str, Any]) -> List[str]:
+    """render_report's warnings on the countries: each security to
+    review, with the ticker.map line that settles it."""
+    cs = rep.get("classification_conflicts") or []
+    out = []
+    for e in _said_review(rep):
+        lines = " or ".join(f"`{x}`" for x in e.get("lines") or [])
+        out.append(
+            f"{e['symbol']}: {_review_words(e, cs)} — add "
+            + (lines if lines else f"`T1135 {e['symbol']} COUNTRY`")
+            + (" (to keep it), or its line with the company's country"
+               if e["reason"] == _TI.RECEIPT and lines else "")
+            + " to ticker.map once you know (COUNTRY: a three-letter "
+              "code; CA: not foreign property).")
+    return out
+
+
+def _render_country_lists(lines: List[str], rep: Dict[str, Any], item: Any,
+                          end_col: str) -> None:
+    """t1135 --details: the securities an ISIN counts otherwise than
+    their listing would, each with the line for someone who knows
+    otherwise; and the ones whose country is assumed from the listing,
+    with their cost (CA-RPT-02)."""
+    from taxjson.lib import out as _out
+    cur = rep["base_currency"]
+    over = _overruled(rep)
+    if over:
+        lines.append("COUNTED BY THE ISIN, NOT THE LISTING")
+        for e in over:
+            acct = e.get("country_source_account") or "?"
+            how = ("learned from " if e["country_source"] == _TI.LEARNED
+                   else "")
+            was = e["listing_country"]
+            item(f"{e['symbol']}: "
+                 + ("not foreign property" if not e["foreign_property"]
+                    else e["country"])
+                 + f" by its ISIN ({e.get('isin_country_code') or '?'}, "
+                   f"{how}{acct}); its listing says "
+                   f"{_listing_words(was)}. Cost: "
+                   f"{_money(e['max_cost'])} {cur} at most in the year. If "
+                   f"you know otherwise: `T1135 {e['symbol']} "
+                   f"{'CA' if was == _TI.CAN else was}` (or its country of "
+                   f"residence) in ticker.map.")
+        lines.append("")
+    assumed = [e for e in rep.get("country_decisions") or []
+               if e["country_source"] == _TI.ASSUMED]
+    if assumed:
+        lines.append("COUNTRY ASSUMED FROM THE LISTING (no ISIN in the "
+                     "exports)")
+        table = [(e["symbol"], _listing_words(e["country"]),
+                  "yes" if e["foreign_property"] else "no",
+                  _money(e["max_cost"]), _money(e["year_end_cost"]))
+                 for e in assumed]
+        lines.extend(_out.fit_table(
+            ("SYMBOL", "ASSUMED", "ON THE FORM", "MAX COST IN YR", end_col),
+            table, aligns=["<", "<", "<", ">", ">"]))
+        item(f"{len(assumed)} in all: "
+             f"{_money(rep.get('assumed_foreign_cost') or 0.0)} {cur} "
+             f"counted as foreign property, "
+             f"{_money(rep.get('assumed_not_foreign_cost') or 0.0)} {cur} "
+             f"as Canadian (maximum costs summed). A foreign company "
+             f"listed in Canada, or a Canadian one listed abroad, is "
+             f"assumed wrongly: `T1135 SYMBOL COUNTRY` in ticker.map "
+             f"decides it.")
+        lines.append("")
+
+
 def render_brief(rep: Dict[str, Any]) -> str:
     """The default view: the filing verdict and its figure, the two
     tables under a legend, then one `! ` line per thing to act on and
@@ -2697,23 +3016,7 @@ def render_brief(rep: Dict[str, Any]) -> str:
         acts.append(f"{len(_ex)} expired long option(s) still counted at "
                     f"cost: {', '.join(_ex[:2])}"
                     f"{' +' + str(len(_ex) - 2) + ' more' if len(_ex) > 2 else ''}")
-    if rep.get("canadian_issuer_symbols"):
-        _ci = rep["canadian_issuer_symbols"]
-        acts.append(f"{len(_ci)} Canadian-ISIN symbol(s) counted as foreign:"
-                    f" {', '.join(_ci[:2])}"
-                    f"{' +' + str(len(_ci) - 2) + ' more' if len(_ci) > 2 else ''}")
-    if rep.get("foreign_issuer_symbols"):
-        _fi = rep["foreign_issuer_symbols"]
-        acts.append(f"{len(_fi)} foreign-ISIN symbol(s) counted as "
-                    f"Canadian: {', '.join(_fi[:2])}"
-                    f"{' +' + str(len(_fi) - 2) + ' more' if len(_fi) > 2 else ''}")
-    _mm = [c for c in rep.get("classification_conflicts") or []
-           if c.get("affects") == "country"]
-    if _mm:
-        acts.append(f"{len(_mm)} symbol(s) with another country's ISIN "
-                    f"than counted: "
-                    + _few([f"{c['symbol']} ({_isin_words(c)})"
-                            for c in _mm]))
+    acts.extend(_country_acts(rep))
     _ng = _no_gains_note(rep)
     if _ng:
         acts.append(_ng)
@@ -2730,7 +3033,8 @@ def render_brief(rep: Dict[str, Any]) -> str:
             if r["unknown_acb"] and not r.get("cash"):
                 by_note.setdefault("unknown ACB, cost understated",
                                    []).append(r["symbol"])
-            if r["country"] == REVIEW:
+            if r["country"] == REVIEW \
+                    and r.get("country_review") not in _OPEN_REVIEWS:
                 by_note.setdefault("unclassified: add a ticker.map T1135 "
                                    "line", []).append(r["symbol"])
             elif r["country"] == CRYPTO:
@@ -2749,7 +3053,8 @@ def render_brief(rep: Dict[str, Any]) -> str:
         lines.append("")
         lines.append("PER PROPERTY — taxable accounts only")
         lines.append("Amounts are cost (ACB), not market value; MAX COST "
-                     "IN YR: the most held at once.")
+                     "IN YR: the most held at once; FROM: what decided the "
+                     "country.")
         if any(r.get("cash") for r in rows):
             lines.append("CAT: the form's category (1 cash; 2 shares; 6 "
                          "options, futures, crypto); a ticker.map T1135 "
@@ -2761,13 +3066,13 @@ def render_brief(rep: Dict[str, Any]) -> str:
         _cn = _custody_note(rep)
         if _cn:
             lines.append(_cn + ".")
-        table = [(_cash_cell(r), r["country"], _cat(r), _money(r["max_cost"]),
-                  _money(r["year_end_cost"]), _amt(r["income"]),
-                  _amt(r["gain"])) for r in rows]
+        table = [(_cash_cell(r), r["country"], _from(r), _cat(r),
+                  _money(r["max_cost"]), _money(r["year_end_cost"]),
+                  _amt(r["income"]), _amt(r["gain"])) for r in rows]
         lines.extend(_out.fit_table(
-            ("SYMBOL", "COUNTRY", "CAT", "MAX COST IN YR", end_col,
+            ("SYMBOL", "COUNTRY", "FROM", "CAT", "MAX COST IN YR", end_col,
              "INCOME", "GAIN(LOSS)"), table,
-            aligns=["<", "<", "<", ">", ">", ">", ">"], drop=(5,)))
+            aligns=["<", "<", "<", "<", ">", ">", ">", ">"], drop=(6,)))
         lines.append("")
         lines.append("PER COUNTRY — upper-bound aggregates")
         ctable = [(c, _money(v["max_cost"]), _money(v["year_end_cost"]),
@@ -2779,6 +3084,7 @@ def render_brief(rep: Dict[str, Any]) -> str:
     else:
         lines.append("")
         lines.append("No specified foreign property found in the inputs.")
+    acts.extend(_assumed_act(rep))
     lines.append("")
     # The cash the test could not count comes first: it decides
     # whether the verdict stands (CA-RPT-20).
@@ -2880,43 +3186,13 @@ def render_report(rep: Dict[str, Any]) -> str:
          f"{cur}{when}", "  ", "    ")
     _report_verdict(rep, para, complete, as_of)
     warns: List[str] = []
-    _mm = [c for c in rep.get("classification_conflicts") or []
-           if c.get("affects") == "country"]
-    if _mm:
-        warns.append(f"{len(_mm)} symbol(s) counted under one foreign "
-                     f"country carry another's ISIN ("
-                     + ", ".join(f"{c['symbol']}: {_isin_words(c)}, "
-                                 f"counted under {c['counted_as']}"
-                                 for c in _mm[:6])
-                     + f"{' ...' if len(_mm) > 6 else ''}) — foreign "
-                       f"property under either, the total is the same; "
-                       f"map them `T1135 SYMBOL COUNTRY` in ticker.map "
-                       f"once confirmed.")
+    warns.extend(_country_warns(rep))
     if rep.get("expired_options_held"):
         _ex = rep["expired_options_held"]
         warns.append(f"{len(_ex)} long option(s) still held after their "
                      f"expiry date ({', '.join(_ex[:6])}"
                      f"{' ...' if len(_ex) > 6 else ''}) are counted at "
                      f"cost — the books lack their expiry/exercise row.")
-    if rep.get("canadian_issuer_symbols"):
-        _ci = rep["canadian_issuer_symbols"]
-        warns.append(f"{len(_ci)} symbol(s) with a Canadian ISIN on a "
-                     f"foreign listing are counted as foreign property "
-                     f"({', '.join(_ci[:6])}{' ...' if len(_ci) > 6 else ''})"
-                     f" — a Canadian corporation's shares are not; map "
-                     f"them `T1135 SYMBOL CA` in ticker.map once confirmed.")
-    if rep.get("foreign_issuer_symbols"):
-        _fc = {c["symbol"]: _isin_words(c)
-               for c in rep.get("classification_conflicts") or []}
-        _fc = {**(rep.get("foreign_issuer_countries") or {}), **_fc}
-        _fi = rep["foreign_issuer_symbols"]
-        warns.append(f"{len(_fi)} symbol(s) with a foreign ISIN on a "
-                     f"Canadian listing are counted as Canadian ("
-                     f"{', '.join(f'{s}: {_fc.get(s, REVIEW)}' for s in _fi[:6])}"
-                     f"{' ...' if len(_fi) > 6 else ''}) — a non-resident "
-                     f"corporation's shares are specified foreign property "
-                     f"wherever listed; map them `T1135 SYMBOL COUNTRY` in "
-                     f"ticker.map once confirmed.")
     _ng = _no_gains_note(rep)
     if _ng:
         warns.append(_ng + " — pass each account's gains file; `tjs "
@@ -2951,6 +3227,7 @@ def render_report(rep: Dict[str, Any]) -> str:
     # is open — 'COST AT DEC 31' labelled a September figure (S051-22).
     end_col = "COST AT DEC 31" if complete else f"COST AT {as_of}"
     _render_property_tables(rows, end_col, lines, item, rep)
+    _render_country_lists(lines, rep, item, end_col)
 
     _render_notes(lines, rep, item)
     return "\n".join(lines)
@@ -2963,8 +3240,8 @@ def _render_property_tables(rows: List[Dict[str, Any]], end_col: str, lines: Lis
     found)."""
     from taxjson.lib import out as _out
     if rows:
-        header = ("SYMBOL", "COUNTRY", "CAT", "MAX COST IN YR", end_col,
-                  "INCOME", "GAIN(LOSS)")
+        header = ("SYMBOL", "COUNTRY", "FROM", "CAT", "MAX COST IN YR",
+                  end_col, "INCOME", "GAIN(LOSS)")
         table = []
         # A property's notes are listed under the table, one line per
         # note with the symbols it applies to (a prose column made the
@@ -2993,7 +3270,8 @@ def _render_property_tables(rows: List[Dict[str, Any]], end_col: str, lines: Lis
                              "(s.53(1)(f))")
             elif r.get("futures"):
                 notes.append("futures — cost amount nil")
-            if r["country"] == REVIEW:
+            if r["country"] == REVIEW \
+                    and r.get("country_review") not in _OPEN_REVIEWS:
                 notes.append("unclassified — review / add a ticker.map T1135 line")
             elif r["country"] == CRYPTO and r.get("cash"):
                 notes.append("a crypto platform's cash — check where held; "
@@ -3012,16 +3290,17 @@ def _render_property_tables(rows: List[Dict[str, Any]], end_col: str, lines: Lis
                              f"{r['custody_account']}] custodian_country): "
                              f"other property (CAT 6) under the "
                              f"custodian's country")
+            notes.extend(_from_notes(r))
             for n in notes:
                 by_note.setdefault(n, []).append(_cash_cell(r))
-            table.append((_cash_cell(r), r["country"], _cat(r),
+            table.append((_cash_cell(r), r["country"], _from(r), _cat(r),
                           _money(r["max_cost"]), _money(r["year_end_cost"]),
                           _amt(r["income"]), _amt(r["gain"])))
         lines.append("PER PROPERTY (taxable accounts only)")
         lines.extend(_out.fit_table(header, table,
-                                    aligns=["<", "<", "<", ">", ">", ">",
-                                            ">"],
-                                    drop=(5,)))
+                                    aligns=["<", "<", "<", "<", ">", ">",
+                                            ">", ">"],
+                                    drop=(6,)))
         for n, syms in by_note.items():
             item(f"{', '.join(syms)}: {n}")
         lines.append("")
@@ -3066,12 +3345,22 @@ def _render_notes(lines: List[str], rep: Dict[str, Any], item: Any) -> None:
            "crypto and 2 for any other listed security; units of a fund, "
            "trust or partnership may be another category: check them and "
            "set it with `T1135 SYMBOL COUNTRY CAT` in ticker.map.")
-    item(".TO/.V/.CN/.NE symbols count as Canadian. A foreign corp on "
-         "a Canadian exchange is still SFP (`T1135 SYMBOL <ISO3>` in "
-         "ticker.map); a Canadian corp on a US exchange is not "
-         "(`T1135 SYMBOL CA`), unless a custodian outside Canada holds "
-         "it (`custodian_country` of its account in taxjson.toml: "
-         "category 6 under that country).")
+    item("COUNTRY is decided in order, FROM saying by which: a "
+         "ticker.map `T1135 SYMBOL COUNTRY` line (`CA`: not foreign "
+         "property; it covers the security before and after a ticker "
+         "change); the ISIN an export gives the security, or tobase.map's "
+         "issuer country; the same security's ISIN in another account "
+         "(learned); else assumed from the listing (.TO/.V/.CN/.NE "
+         "Canadian). An ISIN's first two letters say where the issuer is "
+         "registered; the form asks for its country of residence, which "
+         "can differ (a company registered in one country and managed "
+         "from another): a T1135 line decides it then (the CRA's T1135 "
+         "guidance says which). A CUSIP alone names no country and is "
+         "not read. A Canadian corporation's shares are not foreign "
+         "property unless a custodian outside Canada holds them "
+         "(`custodian_country` of its account in taxjson.toml: category "
+         "6 under that country). A listed option keeps its own listing's "
+         "country.")
     if rep.get("futures_symbols"):
         item(f"Futures contracts ({len(rep['futures_symbols'])}: "
              f"{', '.join(rep['futures_symbols'][:6])}"

@@ -19,6 +19,6 @@
       "year": 2024
     }
   ],
-  "schema_version": 1,
+  "schema_version": 2,
   "scope_note": "NET GAIN(LOSS) counts the dispositions in these books (plus the T5 box 18 dividends [[capital_gains_dividends]] names, when `tjs carryover` passes them). Other capital gains reported on slips (T3 box 21, T5 box 18 -> lines 17400/17600) and the ITA s.39(1.1) FX gain or loss on foreign cash (line 15300, `tjs fx-cash`) are NOT included; in a loss year they change the net capital loss, so the carryforward and the carryback caps shown are off by that amount."
 }

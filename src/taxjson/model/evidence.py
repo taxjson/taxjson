@@ -10,11 +10,13 @@ string, each in the spelling of the code that writes it:
   `find-missing-history --write-purchases` (lib/missing_history).
 - `commission_refunds`: the commission refunds IB folded into a trade's
   cost, "<date> <amount>" joined by "; " in date order, the amount a
-  float's repr (ib_extractor `_ib_fold_refund_into`). Read by the cash
-  ledger (lib/fx_cash_v2 `_refund_legs`).
+  float's repr (ib_extractor `_ib_fold_refund_into`); in a .tt line the
+  token `refunds=`, "<date>:<amount>" joined by ";" (lib/tt_format). Read
+  by the cash ledger (lib/fx_cash_v2 `_refund_legs`).
 - `opening_cut_legs`: the share rows an OPENING snapshot replaced,
-  "<date> <quantity> <price> <action>" joined by ";", the numbers a
-  float's repr (lib/opening `_note_cut_legs`). Read by the assignment
+  "<date> <quantity> <price> <action>[ <symbol>]" joined by ";", the
+  numbers a float's repr; the symbol is the row's own when a rename
+  made it the snapshot's (lib/opening `_note_cut_legs`). Read by the assignment
   premium ledger (engine/premium_ledger `_AssignPremiumLedger`).
 - `corp_cash`: the cash a corporate action paid (cash in lieu, boot),
   "<amount> <CUR>[ @<paid>]" joined by "; ", the amount `.10g`
@@ -81,11 +83,14 @@ class CommissionRefund:
 
 @dataclass(frozen=True, slots=True)
 class CutLeg:
-    """A share row an OPENING snapshot replaced."""
+    """A share row an OPENING snapshot replaced. `symbol`: the row's
+    own symbol when it is not the snapshot's (a rename on or after the
+    row made it the snapshot's; backlog TJ-5005), else ''."""
     date: str
     quantity: Decimal
     price: Decimal
     action: str
+    symbol: str = ''
 
 
 def _token(d: Decimal) -> str:
@@ -205,6 +210,38 @@ def add_commission_refund(text: Optional[str], refund: CommissionRefund) -> str:
     return _join_refunds(parts + [_refund_part(refund)])
 
 
+# A part of the .tt token `refunds=` (lib/tt_format): the row's part
+# with its space made a colon, `<date>:<amount>`.
+# What a refund's amount must not write as (`_token`): past a float's
+# range, no number, or nothing.
+_NO_REFUND = ("inf", "-inf", "nan", "0.0", "-0.0")
+_REFUND_TT_PART = re.compile(r'^\d{4}-\d{2}-\d{2}:-?\d[\d.eE+-]*$')
+
+
+def commission_refunds_tt(text: Optional[str]) -> str:
+    """A row's `commission_refunds` as the .tt token's value: the refunds
+    the cash ledger reads of it (`parse_commission_refunds`: a part that
+    does not read moves no cash and is left out), each `<date>:<amount>`,
+    joined by ";"; '' when there are none (backlog TJ-5036)."""
+    return ';'.join(f"{r.date}:{_token(r.amount)}" for r in parse_commission_refunds(text))
+
+
+def commission_refunds_of_tt(token: str) -> str:
+    """The row's `commission_refunds` of a .tt `refunds=` value, as the
+    writer spells it (`format_commission_refunds`: date order, each
+    amount a float's repr); EvidenceError when a part is not
+    `<date>:<amount>`, its date is no day of the calendar, or its amount
+    is no finite number or 0."""
+    parts = token.split(';')
+    if not all(_REFUND_TT_PART.match(p) for p in parts):
+        raise EvidenceError(f"not a trade's commission refunds: {token!r}")
+    refunds = parse_commission_refunds('; '.join(p.replace(':', ' ') for p in parts))
+    if len(refunds) != len(parts) or any(
+            _token(r.amount) in _NO_REFUND for r in refunds):
+        raise EvidenceError(f"a date or an amount that does not read: {token!r}")
+    return format_commission_refunds(refunds)
+
+
 # --- opening_cut_legs ------------------------------------------------------
 
 def split_cut_legs(text: Optional[str]) -> Tuple[str, ...]:
@@ -214,14 +251,23 @@ def split_cut_legs(text: Optional[str]) -> Tuple[str, ...]:
 
 
 def parse_cut_leg(leg: str) -> CutLeg:
-    """One leg: a date, a quantity, a price and an action (EvidenceError
+    """One leg: a date, a quantity, a price and an action, then the
+    row's own symbol when a rename made it the snapshot's (EvidenceError
     when it does not read). The ledger read a leg's numbers only where it
     used them, so a bad number in a leg it skipped did not raise; no
     writer makes one, and a leg is read whole now."""
     bits = leg.split()
-    if len(bits) != 4:
-        raise EvidenceError(f"an opening's cut leg is four tokens, not {leg!r}")
-    return CutLeg(bits[0], _number(bits[1]), _number(bits[2]), bits[3])
+    if len(bits) not in (4, 5):
+        raise EvidenceError(f"an opening's cut leg is four or five tokens, not {leg!r}")
+    return CutLeg(bits[0], _number(bits[1]), _number(bits[2]), bits[3], *bits[4:])
+
+
+def cut_leg_symbol(leg: str) -> str:
+    """The symbol an unread leg's row had when it is not the snapshot's
+    ('' for the snapshot's own): what the ledger files a leg under
+    before it reads one."""
+    bits = leg.split()
+    return bits[4] if len(bits) == 5 else ''
 
 
 def parse_cut_legs(text: Optional[str]) -> Tuple[CutLeg, ...]:
@@ -230,13 +276,16 @@ def parse_cut_legs(text: Optional[str]) -> Tuple[CutLeg, ...]:
     return tuple(parse_cut_leg(leg) for leg in split_cut_legs(text))
 
 
-def cut_leg(day: str, quantity: float, price: float, action: str) -> CutLeg:
+def cut_leg(day: str, quantity: float, price: float, action: str,
+            symbol: str = '') -> CutLeg:
     """The leg lib/opening writes: its numbers as their repr."""
-    return CutLeg(day, Decimal(repr(float(quantity))), Decimal(repr(float(price))), action)
+    return CutLeg(day, Decimal(repr(float(quantity))), Decimal(repr(float(price))), action,
+                  symbol)
 
 
 def format_cut_leg(leg: CutLeg) -> str:
-    return f"{leg.date} {_token(leg.quantity)} {_token(leg.price)} {leg.action}"
+    return (f"{leg.date} {_token(leg.quantity)} {_token(leg.price)} {leg.action}"
+            + (f" {leg.symbol}" if leg.symbol else ""))
 
 
 def format_cut_legs(legs: Iterable[CutLeg]) -> str:

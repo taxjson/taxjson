@@ -462,6 +462,10 @@ def _pending_doc(missing: List[CorporateAction], manifest_path: Path,
             "cash_in_lieu_currency": ev.cash_in_lieu_currency or "",
             "fraction_in_lieu": float(ev.fraction_in_lieu or 0.0),
             "cash_in_lieu_date": ev.cash_in_lieu_date or "",
+            # [[day, fraction, cash], ...] when the cash was paid on
+            # more than one day (the date above is the first; TJ-5057).
+            "cash_in_lieu_parts": [list(p) for p in
+                                   ev.cash_in_lieu_parts or ()],
             "options": options,
             # A sheltered account's event that is asked: no tax in the
             # account depends on it (sheltered_note).

@@ -11,6 +11,7 @@ from argparse import Namespace
 from pathlib import Path
 
 from _run_patch import patch_run
+from _support.planning_radar_row import base_rows
 
 
 def _row(d, sym, qty, px, acct="margin", settle=None, currency="CAD"):
@@ -27,12 +28,13 @@ def _radar_main(country, taxable, sheltered=None, as_of="2026-10-25",
     from taxjson.bin import taxjson_wash_radar as R
     with tempfile.TemporaryDirectory() as d:
         tp = Path(d) / "margin_base.json"
-        tp.write_text(json.dumps({"transactions": taxable}))
+        tp.write_text(json.dumps({"transactions": base_rows(taxable, country)}))
         argv = ["taxjson-wash-radar", "--country", country, "--date",
                 as_of, "--taxable", str(tp), *extra]
         if sheltered:
             sp = Path(d) / "sheltered_base.json"
-            sp.write_text(json.dumps({"transactions": sheltered}))
+            sp.write_text(json.dumps({"transactions": base_rows(sheltered,
+                                                                country)}))
             argv += ["--sheltered", str(sp)]
         out, old = io.StringIO(), sys.argv
         sys.argv = argv

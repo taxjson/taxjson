@@ -71,6 +71,156 @@ OWN_EARLY_DAYS = 7
 RateOf = Callable[[str, str], Optional[float]]
 
 
+def _declarations(events: List[Dict[str, Any]], lines: List[Dict[str, Any]],
+                  base: str, year: int, problems: List[Dict[str, Any]],
+                  carry: Optional[Dict[str, Any]] = None) -> List[str]:
+    """The .tt CASHMOVE lines and the crypto-sends decisions set against
+    the brokers' moves (lib/cash_events `apply_declarations`), then what
+    they declare wrongly, added to `problems` or returned as warnings:
+
+    - a line that declares no broker move and fits a Kraken Hybrid Earn
+      row of cash (`parked_lines`). It was written when the row was read
+      as cash leaving or coming in; the row is a move within Kraken, so
+      the line moves cash that never moved. Dated in `year`, the year
+      computed: a problem, and the line is marked `matched`, so it is
+      not walked as a move of its own (with it the figure is another
+      one; the ledger gives none until it is removed, backlog TJ-4951).
+      Dated in an earlier year: not this year's to refuse (the year is
+      not walked here, and its line must not stop this one); a warning
+      says what the line is and that removing it changes that year, and,
+      only when this year opens from the close of the year before
+      (`carry`), that the pool it opens with was computed with the
+      line. A later year's: that year's to say;
+    - the lines of `year` that fit both a cash move and a Hybrid Earn
+      row, or whose `row=` names no move (lib/cash_events
+      `refused_lines`): a problem naming every line alike and the rows,
+      the lines not walked. Nothing chooses between the rows. Those of
+      an earlier year: a warning, as for a line written for a Hybrid
+      Earn row (`_earlier_year`);
+    - a move of `year` that is a stablecoin send the account's sends.json
+      decides one way and a .tt line declares the other (`send_conflict`;
+      backlog TJ-4953): a problem naming both. Nothing chooses between
+      them."""
+    from taxjson.lib import cash_events as CE
+    CE.apply_declarations(events, lines, base)
+    warnings: List[str] = []
+    carried = bool(carry and not carry.get("problem") and carry.get("books"))
+    for kind, lns, text in CE.refused_lines(lines, base):
+        yr = str(lns[0]["date"])[:4]
+        if yr == str(year):
+            for ln in lns:
+                ln["matched"] = True                # refused: not walked
+            hit = lns[0].get("parked") or {}
+            problems.append(_p(
+                "parked" if kind == "parked" else "declared",
+                text + (f": {CE.parked_fix(lns[0])}" if kind == "parked" else ""),
+                lns[0]["date"], hit.get("book") or lns[0].get("book") or "",
+                str(lns[0]["currency"]).upper(), lns[0]["amount"]))
+        elif yr < str(year):
+            warnings.append(_earlier_year(kind, len(lns), text, yr, year, carried))
+    for ev in events:
+        if ev["kind"] == "CASHMOVE" and ev.get("send_conflict") \
+                and str(ev["settle"])[:4] == str(year) \
+                and str(ev["currency"]).upper() != base:
+            problems.append(_p(
+                "sends", CE.send_conflict_text(ev), ev["settle"], ev.get("book") or "",
+                str(ev["currency"]).upper(), ev["amount"]))
+    return warnings
+
+
+def _earlier_year(kind: str, n: int, text: str, yr: str, year: int, carried: bool) -> str:
+    """The warning for .tt CASHMOVE lines of the earlier year `yr` that
+    its own ledger refuses (`text`: what is said of them; `kind` "parked",
+    a line written for a Kraken Hybrid Earn row, which is removed; else
+    lines that fit two rows or name none, which are put right): not this
+    year's to refuse, and what changing them changes (`carried`: this
+    year opens from the recorded close of the year before)."""
+    one = n == 1
+    the, it, is_ = ("the line", "it", "is") if one else ("the lines", "them", "are")
+    does = "does" if one else "do"
+    fix = ("Removing", "removing") if kind == "parked" else ("Correcting", "correcting")
+    after = "and each year after it " if int(yr) < year - 1 else ""
+    return (f"{text}. {the.capitalize()} {is_} of {yr}, which is not walked here" + (
+        f", so {it if one else 'they'} {does} not stop {year}; the pool {year} opens with "
+        f"comes from the close of {year - 1}, which was computed with {the}. {fix[0]} "
+        f"{the} changes {yr} and what its close carries forward: compute and "
+        f"close {yr} {after}again" if carried else
+        f": {it if one else 'they'} {does} not stop {year} and "
+        f"{'changes' if one else 'change'} nothing in it ({year} does not "
+        f"open from a recorded close). {yr}'s own ledger refuses {the}; "
+        f"{fix[1]} {it} changes {yr}: compute {yr} again")
+        + f" and, if {yr} is filed, see `tjs check-filed`")
+
+
+def _asked(o: Dict[str, Any], cur: str, amt: float, base: str) -> str:
+    """What the ledger says of a move nothing declares: the row, and the
+    .tt CASHMOVE line to add. The line carries its `row=` where one
+    without it would fit a Kraken Hybrid Earn row of that day and amount
+    as well and be refused (lib/cash_events `row_needed`), so the line
+    is taken as it is copied (review round 4)."""
+    from taxjson.lib.cash_lines import row_token
+    row = f" {row_token(str(o.get('where')))}" if o.get("row_needed") else ""
+    return (f"{o['book']}: {M.shown(amt, 2):+,.2f} {cur} "
+            f"{'came in' if amt > 0 else 'went out'} on {o['sd']} "
+            f"({o.get('desc') or 'a cash move'}, "
+            f"{o.get('where')}) and nothing says what it was — "
+            f"add `CASHMOVE {o['td']} {cur} {M.shown(amt, 2):.2f} "
+            + (f"cost=<what it cost in {base}>{row}` (or own / spot)" if amt > 0 else
+               f"kept{row}` (still yours elsewhere; or proceeds=<{base}> / spot / own)")
+            + f" to a .tt of {o['book'].split('/', 1)[0]}"
+            + (" (with its row=: a Kraken Hybrid Earn row of that day and amount takes "
+               "no line, and a line without row= fits both)" if row else "")
+            + _unclear_send(o))
+
+
+def _unsure(recon: List[Dict[str, Any]]) -> List[str]:
+    """A warning per statement balance that reconciles and that its
+    broker's parse is not sure of (a CASHBAL event's `unsure`: a Kraken
+    balance read from rows of one second in the file's order while their
+    balances do not settle which came last, lib/brokerages/kraken
+    `_kr_place`). One that does not reconcile says so in its gap line,
+    which quotes the same source; one that does would otherwise say it
+    nowhere, and a balance that agrees with the ledger by another order
+    of those rows is the check a missing row slips through (review
+    round 4)."""
+    return [f"{r['book']} {r['currency']}: the statement balance at the end of {r['date']} "
+            f"({M.shown(r['statement'], 2):,.2f}) reconciles, and may not be the balance at "
+            f"the end of that day ({r['source']})"
+            for r in recon if r.get("unsure") and r["ok"]]
+
+
+def _gap_text(book: str, cur: str, c: Dict[str, Any], led: float, gap: float,
+              source: str) -> str:
+    """What a statement balance that does not reconcile says. One read
+    from the balance an export OPENS a wallet at, after rows that are
+    missing from the exports read (a CASHBAL's `opens`: lib/brokerages/
+    kraken `_kr_wallet_at`), is said as that: no statement gave a balance
+    at the end of that day (review round 2, P3)."""
+    over = (f"gap {M.shown(gap, 2):+,.2f}, over the {M.shown(TOL, 2):.2f} tolerance")
+    if c.get("opens"):
+        return (f"{book} {cur}: {c['opens']} — rows between the two are missing from the "
+                f"exports read. The account's balance from that opening is "
+                f"{M.shown(c['balance'], 2):,.2f} where the ledger has {M.shown(led, 2):,.2f} "
+                f"at the end of {c['date']} ({over}): add the ledger export that holds "
+                f"the rows between ({source})")
+    return (f"{book} {cur}: the statement balance at "
+            f"the end of {c['date']} is {M.shown(c['balance'], 2):,.2f}, the "
+            f"ledger's {M.shown(led, 2):,.2f} ({over}) — a conversion, deposit or "
+            f"withdrawal the ledger does not see ({source})")
+
+
+def _unclear_send(o: Dict[str, Any]) -> str:
+    """What an undeclared move's question adds when the account's
+    sends.json decides a send alike to it and nothing says which row
+    each decision is of (lib/cash_events `send_decisions`): none is
+    taken (backlog TJ-4953)."""
+    if not o.get("send_unclear"):
+        return ""
+    return (f" (the account's sends.json has a decision for a send alike to this one — "
+            f"{o['send_unclear']} — and nothing says which row each decides, so none is "
+            f"taken)")
+
+
 def _p(kind: str, text: str, date: str = "", book: str = "",
        currency: str = "", amount: Optional[float] = None) -> Dict[str, Any]:
     return {"kind": kind, "date": date, "book": book or "",
@@ -430,30 +580,6 @@ def _carry_openings(carry: Dict[str, Any],
             if early_in is not None and units > _EPS:
                 early_in[k] = units
     return carried, notes
-
-
-def _reward_cash(row: Dict[str, Any], stable_cash: bool
-                 ) -> Optional[Tuple[str, float]]:
-    """(currency, units) of a reward paid in cash that the export prices
-    in ANOTHER currency: a Coinbase "Rewards Income" of 5 USDC valued at
-    6.85 CAD is booked as income in CAD (its DIVIDEND row's currency),
-    while the 5 US dollars (a USD stablecoin is US-dollar cash,
-    CA-CRYPTO-02) came into the account (backlog TJ-0038). None for
-    any other row, or when the row's currency is the reward's own."""
-    if row.get("action") != "DIVIDEND" or not str(
-            row.get("description") or "").lower().startswith(
-                "staking reward"):
-        return None
-    from taxjson.lib.brokerages._crypto_common import (FIAT_CURRENCIES,
-                                                       USD_STABLECOINS)
-    sym = str(row.get("symbol") or "").upper().split(".")[0]
-    cur = (sym if sym in FIAT_CURRENCIES else
-           "USD" if stable_cash and sym in USD_STABLECOINS else "")
-    units = abs(float(row.get("quantity") or 0.0))
-    if not cur or cur == str(row.get("currency") or "").upper() \
-            or units < _EPS:
-        return None
-    return cur, units
 
 
 def _in_lag(legs: List[Tuple[Any, ...]], dates: List[str]):
@@ -816,7 +942,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     has moved: _on_trade_dates; backlog TJ-0627) — the dates `tjs
     t1135` walks the securities on, so the cash that paid for shares is
     never counted with them, nor a sale's proceeds left out."""
-    from taxjson.lib.cash_legs import _cash_leg_dates
+    from taxjson.lib.cash_legs import _cash_leg_dates, _reward_cash
     if holdings_basis not in ("settle", "trade"):
         raise ValueError(f"holdings_basis {holdings_basis!r}: settle or "
                          f"trade")
@@ -964,10 +1090,9 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                 != base:
             notes.append(ev["text"])
     # .tt CASHMOVE lines: a declaration of a broker's move when one
-    # matches, else a move of their own (lib/cash_events; `tjs
-    # cash` lists the same).
-    from taxjson.lib.cash_events import apply_declarations
-    apply_declarations(events, lines)
+    # matches, else a move of their own; a stablecoin send's saved
+    # decision where none does (`_declarations`; `tjs cash` lists the same).
+    decl_warnings = _declarations(events, lines, base, year, problems, carry)
     # A conversion's commission in the base currency (IB's "Comm in
     # CAD", a Kraken conversion fee in CAD): part of the base amount
     # actually paid or received (CA-FX-07; a purchase commission adds
@@ -1068,6 +1193,8 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                 op(kind="move", sd=ev["settle"], td=ev["date"], book=book,
                    currency=ev["currency"].upper(), amount=ev["amount"],
                    decl=ev.get("decl"), desc=ev.get("desc", ""),
+                   send_unclear=ev.get("send_unclear"),
+                   row_needed=ev.get("row_needed"),
                    where=(ev.get("line_where") or ev.get("where", "")),
                    decl_where=ev.get("decl_where") or (
                        ev.get("where") if ev.get("origin") == "tt"
@@ -1728,15 +1855,15 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                    "statement": M.shown(c["balance"], 2),
                    "ledger": M.shown(led, 2), "gap": M.shown(gap, 2),
                    "ok": abs(gap) <= TOL,
-                   "source": c.get("where") or ""}
+                   "source": c.get("where") or "", "unsure": bool(c.get("unsure"))}
             recon.append(row)
             if not row["ok"]:
                 problems.append(_p(
-                    "reconcile", f"{book} {cur}: the statement balance at "
-                    f"the end of {c['date']} is {M.shown(c['balance'], 2):,.2f}, the "
-                    f"ledger's {M.shown(led, 2):,.2f} (gap {M.shown(gap, 2):+,.2f}, over the "
-                    f"{M.shown(TOL, 2):.2f} tolerance) — a conversion, deposit or "
-                    f"withdrawal the ledger does not see ({row['source']})"
+                    "reconcile",
+                    _gap_text(book, cur, c, led, gap, row["source"])
+                    # (worded by what the balance was read from: a
+                    # statement's balance, or the opening of the export
+                    # after rows that are missing)
                     + _stable_bal_note(c), c["date"], book, cur, gap))
             continue
         if o["kind"] == "flow":
@@ -1823,18 +1950,8 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                                  "how": "spot (fx_cash_inflow_cost)",
                                  "where": o.get("where", "")})
             else:
-                problems.append(_p(
-                    "undeclared", f"{o['book']}: {M.shown(amt, 2):+,.2f} {cur} "
-                    f"{'came in' if amt > 0 else 'went out'} on {o['sd']} "
-                    f"({o.get('desc') or 'a cash move'}, "
-                    f"{o.get('where')}) and nothing says what it was — "
-                    f"add `CASHMOVE {o['td']} {cur} {M.shown(amt, 2):.2f} "
-                    + ("cost=<what it cost in " + base + ">` (or own / "
-                       "spot)" if amt > 0 else
-                       "kept` (still yours elsewhere; or proceeds=<"
-                       + base + "> / spot / own)")
-                    + f" to a .tt of {o['book'].split('/', 1)[0]}",
-                    o["sd"], o["book"], cur, amt))
+                problems.append(_p("undeclared", _asked(o, cur, amt, base),
+                                   o["sd"], o["book"], cur, amt))
                 # Walked on (to find the other problems) as the neutral
                 # reading: in at the day's rate, out at its cost.
                 how = "spot" if amt > 0 else "kept"
@@ -2112,7 +2229,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
         "notes": notes,
         # lib/cash_events.collect's warnings (one event two files date
         # differently): said, never a refusal.
-        "warnings": list(cash.get("warnings") or []),
+        "warnings": list(cash.get("warnings") or []) + decl_warnings + _unsure(recon),
         # Books whose broker's parse builds no cash event (`Books.unread`):
         # each with whether a CASHBOOK line declared its lines complete.
         "unread_books": unread,
@@ -2348,6 +2465,18 @@ def headline(doc: Dict[str, Any], verdict: Optional[Dict[str, Any]]
             f"{M.shown(doc['net_gain'], 2):,.2f} {doc['currency']}"
             + (f", reportable {M.shown(rep, 2):,.2f}" if rep is not None else "")
             + "; review it before using it")
+
+
+def warned(doc: Dict[str, Any], where: str = "") -> str:
+    """How many warnings the v2 result carries, for the one-line outputs
+    that show the headline and not the report (the end-of-run note, the
+    `tjs sum` line): "2 warnings in reports/fx_cash.rpt" (`where`: the
+    report, when one was written), "" without one. A warning was in the
+    report alone and reached no screen (review round 6)."""
+    n = len(doc.get("warnings") or [])
+    if not n:
+        return ""
+    return f"{n} warning{'' if n == 1 else 's'}" + (f" in {where}" if where else "")
 
 
 def render(doc: Dict[str, Any], verdict: Optional[Dict[str, Any]],

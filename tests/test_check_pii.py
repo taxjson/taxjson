@@ -201,6 +201,60 @@ class TestMediumRoundGaps(_Sandbox):
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn("no private denylist", r.stdout)
 
+    def test_a_tree_git_cannot_list_fails_closed(self):   # TJ-5082
+        """A source archive with no .git: `git ls-files` fails, and the
+        scan of no file said "clean" at exit 0. It fails closed, naming
+        how to pass the paths; given them, it scans the files."""
+        import shutil
+        shutil.rmtree(self.repo / ".git")
+        (self.repo / "notes.txt").write_text(f"see {_ACCT} here\n")
+        env = dict(self.env, GIT_CEILING_DIRECTORIES=str(self.tmp))
+        r = subprocess.run(["bash", str(self.repo / "scripts" / "check-pii.sh")],
+                           cwd=self.repo, capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertNotIn("check-pii: clean", r.stdout)
+        self.assertIn("cannot list the files git sees", r.stdout)
+        self.assertIn("scripts/check-pii.sh .", r.stdout)
+        # (no file read: no content to fix or mark pii-ok)
+        self.assertIn("the tree was not scanned", r.stdout)
+        self.assertNotIn("pii-ok", r.stdout)
+        r = subprocess.run(["bash", str(self.repo / "scripts" / "check-pii.sh"), "."],
+                           cwd=self.repo, capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("private denylist match", r.stdout)
+        (self.repo / "notes.txt").write_text("nothing here\n")
+        r = subprocess.run(["bash", str(self.repo / "scripts" / "check-pii.sh"),
+                            "notes.txt"],
+                           cwd=self.repo, capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+    def test_a_tree_git_lists_nothing_in_fails_closed(self):   # TJ-5082
+        """The tree unpacked in a folder another repository ignores: `git
+        ls-files` succeeds and lists no file, and the scan of none said
+        "clean" at exit 0. It fails closed, as with no git; given the
+        paths, it scans them."""
+        import shutil
+        with open(self.repo / ".gitignore", "a") as f:
+            f.write("tmp_export/\n")
+        tree = self.repo / "tmp_export"
+        (tree / "scripts").mkdir(parents=True)
+        shutil.copy(self.repo / "scripts" / "check-pii.sh", tree / "scripts")
+        (tree / "notes.txt").write_text(f"see {_ACCT} here\n")
+        self.assertEqual(self.git("-C", str(tree), "ls-files", "--cached",
+                                  "--others", "--exclude-standard"), "")
+        r = subprocess.run(["bash", str(tree / "scripts" / "check-pii.sh")],
+                           cwd=tree, capture_output=True, text=True, env=self.env)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertNotIn("check-pii: clean", r.stdout)
+        self.assertIn("git lists no file here", r.stdout)
+        self.assertIn("nothing was scanned — pass the paths instead "
+                      "(scripts/check-pii.sh .)", r.stdout)
+        self.assertNotIn("pii-ok", r.stdout)
+        r = subprocess.run(["bash", str(tree / "scripts" / "check-pii.sh"), "."],
+                           cwd=tree, capture_output=True, text=True, env=self.env)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("private denylist match", r.stdout)
+
     def test_sin_shape_with_valid_check_digit(self):   # S022-05 hardening
         sin = "046" + " 454 " + "286"                   # CRA's published sample
         r = self.scan("--text", stdin=f"SIN {sin}\n")

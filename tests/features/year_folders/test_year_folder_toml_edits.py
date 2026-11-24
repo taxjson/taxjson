@@ -218,6 +218,24 @@ def _align(folder: Path, frm: int):
     return 0
 
 
+def _align_err(folder: Path, frm: int):
+    """`_align`, its stderr kept: (exit code, stderr)."""
+    import contextlib
+    import io
+    from taxjson.cli import setup as cli_setup
+    args = argparse.Namespace(dir=str(folder), from_year=frm, write=True,
+                              all=True, json=False)
+    err = io.StringIO()
+    try:
+        with mock.patch("sys.stdout"), contextlib.redirect_stderr(err):
+            cli_setup.cmd_align(args)
+    except SystemExit as e:
+        if isinstance(e.code, int):
+            return e.code, err.getvalue()
+        return 1, err.getvalue() + str(e.code or "")
+    return 0, err.getvalue()
+
+
 class TestAlign(unittest.TestCase):
     def _pair(self):
         top = _years((2024, _cfg(2024) + _DIST), (2025, _cfg(2025)))
@@ -267,6 +285,93 @@ class TestAlign(unittest.TestCase):
             self.assertEqual(_align(top / "2025", 2024), 2)
         self.assertEqual((top / "2025" / "ticker.map").read_text(), "")
         self.assertNotIn("distributions", _doc(top / "2025"))
+
+    def test_a_ctrl_c_at_the_second_write_puts_the_map_back(self):
+        """TJ-5079: a Ctrl-C as taxjson.toml is written puts ticker.map
+        back and removes the backup its write made, exit 130, and says
+        nothing was written; one after both writes says they were."""
+        from taxjson.lib import safe_write
+        real = safe_write.write_user_file
+        for at in ("taxjson.toml", "after"):
+            with self.subTest(at=at):
+                top = self._pair()
+                y = top / "2025"
+                (y / "ticker.map").write_text("# mine\n")
+                cfg = (y / "taxjson.toml").read_bytes()
+
+                def _stop(path, *a, **k):
+                    if Path(path).name == at:
+                        raise KeyboardInterrupt
+                    bak = real(path, *a, **k)
+                    if at == "after" and Path(path).name == "taxjson.toml":
+                        raise KeyboardInterrupt
+                    return bak
+                with mock.patch.object(safe_write, "write_user_file", _stop):
+                    code, err = _align_err(y, 2024)
+                self.assertEqual(code, 130, err)
+                self.assertIn("tjs align: error: interrupted — ", err)
+                baks = sorted(p.name for p in y.iterdir() if ".bak" in p.name)
+                if at == "after":
+                    self.assertIn("the changes were written: ticker.map: 1 "
+                                  "line(s) added", err)
+                    self.assertIn("QUOTE QZZQ.TO", (y / "ticker.map").read_text())
+                    self.assertIn("distributions", _doc(y))
+                    self.assertEqual(baks, ["taxjson.toml.bak", "ticker.map.bak"])
+                    continue
+                self.assertIn("nothing was written: ", err)
+                self.assertIn("ticker.map and ", err)
+                self.assertIn("taxjson.toml are as they were", err)
+                self.assertEqual((y / "ticker.map").read_text(), "# mine\n")
+                self.assertEqual((y / "taxjson.toml").read_bytes(), cfg)
+                self.assertEqual(baks, [])
+
+    def test_a_read_only_config_is_refused_before_the_map_is_written(self):
+        """TJ-4625: a read-only taxjson.toml is refused before ticker.map
+        is touched: no ticker.map.bak, the map as it was."""
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root writes a read-only file")
+        top = self._pair()
+        y = top / "2025"
+        (y / "ticker.map").write_text("# mine\n")
+        os.utime(y / "ticker.map", ns=(10**18, 10**18))
+        os.chmod(y / "taxjson.toml", 0o444)
+        self.addCleanup(os.chmod, y / "taxjson.toml", 0o644)
+        code, err = _align_err(y, 2024)
+        self.assertEqual(code, 2, err)
+        self.assertIn("taxjson.toml: the file is read-only", err)
+        self.assertIn("Nothing was changed.", err)
+        self.assertEqual((y / "ticker.map").read_text(), "# mine\n")
+        self.assertEqual((y / "ticker.map").stat().st_mtime_ns, 10**18)
+        self.assertEqual(sorted(p.name for p in y.iterdir()),
+                         ["taxjson.toml", "ticker.map"])
+
+    def test_a_failed_write_leaves_no_new_backup(self):
+        """TJ-5078: the backup the map's write made goes with the write
+        taken back; a backup that was there before stays."""
+        from taxjson.lib import safe_write
+        real = safe_write.write_user_file
+
+        def _fail_toml(path, *a, **k):
+            if Path(path).name == "taxjson.toml":
+                raise OSError(28, "No space left on device")
+            return real(path, *a, **k)
+        for older in (None, "# older\n", "# mine\n"):
+            with self.subTest(older=older):
+                top = self._pair()
+                y = top / "2025"
+                (y / "ticker.map").write_text("# mine\n")
+                if older is not None:
+                    (y / "ticker.map.bak").write_text(older)
+                with mock.patch.object(safe_write, "write_user_file",
+                                       _fail_toml):
+                    code, err = _align_err(y, 2024)
+                self.assertEqual(code, 2, err)
+                self.assertIn("Nothing was changed.", err)
+                self.assertEqual((y / "ticker.map").read_text(), "# mine\n")
+                baks = {p.name: p.read_text() for p in y.iterdir()
+                        if ".bak" in p.name}
+                self.assertEqual(baks, {} if older is None
+                                 else {"ticker.map.bak": older})
 
     def test_dotted_account_name(self):
         """#36: one name; its ids never shown; written in its table."""
@@ -414,6 +519,40 @@ class TestNewYear(unittest.TestCase):
         self.assertEqual(list((top / "2025").iterdir()), [])
         self.assertEqual(sorted(p.name for p in top.iterdir()),
                          ["2024", "2025", "inputs"])
+
+    def test_a_ctrl_c_at_the_second_move_is_taken_back(self):
+        """TJ-5079: a Ctrl-C as the second file is moved into an empty
+        2025/ takes the first back, exit 130, and says so; a retry then
+        makes the year."""
+        import contextlib
+        import io
+        from taxjson.cli import setup as cli_setup
+        top = _years((2024, _cfg()))
+        (top / "2025").mkdir()
+        real = os.rename
+        calls = []
+
+        def _rename(a, b):
+            calls.append(Path(b).name)
+            if len(calls) == 2:
+                raise KeyboardInterrupt
+            return real(a, b)
+        err = io.StringIO()
+        with mock.patch.object(os, "rename", _rename), \
+                mock.patch("sys.stdout"), contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit) as cm:
+                cli_setup.cmd_new_year(argparse.Namespace(
+                    dir=str(top), year=2025, details=False, json=False))
+        self.assertEqual(cm.exception.code, 130, err.getvalue())
+        self.assertEqual(calls[0], "ticker.map")
+        self.assertIn("tjs new-year: error: interrupted — nothing was "
+                      "created: 2025/ is as it was", err.getvalue())
+        self.assertEqual(list((top / "2025").iterdir()), [])
+        self.assertEqual(sorted(p.name for p in top.iterdir()),
+                         ["2024", "2025", "inputs"])
+        r = tjs("-C", str(top), "new-year", "2025")
+        self.assertEqual(r.returncode, 0, _out(r))
+        self.assertTrue((top / "2025" / "taxjson.toml").is_file())
 
     @rule(R.CA_OPT_01)
     def test_canada_keeps_the_default_cutoff(self):

@@ -32,13 +32,15 @@ import csv
 import json
 import tempfile
 from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
 
 from taxjson.project.accounts import accounts_of
 from taxjson.project.settings import settings_of
 from taxjson.lib.tx_load import finite_num
 from taxjson.lib.filed_locks import _d
+from taxjson.lib.futures_prefixes import canonical_futures_symbol
 from taxjson.model import money as M
 from taxjson.model.result import GainRow, Result, ResultShapeError
 
@@ -552,7 +554,9 @@ def load_filed_dispositions(path: Path, year: Optional[int] = None
         try:
             rows.append({
                 "account": (r.get("account") or "").strip(),
-                "symbol": r["symbol"].strip(),
+                # A future's `/` or `\` prefix is `F:`, as the books
+                # spell it (lib/futures_prefixes, backlog TJ-5150).
+                "symbol": canonical_futures_symbol(r["symbol"].strip()),
                 "date": str(_d(r["date"]) or ""),
                 "qty": abs(float(r["qty"])),
                 "proceeds": M.shown(float(r["proceeds"]), 2),
@@ -608,18 +612,219 @@ def _eff_date(r: Dict[str, Any], basis: str, ir) -> Optional[date]:
         return _d(r.get("date"))
 
 
+def _cents(v: Any) -> float:
+    return M.shown(M.of(v or 0), 2)
+
+
+def _income(r: Dict[str, Any]) -> float:
+    """What the income summary counts for an income row (lib/
+    income_summary `income_amount`: a dividend's gross), a trade's net:
+    the amount a boundary row is compared at (backlog TJ-5066)."""
+    from taxjson.lib.income_summary import income_amount
+    if str(r.get("action") or "").upper() in _TRADES:
+        return _cents(r.get("net_amount"))
+    return _cents(income_amount(r))
+
+
+_CENT, _HALF_CENT = Decimal("0.01"), Decimal("0.005")
+
+
+def _c(v: Any) -> Decimal:
+    """An amount the broker stated, in cents: half up from the decimal
+    as written, past a computation's residue beyond the sixth place
+    (57.37499999 is 57.375, so 57.38)."""
+    return M.of(v or 0).quantize(Decimal("1e-6"), ROUND_HALF_UP).quantize(
+        _CENT, ROUND_HALF_UP)
+
+
+def _moved(a: Any, b: Any) -> bool:
+    """Two amounts the broker stated differ in cents (`_c`: 57.375 and
+    57.38 are both 57.38; backlog TJ-5180)."""
+    return _c(a) != _c(b)
+
+
+def _near(n: Any, xn: Any) -> bool:
+    """One row's amount in two readings, within the identity tolerance:
+    a cent, or 0.5% of the record's."""
+    d, x = M.of(n or 0), M.of(xn or 0)
+    return abs(d - x) <= max(_CENT, _HALF_CENT * abs(x))
+
+
+class _Stated(NamedTuple):
+    """A row's amounts as the broker stated them, each in the currency
+    it was stated in (backlog TJ-5065, TJ-5180): `income` in `cur` (a
+    dividend's gross, else the net: income_summary `income_amount`), the
+    row's own `net` in `cur` (None: the merge netted its day's TAX rows
+    into it, merge2 `reconcile_dividend_tax`), and `withheld`
+    {currency: tax withheld}, each TAX row's in its own currency, else
+    the row's gross less its net, in cents; `day` instead, where two or
+    more dividends of the security share the day's TAX rows: the day's
+    withholding, compared once (`_day_withheld`; backlog TJ-5185)."""
+    cur: str
+    income: Any
+    net: Any
+    withheld: Dict[str, Any]
+    day: Optional[Dict[str, Any]] = None
+
+
+def _stated(cur: str, income: Any, net: Any,
+            taxes: Optional[Dict[str, Any]] = None,
+            day: Optional[Dict[str, Any]] = None) -> _Stated:
+    if taxes is None:
+        w = _c(income) - _c(net) if net is not None else 0
+        taxes = {cur: w} if w else {}
+    return _Stated(cur, income, net, dict(taxes),
+                   dict(day) if day is not None else None)
+
+
+def _stated_of(x: Dict[str, Any]) -> Optional[_Stated]:
+    """A record row's `_Stated`, or None when it has none (written
+    before backlog TJ-5065, or its amounts were not the broker's)."""
+    cur = str(x.get("native_currency") or "").strip().upper()
+    if not cur or x.get("native_income") is None:
+        return None
+    w, day = x.get("native_withheld"), x.get("native_withheld_day")
+    if isinstance(day, dict):
+        return _stated(cur, x["native_income"], None, {}, day)
+    return _stated(cur, x["native_income"], x.get("native_net"),
+                   w if isinstance(w, dict) else None)
+
+
+def _is_tax(t: Dict[str, Any]) -> bool:
+    return (str(t.get("action") or "").upper() == "TAX"
+            or str(t.get("type") or "").lower() == "tax")
+
+
+class _Native:
+    """A base row's amounts as the broker stated them (`of`, backlog
+    TJ-5065, TJ-5180). An equity account's are its native books,
+    work/<account>_raw.json: a row the conversion relabelled carries the
+    currency it was in (`trade_currency`, bin/taxjson_convert_currency)
+    and is found there by its id (one merge of the same sources); any
+    other row is in its own currency already. A crypto account's are
+    work/<account>_filled.json's rows the fill stage left as parsed
+    (_sorted.json's): one it priced from the price cache is taxjson's
+    figure, not the broker's. Each book is read once."""
+
+    def __init__(self, cache: Path):
+        self.cache = Path(cache)
+        self.books: Dict[str, Any] = {}
+
+    def _book(self, account: str, crypto: bool) -> Tuple[
+            Path, Optional[Dict[str, List[Dict[str, Any]]]],
+            Dict[Tuple[str, str, str], Dict[str, Any]],
+            Optional[Dict[str, Dict[str, Any]]]]:
+        """(path, {id: rows} or None when the file is missing, {(broker
+        account, symbol, day): {"~currency": the TAX rows' sum, and ""
+        the day's dividends' count}}, crypto: the parse {id: row})."""
+        if account not in self.books:
+            p = self.cache / f"{account}{'_filled' if crypto else '_raw'}.json"
+            rows: Optional[Dict[str, List[Dict[str, Any]]]] = None
+            taxes: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+            if p.exists():
+                rows = {}
+                for t in _rows(p):
+                    k = (str(t.get("account") or ""),
+                         str(t.get("symbol") or ""),
+                         str(t.get("date") or "")[:10])
+                    if _is_tax(t):
+                        c = "~" + str(t.get("currency") or "").strip().upper()
+                        d = taxes.setdefault(k, {})
+                        d[c] = d.get(c, 0) + M.of(t.get("net_amount") or 0)
+                    elif str(t.get("action") or "").upper() == "DIVIDEND":
+                        d = taxes.setdefault(k, {})
+                        d[""] = d.get("", 0) + 1
+                    if t.get("id") not in (None, ""):
+                        rows.setdefault(str(t["id"]), []).append(t)
+            sp = self.cache / f"{account}_sorted.json"
+            parsed = ({str(t["id"]): t for t in _rows(sp)
+                       if t.get("id") not in (None, "")} if crypto else None)
+            self.books[account] = (p, rows, taxes, parsed)
+        return self.books[account]
+
+    @staticmethod
+    def _as_parsed(n: Dict[str, Any], parsed: Dict[str, Dict[str, Any]]
+                   ) -> bool:
+        """A crypto row the fill stage did not price: its parse has the
+        same currency and amounts (taxjson_audit `priced_by_fill`)."""
+        p = parsed.get(str(n.get("id")))
+        return p is not None and (
+            str(p.get("currency") or "").upper()
+            == str(n.get("currency") or "").upper()) and all(
+            abs(M.of(p.get(k) or 0) - M.of(n.get(k) or 0)) <= Decimal("1e-9")
+            for k in ("net_amount", "gross_amount"))
+
+    def of(self, r: Dict[str, Any], account: str, crypto: bool = False
+           ) -> Tuple[Optional[_Stated], Optional[str]]:
+        """(base row `r`'s `_Stated`, None), or (None, why it has none:
+        `missing:<book>`, `absent:<book>` or `computed`)."""
+        from taxjson.lib.income_summary import income_amount
+        cur = str(r.get("currency") or "").strip().upper()
+        was = str(r.get("trade_currency") or "").strip().upper()
+        p, rows, taxes, parsed = self._book(account, crypto)
+        a = str(r.get("action") or "").upper()
+        # The row of its id, action and day, then symbol (two: neither).
+        alike = [t for t in (rows or {}).get(str(r.get("id")), [])
+                 if str(t.get("action") or "").upper() == a
+                 and str(t.get("date") or "")[:10]
+                 == str(r.get("date") or "")[:10]] \
+            if r.get("id") not in (None, "") else []
+        if len(alike) > 1:
+            alike = [t for t in alike if t.get("symbol") == r.get("symbol")]
+        n = alike[0] if len(alike) == 1 else None
+        if n is None:
+            if crypto or (was and was != cur):
+                return None, (f"missing:{_label(p)}" if rows is None
+                              else f"absent:{_label(p)}")
+            n = r                       # in its own currency already
+        elif crypto and not self._as_parsed(n, parsed or {}):
+            return None, "computed"
+        ncur = str(n.get("currency") or "").strip().upper()
+        if not ncur:
+            return None, f"absent:{_label(p)}"
+        day = (taxes.get((str(n.get("account") or ""),
+                          str(n.get("symbol") or ""),
+                          str(n.get("date") or "")[:10]))
+               if a == "DIVIDEND" else None) or {}
+        # The day's TAX rows as written (a TAX row with no currency is in
+        # the dividend's): this dividend's, or, shared by two or more
+        # dividends of the day, the day's (backlog TJ-5185).
+        w: Dict[str, Any] = {}
+        for c, v in day.items():
+            if c:
+                w[c[1:] or ncur] = w.get(c[1:] or ncur, 0) + v
+        if a in _TRADES:
+            income: Any = n.get("net_amount") or 0
+        else:
+            income = income_amount(n)
+        if w and day.get("", 0) > 1:
+            return _stated(ncur, income, None, {}, w), None
+        return _stated(ncur, income, None if w else n.get("net_amount") or 0,
+                       w or None), None
+
+
 def boundary_rows(cache: Path, cfg: Dict[str, Any], year: int
                   ) -> List[Dict[str, Any]]:
     """Every taxable trade and income row of December `year` and January
-    `year + 1` (by its own date or the date the books count it on), with
-    that tax date: the next project's `handoff` checks rows the two
+    `year + 1`, by its own date or its tax date, for the next year's
+    hand-off: the rows an export re-dated after the close, or the two
     projects put on different sides of Dec 31 — income a trust record
     date, a RIC January dividend or a local_timezone re-dating moves
     across the boundary, and a fill the overnight shift moved into
-    January (A2-0120, A2-0343, A2-0344, A2-0670, A2-0675)."""
+    January (A2-0120, A2-0343, A2-0344, A2-0670, A2-0675). Each row
+    keeps its base amounts, `net` and `income` (what the income summary
+    counts: a dividend's gross; backlog TJ-5066), and the amounts the
+    broker stated (`_Native`), which the check compares to the cent
+    (TJ-5065, TJ-5180): `native_currency`, `native_income` and
+    `native_net` as written, or for a dividend whose day's TAX rows the
+    merge netted into it, `native_withheld` {currency: amount} (shared
+    by two or more dividends of the security: `native_withheld_day`,
+    the day's; TJ-5185); none for a row whose amounts are taxjson's. A converted row whose native book
+    is missing is a BooksError: re-run `tjs run`."""
     settings = settings_of(cfg)
     basis = _basis(settings)
     ir = _income_rules(settings)
+    native = _Native(cache)
     lo, hi = date(year, 12, 1), date(year + 1, 1, 31)
     out = []
     for g, names in groups(cfg).items():
@@ -632,21 +837,39 @@ def boundary_rows(cache: Path, cfg: Dict[str, Any], year: int
                 if not ((eff and lo <= eff <= hi)
                         or (raw and lo <= raw <= hi)):
                     continue
-                out.append({"group": g, "account": n, "action": a,
-                            "symbol": r.get("symbol"), "date": str(raw),
-                            "date_settle": str(_d(r.get("date_settle"))
-                                               or raw),
-                            # Full precision: a coin reward of
-                            # 0.000123456789 rounded to 8 places no
-                            # longer matched its own row.
-                            "quantity": float(r.get("quantity") or 0.0),
-                            "net": M.shown(float(r.get("net_amount")
-                                                 or 0.0), 2),
-                            "tax_date": str(eff) if eff else None})
+                row = {"group": g, "account": n, "action": a,
+                       "symbol": r.get("symbol"), "date": str(raw),
+                       "date_settle": str(_d(r.get("date_settle")) or raw),
+                       # Full precision: a coin reward of
+                       # 0.000123456789 rounded to 8 places no longer
+                       # matched its own row.
+                       "quantity": float(r.get("quantity") or 0.0),
+                       "net": M.shown(float(r.get("net_amount") or 0.0), 2),
+                       "income": _income(r),
+                       "tax_date": str(eff) if eff else None}
+                nat, why = native.of(r, n, g == "crypto")
+                if nat is not None:
+                    row.update(native_currency=nat.cur,
+                               native_income=nat.income)
+                    if nat.net is not None:
+                        row["native_net"] = nat.net
+                    else:
+                        row["native_withheld" if nat.day is None
+                            else "native_withheld_day"] = {
+                            c: M.from_money(M.of(v)) for c, v in sorted(
+                                (nat.withheld if nat.day is None
+                                 else nat.day).items())}
+                elif (str(why).startswith("missing:")
+                      and r.get("trade_currency") not in (None, "",
+                                                          r.get("currency"))):
+                    raise BooksError(
+                        f"{why[8:]} is missing: the books before "
+                        f"conversion, which the Dec-31 rows are recorded "
+                        f"from (backlog TJ-5181) — re-run `tjs run` to "
+                        f"rebuild it")
+                out.append(row)
     out.sort(key=lambda x: (x["date"], x["symbol"] or "", x["action"]))
     return out
-
-
 def record_fields(root: Path, cfg: Dict[str, Any], year: int,
                   gains_files: Dict[str, Path], run_gains: RunGains,
                   common_flags: List[str],
@@ -701,6 +924,13 @@ def _txt(v: Any, *, none_ok: bool = True) -> bool:
 
 
 # Per list: {field: (check, required)}.
+def _withheld_ok(v: Any) -> bool:
+    """A boundary row's `native_withheld` / `native_withheld_day`:
+    {currency: amount}."""
+    return isinstance(v, dict) and all(
+        _txt(k, none_ok=False) and _num(w) for k, w in v.items())
+
+
 _REC_LISTS = {
     "dispositions": {"symbol": (lambda v: _txt(v, none_ok=False)
                                 and bool(v.strip()), True),
@@ -721,6 +951,13 @@ _REC_LISTS = {
     "boundary_rows": {"symbol": (_txt, False), "action": (_txt, False),
                       "quantity": (lambda v: _num(v, none_ok=True), False),
                       "net": (lambda v: _num(v, none_ok=True), False),
+                      "income": (lambda v: _num(v, none_ok=True), False),
+                      "native_currency": (_txt, False),
+                      "native_net": (lambda v: _num(v, none_ok=True), False),
+                      "native_income": (lambda v: _num(v, none_ok=True),
+                                        False),
+                      "native_withheld": (_withheld_ok, False),
+                      "native_withheld_day": (_withheld_ok, False),
                       "date": (_txt, False), "tax_date": (_txt, False)},
 }
 
@@ -1086,13 +1323,84 @@ def _timing_issues(cache: Path, cfg: Dict[str, Any],
     return out
 
 
+class _Here(NamedTuple):
+    """A base row's amounts for the boundary check: `net` and `income`
+    (lib/income_summary `income_amount`) in the base currency, `native`
+    (`_Native.of`: as the broker stated them) and, without them, `why`."""
+    net: float
+    income: float
+    native: Optional[_Stated]
+    why: Optional[str]
+
+
+def _here(r: Dict[str, Any], account: str,
+          native: Optional[_Native] = None, crypto: bool = False) -> _Here:
+    nat, why = (native.of(r, account, crypto) if native is not None
+                else (None, None))
+    return _Here(_cents(r.get("net_amount")), _income(r), nat, why)
+
+
+def _space(h: _Here, x: Dict[str, Any]) -> Optional[_Stated]:
+    """Record row `x`'s `_Stated` when both sides have one in one
+    currency: the two are compared to the cent. None: in the base
+    currency, within the tolerance (`_rough`)."""
+    xs = _stated_of(x)
+    if h.native is not None and xs is not None and xs.cur == h.native.cur:
+        return xs
+    return None
+
+
+def _rough(h: _Here, x: Dict[str, Any]) -> Optional[str]:
+    """Why a row and record row `x` are compared only within the
+    tolerance (`_boundary_section` counts them; backlog TJ-5181), or None
+    when they are compared to the cent."""
+    if _space(h, x) is not None:
+        return None
+    if h.why:
+        return h.why
+    return "record" if _stated_of(x) is None else "currency"
+
+
+def _w_moved(now: _Stated, was: _Stated) -> List[str]:
+    """The currencies whose tax withheld differs to the cent; none where
+    either side's is a day's shared by its dividends (`_day_withheld`
+    compares that once)."""
+    if now.day is not None or was.day is not None:
+        return []
+    return sorted(c for c in set(now.withheld) | set(was.withheld)
+                  if _moved(now.withheld.get(c, 0), was.withheld.get(c, 0)))
+
+
+def _changed(h: _Here, x: Dict[str, Any]) -> bool:
+    """Whether the row `_same_row` matched to record row `x` was
+    corrected since: its income (a dividend's gross) or a tax withheld
+    differs to the cent as the broker stated them, each in its own
+    currency, so a converted amount that moved only with the rate is no
+    change (backlog TJ-5065, TJ-5066, TJ-5180); in the base currency, by
+    more than the identity tolerance (an older record: its net matched,
+    so no change, as before)."""
+    xs = _space(h, x)
+    if xs is not None and h.native is not None:
+        return _moved(h.native.income, xs.income) or bool(
+            _w_moved(h.native, xs))
+    if x.get("income") is None:
+        return False
+    return not _near(h.income, x["income"])
+
+
 def _same_row(r: Dict[str, Any], x: Dict[str, Any],
-              account: Optional[str] = None, amount: bool = True) -> bool:
+              account: Optional[str] = None, amount: bool = True,
+              here: Optional[_Here] = None) -> bool:
     """A base row of this project (of taxjson account `account`) and a
     record's boundary row are the same row: account (when both name
     one: an older record's rows do not), action, symbol, own date,
-    quantity and amount (`amount` False: any amount — the row as the
-    broker corrected it)."""
+    quantity and, within the identity tolerance (`_near`), the amount
+    (`amount` False: any amount — the row as the broker corrected it):
+    the income as the broker stated it where both sides have it
+    (`_space`; `here`: this row's amounts), so a rate refreshed since
+    moves no row out, else the base net. The tolerance identifies the
+    row; whether it was corrected is `_changed`, to the cent (backlog
+    TJ-5065)."""
     if account and x.get("account") and x.get("account") != account:
         return False
     if str(r.get("action") or "").upper() != x.get("action") \
@@ -1105,55 +1413,500 @@ def _same_row(r: Dict[str, Any], x: Dict[str, Any],
         return False
     if not amount:
         return True
-    n, xn = float(r.get("net_amount") or 0.0), float(x.get("net") or 0.0)
-    return abs(n - xn) <= max(0.01, 0.005 * abs(xn))
+    h = here or _here(r, account or "")
+    xs = _space(h, x)
+    if xs is not None and h.native is not None:
+        return _near(h.native.income, xs.income)
+    return _near(h.net, x.get("net"))
 
 
+def _j(v: Any) -> Any:
+    return M.json_money(M.of(v or 0), 2)
+
+
+def _f(v: Any) -> str:
+    return f"{M.shown(M.of(v or 0), 2):,.2f}"
+
+
+def _correction(r: Dict[str, Any], x: Dict[str, Any], h: _Here, ry: int,
+                what: str, raw: Optional[date], eff: date,
+                gone: Optional[Tuple[str, date]] = None) -> Dict[str, Any]:
+    """The item of a row the closed books counted in the closed year
+    that the export corrected since (`_changed`; backlog TJ-0224): both
+    readings and what the return reported, as the broker stated them
+    where both sides have them (`_space`: each in its currency when it
+    is not the base one), a dividend's gross beside its tax withheld
+    when either side has one, and each difference in the space that
+    raised it (`difference` is the base net's: the rate's move with the
+    correction; backlog TJ-5065, TJ-5066, TJ-5180). `gone` (account,
+    the first day its exports hold): a row they no longer hold
+    (`_removed`)."""
+    base = str(r.get("currency") or "").strip().upper()
+    xs = _space(h, x)
+    if xs is not None and h.native is not None:
+        now, was = h.native, xs
+    else:                               # in the base currency
+        xi = x.get("income")
+        now = _stated(base, h.net if xi is None else h.income, h.net)
+        was = _stated(base, x.get("net") if xi is None else xi,
+                      x.get("net") or 0)
+    cur = now.cur
+    c = f" {cur}" if cur != base else ""
+
+    def cs(wc: str) -> str:
+        return c if wc == cur else f" {wc}"
+    wcs = ([] if now.day is not None or was.day is not None
+           else sorted(set(now.withheld) | set(was.withheld)))
+    wm = _w_moved(now, was)
+    di = M.of(now.income or 0) - M.of(was.income or 0)
+    inc = _moved(now.income, was.income) or not wm
+
+    def _at(s: _Stated) -> str:
+        if not wcs:
+            return f"{_f(s.income)}{c}"
+        return f"{_f(s.income)}{c} gross, " + ", ".join(
+            f"{_f(s.withheld.get(wc, 0))}{cs(wc)} withheld" for wc in wcs)
+    wparts = []
+    for wc in wm:
+        dw = M.of(now.withheld.get(wc, 0)) - M.of(was.withheld.get(wc, 0))
+        wparts.append(f"{_f(abs(dw))}{cs(wc)} {'less' if dw > 0 else 'more'}"
+                      f" tax withheld")
+    slip = [f"{_f(now.withheld.get(wc, 0))}{cs(wc)} withheld" for wc in wm]
+    if inc:
+        said = (f"{_f(abs(di))}{c} {'less' if di > 0 else 'more'}"
+                + (", and " + " and ".join(wparts) if wparts else "")
+                + " than the row now says. Compare it with the slip: if "
+                + "the slip says " + " and ".join([f"{_f(now.income)}{c}"]
+                                                  + slip))
+    else:
+        said = (f"the same {what} but " + " and ".join(wparts)
+                + " than the row now says. Compare it with the slip: if "
+                + "it says " + " and ".join(slip))
+    xn = _cents(x.get("net"))
+    item: Dict[str, Any] = {
+        "symbol": r.get("symbol"), "action": str(r.get("action") or "").upper(),
+        "date": str(raw), "tax_date": str(eff), "amount": h.net,
+        "recorded_amount": xn, "difference": _j(M.of(h.net) - M.of(xn))}
+    if x.get("income") is not None:
+        item.update(income=h.income, recorded_income=_cents(x["income"]),
+                    income_difference=_j(M.of(h.income)
+                                         - M.of(x["income"])))
+    if c:
+        item.update(currency=cur, native_income=_j(now.income),
+                    recorded_native_income=_j(was.income),
+                    native_income_difference=_j(di))
+        if now.net is not None and was.net is not None:
+            item.update(native_amount=_j(now.net),
+                        recorded_native_amount=_j(was.net),
+                        native_difference=_j(M.of(now.net) - M.of(was.net)))
+    if wcs:
+        item.update(
+            withheld={wc: _j(now.withheld.get(wc, 0)) for wc in wcs},
+            recorded_withheld={wc: _j(was.withheld.get(wc, 0)) for wc in wcs},
+            withheld_difference={wc: _j(M.of(now.withheld.get(wc, 0))
+                                        - M.of(was.withheld.get(wc, 0)))
+                                 for wc in wcs})
+    item["why"] = (f"the {ry} books counted this {what} in {ry} at "
+                   f"{_at(was)}; this project reads it at {_at(now)} (the "
+                   f"export was corrected after the close), so the {ry} "
+                   f"return reported {said}, amend {ry} for the "
+                   f"difference.")
+    if gone is not None:
+        item["why"] = (
+            f"the {ry} books counted this {what} (dated {raw}) in {ry} "
+            f"at {_at(was)}, but this project's books of {gone[0]}, whose "
+            f"broker exports reach that day (they start {gone[1]}), no "
+            f"longer have it: the broker removed or reversed it after the "
+            f"close, or the export that held it is not in this project. "
+            f"Compare it with the slip: if the slip does not have it, "
+            f"amend {ry} for it; if it does, add the export that holds it "
+            f"here.")
+    return item
+
+
+def _in_window(a: str, q: Any, eff: date, raw: Optional[date], ry: int
+               ) -> bool:
+    """A row counted in closed year `ry` (tax date `eff`) that the
+    boundary check compares: a sale from Dec 30, income from Dec 30 or
+    dated in January; nothing earlier, no purchase (backlog TJ-5182)."""
+    if a in _INCOME:
+        return (raw is not None and raw > date(ry, 12, 31)) \
+            or eff >= date(ry, 12, 30)
+    return M.of(q or 0) < 0 and eff >= date(ry, 12, 30)
+
+
+class _HereBooks:
+    """This project's trade and income rows for the boundary check, by
+    taxjson account (`acct_of`), their amounts (`h`), the base currency
+    (`base`) and the first day each account's broker exports hold
+    (`first`, `_exported`; backlog TJ-5183)."""
+
+    def __init__(self, cache: Path, cfg: Dict[str, Any]):
+        self.native = _Native(cache)
+        self.rows: List[Dict[str, Any]] = []
+        self.acct_of: Dict[int, str] = {}
+        self.crypto: Dict[int, bool] = {}
+        self.first: Dict[str, date] = {}
+        self.base = str(settings_of(cfg).base_currency or "").upper()
+        self._h: Dict[int, _Here] = {}
+        for g, names in groups(cfg).items():
+            for n in names:
+                for r in _rows(cache / f"{n}_base.json"):
+                    self.base = self.base or str(r.get("currency") or "")
+                    d = _d(r.get("date"))
+                    if (d is not None and _exported(r)
+                            and d < self.first.get(n, date.max)):
+                        self.first[n] = d
+                    if str(r.get("action") or "").upper() in _TRADES + _INCOME:
+                        self.rows.append(r)
+                        self.acct_of[id(r)] = n
+                        self.crypto[id(r)] = g == "crypto"
+
+    def h(self, r: Dict[str, Any]) -> _Here:
+        if id(r) not in self._h:
+            self._h[id(r)] = _here(r, self.acct_of.get(id(r)) or "",
+                                   self.native, self.crypto.get(id(r), False))
+        return self._h[id(r)]
+
+    def same(self, r: Dict[str, Any], x: Dict[str, Any],
+             amount: bool = True) -> bool:
+        a = self.acct_of.get(id(r))
+        return _same_row(r, x, a, amount=False) and (
+            not amount or _same_row(r, x, a, here=self.h(r)))
+
+    def pairs(self, rows: List[Dict[str, Any]],
+              rec_rows: List[Dict[str, Any]], used: set
+              ) -> Dict[int, int]:
+        """{id(row): its record row's index}: every pair unchanged to the
+        cent first, then the rows alike within the tolerance, so of two
+        record rows a day alike each row takes its own (`used`: the
+        record rows taken, updated)."""
+        out: Dict[int, int] = {}
+        for exact in (True, False):
+            for i, x in enumerate(rec_rows):
+                if i in used:
+                    continue
+                for r in rows:
+                    if id(r) not in out and self.same(r, x) and not (
+                            exact and _changed(self.h(r), x)):
+                        out[id(r)] = i
+                        used.add(i)
+                        break
+        return out
+
+
+def _exported(r: Dict[str, Any]) -> bool:
+    """A base row from a broker's export of the account (a parsed file):
+    evidence that the books reach its day. Not a .tt file's row (a hand
+    file: what it covers cannot be told), an OPENING line, nor a row
+    taxjson made (a lot move, a listing journal, a move between your own
+    accounts, an in-kind or custody row, a corporate action's row with
+    no file). A row with no file named (hand-built books) counts."""
+    from taxjson.lib import row_types as RT
+    t, a = str(r.get("type") or ""), str(r.get("action") or "").upper()
+    src = str(r.get("source") or "")
+    return not (src.lower().endswith(".tt") or RT.is_opening_row(r)
+                or a == "OPENING_BALANCE"
+                or t in ("opening_balance", RT.LOT_MOVE_TYPE,
+                         RT.LISTING_JOURNAL_TYPE, RT.OWN_MOVE_TYPE,
+                         RT.TRANSFER_CUSTODY_TYPE, *RT.IN_KIND_TYPES)
+                or (r.get("corp_event_id") and not src))
+
+
+def _comparable(x: Dict[str, Any], ry: int, doubled: set) -> bool:
+    """A record row the closed year counted that `_boundary_issues`
+    compares (`_in_window`), not one section 2 (a trade settling after
+    Dec 31) or section 3 (`doubled`: (symbol, date) of each double)
+    judges."""
+    a = str(x.get("action") or "").upper()
+    xd, raw = _d(x.get("tax_date")), _d(x.get("date"))
+    return not (xd is None or raw is None or xd > date(ry, 12, 31)
+                or not _in_window(a, x.get("quantity"), xd, raw, ry)
+                or (a in _TRADES
+                    and (_d(x.get("date_settle")) or raw) > date(ry, 12, 31))
+                or bool({(x.get("symbol"), str(raw)),
+                         (x.get("symbol"), str(xd))} & doubled))
+
+
+def _what(a: str) -> str:
+    return ("sale" if a in _TRADES else
+            "return of capital" if a == "ADJUST" else "income")
+
+
+def _removed(x: Dict[str, Any], ry: int, bk: _HereBooks, taken: set
+             ) -> Optional[Dict[str, Any]]:
+    """The item of a `_comparable` record row that this project's books
+    of its account no longer hold anywhere, where the account's broker
+    exports reach its day (`first`: they hold a row dated on or before
+    it; none for an account of .tt files only, or books that start
+    later): the broker removed or reversed it, or the export that held
+    it is not here (backlog TJ-5183). `_correction`'s fields, this
+    project's amounts nil."""
+    acct = str(x.get("account") or "")
+    raw = _d(x.get("date"))
+    first = bk.first.get(acct)
+    if first is None or raw is None or first > raw or any(
+            id(r) not in taken and bk.same(r, x, amount=False)
+            for r in bk.rows):
+        return None
+    a = str(x.get("action") or "").upper()
+    xs = _stated_of(x)
+    nil = _Here(0.0, 0.0, None if xs is None else _stated(
+        xs.cur, 0, None if xs.net is None else 0,
+        {c: 0 for c in xs.withheld}, None if xs.day is None else {}), None)
+    return _correction({"symbol": x.get("symbol"), "action": a,
+                        "currency": bk.base}, x, nil, ry, _what(a), raw,
+                       _d(x.get("tax_date")) or raw, gone=(acct, first))
+
+
+def _alike_sym(a: Any, b: Any) -> bool:
+    """Two spellings of one security: the letters before the exchange
+    suffix (ZZH.TO, ZZH)."""
+    def root(s: Any) -> str:
+        return str(s or "").strip().upper().replace(":", ".").split(".")[0]
+    return bool(root(a)) and root(a) == root(b)
+
+
+def _redated(r: Dict[str, Any], x: Dict[str, Any], h: _Here, ry: int,
+             what: str, raw: Optional[date], eff: date,
+             cross: bool = False) -> Dict[str, Any]:
+    """The one item of a row here and a record row of one account, kind
+    and amount that the export re-dated, re-counted or re-spelled after
+    the close: what changed; both count it in `ry`, or (`cross`) it is
+    re-dated past Dec 31, a tax date or a sale's settlement in `ry` + 1
+    (`_moved_out`)."""
+    q, xq = float(r.get("quantity") or 0.0), float(x.get("quantity") or 0.0)
+    ch: List[str] = []
+    item: Dict[str, Any] = {
+        "symbol": r.get("symbol"), "action": str(r.get("action")).upper(),
+        "date": str(raw), "tax_date": str(eff), "amount": h.net,
+        "recorded_amount": _cents(x.get("net")),
+        "difference": _j(M.of(h.net) - M.of(_cents(x.get("net"))))}
+    if str(raw) != str(x.get("date")):
+        ch.append(f"re-dated from {x.get('date')} to {raw}")
+        item["recorded_date"] = x.get("date")
+    if not _qty_eq(q, xq):
+        ch.append(f"re-counted from {xq:g} to {q:g} units")
+        item.update(quantity=q, recorded_quantity=xq)
+    if r.get("symbol") != x.get("symbol"):
+        ch.append(f"re-spelled from {x.get('symbol')} to {r.get('symbol')}")
+        item["recorded_symbol"] = x.get("symbol")
+    item["changed"] = [k for k, c in (("date", "re-dated"),
+                                      ("quantity", "re-counted"),
+                                      ("symbol", "re-spelled"))
+                       if any(t.startswith(c) for t in ch)]
+    said = x.get("income") if x.get("income") is not None else x.get("net")
+    if cross:
+        return _moved_out(item, r, x, ch, ry, what, said, eff)
+    item["why"] = (f"the {ry} books counted this {what} in {ry} at "
+                   f"{_f(said)}; this project has the same {what} at the "
+                   f"same amount, "
+                   + " and ".join(ch) + f" (the export was corrected after "
+                   f"the close). Both count it in {ry}, so the {ry} return "
+                   f"needs no change for it: check the slip shows it as "
+                   f"this project now reads it.")
+    return item
+
+
+def _moved_out(item: Dict[str, Any], r: Dict[str, Any],
+               x: Dict[str, Any], ch: List[str], ry: int, what: str,
+               said: Any, eff: date) -> Dict[str, Any]:
+    """`_redated`'s item for a row re-dated past Dec 31: the closed
+    return reported it; this project counts it in `ry` + 1 (`eff`), or
+    counts a sale settling then on its trade date. Never "needs no
+    change" (backlog TJ-5186)."""
+    s = _d(r.get("date_settle")) if item["action"] in _TRADES else None
+    item.update(crossed_year_end=True, recorded_tax_date=x.get("tax_date"))
+    if s is not None:
+        item.update(date_settle=str(s),
+                    recorded_date_settle=x.get("date_settle"))
+    if s is not None and s > date(ry, 12, 31):
+        ch = ch + [f"settling {s}"]
+    nxt = eff.year if eff > date(ry, 12, 31) else None
+    item["why"] = (
+        f"the {ry} books counted this {what} (dated {x.get('date')}) in "
+        f"{ry} at {_f(said)}; this project has the same {what} at the "
+        f"same amount, " + " and ".join(ch) + " (the export was corrected "
+        "after the close), " + (
+            f"which counts in {nxt}: the {ry} return reported it and this "
+            f"project counts it in {nxt} too. Report it in one year only: "
+            f"if the slip (or the trade confirmation) puts it in {nxt}, "
+            f"amend {ry} to take it out; if it puts it in {ry}, this "
+            f"project's export misdates it." if nxt else
+            f"which settles after Dec 31; this project still counts it in "
+            f"{ry} on its trade date, as the {ry} return did. Compare it "
+            f"with the trade confirmation: if the sale belongs to "
+            f"{ry + 1}, amend {ry} to take it out."))
+    return item
+
+
+def _lone_and_gone(lone: List[Tuple[Any, ...]],
+                   gone: List[Tuple[int, Dict[str, Any]]], ry: int,
+                   bk: _HereBooks, taken: set, doubled: set,
+                   eff_of: Callable[[Dict[str, Any]], Optional[date]]
+                   ) -> List[Dict[str, Any]]:
+    """Case (a)'s rows no record row matched (`lone`: (row, action, tax
+    date, date, what, `_Here`)) and the record rows of the window none
+    here matched (`gone`: (index, row)): a pair of one account, kind and
+    amount (`_changed`, to the cent where both state it, else within the
+    tolerance), the security spelled alike, is one row the export
+    re-dated, re-counted or re-spelled (`_redated`, backlog TJ-5186): in
+    `ry` both, or past Dec 31 (a row here counted, `eff_of`, or a sale
+    settling by Jan 10, never paired as unchanged: `_moved_out`); then
+    each lone row is in neither return (`_neither`) and each gone row
+    removed where the exports reach its day (`_removed`)."""
+    out: List[Dict[str, Any]] = []
+    ye, near = date(ry, 12, 31), date(ry + 1, 1, 10)
+    left = [x for _, x in gone if _comparable(x, ry, doubled)]
+
+    def twin(r: Dict[str, Any], a: str, h: _Here) -> Optional[Dict[str, Any]]:
+        acct = bk.acct_of.get(id(r))
+        return next((x for x in left
+                     if a == x.get("action")
+                     and not (acct and x.get("account")
+                              and x.get("account") != acct)
+                     and _alike_sym(r.get("symbol"), x.get("symbol"))
+                     and not _changed(h, x)
+                     and (_space(h, x) is not None
+                          or _near(h.net, x.get("net")))), None)
+
+    def settles_out(r: Dict[str, Any], a: str) -> bool:
+        return a in _TRADES and (_d(r.get("date_settle")) or ye) > ye
+
+    for r, a, eff, raw, what, h in lone:
+        x = twin(r, a, h)
+        if x is None:
+            out.append(_neither(r, a, eff, raw, what, ry, h))
+            continue
+        left.remove(x)
+        out.append(_redated(r, x, h, ry, what, raw, eff, settles_out(r, a)))
+    lone_ids = {id(t[0]) for t in lone}
+    for r in bk.rows:
+        a, e, raw = str(r.get("action") or "").upper(), eff_of(r), _d(
+            r.get("date"))
+        if (not left or id(r) in taken or id(r) in lone_ids or e is None
+                or raw is None or not ye < e <= near or raw > near):
+            continue
+        x = twin(r, a, bk.h(r))
+        if x is not None:
+            left.remove(x)
+            out.append(_redated(r, x, bk.h(r), ry, _what(a), raw, e, True))
+    for x in left:
+        g = _removed(x, ry, bk, taken)
+        if g is not None:
+            out.append(g)
+    return out
+
+
+def _day_withheld(bk: _HereBooks, rows: List[Dict[str, Any]],
+                  rec_rows: List[Dict[str, Any]], ry: int, doubled: set
+                  ) -> List[Dict[str, Any]]:
+    """Where two or more dividends of a security share a day's TAX rows
+    on either side (`_Stated.day`), the day's tax withheld for that
+    account and security compared once, by currency, in cents: one item
+    for a change (backlog TJ-5185)."""
+    now: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+    was: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+    shared, td = set(), {}
+    for r in rows:
+        n = bk.h(r).native
+        if str(r.get("action") or "").upper() == "DIVIDEND" and n:
+            k = (bk.acct_of.get(id(r)), r.get("symbol"),
+                 str(_d(r.get("date"))))
+            now.setdefault(k, n.day if n.day is not None else n.withheld)
+            shared |= {k} if n.day is not None else set()
+    for x in rec_rows:
+        xs = _stated_of(x)
+        if x.get("action") == "DIVIDEND" and xs and _comparable(x, ry, doubled):
+            k = (x.get("account"), x.get("symbol"), str(x.get("date")))
+            was.setdefault(k, xs.day if xs.day is not None else xs.withheld)
+            shared |= {k} if xs.day is not None else set()
+            td.setdefault(k, x.get("tax_date"))
+    out = []
+    for k in sorted(shared, key=str):
+        w1, w0 = now.get(k, {}), was.get(k, {})
+        wm = [c for c in sorted(set(w1) | set(w0))
+              if _moved(w1.get(c, 0), w0.get(c, 0))]
+        if not wm:
+            continue
+
+        def at(w: Dict[str, Any]) -> str:
+            return ", ".join(f"{_f(w.get(c, 0))} {c}" for c in wm)
+        dws = {c: M.of(w1.get(c, 0)) - M.of(w0.get(c, 0)) for c in wm}
+        out.append({
+            "symbol": k[1], "action": "DIVIDEND", "date": k[2],
+            "tax_date": td.get(k) or k[2],
+            "withheld": {c: _j(w1.get(c, 0)) for c in wm},
+            "recorded_withheld": {c: _j(w0.get(c, 0)) for c in wm},
+            "withheld_difference": {c: _j(d) for c, d in dws.items()},
+            "why": (f"the {ry} books counted the tax withheld on the "
+                    f"{k[2]} dividends of {k[1]} in {k[0]} at {at(w0)}; "
+                    f"this project reads {at(w1)} (the export was "
+                    f"corrected after the close), so the {ry} return "
+                    f"reported " + " and ".join(
+                        f"{_f(abs(d))} {c} {'less' if d > 0 else 'more'}"
+                        for c, d in dws.items())
+                    + f" tax withheld than the rows now say. Compare it "
+                    f"with the slip: if it says {at(w1)} withheld, amend "
+                    f"{ry} for the difference.")})
+    return out
+
+
+def _neither(r: Dict[str, Any], a: str, eff: date, raw: Optional[date],
+             what: str, ry: int, h: _Here) -> Dict[str, Any]:
+    """Case (a)'s item: a row this project counts in the closed year
+    that the closed books never had."""
+    return {"symbol": r.get("symbol"), "action": a,
+            "date": str(raw), "tax_date": str(eff), "amount": h.net,
+            "why": (f"this project counts this {what} on {eff} (in {ry})"
+                    + (f", though it is dated {raw}" if raw != eff else "")
+                    + f", but the {ry} books never had it (their inputs "
+                    f"did not hold it): it is in neither return. It "
+                    f"belongs on the {ry} return — amend {ry} (or confirm "
+                    f"the slip reported it).")}
 def _boundary_issues(cache: Path, cfg: Dict[str, Any],
                      record: Dict[str, Any], basis: str,
                      section2: set,
-                     notes: Optional[List[str]] = None
+                     notes: Optional[List[str]] = None,
+                     rough: Optional[Dict[str, set]] = None,
+                     doubled: Optional[set] = None
                      ) -> List[Dict[str, Any]]:
     """Rows reported in neither year or in both because this project and
     the closed one date them on different sides of Dec 31 (see
-    boundary_rows). Three cases:
+    boundary_rows), or corrected since the close. Four cases:
       (a) this project counts a row in the closed year that the closed
           books never had — income its trust record date (or a RIC entry)
           moves back, or a row local_timezone re-dates to Dec 31 — so it
           is in neither return; a row the closed books counted in the
           closed year, of the same date and quantity at another amount
           (the broker corrected the export), is that row: its
-          difference is reported, not the whole row (backlog TJ-0224);
+          difference is reported, not the whole row (backlog TJ-0224),
+          to the cent (`_changed`; TJ-5065, TJ-5066, TJ-5180). Only the
+          rows `_in_window`: a sale or income from Dec 30, income dated
+          in January;
       (b) the closed books counted an income row in the closed year and
           this project counts it again in the next;
       (c) the closed project's inputs held an early-January row (an
           overnight fill moved past Dec 31) that this project lacks — a
           row here of the same date and quantity at another amount (the
           broker corrected the export) is that row: a note in `notes`,
-          not "in neither return" (backlog TJ-0014)."""
+          not "in neither return" (backlog TJ-0014);
+      (d) a row of (a)'s window the closed books counted that this
+          project no longer holds, or holds re-dated, re-counted or
+          re-spelled (`_lone_and_gone`); shared TAX rows (`_day_withheld`).
+    `rough` ({why: row keys}) collects the rows compared only within the
+    tolerance (`_rough`); `doubled`, see `_removed`."""
     settings = settings_of(cfg)
     ir = _income_rules(settings)
     ry = int(record["year"])
     ye = date(ry, 12, 31)
     rec_rows = [x for x in record.get("boundary_rows") or []
                 if isinstance(x, dict)]
-    here = []
-    acct_of: Dict[int, str] = {}        # id(row) -> its taxjson account
-    for _g, names in groups(cfg).items():
-        for n in names:
-            for r in _rows(cache / f"{n}_base.json"):
-                if str(r.get("action") or "").upper() in _TRADES + _INCOME:
-                    here.append(r)
-                    acct_of[id(r)] = n
+    bk = _HereBooks(cache, cfg)
     out: List[Dict[str, Any]] = []
     used: set = set()
-
-    def _match(r):
-        for i, x in enumerate(rec_rows):
-            if i not in used and _same_row(r, x, acct_of.get(id(r))):
-                used.add(i)
-                return x
-        return None
+    lone: List[Tuple[Any, ...]] = []
+    gone: List[Tuple[int, Dict[str, Any]]] = []
 
     def _corrected(r):
         # The record's row the closed books counted in the closed year,
@@ -1162,74 +1915,56 @@ def _boundary_issues(cache: Path, cfg: Dict[str, Any],
         for i, x in enumerate(rec_rows):
             xd = _d(x.get("tax_date"))
             if (i not in used and xd is not None and xd <= ye
-                    and _same_row(r, x, acct_of.get(id(r)),
-                                  amount=False)):
+                    and bk.same(r, x, amount=False)):
                 used.add(i)
                 return x
         return None
 
-    for r in here:
+    cands = []
+    for r in bk.rows:
         if r.get("id") not in (None, "") and str(r["id"]) in section2:
             continue                    # section 2 already judges it
         a = str(r.get("action") or "").upper()
         eff, raw = _eff_date(r, basis, ir), _d(r.get("date"))
-        if eff is None or eff > ye:
+        if eff is not None and eff <= ye and _in_window(
+                a, r.get("quantity"), eff, raw, ry):
+            cands.append((r, a, eff, raw))
+    pairs = bk.pairs([c[0] for c in cands], rec_rows, used)
+    hits = {i: r for r, *_ in cands for i in [pairs.get(id(r))]
+            if i is not None}
+    for r, a, eff, raw in cands:
+        h = bk.h(r)
+        old = rec_rows[pairs[id(r)]] if id(r) in pairs else None
+        if old is not None and not (_changed(h, old) and (
+                _d(old.get("tax_date")) or date.max) <= ye):
+            if rough is not None and _rough(h, old):
+                rough.setdefault(str(_rough(h, old)), set()).add(id(r))
             continue
-        q = float(r.get("quantity") or 0.0)
-        if a in _INCOME:
-            if not ((raw and raw > ye) or eff >= date(ry, 12, 30)):
-                continue
-        elif not (q < 0 and eff >= date(ry, 12, 30)):
+        what = _what(a)
+        old = old or _corrected(r)
+        if old is None:
+            lone.append((r, a, eff, raw, what, h))
             continue
-        if _match(r) is not None:
-            continue
-        what = ("sale" if a in _TRADES else
-                "return of capital" if a == "ADJUST" else "income")
-        old = _corrected(r)
-        if old is not None:
-            n = M.shown(float(r.get("net_amount") or 0.0), 2)
-            xn = M.shown(float(old.get("net") or 0.0), 2)
-            diff = M.shown(n - xn, 2)
-            out.append({
-                "symbol": r.get("symbol"), "action": a,
-                "date": str(raw), "tax_date": str(eff), "amount": n,
-                "recorded_amount": xn, "difference": diff,
-                "why": (f"the {ry} books counted this {what} in {ry} at "
-                        f"{xn:,.2f}; this project reads it at {M.shown(n, 2):,.2f} "
-                        f"(the export was corrected after the close), "
-                        f"so the {ry} return reported "
-                        f"{abs(diff):,.2f} "
-                        f"{'less' if diff > 0 else 'more'} than the row "
-                        f"now says. Compare it with the slip: if the "
-                        f"slip says {M.shown(n, 2):,.2f}, amend {ry} for the "
-                        f"difference.")})
-            continue
-        out.append({"symbol": r.get("symbol"), "action": a,
-                    "date": str(raw), "tax_date": str(eff),
-                    "amount": M.shown(float(r.get("net_amount") or 0.0), 2),
-                    "why": (f"this project counts this {what} on {eff} "
-                            f"(in {ry})"
-                            + (f", though it is dated {raw}" if raw != eff
-                               else "")
-                            + f", but the {ry} books never had it (their "
-                            f"inputs did not hold it): it is in neither "
-                            f"return. It belongs on the {ry} return — "
-                            f"amend {ry} (or confirm the slip reported "
-                            f"it).")})
+        if rough is not None and _rough(h, old):
+            rough.setdefault(str(_rough(h, old)), set()).add(id(r))
+        out.append(_correction(r, old, h, ry, what, raw, eff))
     # Each row of this project stands for one record row: two identical
     # record rows need two here.
-    taken: set = set()
+    taken = {id(r) for r in hits.values()}
+    rest = bk.pairs([r for r in bk.rows if id(r) not in taken], rec_rows,
+                    used | set(hits))
+    hits.update({i: r for r in bk.rows for i in [rest.get(id(r))]
+                 if i is not None})
+    taken = {id(r) for r in hits.values()}
     for i, x in enumerate(rec_rows):
         a = x.get("action")
         xd = _d(x.get("tax_date"))
         if xd is None:
             continue
-        hit = None
-        for r in here:
-            if id(r) not in taken and _same_row(r, x, acct_of.get(id(r))):
-                hit = r
-                taken.add(id(r))
-                break
+        hit = hits.get(i)
+        if hit is None and i not in used and xd <= ye:
+            gone.append((i, x))
+            continue
         if a in _INCOME and xd <= ye:
             if hit is None:
                 continue
@@ -1249,9 +1984,8 @@ def _boundary_issues(cache: Path, cfg: Dict[str, Any],
               and not (a in _TRADES
                        and (_d(x.get("date")) or date.max) <= ye)):
             fixed = None
-            for r in here:
-                if id(r) not in taken and _same_row(
-                        r, x, acct_of.get(id(r)), amount=False):
+            for r in bk.rows:
+                if id(r) not in taken and bk.same(r, x, amount=False):
                     eff = _eff_date(r, basis, ir)
                     if eff is not None and eff > ye:
                         fixed = r
@@ -1261,8 +1995,8 @@ def _boundary_issues(cache: Path, cfg: Dict[str, Any],
                 if notes is not None:
                     notes.append(
                         f"{x.get('symbol')} {a} dated {x.get('date')}: "
-                        f"{M.shown(float(fixed.get('net_amount') or 0.0), 2):,.2f} "
-                        f"here, {M.shown(float(x.get('net') or 0.0), 2):,.2f} when "
+                        f"{bk.h(fixed).net:,.2f} here, "
+                        f"{_cents(x.get('net')):,.2f} when "
                         f"the {ry} project read it (the export was "
                         f"corrected) — both count it in {ry + 1}, so it "
                         f"is in this return once.")
@@ -1275,9 +2009,75 @@ def _boundary_issues(cache: Path, cfg: Dict[str, Any],
                                 f"{ry + 1}, so the {ry} return left it "
                                 f"out — but this project does not have it: "
                                 f"it is in neither return. Add it here.")})
+    return (out + _lone_and_gone(lone, gone, ry, bk, taken, doubled or set(),
+                                 lambda r: _eff_date(r, basis, ir))
+            + _day_withheld(bk, [c[0] for c in cands], rec_rows, ry,
+                            doubled or set()))
+
+
+def _rough_note(ry: int, rough: Dict[str, set]) -> Optional[str]:
+    """The note on the rows compared only within the tolerance, by why
+    (`_rough`; backlog TJ-5181)."""
+    if not any(rough.values()):
+        return None
+
+    def _why(k: str) -> str:
+        if k.startswith("missing:"):
+            return f"{k[8:]} is missing (re-run `tjs run` to rebuild it)"
+        if k.startswith("absent:"):
+            return f"{k[7:]} does not hold it"
+        return {"computed": "its amounts are taxjson's (a crypto row "
+                            "priced from the price cache), not the "
+                            "broker's",
+                "record": f"the {ry} record has no amounts as the broker "
+                          f"stated them for it",
+                "currency": f"its currency is not the {ry} record's"}.get(
+                    k, k)
+    parts = [f"{len(v)} row{'s' if len(v) != 1 else ''}: {_why(k)}"
+             for k, v in sorted(rough.items()) if v]
+    return (f"Some of the {ry} Dec-31 rows were compared at their converted "
+            f"amounts within 0.5%, not to the cent, so a smaller "
+            f"correction since the close is not seen — "
+            + "; ".join(parts) + ".")
+
+
+def _boundary_section(cache: Path, cfg: Dict[str, Any],
+                      record: Dict[str, Any], basis: str, section2: set,
+                      notes: List[str],
+                      doubles: Optional[List[Dict[str, Any]]] = None
+                      ) -> List[Dict[str, Any]]:
+    """Section 4 of `check`: `_boundary_issues`, with a note for a record
+    that predates the Dec-31 row list (nothing compared) or the amounts
+    its rows are compared at to the cent (backlog TJ-5065, TJ-5066), else
+    one for the rows compared only within the tolerance (TJ-5181).
+    `doubles`: section 3's items (`_removed` leaves their sales to it)."""
+    ry = int(record["year"])
+    rows = record.get("boundary_rows")
+    if not isinstance(rows, list):
+        notes.append(
+            f"The {ry} record predates the Dec-31 row list: income or a "
+            f"trade that this project dates in {ry} (a trust's record "
+            f"date, a RIC January dividend, a local_timezone re-dating) "
+            f"is not checked. Re-close {ry} with the current taxjson to "
+            f"check it.")
+        return []
+    rough: Dict[str, set] = {}
+    out = _boundary_issues(cache, cfg, record, basis, section2, notes, rough,
+                           {(d.get("symbol"), str(d.get("closed_date")))
+                            for d in doubles or []})
+    if any(isinstance(x, dict) and "income" not in x for x in rows):
+        notes.append(
+            f"The {ry} record predates the native amounts in its Dec-31 "
+            f"row list (closed by an older taxjson): its rows were "
+            f"compared at their converted amounts within 0.5%, a dividend "
+            f"at its net, so a smaller correction since the close, or a "
+            f"dividend's gross split anew between the income and the tax "
+            f"withheld, is not seen. Re-close {ry} with the current "
+            f"taxjson (`close-year --force` in its project) to compare "
+            f"them to the cent.")
+    elif _rough_note(ry, rough):
+        notes.append(str(_rough_note(ry, rough)))
     return out
-
-
 def _short_rows_issues(record: Dict[str, Any],
                        opening_shorts: Optional[Dict[str, Any]],
                        moved_shorts: Dict[Tuple[str, str], Dict[str, Any]],
@@ -1678,7 +2478,7 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
                 blended_pool_rows(cache, n), n)]
     split_dup = split_copies(replay, per_account=True,
                              account_of=lambda x: x.get("_acct") or "")
-    own_closed: List[Tuple[str, float, Optional[date], Optional[date],
+    own_closed: List[Tuple[str, str, float, Optional[date], Optional[date],
                            float]] = []
     _pos: Dict[Tuple[str, str], float] = {}
     for r in sorted(replay, key=lambda x: (_bdate(x, basis) or date.max,
@@ -1704,16 +2504,20 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
             continue
         if (_bdate(r, basis) or date.max) > date(ry, 12, 31):
             continue
-        own_closed.append((_root_sym(sym), min(abs(q), before),
+        own_closed.append((acct, _root_sym(sym), min(abs(q), before),
                            _d(r.get("date")), _d(r.get("date_settle")),
                            abs(float(r.get("net_amount") or 0.0))))
 
     def _is_own(c: Dict[str, Any]) -> bool:
+        # The record's account, when this project has it, must be the
+        # row's: another account's sale is its own (as `_found`, TJ-5067).
+        ca = str(c.get("account") or "")
         k, cq = _root_sym(c["symbol"]), abs(float(c["qty"]))
         cds = {_d(c.get("date")), _d(c.get("date_settle"))} - {None}
         cp = abs(float(c.get("proceeds") or 0.0))
-        for ok, oq, otd, osd, onet in own_closed:
-            if ok != k or not _qty_eq(oq, cq):
+        for oa, ok, oq, otd, osd, onet in own_closed:
+            if (ca in here_accts and oa != ca) or ok != k \
+                    or not _qty_eq(oq, cq):
                 continue
             if not ({otd, osd} & cds):
                 continue
@@ -1748,8 +2552,13 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
                               and (t.direction == "SHORT" or tp < 0)
                               and abs(tc) > 0.005) else None)
             tol = max(1.0, 0.01 * abs(tp))
+            # A sale another of this project's accounts recorded is a
+            # distinct disposition, never this one again (the rule `_found`
+            # applies; backlog TJ-0807, TJ-5067).
+            others = taxable - {t.account or acct}
             for c in closed:
-                if _root_sym(c["symbol"]) != k:
+                if _root_sym(c["symbol"]) != k \
+                        or str(c.get("account") or "") in others:
                     continue
                 if abs(abs(c["qty"]) - q) > max(QTY_TOL, 0.005 * q):
                     continue
@@ -1783,26 +2592,17 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
                             f"in one year only.")})
                 break
     # 4. Rows the two projects put on different sides of Dec 31.
-    if isinstance(record.get("boundary_rows"), list):
-        issues["boundary"] = _boundary_issues(
-            cache, cfg, record, basis,
-            {str(here[i].get("id")) for i in used_here
-             if here[i].get("id") not in (None, "")},
-            issues["notes"])
-    else:
-        issues["notes"].append(
-            f"The {ry} record predates the Dec-31 row list: income or a "
-            f"trade that this project dates in {ry} (a trust's record "
-            f"date, a RIC January dividend, a local_timezone re-dating) "
-            f"is not checked. Re-close {ry} with the current taxjson to "
-            f"check it.")
+    issues["boundary"] = _boundary_section(
+        cache, cfg, record, basis, {str(here[i].get("id")) for i in used_here
+                                    if here[i].get("id") not in (None, "")},
+        issues["notes"], issues["double"])
     # 5. Carry-forwards: this project's inputs vs what the closed year
     # carried forward (tax-logic CA-CARRY-05, US-CARRY-03).
     from taxjson.lib.carryforward import handoff_issues
     _carry = handoff_issues(root, cfg, record, carry_back)
     issues["carry"] = _carry.issues
     issues["notes"] += [n for n in (_carry.unchecked, _carry.caveat,
-                                    _carry.split_note) if n]
+                                    _carry.split_note, *_carry.order_notes) if n]
     if record.get("carryforwards") is None:
         issues["notes"].append(
             f"The {ry} record predates the carry-forward record (net "

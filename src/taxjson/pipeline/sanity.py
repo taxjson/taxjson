@@ -1,4 +1,4 @@
-"""`tjs sanity`: positions against the broker's holdings, also the run's closing check."""
+"""`tjs sanity`: positions against the broker's holdings (its own step, never part of `tjs run`)."""
 import argparse
 import re
 from pathlib import Path
@@ -9,6 +9,7 @@ from taxjson.project.toml_io import read_toml
 from taxjson.project.settings import settings_of
 from taxjson.lib import out as _out
 from taxjson.lib import project_layout as _PL
+from taxjson.lib.futures_prefixes import FUTURES_PREFIX_GROUP, canonical_futures_symbol
 from taxjson.lib.json_contract import versioned
 from taxjson.lib.report_model import format_report_table
 from taxjson.model.result import Holding
@@ -153,6 +154,29 @@ def _sanity_items_from_config(accounts_cfg: Dict[str, Any],
         kinds["snapshots"] = list(_hnotes)
         kinds["unread"] = list(_unread)
     return items, notes
+
+
+def _named_fold(sym: str, where: str) -> str:
+    """`sym` with a future's `/` or `\\` prefix `F:` (lib/futures_prefixes,
+    backlog TJ-5150); one that names no contract (`//QZM26.US`) stops the
+    command, naming the file (`where`): exit 2, an input it cannot read."""
+    try:
+        return canonical_futures_symbol(sym)
+    except ValueError as e:
+        _die_input(f"{where}: {e} — fix the file.")
+        raise
+
+
+def _file_symbol(v: Any, spelled: Dict[str, str], where: str) -> str:
+    """A holdings file's `symbol` as the books spell it: upper case
+    (lib/symbol_case), a future's `/` or `\\` prefix `F:` (_named_fold).
+    `spelled` takes the file's own spelling of a symbol the fold changed
+    (`file_symbol` shows it)."""
+    raw = book_symbol(str(v or "").strip())
+    sym = _named_fold(raw, where)
+    if sym != raw:
+        spelled[sym] = raw
+    return sym
 
 
 def _mask_ids_in_path(path: str) -> str:
@@ -314,7 +338,7 @@ def _sanity_json_doc(*, basis: str, accounts: List[str], files: List[Path],
                     "files": [_mask_ids_in_path(str(p2))
                               for p2 in g["files"]],
                     "matched_via_underlying": [
-                        {"file_symbol": a, "taxjson_symbol": b}
+                        {"file_symbol": g.get("file_spelling", {}).get(a, a), "taxjson_symbol": b}
                         for a, b in g["via_underlying"]],
                     "fractions_awaiting_cash_in_lieu":
                         g.get("awaiting_cash") or [],
@@ -502,7 +526,10 @@ class _Files:
     day and broker account, and each account's rows of the books, read
     once; what the readers record are its attributes."""
 
-    _OPT_RE = re.compile(r'^((?:F:)?[A-Z0-9.]+?)(\d{6}[CP]\d+)\.(\S+)$',
+    # (an option on a future in any of its prefix spellings, as
+    # ticker_map_rules.map_symbol reads one: backlog TJ-5037)
+    _OPT_RE = re.compile(r'^(' + FUTURES_PREFIX_GROUP
+                         + r'?[A-Z0-9.]+?)(\d{6}[CP]\d+)\.(\S+)$',
                          re.IGNORECASE)
     _VENUE_SFX_RE = re.compile(r'^([A-Za-z0-9]+)\.[A-Za-z]{2,3}$')
 
@@ -527,6 +554,8 @@ class _Files:
         self._toml_meta: Dict[Path, Dict[str, Any]] = {}
         self._toml_day: Dict[Path, str] = {}
         self._unread_cost: Dict[Path, str] = {}
+        # (a futures symbol as a file spells it, `/` or `\`: _file_symbol)
+        self.spelled: Dict[str, str] = {}
         self.base_rows: Dict[str, List[Dict[str, Any]]] = {}
 
         # (the year's holdings/ snapshots: dated by generated_at too —
@@ -706,7 +735,7 @@ class _Files:
                                f"entry is not a table")
                 if (str(h.get("asset_type") or "")).lower() == "cash":
                     continue
-                sym = book_symbol(str(h.get("symbol") or "").strip())
+                sym = _file_symbol(h.get("symbol"), self.spelled, _named)
                 _qraw = h.get("quantity")
                 if _qraw is None or (isinstance(_qraw, str)
                                      and not _qraw.strip()):
@@ -750,7 +779,7 @@ class _Files:
                     sym = self._VENUE_SFX_RE.match(sym).group(1)
                 tgt = self._mapped(sym)
                 book[tgt] = book.get(tgt, 0.0) + q
-                und = str(h.get("underlying") or "").strip()
+                und = _named_fold(str(h.get("underlying") or "").strip(), _named)
                 m = self._OPT_RE.match(sym)
                 if und and m and "." in und:
                     und_root, und_ext = self._mapped(und).rsplit(".", 1)
@@ -1180,6 +1209,7 @@ def _compare_unit(fl: "_Files", grp: Dict[str, Any], units: List[List[Path]],
             ext_book[via] = ext_book.get(via, 0.0) + ext_book.pop(sym)
             via_underlying.append((sym, via))
     sub["via_underlying"] = via_underlying
+    sub["file_spelling"] = {a: fl.spelled[a] for a, _b in via_underlying if a in fl.spelled}
     # An s.86.1 spin-off's fraction the books hold on the
     # snapshot's date until its cash in lieu is paid after it:
     # the broker shows the whole shares only (backlog TJ-0149).
@@ -1448,7 +1478,6 @@ def _sanity_nothing_to_compare(pl: "_Placement", root: Path, config_notes: List[
             f"(docs/commands.md, sanity)."):
         d.line(_ln)
     _sanity_print_extras([], [], [], 0, 0, _inc, True,
-                         brief=getattr(args, "brief_extras", False),
                          concise=not _details(args))
     return
 
@@ -1575,7 +1604,7 @@ def _sanity_groups_text(d: _out.Doc,
                      if lbl not in p2.stem else "")
             pairs.append(("file", f"{shown}{extra}"))
         for a, b in grp["via_underlying"]:
-            pairs.append(("option", f"{a} matched taxjson's {b} via its "
+            pairs.append(("option", f"{grp.get('file_spelling', {}).get(a, a)} matched taxjson's {b} via its "
                                     f"underlying (same contract, "
                                     f"different option root)"))
         for _a in grp.get("awaiting_cash") or ():
@@ -1629,8 +1658,8 @@ def _sanity_unchecked_text(d: _out.Doc,
     if open_notes:
         # A configured holdings file that could not be read drops its
         # whole account from the compare: never let that read as a
-        # clean check (the checklist and run's auto-sanity key on this
-        # line — 2026-09 audit R1-324). It counts what the notes say
+        # clean check (the checklist's step keys on this line — 2026-09
+        # audit R1-324). It counts what the notes say
         # (a holdings/ snapshot is not a path in taxjson.toml: backlog
         # TJ-0020).
         _nunread = len(config_kinds.get("unread") or ())
@@ -1854,7 +1883,6 @@ def cmd_sanity(args: argparse.Namespace) -> None:
     _sanity_verdict_text(d, all_rows, open_notes, multi, uncovered, items, _det, root, distinct)
     _sanity_print_extras(ordered, cost_all, cost_diffs, cost_matched,
                          cost_na, income_all, multi,
-                         brief=getattr(args, "brief_extras", False),
                          concise=not _det)
     raise SystemExit(0 if not all_rows else 1)
 
@@ -1996,12 +2024,10 @@ def _sanity_pointers(root: Path, rows: List[Dict[str, Any]],
 
 def _sanity_print_extras(groups, cost_all, cost_diffs, cost_matched,
                          cost_na, income_all, multi,
-                         brief: bool = False,
                          concise: bool = False) -> None:
     """The COST and INCOME sections of `tjs sanity` (after the
-    quantity check, never changing its exit code). `brief` (the check
-    `tjs run` ends with): one line each, the tables are
-    `tjs sanity`'s."""
+    quantity check, never changing its exit code). `concise` (the
+    default view): one line each; `--details` has the tables."""
     from taxjson.lib.positions_check import REASON_TEXT
     from taxjson.lib.out import wrap as _wrap
 
@@ -2016,18 +2042,6 @@ def _sanity_print_extras(groups, cost_all, cost_diffs, cost_matched,
     # as the print() it replaces printed it.
     d = _out.Doc(exact=True, width_=0, live=True)
     compared = cost_matched + len(cost_diffs)
-    if brief:
-        if cost_diffs:
-            _p(f"COST: {len(cost_diffs)} of {compared} position(s) "
-               f"differ from the reports' cost "
-               f"({sum(1 for c in cost_diffs if c['reasons'] == ['unexplained'])}"
-               f" unexplained) — `tjs sanity` lists them with "
-               f"their reasons (informational).")
-        if income_all:
-            _p(f"INCOME: {len(income_all)} dividend row(s) state a "
-               f"share count the books did not hold — `tjs "
-               f"sanity` lists them.")
-        return
     if concise:
         # The default view (Essentials first): one line each,
         # informational; --details has the tables and the reasons.

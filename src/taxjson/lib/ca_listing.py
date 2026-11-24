@@ -1,13 +1,15 @@
 """Canadian listing identity: the one spelling of a Canadian listing in
 the books (ROOT.TO, a dotted preferred series), which every parser
 (lib/brokerages/base), the .tt reader and a ticker.map EXTRACT target
-(lib/ticker_map.extract_symbol) give a symbol. A leaf below them: it
-reads only the shipped market data (lib/markets_data), so the
-ticker.map reader can use it (out of lib/brokerages/base for that,
-backlog TJ-4604)."""
+(lib/ticker_map.extract_symbol) give a symbol, and `book_listing`, the
+spelling of a symbol a ticker.map line names. A leaf below them: it
+reads only the shipped market data (lib/markets_data) and the futures
+prefixes (lib/futures_prefixes), so the ticker.map reader can use it
+(out of lib/brokerages/base for that, backlog TJ-4604)."""
 import re
 from typing import Optional
 
+from taxjson.lib.futures_prefixes import canonical_futures_symbol
 from taxjson.lib.markets_data import (canadian_suffixes as _ca_sfx,
                                       known_suffixes as _known_sfx,
                                       listing_suffix_re as _sfx_re)
@@ -90,8 +92,12 @@ def book_listing(symbol: str) -> str:
     """A symbol a ticker.map line names, as the books spell it: upper
     case, a listing on a Canadian venue ROOT.TO with a dotted preferred
     series (`canonical_ca_listing` with no currency: `.CN`, `.NE`, `.VN`
-    and an undotted series; a `.V` stays, a class letter outside CAD).
-    A line naming ZYAB.NE named a pool no parser or .tt row books
-    (backlog TJ-4604, TJ-4607)."""
-    s = (symbol or '').strip().upper()
+    and an undotted series; a `.V` stays, a class letter outside CAD),
+    a future's `/` or `\\` prefix `F:` (lib/futures_prefixes
+    canonical_futures_symbol, as the .tt reader and every parser spell
+    it). A line naming ZYAB.NE named a pool no parser or .tt row books
+    (backlog TJ-4604, TJ-4607); one naming `/QZ.US`, the .tt line's
+    spelling, kept matching it apart from the brokers' `F:QZ.US`
+    (backlog TJ-5150)."""
+    s = canonical_futures_symbol((symbol or '').strip().upper())
     return canonical_ca_listing(s, '') or s

@@ -24,6 +24,7 @@ from tax_rules import rule, rule_absent
 from tax_rules.dual import SRC, cli_both, gains_both, projects_both
 from taxjson.rules import ids as R
 from _style import CapturedWidth
+from _support.planning_radar_row import base_rows
 
 
 # Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
@@ -64,7 +65,7 @@ class TestSafeToSellWording(unittest.TestCase):
         rows = [_row("2026-01-05", "ASG.US", 100, 5000.0)]
         with tempfile.TemporaryDirectory() as tmp:
             t = Path(tmp) / "t.json"
-            t.write_text(json.dumps({"transactions": rows}))
+            t.write_text(json.dumps({"transactions": base_rows(rows, country)}))
             env = dict(os.environ, PYTHONPATH=str(SRC), TAXJSON_OFFLINE="1")
             r = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_safe_to_sell",
@@ -197,12 +198,14 @@ class TestBuySellCheckShelteredWording(unittest.TestCase):
     def test_ira_vs_sheltered_words(self):
         acc = ('[accounts.margin]\ntype = "taxable"\n'
                '[accounts.rrsp]\ntype = "sheltered"\n')
+        tax = [_row(_ago(100), "BND.US", 100, 1500.0),
+               _row(_ago(10), "BND.US", -100, 1200.0)]
+        shl = [_row(_ago(100), "SHL.US", 50, 500.0, account="rrsp")]
         files = {
-            "work/margin_base.json": json.dumps({"transactions": [
-                _row(_ago(100), "BND.US", 100, 1500.0),
-                _row(_ago(10), "BND.US", -100, 1200.0)]}),
-            "work/sheltered_base.json": json.dumps({"transactions": [
-                _row(_ago(100), "SHL.US", 50, 500.0, account="rrsp")]})}
+            "work/margin_base.json": lambda c: json.dumps(
+                {"transactions": base_rows(tax, c)}),
+            "work/sheltered_base.json": lambda c: json.dumps(
+                {"transactions": base_rows(shl, c)})}
         with tempfile.TemporaryDirectory() as td:
             p = projects_both(td, year=date.today().year, accounts=acc,
                               files=files)

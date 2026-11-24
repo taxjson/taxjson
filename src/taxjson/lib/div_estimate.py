@@ -191,9 +191,12 @@ def _held(rows: List[Tuple[str, Dict[str, Any]]],
           ok: Callable[[Dict[str, Any]], Optional[Tuple[str, str, str]]],
           splits: List[Tuple[str, str, str, float]]
           ) -> Tuple[Dict[Tuple[str, str], List[Tuple[str, float]]],
-                     Dict[Tuple[str, str, str], List[Tuple[str, float]]]]:
+                     Dict[Tuple[str, str, str], List[Tuple[str, float]]],
+                     Dict[Tuple[str, str], List[List[Tuple[str, float]]]]]:
     """({(account, symbol): [(date, signed share balance after it)]},
-    {(account, broker account, symbol): [(date, balance)]}) by trade
+    {(account, broker account, symbol): [(date, balance)]}, {(account,
+    symbol after the last of `splits`): the parts of the first map's
+    lists that are its security's}) by trade
     date: each account's trade rows (_TRADES; `ok` reads a row's
     (action, symbol, date), or None to leave it out), scaled by every
     split of `splits` (date, symbol, new symbol, ratio) and moved to the
@@ -206,7 +209,11 @@ def _held(rows: List[Tuple[str, Dict[str, Any]]],
     rows' source_account) on its own: one broker account's short is not
     the other's long (backlog TJ-0558). A symbol a trade row naming no
     broker account moves (a .tt OPENING line) has no entry there: its
-    broker accounts' own balances are incomplete, the account's decide."""
+    broker accounts' own balances are incomplete, the account's decide.
+    The third map cuts the lists at each rename: the old symbol's
+    entries to the rename's (its last, at 0) are the renamed security's
+    and go on with it, those after it are another security's that took
+    the old symbol up (a ticker reused: backlog TJ-5052)."""
     walk: Dict[str, List[tuple]] = {}
     for acct, t in rows:
         key = ok(t)
@@ -222,9 +229,12 @@ def _held(rows: List[Tuple[str, Dict[str, Any]]],
              str(t.get("source_account") or "")))
     out: Dict[Tuple[str, str], List[Tuple[str, float]]] = {}
     by_src: Dict[Tuple[str, str, str], List[Tuple[str, float]]] = {}
+    parts: Dict[Tuple[str, str], List[List[Tuple[str, float]]]] = {}
     for acct, ts in walk.items():
         bal: Dict[Tuple[str, str], float] = {}      # (source, symbol)
         mixed = set()       # symbols a row naming no broker account moved
+        cut: Dict[str, int] = {}    # symbol: where its security's own entries start
+        carried: Dict[str, List[List[Tuple[str, float]]]] = {}  # earlier names'
         evs = [(d, 1, "", sym, ratio, new, "")
                for d, sym, new, ratio in splits]
         for d, rank, _tm, sym, q, new, src in sorted(ts + evs,
@@ -252,25 +262,38 @@ def _held(rows: List[Tuple[str, Dict[str, Any]]],
                 if k[0]:
                     by_src.setdefault((acct, k[0], k[1]), []).append(
                         (d, bal.get(k, 0.0)))
+            if rank == 1 and new != sym:
+                mine = out[(acct, sym)]
+                carried.setdefault(new, []).extend(
+                    carried.pop(sym, []) + [mine[cut.get(sym, 0):]])
+                cut[sym] = len(mine)
         for k in [k for k in by_src if k[0] == acct and k[2] in mixed]:
             del by_src[k]
-    return out, by_src
+        for (a, s), series in [i for i in out.items() if i[0][0] == acct]:
+            own = series[cut.get(s, 0):]
+            parts[(a, s)] = carried.get(s, []) + ([own] if own else [])
+    return out, by_src, parts
 
 
-def _held_now(held: Dict[Tuple[str, str], List[Tuple[str, float]]],
-              events: List[Tuple[str, str, str, float]]
+def _held_now(parts: Dict[Tuple[str, str], List[List[Tuple[str, float]]]],
+              events: List[Tuple[str, str, str, float]],
+              as_of: Optional[str] = None
               ) -> Dict[str, List[Tuple[str, List[Tuple[str, float]]]]]:
     """`_held`'s balances per security as it is named now: {symbol:
-    [(account, its (date, balance) list)]}. A rename of `events` (the
-    splits, sorted: date, symbol, new symbol, ratio) carries the old
-    symbol's list to the new one, beside the list the shares moved to
-    (the old one ends at 0 on the rename's date)."""
+    [(account, a (date, balance) list)]}: `_held`'s parts, the lists cut
+    at each rename it walked (the old symbol's list to the rename, which
+    ends at 0 on its date, beside the list the shares moved to; the old
+    symbol's entries after it another security's, a ticker reused:
+    backlog TJ-5052), and a rename of `events` (the splits, sorted:
+    date, symbol, new symbol, ratio) after `as_of`, which `_held` did
+    not walk, carrying a symbol's parts to the new one."""
     out: Dict[str, List[Tuple[str, List[Tuple[str, float]]]]] = {}
-    for (acct, sym), series in held.items():
-        for _d, old, new, _ratio in events:
-            if old == sym:
+    for (acct, sym), pieces in parts.items():
+        for d, old, new, _ratio in events:
+            if as_of is not None and d > as_of and old == sym:
                 sym = new
-        out.setdefault(sym, []).append((acct, series))
+        for piece in pieces:
+            out.setdefault(sym, []).append((acct, piece))
     return out
 
 
@@ -397,8 +420,8 @@ def payments(rows: Iterable[Tuple[str, Dict[str, Any]]],
         if sym and len(d) == 10 and ratio > 0:
             splits.append((d, sym, str(t.get("symbol_new") or "").strip()
                            or sym, ratio))
-    held, held_src = _held(rows, _ok, [e for e in splits
-                                       if as_of is None or e[0] <= as_of])
+    held, held_src, parts = _held(rows, _ok, [e for e in splits
+                                              if as_of is None or e[0] <= as_of])
 
     def _short_on(acct: str, src: str, sym: str,
                   when: str) -> Optional[bool]:
@@ -590,7 +613,7 @@ def payments(rows: Iterable[Tuple[str, Dict[str, Any]]],
         ds.sort()
     out = Payments()
     out.rows, out.notes, out.short_paid = rows, notes, short_paid
-    out.held = _held_now(held, events)
+    out.held = _held_now(parts, events, as_of)
     out.paid, out.ends = _paid_and_ends(inc, rows)
     for k, e in inc.items():
         acct, src, sym, d, cur = k

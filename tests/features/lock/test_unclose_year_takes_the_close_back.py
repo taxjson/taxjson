@@ -567,6 +567,36 @@ class UncloseYearDivergedInputs(_Projects):
         self.assertEqual(sorted(p.name for p in (y / "inputs").rglob("*")),
                          ["linked_demo.csv", "margin"])
 
+    def test_a_copy_reached_through_a_linked_folder_is_left_where_it_is(self):
+        """Backlog TJ-5080: an account folder (or inputs/ itself) that is
+        a link inside the project: the copies reached through it are the
+        person's, left where they are and named; removed, the files at
+        the link's end were deleted (the link stayed)."""
+        for linked in ("inputs/margin", "inputs"):
+            with self.subTest(linked=linked):
+                top = self._copy(self.closed)
+                y = top / YEAR
+                folder = y.joinpath(*linked.split("/"))
+                stash = y / "stash"
+                shutil.move(str(folder), str(stash))
+                os.symlink(os.path.relpath(stash, folder.parent), folder)
+                kept = {p.relative_to(stash).as_posix(): p.read_bytes()
+                        for p in sorted(stash.rglob("*")) if p.is_file()}
+                self.assertTrue(kept)
+                code, out, err, escaped = _unclose(y)
+                self.assertEqual((code, escaped), (0, None), err)
+                self.assertTrue(folder.is_symlink())
+                self.assertEqual({p.relative_to(stash).as_posix(): p.read_bytes()
+                                  for p in sorted(stash.rglob("*")) if p.is_file()},
+                                 kept)
+                rec = json.loads((_backup(y) / "unclosed.json").read_text())
+                self.assertEqual(sorted(rec["links_left"]),
+                                 sorted(f"{linked}/{k}" for k in kept))
+                self.assertFalse(any(p.startswith(f"{linked}/")
+                                     for p in rec["copies_removed"]))
+                self.assertIn(f"{len(kept)} left where they are: a link, or "
+                              f"reached through one (", out)
+
     def test_a_tobase_map_that_is_a_link_to_another_file_is_refused(self):
         top = self._copy(self.closed)
         y = top / YEAR

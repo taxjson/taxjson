@@ -322,19 +322,19 @@ class TestDefaultRateValidated(_Tmp):
         ok = _run(*cmds["convert-currency"]("1.35"))
         self.assertEqual(ok.returncode, 0, ok.stderr)
 
-    def test_rates_file_underscore_is_malformed(self):
+    def test_rates_file_underscore_is_refused(self):
+        # It was skipped and counted "malformed", and March 3 converted
+        # at another day's rate; one rule for every rates reader now: the
+        # row is refused, naming the file and the line (TJ-5045).
         from taxjson.lib.exchange_rates import load_exchange_rates
         rf = self.tmp / "rates.txt"
         rf.write_text("2025-03-03 12:00:00 USD CAD 1_35\n"
                       "2025-03-04 12:00:00 USD CAD 1.36\n")
-        import contextlib
-        import io
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            h = load_exchange_rates(rf, "CAD")
-        self.assertNotIn("2025-03-03", h.get("USD", {}))
-        self.assertEqual(str(h["USD"]["2025-03-04"]), "1.36")
-        self.assertIn("malformed", err.getvalue())
+        with self.assertRaises(ValueError) as cm:
+            load_exchange_rates(rf, "CAD")
+        self.assertIn(f"rates file {rf}, line 1: rate '1_35' for USD->CAD "
+                      f"on 2025-03-03 is not a plain decimal number",
+                      str(cm.exception))
 
 
 if __name__ == "__main__":

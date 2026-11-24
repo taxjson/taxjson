@@ -579,8 +579,9 @@ class TestTJ0457StablecoinGiftGainCountedOnce(unittest.TestCase):
     ledger v2, which reads the send as US dollars going out and, once it
     is declared (`CASHMOVE ... proceeds=`), counts the gain: following
     both counted it twice. Under v2 the listing gives each send's
-    declaration and says fx-cash counts it; under v1 (which does not
-    read it) the by-hand advice stays."""
+    declaration and says fx-cash counts it (since TJ-4953 by the decision
+    itself, no .tt line needed); under v1 (which does not read it) the
+    by-hand advice stays."""
 
     def _listing(self, ledger, details=False):
         import contextlib
@@ -614,7 +615,7 @@ class TestTJ0457StablecoinGiftGainCountedOnce(unittest.TestCase):
         self.assertIn("fx-cash v2: CASHMOVE 2025-06-02 USD -50.00 kept",
                       out)
         self.assertNotIn("by hand", out)
-        self.assertIn("fx-cash v2 counts it once each", out)
+        self.assertIn("fx-cash v2 counts it, by each decision here", out)
         out = self._listing("v2", details=True)
         self.assertIn("Do NOT add this total too", out)
         self.assertNotIn("add it by hand", out)

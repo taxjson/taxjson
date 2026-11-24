@@ -113,6 +113,58 @@ class TestLine(unittest.TestCase):
                 self.assertIn("x.tt:3", str(cm.exception))
                 self.assertIn(word, str(cm.exception))
 
+    def _file(self, qty, **kw):
+        from _tmpfiles import private_tmpfile
+        entry = {"account": "margin", "date": "2025-12-19",
+                 "symbol": "QZA.TO", "reason": "r", **kw}
+        if qty is not ...:
+            entry["qty"] = qty
+        with private_tmpfile("w", suffix=".json", delete=False) as f:
+            f.write(json.dumps({"overrides": [entry]}))
+        return f.name
+
+    def test_a_file_quantity_is_a_finite_number_above_zero(self):
+        # TJ-4999: a hand-written --loss-overrides file (or an edited
+        # state file): `Infinity` named every sale as equal and a 0
+        # skipped the units test, so the override reached a sale it did
+        # not name. The .tt line refuses both (test_malformed_lines_...).
+        for bad in ("Infinity", "-Infinity", "NaN", 0, "0", -0.0, True,
+                    "ten", "1,000", "1_00", " 40", [100]):
+            with self.subTest(qty=bad):
+                p = self._file(bad)
+                with self.assertRaises(ValueError) as cm:
+                    LO.load_file(p)
+                self.assertIn(f"{p}: entry 1: qty", str(cm.exception))
+                self.assertIn("not a number of units sold",
+                              str(cm.exception))
+        # As the .tt line refuses `1_00` (Python's float reads it as 100).
+        with self.assertRaises(ValueError):
+            LON.parse_line('ALLOWLOSS 2025-12-19 QZA.TO 1_00 reason="r"')
+        for good, want in ((100, 100.0), ("40", 40.0), (-100, 100.0),
+                           (2.5, 2.5), ("2.5", 2.5), ("1e2", 100.0),
+                           (None, None), ("", None), (..., None)):
+            with self.subTest(qty=good):
+                self.assertEqual(LO.load_file(self._file(good))[0]["qty"],
+                                 want)
+
+    def test_a_refused_file_stops_the_gains_tool(self):
+        # The engine CLIs read the file through loss_overrides_from_args:
+        # the refusal is theirs (exit 2 naming the file), never a run
+        # that allows the loss.
+        import argparse
+        from taxjson.lib.pipeline import loss_overrides_from_args
+        p = self._file("Infinity")
+        with self.assertRaises(ValueError) as cm:
+            loss_overrides_from_args(argparse.Namespace(loss_overrides=p))
+        self.assertIn(p, str(cm.exception))
+        sale = _engine(_CA, [_BUY, _SELL, tx(
+            "BUYSELL", "2025-12-29", "QZA.TO", 100, -3900, currency="CAD",
+            settle="2025-12-30")],
+            loss_overrides=loss_overrides_from_args(
+                argparse.Namespace(loss_overrides=self._file(100))))
+        self.assertEqual([round(t["gain"], 2) for t in _gains(sale)],
+                         [-1000.0])
+
     def test_convert_tt_skips_the_line(self):
         from taxjson.lib.tt_format import tt_to_json
         with tempfile.TemporaryDirectory() as td:

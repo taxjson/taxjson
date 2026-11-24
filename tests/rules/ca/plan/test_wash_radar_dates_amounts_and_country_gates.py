@@ -35,7 +35,7 @@ from pathlib import Path
 
 from tax_rules import rule, rule_absent
 from taxjson.rules import ids as RID
-from _support.planning_radar_row import _row
+from _support.planning_radar_row import _row, base_rows
 
 
 def _run(country, taxable, sheltered=None, as_of="2026-05-20",
@@ -43,12 +43,13 @@ def _run(country, taxable, sheltered=None, as_of="2026-05-20",
     from taxjson.bin import taxjson_wash_radar as R
     with tempfile.TemporaryDirectory() as d:
         tp = Path(d) / "margin_base.json"
-        tp.write_text(json.dumps({"transactions": taxable}))
+        tp.write_text(json.dumps({"transactions": base_rows(taxable, country)}))
         argv = ["taxjson-wash-radar", "--country", country, "--date", as_of,
                 "--all", "--taxable", str(tp), *extra]
         if sheltered:
             sp = Path(d) / "sheltered_base.json"
-            sp.write_text(json.dumps({"transactions": sheltered}))
+            sp.write_text(json.dumps({"transactions": base_rows(sheltered,
+                                                                country)}))
             argv += ["--sheltered", str(sp)]
         if json_out:
             argv.append("--json")

@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from taxjson.lib.tax_forms import grant_buyback_units, load_json, short_carried_loss
 from taxjson.lib.country import CANADA
 from taxjson.lib.futures import is_plain_future, section_1256_kind
+from taxjson.lib.futures_prefixes import canonical_futures_symbol
 from taxjson.model.result import GainRow
 
 # Every known listing suffix (lib/markets; .VN was missing here).
@@ -76,12 +77,21 @@ def slip_symbol(raw: str, strict: bool = False) -> str:
     cased, broker option descriptions rewritten to OCC and share-class
     separators ('SAMPLC B', 'SAMPLC/B', 'SAMPLC-B') to the books' dot form.
     An option description whose strike OCC cannot hold raises
-    UnrepresentableStrike with `strict`; otherwise it stays a plain
+    UnrepresentableStrike with `strict`, and so does a futures symbol that
+    names no contract (FuturesSymbolError); otherwise it stays a plain
     (unmatched) symbol."""
     s = (raw or "").replace("\ufeff", "").strip().upper().lstrip(".")
     s = re.sub(r"\s+", " ", s)
     if not s:
         return ""
+    # A future's `/` or `\` prefix is `F:`, as the books spell it
+    # (lib/futures_prefixes, backlog TJ-5150); one that names no contract
+    # raises with `strict`, else stays as written (unmatched).
+    try:
+        s = canonical_futures_symbol(s)
+    except ValueError:
+        if strict:
+            raise
     try:
         m = _IB_OPT_RE.match(s)
         if m and m.group(3) in _MONTHS:

@@ -370,6 +370,9 @@ def _view_positionals(items, accounts_cfg, *,
     TJ-0785), unless a number stands after the dot (`1.5y`, `2.5m`: read
     as a symbol, the window fell back to the tax year: backlog TJ-1085);
     any other digit-leading non-period is a malformed period."""
+    # A symbol's future `/` or `\` prefix is `F:`, as the books spell it
+    # (lib/futures_prefixes, backlog TJ-5150).
+    from taxjson.lib.futures_prefixes import canonical_futures_symbol
     period = account = None
     rest: List[str] = []
     both: List[str] = []
@@ -388,7 +391,7 @@ def _view_positionals(items, accounts_cfg, *,
               and ("." not in t or re.fullmatch(r"\d+\.\d+[A-Za-z]*", t))):
             _tx_period_cutoff(t)                # sys.exits: invalid period
         else:
-            rest.append(t.upper())
+            rest.append(canonical_futures_symbol(t.upper()))
     for i, t in enumerate(both):
         if account is None and (period is not None or all_history):
             account = t
@@ -399,7 +402,7 @@ def _view_positionals(items, accounts_cfg, *,
             if i == len(both) - 1:
                 _warn_period_or_account(t)
         else:
-            rest.append(t.upper())
+            rest.append(canonical_futures_symbol(t.upper()))
     return period, account, rest
 
 

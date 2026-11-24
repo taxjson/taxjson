@@ -276,10 +276,13 @@ class TestCorrectedDecemberRow(unittest.TestCase):
              "symbol": "ZZR.US", "quantity": 0.0, "price": 0.0,
              "net_amount": 110.0, "currency": "CAD", "account": "a"}]}))
         rec = {"year": 2025, "boundary_rows": [dict(self.REC_ROW)]}
-        out = handoff._boundary_issues(work, self.CFG, rec, "settle",
-                                       set())
-        self.assertEqual(len(out), 1)
-        self.assertIn("neither return", out[0]["why"])
+        out = {i["symbol"]: i for i in handoff._boundary_issues(
+            work, self.CFG, rec, "settle", set())}
+        self.assertEqual(sorted(out), ["ZZQ.US", "ZZR.US"])
+        self.assertIn("neither return", out["ZZR.US"]["why"])
+        # The record's ZZQ.US row, which these books (their rows reach
+        # Dec 31) no longer hold (TJ-5183).
+        self.assertIn("no longer have it", out["ZZQ.US"]["why"])
 
 
 # ------------------------------------------------- a frozen, migrated year

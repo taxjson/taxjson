@@ -768,8 +768,9 @@ def _convert_stage(args: argparse.Namespace, txs: list[Any]) -> tuple[Any, ...]:
                 target_curr=target_currency,
             )
         except ValueError as e:
+            # A refused rates row is a refused input: exit 2.
             emit_line(f"error: {e}")
-            return True, 1, None, None, None
+            return True, 2, None, None, None
         default_rate = resolve_default_rate(args.default_rate)
         try:
             txs = convert_transactions(txs, target_currency, history,

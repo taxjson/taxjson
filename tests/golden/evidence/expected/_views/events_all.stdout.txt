@@ -11,8 +11,8 @@ margin  BUYSELL          2025-03-03 10:00:00 F:SAMPLMH6.US           -1   USD   
 margin2 BUYSELL          2025-03-10 10:00:00 F:SAMPLMH6.US           -1   USD    25         124.00 1.00 x5
 rbc     BUYSELL          2025-03-17 09:30:00 SAMPR.US                -12  USD    10.5       126.00 0.00 corp=20250317-sampr-sampt-1b4d election=taxable_disposition cash=6:USD:@2025-03-20
 rbc     BUYSELL          2025-03-17 09:30:01 SAMPT.US                12   USD    10         120.00 0.00 corp=20250317-sampr-sampt-1b4d election=taxable_disposition
-margin  BUYSELL          2025-03-18 10:00:00 SAMPLA.US               -15  USD    40         598.50 1.50
-margin2 ADJUST           2025-06-30 09:30:00 SAMPLD.US               USD  -3.00                         issuer=CA type=roc
+margin  BUYSELL          2025-03-18 10:00:00 SAMPLA.US               -15  USD    40         598.50 1.50 refunds=2025-03-24:1.5
+margin2 ADJUST           2025-06-30 09:30:00 SAMPLD.US               USD  -3.00                         issuer=CA type=roc cash_leg=cash
 margin2 DIVIDEND_IN_LIEU 2025-09-30 09:30:00 SAMPLD.US               0    USD    0            2.00      issuer=CA
 rbc     BUYSELL          2025-11-03 09:30:00 SAMPT.US                -12  USD    11         132.00 0.00
 margin2 BUYSELL          2025-11-14 10:00:00 SAMPLD.US               -10  USD    21         209.00 1.00

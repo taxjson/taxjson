@@ -81,6 +81,49 @@ class TestRadarInputFunnel(unittest.TestCase):
         self.assertNotIn("Traceback", r.stderr)
         self.assertIn("not valid JSON", r.stderr)
 
+    def test_amounts_in_another_currency_than_the_countrys_are_refused(self):
+        """Backlog TJ-5068: a Canadian radar on USD books read the USD
+        amounts as CAD (a VIOLATION with a loss of 50, exit 0, nothing on
+        stderr). Refused, naming the file, the currency and the
+        conversion; the US radar takes the same books, and refuses CAD
+        ones."""
+        usd = [_row("2026-01-05", "ZZU.US", 10, -100.0, currency="USD"),
+               _row("2026-01-20", "ZZU.US", -10, 50.0, currency="USD"),
+               _row("2026-01-25", "ZZU.US", 10, -55.0, currency="USD")]
+        doc = {"metadata": {"target_currency": "USD"}, "transactions": usd}
+        for raw, says in (
+                (doc, "amounts in USD (3 row(s)), not CAD"),
+                ({"transactions": usd}, "amounts in USD (3 row(s)), not CAD"),
+                ({"metadata": {"target_currency": "USD"},
+                  "transactions": [dict(r, currency="CAD") for r in usd]},
+                 "amounts in USD (metadata.target_currency), not CAD")):
+            for json_out in (True, False):
+                with self.subTest(raw=raw, json_out=json_out):
+                    r = _run_radar(None, "2026-01-26", raw_taxable=json.dumps(raw),
+                                   json_out=json_out)
+                    self.assertEqual((r.returncode, r.stdout), (2, ""), r.stderr)
+                    self.assertIn("taxjson-wash-radar: error: ", r.stderr)
+                    self.assertIn("margin_base.json: " + says, r.stderr)
+                    self.assertIn("taxjson-convert-currency --to CAD --rates FILE",
+                                  r.stderr)
+                    self.assertNotIn("Traceback", r.stderr)
+        r = _run_radar(None, "2026-01-26", raw_taxable=json.dumps(doc),
+                       country="usa")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("ZZU.US", r.stdout)
+        cad = [dict(t, currency="CAD") for t in usd]
+        r = _run_radar(cad, "2026-01-26", country="usa")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("amounts in CAD (3 row(s)), not USD", r.stderr)
+        # The sheltered books too; a row naming no currency is the base's.
+        r = _run_radar([_row("2026-01-05", "ZZQ.TO", 10, -100.0)], "2026-01-26",
+                       sheltered=usd)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("sheltered_base.json: amounts in USD", r.stderr)
+        r = _run_radar([dict(_row("2026-01-05", "ZZQ.TO", 10, -100.0),
+                             currency="")], "2026-01-26")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
     def test_safe_to_sell_passes_the_refusal_through(self):
         bad = [_row("2026-01-05", "ZZZ.TO", 100, 1000.0)]
         bad[0]["quantity"] = "abc"
@@ -160,8 +203,10 @@ class TestHarvestInputs(unittest.TestCase):
                 self.assertNotIn("Traceback", err)
 
     def test_native_currency_book_is_refused(self):
+        # (a gains file in the trade currency: the run's own native one,
+        # margin_raw_gains.json, is refused by its name first, TJ-5055)
         with tempfile.TemporaryDirectory() as td:
-            g = self._write(td, "margin_raw_gains.json",
+            g = self._write(td, "margin_gains.json",
                             _inv(("BBB.US", 10, 1500.0,
                                   {"currency": "USD"})))
             rc, out, err = _harvest([str(g), "--no-ibkr",
@@ -179,6 +224,129 @@ class TestHarvestInputs(unittest.TestCase):
                                      "--country", "canada"])
         self.assertEqual(rc, 0, err)
         self.assertIn("AAA.TO", out)
+
+    def test_a_document_with_no_inventory_list_is_refused(self):
+        """Backlog TJ-5054: a book of another stage (transactions, no
+        inventory), a gains-shaped file without the list, or with it
+        null, read as an empty portfolio: "No open positions.", exit 0.
+        Refused by name; an explicit empty list is an empty portfolio."""
+        buy = {"date": "2026-01-05", "action": "BUYSELL", "symbol": "AAA.TO",
+               "quantity": 10, "price": 10.0, "net_amount": -100.0,
+               "currency": "CAD"}
+        docs = (("margin_base.json", {"metadata": {"target_currency": "CAD"},
+                                      "transactions": [buy]}),
+                ("margin_gains.json", {"summary": {"year": 2026},
+                                       "transactions": []}),
+                ("margin_gains_wash.json", {"summary": {"year": 2026},
+                                            "transactions": [],
+                                            "inventory": None}))
+        with tempfile.TemporaryDirectory() as td:
+            for name, doc in docs:
+                g = self._write(td, name, doc)
+                for mode in ([], ["--json"]):
+                    with self.subTest(name=name, mode=mode):
+                        rc, out, err = _harvest([str(g), "--no-ibkr",
+                                                 "--country", "canada"] + mode)
+                        self.assertEqual((rc, out), (2, ""), err)
+                        self.assertIn(f'{g}: no "inventory" list', err)
+                        self.assertIn("not a gains file", err)
+                        self.assertNotIn("Traceback", err)
+            # As --sheltered too: its SH_QTY / SH_ADD would read none.
+            g = self._write(td, "margin_gains_wash.json",
+                            _inv(("AAA.TO", 100, 1240.0, {})))
+            sh = self._write(td, "tfsa_base.json", docs[0][1])
+            rc, out, err = _harvest([str(g), "--sheltered", str(sh),
+                                     "--no-ibkr", "--country", "canada"])
+            self.assertEqual(rc, 2, err)
+            self.assertIn(f'{sh}: no "inventory" list', err)
+            g = self._write(td, "margin_gains_wash.json",
+                            {"summary": {"year": 2026}, "transactions": [],
+                             "inventory": []})
+            rc, out, err = _harvest([str(g), "--no-ibkr", "--country", "canada"])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("No open positions.", out)
+
+    def test_a_file_given_twice_is_refused(self):
+        """Backlog TJ-5055: the same gains file twice (by one name or
+        two: a glob and an explicit name, dir/../dir/name) doubled every
+        position and total. Refused, naming the file; as a taxable input
+        and as --sheltered too."""
+        with tempfile.TemporaryDirectory() as td:
+            g = self._write(td, "margin_gains_wash.json",
+                            _inv(("AAA.TO", 10, 100.0, {"currency": "CAD"})))
+            other = self._write(td, "cash_gains_wash.json",
+                                _inv(("AAA.TO", 5, 50.0, {"currency": "CAD"})))
+            alias = Path(td) / ".." / Path(td).name / g.name
+            rc, out, err = _harvest([str(g), str(other), "--no-ibkr",
+                                     "--country", "canada", "--json"])
+            self.assertEqual(rc, 0, err)
+            self.assertEqual(len(json.loads(out)["rows"]), 2)
+            for argv, says in (
+                    ([str(g), str(g)], f"{g} is given twice"),
+                    ([str(g), str(other), str(alias)],
+                     f"{alias} is given twice (as {g} too)"),
+                    ([str(g), "--sheltered", str(alias)],
+                     f"{alias} is given twice (as {g} too), as a taxable "
+                     f"input and as --sheltered"),
+                    ([str(g), "--sheltered", str(other), "--sheltered",
+                      str(other)], f"{other} is given twice")):
+                for mode in ([], ["--json"]):
+                    with self.subTest(argv=argv, mode=mode):
+                        rc, out, err = _harvest(argv + ["--no-ibkr", "--country",
+                                                        "canada"] + mode)
+                        self.assertEqual((rc, out), (2, ""), err)
+                        self.assertIn("taxjson-harvest: error: " + says, err)
+                        self.assertIn("its positions would count twice: name each "
+                                      "file once", err)
+
+    def test_two_books_of_one_account_are_refused(self):
+        """Backlog TJ-5055: a glob over work/ gives one account's
+        _gains.json and _gains_wash.json (and the run's raw ones): each
+        was counted, every total two to four times the account's. Two
+        books of one account are refused, naming both, as a taxable input
+        and as --sheltered too; a stage file (_raw_gains.json,
+        _raw_base_gains.json) is refused as an input; one book of each
+        account still runs."""
+        held = _inv(("AAA.TO", 10, 100.0, {"currency": "CAD"}))
+        with tempfile.TemporaryDirectory() as td:
+            w = {n: self._write(td, n, held) for n in (
+                "margin_gains_wash.json", "margin_gains.json",
+                "margin_gains_all.json", "margin_raw_gains.json",
+                "margin_raw_base_gains.json", "cash_gains.json")}
+            rc, out, err = _harvest([str(w["margin_gains_wash.json"]),
+                                     str(w["cash_gains.json"]), "--no-ibkr",
+                                     "--country", "canada", "--json"])
+            self.assertEqual(rc, 0, err)
+            self.assertEqual(len(json.loads(out)["rows"]), 2)
+            wash, plain = w["margin_gains_wash.json"], w["margin_gains.json"]
+            two = "are two books of account margin"
+            for argv, says in (
+                    ([wash, plain], f"{wash} and {plain} {two} — its positions "
+                                    f"would count twice: pass one "
+                                    f"(margin_gains_wash.json, else "
+                                    f"margin_gains.json)"),
+                    ([plain, w["margin_gains_all.json"]],
+                     f"{plain} and {w['margin_gains_all.json']} {two}"),
+                    ([wash, "--sheltered", plain],
+                     f"{wash} and {plain} {two}, one as a taxable input and "
+                     f"one as --sheltered"),
+                    ([wash, w["margin_raw_gains.json"]],
+                     f"{w['margin_raw_gains.json']}: an intermediate file of "
+                     f"the run (the raw books' gains), not a gains file to "
+                     f"pass — pass work/margin_gains_wash.json (or "
+                     f"margin_gains.json)"),
+                    ([w["margin_raw_base_gains.json"]],
+                     f"{w['margin_raw_base_gains.json']}: an intermediate "
+                     f"file of the run"),
+                    ([wash, "--sheltered", w["margin_raw_gains.json"]],
+                     f"{w['margin_raw_gains.json']}: an intermediate file")):
+                for mode in ([], ["--json"]):
+                    with self.subTest(argv=argv, mode=mode):
+                        rc, out, err = _harvest([str(a) for a in argv]
+                                                + ["--no-ibkr", "--country",
+                                                   "canada"] + mode)
+                        self.assertEqual((rc, out), (2, ""), err)
+                        self.assertIn("taxjson-harvest: error: " + says, err)
 
 
 class TestHarvestTotalsAndMap(unittest.TestCase):

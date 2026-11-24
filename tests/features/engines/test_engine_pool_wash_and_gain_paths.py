@@ -45,6 +45,19 @@ class TestFxCashRateAge(unittest.TestCase):
                                         max_age_days=7),
                          (1.32, "2024-01-02"))
 
+    def test_latest_rate_skips_a_key_that_is_no_calendar_day(self):
+        # Backlog TJ-5046: a history built by hand (the loader drops
+        # such a line) with `2025-02-30`, which sorts after February 28.
+        hist = {"USD": {"2025-02-28": 1.35, "2025-02-30": 9.99,
+                        "20250229": 9.98, "": 9.97}}
+        self.assertEqual(PC.latest_rate(hist, "USD", "2025-03-01"),
+                         (1.35, "2025-02-28"))
+        self.assertEqual(PC.latest_rate(hist, "USD", "2025-03-01",
+                                        max_age_days=5),
+                         (1.35, "2025-02-28"))
+        self.assertEqual(PC.latest_rate({"USD": {"2025-02-30": 9.99}},
+                                        "USD", "2025-03-01"), (None, None))
+
     @rule(R.CA_FX_02)
     def test_fx_cash_counts_a_stale_rate_unrated(self):
         self._stale("canada")

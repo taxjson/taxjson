@@ -129,18 +129,23 @@ class TestTJ0639SanityAccountWithNoInputs(unittest.TestCase):
             self.assertIn("or take out its snapshot in holdings/ until it "
                           "has some.", err)
 
-    def test_the_run_shows_it(self):
+    def test_sanity_shows_it_and_the_run_names_sanity(self):
         from _qa_project import console, tj
         with tempfile.TemporaryDirectory() as td:
             root = self._with_zempty(td)
-            out = console(tj(root, "run", "--no-input"))
+            out = console(tj(root, "sanity", check=False))
             # As a person reads it: the headline on its one line.
             self.assertIn("Error: taxjson.toml: account 'zempty' has no "
                           "inputs (inputs/zempty/ is missing): nothing to "
                           "compare\n", out)
-            self.assertIn("Warning: holdings check could not run — "
-                          "`tjs sanity`", out)
             self.assertNotIn("is not an account", out)
+            # The run compares nothing (TJ-5170): no Error of sanity's,
+            # its closing list names `tjs sanity`.
+            out = console(tj(root, "run", "--no-input"))
+            self.assertNotIn("nothing to compare", out)
+            self.assertNotIn("holdings check", out)
+            self.assertIn("Info: positions not yet compared with the "
+                          "broker's holdings files — `tjs sanity`", out)
 
 
 # ---- TJ-0640: nothing compared for a config problem is exit 2 -------------
@@ -179,12 +184,15 @@ class TestTJ0640NothingComparedExits2(unittest.TestCase):
             self.assertIn("none of the `holdings` files in taxjson.toml "
                           "(or the holdings/ folder) could be checked (see "
                           "the notes above) — fix the paths.", err)
-            # The run still names it, and goes on.
+            # The run compares nothing (TJ-5170): it goes on, and its
+            # closing list names `tjs sanity`.
             r = _tjs(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             out = _flat(r.stdout + r.stderr)
-            self.assertIn("error: none of the `holdings` files", out)
-            self.assertIn("warning: holdings check could not run", out)
+            self.assertNotIn("none of the `holdings` files", out)
+            self.assertNotIn("holdings check", out)
+            self.assertIn("positions not yet compared with the broker's "
+                          "holdings files", out)
 
     def test_only_unclaimed_snapshots(self):
         with tempfile.TemporaryDirectory() as td:

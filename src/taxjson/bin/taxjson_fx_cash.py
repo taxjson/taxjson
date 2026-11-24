@@ -198,7 +198,7 @@ def build_ledger(transactions: List[Dict[str, Any]], base: str,
     # own units come in, at the income's value when that is in the base
     # currency — as ledger v2 books it (backlog TJ-0038, TJ-0221).
     from taxjson.lib.country import stablecoin_model
-    from taxjson.lib.fx_cash_v2 import _reward_cash
+    from taxjson.lib.cash_legs import _reward_cash
     stable_cash = bool(country) and stablecoin_model(country) == "cash"
     for tx in rows:
         if pools_ye is None and str(tx.get("date_settle")

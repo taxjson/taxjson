@@ -307,30 +307,36 @@ class TestKrakenCashAcrossExports(unittest.TestCase):
             ("2024-12-31", "CAD"): 2000.0, ("2024-12-31", "USD"): 0.0,
             ("2025-03-02", "CAD"): 2000.0, ("2025-03-02", "USD"): 50.0})
 
-    def test_a_wallet_another_export_moves_first_has_no_opening(self):
+    def test_a_wallet_another_export_moves_first_opens_before_that_exports_row(self):
         # k07, k25: the June export's USDC (US dollars here) was moved by the
-        # January export, so the June export says no US-dollar balance at
-        # the year's start, for any of its wallets (the January one gives
-        # it); its own closing balance sums its wallets.
+        # January export. The balances are the account's (backlog TJ-5032):
+        # each export gives the balance before the wallet's first row in
+        # ANY export at the year's start (the June export once dated the
+        # balance before its own first row there, then gave none), and
+        # the account's closing balance, its wallets added up.
         d = self._dir({
             "kraken_ledgers_a.csv":
                 "LA-1,R1,2025-01-05 15:00:00,deposit,,currency,USDC,spot / main,30,0,30,0,0,USDC\n",
             "kraken_ledgers_b.csv":
                 "LB-1,R2,2025-06-01 15:00:00,deposit,,currency,ZUSD,spot / main,100,0,100,0,0,USD\n"
                 "LB-2,R3,2025-06-02 15:00:00,deposit,,currency,USDC,spot / main,50,0,80,0,0,USDC\n"})
-        self.assertEqual(_bals(self._parsed(d / "kraken_ledgers_b.csv").cash_events),
-                         {("2025-06-02", "USD"): 180.0})
+        for name in ("kraken_ledgers_a.csv", "kraken_ledgers_b.csv"):
+            with self.subTest(name):
+                self.assertEqual(_bals(self._parsed(d / name).cash_events),
+                                 {("2024-12-31", "USD"): 0.0, ("2025-06-02", "USD"): 180.0})
 
     def test_a_wallet_is_its_asset_and_its_suffix(self):
         # k07b: another export moving USD.HOLD says nothing of the spot ZUSD
-        # wallet's balance at the year's start.
+        # wallet's balance at the year's start; the account's closing
+        # balance is the two wallets' (backlog TJ-5032: this export once
+        # gave its own wallet's 100 as the account's).
         d = self._dir({
             "kraken_ledgers_a.csv":
                 "LA-1,R1,2025-01-05 15:00:00,deposit,,currency,USD.HOLD,spot / main,30,0,30,0,0,USD\n",
             "kraken_ledgers_b.csv":
                 "LB-1,R2,2025-06-01 15:00:00,deposit,,currency,ZUSD,spot / main,100,0,100,0,0,USD\n"})
         self.assertEqual(_bals(self._parsed(d / "kraken_ledgers_b.csv").cash_events),
-                         {("2024-12-31", "USD"): 0.0, ("2025-06-01", "USD"): 100.0})
+                         {("2024-12-31", "USD"): 0.0, ("2025-06-01", "USD"): 130.0})
 
     def test_a_trade_row_with_no_refid_is_a_trade_of_its_own(self):
         # k11: two trade rows without a refid are two trades (each a

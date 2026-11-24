@@ -243,9 +243,12 @@ with its explanation, and which broker each file was read as
 (`Info: File inputs/margin/activity.csv → identified as Questrade`).
 
 The list can also name positions at a $0 cost (sold this year or still
-held), stocks that paid you income the books do not hold, and rows
+held), stocks that paid you income the books do not hold, rows
 booked in two accounts (one export saved in two `inputs/<account>/`
-folders: keep it in one, then run again). A run with
+folders: keep it in one, then run again), and, once the project has the
+broker's holdings files, `tjs sanity`: the run never compares positions
+with them (step 6, which the heading names when the list's lines are
+only about the broker's holdings). A run with
 nothing to report has no list after `Done.` (at most the line naming
 `tjs checklist --run`); the same counts are always written to
 `reports/run_summary.json`.
@@ -1010,20 +1013,22 @@ Export itself works too: save it there named for its account
 margin=FILE`). Then run `tjs sanity` again. A report dated
 before the books' last row is compared with the books' positions on its
 own date. Every difference is either a trade after your last export or
-something still missing. Once `holdings/` holds a snapshot or
-`holdings = [...]` is set (a `.toml` or a broker's report), every run
-ends with the same check:
+something still missing. The check is a step of its own: `tjs run`
+compares nothing with these files. Once `holdings/` holds a snapshot or
+`holdings = [...]` is set (a `.toml` or a broker's report), the run's
+closing list names it:
 
 ```
-==> Checking positions against the broker's holdings files
-Info: positions match the broker's holdings files
+Info: positions not yet compared with the broker's holdings files — `tjs sanity`
 ```
 
-An account with open positions and no `holdings` file is not checked;
-the line then ends `(checked accounts only; 1 unchecked: crypto)`.
-When it differs, the run says so: on a first project, missing history
-is the likely cause (go back to step 5); later, same-day trades not yet
-in the CSVs are the usual one.
+and `tjs checklist --run` runs it (the sanity step). An account with
+open positions and no `holdings` file is not checked: `tjs sanity`
+names it (`UNCHECKED: 1 account(s) with positions and no holdings file:
+crypto`). When
+positions differ, it says so (exit 1): on a first project, missing
+history is the likely cause (go back to step 5); later, same-day trades
+not yet in the CSVs are the usual one.
 
 Also compare the books with the broker's slips (T5008; US: 1099-B):
 
@@ -1142,8 +1147,8 @@ and a complete project per tax year beside them.
   does not have (an RRSP split in 2025, seen from 2024) is not read by
   that year, with one `Info:` line.
 - **The year's positions snapshots go in its `holdings/`**: keep one taken
-  at (or just after) the year end there. `tjs sanity` and the end of
-  `tjs run` find them without a setting (step 6).
+  at (or just after) the year end there. `tjs sanity` finds them without
+  a setting (step 6); `tjs run` only names it in its closing list.
 - **A new year:** `tjs new-year 2026` in `~/taxes` (or any year folder)
   creates `2026/` from the newest earlier year: its `taxjson.toml` (year
   set, `prior_year_record` pointed at `../2025/filed/2025.json`, 2025's

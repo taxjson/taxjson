@@ -334,6 +334,50 @@ class TestTemplate(unittest.TestCase):
         # alone; the third is the second fill among the id-less rows.
         self.assertEqual([t.get("description", "") for t in out], ["", "", "[fill #2]"])
 
+    def test_only_rows_alike_in_every_field_of_the_id_are_split_fills(self):
+        # TJ-5038: rows one field of the id already tells apart get two
+        # ids; marked, the copy an overlapping export holds was a third.
+        from taxjson.lib.brokerages.base import FILL_IDENTITY_FIELDS
+        base = {"action": "BUYSELL", "date": "2025-03-03", "symbol": "ZQQ.TO",
+                "quantity": 10, "price": 10.0, "net_amount": -100.0}
+        other = {"action": "DIVIDEND", "date": "2025-03-04", "time": "10:00:00",
+                 "symbol": "ZQR.TO", "quantity": 11, "currency": "USD",
+                 "price": 11.0, "net_amount": -110.0, "gross_amount": 100.0,
+                 "account": "B", "type": "roc", "date_settle": "2025-03-05",
+                 "description": "second fill"}
+        self.assertEqual([n for n, _ in FILL_IDENTITY_FIELDS], list(other))
+        for name in other:
+            with self.subTest(field=name):
+                rows = [dict(base), dict(base, **{name: other[name]})]
+                BaseBrokerage.disambiguate_split_fills(rows)
+                self.assertEqual(rows[1].get("description", ""),
+                                 other[name] if name == "description" else "")
+        # Alike in all of them (10 and 10.0 are one quantity; a field left
+        # out is its default): the second is marked, whatever else differs.
+        rows = [dict(base), dict(base, quantity=10.0, time="09:30:00",
+                                 account="PORTFOLIO", commission=1.0)]
+        BaseBrokerage.disambiguate_split_fills(rows)
+        self.assertEqual(rows[1]["description"], "[fill #2]")
+
+    def test_the_fill_identity_is_the_fields_the_id_hashes(self):
+        # A field the id reads and the marks did not would collapse two
+        # rows; one the marks read and the id does not would mark none.
+        import dataclasses
+        from taxjson.lib.brokerages.base import FILL_IDENTITY_FIELDS, fill_identity
+        from taxjson.model.transaction import TaxTransaction
+        base = {"action": "BUYSELL", "date": "2025-03-03"}
+        for f in dataclasses.fields(TaxTransaction):
+            if f.name == "id" or not isinstance(f.default, (str, float)):
+                continue
+            changed = dict(base, **{f.name: "x" if isinstance(f.default, str) else 7.0})
+            with self.subTest(field=f.name):
+                self.assertEqual(
+                    TaxTransaction(**base).id != TaxTransaction(**changed).id,
+                    fill_identity(base) != fill_identity(changed))
+        for name, default in FILL_IDENTITY_FIELDS:
+            if name not in base:
+                self.assertEqual(getattr(TaxTransaction(**base), name), default, name)
+
     def test_a_row_keeps_the_builder_classify_chose(self):
         row = _Row(2, "build")
         self.assertIsNone(row.builder)
@@ -448,8 +492,8 @@ class TestTemplate(unittest.TestCase):
                 return transactions[::-1]
         p = Reversing([_Row(2, "build"), _Row(3, "build")])
         out, _ = _parse(p)
-        # Two identical rows: the first in the file keeps its stable id
-        # (no mark) whatever order the parser outputs them in.
+        # Two identical rows: the first as `finish` left them keeps its
+        # stable id (no mark); a step after the marks moves them with it.
         self.assertEqual([t["from"] for t in out], [3, 2])
         self.assertEqual([t.get("description", "") for t in out], ["[fill #2]", ""])
 

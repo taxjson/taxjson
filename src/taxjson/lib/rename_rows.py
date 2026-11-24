@@ -8,7 +8,7 @@ architecture plan: lib's import cycle)."""
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from taxjson.lib.rename_decl import SOURCE_MAP, SOURCE_TT, WINDOW_DAYS, _days
 
@@ -31,6 +31,27 @@ def _option_root(sym: str) -> Optional[str]:
     if sym and is_option_symbol(sym):
         return parse_option_underlying(sym)
     return None
+
+
+def underlying_change(old: str, new: str) -> Optional[Tuple[str, str]]:
+    """(OLD, NEW) underlyings when a rename row moves one option
+    contract from one underlying to another — the same expiry, right
+    and strike on each side (the row a declared rename of the
+    underlying books per open contract, lib/renames
+    ._book_option_series; a .tt SPLIT of the contract) — else None: a
+    share's rename, a contract adjusted on its own underlying, another
+    contract."""
+    from taxjson.lib.option_symbols import (parse_option_expiry,
+                                            parse_option_right,
+                                            parse_option_strike)
+    a, b = _option_root(old), _option_root(new)
+    if not a or not b or a == b:
+        return None
+    if any(f(old) != f(new) for f in (parse_option_expiry,
+                                      parse_option_right,
+                                      parse_option_strike)):
+        return None
+    return a, b
 
 
 def rename_target(r: Any) -> str:

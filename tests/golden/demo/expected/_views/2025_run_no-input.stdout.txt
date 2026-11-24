@@ -132,6 +132,6 @@
 ==> Writing fees report reports/fees.rpt
   note: 20 file(s) for other tools -> ../exports/ (the newest year's)
 ==> Done. Reports are in reports/
-==> Before you trust these numbers (docs/getting-started.md, step 5)
+==> Before you trust these numbers (docs/getting-started.md, step 6)
 Info: 8 accounts with open positions and no holdings file to check them against: crypto (2), ib (1), lira (3), margin (3), questrade (1), rrsp (1) +2 more. Run `tjs sanity` with the broker's positions.
 Info: Then run `tjs checklist --run`: it checks every step and names the next one.

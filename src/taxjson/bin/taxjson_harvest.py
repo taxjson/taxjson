@@ -107,10 +107,22 @@ def _read_input(p: Path, what: str) -> Dict[str, Any]:
 
 
 def _inventory(doc: Dict[str, Any], p: Path) -> List[Dict[str, Any]]:
-    inv = doc.get("inventory") or []
+    """The gains file's `inventory` rows, or one line and exit 2. A
+    document without the list (a book of another stage: transactions,
+    no inventory), or with it null, is refused by name: read as no
+    positions it said "No open positions." at exit 0 (backlog TJ-5054).
+    An empty list is an empty portfolio."""
+    from taxjson.lib.cli_diag import error
+    inv = doc.get("inventory")
+    if inv is None:
+        why = ("it is null" if "inventory" in doc else "keys: " + (
+            ", ".join(sorted(map(str, doc))) or "none"))
+        error(PROG, f'{p}: no "inventory" list ({why}): not a gains file '
+                    f"— pass work/<account>_gains_wash.json (or "
+                    f"_gains.json)")
+        sys.exit(2)
     if not isinstance(inv, list) or any(not isinstance(h, dict)
                                          for h in inv):
-        from taxjson.lib.cli_diag import error
         error(PROG, f'{p}: "inventory" must be a list of JSON objects')
         sys.exit(2)
     # A text qty / total_cost is one line naming the file and row, like
@@ -118,10 +130,78 @@ def _inventory(doc: Dict[str, Any], p: Path) -> List[Dict[str, Any]]:
     try:
         check_row_types(inv, p, "inventory")
     except InputFileError as e:
-        from taxjson.lib.cli_diag import error
         error(PROG, str(e))
         sys.exit(2)
     return inv
+
+
+# The run's intermediate gains files (stage_table: raw_gains,
+# raw_base_gains), never an input: an account's positions are in its
+# _gains_wash.json (or _gains.json) already (backlog TJ-5055).
+_STAGE_SUFFIXES = ("_raw_base_gains.json", "_raw_gains.json")
+
+
+def _book_account(path: Path) -> str:
+    """The account a gains file of work/ is a book of: `_account_of`,
+    a stage file's and the full history's (`_gains_all.json`) too."""
+    for suf in _STAGE_SUFFIXES + ("_gains_all.json",) + _GAINS_SUFFIXES:
+        if path.name.endswith(suf):
+            return path.name[: -len(suf)]
+    return path.stem
+
+
+def _input_problem(files: List[Path], sheltered: List[Path]) -> Optional[str]:
+    """The refusal of the inputs (one line), else None: a stage file of
+    the run (`_STAGE_SUFFIXES`), a file named twice (`_named_twice`), or
+    two books of one account (`_book_account`: a glob over work/ gave
+    _gains.json, _gains_wash.json and the raw ones, each counted, the
+    totals 2 to 4 times the account's; backlog TJ-5055)."""
+    named = [(f, False) for f in files] + [(f, True) for f in sheltered]
+    for p, _shelt in named:
+        if p.name.endswith(_STAGE_SUFFIXES):
+            a = _book_account(p)
+            return (f"{p}: an intermediate file of the run (the raw books' "
+                    f"gains), not a gains file to pass — pass "
+                    f"work/{a}_gains_wash.json (or {a}_gains.json)")
+    twice = _named_twice(files, sheltered)
+    if twice:
+        return twice
+    seen: Dict[str, Tuple[Path, bool]] = {}
+    for p, shelt in named:
+        a = _book_account(p)
+        if a in seen:
+            first, was = seen[a]
+            where = (", one as a taxable input and one as --sheltered"
+                     if was != shelt else "")
+            return (f"{first} and {p} are two books of account {a}{where} — "
+                    f"its positions would count twice: pass one "
+                    f"({a}_gains_wash.json, else {a}_gains.json)")
+        seen[a] = (p, shelt)
+    return None
+
+
+def _named_twice(files: List[Path], sheltered: List[Path]) -> Optional[str]:
+    """The refusal of an input file named twice (once as a taxable input
+    and once as --sheltered too), by one spelling or two (a glob and the
+    name, dir/./name, a link): its positions were counted twice, every
+    total doubled (backlog TJ-5055). None when each file is named once.
+    A file that is not there is the reader's to refuse."""
+    seen: Dict[Any, Tuple[Path, bool]] = {}
+    for p, shelt in [(f, False) for f in files] + [(f, True) for f in sheltered]:
+        try:
+            st = p.stat()
+            key: Any = (st.st_dev, st.st_ino)
+        except OSError:
+            key = str(p.resolve())
+        if key in seen:
+            first, was = seen[key]
+            alias = f" (as {first} too)" if str(first) != str(p) else ""
+            where = (", as a taxable input and as --sheltered"
+                     if was != shelt else "")
+            return (f"{p} is given twice{alias}{where} — its positions "
+                    f"would count twice: name each file once")
+        seen[key] = (p, shelt)
+    return None
 
 
 def load_positions(files: List[Path],
@@ -788,10 +868,18 @@ def main(argv: Optional[List[str]] = None,
     _scope = scope_note(args.country)
 
     files = [Path(f) for f in args.files]
+    refused = _input_problem(files, [Path(f) for f in args.sheltered])
+    if refused:
+        error(PROG, refused)
+        return 2
     skipped_options: List[str] = []
     positions = load_positions(files, include_options=args.options,
                                base_currency=args.base_currency,
                                skipped_options=skipped_options)
+    # A future's `/` or `\` prefix is `F:`, as the books spell it
+    # (lib/futures_prefixes, backlog TJ-5150).
+    from taxjson.lib.futures_prefixes import canonical_futures_symbol
+    args.symbol = [canonical_futures_symbol(s) for s in args.symbol or []]
     if args.symbol:
         want = {s.upper() for s in args.symbol}
         held = {r["symbol"].upper() for r in positions}

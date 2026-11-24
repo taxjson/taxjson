@@ -142,7 +142,8 @@
       "ledger": 0.0,
       "ok": true,
       "source": "ib_2025.csv: Cash Report Starting Cash",
-      "statement": 0.0
+      "statement": 0.0,
+      "unsure": false
     },
     {
       "book": "margin2/ib",
@@ -152,7 +153,8 @@
       "ledger": 0.0,
       "ok": true,
       "source": "ib_2025.csv: Cash Report Starting Cash",
-      "statement": 0.0
+      "statement": 0.0,
+      "unsure": false
     },
     {
       "book": "rbc/rbc",
@@ -162,7 +164,8 @@
       "ledger": 0.0,
       "ok": true,
       "source": "inputs/rbc/cash.tt:5",
-      "statement": 0.0
+      "statement": 0.0,
+      "unsure": false
     },
     {
       "book": "margin/ib",
@@ -172,7 +175,8 @@
       "ledger": 825.0,
       "ok": true,
       "source": "inputs/margin/cash.tt:5",
-      "statement": 825.0
+      "statement": 825.0,
+      "unsure": false
     },
     {
       "book": "margin/ib",
@@ -182,7 +186,8 @@
       "ledger": 826.5,
       "ok": true,
       "source": "ib_2025.csv: Cash Report Ending Cash",
-      "statement": 826.5
+      "statement": 826.5,
+      "unsure": false
     },
     {
       "book": "margin2/ib",
@@ -192,7 +197,8 @@
       "ledger": 436.0,
       "ok": true,
       "source": "ib_2025.csv: Cash Report Ending Cash",
-      "statement": 436.0
+      "statement": 436.0,
+      "unsure": false
     },
     {
       "book": "rbc/rbc",
@@ -202,7 +208,8 @@
       "ledger": 138.0,
       "ok": true,
       "source": "inputs/rbc/cash.tt:6",
-      "statement": 138.0
+      "statement": 138.0,
+      "unsure": false
     }
   ],
   "reliable": true,

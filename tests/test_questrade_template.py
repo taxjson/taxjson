@@ -38,9 +38,11 @@ class TestQuestradeOnTheTemplate(unittest.TestCase):
 
     def test_journal_costing_follows_the_marks(self):
         # Two lots of one security journaled to the USD line on one day,
-        # with different book values: the two IN legs are byte-identical
-        # as the loop made them, so the second is a split fill, and each
-        # keeps its own cost (the marks saw the legs before the costing).
+        # with different book values: the two OUT legs are byte-identical
+        # as the loop made them, so the second is a split fill; the IN
+        # legs' descriptions (the book values) tell them apart, so neither
+        # is marked (TJ-5038), and each keeps its own cost (the marks saw
+        # the legs before the costing).
         day = '2025-03-03'
         body = (_brw(day, 'SAMPLF.TO', '-100', 'SAMPLE US DOLLAR FUND JOURNAL POSITION TO USD')
                 + _brw(day, 'SAMPLF.U.TO', '100', 'SAMPLE US DOLLAR FUND JOURNAL POSITION FROM '
@@ -51,8 +53,11 @@ class TestQuestradeOnTheTemplate(unittest.TestCase):
         txs, _err, _ = qt_parse(body)
         ins = of(txs, symbol='SAMPLF.U.TO')
         self.assertEqual(len(ins), 2)
-        self.assertEqual([t['description'].endswith('[fill #2]') for t in ins], [False, True])
+        self.assertEqual([t['description'].endswith('[fill #2]') for t in ins], [False, False])
+        self.assertNotEqual(ins[0]['description'], ins[1]['description'])
         self.assertNotEqual(ins[0]['net_amount'], ins[1]['net_amount'])
+        outs = of(txs, symbol='SAMPLF.TO')
+        self.assertEqual([t['description'].endswith('[fill #2]') for t in outs], [False, True])
 
 
 if __name__ == "__main__":

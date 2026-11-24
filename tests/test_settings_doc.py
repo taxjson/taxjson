@@ -146,6 +146,12 @@ class TestSettingsDocFiles(unittest.TestCase):
         want = ({f"{k}=" for k in tt._FACT_KEYS} | {f"{tt.EXERCISE_KEY}="}
                 # a corporate action's provenance (backlog TJ-1117)
                 | {f"{k}=" for k in tt._CORP_KEYS}
+                # the cash the FX-on-cash ledgers read (backlog TJ-5036)
+                | {f"{k}=" for k in tt._CASH_KEYS}
+                # a row's settlement date, the events view's marker of a
+                # row no line can say (backlog TJ-5211, TJ-5212)
+                | {f"{tt.SETTLED_KEY}=", f"{tt.TRADED_KEY}=",
+                   f"{tt.NOT_TT_KEY}="}
                 # an INTEREST line's property, a settled futures part's
                 # facts (backlog TJ-0856, TJ-0662)
                 | {f"{tt.INTEREST_SYMBOL_KEY}=", f"{tt.SETTLE_KEY}=",

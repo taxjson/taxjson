@@ -1,17 +1,20 @@
-"""`tjs t1135` while a holding's ISIN and its listing disagree on its
-being foreign property (backlog TJ-4956, TJ-4958).
+"""`tjs t1135` while a holding's being foreign property is open (backlog
+TJ-4956, TJ-4957, TJ-4963).
 
-The books count a symbol by its listing. When the rows' ISIN
-(`issuer_country`, stamped by the IB reader) says otherwise, the symbol
-was named in a warning and the verdict printed regardless: "no T1135
-required" over a Toronto-listed holding of a foreign issuer whose cost
-alone was over the threshold. Now the test is open (`--json`
-`classification_status` "unresolved", `filing_required` null, the text
-NOT RESOLVED with the ticker.map lines that settle it) whenever counting
-the named holdings the other way would move the total across the
-threshold, in either direction; it says the result is the same either
-way when it is; and a holding foreign under either country (the total
-cannot move) is a warning and a symbol to review.
+A share's country is decided in order (a T1135 line, the ISIN, the same
+security's ISIN in another account, the listing: tests/rules/ca/rpt/
+test_t1135_country_by_issuer.py). An ISIN that disagrees with the
+listing decides, so that is no longer open. What is: a share whose
+sources of one rank disagree (two ISINs in the year, an ISIN and
+tobase.map), or whose ISIN's prefix is no country's, counted as foreign
+property under `??`; and a listed option whose own listing and whose
+share disagree, counted by its listing. While counting such a holding
+the other way would move the total across the threshold the test is
+open (`--json` `classification_status` "unresolved", `filing_required`
+null, the text NOT RESOLVED with the ticker.map lines that settle it),
+in either direction; the report says the result is the same either way
+when it is; and a holding foreign under each reading (the total cannot
+move) is a warning and a symbol to review.
 
 Every fixture is SYNTHETIC: invented tickers (FGN, OLD, NEW, QZ*), an
 invented account name.
@@ -31,7 +34,6 @@ from taxjson.rules import ids as R
 from taxjson.bin import taxjson_t1135 as T
 from taxjson.bin.taxjson_t1135 import (build_report, main, render_brief,
                                        render_report, verdict_keys)
-from taxjson.lib import out as _out
 from taxjson.project.settings import Settings
 
 from _support.ca_t1135_walk import _r
@@ -68,6 +70,22 @@ def unknown(symbol, day="2024-01-02"):
 
 def book(symbol, cost, issuer, more=()):
     return [buy(symbol, cost), div(symbol, issuer), *more]
+
+
+def torn(symbol, cost, more=(), one="AU", other="CA"):
+    """A holding two of the year's rows give two countries for (an
+    Australian ISIN and a Canadian one): nothing may be picked."""
+    return [buy(symbol, cost), div(symbol, one),
+            div(symbol, other, "2025-09-17"), *more]
+
+
+OPT = "FGN250620C00150000.TO"       # a Montreal-listed call on FGN.TO
+OPU = "QZC250620C00150000.US"       # a US-listed call on QZC.US
+
+
+def opt(symbol, cost, day="2025-02-05"):
+    """One long contract bought for `cost`."""
+    return _r("BUYSELL", day, symbol, 1, -cost)
 
 
 def cash_doc(cost, unknown_cost=False):
@@ -127,58 +145,73 @@ def lines_named(text):
             if "SYMBOL" not in ln.split() and "COUNTRY" not in ln.split()]
 
 
-class TestAForeignIsinOnACanadianListing(unittest.TestCase):
-    """TJ-4956: FGN.TO, an Australian ISIN, counted as Canadian."""
+class TestAShareItsSourcesDisagreeOn(unittest.TestCase):
+    """FGN.TO, an Australian ISIN on one row of the year and a Canadian
+    one on another: counted as foreign under `??`, the other reading
+    walked."""
 
     @rule(R.CA_RPT_02)
     def test_a_cost_over_the_threshold_leaves_the_test_open(self):
-        rep = report(book("FGN.TO", COST, "AU"))
-        # The figures stay as counted: nothing is reclassified.
-        self.assertEqual(rep["max_total_cost"], 0.0)
-        self.assertIs(rep["over_threshold_as_counted"], False)
-        self.assertIs(rep["total_settled"], True)
-        self.assertEqual(rep["properties"], [])
-        # ... and no key says they are a verdict.
+        rep = report(torn("FGN.TO", COST))
+        # Counted, the cautious way, under no country.
+        self.assertEqual(rep["max_total_cost"], COST)
+        self.assertIs(rep["over_threshold_as_counted"], True)
+        self.assertEqual([(r["symbol"], r["country"], r["country_review"])
+                          for r in rep["properties"]],
+                         [("FGN.TO", "??", "sources_disagree")])
+        # ... and no key says that is a verdict.
         self.assertIsNone(rep["filing_required"])
         self.assertIsNone(rep["simplified_method_available"])
         self.assertEqual(rep["classification_status"], "unresolved")
         self.assertEqual(rep["classification_unresolved_symbols"],
                          ["FGN.TO"])
         self.assertEqual(rep["classification_unknown_cost_symbols"], [])
-        self.assertEqual(rep["max_total_cost_low"], 0.0)
-        self.assertEqual(rep["max_total_cost_high"], COST)
-        self.assertEqual(rep["max_total_cost_high_at_least"], COST)
+        self.assertEqual((rep["max_total_cost_low"],
+                          rep["max_total_cost_high"],
+                          rep["max_total_cost_high_at_least"]),
+                         (0.0, COST, COST))
         self.assertEqual(rep["classification_conflicts"], [
-            {"symbol": "FGN.TO", "counted_as": "CAN",
-             "issuer_country": "AUS", "isin_country_code": "AU",
+            {"symbol": "FGN.TO", "kind": "sources_disagree",
+             "counted_as": "??", "issuer_country": None,
+             "isin_country_code": None, "countries": ["AUS", "CAN"],
              "affects": "total", "held_in_year": True,
-             "symbols": {"FGN.TO": "CAN"},
+             "symbols": {"FGN.TO": "??"},
              "lines": {"foreign": ["T1135 FGN.TO AUS"],
                        "not_foreign": ["T1135 FGN.TO CA"]}}])
+        self.assertEqual(rep["country_review_symbols"], ["FGN.TO"])
+        self.assertEqual(rep["review_symbols"], ["FGN.TO"])
         for text in texts(rep):
             self.assertNotIn("no T1135 required", text)
             self.assertNotIn("FILING REQUIRED", text)
-            self.assertIn(f"=> NOT RESOLVED: below the {THR} threshold as "
-                          "counted, but FGN.TO may be foreign property (a "
-                          "foreign ISIN on a Canadian listing): with it "
-                          f"the maximum is {money(COST)} CAD", text)
-            self.assertIn("Add `T1135 FGN.TO AUS` (foreign property) or "
-                          "`T1135 FGN.TO CA` (not foreign property) to "
+            self.assertIn(f"=> NOT RESOLVED: over the {THR} threshold as "
+                          "counted, but FGN.TO may not be foreign property "
+                          "(its sources disagree: AUS, CAN): without it "
+                          "the maximum is 0.00 CAD", text)
+            self.assertIn("Add `T1135 FGN.TO CA` (not foreign property) or "
+                          "`T1135 FGN.TO AUS` (foreign property) to "
                           "ticker.map, then `tjs run` and `tjs t1135`.",
                           text)
+            self.assertRegex(text, r"FGN\.TO \?\? review 2 ")
+        self.assertIn("1 security to review for the T1135's country: "
+                      "FGN.TO (its sources disagree: AUS, CAN)",
+                      rep["_stderr"])
 
     @rule(R.CA_RPT_02)
     def test_the_lines_named_give_the_figures_named(self):
-        rows = book("FGN.TO", COST, "AU")
+        rows = torn("FGN.TO", COST)
         open_ = report(rows)
         lines = conflict(open_, "FGN.TO")["lines"]
         rep = report(rows, as_overrides(lines["foreign"]))
         self.assertEqual(rep["classification_status"], "resolved")
         self.assertEqual(rep["classification_conflicts"], [])
+        self.assertEqual(rep["country_review"], [])
         self.assertEqual(rep["max_total_cost"],
                          open_["max_total_cost_high"])
         self.assertIs(rep["filing_required"], True)
         self.assertIs(rep["simplified_method_available"], True)
+        self.assertEqual(rep["properties"][0]["country"], "AUS")
+        self.assertEqual(rep["properties"][0]["country_source"],
+                         "override")
         self.assertIn("FILING REQUIRED", texts(rep)[0])
         rep = report(rows, as_overrides(lines["not_foreign"]))
         self.assertEqual(rep["classification_status"], "resolved")
@@ -191,7 +224,7 @@ class TestAForeignIsinOnACanadianListing(unittest.TestCase):
 
     @rule(R.CA_RPT_02)
     def test_a_cost_far_below_cannot_change_the_verdict(self):
-        rep = report(book("FGN.TO", SMALL, "AU"))
+        rep = report(torn("FGN.TO", SMALL))
         self.assertEqual(rep["classification_status"], "verdict_holds")
         self.assertEqual(rep["classification_unresolved_symbols"], [])
         self.assertEqual((rep["max_total_cost_low"],
@@ -199,14 +232,13 @@ class TestAForeignIsinOnACanadianListing(unittest.TestCase):
         self.assertIs(rep["filing_required"], False)
         for text in texts(rep):
             self.assertIn("no T1135 required", text)
-            self.assertNotIn("NOT RESOLVED", text)
-            self.assertIn("Counting FGN.TO the other way (ISIN and listing "
+            self.assertIn("Counting FGN.TO the other way (its sources "
                           "disagree) does not change this (the maximum is "
                           f"0.00 to {money(SMALL)} CAD).", text)
 
     @rule(R.CA_RPT_02)
     def test_already_required_holds_either_way(self):
-        rep = report(book("FGN.TO", SMALL, "AU",
+        rep = report(torn("FGN.TO", SMALL,
                           more=[buy("QZX.US", COST, "2025-02-04")]))
         self.assertEqual(rep["classification_status"], "verdict_holds")
         self.assertIs(rep["filing_required"], True)
@@ -220,8 +252,8 @@ class TestAForeignIsinOnACanadianListing(unittest.TestCase):
 
     @rule(R.CA_RPT_15)
     def test_the_part_that_depends_on_it_is_open(self):
-        # 249,500 as counted (Part A); with FGN.TO, over 250,000. pii-ok
-        rep = report(book("FGN.TO", SMALL, "AU",
+        # 250,400 as counted (Part B); without FGN.TO, under 250,000. pii-ok
+        rep = report(torn("FGN.TO", SMALL,
                           more=[buy("QZX.US", 249500.0, "2025-02-04")]))
         self.assertEqual(rep["classification_status"], "verdict_holds")
         self.assertIs(rep["filing_required"], True)
@@ -229,64 +261,29 @@ class TestAForeignIsinOnACanadianListing(unittest.TestCase):
         for text in texts(rep):
             self.assertIn("Part A or Part B open (it depends on how FGN.TO "
                           "is counted", text)
-            self.assertNotIn("Simplified method (Part A) available", text)
-            self.assertNotIn("simplified method (Part A)", text)
+            self.assertNotIn("Detailed method (Part B) required", text)
+            self.assertNotIn("detailed method (Part B)", text)
 
     @rule(R.CA_RPT_02)
     def test_the_sum_with_other_property_decides(self):
         # Neither alone is over; together they are.
-        rep = report(book("FGN.TO", 60000.0, "AU",
+        rep = report(torn("FGN.TO", 60000.0,
                           more=[buy("QZX.US", 60000.0, "2025-02-04")]))
         self.assertIsNone(rep["filing_required"])
         self.assertEqual(rep["classification_status"], "unresolved")
-        self.assertEqual(rep["max_total_cost_high"], 120000.0)
-
-    @rule(R.CA_RPT_02)
-    def test_a_cost_the_books_do_not_give_leaves_it_open(self):
-        rep = report([unknown("FGN.TO"), div("FGN.TO", "AU")])
-        self.assertEqual(rep["classification_status"], "unresolved")
-        self.assertIsNone(rep["max_total_cost_high"])
-        self.assertEqual(rep["max_total_cost_high_at_least"], 0.0)
-        self.assertEqual(rep["classification_unknown_cost_symbols"],
-                         ["FGN.TO"])
-        for text in texts(rep):
-            self.assertIn("FGN.TO may be foreign property (a foreign ISIN "
-                          "on a Canadian listing): with it the maximum is "
-                          "at least 0.00 CAD, plus FGN.TO at a cost the "
-                          "books do not give", text)
-            self.assertNotIn("no T1135 required", text)
-
-    @rule(R.CA_RPT_02)
-    def test_several_open_and_one_of_unknown_cost_keeps_the_known_part(self):
-        rep = report(book("FGN.TO", 60000.0, "AU")
-                     + [unknown("QZA.TO"), div("QZA.TO", "US")])
-        self.assertEqual(rep["classification_status"], "unresolved")
-        self.assertEqual(rep["classification_unresolved_symbols"],
-                         ["FGN.TO", "QZA.TO"])
-        self.assertIsNone(rep["max_total_cost_high"])
-        self.assertEqual(rep["max_total_cost_high_at_least"], 60000.0)
-        for text in texts(rep):
-            self.assertIn("FGN.TO, QZA.TO may be foreign property (a "
-                          "foreign ISIN on a Canadian listing): with them "
-                          f"the maximum is at least {money(60000)} CAD, "
-                          "plus QZA.TO at a cost the books do not give",
-                          text)
-            self.assertIn("Add `T1135 FGN.TO AUS` (foreign property) or "
-                          "`T1135 FGN.TO CA` (not foreign property); "
-                          "`T1135 QZA.TO USA` (foreign property) or "
-                          "`T1135 QZA.TO CA` (not foreign property) to "
-                          "ticker.map", text)
+        self.assertEqual((rep["max_total_cost_low"],
+                          rep["max_total_cost_high"]), (60000.0, 120000.0))
 
     @rule(R.CA_RPT_02)
     def test_more_symbols_than_the_default_view_names(self):
-        rows = (book("FGN.TO", 40000.0, "AU") + book("QZA.TO", 40000.0, "US")
-                + book("QZB.TO", 40000.0, "IE"))
+        rows = (torn("FGN.TO", 40000.0) + torn("QZA.TO", 40000.0, one="US")
+                + torn("QZB.TO", 40000.0, one="IE"))
         rep = report(rows)
         self.assertEqual(rep["classification_status"], "unresolved")
         brief, full = texts(rep)
-        self.assertIn("FGN.TO, QZA.TO +1 more may be foreign property",
+        self.assertIn("FGN.TO, QZA.TO +1 more may not be foreign property",
                       brief)
-        self.assertIn("with them the maximum is", brief)
+        self.assertIn("without them the maximum is 0.00 CAD", brief)
         self.assertIn("; and the lines of 1 more (tjs t1135 --details) to "
                       "ticker.map", brief)
         self.assertNotIn("T1135 QZB.TO", brief.split("! ")[0])
@@ -295,19 +292,20 @@ class TestAForeignIsinOnACanadianListing(unittest.TestCase):
             self.assertIn(ln, full)
         # Every line named, together, gives the figure named.
         every = [x for c in rep["classification_conflicts"]
-                 for x in c["lines"]["foreign"]]
+                 for x in c["lines"]["not_foreign"]]
         self.assertEqual(report(rows, as_overrides(every))["max_total_cost"],
-                         rep["max_total_cost_high"])
+                         rep["max_total_cost_low"])
 
     @rule(R.CA_RPT_02)
     def test_a_holding_sold_before_the_year_decides_nothing(self):
         rows = [buy("FGN.TO", COST, "2023-02-03"),
                 div("FGN.TO", "AU", "2023-06-17"),
+                div("FGN.TO", "CA", "2023-07-17"),
                 sell("FGN.TO", COST, "2023-09-01")]
         rep = report(rows)
         self.assertEqual(rep["classification_status"], "resolved")
-        self.assertIs(conflict(rep, "FGN.TO")["held_in_year"], False)
-        self.assertEqual(rep["max_total_cost_high"], 0.0)
+        self.assertEqual(rep["classification_conflicts"], [])
+        self.assertEqual(rep["country_review"], [])
         self.assertIs(rep["filing_required"], False)
         for text in texts(rep):
             self.assertIn("no T1135 required", text)
@@ -316,53 +314,52 @@ class TestAForeignIsinOnACanadianListing(unittest.TestCase):
     @rule(R.CA_RPT_19)
     def test_a_holding_only_short_decides_nothing(self):
         rep = report([sell("FGN.TO", COST, "2025-02-03"),
-                      div("FGN.TO", "AU")])
+                      div("FGN.TO", "AU"), div("FGN.TO", "CA", "2025-09-17")])
         self.assertEqual(rep["classification_status"], "resolved")
         self.assertIs(conflict(rep, "FGN.TO")["held_in_year"], False)
 
     @rule(R.CA_RPT_20)
     def test_with_a_cash_row_it_is_the_sum_that_decides(self):
-        rep = report(book("FGN.TO", 60000.0, "AU"), cash=cash_doc(60000.0))
-        self.assertEqual(rep["max_total_cost"], 60000.0)
+        rep = report(torn("FGN.TO", 60000.0), cash=cash_doc(60000.0))
+        self.assertEqual(rep["max_total_cost"], 120000.0)
         self.assertEqual(rep["classification_status"], "unresolved")
-        self.assertEqual(rep["max_total_cost_high"], 120000.0)
-        self.assertIn("=> NOT RESOLVED: below", texts(rep)[0])
+        self.assertEqual(rep["max_total_cost_low"], 60000.0)
+        self.assertIn("=> NOT RESOLVED: over", texts(rep)[0])
 
     @rule(R.CA_RPT_20)
-    def test_cash_of_unknown_cost_keeps_its_line_and_this_is_added(self):
-        rep = report(book("FGN.TO", COST, "AU"),
+    def test_cash_of_unknown_cost_is_said_beside_it(self):
+        rep = report(torn("FGN.TO", COST),
                      cash=cash_doc(0.0, unknown_cost=True))
         self.assertIs(rep["total_settled"], False)
         self.assertIsNone(rep["filing_required"])
         for text in texts(rep):
-            self.assertIn("=> NOT SETTLED: below the", text)
-            self.assertIn("Also not resolved: FGN.TO may be foreign "
-                          "property (a foreign ISIN on a Canadian "
-                          "listing): with it the maximum is at least "
-                          f"{money(COST)} CAD.", text)
-            self.assertIn("Add `T1135 FGN.TO AUS`", text)
-            self.assertNotIn("no T1135 required", text)
+            self.assertIn(f"=> NOT RESOLVED: over the {THR} threshold as "
+                          "counted, but FGN.TO may not be foreign property "
+                          "(its sources disagree: AUS, CAN): without it "
+                          "the maximum is at least 0.00 CAD; NOT SETTLED "
+                          "either: some cash's cost is unknown — tjs "
+                          "fx-cash --ledger v2", text)
+            self.assertIn("Add `T1135 FGN.TO CA`", text)
+            self.assertNotIn("FILING REQUIRED", text)
 
     @rule(R.CA_RPT_13)
     def test_an_open_year_keeps_its_so_far(self):
-        rep = report(book("FGN.TO", COST, "AU"), today="2025-09-01")
+        rep = report(torn("FGN.TO", COST), today="2025-09-01")
         self.assertIs(rep["year_complete"], False)
         self.assertEqual(rep["classification_status"], "unresolved")
         self.assertIsNone(rep["filing_required"])
         for text in texts(rep):
-            self.assertIn(f"=> NOT RESOLVED: below the {THR} threshold as "
-                          "counted so far (books through 2025-06-17), but "
-                          "FGN.TO may be foreign property", text)
-            self.assertIn(f"with it the maximum so far is {money(COST)} "
-                          "CAD", text)
-            self.assertIn("then `tjs run` and `tjs t1135`; the test runs "
-                          "to Dec 31, re-run after it.", text)
+            self.assertIn(f"=> NOT RESOLVED: over the {THR} threshold as "
+                          "counted, but FGN.TO may not be foreign property",
+                          text)
+            self.assertIn("without it the maximum so far is 0.00 CAD", text)
+            self.assertIn("then `tjs run` and `tjs t1135`.", text)
 
     @rule(R.CA_RPT_02)
-    def test_a_custodian_abroad_already_counts_it(self):
+    def test_a_custodian_abroad_counts_it_either_way(self):
         # Held with a custodian outside Canada it is foreign property
         # under either reading: the same total.
-        rep = report(book("FGN.TO", COST, "AU"), custody={"margin": "USA"})
+        rep = report(torn("FGN.TO", COST), custody={"margin": "USA"})
         self.assertEqual(rep["classification_status"], "verdict_holds")
         self.assertEqual((rep["max_total_cost_low"],
                           rep["max_total_cost_high"]), (COST, COST))
@@ -370,44 +367,220 @@ class TestAForeignIsinOnACanadianListing(unittest.TestCase):
         self.assertIn(f"does not change this (the maximum stays "
                       f"{money(COST)} CAD).", texts(rep)[0])
 
-    @rule(R.CA_RPT_15)
-    def test_required_either_way_with_a_cost_unknown_leaves_the_part_open(
-            self):
+    @rule(R.CA_RPT_12)
+    def test_a_cost_the_books_do_not_give_is_not_settled(self):
         rep = report([unknown("FGN.TO"), div("FGN.TO", "AU"),
-                      buy("QZX.US", 240000.0)])
-        self.assertEqual(rep["classification_status"], "verdict_holds")
-        self.assertIsNone(rep["max_total_cost_high"])
-        self.assertIs(rep["filing_required"], True)
-        self.assertIsNone(rep["simplified_method_available"])
+                      div("FGN.TO", "CA", "2025-09-17")])
+        self.assertEqual(rep["unknown_acb_symbols"], ["FGN.TO"])
+        self.assertIsNone(rep["filing_required"])
         for text in texts(rep):
-            self.assertIn("FILING REQUIRED", text)
-            self.assertIn("Part A or Part B open (it depends on how FGN.TO "
-                          "is counted", text)
-            self.assertIn("Counting FGN.TO the other way (ISIN and listing "
-                          "disagree) does not change this.", text)
+            self.assertNotIn("no T1135 required", text)
+            self.assertIn(f"=> NOT SETTLED: below the {THR} threshold",
+                          text)
+            self.assertIn("the cost of FGN.TO is unknown", text)
+
+    @rule(R.CA_RPT_02)
+    def test_an_isin_and_tobase_map_that_disagree(self):
+        # tobase.map says Bermuda, the rows' ISIN Ireland: foreign
+        # under each, so the total stands and the country is open.
+        rep = report(book("FGN.US", SMALL, "IE"),
+                     issuer_countries={"FGN.US": "BMU"})
+        self.assertEqual(rep["classification_status"], "resolved")
+        self.assertEqual(rep["classification_conflicts"], [
+            {"symbol": "FGN.US", "kind": "sources_disagree",
+             "counted_as": "??", "issuer_country": None,
+             "isin_country_code": None, "countries": ["BMU", "IRL"],
+             "affects": "country", "held_in_year": True,
+             "lines": {"choices": ["T1135 FGN.US BMU",
+                                   "T1135 FGN.US IRL"]}}])
+        self.assertEqual(rep["properties"][0]["country"], "??")
+        self.assertEqual(rep["max_total_cost"], SMALL)
+        self.assertIs(rep["filing_required"], False)
+        self.assertIn("! 1 to review for the country: FGN.US (its sources "
+                      "disagree: BMU, IRL)", texts(rep)[0])
+        self.assertIn("add `T1135 FGN.US BMU` or `T1135 FGN.US IRL` to "
+                      "ticker.map", texts(rep)[1])
+        # Either line settles it.
+        rep = report(book("FGN.US", SMALL, "IE"),
+                     as_overrides(["T1135 FGN.US IRL"]),
+                     issuer_countries={"FGN.US": "BMU"})
+        self.assertEqual(rep["classification_conflicts"], [])
+        self.assertEqual(rep["properties"][0]["country"], "IRL")
+
+    @rule(R.CA_RPT_02)
+    def test_sources_that_agree_are_no_conflict(self):
+        rep = report(book("FGN.US", SMALL, "BM"),
+                     issuer_countries={"FGN.US": "BMU"})
+        self.assertEqual(rep["classification_conflicts"], [])
+        self.assertEqual((rep["properties"][0]["country"],
+                          rep["properties"][0]["country_source"]),
+                         ("BMU", "isin"))
+
+
+class TestAnOptionAndItsShare(unittest.TestCase):
+    """TJ-4963: an option keeps its own listing's country; where that
+    and its share's classification disagree on being foreign property
+    the test is worked out with the option counted each way."""
+
+    # FGN.TO is Australian by its ISIN; its call is listed in Montreal.
+    UP = [buy("FGN.TO", 60000.0), div("FGN.TO", "AU"), opt(OPT, 50000.0)]
+    # QZC.US is Canadian by its ISIN; its call is listed in the US.
+    DOWN = [buy("QZC.US", 1000.0), div("QZC.US", "CA"), opt(OPU, 120000.0)]
+
+    @rule(R.CA_RPT_22)
+    def test_a_montreal_option_on_a_foreign_share(self):
+        rep = report(self.UP)
+        # The share is on the form by its ISIN; the option is counted
+        # by its own listing: off it.
+        self.assertEqual(rep["max_total_cost"], 60000.0)
+        self.assertEqual([r["symbol"] for r in rep["properties"]],
+                         ["FGN.TO"])
+        self.assertEqual(rep["classification_status"], "unresolved")
+        self.assertEqual(rep["classification_unresolved_symbols"], [OPT])
+        self.assertIsNone(rep["filing_required"])
+        self.assertEqual((rep["max_total_cost_low"],
+                          rep["max_total_cost_high"]), (60000.0, 110000.0))
+        self.assertEqual(rep["classification_conflicts"], [
+            {"symbol": OPT, "kind": "option", "underlying": "FGN.TO",
+             "counted_as": "CAN", "issuer_country": "AUS",
+             "isin_country_code": "AU", "affects": "total",
+             "held_in_year": True, "symbols": {OPT: "CAN"},
+             "lines": {"foreign": [f"T1135 {OPT} AUS"],
+                       "not_foreign": [f"T1135 {OPT} CA"]}}])
+        # An option conflict is open, not a security to review.
+        self.assertEqual(rep["country_review"], [])
+        for text in texts(rep):
+            self.assertNotIn("no T1135 required", text)
+            self.assertNotIn("does not change this", text)
+            self.assertIn(f"=> NOT RESOLVED: below the {THR} threshold as "
+                          f"counted, but {OPT} may be foreign property (an "
+                          "option on a Canadian listing; its share FGN.TO "
+                          "is foreign property): with it the maximum is "
+                          f"{money(110000)} CAD", text)
+            self.assertIn(f"Add `T1135 {OPT} AUS` (foreign property) or "
+                          f"`T1135 {OPT} CA` (not foreign property) to "
+                          "ticker.map", text)
+
+    @rule(R.CA_RPT_22)
+    def test_the_lines_on_the_option_settle_it(self):
+        open_ = report(self.UP)
+        lines = conflict(open_, OPT)["lines"]
+        rep = report(self.UP, as_overrides(lines["foreign"]))
+        self.assertEqual(rep["classification_conflicts"], [])
+        self.assertEqual(rep["max_total_cost"], 110000.0)
+        self.assertIs(rep["filing_required"], True)
+        rep = report(self.UP, as_overrides(lines["not_foreign"]))
+        self.assertEqual(rep["classification_conflicts"], [])
+        self.assertEqual(rep["max_total_cost"], 60000.0)
+        self.assertIs(rep["filing_required"], False)
+        self.assertIn("no T1135 required", texts(rep)[0])
+
+    @rule(R.CA_RPT_22)
+    def test_a_us_option_on_a_canadian_share(self):
+        rep = report(self.DOWN)
+        # The share is off the form by its ISIN; the option is counted.
+        self.assertEqual(rep["max_total_cost"], 120000.0)
+        self.assertEqual([(r["symbol"], r["country"], r["country_source"])
+                          for r in rep["properties"]],
+                         [(OPU, "USA", "listing")])
+        self.assertEqual(rep["classification_status"], "unresolved")
+        self.assertIsNone(rep["filing_required"])
+        self.assertEqual((rep["max_total_cost_low"],
+                          rep["max_total_cost_high"]), (0.0, 120000.0))
+        for text in texts(rep):
+            self.assertNotIn("FILING REQUIRED", text)
+            self.assertIn(f"=> NOT RESOLVED: over the {THR} threshold as "
+                          f"counted, but {OPU} may not be foreign property "
+                          "(an option on a foreign listing; its share "
+                          "QZC.US is not foreign property): without it the "
+                          "maximum is 0.00 CAD", text)
+        lines = conflict(rep, OPU)["lines"]
+        self.assertEqual(lines, {"foreign": [f"T1135 {OPU} USA"],
+                                 "not_foreign": [f"T1135 {OPU} CA"]})
+        low = report(self.DOWN, as_overrides(lines["not_foreign"]))
+        self.assertEqual(low["max_total_cost"], 0.0)
+        self.assertIs(low["filing_required"], False)
+
+    @rule(R.CA_RPT_22)
+    def test_the_verdict_stands_when_both_readings_agree(self):
+        rep = report([buy("FGN.TO", SMALL), div("FGN.TO", "AU"),
+                      opt(OPT, SMALL)])
+        self.assertEqual(rep["classification_status"], "verdict_holds")
+        self.assertIs(rep["filing_required"], False)
+        for text in texts(rep):
+            self.assertIn(f"Counting {OPT} the other way (an option and "
+                          "its share disagree) does not change this (the "
+                          f"maximum is {money(SMALL)} to "
+                          f"{money(2 * SMALL)} CAD).", text)
+
+    @rule(R.CA_RPT_22)
+    def test_an_option_that_agrees_with_its_share_is_not_named(self):
+        # A Montreal option on a Canadian share; a US one on a US share.
+        rep = report([buy("FGN.TO", SMALL), opt(OPT, SMALL),
+                      buy("QZC.US", SMALL), opt(OPU, SMALL)])
+        self.assertEqual(rep["classification_conflicts"], [])
+        self.assertEqual(rep["classification_status"], "resolved")
+
+    @rule(R.CA_RPT_22)
+    def test_a_written_or_expired_option_is_not_listed(self):
+        # Written (an obligation, never a row), and one that expired
+        # before the year: no entry, whatever its share is.
+        old = "FGN230616C00150000.TO"
+        rep = report([buy("FGN.TO", SMALL), div("FGN.TO", "AU"),
+                      _r("BUYSELL", "2025-02-05", OPT, -1, 400.0),
+                      _r("BUYSELL", "2023-02-05", old, 1, -400.0),
+                      _r("BUYSELL", "2023-06-16", old, -1, 0.0)])
+        self.assertEqual(rep["classification_conflicts"], [])
+        self.assertEqual(rep["classification_status"], "resolved")
+
+    @rule(R.CA_RPT_22)
+    def test_the_options_of_an_open_share_are_walked_with_it(self):
+        # The share's sources disagree: counted (as foreign) with its
+        # option not (a Canadian listing); each is walked both ways.
+        rep = report(torn("FGN.TO", 60000.0, more=[opt(OPT, 50000.0)]))
+        self.assertEqual(rep["max_total_cost"], 60000.0)
+        self.assertEqual((rep["max_total_cost_low"],
+                          rep["max_total_cost_high"]), (0.0, 110000.0))
+        self.assertEqual(rep["classification_status"], "unresolved")
+        self.assertEqual(sorted(c["symbol"]
+                                for c in rep["classification_conflicts"]),
+                         ["FGN.TO", OPT])
+        self.assertEqual(conflict(rep, OPT)["lines"]["foreign"],
+                         [f"T1135 {OPT} AUS"])
+        # Far below, the sentence is true with the option included.
+        rep = report(torn("FGN.TO", SMALL, more=[opt(OPT, SMALL)]))
+        self.assertEqual(rep["classification_status"], "verdict_holds")
+        self.assertIn(f"Counting FGN.TO, {OPT} the other way (sources "
+                      "disagree, options with their shares) does not "
+                      f"change this (the maximum is 0.00 to "
+                      f"{money(2 * SMALL)} CAD).", texts(rep)[0])
 
 
 class TestAnIsinPrefixThatIsNoCountry(unittest.TestCase):
     """XS (an international security), EU, ZZ: nothing to write after
-    `T1135 SYMBOL`, and ticker.map refuses the prefix."""
+    `T1135 SYMBOL`, and never a guess."""
 
     @rule(R.CA_RPT_02)
-    def test_the_line_is_given_by_its_shape(self):
+    def test_on_a_canadian_listing_the_line_is_given_by_its_shape(self):
         for prefix in ("XS", "EU", "ZZ"):
             with self.subTest(prefix=prefix):
                 rep = report(book("FGN.TO", COST, prefix))
                 c = conflict(rep, "FGN.TO")
+                self.assertEqual(c["kind"], "isin_no_country")
                 self.assertIsNone(c["issuer_country"])
                 self.assertEqual(c["isin_country_code"], prefix)
+                self.assertEqual(c["affects"], "total")
                 self.assertEqual(c["lines"], {
                     "foreign": None, "not_foreign": ["T1135 FGN.TO CA"]})
+                self.assertEqual(rep["properties"][0]["country"], "??")
                 self.assertEqual(rep["classification_status"],
                                  "unresolved")
-                self.assertEqual(rep["max_total_cost_high"], COST)
+                self.assertEqual((rep["max_total_cost_low"],
+                                  rep["max_total_cost_high"]), (0.0, COST))
                 for text in (*texts(rep), rep["_stderr"]):
                     self.assertNotIn(f"T1135 FGN.TO {prefix}", text)
-                    self.assertIn(
-                        "`T1135 FGN.TO COUNTRY` (", text)
+                for text in texts(rep):
+                    self.assertIn("`T1135 FGN.TO COUNTRY` (", text)
                     self.assertIn(
                         "COUNTRY: the issuer's country, its three-letter "
                         f"code; the ISIN's prefix {prefix} names no "
@@ -416,294 +589,55 @@ class TestAnIsinPrefixThatIsNoCountry(unittest.TestCase):
                               rep["_stderr"])
 
     @rule(R.CA_RPT_02)
-    def test_on_a_foreign_listing_it_is_still_to_review(self):
+    def test_on_a_foreign_listing_the_total_stands(self):
         rep = report(book("FGN.US", SMALL, "XS"))
         self.assertEqual(rep["review_symbols"], ["FGN.US"])
         self.assertEqual(rep["classification_conflicts"], [
-            {"symbol": "FGN.US", "counted_as": "USA",
-             "issuer_country": None, "isin_country_code": "XS",
+            {"symbol": "FGN.US", "kind": "isin_no_country",
+             "counted_as": "??", "issuer_country": None,
+             "isin_country_code": "XS", "countries": [],
              "affects": "country", "held_in_year": True,
-             "lines": {"as_counted": ["T1135 FGN.US USA"], "other": None}}])
-        self.assertIn("FGN.US (ISIN prefix XS: no country, counted under "
-                      "USA)", rep["_stderr"])
-        self.assertIn("`T1135 FGN.US COUNTRY` (", rep["_stderr"])
-        self.assertIn("`T1135 FGN.US USA` to keep it", rep["_stderr"])
+             "lines": {"choices": []}}])
+        self.assertEqual(rep["classification_status"], "resolved")
+        self.assertEqual(rep["properties"][0]["country"], "??")
+        self.assertIn("FGN.US (ISIN prefix XS: no country)", rep["_stderr"])
+        self.assertIn("add `T1135 FGN.US COUNTRY` to ticker.map",
+                      texts(rep)[1])
         for text in (*texts(rep), rep["_stderr"]):
             self.assertNotIn("T1135 FGN.US XS", text)
-
-
-class TestATickerChange(unittest.TestCase):
-    """The security is one through its ticker changes: the other
-    reading covers the whole year, and the line named is the one that
-    does."""
-
-    # Most of it sold before the change; the ISIN on the new symbol.
-    UP = [buy("OLD.TO", COST), sell("OLD.TO", 112500.0, "2025-03-03", 90),
-          ren("OLD.TO", "NEW.TO", "2025-04-01"), div("NEW.TO", "AU")]
-    DOWN = [buy("OLDW.US", COST), sell("OLDW.US", 112500.0, "2025-03-03", 90),
-            ren("OLDW.US", "NEWW.US", "2025-04-01"), div("NEWW.US", "CA")]
-
-    @rule(R.CA_RPT_02)
-    def test_a_foreign_isin_after_the_change_reaches_back(self):
-        rep = report(self.UP)
-        self.assertEqual(rep["classification_status"], "unresolved")
-        self.assertEqual(rep["max_total_cost_high"], COST)
-        self.assertIsNone(rep["filing_required"])
-        c = conflict(rep, "NEW.TO")
-        self.assertEqual(c["symbols"], {"NEW.TO": "CAN", "OLD.TO": "CAN"})
-        self.assertEqual(c["lines"], {"foreign": ["T1135 OLD.TO AUS"],
-                                      "not_foreign": ["T1135 OLD.TO CA"]})
-        for text in texts(rep):
-            self.assertIn("Add `T1135 OLD.TO AUS` (foreign property; "
-                          "OLD.TO: NEW.TO before its ticker change) or "
-                          "`T1135 OLD.TO CA` (not foreign property) to "
-                          "ticker.map", text)
-        self.assertIn("add `T1135 OLD.TO AUS` (OLD.TO: NEW.TO before its "
-                      "ticker change) to ticker.map once confirmed, or "
-                      "`T1135 OLD.TO CA`", rep["_stderr"])
-        # Exactly the line named gives the figure named.
-        other = report(self.UP, as_overrides(c["lines"]["foreign"]))
-        self.assertEqual(other["max_total_cost"], COST)
-        self.assertIs(other["filing_required"], True)
-        self.assertEqual(other["classification_conflicts"], [])
-        same = report(self.UP, as_overrides(c["lines"]["not_foreign"]))
-        self.assertEqual(same["max_total_cost"], rep["max_total_cost_low"])
-        self.assertIs(same["filing_required"], False)
-        self.assertEqual(same["classification_conflicts"], [])
-
-    @rule(R.CA_RPT_02)
-    def test_a_canadian_isin_after_the_change_reaches_back(self):
-        rep = report(self.DOWN)
-        self.assertEqual(rep["max_total_cost"], COST)
-        self.assertEqual(rep["classification_status"], "unresolved")
-        self.assertEqual(rep["max_total_cost_low"], 0.0)
-        self.assertIsNone(rep["filing_required"])
-        c = conflict(rep, "NEWW.US")
-        self.assertEqual(c["lines"], {"foreign": ["T1135 OLDW.US USA"],
-                                      "not_foreign": ["T1135 OLDW.US CA"]})
-        self.assertIn("Add `T1135 OLDW.US CA` (not foreign property; "
-                      "OLDW.US: NEWW.US before its ticker change) or "
-                      "`T1135 OLDW.US USA` (foreign property) to "
-                      "ticker.map", texts(rep)[0])
-        other = report(self.DOWN, as_overrides(c["lines"]["not_foreign"]))
-        self.assertEqual(other["max_total_cost"], 0.0)
-        self.assertIs(other["filing_required"], False)
-        self.assertEqual(other["classification_conflicts"], [])
-        same = report(self.DOWN, as_overrides(c["lines"]["foreign"]))
-        self.assertEqual(same["max_total_cost"], COST)
-        self.assertIs(same["filing_required"], True)
-        self.assertEqual(same["classification_conflicts"], [])
-
-    @rule(R.CA_RPT_02)
-    def test_a_line_before_the_change_is_not_reopened_after_it(self):
-        for rows, ov, total in ((self.UP, {"OLD.TO": None}, 0.0),
-                                (self.UP, {"OLD.TO": "AUS"}, COST),
-                                (self.DOWN, {"OLDW.US": "USA"}, COST),
-                                (self.DOWN, {"OLDW.US": None}, 0.0)):
-            with self.subTest(ov=ov):
-                rep = report(rows, ov)
-                self.assertEqual(rep["classification_conflicts"], [])
-                self.assertEqual(rep["classification_status"], "resolved")
-                self.assertEqual(rep["foreign_issuer_symbols"], [])
-                self.assertEqual(rep["canadian_issuer_symbols"], [])
-                self.assertEqual(rep["max_total_cost"], total)
-                self.assertNotIn("ISIN", rep["_stderr"])
-
-    @rule(R.CA_RPT_02)
-    def test_an_isin_before_the_change_follows_it(self):
-        rows = [buy("OLD.TO", COST), div("OLD.TO", "AU", "2025-03-01"),
-                ren("OLD.TO", "NEW.TO", "2025-04-01")]
-        rep = report(rows)
-        self.assertEqual(rep["classification_status"], "unresolved")
-        self.assertEqual(conflict(rep, "OLD.TO")["lines"]["foreign"],
-                         ["T1135 OLD.TO AUS"])
-        self.assertEqual(rep["max_total_cost_high"], COST)
-
-
-def settled_by(testcase, rows, rep, symbol, **kw):
-    """Feed each line named for `symbol` back: the foreign one gives
-    the highest maximum named, the other the lowest, and neither leaves
-    a conflict."""
-    lines = conflict(rep, symbol)["lines"]
-    for key, figure in (("foreign", rep["max_total_cost_high"]),
-                        ("not_foreign", rep["max_total_cost_low"])):
-        after = report(rows, as_overrides(lines[key]), **kw)
-        testcase.assertEqual(after["max_total_cost"], figure, key)
-        testcase.assertEqual(after["classification_conflicts"], [], key)
-        testcase.assertEqual(after["classification_status"], "resolved")
-        testcase.assertIs(after["filing_required"], figure > 100000.0, key)
-
-
-class TestATickerChangeAcrossTheBorder(unittest.TestCase):
-    """A ticker change from a foreign listing to a Canadian one (or
-    back): as counted is neither reading, the security foreign for part
-    of the year. Both whole-year readings are walked."""
-
-    @rule(R.CA_RPT_02)
-    def test_a_canadian_isin_then_a_canadian_listing(self):
-        rows = [buy("OLDW.US", 60000.0), div("OLDW.US", "CA", "2025-02-20"),
-                ren("OLDW.US", "NEW.TO", "2025-04-01"),
-                buy("NEW.TO", 60000.0, "2025-07-02")]
-        rep = report(rows)
-        # Counted: foreign until the change, 60,000 at most. pii-ok
-        self.assertEqual(rep["max_total_cost"], 60000.0)
-        self.assertEqual((rep["max_total_cost_low"],
-                          rep["max_total_cost_high"]), (0.0, 120000.0))
-        self.assertEqual(rep["classification_status"], "unresolved")
-        self.assertIsNone(rep["filing_required"])
-        c = conflict(rep, "OLDW.US")
-        self.assertIs(c["held_in_year"], True)
-        self.assertEqual(c["symbols"], {"NEW.TO": "CAN", "OLDW.US": "USA"})
-        self.assertEqual(c["lines"], {"foreign": ["T1135 OLDW.US USA"],
-                                      "not_foreign": ["T1135 OLDW.US CA"]})
-        for text in texts(rep):
-            self.assertNotIn("no T1135 required", text)
-            self.assertIn("OLDW.US may be foreign property (ISIN and "
-                          "listings disagree through its ticker change): "
-                          f"with it the maximum is {money(120000)} CAD",
-                          text)
-            self.assertIn("Add `T1135 OLDW.US USA` (foreign property) or "
-                          "`T1135 OLDW.US CA` (not foreign property) to "
-                          "ticker.map", text)
-        settled_by(self, rows, rep, "OLDW.US")
-
-    @rule(R.CA_RPT_02)
-    def test_a_foreign_isin_then_a_foreign_listing(self):
-        rows = [buy("OLD.TO", COST), div("OLD.TO", "AU", "2025-02-20"),
-                ren("OLD.TO", "NEWW.US", "2025-04-01")]
-        rep = report(rows)
-        # Counted: foreign from the change on, so over; not foreign at
-        # all under the other line.
-        self.assertEqual(rep["max_total_cost"], COST)
-        self.assertEqual((rep["max_total_cost_low"],
-                          rep["max_total_cost_high"]), (0.0, COST))
-        self.assertEqual(rep["classification_status"], "unresolved")
-        self.assertIsNone(rep["filing_required"])
-        self.assertEqual(conflict(rep, "OLD.TO")["lines"], {
-            "foreign": ["T1135 OLD.TO AUS"],
-            "not_foreign": ["T1135 OLD.TO CA"]})
-        for text in texts(rep):
-            self.assertNotIn("FILING REQUIRED", text)
-            self.assertNotIn("does not change this", text)
-            self.assertIn("OLD.TO may not be foreign property (ISIN and "
-                          "listings disagree through its ticker change): "
-                          "without it the maximum is 0.00 CAD", text)
-        settled_by(self, rows, rep, "OLD.TO")
-
-    @rule(R.CA_RPT_02)
-    def test_a_canadian_isin_after_the_change_to_a_foreign_listing(self):
-        rows = [buy("OLD.TO", 60000.0), ren("OLD.TO", "NEWW.US", "2025-04-01"),
-                div("NEWW.US", "CA"), buy("QZX.US", 60000.0, "2025-01-10"),
-                sell("QZX.US", 60000.0, "2025-03-03")]
-        rep = report(rows)
-        # Counted: QZX.US alone, then NEWW.US alone; foreign all year
-        # the two overlap.
-        self.assertEqual(rep["max_total_cost"], 60000.0)
-        self.assertEqual((rep["max_total_cost_low"],
-                          rep["max_total_cost_high"]), (60000.0, 120000.0))
-        self.assertEqual(rep["classification_status"], "unresolved")
-        self.assertIsNone(rep["filing_required"])
-        self.assertEqual(conflict(rep, "NEWW.US")["lines"], {
-            "foreign": ["T1135 OLD.TO USA"],
-            "not_foreign": ["T1135 OLD.TO CA"]})
-        brief = texts(rep)[0]
-        self.assertNotIn("no T1135 required", brief)
-        self.assertIn("Add `T1135 OLD.TO USA` (foreign property; OLD.TO: "
-                      "NEWW.US before its ticker change) or `T1135 OLD.TO "
-                      "CA` (not foreign property) to ticker.map", brief)
-        settled_by(self, rows, rep, "NEWW.US")
-
-    @rule(R.CA_RPT_02)
-    def test_an_isin_that_agrees_with_its_own_listing_only(self):
-        # CA on the Toronto symbol; the US symbol before it has none.
-        rows = [buy("OLDW.US", COST), ren("OLDW.US", "NEW.TO", "2025-04-01"),
-                div("NEW.TO", "CA")]
-        rep = report(rows)
-        self.assertEqual(rep["canadian_issuer_symbols"], [])
-        self.assertEqual(rep["foreign_issuer_symbols"], [])
-        self.assertEqual(rep["max_total_cost"], COST)
-        self.assertEqual(rep["classification_status"], "unresolved")
-        self.assertIsNone(rep["filing_required"])
-        self.assertEqual(conflict(rep, "NEW.TO")["lines"], {
-            "foreign": ["T1135 OLDW.US USA"],
-            "not_foreign": ["T1135 OLDW.US CA"]})
-        self.assertIn("1 symbol(s) carry an ISIN that disagrees with a "
-                      "listing they had before or after a ticker change: "
-                      "NEW.TO (CAN; NEW.TO counted under CAN, OLDW.US "
-                      "counted under USA)", rep["_stderr"])
-        self.assertIn("NEW.TO may not be foreign property (ISIN and "
-                      "listings disagree through its ticker change): "
-                      "without it the maximum is 0.00 CAD", texts(rep)[0])
-        settled_by(self, rows, rep, "NEW.TO")
-
-
-class TestLongerChains(unittest.TestCase):
-    @rule(R.CA_RPT_02)
-    def test_two_ticker_changes(self):
-        rows = [buy("OLD.TO", COST), sell("OLD.TO", 112500.0, "2025-03-03", 90),
-                ren("OLD.TO", "MID.TO", "2025-04-01"),
-                ren("MID.TO", "NEW.TO", "2025-05-01"), div("NEW.TO", "AU")]
-        rep = report(rows)
-        self.assertEqual(rep["classification_status"], "unresolved")
-        self.assertEqual(rep["max_total_cost_high"], COST)
-        self.assertEqual(conflict(rep, "NEW.TO")["lines"]["foreign"],
-                         ["T1135 OLD.TO AUS"])
-        settled_by(self, rows, rep, "NEW.TO")
-        # A line for the symbol in the middle is one before the ISIN's:
-        # it decides the last symbol too.
-        mid = report(rows, {"MID.TO": None})
-        self.assertEqual(mid["classification_conflicts"], [])
-
-    @rule(R.CA_RPT_02)
-    def test_a_merger_has_two_first_symbols(self):
-        rows = [buy("QZA.TO", 60000.0), buy("QZB.TO", 60000.0),
-                ren("QZA.TO", "NEW.TO", "2025-04-01"),
-                ren("QZB.TO", "NEW.TO", "2025-04-01"), div("NEW.TO", "AU")]
-        rep = report(rows)
-        self.assertEqual(rep["classification_status"], "unresolved")
-        self.assertEqual(rep["max_total_cost_high"], 120000.0)
-        self.assertEqual(conflict(rep, "NEW.TO")["lines"], {
-            "foreign": ["T1135 QZA.TO AUS", "T1135 QZB.TO AUS"],
-            "not_foreign": ["T1135 QZA.TO CA", "T1135 QZB.TO CA"]})
-        self.assertIn("Add `T1135 QZA.TO AUS` and `T1135 QZB.TO AUS` "
-                      "(foreign property; QZA.TO, QZB.TO: NEW.TO before "
-                      "its ticker change) or `T1135 QZA.TO CA` and `T1135 "
-                      "QZB.TO CA` (not foreign property) to ticker.map",
-                      texts(rep)[0])
-        settled_by(self, rows, rep, "NEW.TO")
-
-    @rule(R.CA_RPT_02)
-    def test_a_ticker_bought_again_after_its_change(self):
-        # OLD.TO becomes NEW.TO; a later OLD.TO is bought. The line is
-        # on OLD.TO, the security's first symbol, and counts both (the
-        # cautious side: the report names what the line gives).
-        rows = [buy("OLD.TO", 60000.0), ren("OLD.TO", "NEW.TO", "2025-04-01"),
-                div("NEW.TO", "AU"), buy("OLD.TO", 60000.0, "2025-07-02")]
-        rep = report(rows)
-        self.assertEqual(rep["classification_status"], "unresolved")
-        self.assertEqual(rep["max_total_cost_high"], 120000.0)
-        settled_by(self, rows, rep, "NEW.TO")
 
 
 class TestACostTheBooksDoNotGive(unittest.TestCase):
     """A foreign property counted at an unknown ACB understates the
     total: below the threshold is then no verdict either."""
 
-    ROWS = [unknown("FGN.TO"), div("FGN.TO", "AU")]
+    @rule(R.CA_RPT_12)
+    def test_an_option_the_other_reading_adds_at_no_known_cost(self):
+        rep = report([buy("FGN.TO", SMALL), div("FGN.TO", "AU"),
+                      _r("OPENING_BALANCE", "2024-01-02", OPT, 1, 0.0)])
+        self.assertEqual(rep["classification_status"], "unresolved")
+        self.assertIsNone(rep["max_total_cost_high"])
+        self.assertEqual(rep["max_total_cost_high_at_least"], SMALL)
+        self.assertEqual(rep["classification_unknown_cost_symbols"], [OPT])
+        for text in texts(rep):
+            self.assertIn(f"{OPT} may be foreign property (an option on a "
+                          "Canadian listing; its share FGN.TO is foreign "
+                          "property): with it the maximum is at least "
+                          f"{money(SMALL)} CAD, plus {OPT} at a cost the "
+                          "books do not give", text)
+            self.assertNotIn("no T1135 required", text)
 
     @rule(R.CA_RPT_12)
     def test_the_line_named_leads_to_not_settled_not_to_a_no(self):
-        open_ = report(self.ROWS)
-        self.assertEqual(open_["classification_status"], "unresolved")
-        rep = report(self.ROWS, as_overrides(
-            conflict(open_, "FGN.TO")["lines"]["foreign"]))
+        rows = [unknown("FGN.TO"), div("FGN.TO", "AU")]
+        rep = report(rows)
+        # The ISIN decides: on the form, at a cost the books do not give.
         self.assertEqual(rep["classification_status"], "resolved")
         self.assertEqual(rep["unknown_acb_symbols"], ["FGN.TO"])
         self.assertIs(rep["total_settled"], True)
         self.assertIsNone(rep["filing_required"])
         self.assertIsNone(rep["simplified_method_available"])
-        brief, full = texts(rep)
-        for text in (brief, full):
+        for text in texts(rep):
             self.assertNotIn("no T1135 required", text)
             self.assertIn(f"=> NOT SETTLED: below the {THR} threshold", text)
             self.assertIn("the cost of FGN.TO is unknown", text)
@@ -763,7 +697,7 @@ class TestCashInTransitAtTheYearEnd(unittest.TestCase):
 
     @rule(R.CA_RPT_20)
     def test_not_resolved_and_not_settled_says_transit(self):
-        rep = report(book("QZW.US", COST, "CA"), cash=self.CASH)
+        rep = report(torn("QZW.US", COST), cash=self.CASH)
         self.assertIsNone(rep["filing_required"])
         for text in texts(rep):
             self.assertIn("; NOT SETTLED either: where cash in transit at "
@@ -783,220 +717,17 @@ class TestCashInTransitAtTheYearEnd(unittest.TestCase):
             self.assertNotIn("the cost of some cash", text)
 
 
-class TestACanadianIsinOnAForeignListing(unittest.TestCase):
-    """The mirror: QZW.US, a Canadian ISIN, counted as foreign."""
-
-    @rule(R.CA_RPT_02)
-    def test_required_only_by_it_is_open(self):
-        rep = report(book("QZW.US", COST, "CA"))
-        self.assertEqual(rep["max_total_cost"], COST)
-        self.assertIs(rep["over_threshold_as_counted"], True)
-        self.assertIsNone(rep["filing_required"])
-        self.assertIsNone(rep["simplified_method_available"])
-        self.assertEqual(rep["classification_status"], "unresolved")
-        self.assertEqual(rep["classification_unresolved_symbols"],
-                         ["QZW.US"])
-        self.assertEqual((rep["max_total_cost_low"],
-                          rep["max_total_cost_high"]), (0.0, COST))
-        self.assertEqual(rep["classification_conflicts"], [
-            {"symbol": "QZW.US", "counted_as": "USA",
-             "issuer_country": "CAN", "isin_country_code": "CA",
-             "affects": "total", "held_in_year": True,
-             "symbols": {"QZW.US": "USA"},
-             "lines": {"foreign": ["T1135 QZW.US USA"],
-                       "not_foreign": ["T1135 QZW.US CA"]}}])
-        for text in texts(rep):
-            self.assertNotIn("FILING REQUIRED", text)
-            self.assertIn(f"=> NOT RESOLVED: over the {THR} threshold as "
-                          "counted, but QZW.US may not be foreign property "
-                          "(a Canadian ISIN on a foreign listing): without "
-                          "it the maximum is 0.00 CAD", text)
-            self.assertIn("Add `T1135 QZW.US CA` (not foreign property) or "
-                          "`T1135 QZW.US USA` (foreign property) to "
-                          "ticker.map, then `tjs run` and `tjs t1135`.",
-                          text)
-
-    @rule(R.CA_RPT_02)
-    def test_the_lines_named_give_the_figures_named(self):
-        rows = book("QZW.US", COST, "CA")
-        open_ = report(rows)
-        lines = conflict(open_, "QZW.US")["lines"]
-        rep = report(rows, as_overrides(lines["not_foreign"]))
-        self.assertEqual(rep["classification_status"], "resolved")
-        self.assertEqual(rep["max_total_cost"], open_["max_total_cost_low"])
-        self.assertIs(rep["filing_required"], False)
-        self.assertIn("no T1135 required", texts(rep)[0])
-        rep = report(rows, as_overrides(lines["foreign"]))
-        self.assertEqual(rep["classification_status"], "resolved")
-        self.assertEqual(rep["max_total_cost"], open_["max_total_cost_high"])
-        self.assertIs(rep["filing_required"], True)
-        self.assertIn("FILING REQUIRED", texts(rep)[0])
-
-    @rule(R.CA_RPT_02)
-    def test_required_without_it_holds(self):
-        rep = report(book("QZW.US", SMALL, "CA",
-                          more=[buy("QZX.US", COST, "2025-02-04")]))
-        self.assertEqual(rep["classification_status"], "verdict_holds")
-        self.assertIs(rep["filing_required"], True)
-        self.assertEqual((rep["max_total_cost_low"],
-                          rep["max_total_cost_high"]), (COST, COST + SMALL))
-        brief = texts(rep)[0]
-        self.assertIn("FILING REQUIRED", brief)
-        self.assertIn("Counting QZW.US the other way", brief)
-
-    @rule(R.CA_RPT_02)
-    def test_below_with_it_holds(self):
-        rep = report(book("QZW.US", SMALL, "CA"))
-        self.assertEqual(rep["classification_status"], "verdict_holds")
-        self.assertIs(rep["filing_required"], False)
-        self.assertIn("no T1135 required", texts(rep)[0])
-
-    @rule(R.CA_RPT_15)
-    def test_the_part_that_depends_on_it_is_open(self):
-        # Over 250,000 as counted; without QZW.US, under it. pii-ok
-        rep = report(book("QZW.US", 60000.0, "CA",
-                          more=[buy("QZX.US", 200000.0, "2025-02-04")]))
-        self.assertEqual(rep["classification_status"], "verdict_holds")
-        self.assertIs(rep["filing_required"], True)
-        self.assertIsNone(rep["simplified_method_available"])
-        self.assertIn("Part A or Part B open (it depends on how QZW.US is "
-                      "counted)", texts(rep)[0])
-
-    @rule(R.CA_RPT_02)
-    def test_both_kinds_at_once(self):
-        # As counted QZW.US alone is over; the lowest reading drops it,
-        # the highest adds FGN.TO.
-        rep = report(book("QZW.US", COST, "CA")
-                     + book("FGN.TO", SMALL, "AU"))
-        self.assertEqual(rep["classification_status"], "unresolved")
-        self.assertEqual(rep["classification_unresolved_symbols"],
-                         ["QZW.US"])
-        self.assertEqual((rep["max_total_cost_low"],
-                          rep["max_total_cost_high"]), (0.0, COST + SMALL))
-
-    @rule(R.CA_RPT_20)
-    def test_over_with_cash_of_unknown_cost_gives_no_firm_figure(self):
-        rep = report(book("QZW.US", COST, "CA"),
-                     cash=cash_doc(0.0, unknown_cost=True))
-        self.assertIs(rep["total_settled"], False)
-        self.assertIsNone(rep["filing_required"])
-        for text in texts(rep):
-            self.assertNotIn("FILING REQUIRED", text)
-            self.assertIn("without it the maximum is at least 0.00 CAD; "
-                          "NOT SETTLED either: some cash's cost is unknown "
-                          "— tjs fx-cash --ledger v2", text)
-
-    @rule(R.CA_RPT_12)
-    def test_another_cost_unknown_gives_no_firm_figure(self):
-        rep = report(book("QZW.US", COST, "CA") + [unknown("QZX.US")])
-        self.assertEqual(rep["classification_status"], "unresolved")
-        self.assertIn("without it the maximum is at least 0.00 CAD",
-                      texts(rep)[0])
-
-    @rule(R.CA_RPT_02)
-    def test_a_custodian_abroad_counts_it_either_way(self):
-        rep = report(book("QZW.US", COST, "CA"), custody={"margin": "USA"})
-        self.assertEqual(rep["classification_status"], "verdict_holds")
-        self.assertEqual((rep["max_total_cost_low"],
-                          rep["max_total_cost_high"]), (COST, COST))
-        self.assertIs(rep["filing_required"], True)
-
-
-class TestForeignUnderEitherCountry(unittest.TestCase):
-    """TJ-4958: FGN.US, an Irish ISIN: foreign either way."""
-
-    @rule(R.CA_RPT_02)
-    def test_it_is_warned_about_and_to_review(self):
-        rep = report(book("FGN.US", COST, "IE"))
-        self.assertIn("1 symbol(s) counted under one foreign country carry "
-                      "another's ISIN: FGN.US (IRL, counted under USA)",
-                      rep["_stderr"])
-        self.assertIn("Add `T1135 FGN.US IRL` to ticker.map once "
-                      "confirmed, or `T1135 FGN.US USA` to keep it.",
-                      rep["_stderr"])
-        self.assertEqual(rep["review_symbols"], ["FGN.US"])
-        self.assertEqual(rep["classification_conflicts"], [
-            {"symbol": "FGN.US", "counted_as": "USA",
-             "issuer_country": "IRL", "isin_country_code": "IE",
-             "affects": "country", "held_in_year": True,
-             "lines": {"as_counted": ["T1135 FGN.US USA"],
-                       "other": ["T1135 FGN.US IRL"]}}])
-        # The total is the same under either country: a verdict.
-        self.assertEqual(rep["classification_status"], "resolved")
-        self.assertIs(rep["filing_required"], True)
-        self.assertEqual((rep["max_total_cost_low"],
-                          rep["max_total_cost_high"]), (COST, COST))
-        self.assertEqual(rep["properties"][0]["country"], "USA")
-        brief, full = texts(rep)
-        self.assertIn("FILING REQUIRED", brief)
-        acts = _out.act_lines(render_brief(rep))
-        self.assertTrue(any("FGN.US (IRL)" in a and "another country's "
-                            "ISIN than counted" in a for a in acts), acts)
-        self.assertIn("FGN.US: IRL, counted under USA", full)
-
-    @rule(R.CA_RPT_02)
-    def test_a_line_for_it_settles_it(self):
-        lines = conflict(report(book("FGN.US", COST, "IE")),
-                         "FGN.US")["lines"]
-        for which, country in (("other", "IRL"), ("as_counted", "USA")):
-            with self.subTest(which=which):
-                rep = report(book("FGN.US", COST, "IE"),
-                             as_overrides(lines[which]))
-                self.assertEqual(rep["classification_conflicts"], [])
-                self.assertEqual(rep["review_symbols"], [])
-                self.assertEqual(rep["properties"][0]["country"], country)
-                self.assertEqual(rep["max_total_cost"], COST)
-                self.assertNotIn("ISIN", rep["_stderr"])
-
-    @rule(R.CA_RPT_02)
-    def test_the_listings_own_country_is_not_named(self):
-        rep = report(book("FGN.US", COST, "US"))
-        self.assertEqual(rep["classification_conflicts"], [])
-        self.assertEqual(rep["review_symbols"], [])
-
-    @rule(R.CA_RPT_02)
-    def test_the_issuers_country_from_tobase_map_is_compared(self):
-        rep = report(book("FGN.US", COST, "IE"),
-                     issuer_countries={"FGN.US": "IRL"})
-        self.assertEqual(rep["classification_conflicts"], [])
-        self.assertEqual(rep["properties"][0]["country"], "IRL")
-
-    @rule(R.CA_RPT_02)
-    def test_a_canadian_listing_tobase_map_counts_abroad_is_worded_truly(
-            self):
-        # tobase.map gives FGN.TO's issuer a country: no "foreign
-        # listing" is claimed of a .TO symbol.
-        rep = report(book("FGN.TO", SMALL, "IE"),
-                     issuer_countries={"FGN.TO": "USA"})
-        self.assertEqual(conflict(rep, "FGN.TO")["affects"], "country")
-        for text in (*texts(rep), rep["_stderr"]):
-            self.assertNotIn("on a foreign listing", text)
-        self.assertIn("counted under one foreign country carry another's "
-                      "ISIN: FGN.TO (IRL, counted under USA)",
-                      rep["_stderr"])
-
-    @rule(R.CA_RPT_02)
-    def test_a_holding_with_no_row_in_the_year_is_not_named(self):
-        rows = [buy("FGN.US", COST, "2023-02-03"),
-                div("FGN.US", "IE", "2023-06-17"),
-                sell("FGN.US", COST, "2023-09-01")]
-        rep = report(rows)
-        self.assertEqual(rep["classification_conflicts"], [])
-        self.assertNotIn("ISIN", rep["_stderr"])
-
-
 class TestEveryLineNamedIsOneTickerMapTakes(unittest.TestCase):
     BOOKS = {
-        "up": book("FGN.TO", COST, "AU"),
-        "down": book("QZW.US", COST, "CA"),
-        "holds": book("FGN.TO", SMALL, "AU"),
-        "renamed": TestATickerChange.UP,
-        "renamed down": TestATickerChange.DOWN,
+        "torn": torn("FGN.TO", COST),
+        "holds": torn("FGN.TO", SMALL),
+        "option up": TestAnOptionAndItsShare.UP,
+        "option down": TestAnOptionAndItsShare.DOWN,
         "third": book("FGN.US", SMALL, "IE"),
+        "two abroad": torn("FGN.US", SMALL, one="IE", other="BM"),
         "no country": book("FGN.TO", COST, "XS"),
-        "no country, third": book("FGN.US", SMALL, "EU"),
-        "several": (book("FGN.TO", 40000.0, "AU")
-                    + book("QZA.TO", 40000.0, "US")
+        "no country, abroad": book("FGN.US", SMALL, "EU"),
+        "several": (torn("FGN.TO", 40000.0) + torn("QZA.TO", 40000.0)
                     + book("QZB.TO", 40000.0, "ZZ")),
     }
 
@@ -1009,8 +740,7 @@ class TestEveryLineNamedIsOneTickerMapTakes(unittest.TestCase):
                          for ln in lines_named(text)]
                 listed = [ln for c in rep["classification_conflicts"]
                           for v in c["lines"].values() for ln in v or []]
-                self.assertTrue(listed, name)
-                if "no country" not in name:
+                if "no country, abroad" not in name:
                     self.assertTrue(named, name)
                 for ln in sorted(set(named + listed)):
                     # load_overrides stops on a line ticker.map refuses.
@@ -1119,26 +849,29 @@ class TestTheKeysSayWhatTheTextSays(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td) / "margin_base.json"
             base.write_text(json.dumps(
-                {"transactions": book("FGN.TO", COST, "AU")}))
+                {"transactions": torn("FGN.TO", COST)}))
             out, err = io.StringIO(), io.StringIO()
             with contextlib.redirect_stdout(out), \
                     contextlib.redirect_stderr(err):
                 rc = main([str(base), "--year", "2025", "--json"])
         self.assertEqual(rc, 0, err.getvalue())
         doc = json.loads(out.getvalue())
-        self.assertEqual(doc["schema_version"], 1)
+        self.assertEqual(doc["schema_version"], 2)
         self.assertEqual(doc["classification_status"], "unresolved")
         self.assertEqual(doc["classification_unresolved_symbols"],
                          ["FGN.TO"])
         self.assertIsNone(doc["filing_required"])
         self.assertIsNone(doc["simplified_method_available"])
-        self.assertIs(doc["over_threshold_as_counted"], False)
+        self.assertIs(doc["over_threshold_as_counted"], True)
         self.assertIs(doc["total_settled"], True)
-        self.assertEqual(doc["max_total_cost"], 0.0)
-        self.assertEqual(doc["max_total_cost_high"], COST)
+        self.assertEqual(doc["max_total_cost"], COST)
+        self.assertEqual(doc["max_total_cost_low"], 0.0)
         self.assertEqual(doc["classification_conflicts"][0]["lines"],
                          {"foreign": ["T1135 FGN.TO AUS"],
                           "not_foreign": ["T1135 FGN.TO CA"]})
+        # No key that starts with an underscore leaves the tool.
+        self.assertEqual([k for c in doc["classification_conflicts"]
+                          for k in c if k.startswith("_")], [])
 
 
 class TestTheChecklistStep(unittest.TestCase):
@@ -1155,15 +888,15 @@ class TestTheChecklistStep(unittest.TestCase):
     @rule(R.CA_RPT_02)
     def test_it_is_neither_done_nor_file_it(self):
         for rows, words in (
-                (book("FGN.TO", COST, "AU"),
-                 "FGN.TO may be foreign property (ISIN and listing "
-                 "disagree), and the result (below the threshold as "
-                 "counted) depends on it — add the `T1135` line `tjs "
-                 "t1135` names to ticker.map, then `tjs run`"),
-                (book("QZW.US", COST, "CA"),
-                 "QZW.US may not be foreign property (ISIN and listing "
-                 "disagree), and the result (over the threshold as "
-                 "counted) depends on it")):
+                (TestAnOptionAndItsShare.UP,
+                 f"{OPT} may be foreign property (`tjs t1135` says why), "
+                 "and the result (below the threshold as counted) depends "
+                 "on it — add the `T1135` line `tjs t1135` names to "
+                 "ticker.map, then `tjs run`"),
+                (torn("QZW.US", COST),
+                 "QZW.US may not be foreign property (`tjs t1135` says "
+                 "why), and the result (over the threshold as counted) "
+                 "depends on it")):
             with self.subTest(symbol=rows[0]["symbol"]):
                 res = self.step(report(rows))
                 self.assertEqual(res.status, "attention")
@@ -1173,22 +906,37 @@ class TestTheChecklistStep(unittest.TestCase):
 
     @rule(R.CA_RPT_02)
     def test_several_symbols_read_as_several(self):
-        res = self.step(report(book("FGN.TO", 40000.0, "AU")
-                               + book("QZA.TO", 40000.0, "US")
-                               + book("QZB.TO", 40000.0, "IE")))
+        res = self.step(report(torn("FGN.TO", 40000.0)
+                               + torn("QZA.TO", 40000.0)
+                               + torn("QZB.TO", 40000.0)))
         self.assertEqual(res.status, "attention")
-        self.assertIn("FGN.TO, QZA.TO +1 more may be foreign property (ISIN "
-                      "and listing disagree)", res.detail)
+        self.assertIn("FGN.TO, QZA.TO +1 more may not be foreign property "
+                      "(`tjs t1135` says why)", res.detail)
         self.assertIn("add the `T1135` lines `tjs t1135` names",
                       res.detail)
 
-    @rule(R.CA_RPT_02)
-    def test_it_stands_when_the_verdict_holds(self):
-        self.assertEqual(self.step(report(book("FGN.TO", SMALL, "AU"))).status,
-                         "done")
-        rep = report(book("QZW.US", SMALL, "CA",
-                          more=[buy("QZX.US", COST, "2025-02-04")]))
+    @rule(R.CA_RPT_22)
+    def test_an_option_whose_reading_cannot_matter_leaves_it_done(self):
+        # The verdict holds either way and nothing is to review: an
+        # option conflict alone asks for nothing.
+        rep = report([buy("FGN.TO", SMALL), div("FGN.TO", "AU"),
+                      opt(OPT, SMALL)])
+        self.assertEqual(self.step(rep).status, "done")
+        rep = report([buy("QZC.US", SMALL), div("QZC.US", "CA"),
+                      opt(OPU, SMALL), buy("QZX.US", COST, "2025-02-04")])
         self.assertEqual(self.step(rep).status, "manual")
+
+    @rule(R.CA_RPT_02)
+    def test_a_security_to_review_needs_attention(self):
+        # Far below the threshold either way, and still a row whose
+        # country nothing may be picked for.
+        res = self.step(report(torn("FGN.TO", SMALL)))
+        self.assertEqual(res.status, "attention")
+        self.assertIn("1 security to review for the T1135's country: "
+                      "FGN.TO — add the `T1135` line `tjs t1135 --details` "
+                      "names for each to ticker.map, then `tjs run`",
+                      res.detail)
+        self.assertEqual(res.cmd, "tjs t1135 --details")
 
     @rule(R.CA_RPT_13)
     def test_a_null_filing_required_is_never_done(self):

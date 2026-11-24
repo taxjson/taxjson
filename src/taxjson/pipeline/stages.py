@@ -5,6 +5,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
@@ -1458,10 +1459,10 @@ def stage_account(name: str, acfg: Mapping[str, Any], settings: Settings,
     # symbols out of the books (lib/opening, CA-OPEN-03).
     if not is_crypto:
         echo_attention_lines(base_json, prefix="opening: ")
-    # A split booked twice with a rounded ratio (A2-0070): one event,
-    # applied once — on the console, so the manual line gets deleted.
+    # A split booked twice with a rounded ratio (A2-0070): one event, applied
+    # once; a late row over-closing a renamed contract (TJ-5008): on the console.
     if not is_crypto:
-        echo_attention_lines(base_json, prefix="split: ")
+        echo_attention_lines(base_json, prefix=("split: ", "rename: "))
         _warn_partial_carryovers(name, corp_files, base_json, cache)
         # Opposite US futures positions of two broker accounts (TJ-1265).
         echo_attention_lines(base_json, prefix="futures: ")
@@ -2420,8 +2421,302 @@ def _split_every_run(i: ST.Inst, _r: ST.Ready) -> None:
     run, the banners fold today's diags, TJ-1827). Every account's wash twin
     is current after the split (the cross reports read it)."""
     c, name = i.ctx, i.account
+    run_state.current.undated_rows += _flag_undated_listings(
+        name, c.work, c.settings, ST.output(ST.Inst("blend_gains", c)))
     _render_wash_outputs(name, c.settings, c.work, c.own.reports_dir, blended=True)
     run_state.current.wash_current.add(name)
+
+
+# work/<account>_listing_evidence.diag: the ATTENTION lines of the cost
+# rows on a listing no dated row of their statement shows held
+# (_flag_undated_listings); in the wash twin's banner only.
+LISTING_EVIDENCE_SUFFIX = "_listing_evidence.diag"
+
+
+def _undated_listing_rows(cache: Path, name: str, cost: List[str]
+                          ) -> Dict[str, Dict[str, str]]:
+    """{row id: what the parser's note names} of the account's cost rows
+    (`cost`: their ids in the books, in order) a statement left on a
+    listing none of its dated rows shows held, the account's exports
+    naming another (lib/stage_msg.undated_listing_note, in a parse's
+    .diag). A note names its row by file and line, the parse's rows by
+    file, symbol and day: the notes of one file, symbol and day go to its
+    cost rows in the file's order, one each."""
+    import json as _json
+    from taxjson.lib.stage_msg import parse_undated_listing_note
+    want = set(cost)
+    rows: Dict[str, Dict[str, str]] = {}
+    for diag in sorted(cache.glob(f"{name}_*.json.diag")):
+        try:
+            notes = [n for n in (parse_undated_listing_note(ln) for ln in
+                                 diag.read_text(errors="replace").splitlines()
+                                 if ln.startswith("note: ")) if n]
+            notes = [n for n in notes if n["what"] == "return of capital"]
+            if not notes:
+                continue
+            txs = _json.loads(diag.with_suffix("").read_text(
+                encoding="utf-8")).get("transactions") or []
+        except (OSError, ValueError, AttributeError):
+            continue
+        groups: Dict[Tuple[str, str, str], List[Dict[str, str]]] = {}
+        for n in notes:
+            groups.setdefault((n["file"], n["symbol"], n["day"]), []).append(n)
+        for (file, sym, day), ns in groups.items():
+            ns.sort(key=lambda n: int(n["line"] or 0))
+            mine = [t for t in txs if isinstance(t, dict)
+                    and str(t.get("id") or "") in want
+                    and t.get("account") == name
+                    and t.get("symbol") == sym and t.get("date") == day]
+            there = [t for t in mine if t.get("source") == file] or mine
+            for k, t in enumerate(there):
+                # (more rows than notes: the last note's, without a line)
+                n = ns[k] if k < len(ns) else dict(ns[-1], line="")
+                rows.setdefault(str(t["id"]), n)
+    return rows
+
+
+def _map_renames(cache: Path) -> Optional[Dict[str, str]]:
+    """The renames of the map the books were merged with (the run's
+    effective map, else ticker.map); {} with no map, None unreadable."""
+    tm = cache / _PL.EFFECTIVE_MAP
+    if not tm.is_file():
+        tm = _PL.ticker_map_path(cache.parent)
+    if not tm.is_file():
+        return {}
+    try:
+        from taxjson.lib.ticker_map_rules import merge_renames
+        from taxjson.lib.map_file import load_map_file
+        import contextlib as _cl
+        import io as _io
+        with _cl.redirect_stderr(_io.StringIO()):
+            return merge_renames(load_map_file(tm), to_base=True)
+    except (OSError, ValueError):
+        return None
+
+
+def _one_pool(renames: Optional[Dict[str, str]], symbols: List[str]) -> bool:
+    """Whether the map books `symbols` as one symbol: one cost pool."""
+    if renames is None:
+        return False
+    from taxjson.lib.ticker_map_rules import map_symbol
+    return len({map_symbol(s, renames) for s in symbols}) < 2
+
+
+def _dec(v: Any) -> Decimal:
+    """A JSON number as a Decimal (0 for none)."""
+    return Decimal(str(v if v is not None else 0))
+
+
+def _books_did(timeline: Dict[str, Any], rid: str, amount: Decimal,
+               account: str, booked: str, day: str
+               ) -> Tuple[str, Optional[Decimal], Optional[Decimal]]:
+    """What the engine did with the cost row `rid` (an amount of `amount`
+    returned), read from its cost timeline: (the pool's symbol, the cost
+    it took off the pool, the rest it booked as a gain: all of it for a
+    row that left its pool as it was); (`booked`, None, None) when the
+    timeline does not say. A timeline that records no row ids (the US
+    engine's) is read by the pool and the day: the state of `booked` dated
+    `day` that keeps the units and takes no more than the amount off the
+    cost."""
+    from taxjson.lib import cost_timeline as CT
+    try:
+        seq = CT.row_seqs(timeline).get(rid)
+        fields = list(timeline.get("fields") or CT.FIELDS)
+        rows = [dict(zip(fields, r)) for r in timeline.get("rows") or []]
+    except (AttributeError, TypeError, ValueError):
+        return booked, None, None
+    zero = _dec(0)
+    if seq is None and not timeline.get("row_ids"):
+        last: Dict[Any, Dict[str, Any]] = {}
+        for x in rows:
+            key = (x.get("account"), x.get("symbol"))
+            prev = last.get(key)
+            last[key] = x
+            if (prev is None or x.get("symbol") != booked
+                    or x.get("date") != day
+                    or x.get("account") not in ("", account)
+                    or x.get("qty") != prev.get("qty")):
+                continue
+            took = _dec(prev.get("total_cost")) - _dec(x.get("total_cost"))
+            if zero < took <= amount + _dec("0.005"):
+                took = min(took, amount)
+                return booked, took, amount - took
+        return booked, None, None
+    if seq is None:
+        return booked, None, None
+    here = [r for r in rows if r.get("seq") == seq
+            and r.get("account") in ("", account)]
+    if not here:
+        # No state after it: the row changed no pool.
+        return booked, zero, amount
+    r = next((x for x in here if x.get("symbol") == booked), here[0])
+    before = zero
+    for x in rows:
+        if (x.get("seq") is not None and x["seq"] < seq
+                and x.get("symbol") == r.get("symbol")
+                and x.get("account") == r.get("account")):
+            before = _dec(x.get("total_cost"))
+    took = min(amount, max(zero, before - _dec(r.get("total_cost"))))
+    return str(r.get("symbol")), took, max(zero, amount - took)
+
+
+def _unapplied(gains: Path, symbol: str, day: str) -> bool:
+    """Whether the engine run that wrote `gains` said it did not apply a
+    cost adjustment of `symbol` on `day` (the US engine's ATTENTION for a
+    return of capital that finds no lots: no gain is booked)."""
+    head = f"warning: ATTENTION: unapplied basis adjustment: {symbol} ADJUST "
+    return any(ln.startswith(head) and f" on {day} " in ln
+               for ln in _diag_lines(gains))
+
+
+def _flag_undated_listings(name: str, cache: Path, settings: Settings,
+                           gains: Path, *, pooled_apart: bool = False
+                           ) -> List[str]:
+    """A cost row (a return of capital) a statement left on a listing none
+    of its dated rows shows held that day, while the account's exports
+    name another listing of the ticker (the parser's notes: the split
+    exports, a statement that trades one listing later, a statement with
+    no Open Positions whose purchase is in another year's). An ATTENTION
+    each, wherever the row landed: the payment and the listing it may
+    belong to first, then what the books did with it, from the engine's
+    cost timeline (beside `gains`: the blended pass's gains, or the
+    account's own under `run --account`; so a row of an earlier year says
+    what that year's books did): the cost it took off the pool, the rest a
+    gain, or not applied (the engine's own word in its .diag). `pooled_apart`: `run --account` in a project that pools
+    cost across taxable accounts, where the account's own books are not
+    the filed ones: nothing is said of what they did. None where the map
+    books the listings as one pool. On the console and in
+    work/<name>_listing_evidence.diag (the wash twin's banner, the
+    closing list, the checklist); returns each row as `--strict` names
+    it (backlog TJ-5011, TJ-5201, TJ-5202)."""
+    import json as _json
+    from taxjson.lib import cross_listings as XL
+    from taxjson.lib.stage_msg import UNDATED_LISTING_GAIN
+    from taxjson.lib.ticker_map_rules import map_symbol
+    diag = cache / f"{name}{LISTING_EVIDENCE_SUFFIX}"
+    amounts: Dict[str, Any] = {}
+    try:
+        # The books' rows: a cost row is an ADJUST there (a foreign
+        # issuer's return of capital becomes one after the parse).
+        for t in _json.loads((cache / f"{name}_base.json").read_text(
+                encoding="utf-8")).get("transactions") or []:
+            if isinstance(t, dict) and t.get("action") == "ADJUST":
+                amounts[str(t.get("id"))] = abs(_dec(t.get("net_amount")))
+    except (OSError, ValueError, AttributeError, TypeError, ArithmeticError):
+        amounts = {}
+    rows = _undated_listing_rows(cache, name, list(amounts))
+    doc: Dict[str, Any] = {}
+    if rows and not pooled_apart:
+        try:
+            doc = _json.loads(timeline_beside(gains).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            doc = {}
+    renames = _map_renames(cache) if rows else {}
+    base = str(settings.base_currency or "").upper() or None
+    cur = f" {base}" if base else ""
+    lines: List[str] = []
+    shorts: List[str] = []
+    for rid in [r for r in amounts if r in rows]:
+        n = rows[rid]
+        sym = n["symbol"]
+        flat = [s for s in n["flat"].split(", ") if s]
+        others = [s for s in n["listings"].split(", ") if s and s != sym]
+        if not others or _one_pool(renames, [sym] + others):
+            continue
+        alts = [s for s in others if s not in flat]
+        alt = " or ".join(alts)
+        where = f"{n['file']} line {n['line']}" if n["line"] else n["file"]
+        amount = amounts[rid]
+        booked, took, gain = _books_did(
+            doc, rid, amount, name, map_symbol(sym, renames or {}), n["day"])
+        on = booked if booked == sym else f"{booked} ({sym} in the statement)"
+        # The headline: the fact first, short enough for a 100-column
+        # console's one line; the row's file last.
+        head = (f"{n['what']} {n['day']} on {on} "
+                + (f"may belong to {alt}" if alt
+                   else "that no dated row shows held")
+                + f" ({name}: {where}).")
+        cent = _dec("0.005")
+        unapplied = not pooled_apart and _unapplied(gains, booked, n["day"])
+        if n["why"] == "moved" and not unapplied and (
+                gain is None or took is None or gain < cent or took >= cent):
+            # Moved off its ISIN's listing on another statement's word:
+            # said only where the books found nothing there to reduce.
+            continue
+        if pooled_apart:
+            did = ("The books that pool the taxable accounts say what was "
+                   "done with it: a full `tjs run`.")
+        elif unapplied:
+            did = (f"The books did not apply it: {booked} held nothing that "
+                   f"day (the Unapplied basis adjustment warning).")
+        elif took is None or gain is None:
+            did = (f"The books' record of that day does not say what was "
+                   f"done with it: `tjs audit {booked}`.")
+        elif gain < cent:
+            did = f"The books reduced the cost of {booked} by {took:.2f}{cur}."
+        elif took < cent:
+            did = (f"The books took it as a capital gain of {gain:.2f}{cur}: "
+                   f"{booked} had no cost to reduce that day.")
+        else:
+            did = (f"The books reduced the cost of {booked} by {took:.2f}{cur}, "
+                   f"all it had, and took the other {gain:.2f}{cur} as a "
+                   f"capital gain.")
+        if n["why"] == "moved":
+            why = (f"The row was moved off its ISIN's listing {alt}: the "
+                   f"account's statements hold or trade {sym}, and no dated "
+                   f"row shows it held that day.")
+        elif n["why"] == "split":
+            why = ("The statement has no position in the ticker, and the "
+                   "account's other exports name its listings with no dates "
+                   "the statement can use, so the row kept the listing its "
+                   "ISIN names.")
+        else:
+            why = (f"No dated row of the statement shows {sym} held that day, "
+                   f"and the account's exports also name "
+                   f"{' and '.join(others)}"
+                   + (f" (the statement's own rows show {' and '.join(flat)} "
+                      f"not held that day)" if flat else "") + ".")
+        if alt:
+            then = (f"If {alt} was the listing held, its cost is too high by "
+                    f"{amount:.2f}{cur} and what is booked on {booked} is "
+                    f"not real.")
+        else:
+            then = (f"If {booked} was not held that day, what is booked on it "
+                    f"is not real.")
+        tob = " / ".join("`TOBASE {} {}`".format(*XL.tobase_direction(o, sym, base))
+                         for o in others)
+        fix = ("Download a statement that holds the account's Open Positions "
+               "section, or every trade of the ticker from before the "
+               "holding's purchase, and keep it in place of the split "
+               f"exports; or, if the listings are one security, add {tob} to "
+               "ticker.map (one cost pool).")
+        lines.append(f"{UNDATED_LISTING_GAIN}{head} {did} {why} {then} {fix}")
+        shorts.append(f"{where}: {n['what']} of {n['day']} on {booked}")
+    for line in lines:
+        _echo_captured(line)
+    if lines:
+        _write_atomic(diag, "".join(ln + "\n" for ln in lines), encoding="utf-8")
+    else:
+        diag.unlink(missing_ok=True)
+    return shorts
+
+
+def undated_strict(rows: List[str]) -> str:
+    """`run --strict`'s stop on the rows _flag_undated_listings named."""
+    return (f"--strict: {len(rows)} cost row(s) on a listing no dated row "
+            f"shows held, where the account's exports name another "
+            f"({'; '.join(rows)}) — aborting")
+
+
+def flag_undated_account(name: str, cache: Path, settings: Settings,
+                         gains: Path, *, pooled_apart: bool,
+                         strict: bool) -> None:
+    """`tjs run --account NAME`, which runs no pass across accounts: the
+    undated-listing check from the account's own gains (TJ-5202)."""
+    rows = _flag_undated_listings(name, cache, settings, gains,
+                                  pooled_apart=pooled_apart)
+    if rows and strict:
+        _die(undated_strict(rows))
 
 
 def _wash_prepare(i: ST.Inst) -> List[str]:
@@ -4622,6 +4917,12 @@ def stage_blended_wash_pass(names: List[str],
     _record_wash_inputs(cache, [cache / f"{n}_gains_wash.json"
                                 for n in names], names,
                         sheltered_base, tag=tag)
+    # A cost row on a listing no dated row shows held
+    # (_flag_undated_listings, said after each split).
+    _undated = list(run_state.current.undated_rows)
+    run_state.current.undated_rows.clear()
+    if _undated and strict:
+        _die(undated_strict(_undated))
     # Conservation check: the splitter apportions blended inventory
     # rows by each account's BASE-book balance, which does not include
     # missing-history (OPENING_BALANCE) shares synthesized in-memory

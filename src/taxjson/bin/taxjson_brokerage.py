@@ -1004,7 +1004,14 @@ def _brokerage_account_pass(shared_context: Any, extractor_class: Any, parsed_fi
     # holds the unadjusted original gets the same adjustment, so dedup
     # keeps one row (audit S059-04, A2-0023 / A2-0024 / A2-0088).
     if shared_context is not None:
-        extractor_class.reconcile_files(parsed_files)
+        try:
+            extractor_class.reconcile_files(parsed_files)
+        except BrokerageParseError as e:
+            # A refusal of the pass across statements (one income row two
+            # statements put on two listings, backlog TJ-5011): the
+            # parse's refusal, not a traceback.
+            emit_line(f"taxjson-brokerage: error: {_refusal(e)}")
+            sys.exit(1)
 
     # An option trade on its expiry day is clamped to the expiry by each
     # parser — but only against the expiry rows of ITS file. The expiry

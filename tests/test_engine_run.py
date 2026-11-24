@@ -63,12 +63,15 @@ FINISH_FIELDS = sorted([
 PARTS = ("_sl_trigger_scan", "_sl_window_walk", "_sl_window_trace", "_sl_allocate")
 # The walk's action branches as functions (step 4m): they read `run` and `it`
 # beside the walk, and take the row's locals as keyword-only inputs.
-WALK_PARTS = ("_walk_adjust", "_walk_split", "_walk_trade")
+WALK_PARTS = ("_walk_adjust", "_walk_split", "_walk_trade",
+              # an exercise's route: its premium rolls into its shares, or cash-settled (TJ-5005)
+              "_assign_rolls")
 US_WALK_PARTS = ("_us_walk_lot_move", "_us_walk_split", "_us_walk_adjust",
                  "_us_walk_stock_dividend", "_us_walk_spinoff", "_us_walk_reorg",
                  "_us_walk_buy", "_us_walk_sell", "_us_gain_entry")
 WALK_PART_INPUTS = {
     "_walk_adjust": ["is_other_scope", "it", "pool", "run", "symbol", "trace_sym", "tx"],
+    "_assign_rolls": ["is_other_scope", "it", "run", "symbol", "tx"],
     "_walk_split": ["is_other_scope", "it", "pool", "qty", "run", "symbol", "tx"],
     "_walk_trade": ["account", "internal_adj", "internal_dw", "internal_tainted",
                     "is_option_assign", "is_other_scope", "it", "pool", "qty", "run",
@@ -129,6 +132,8 @@ US_RUN_HELPERS = ("_us_ikey_on", "_us_rkey_on", "_us_allot_sold_shares", "_us_ap
                   "_us_split_matched_short",
                   # lots delivered to a short: a listing journal, an own move (TJ-2738, TJ-3424)
                   "_us_deliver_to_short",
+                  # an ASSIGN's route: its premium rolls into its shares, or cash-settled (TJ-5005)
+                  "_us_assign_route",
                   )
 # Three the pre-run scan and the timeline recorder share stay pure over one keyword
 # input, which the walk hands from the run.
@@ -250,6 +255,11 @@ class TestCanadaRun(unittest.TestCase):
         cls.helpers["_ClassBalances"] = [m for n in t.body if isinstance(n, ast.ClassDef)
                                          and n.name == "_ClassBalances" for m in n.body
                                          if isinstance(m, ast.FunctionDef) and m.name == "__init__"][0]
+        # The year-end pools' reader takes the run too (TJ-4984): what its
+        # constructor reads of the run, the walk reads.
+        cls.helpers["_YearEndPools"] = [m for n in t.body if isinstance(n, ast.ClassDef)
+                                        and n.name == "_YearEndPools" for m in n.body
+                                        if isinstance(m, ast.FunctionDef) and m.name == "__init__"][0]
         cls.objects = {n.name: [st.target.id for st in n.body
                                 if isinstance(st, ast.AnnAssign)]
                        for n in ast.walk(t) if isinstance(n, ast.ClassDef)

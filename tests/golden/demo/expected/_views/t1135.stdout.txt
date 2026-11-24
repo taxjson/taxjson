@@ -5,20 +5,20 @@ Maximum total cost in 2024: 117,465.80 CAD on 2024-04-22
 => T1135 FILING REQUIRED (over 100,000.00 CAD): Part A or Part B open (some cash's cost is unknown)
 
 PER PROPERTY — taxable accounts only
-Amounts are cost (ACB), not market value; MAX COST IN YR: the most held at once.
+Amounts are cost (ACB), not market value; MAX COST IN YR: the most held at once; FROM: what decided the country.
 CAT: the form's category (1 cash; 2 shares; 6 options, futures, crypto); a ticker.map T1135 line sets another.
-SYMBOL                  COUNTRY  CAT  MAX COST IN YR  COST AT DEC 31  INCOME  GAIN(LOSS)
-----------------------------------------------------------------------------------------
-AAPL.US                 USA      2         72,913.37       18,228.34   24.30      172.43
-ABCD270219C00045000.US  USA      6          2,105.66            0.00    0.00      175.84
-BTC                     CRYPTO   6         13,003.34        3,250.83    0.00      197.67
-ETH                     CRYPTO   6          7,346.36        3,685.87   23.56      472.86
-INTC.US                 USA      2            946.35            0.00    0.00        0.00
-MSFT.US                 USA      2         27,001.35            0.00  101.25      132.30
-NVDA.US                 USA      2          1,999.35        1,941.30    0.00        0.00
-PARNT.US                USA      2          5,401.35        5,401.35  675.00        0.00
-SPNCO.US                USA      2            675.00            0.00    0.00       66.15
-USD cash (crypto)       CRYPTO   1              0.00            0.00    0.00        0.00
+SYMBOL                  COUNTRY  FROM     CAT  MAX COST IN YR  COST AT DEC 31  INCOME  GAIN(LOSS)
+-------------------------------------------------------------------------------------------------
+AAPL.US                 USA      assumed  2         72,913.37       18,228.34   24.30      172.43
+ABCD270219C00045000.US  USA      listing  6          2,105.66            0.00    0.00      175.84
+BTC                     CRYPTO   -        6         13,003.34        3,250.83    0.00      197.67
+ETH                     CRYPTO   -        6          7,346.36        3,685.87   23.56      472.86
+INTC.US                 USA      assumed  2            946.35            0.00    0.00        0.00
+MSFT.US                 USA      ISIN     2         27,001.35            0.00  101.25      132.30
+NVDA.US                 USA      assumed  2          1,999.35        1,941.30    0.00        0.00
+PARNT.US                USA      ISIN     2          5,401.35        5,401.35  675.00        0.00
+SPNCO.US                USA      ISIN     2            675.00            0.00    0.00       66.15
+USD cash (crypto)       CRYPTO   account  1              0.00            0.00    0.00        0.00
 
 PER COUNTRY — upper-bound aggregates
 COUNTRY  MAX COST IN YR  COST AT DEC 31  INCOME  GAIN(LOSS)
@@ -29,4 +29,5 @@ USA          111,042.43       25,570.99  800.55      546.72
 ! USD cash (crypto): cost unknown (fx-cash v2 refuses) — tjs fx-cash --ledger v2
 ! SAMPW250117C00030000.US: held only short: an obligation, not a row — tjs t1135 --details
 ! BTC, ETH, USD cash (crypto): crypto, check where held — tjs t1135 --details
+! 4 countries assumed from the listing (no ISIN): cost 81,568.97 CAD — tjs t1135 --details
 Not counted: foreign property outside these books (a foreign bank account, cash held elsewhere) — tjs t1135 --details

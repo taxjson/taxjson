@@ -788,16 +788,20 @@ def rename_records(book_rows: Iterable[Any], declared: Iterable[Any],
     carried (accounts [], status "unused"). `mapping`: the base stage's
     undated renames (the books' symbols are the mapped ones)."""
     from taxjson.lib.ticker_map_rules import map_symbol
-    from taxjson.lib.rename_rows import rename_events
+    from taxjson.lib.rename_rows import rename_events, underlying_change
     from taxjson.lib.rename_decl import SOURCE_MAP, WINDOW_DAYS, _days
     mapping = mapping or {}
     declared = list(declared)
     out = []
     used = set()
     for e in rename_events(book_rows):
+        # (an option contract's row follows its underlying's
+        # declaration: TJ-5008)
+        names = ((e["old"], e["new"]),
+                 underlying_change(e["old"], e["new"]))
         decl = [dr for dr in declared
-                if map_symbol(dr.old, mapping) == e["old"]
-                and map_symbol(dr.new, mapping) == e["new"]
+                if (map_symbol(dr.old, mapping),
+                    map_symbol(dr.new, mapping)) in names
                 and (_days(dr.date, e["date"]) or 0) <= WINDOW_DAYS]
         for dr in decl:
             used.add(id(dr))

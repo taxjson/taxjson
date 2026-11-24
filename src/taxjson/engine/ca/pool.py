@@ -694,13 +694,18 @@ class AcbPool:
         next units (a ticker sold out after a purchase, renamed into: that
         purchase still shows when it is the later; giving way whole showed
         the source's older one, TJ-4413). The settlement date goes with
-        the purchase that shows (on one trade date, this pool's). The
-        position's start, the continuous holding, is not this: the merges
-        keep the earlier."""
+        the purchase that shows; on one trade date, the later of the two
+        settlement dates, as one pool walking both purchases in settlement
+        order shows (the target's own kept the window's settle date three
+        days early: backlog TJ-2722). The position's start, the continuous
+        holding, is not this: the merges keep the earlier."""
         theirs = other._last_acq_date or _NO_PURCHASE
         mine = self._last_acq_date or _NO_PURCHASE
         if theirs != _NO_PURCHASE and (mine == _NO_PURCHASE or theirs > mine):
             self._last_acq_date = theirs
+            self._last_acq_settle = other._last_acq_settle
+        elif (theirs != _NO_PURCHASE and theirs == mine
+              and (other._last_acq_settle or '') > (self._last_acq_settle or '')):
             self._last_acq_settle = other._last_acq_settle
         if other._opening_acq and (not self._opening_acq
                                    or other._opening_acq > self._opening_acq):

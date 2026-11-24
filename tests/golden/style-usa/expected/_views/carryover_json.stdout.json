@@ -19,6 +19,6 @@
       "year": 2024
     }
   ],
-  "schema_version": 1,
+  "schema_version": 2,
   "scope_note": "Net ST/LT count the dispositions in these books only. Capital gain distributions (1099-DIV box 2a -> Schedule D line 13) are NOT included; in a loss year they change the carryover shown."
 }

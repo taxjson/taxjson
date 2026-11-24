@@ -304,9 +304,11 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any],
     base = report["base_currency"]
     _usa = _country(settings) == "usa"
     # Under ledger v2 fx-cash reads a stablecoin send as US dollars going
-    # out and owns its currency gain once the move is declared; the
-    # listing gives that declaration, never "add it by hand" (backlog
-    # TJ-0457: both together counted the gain twice).
+    # out and owns its currency gain; the listing gives the declaration
+    # the ledger takes from the decision saved here (lib/cash_events
+    # `SEND_HOW`, backlog TJ-4953; a .tt line of the account overrides
+    # it), never "add it by hand" (backlog TJ-0457: both together
+    # counted the gain twice).
     _v2 = str(settings.fx_cash_ledger or "v1"
               ).strip().lower() == "v2"
     doc = Doc("CRYPTO SENDS — outgoing transfers that did not arrive in "
@@ -471,8 +473,9 @@ def _crypto_sends_facts(sends: Any, doc: Any, base: Any, _v2: bool, Verbatim: An
                                   "ledgers do not show where part of "
                                   "this USD came from"))
                 if _v2 and e["decision"]:
-                    # The line fx-cash ledger v2 asks for, in a .tt
-                    # of the account: it then counts this gain.
+                    # The declaration fx-cash ledger v2 takes from the
+                    # decision (a gift's or a payment's value at the
+                    # day's rate, `spot` there): it counts this gain.
                     how = (f"proceeds={M.shown(fx['value'], 2):.2f}"
                            if e["decision"] in CS.DISPOSING
                            else "kept")
@@ -512,11 +515,12 @@ def _crypto_sends_fx_gain(fx_by_year: Dict[str, float], doc: Any, details: bool,
                 for y, g in sorted(fx_by_year.items())], indent="  ")
         # Ledger v1 has no input for it (re-audit A2-0591): the amount
         # is added by hand to the year's s.39(1.1) currency total. Ledger
-        # v2 reads the send and counts it once declared (TJ-0457).
+        # v2 reads the send and counts it (TJ-0457), by the decision
+        # saved here (TJ-4953).
         if _v2 and not details:
             from taxjson.lib.out import act as _act
-            doc.line(_act("fx-cash v2 counts it once each `fx-cash v2` "
-                          "line is in a .tt", "tjs crypto-sends --details"))
+            doc.line(_act("fx-cash v2 counts it, by each decision here (its "
+                          "`fx-cash v2` line)", "tjs crypto-sends --details"))
         elif _v2:
             doc.para("Superficial losses are excluded. Stablecoins are "
                      "US-dollar cash in these books, so this is a "
@@ -524,9 +528,13 @@ def _crypto_sends_fx_gain(fx_by_year: Dict[str, float], doc: Any, details: bool,
                      "year's NET currency gain beyond $200. With ledger v2 "
                      "(fx_cash_ledger = \"v2\") `tjs fx-cash` reads "
                      "each of these sends as US dollars going out and "
-                     "asks what it was: put its `fx-cash v2` line above "
-                     "(proceeds= its value; kept for a send to your own "
-                     "wallet) in a .tt file of the account, and fx-cash "
+                     "takes the decision saved here for what it was: its "
+                     "`fx-cash v2` line above (a gift or a payment at the "
+                     "day's rate, the value in proceeds=; kept for a send "
+                     "to your own wallet). A CASHMOVE line of your own for "
+                     "the send, in a .tt file of the account, is used "
+                     "instead when it says the same kind of thing, and "
+                     "fx-cash gives no figure when the two disagree. It "
                      "counts the gain in its net, against the pool of all "
                      "your taxable accounts' US dollars. Do NOT add this "
                      "total too: it comes from the crypto exports' pool "
@@ -1726,10 +1734,10 @@ def _register_run(sub: argparse._SubParsersAction) -> None:
                     "ticker.map, corporate actions and your elections, "
                     "compute the gains with the superficial-loss / "
                     "wash-sale pass across all your accounts, and write "
-                    "reports/. Every stage is rebuilt, every run. The "
-                    "run ends with the broker positions "
-                    "cross-check when there are positions snapshots "
-                    "(holdings/, found without a setting). "
+                    "reports/. Every stage is rebuilt, every run. It "
+                    "compares no positions with the broker's "
+                    "holdings files: `tjs sanity` does, a step of "
+                    "its own. "
                     "Commands chain: `tjs run sum`.")
     p_run.add_argument("--account", help="Process only one account")
     p_run.add_argument("--no-input", action="store_true",

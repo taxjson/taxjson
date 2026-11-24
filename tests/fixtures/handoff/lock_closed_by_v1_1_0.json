@@ -1,0 +1,162 @@
+{
+  "accounts": {
+    "a": {
+      "disallowed": 0.0,
+      "dispositions": 1,
+      "dividend": 567.5,
+      "form_lines": {
+        "13199": 240.0,
+        "13200": -160.0
+      },
+      "income": 567.5,
+      "lt_gain": 0.0,
+      "pil": 0.0,
+      "proceeds": 240.0,
+      "realized": -160.0,
+      "st_gain": 0.0,
+      "tainted": 0
+    }
+  },
+  "basis": "wash-adjusted",
+  "boundary_rows": [
+    {
+      "account": "a",
+      "action": "BUYSELL",
+      "date": "2025-12-31",
+      "date_settle": "2025-12-31",
+      "group": "equity",
+      "net": 240.0,
+      "quantity": -40.0,
+      "symbol": "ZZC.TO",
+      "tax_date": "2025-12-31"
+    },
+    {
+      "account": "a",
+      "action": "DIVIDEND",
+      "date": "2025-12-31",
+      "date_settle": "2025-12-31",
+      "group": "equity",
+      "net": 500.0,
+      "quantity": 100.0,
+      "symbol": "ZZC.TO",
+      "tax_date": "2025-12-31"
+    },
+    {
+      "account": "a",
+      "action": "DIVIDEND",
+      "date": "2025-12-31",
+      "date_settle": "2025-12-31",
+      "group": "equity",
+      "net": 57.38,
+      "quantity": 100.0,
+      "symbol": "ZZU.US",
+      "tax_date": "2025-12-31"
+    }
+  ],
+  "carryforwards": {
+    "computed_by": "tjs estimate",
+    "minimum_tax": {
+      "closing": 0.0,
+      "closing_by_year": {},
+      "created": 0.0,
+      "expired_by_year": {},
+      "opening_by_year": {},
+      "opening_source": "none",
+      "other_income": 0.0,
+      "other_income_entered": false,
+      "province": "ON",
+      "recovered_by_year": {},
+      "recovered_federal": 0.0,
+      "recovered_federal_tax": 0.0,
+      "recovered_provincial": 0.0,
+      "recovered_provincial_credit": 0.0,
+      "recovered_provincial_surtax": 0.0
+    },
+    "net_capital_loss": {
+      "applied": 0.0,
+      "closing": 160.0,
+      "created": 160.0,
+      "opening": 0.0,
+      "opening_source": "none"
+    },
+    "version": 1
+  },
+  "closed_at": "2026-11-23T20:15:39",
+  "country": "canada",
+  "date_basis": "settle",
+  "dispositions": [
+    {
+      "account": "a",
+      "cost": 400.0,
+      "date": "2025-12-31",
+      "date_settle": "2025-12-31",
+      "denied": 0.0,
+      "gain": -160.0,
+      "proceeds": 240.0,
+      "qty": 40.0,
+      "symbol": "ZZC.TO"
+    }
+  ],
+  "frozen": {
+    "books": {
+      "work/a_gains_wash.json": "a391783d4a4090449cdf1b1f45934558ea314aa86ad877bf30b67a7357815c1e"
+    },
+    "copied": 0,
+    "inputs": {
+      "inputs/a/rows.tt": "e1dbaf0745b57debb48336087de57392da4ccecdef8fd9c4376a1e37b3e56716",
+      "taxjson.toml": "run-settings:d455124f388bc8e5cc5d891e0abba51cca2039cda15369083a770b10fe69780a",
+      "ticker.map": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "inputs_dir": null,
+    "tobase_map": null
+  },
+  "option_timing": {
+    "option_buyback_loss_superficial": false,
+    "option_grant_since": 2025,
+    "option_premium_timing": "grant"
+  },
+  "record_version": 2,
+  "return_row": {
+    "disallowed": 0.0,
+    "realized": -160.0
+  },
+  "schema_version": 2,
+  "settle_next_year": [],
+  "tainted_counts_manual": true,
+  "taxjson": {
+    "commit": null,
+    "modified": null,
+    "release": null,
+    "version": "1.1.0"
+  },
+  "totals": {
+    "disallowed": 0.0,
+    "dispositions": 1,
+    "dividend": 567.5,
+    "income": 567.5,
+    "lt_gain": 0.0,
+    "pil": 0.0,
+    "proceeds": 240.0,
+    "realized": -160.0,
+    "st_gain": 0.0,
+    "tainted": 0
+  },
+  "year": 2025,
+  "year_end": {
+    "equity": {
+      "ZZC.TO": {
+        "acb": 600.0,
+        "deferred": 0.0,
+        "qty": 60.0
+      },
+      "ZZU.US": {
+        "acb": 1350.0,
+        "deferred": 0.0,
+        "qty": 100.0
+      }
+    }
+  },
+  "year_end_shorts": {
+    "equity": {}
+  }
+}

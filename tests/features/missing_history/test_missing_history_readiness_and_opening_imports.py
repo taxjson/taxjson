@@ -461,6 +461,394 @@ class TestSnapshotHoldsTheExercisedPremiumOnce(unittest.TestCase):
         self.assertEqual(self._gain("canada", False, True), 300.0)
 
 
+class TestSnapshotAfterARenameHoldsTheExercisedPremiumOnce(unittest.TestCase):
+    """TJ-5005 (the branch TJ-0962 left open): a call bought for 100 and
+    exercised into 100 SYNO shares for 1000; SYNO renamed SYNW the next
+    day; an accurate OPENING snapshot of the 100 SYNW at 1100 the day
+    after. The option staged its premium under SYNO, where no snapshot
+    was found, and a later, unrelated purchase under the reused SYNO
+    name took it: cost 1300 and a total gain of 100, against 200 for the
+    same history without the redundant snapshot."""
+
+    OPT = "SYNO250620C00010000.US"
+
+    def _book(self, cur, snapshot, late="", parts=False, marked_later=False):
+        delivery = (
+            f"ASSIGN 2025-06-02 10:01:00 SYNO.US 60 {cur} 10 600 0\n"
+            f"ASSIGN 2025-06-02 10:02:00 SYNO.US 40 {cur} 10 400 0\n"
+            if parts else
+            f"ASSIGN 2025-06-02 10:01:00 SYNO.US 100 {cur} 10 1000 0\n")
+        b = (f"BUYSELL 2024-06-03 10:00:00 {self.OPT} 1 {cur} 1 100 0\n"
+             f"ASSIGN 2025-06-02 10:00:00 {self.OPT} -1 {cur} 0 0 0\n"
+             + delivery
+             + f"RENAME 2025-06-03 SYNO.US SYNW.US{late}\n")
+        if snapshot:
+            b += f"OPENING 2025-06-04 SYNW.US 100 {cur} 1100 2025-06-02\n"
+        b += (f"BUYSELL 2025-06-05 10:00:00 SYNO.US 100 {cur} 12 1200 0\n"
+              f"BUYSELL 2025-06-10 10:00:00 SYNW.US -100 {cur} 12 1200 0\n"
+              f"BUYSELL 2025-06-10 10:05:00 SYNO.US -100 {cur} 13 1300 0\n")
+        return b
+
+    def _sales(self, country, snapshot, **kw):
+        cur = "USD" if country == "usa" else "CAD"
+        with tempfile.TemporaryDirectory() as d:
+            root = project(d, "p", {"margin/book.tt": self._book(
+                cur, snapshot, **kw)})
+            (root / "taxjson.toml").write_text(toml(country, year=2025))
+            tj(root, "run", "--no-input")
+            return sorted((g["symbol"], round(float(g["cost"]), 2),
+                           round(float(g["gain"]), 2))
+                          for g in gains(root) if g.get("qty")
+                          and g.get("symbol") in ("SYNO.US", "SYNW.US"))
+
+    ONCE = [("SYNO.US", 1200.0, 100.0), ("SYNW.US", 1100.0, 100.0)]
+
+    @rule(R.CA_OPEN_03)
+    def test_canada_the_reused_old_name_does_not_take_the_premium(self):
+        self.assertEqual(self._sales("canada", True), self.ONCE)
+        self.assertEqual(self._sales("canada", False), self.ONCE)
+
+    @rule(R.US_OPEN_03)
+    def test_us_the_reused_old_name_does_not_take_the_premium(self):
+        self.assertEqual(self._sales("usa", True), self.ONCE)
+        self.assertEqual(self._sales("usa", False), self.ONCE)
+
+    @rule(R.CA_OPEN_03)
+    def test_canada_declared_separate_and_a_delivery_in_two_rows(self):
+        self.assertEqual(self._sales("canada", True, late=" late=separate"),
+                         self.ONCE)
+        self.assertEqual(self._sales("canada", True, parts=True), self.ONCE)
+
+
+class TestRenamedSnapshotPremiumGuards(unittest.TestCase):
+    """TJ-5005, its two other ends. (a) The common case: no row of the
+    old ticker is left after the cut-off, and the exercise was booked as
+    cash-settled: the option's loss of the premium on top of the
+    snapshot's cost. (b) What the snapshot does NOT hold stays as
+    without it: the replaced row is the delivery only when it is marked
+    ASSIGN or at the strike, the exercise is on or before the snapshot,
+    and a replaced row is one exercise's delivery, never two."""
+
+    OPT = "SYNO250620C00010000.US"
+    OPT2 = "SYNO250620C00011000.US"
+    BUY = "BUYSELL 2024-06-03 10:00:00 %s 1 CUR 1 100 0" % OPT
+    EX = "ASSIGN 2025-06-02 10:00:00 %s -1 CUR 0 0 0" % OPT
+    RENAME = "RENAME 2025-06-03 SYNO.US SYNW.US"
+    SELL_NEW = "BUYSELL 2025-06-20 10:00:00 SYNW.US -%d CUR 12 %d 0"
+    SELL_OLD = "BUYSELL 2025-06-20 10:05:00 SYNO.US -100 CUR 13 1300 0"
+
+    def _run(self, country, lines, snapshot=True):
+        """(the gains by symbol, the total, the run's text)."""
+        cur = "USD" if country == "usa" else "CAD"
+        book = "".join(line.replace("CUR", cur) + "\n" for line in lines
+                       if snapshot or not line.startswith("OPENING"))
+        with tempfile.TemporaryDirectory() as d:
+            root = project(d, "p", {"margin/book.tt": book})
+            (root / "taxjson.toml").write_text(toml(country, year=2025))
+            r = tj(root, "run", "--no-input", "--details")
+            rows = sorted((g["symbol"], round(float(g["cost"]), 2),
+                           round(float(g["gain"]), 2))
+                          for g in gains(root)
+                          if g.get("qty") and "gain" in g)
+            # (The engine's notes are in its stage's .diag.)
+            diag = root / "work" / "margin_gains.json.diag"
+            diag = diag.read_text() if diag.exists() else ""
+        return rows, sum(g[2] for g in rows), flat(
+            r.stdout + r.stderr + diag)
+
+    def _same_as_without(self, country, lines):
+        with_snap = self._run(country, lines)
+        without = self._run(country, lines, snapshot=False)
+        self.assertEqual(with_snap[:2], without[:2])
+        return with_snap
+
+    NO_OLD_TRADE = [
+        BUY, EX, "ASSIGN 2025-06-02 10:01:00 SYNO.US 100 CUR 10 1000 0",
+        RENAME, "OPENING 2025-06-04 SYNW.US 100 CUR 1100 2025-06-02",
+        SELL_NEW % (100, 1200)]
+
+    @rule(R.CA_OPEN_03)
+    def test_canada_no_later_trade_of_the_old_ticker(self):
+        rows, total, text = self._same_as_without("canada", self.NO_OLD_TRADE)
+        self.assertEqual((rows, total),
+                         ([("SYNW.US", 1100.0, 100.0)], 100.0))
+        self.assertNotIn("cash-settled", text)
+
+    @rule(R.US_OPEN_03)
+    def test_us_no_later_trade_of_the_old_ticker(self):
+        rows, total, text = self._same_as_without("usa", self.NO_OLD_TRADE)
+        self.assertEqual((rows, total),
+                         ([("SYNW.US", 1100.0, 100.0)], 100.0))
+        self.assertNotIn("cash-settled", text)
+
+    @rule(R.CA_OPEN_03)
+    def test_a_plain_replaced_row_is_not_a_later_exercises_delivery(self):
+        # A market purchase (not at the strike) is replaced; a call on
+        # the reused old ticker is bought and exercised after the
+        # snapshot: its premium is its own delivery's.
+        rows, total, _ = self._same_as_without("canada", [
+            "BUYSELL 2025-06-02 10:01:00 SYNO.US 150 CUR 9 1350 0",
+            self.RENAME, "OPENING 2025-06-04 SYNW.US 150 CUR 1350 2025-06-02",
+            self.BUY.replace("2024-06-03 10:00:00", "2025-06-04 11:00:00"),
+            self.EX.replace("2025-06-02", "2025-06-05"),
+            "BUYSELL 2025-06-05 10:01:00 SYNO.US 100 CUR 10 1000 0",
+            self.SELL_NEW % (150, 1800), self.SELL_OLD])
+        self.assertEqual(rows, [("SYNO.US", 1100.0, 200.0),
+                                ("SYNW.US", 1350.0, 450.0)])
+
+    @rule(R.US_OPEN_03)
+    def test_us_an_exercise_after_the_snapshot_keeps_its_premium(self):
+        # The replaced row is at the strike, but the exercise is dated
+        # after the snapshot: the snapshot cannot hold its delivery.
+        _rows, total, _ = self._same_as_without("usa", [
+            "BUYSELL 2025-06-02 10:01:00 SYNO.US 100 CUR 10 1000 0",
+            self.RENAME, "OPENING 2025-06-04 SYNW.US 100 CUR 1000 2025-06-02",
+            self.BUY.replace("2024-06-03", "2025-06-04"),
+            self.EX.replace("2025-06-02", "2025-06-05"),
+            "BUYSELL 2025-06-05 10:01:00 SYNO.US 100 CUR 10 1000 0",
+            self.SELL_NEW % (100, 1200), self.SELL_OLD])
+        self.assertEqual(total, 400.0)
+
+    @rule(R.CA_OPEN_03)
+    def test_a_replaced_delivery_is_one_exercises_never_two(self):
+        _rows, total, _ = self._same_as_without("canada", [
+            self.BUY, self.EX,
+            "ASSIGN 2025-06-02 10:01:00 SYNO.US 100 CUR 10 1000 0",
+            self.RENAME, "OPENING 2025-06-04 SYNW.US 100 CUR 1100 2025-06-02",
+            "BUYSELL 2025-06-04 11:00:00 %s 1 CUR 1 100 0" % self.OPT2,
+            "ASSIGN 2025-06-05 10:00:00 %s -1 CUR 0 0 0" % self.OPT2,
+            "BUYSELL 2025-06-05 10:01:00 SYNO.US 100 CUR 11 1100 0",
+            self.SELL_NEW % (100, 1200), self.SELL_OLD])
+        self.assertEqual(total, 200.0)
+
+    @rule(R.CA_OPEN_03)
+    def test_two_rows_that_can_each_be_the_delivery_are_said(self):
+        # A plain purchase at the strike before the snapshot and another
+        # after it, under the new name: the books cannot tell which the
+        # call delivered. The total of the books without the snapshot
+        # (the premium once, realized on the option, as before), and said.
+        lines = [
+            "BUYSELL 2025-06-01 10:01:00 SYNO.US 100 CUR 10 1000 0",
+            self.BUY, self.EX, self.RENAME,
+            "OPENING 2025-06-04 SYNW.US 100 CUR 1000 2025-06-01",
+            "BUYSELL 2025-06-05 10:01:00 SYNW.US 100 CUR 10 1000 0",
+            self.SELL_NEW % (200, 2400)]
+        rows, total, text = self._run("canada", lines)
+        self.assertEqual(rows, [(self.OPT, 100.0, -100.0),
+                                ("SYNW.US", 2000.0, 400.0)])
+        self.assertEqual(total, self._run("canada", lines, False)[1])
+        self.assertIn(f"{self.OPT}: exercised or assigned on 2025-06-02, "
+                      f"and SYNO.US was renamed before an opening snapshot "
+                      f"replaced its rows: a replaced row at the strike and "
+                      f"the row of 2025-06-05 after the snapshot can each "
+                      f"be its delivery", text)
+        self.assertIn("If a replaced row is its delivery, write that row as "
+                      "ASSIGN; if the row of 2025-06-05 is, write it as "
+                      "ASSIGN and write the option under the renamed ticker "
+                      "(SYNW.US), and its premium rolls into that row.", text)
+
+    @rule(R.CA_OPEN_03)
+    def test_a_marked_delivery_under_the_new_name_is_said_with_what_settles_it(self):
+        # The delivery is the row after the snapshot, marked ASSIGN,
+        # under the new name: the premium does not follow the rename
+        # (TJ-5120), so it stays on the option; said, with the remedy
+        # that works (the option written under the renamed ticker).
+        lines = [
+            "BUYSELL 2025-06-01 10:01:00 SYNO.US 100 CUR 10 1000 0",
+            self.BUY, self.EX, self.RENAME,
+            "OPENING 2025-06-04 SYNW.US 100 CUR 1000 2025-06-01",
+            "ASSIGN 2025-06-05 10:01:00 SYNW.US 100 CUR 10 1000 0",
+            self.SELL_NEW % (200, 2400)]
+        rows, total, text = self._run("canada", lines)
+        self.assertEqual(rows, [(self.OPT, 100.0, -100.0),
+                                ("SYNW.US", 2000.0, 400.0)])
+        self.assertIn("its delivery, the ASSIGN row of 2025-06-05, follows "
+                      "the snapshot under the new name SYNW.US. The option "
+                      "names SYNO.US, so its premium is not rolled into "
+                      "those shares: it stays on the option, as a cash "
+                      "settlement would. To roll it, write the option under "
+                      "the renamed ticker (SYNW.US)", text)
+        rows, total, text = self._run("canada", [
+            line.replace("SYNO2506", "SYNW2506") for line in lines])
+        self.assertEqual(rows, [("SYNW.US", 2100.0, 300.0)])
+        self.assertNotIn("was renamed before an opening snapshot", text)
+
+    def _amount_on_the_row(self, country, amount, fee, said):
+        # The exercise row itself carries an amount. Its cash cannot tell
+        # a settlement from a commission or cash in lieu (owner,
+        # 2026-11-23): where a snapshot holds its delivery the row is
+        # booked as delivered, as it always was on the same-symbol path
+        # (the snapshot's cost holds the premium: the figures of the row
+        # with no amount), and an amount beyond the row's fee is SAID,
+        # with both readings. A commission in the fee column is not.
+        ex = "ASSIGN 2025-06-02 10:00:00 %s -1 CUR 0 %s %s" % (
+            self.OPT, amount, fee)
+        for old, rename in (("SYNO.US", [self.RENAME]), ("SYNW.US", [])):
+            opt = self.OPT.replace("SYNO", old[:4])
+            lines = ([self.BUY.replace(self.OPT, opt),
+                      ex.replace(self.OPT, opt),
+                      f"ASSIGN 2025-06-02 10:01:00 {old} 100 CUR 10 1000 0"]
+                     + rename
+                     + ["OPENING 2025-06-04 SYNW.US 100 CUR 1100 2025-06-02",
+                        self.SELL_NEW % (100, 1200)])
+            rows, total, text = self._run(country, lines)
+            self.assertEqual(rows, [("SYNW.US", 1100.0, 100.0)], old)
+            self.assertEqual(
+                f"{opt}: the exercise or assignment row of 2025-06-02 "
+                f"carries {said or '0'}" in text, bool(said),
+                (old, text[-900:]))
+            self.assertEqual("is booked as DELIVERED" in text, bool(said))
+            if said:
+                self.assertIn(
+                    "and is booked as DELIVERED: its shares are in the "
+                    "opening snapshot of SYNW.US", text)
+                self.assertIn(
+                    "If shares were delivered, write the row with no amount "
+                    "(a charge or cash in lieu as a row of its own). If it "
+                    "was settled in cash, write it as a closing BUYSELL of "
+                    "the option at the settlement amount", text)
+
+    @rule(R.CA_OPEN_03)
+    def test_canada_an_amount_on_a_delivered_exercise_row_is_said(self):
+        self._amount_on_the_row("canada", "0.5", "0", "0.50 CAD")
+        self._amount_on_the_row("canada", "0", "24.95", "")
+
+    @rule(R.US_OPEN_03)
+    def test_us_an_amount_on_a_delivered_exercise_row_is_said(self):
+        self._amount_on_the_row("usa", "300", "0", "300.00 USD")
+
+    @rule(R.CA_OPEN_03)
+    def test_the_cash_settlement_the_warning_names_is_read_as_one(self):
+        # A plain purchase at the strike in the snapshot, and a row with
+        # 300 of settlement cash: booked as delivered and said (main's
+        # figure on this path); written as the closing BUYSELL the
+        # warning names, the option's 200 is realized.
+        lines = ["BUYSELL 2025-06-01 10:00:00 SYNW.US 100 CUR 10 1000 0",
+                 self.BUY.replace("SYNO", "SYNW"),
+                 "ASSIGN 2025-06-02 10:00:00 %s -1 CUR 3 300 0"
+                 % self.OPT.replace("SYNO", "SYNW"),
+                 "OPENING 2025-06-04 SYNW.US 100 CUR 1000 2025-06-01",
+                 self.SELL_NEW % (100, 1200)]
+        rows, total, text = self._run("canada", lines)
+        self.assertEqual(rows, [("SYNW.US", 1000.0, 200.0)])
+        self.assertIn("carries 300.00 CAD and is booked as DELIVERED", text)
+        rows, total, text = self._run("canada", [
+            line.replace("ASSIGN 2025-06-02", "BUYSELL 2025-06-02")
+            for line in lines])
+        self.assertEqual(total, 400.0)
+        self.assertNotIn("is booked as DELIVERED", text)
+
+
+class TestTheLedgerReadsADeliveryCutUnderItsOldName(unittest.TestCase):
+    """TJ-5005, at the two ends: the cut-off names the replaced row's own
+    symbol on the snapshot's row, and the premium ledger stages nothing
+    for the assignment that row delivered."""
+
+    OPT = "SYNO250620C00010000.US"
+
+    def _rows(self, *, delivery_day="2025-06-02", qty=100.0):
+        def row(action, day, sym, q, net, **kw):
+            return TaxTransaction(
+                action=action, date=day, date_settle=day, time="10:00:00",
+                symbol=sym, quantity=q, currency="CAD",
+                price=abs(net / q) if q else 0.0, net_amount=net,
+                account="margin", **kw)
+        return [
+            row("ASSIGN", "2025-06-02", self.OPT, -1.0, 0.0, id="o1"),
+            row("ASSIGN", delivery_day, "SYNO.US", qty, -10.0 * qty,
+                id="d1"),
+            row("SPLIT", "2025-06-03", "SYNO.US", 1.0, 0.0,
+                symbol_new="SYNW.US", id="r1"),
+            opening("2025-06-04", "SYNW.US", 100, 1100, lot="2025-06-02"),
+            row("BUYSELL", "2025-06-05", "SYNO.US", 100.0, -1200.0, id="b1"),
+        ]
+
+    def _ledger(self, rows):
+        from taxjson.engine.premium_ledger import _AssignPremiumLedger
+        from taxjson.lib.option_symbols import is_option_symbol
+        return _AssignPremiumLedger(
+            rows, lambda t: t.action in ("BUYSELL", "ASSIGN")
+            and not is_option_symbol(t.symbol))
+
+    def _staged(self, **kw):
+        from decimal import Decimal
+        kept = apply_opening_cutoff(self._rows(**kw), report=io.StringIO())
+        ledger = self._ledger(kept)
+        opt = next(t for t in kept if t.symbol == self.OPT)
+        ledger.stage(opt, "SYNO.US", Decimal("-100"))
+        return kept, ledger.undrained()
+
+    @rule(R.CA_OPEN_03)
+    def test_the_snapshot_row_names_the_old_symbols_delivery(self):
+        kept, staged = self._staged()
+        self.assertEqual([r.id for r in kept if r.id in ("o1", "d1", "r1", "b1")],
+                         ["o1", "b1"])
+        snap, = [r for r in kept if r.symbol == "SYNW.US"]
+        self.assertEqual(snap.opening_cut_legs,
+                         "2025-06-02 100.0 10.0 ASSIGN SYNO.US")
+        self.assertEqual(staged, {})
+
+    @rule(R.CA_OPEN_03)
+    def test_a_replaced_row_that_is_not_the_delivery_holds_nothing(self):
+        import contextlib
+        from decimal import Decimal
+        # Too few shares to be what the call delivered (said), and a row
+        # far from the exercise: the premium stays staged (and is named
+        # undrained when no row takes it).
+        for kw, said in ((dict(qty=40.0), "come to 40 shares, fewer than "
+                                           "it delivers"),
+                         (dict(delivery_day="2025-05-01"), "")):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                _kept, staged = self._staged(**kw)
+            self.assertEqual(staged, {("margin", "SYNO.US"): Decimal("-100")},
+                             kw)
+            self.assertIn(said, flat(err.getvalue()))
+            self.assertEqual("ATTENTION" in err.getvalue(), bool(said))
+
+    @rule(R.CA_OPEN_03)
+    def test_the_verdict_is_made_once_and_a_row_claimed_once(self):
+        import contextlib
+        kept = apply_opening_cutoff(self._rows(), report=io.StringIO())
+        twin = TaxTransaction(
+            action="ASSIGN", date="2025-06-02", date_settle="2025-06-02",
+            time="10:00:30", symbol="SYNO250620C00010500.US", quantity=-1.0,
+            currency="CAD", price=0.0, net_amount=0.0, account="margin",
+            id="o2")
+        ledger = self._ledger(kept + [twin])
+        first = next(t for t in kept if t.symbol == self.OPT)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(ledger.renamed_delivery_underlying(first),
+                             "SYNO.US")
+            # Asked again (the walks do): the same answer.
+            self.assertEqual(ledger.renamed_delivery_underlying(first),
+                             "SYNO.US")
+            # The one replaced row is the first exercise's: the second
+            # exercise of that day finds none left.
+            self.assertIsNone(ledger.renamed_delivery_underlying(twin))
+            self.assertIsNone(ledger.renamed_delivery_underlying(twin))
+        self.assertEqual(err.getvalue(), "")
+
+    @rule(R.CA_OPEN_03)
+    def test_a_symbol_that_is_not_one_word_is_said(self):
+        # The leg's fifth token cannot spell `SYN O.US`: the snapshot's
+        # row names no such row, and the cut-off says so.
+        rows = self._rows()
+        for r in rows:
+            if r.symbol == "SYNO.US" and r.id != "b1":
+                r.symbol = "SYN O.US"
+        report = io.StringIO()
+        kept = apply_opening_cutoff(rows, report=report)
+        snap, = [r for r in kept if r.symbol == "SYNW.US"]
+        self.assertEqual(snap.opening_cut_legs, "")
+        text = flat(report.getvalue())
+        self.assertIn("the opening snapshot of SYNW.US replaces rows of "
+                      "'SYN O.US', renamed to it, and a symbol with a space "
+                      "or a ';' cannot be named on the snapshot's row", text)
+        self.assertEqual(text.count("cannot be named"), 1)
+
+
 class TestRedoRollbackKeepsAConcurrentElectionOfTheEvent(unittest.TestCase):
     """TJ-0955: an interrupted `elect --redo --event ID` put its cleared
     record back over an election of the same event that another command

@@ -1,12 +1,11 @@
-"""Backlog group `sanity`: `tjs sanity`, the holdings check at the end
-of `tjs run` and the checklist's sanity step (TJ-0010, TJ-0020,
-TJ-0064, TJ-0065, TJ-0066, TJ-0082 = TJ-0094, TJ-0135, TJ-0136,
-TJ-0160). The projects are built from synthetic work/ files (no
-pipeline run): made-up tickers, fake account ids.
+"""Backlog group `sanity`: `tjs sanity` (the run's holdings check
+until TJ-5170: the run compares nothing now) and the checklist's sanity
+step (TJ-0010, TJ-0020, TJ-0064, TJ-0065, TJ-0066, TJ-0082 = TJ-0094,
+TJ-0135, TJ-0136, TJ-0160, and the pre-release review's L4). The
+projects are built from synthetic work/ files (no pipeline run):
+made-up tickers, fake account ids.
 
 Formerly: test_fix_backlog_sanity"""
-import contextlib
-import io
 import json
 import os
 import re
@@ -195,7 +194,8 @@ class TestIncompleteLine(unittest.TestCase):
             self.assertIn("in every group.", r.stdout)
             self.assertTrue(json.loads(
                 _tjs(root, "sanity", "--json").stdout)["complete"])
-            # The run's check says it as a note, not "incomplete".
+            # Sanity says it as a note, not "incomplete" (the "info"
+            # kind of the notes).
             from taxjson.pipeline import config as pipeline_config
             from taxjson.pipeline import sanity as pipeline_sanity
             kinds = {}
@@ -233,7 +233,8 @@ class TestRunCheckMissingFile(unittest.TestCase):
         """TJ-0064: margin's `holdings = [...]` file is missing and margin
         holds nothing; margin2 is checked from holdings/. The run's check
         said "positions match ... (every checked account)": margin is
-        named unchecked."""
+        named unchecked. Since TJ-5170 the run compares nothing; `tjs
+        sanity` (and the checklist's step) say it."""
         with tempfile.TemporaryDirectory() as td:
             root = _project(Path(td) / "p", {
                 "margin": {"account": "99900001",
@@ -243,20 +244,61 @@ class TestRunCheckMissingFile(unittest.TestCase):
                 [("margin2_holdings.toml", {"broker_account": "99900003",
                                             "as_of": "2024-12-31"},
                   [("ZZC.TO", 20, "")])])
-            from taxjson.pipeline import run as pipeline_run
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf), \
-                    contextlib.redirect_stderr(io.StringIO()):
-                pipeline_run._sanity_console(root)
-            text = buf.getvalue()
-            self.assertIn("positions match the broker's holdings files",
-                          text)
-            self.assertNotIn("every checked account", text)
-            self.assertIn("checked accounts only; 1 unchecked: margin",
-                          text)
+            r = _tjs(root, "sanity")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("account margin: holdings file(s) missing — not "
+                          "checked: margin_missing.toml", r.stderr)
+            self.assertIn("INCOMPLETE: 1 account(s) with `holdings` in "
+                          "taxjson.toml not checked", r.stdout)
+            self.assertIn("OK: tickers and quantities agree in every "
+                          "checked group.", r.stdout)
+            self.assertNotIn("in every group.", r.stdout)
             doc = json.loads(_tjs(root, "sanity", "--json").stdout)
             self.assertEqual(doc["accounts_not_checked"], ["margin"])
             self.assertFalse(doc["complete"])
+            from taxjson.lib import checklist as cl
+            res = cl.d_sanity(_ctx(root))
+            self.assertEqual(res.status, "attention")
+            self.assertIn("INCOMPLETE", res.detail)
+
+
+class TestSanityNamesUncheckedAccounts(unittest.TestCase):
+    """L4 (pre-release review for v0.21.0): the run's holdings check
+    said "positions match the broker's holdings files" while accounts
+    with open positions had no holdings file at all. The run compares
+    nothing since TJ-5170: `tjs sanity` names them beside its OK."""
+
+    def test_unchecked_accounts_named_beside_the_match(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _project(Path(td) / "p", {
+                "margin": {"account": "99900001",
+                           "rows": [("2024-02-01", "ZZA.TO", 10)]},
+                "other": {"rows": [("2024-02-01", "ZZB.TO", 3)]},
+                "spare": {"rows": [("2024-03-01", "ZZD.TO", 4)]}},
+                [("margin_holdings.toml", {"broker_account": "99900001",
+                                           "as_of": "2024-12-31"},
+                  [("ZZA.TO", 10, "")])])
+            r = _tjs(root, "sanity")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("UNCHECKED: 2 account(s) with positions and no "
+                          "holdings file: other, spare", r.stdout)
+            self.assertIn("OK: tickers and quantities agree", r.stdout)
+            doc = json.loads(_tjs(root, "sanity", "--json").stdout)
+            self.assertEqual(doc["uncovered_accounts"], ["other", "spare"])
+            self.assertFalse(doc["complete"])
+        with tempfile.TemporaryDirectory() as td:
+            # Every account with positions compared: no such line.
+            root = _project(Path(td) / "p", {
+                "margin": {"account": "99900001",
+                           "rows": [("2024-02-01", "ZZA.TO", 10)]}},
+                [("margin_holdings.toml", {"broker_account": "99900001",
+                                           "as_of": "2024-12-31"},
+                  [("ZZA.TO", 10, "")])])
+            r = _tjs(root, "sanity")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("OK: tickers and quantities agree", r.stdout)
+            self.assertNotIn("Not compared", r.stdout)
+            self.assertNotIn("UNCHECKED", r.stdout)
 
 
 class TestDatedSnapshots(unittest.TestCase):

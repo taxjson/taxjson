@@ -179,15 +179,23 @@ class TestRates(unittest.TestCase):
     @rule(R.CA_CRYPTO_07)
     def test_rate_file_lines(self):
         # m1055/m1146/m1250/m1252 (a 5-column line without source is a
-        # rate; a short line is not), m1056-m1059 (bad lines skipped),
-        # m1149/m1251/m1344 (a positive finite rate below 1 is kept).
+        # rate; a short line is not), m1056-m1059 (lines that are no row
+        # skipped), m1149/m1251/m1344 (a positive finite rate below 1 is
+        # kept).
         t = self._load("\n".join([
             "2025-01-02 12:00:00 USD CAD 1.35 BoC",
             "2025-01-03 12:00:00 usd cad 1.36",
             "2025-01-04 12:00:00 EUR CAD 1.49 yahoo",
             "2025-01-05 USD",
-            "Jan-06 12:00:00 USD CAD 1.37",
-            "2025-01-07 12:00:00 USD CAD abc"]))
+            "Jan-06 12:00:00 USD CAD 1.37"]))
+        # A row whose rate reads as no number is refused naming the line
+        # (it was skipped with a warning: one rule for every rates
+        # reader, TJ-5045).
+        with self.assertRaisesRegex(
+                ValueError, "line 2: rate 'abc' for USD->CAD on 2025-01-07 "
+                            "is not a plain decimal number"):
+            self._load("2025-01-02 12:00:00 USD CAD 1.35 BoC\n"
+                       "2025-01-07 12:00:00 USD CAD abc")
         self.assertEqual(t, {"USD": {"2025-01-02": (1.35, "boc"),
                                      "2025-01-03": (1.36, "")},
                              "EUR": {"2025-01-04": (1.49, "yahoo")}})
@@ -202,6 +210,49 @@ class TestRates(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad) as cm:
                 self._load(f"2025-01-08 12:00:00 USD CAD {bad}")
             self.assertIn("not a positive finite number", str(cm.exception))
+
+    @rule(R.CA_CRYPTO_07)
+    def test_a_rate_with_an_underscore_is_refused(self):
+        # Backlog TJ-5045: float("1_35") is 135.0, a send valued at 100
+        # times its worth; the conversion's grammar takes no such rate.
+        # Refused naming the line, never dropped: an earlier day's rate
+        # would value the send without a word.
+        with self.assertRaises(ValueError) as cm:
+            self._load("2025-02-27 12:00:00 USD CAD 1.34 boc\n"
+                       "2025-02-28 12:00:00 USD CAD 1_35 boc")
+        self.assertIn("line 2: rate '1_35' for USD->CAD on 2025-02-28 is "
+                      "not a plain decimal number", str(cm.exception))
+        self.assertIn("refusing to value a send", str(cm.exception))
+        # To another currency too (the line was refused for that), and a
+        # negative one as before.
+        for bad in ("2025-02-28 12:00:00 USD EUR 1_0",
+                    "2025-02-28 12:00:00 USD CAD -1_0"):
+            with self.assertRaises(ValueError, msg=bad):
+                self._load("2025-02-27 12:00:00 USD CAD 1.34 boc\n" + bad)
+
+    @rule(R.CA_CRYPTO_07)
+    def test_a_date_that_is_no_calendar_day_is_refused(self):
+        # Backlog TJ-5046: `2025-02-30` sorted after February 28 and was
+        # the rate of a March 1 send.
+        good = "2025-02-28 12:00:00 USD CAD 1.35 boc\n"
+        for bad, date in (
+                ("2025-02-30 12:00:00 USD CAD 9.99 boc", "2025-02-30"),
+                ("2025-02-30 12:00:00 USD CAD nan", "2025-02-30"),
+                ("2025-02-30 12:00:00 USD EUR 9.99", "2025-02-30"),
+                ("2025-03-02 12:00:00 USD CAD 9.98 boc 2025-02-31",
+                 "2025-02-31")):
+            with self.assertRaises(ValueError, msg=bad) as cm:
+                self._load(good + bad)
+            self.assertIn(f"line 2: '{date}' is not a day of the calendar",
+                          str(cm.exception))
+            self.assertIn("refusing to value a send", str(cm.exception))
+        t = self._load(good + "2025-03-03 12:00:00 USD CAD 1.36 boc "
+                              "2025-02-28")
+        self.assertEqual(t, {"USD": {"2025-02-28": (1.35, "boc"),
+                                     "2025-03-03": (1.36, "boc")}})
+        self.assertEqual(t.published, {"USD": {"2025-03-03": "2025-02-28"}})
+        self.assertEqual(BR.Rates(t, "CAD").get("USD", "2025-03-01"),
+                         (1.35, "2025-02-28", "Bank of Canada"))
 
     def test_lookup_labels_and_text(self):
         # m1152 (an unknown source keeps its own name), m1064 (the

@@ -91,7 +91,7 @@
    "src/taxjson/pipeline/diagnostics.py": 1,
    "src/taxjson/pipeline/dispatch.py": 1,
    "src/taxjson/pipeline/inputs.py": 1,
-   "src/taxjson/pipeline/run.py": 17,
+   "src/taxjson/pipeline/run.py": 16,
    "src/taxjson/pipeline/sanity.py": 2,
    "src/taxjson/pipeline/stages.py": 21,
    "tests/_money_oracle.py": 2,
@@ -490,7 +490,7 @@
    "src/taxjson/lib/years_report.py": 1,
    "src/taxjson/pipeline/config.py": 1,
    "src/taxjson/pipeline/dispatch.py": 1,
-   "src/taxjson/pipeline/run.py": 9,
+   "src/taxjson/pipeline/run.py": 8,
    "src/taxjson/pipeline/stages.py": 19,
    "tests/_money_oracle.py": 3,
    "tests/rules/ca/xlist/test_shared_tobase_retracted_and_receipts_apart.py": 1,
@@ -707,7 +707,7 @@
    164
   ],
   "src/taxjson/bin/taxjson_t1135.py::build_report": [
-   366
+   359
   ],
   "src/taxjson/bin/taxjson_t1135.py::walk_costs": [
    318
@@ -749,10 +749,10 @@
    346
   ],
   "src/taxjson/engine/ca/walk.py::_walk_adjust": [
-   258
+   240
   ],
   "src/taxjson/engine/ca/walk.py::_walk_rows": [
-   316
+   282
   ],
   "src/taxjson/engine/ca/walk.py::_walk_trade": [
    420
@@ -779,7 +779,7 @@
    181
   ],
   "src/taxjson/engine/us/walk.py::_us_walk_rows": [
-   262
+   232
   ],
   "src/taxjson/engine/us/walk.py::_us_walk_spinoff": [
    173
@@ -839,7 +839,7 @@
    427
   ],
   "src/taxjson/lib/corp_views.py::spinoffs": [
-   206
+   201
   ],
   "src/taxjson/lib/cra_slips.py::place": [
    252
@@ -872,13 +872,10 @@
    215
   ],
   "src/taxjson/lib/fx_cash_v2.py::build": [
-   1346
+   1337
   ],
   "src/taxjson/lib/gain_summary.py::summarize_gains": [
    215
-  ],
-  "src/taxjson/lib/handoff.py::_boundary_issues": [
-   167
   ],
   "src/taxjson/lib/handoff.py::check": [
    503
@@ -956,7 +953,7 @@
    260
   ],
   "src/taxjson/lib/rbc_corp_actions.py::parse_rbc_corporate_actions": [
-   380
+   371
   ],
   "src/taxjson/lib/rename_migration.py::plan_migration": [
    177
@@ -1007,7 +1004,7 @@
    215
   ],
   "src/taxjson/lib/tax_logic.py::_canada": [
-   2775
+   2740
   ],
   "src/taxjson/lib/tax_logic.py::_usa": [
    2017
@@ -1034,10 +1031,10 @@
    266
   ],
   "src/taxjson/lib/tt_format.py::parse_tt_line": [
-   321
+   296
   ],
   "src/taxjson/lib/tx_load.py::coerce_transaction_row": [
-   163
+   161
   ],
   "src/taxjson/lib/xlist_loss_radar.py::analyze": [
    191
@@ -1148,7 +1145,7 @@
    "src/taxjson/lib/futures.py": 1,
    "src/taxjson/lib/fx_cash_v2.py": 40,
    "src/taxjson/lib/gain_summary.py": 7,
-   "src/taxjson/lib/handoff.py": 33,
+   "src/taxjson/lib/handoff.py": 26,
    "src/taxjson/lib/in_kind.py": 8,
    "src/taxjson/lib/income_summary.py": 1,
    "src/taxjson/lib/migrate.py": 1,

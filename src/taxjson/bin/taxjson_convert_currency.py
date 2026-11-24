@@ -13,7 +13,7 @@ import json
 import math
 import sys
 from pathlib import Path
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Dict, Optional
 
 from taxjson.lib.cli_diag import InputContentError, guard_main
@@ -27,9 +27,9 @@ from taxjson.model.transaction import TaxTransaction
 from taxjson.lib.tx_load import load_transactions
 from taxjson.lib.exchange_rates import (
     _PLAIN_DECIMAL_RE,
-    _RATE_DATE_RE,
     load_exchange_rates,
     norm_currency,
+    parse_rate_line,
 )
 
 
@@ -112,16 +112,14 @@ def resolve_default_rate(value):
     return None if value is None else Decimal(str(value))
 
 
-def _usable_rate(tok: str) -> bool:
-    """True when load_exchange_rates keeps a row's RATE column: a plain
-    positive finite decimal."""
-    try:
-        rate = Decimal(tok)
-    except (InvalidOperation, ValueError):
-        return False
-    return (rate.is_finite() and rate > 0
-            and bool(_PLAIN_DECIMAL_RE.match(tok))
-            and math.isfinite(float(rate)) and float(rate) > 0)
+def _usable_rate(line: str, target_norm: str):
+    """The row of a rates-file line load_exchange_rates keeps (its own
+    grammar, parse_rate_line: a real date, a plain positive finite
+    decimal, TO the target when one is given), else None."""
+    problem, row = parse_rate_line(line)
+    if problem or (target_norm and row.to_curr != target_norm):
+        return None
+    return row
 
 
 def load_rate_sources(rates_file: Path, target_curr: str = None) -> Dict[str, Dict[str, str]]:
@@ -139,16 +137,10 @@ def load_rate_sources(rates_file: Path, target_curr: str = None) -> Dict[str, Di
     try:
         with Path(rates_file).open("r", encoding="utf-8-sig") as f:
             for line in f:
-                parts = line.split()
-                if len(parts) < 5 or parts[0].startswith("#") \
-                        or not _RATE_DATE_RE.match(parts[0]):
-                    continue
-                if target_norm and norm_currency(parts[3]) != target_norm:
-                    continue
-                if not _usable_rate(parts[4]):
-                    continue
-                out.setdefault(norm_currency(parts[2]), {}).setdefault(
-                    parts[0], parts[5].lower() if len(parts) > 5 else "")
+                row = _usable_rate(line, target_norm)
+                if row is not None:
+                    out.setdefault(row.from_curr, {}).setdefault(
+                        row.date, row.source)
     except (OSError, UnicodeDecodeError):
         return {}
     return {cur: {d: src for d, src in days.items() if src}
@@ -661,8 +653,9 @@ def main():
             target_curr=target_curr,
         )
     except ValueError as e:
+        # A refused rates row is a refused input: exit 2.
         emit_line(f"error: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     default_rate = resolve_default_rate(args.default_rate)
 
     try:

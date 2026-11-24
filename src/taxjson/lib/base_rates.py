@@ -7,14 +7,20 @@ import cycle)."""
 
 from __future__ import annotations
 
-import math
-import re
-import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from taxjson.lib.stage_msg import emit_line
+from taxjson.lib.exchange_rates import (
+    RATE_BAD_DATE,
+    RATE_BLANK,
+    RATE_NOT_A_ROW,
+    RATE_NOT_POSITIVE,
+    RATE_UNREADABLE,
+    RatesFileError,
+    bad_date_refusal,
+    parse_rate_line,
+)
 
 
 # ---------------------------------------------------------------- rates
@@ -38,8 +44,13 @@ def load_rates(path: Path, base: Optional[str] = None) -> RateTable:
     reads it (re-audit A2-0999): a rate that parses but is not a
     positive finite number (NaN, 0, a negative) is refused — it used to
     be skipped and the send priced at an earlier day's rate without a
-    word; an unreadable rate is skipped with a warning; the FIRST row of
-    a currency and date wins (the noon row, not today's spot row).
+    word; so is a rate Python's float() reads and the conversion's
+    grammar does not (`1_35`, read as 135: TJ-5045) and a date that is
+    no day of the calendar (TJ-5046), each naming the line (the grammar
+    is exchange_rates.parse_rate_line, the conversion's own), and a
+    rate that reads as no number at all (`abc`, once skipped with a
+    warning); the FIRST row of a currency and date wins (the noon row,
+    not today's spot row).
     Every rate is to one currency: `base` when given, else the first
     row's; a row TO another is refused, naming it — read by its FROM
     currency alone, a USD rate to EUR priced a CAD project's send
@@ -59,46 +70,50 @@ def load_rates(path: Path, base: Optional[str] = None) -> RateTable:
         why = (e.strerror if isinstance(e, OSError) else None) or e
         raise ValueError(f"cannot read the rates file {path} ({why}) — "
                          f"re-run `tjs run` to rebuild it.") from None
-    bad: List[str] = []
     for n, line in enumerate(text.splitlines(), 1):
-        parts = line.split()
-        if len(parts) < 5 or not re.match(r"^\d{4}-\d{2}-\d{2}$", parts[0]):
+        problem, row = parse_rate_line(line)
+        if problem in (RATE_BLANK, RATE_NOT_A_ROW):
             continue
-        try:
-            rate = float(parts[4])
-        except ValueError:
-            bad.append(f"line {n}: {line.strip()!r}")
-            continue
-        if not (rate > 0 and math.isfinite(rate)):
-            raise ValueError(
-                f"rates file {path}, line {n}: rate {parts[4]!r} for "
-                f"{parts[2]}->{parts[3]} on {parts[0]} is not a positive "
-                f"finite number — refusing to value a send with it. Fix "
-                f"or regenerate the rates file (`tjs run`).")
-        to = parts[3].upper()
+        if problem == RATE_BAD_DATE:
+            # `2025-02-30` was the newest rate for the days after it
+            # (backlog TJ-5046): refused, never dropped (another day's
+            # rate would stand in without a word).
+            raise RatesFileError(bad_date_refusal(path, n, line, "value a send")
+                             + " (`tjs run` rebuilds it.)")
+        if problem == RATE_UNREADABLE:
+            # float() read `1_35` as 135: a send valued at 100 times its
+            # worth (backlog TJ-5045). One rule for every rates reader
+            # (owner, 2026-11-23): a rate that is no plain decimal is
+            # refused naming the line, never skipped (an `abc` used to
+            # be, with a warning): another day's rate would stand in.
+            raise RatesFileError(
+                f"rates file {path}, line {n}: rate {row.rate_text!r} for "
+                f"{row.from_curr}->{row.to_curr} on {row.date} is not a "
+                f"plain decimal number — refusing to value a send with "
+                f"it. Fix or regenerate the rates file (`tjs run`).")
+        if problem == RATE_NOT_POSITIVE:
+            raise RatesFileError(
+                f"rates file {path}, line {n}: rate {row.rate_text!r} for "
+                f"{row.from_curr}->{row.to_curr} on {row.date} is not a "
+                f"positive finite number — refusing to value a send with "
+                f"it. Fix or regenerate the rates file (`tjs run`).")
+        to = row.to_curr
         if out.target is None:
             out.target = to
         elif to != out.target:
-            raise ValueError(
-                f"rates file {path}, line {n}: the {parts[2]} rate on "
-                f"{parts[0]} is to {to}, and "
+            raise RatesFileError(
+                f"rates file {path}, line {n}: the {row.from_curr} rate on "
+                f"{row.date} is to {to}, and "
                 + (f"this project's base currency is {out.target}"
                    if base else f"the file's rates are to {out.target}")
                 + " — refusing to value a send with it. Regenerate the "
                   "rates file (`tjs run`).")
-        day = out.setdefault(parts[2].upper(), {})
-        if parts[0] not in day:
-            day[parts[0]] = (rate, parts[5].lower() if len(parts) > 5
-                             else "")
-            if len(parts) > 6 and re.match(r"^\d{4}-\d{2}-\d{2}$",
-                                           parts[6]) \
-                    and parts[6] < parts[0]:
-                out.published.setdefault(parts[2].upper(), {})[
-                    parts[0]] = parts[6]
-    if bad:
-        emit_line(f"tjs crypto-sends: warning: {path.name}: skipped "
-                  f"{len(bad)} line(s) with an unreadable rate (e.g. "
-                  f"{bad[0]}).", file=sys.stderr)
+        day = out.setdefault(row.from_curr, {})
+        if row.date not in day:
+            day[row.date] = (float(row.rate), row.source)
+            if row.published:
+                out.published.setdefault(row.from_curr, {})[
+                    row.date] = row.published
     return out
 
 

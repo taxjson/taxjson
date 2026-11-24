@@ -192,6 +192,34 @@ class TestARenamedHoldingsAcquisitionDateCarries(unittest.TestCase):
                          self._since(2025, 2, 3))
         self.assertEqual(holding(res, 'NEW.TO')['last_acq_date'], '2025-02-03')
 
+    @rule(R.CA_ACB_RENAME, R.CA_SL_01)
+    def test_on_one_trade_date_the_later_settlement_shows(self):
+        # Bought on one trade date, settling on 03-21 and 03-24: one
+        # ticker holding both shows 03-24 (CA-SL-01: the date the window
+        # counts from), and so does a rename merging them, whichever side
+        # settles later. The target's own 03-21 stayed when the source
+        # settled later (backlog TJ-2722).
+        def bought(sym, settle):
+            t = trade('2025-03-20', 10, 100, sym=sym)
+            t.date_settle = settle
+            return t
+        want = (20.0, '2025-03-20', '2025-03-24')
+
+        def shown(res):
+            row = holding(res, 'NEW.TO')
+            return row['qty'], row['last_acq_date'], row['last_acq_settle']
+        for first, second in (('2025-03-21', '2025-03-24'),
+                              ('2025-03-24', '2025-03-21')):
+            with self.subTest(one_pool=(first, second)):
+                res, _ = run_canada([bought('NEW.TO', first),
+                                     bought('NEW.TO', second)])
+                self.assertEqual(shown(res), want)
+            with self.subTest(target=first, source=second):
+                res, _ = run_canada([bought('NEW.TO', first),
+                                     bought('OLD.TO', second),
+                                     rename('2025-03-26', 'OLD.TO', 'NEW.TO')])
+                self.assertEqual(shown(res), want)
+
     @rule(R.CA_ACB_RENAME, R.CA_SL_19)
     def test_the_held_shares_renamed_onto_a_ticker_bought_and_sold_in_the_window(self):
         # CA-SL-19's first case: AAA bought 01-10 and sold out at a loss on

@@ -3,7 +3,7 @@
 It left lib/core.py in step 6a, verbatim."""
 import hashlib
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -157,6 +157,18 @@ class TaxTransaction:
     # TJ-1033). Evidence only: NOT part of compute_id, omitted from
     # to_dict() when empty.
     no_cash: str = ''
+    # Whether the row's amount moved as cash, where the row's shape does
+    # not say (lib/cash_legs `CASH_LEG_KINDS`): 'none', the amount is a
+    # value and the consideration was property (a crypto-for-crypto leg,
+    # a fee taken in a coin); 'reward', a reward paid in the row's symbol
+    # (cash only where that symbol is: a fiat currency, a stablecoin in
+    # a book that counts it as cash); 'cash', the amount was paid in
+    # cash (a broker's cash return of capital, a corporate action's own
+    # cash leg). A .tt line's `cash_leg=` token, which taxjson-convert-tt
+    # writes from what the parser's row says (its wording, its source);
+    # a row without it is read by those (backlog TJ-5036). Evidence
+    # only: NOT part of compute_id, omitted from to_dict() when empty.
+    cash_leg: str = ''
     # Why an income row carries no share count (quantity 0) where one
     # would be expected (NO_SHARE_COUNT_ACCRUAL: an IB dividend posted
     # after the pay date that the statements' accrual does not pay,
@@ -235,9 +247,26 @@ class TaxTransaction:
     # TJ-0981 / TJ-0991). Evidence only: NOT part of compute_id,
     # omitted when empty.
     swap_fee: str = ''
+    # The security's identifier as the export gives it (IB's Financial
+    # Instrument Information `Security ID`, the ISIN of every stock,
+    # warrant and bond; the ISIN in a dividend row's description):
+    # `isin` is exactly one ISIN, and where a statement gives one ticker
+    # two on one market `isin` is left out and both are in `isins`. And
+    # the export's own word for an instrument it calls a depositary
+    # receipt (IB's instrument `Type`: "ADR"). `tjs t1135` reads the
+    # issuer's country from the ISIN's first two letters and names a
+    # receipt for review (tax-logic CA-RPT-02; backlog TJ-4957); nothing
+    # else reads them. Evidence only: NOT part of compute_id, omitted
+    # when empty.
+    isin: str = ''
+    isins: Optional[List[str]] = None
+    security_type: str = ''
 
     def __post_init__(self) -> None:
-        if self.id is None:
+        # A blank id is no id: two different trades with `"id": ""` kept
+        # it and deduplicated as one (backlog TJ-5041).
+        if self.id is None or (isinstance(self.id, str)
+                               and not self.id.strip()):
             self.id = self.compute_id()
 
     def compute_id(self) -> str:
@@ -303,7 +332,9 @@ EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
                    'commission_refunds', 'contract_size_basis',
                    'source', 'source_key',
                    'source_account', 'exercise_of', 'corp_cash', 'no_cash',
+                   'cash_leg',
                    'no_share_count', 'corp_parent_qty', 'lot_date', 'opening_cut_legs',
                    'market_value', 'journal_pair',
                    'event_source', 'listing_currency', 'settle_native',
-                   'staking_reward', 'trade_currency', 'swap_fee')
+                   'staking_reward', 'trade_currency', 'swap_fee',
+                   'isin', 'isins', 'security_type')

@@ -336,6 +336,70 @@ class TestUs355DueBill(unittest.TestCase):
             self.assertEqual(r.corp_parent_qty, 0.0)
 
 
+class TestUs355FractionalHolding(unittest.TestCase):
+    """TJ-4988: 0.4 ZZP bought 2024 for 40 and 0.6 bought 2025-06-10 for
+    60; a spin-off with record date 2025-06-02 paid ON 1 SHS, allocated
+    10. A count within one share of a holding was read as that holding,
+    so 1 was the 0.4 held before the date and the June lot kept its 60.
+    The count is the whole holding's, or the 0.4 rounded: every lot
+    gives up 10% (36 and 54) and an ATTENTION line says the count picks
+    neither. A count with a fraction (1.5, with 0.9 before and 1.5 that
+    day) is the holding it equals: a due bill."""
+
+    def _run(self, on_shares, early=0.4, late=0.6):
+        book = [tx('BUYSELL', '2024-01-08', 'ZZP.US', early, 100 * early),
+                tx('BUYSELL', '2025-06-10', 'ZZP.US', late, 100 * late),
+                *_spin_rows(on_shares, 1.0, 10.0),
+                tx('BUYSELL', '2025-07-02', 'ZZP.US', -early, 100)]
+        return _gains(book, 'usa')
+
+    @rule(R.US_CORP_07)
+    def test_a_whole_count_equal_to_the_whole_holding_takes_every_lot_and_says_so(self):
+        res, err = self._run(1)
+        sale = [t for t in res['transactions'] if t['symbol'] == 'ZZP.US']
+        self.assertAlmostEqual(sale[0]['cost'], 36.0, places=4)
+        left = {i['symbol']: i['total_cost'] for i in res['inventory']}
+        self.assertAlmostEqual(left['ZZP.US'], 54.0, places=4)
+        self.assertIn('ATTENTION: ZZP.US', err)
+        self.assertIn('every lot held', err)
+        self.assertNotIn('are not entitled', err)
+
+    @rule(R.US_CORP_07)
+    def test_a_count_with_a_fraction_equal_to_the_whole_holding_is_a_due_bill(self):
+        res, err = self._run(1.5, early=0.9)
+        sale = [t for t in res['transactions'] if t['symbol'] == 'ZZP.US']
+        self.assertAlmostEqual(sale[0]['cost'], 90.0 - 6.0, places=4)
+        self.assertIn('due bill', err)
+        self.assertNotIn('ATTENTION: ZZP.US', err)
+
+    @rule(R.US_CORP_07)
+    def test_a_count_within_a_share_of_both_holdings_picks_neither(self):
+        # 0.4 before the date, 1.3 on the pay date, paid on 1.
+        res, err = self._run(1, late=0.9)
+        self.assertIn('ATTENTION: ZZP.US', err)
+        self.assertIn('every lot held', err)
+
+    def test_the_reading_of_a_stated_count(self):
+        from taxjson.engine.us.terms import spin_entitlement
+        for n, before, held, want in (
+                (1, 0.4, 1.0, 'unknown'),       # the whole holding, or 0.4 rounded
+                (100, 99.6, 100, 'unknown'),
+                (1.5, 0.9, 1.5, 'due_bill'),    # a fraction: the holding it equals
+                (100.4, 99.9, 100.4, 'due_bill'),
+                (0.4, 0.4, 1.0, 'dated'),
+                (10, 4, 10, 'due_bill'),
+                (4, 4, 10, 'dated'),
+                (100, 100, 150, 'dated'),
+                (100, 100.4, 150.4, 'dated'),   # a count printed whole
+                (150, 100.4, 150.4, 'due_bill'),
+                (1, 0.4, 1.3, 'unknown'),       # within a share of both
+                (150, 100, 200, 'unknown'),
+                (0, 100, 200, 'unknown')):
+            with self.subTest(n=n, before=before, held=held):
+                self.assertEqual(spin_entitlement('', n, before, held), want)
+        self.assertEqual(spin_entitlement('2025-06-02', 1, 0.4, 1.3), 'dated')
+
+
 class TestUs355NoRemainingLotBeforeTheRecordDate(unittest.TestCase):
     """TJ-1192: the old lot sold between the record and pay dates; the
     June lot is all that is left. Which lot was entitled cannot be told

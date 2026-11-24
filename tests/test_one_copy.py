@@ -107,6 +107,36 @@ class TestOneCopy(unittest.TestCase):
                          "import FUTURES_PREFIXES (or FUTURES_PREFIX_GROUP) from "
                          "taxjson.lib.futures_prefixes: " + ", ".join(sorted(spelled)))
 
+    def test_the_futures_fold_is_written_once(self):
+        # A future written `/` or `\` is read `F:` by one helper,
+        # lib/futures_prefixes `canonical_futures_symbol` (backlog TJ-5150).
+        # A regex substitution to "F:" or an "F:" glued onto a symbol
+        # anywhere else is a second copy of it.
+        spelled = []
+        for mod, tree in _modules():
+            for n in ast.walk(tree):
+                if isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "sub":
+                    hit = any(isinstance(a, ast.Constant) and a.value == "F:"
+                              for a in n.args[:1])
+                elif isinstance(n, ast.BinOp) and isinstance(n.op, ast.Add):
+                    hit = isinstance(n.left, ast.Constant) and n.left.value == "F:"
+                else:
+                    continue
+                if hit:
+                    spelled.append(f"{mod}:{n.lineno}")
+        self.assertEqual([w for w in spelled if not w.startswith("lib/futures_prefixes.py:")],
+                         [], "fold a future's prefix with taxjson.lib.futures_prefixes "
+                             "canonical_futures_symbol")
+
+    def test_the_fold(self):
+        from taxjson.lib.futures_prefixes import FUTURES_PREFIXES, canonical_futures_symbol
+        for p in FUTURES_PREFIXES:
+            self.assertEqual(canonical_futures_symbol(p + "ZZQM26.US"), "F:ZZQM26.US")
+            self.assertEqual(canonical_futures_symbol(p + "ZZQ260620C00010000.US"),
+                             "F:ZZQ260620C00010000.US")
+        for s in ("ZZQ.US", "ZZB/U.TO", "/", ""):
+            self.assertEqual(canonical_futures_symbol(s), s)
+
     def test_the_prefixes_module_is_a_leaf(self):
         # Any module reads it at import: it imports nothing of taxjson.
         tree = ast.parse((SRC / "lib" / "futures_prefixes.py").read_text(encoding="utf-8"))

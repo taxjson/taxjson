@@ -104,6 +104,45 @@ an opening balance (`tjs opening`) or statements you kept.
 - **Late dividends.** A dividend IB has not yet posted is only an
   accrual (not income), and the run warns: download the statement again
   once it has posted.
+- **A dividend or return of capital and the listing held.** The row
+  names its security by ISIN, and taxjson books it on the listing the
+  statement's dated rows show held that day (its trades, transfers and
+  the Open Positions section). A statement with no position in the
+  ticker (the income exported apart from the trades) takes the listings
+  from the account's other statements, as names: they carry no dates
+  there. With two listings named, the row keeps the listing its ISIN
+  names and a note says the account may have held the other one. A
+  return of capital is never moved off its ISIN listing onto a listing
+  the statement's own rows show was not held that day. Wherever a
+  return of capital ends on a listing no dated row of its statement
+  shows held, while the account's exports name another listing of the
+  ticker, `tjs run` (with `--account` too) lists an `ATTENTION`
+  (`Undated listing`): the payment and the listing it may belong to,
+  then what the books did with it (the cost it reduced, the part booked
+  as a capital gain); `tjs run --strict` stops on it and the closing
+  list names it. What to do: download a statement that holds the
+  account's **Open Positions** section (the **Annually** statement
+  does), or every trade of the ticker from before the holding's
+  purchase (which may be in an earlier year's statement: keep that one
+  too), and keep it in place of the split exports; or, when the two
+  listings are one security, add the `TOBASE` line the message names to
+  ticker.map. A return of capital is moved onto a listing only another
+  statement names when that statement's rows of it could predate the
+  payment (its first row on or before it, or neither a coded opening
+  purchase nor a transfer in after it; or its Open Positions hold more
+  than its rows add); another broker account's statement in the folder
+  does not count. A row moved that way that the books then find
+  nothing under (a capital gain on a pool empty that day) is listed
+  too, with the ISIN's listing as where it may belong.
+- **One payment in two exports.** Overlapping statements that hold the
+  same dividend or return of capital book it once. Where one statement
+  placed it by its dated rows and the other from undated evidence, the
+  dated listing is kept and an `ATTENTION` names both rows; where both
+  placed it with equal standing on different listings, the run stops,
+  naming both files and lines: replace both with one statement of the
+  account that holds the trades behind both placings (its Open
+  Positions section, or every trade of the ticker from before the
+  purchases).
 - **Several accounts in one file** get an `ATTENTION` line: every row is
   booked to the taxjson account whose folder holds the file. If both
   are yours and taxable together, set `combined_broker_accounts = true`
@@ -121,7 +160,7 @@ after December 31 is also its year-end positions.
 it goes in `inputs/slips/` ([Tax slips](#tax-slips)); the run stops on
 one in an account folder.
 
-Parser: `src/taxjson/lib/brokerages/ib_extractor.py` — `_reconcile_cash_report`, `_check_statement_kind`, `_warn_coverage_gaps`.
+Parser: `src/taxjson/lib/brokerages/ib_extractor.py` — `_reconcile_cash_report`, `_check_statement_kind`, `_warn_coverage_gaps`, `_reattribute_income_to_holdings`, `_ib_cross_income_listings`; the run's flag: `src/taxjson/pipeline/stages.py` — `_flag_undated_listings`.
 Troubleshooting: [Interactive Brokers](troubleshooting.md#interactive-brokers).
 
 Sources: [How to Run a Statement](https://ibkrguides.com/clientportal/performanceandstatements/runstatement.htm) (menu path, period, language, format);
@@ -364,6 +403,32 @@ take from a few minutes to a week.
 - **A blank `txid`.** Two fills or ledger rows alike in every cell
   are two events when their `txid` is blank, as in any export without
   ids; an overlapping export holding the same rows is still read once.
+- **Cash and its balances** (for `tjs fx-cash --ledger v2`). A deposit,
+  a withdrawal and a conversion of currency (or, in a Canadian project,
+  of a USD stablecoin) carry the ledger's `txid` and `refid`: two
+  deposits alike in day and amount are two, in one export or in two,
+  and a row two overlapping exports hold is one. A `txid` that two
+  exports hold with different amounts is refused, naming both rows.
+  The ledger's `balance` column gives the account's cash: each
+  wallet's latest balance (a wallet is its asset code, such as `USDC`
+  or `USDC.F`, and the export's `wallet` column where it has one, such
+  as `spot / main` or `earn / flexible`), the wallets of one currency
+  added up over every ledger export in the folder. The exports may be
+  split by date or by wallet: the balances are the same as one export's.
+  Rows of an older export without the `wallet` column are the wallet
+  their code says (`USDC` the spot wallet, `USDC.F` the flexible Earn
+  wallet). A move between two wallets of the account (an Earn
+  allocation, a transfer between spot and staking) is no deposit or
+  withdrawal: the cash stays in the account's balance. Where cash moved
+  to a wallet no export in the folder holds
+  (an Earn allocation whose other row is missing), that currency gets
+  no balance from that day on and the ledger says which row: add the
+  export that holds the wallet. Where rows are missing between two
+  exports (the later one begins at another balance than the earlier
+  one ended at), the dates between them read the balance the later
+  export begins at, and the ledger shows the gap. A wallet whose first
+  row begins at a balance is known from the year end before that row;
+  earlier dates get no balance of its currency, and a note says so.
 - **One `txid` on two rows of a file.** Two identical rows (downloads
   pasted together) are read once; two rows that differ are refused,
   naming both lines: the books keep one row per id, so one trade would
@@ -413,7 +478,11 @@ dates as CSV.
   the same rows in an overlapping export are still read once (in the
   stablecoin pool `tjs crypto-sends` rebuilds too). One ID on two rows
   of a file: identical rows are read once, and two rows that differ
-  are refused, naming both lines.
+  are refused, naming both lines. One ID on a cash row (a deposit, a
+  withdrawal, a stablecoin buy or sell) in two overlapping exports with
+  different amounts, dates or currencies: `tjs cash` and `tjs fx-cash
+  --ledger v2` refuse, naming both rows; keep the export with the right
+  copy.
 - **A blank Total** on a Buy or Sell is derived as Coinbase builds it:
   Subtotal plus the fee on a buy, minus it on a sale (without a
   Subtotal, quantity x price stands in). The books, the FX-on-cash
@@ -632,7 +701,7 @@ it (a filed year reads its own frozen copy):
   refused and saved as `ib_flex.csv.new` instead.
 - `--positions` also snapshots Questrade's live positions into the
   year's holdings folder, `holdings/<account>_live_holdings.toml`,
-  where `tjs sanity` and the end of `tjs run` find it.
+  where `tjs sanity` finds it.
 
 Manual exports keep working beside these files, with one catch: a
 **manual Questrade export with rows inside the fetched window** is

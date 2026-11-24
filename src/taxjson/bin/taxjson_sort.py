@@ -29,10 +29,16 @@ PROG = "taxjson-sort"
 
 
 def generate_uid(tx: TaxTransaction) -> str:
-    """Generate a unique ID for a transaction."""
-    if getattr(tx, "id", None):
-        return tx.id
-    
+    """The row's dedup identity: its id, else (no id, or a blank one) its
+    content id (`compute_id`: action, quantity and money too). The
+    account/symbol/date/time fallback made two different trades of one
+    moment one (backlog TJ-5041); it is kept for a row with no
+    compute_id."""
+    _id = getattr(tx, "id", None)
+    if _id and str(_id).strip():
+        return _id
+    if callable(getattr(tx, "compute_id", None)):
+        return tx.compute_id()
     parts = [
         getattr(tx, "brokerage", "unknown"),
         getattr(tx, "account", "default"),
@@ -116,10 +122,11 @@ def _row_get(tx, key, default=None):
 
 
 def _row_uid(tx):
-    """The dedup identity: the row's id (a dict row without one is never
-    collapsed — None)."""
+    """The dedup identity: the row's id (a dict row without one, or with
+    a blank one, is never collapsed — None)."""
     if isinstance(tx, dict):
-        return tx.get("id") or None
+        _id = tx.get("id")
+        return _id if _id and str(_id).strip() else None
     return generate_uid(tx)
 
 

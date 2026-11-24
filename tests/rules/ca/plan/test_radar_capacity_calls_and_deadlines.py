@@ -25,6 +25,7 @@ from pathlib import Path
 from tax_rules import rule, rule_absent
 from taxjson.rules import ids as R
 from _support.planning_radar_checks import _row, _rows, _check
+from _support.planning_radar_row import base_rows
 
 
 def _engine(taxable, sheltered=(), country="canada"):
@@ -707,7 +708,7 @@ def _project(tmp, rows, ticker_map=None):
         '[accounts.margin]\ntype = "taxable"\n')
     if ticker_map is not None:
         (root / "ticker.map").write_bytes(ticker_map)
-    (root / "work" / "margin_base.json").write_text(json.dumps(rows))
+    (root / "work" / "margin_base.json").write_text(json.dumps(base_rows(rows)))
     return root
 
 

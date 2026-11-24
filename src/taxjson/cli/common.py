@@ -1978,8 +1978,21 @@ def _refuse_cash_older_than_inputs(root: Path, cfg: Dict[str, Any]) -> None:
         CE.collect(root, cfg, settings_country(settings_of(cfg)), {})
     except CountryError:
         return                  # (the command says the country is missing)
+    except CE.CashIdConflict as e:
+        _die_cash_ids(e.conflicts)
     except (OSError, ValueError) as e:
         _die(str(e))
+
+
+def _die_cash_ids(conflicts: List[str]) -> None:
+    """Exit 2 on a broker's id that two exports hold with different
+    content (lib/cash_events `CashIdConflict`: an input refused, backlog
+    TJ-5034): one conflict the error itself, several one below the
+    other under a line that counts them."""
+    if len(conflicts) == 1:
+        _die_input(conflicts[0])
+    _die_input(f"{len(conflicts)} broker's ids are in two exports with different content",
+               *conflicts)
 
 
 def _refuse_books_older_than_inputs(root: Path, cfg: Dict[str, Any], *,
@@ -2095,6 +2108,19 @@ class CarryBack(NamedTuple):
     # {year: amount} of the earlier years' carry-backs that are the person's
     # own figures ([carryover] carried_back; backlog TJ-4880).
     stated: Optional[Dict[str, float]] = None
+    # {earlier year: the part of `amount` carried back to it}, the row's
+    # `carried_back_to`; `to_split`: "entry" when the person's by-target
+    # [carryover] carried_back entry for the year says it, "oldest_first"
+    # when it is the ledger's proposal and another split was open, else None;
+    # `stated_to`: {year: {earlier year: amount}} of the earlier years'
+    # carry-backs whose years are the person's figures (backlog TJ-4882).
+    to: Optional[Dict[str, float]] = None
+    to_split: Optional[str] = None
+    stated_to: Optional[Dict[str, Dict[str, float]]] = None
+    # The ledger's `carried_in_not_in_nets`: the balance carried in and the
+    # [carryover] carried_back entries hold only with a gain or loss the nets
+    # don't have (lib/carry_back `not_in_nets`; backlog TJ-4886).
+    not_in_nets: Optional[List[Dict[str, Any]]] = None
 
 
 def _ledger_amount(row: Dict[str, Any], key: str) -> float:
@@ -2232,9 +2258,10 @@ def _carry_back(root: Path, year: int, created: float = 0.0,
     in place of the books' (backlog TJ-1452); without one, the books', whatever
     the year's own lock records (backlog TJ-1493). Raises LedgerUnavailable
     (`_ledger_doc`), also when the ledger can't tell whether an earlier return
-    met a claim (lib/carry_back `cant_tell`): the split would rest on a guess
-    (backlog TJ-1574)."""
-    from taxjson.lib.carry_back import cant_tell_text, split_left_out
+    met a claim (lib/carry_back `cant_tell`) or which claimed years an earlier
+    carry-back went to (`split_cant_tell`): the split would rest on a guess
+    (backlog TJ-1574, TJ-4882)."""
+    from taxjson.lib.carry_back import cant_tell_text, not_in_nets, split_left_out
     if not year:
         return CarryBack()
     # `opening`: the balance the caller's estimate took in, `typed` when the
@@ -2257,14 +2284,31 @@ def _carry_back(root: Path, year: int, created: float = 0.0,
         raise LedgerUnavailable(
             f"`tjs carryover --json` has no row for {year}, a year with a loss"
             + ("" if created > 0.005 else " carried in or left to carry"))
-    why = cant_tell_text(doc)
+    try:
+        why, off = cant_tell_text(doc), not_in_nets(doc)
+    except ValueError as e:
+        raise LedgerUnavailable(str(e)) from None
     if why:
         raise LedgerUnavailable(why)
     stated = {str(x["year"]): _ledger_amount(x, "carried_back_stated")
               for x in doc["rows"]
               if x["year"] < year and x.get("carried_back_stated") is not None}
+    # The years a carry-back went to: this year's, and the earlier years' the
+    # person gave (a lock's own record of its year is the lock's).
+    to: Dict[str, float] = {}
+    for x in rows:
+        for t, a in _carried_back_to(x).items():
+            to[str(t)] = M.shown(to.get(str(t), 0.0) + a, 2)
+    said = [x.get("carried_back_to_said") or x.get("carried_back_split") for x in rows]
+    stated_to = {str(x["year"]): {str(t): a for t, a in _carried_back_to(x).items()}
+                 for x in doc["rows"]
+                 if x["year"] < year and x.get("carried_back_to_said")
+                 and x.get("carried_back_to_in_lock") != x["year"]}
     return CarryBack(sum(_ledger_amount(x, "carried_back") for x in rows),
-                     split_left_out(doc, year), stated=stated or None)
+                     split_left_out(doc, year), stated=stated or None,
+                     not_in_nets=off or None, to=to or None,
+                     to_split=next((s for s in said if s), None),
+                     stated_to=stated_to or None)
 
 
 def _stale_opening(root: Path, source: Any) -> Optional[str]:

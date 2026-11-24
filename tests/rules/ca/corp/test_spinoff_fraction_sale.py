@@ -595,6 +595,420 @@ class TestUnchanged(unittest.TestCase):
         self.assertEqual(_rows(rows, 'BUYSELL', -1), [])
 
 
+# ========================================================================
+# Cash in lieu paid on two days (backlog TJ-5057)
+# ========================================================================
+
+DEC_DAY, JAN_DAY = '2026-12-31', '2027-01-04'
+
+
+def _sales(rows):
+    return [(x['date'], x['symbol'], x['quantity'], x['net_amount'])
+            for x in _rows(rows, 'BUYSELL', -1)]
+
+
+class TestCashInLieuPaidOnTwoDays(unittest.TestCase):
+    """One spin-off held in two broker accounts of one taxjson account,
+    each paid for its half share, one in December and one in January:
+    the combined event (one election) sold one share for all of the cash
+    in December. Each day's fraction is sold on its own day."""
+
+    @staticmethod
+    def _copies(**kw):
+        cil = dict(date='2026-12-20', cash_in_lieu=5.0,
+                   cash_in_lieu_currency='CAD', fraction_in_lieu=0.5,
+                   qty_received=5.0, ratio_new=1, ratio_old=10,
+                   target_fmv=50.0, event_id='EVT1')
+        cil.update(kw)
+        return (_event(cash_in_lieu_date=DEC_DAY,
+                       broker_account='99900011', **cil),
+                _event(cash_in_lieu_date=JAN_DAY,
+                       broker_account='99900022', **cil))
+
+    @staticmethod
+    def _combine(events):
+        from taxjson.lib.corp_actions import combine_broker_copies
+        err = io.StringIO()
+        out = combine_broker_copies(list(events), stream=err)
+        return out, err.getvalue()
+
+    def test_the_combined_event_keeps_each_days_cash(self):
+        for order in (0, 1):
+            a, b = self._copies()
+            (ev,), err = self._combine((a, b) if not order else (b, a))
+            self.assertIn('their quantities are combined', err)
+            self.assertEqual((ev.qty_received, ev.fraction_in_lieu,
+                              ev.cash_in_lieu, ev.cash_in_lieu_date),
+                             (10.0, 1.0, 10.0, DEC_DAY))
+            self.assertEqual(ev.cash_in_lieu_parts,
+                             [(DEC_DAY, 0.5, 5.0), (JAN_DAY, 0.5, 5.0)])
+        # Paid the same day: one part, so no parts (the booking as before).
+        a, b = self._copies()
+        b.cash_in_lieu_date = DEC_DAY
+        (ev,), _err = self._combine((a, b))
+        self.assertEqual(ev.cash_in_lieu_parts, [])
+        self.assertEqual(_sales(s861(ev, alloc=100.0)[0]),
+                         [(DEC_DAY, 'ZZS.TO', -1.0, 10.0)])
+        # A third account paid on the first day joins that day's part.
+        a, b = self._copies()
+        c = self._copies()[0]
+        c.broker_account = '99900033'
+        (ev,), _err = self._combine((a, b, c))
+        self.assertEqual(ev.cash_in_lieu_parts,
+                         [(DEC_DAY, 1.0, 10.0), (JAN_DAY, 0.5, 5.0)])
+
+    @rule(R.CA_CORP_05)
+    def test_s86_1_sells_each_days_fraction_on_its_day(self):
+        a, b = self._copies()
+        (ev,), _err = self._combine((a, b))
+        rows, err = s861(ev, alloc=100.0)
+        self.assertEqual(_sales(rows), [(DEC_DAY, 'ZZS.TO', -0.5, 5.0),
+                                        (JAN_DAY, 'ZZS.TO', -0.5, 5.0)])
+        # What the two accounts book apart, each on half the allocation.
+        apart = [x for e in self._copies()
+                 for x in _sales(s861(e, alloc=50.0)[0])]
+        self.assertEqual(_sales(rows), apart)
+        # The allocation is the event's, counted once.
+        buy, = _rows(rows, 'BUYSELL', +1)
+        adj, = _rows(rows, 'ADJUST')
+        self.assertAlmostEqual(buy['quantity'], 11.0)
+        self.assertAlmostEqual(buy['net_amount'], 100.0)
+        self.assertAlmostEqual(adj['net_amount'], -100.0)
+        for sale in _rows(rows, 'BUYSELL', -1):
+            self.assertEqual(sale['date_settle'], sale['date'])
+            self.assertEqual(sale['corp_cash'], '5 CAD')
+            self.assertIn('cash in lieu of 0.5 fractional share(s)',
+                          sale['description'])
+        self.assertNotIn('UNBOOKED', err)
+
+    @rule(R.CA_CORP_05)
+    def test_each_sale_is_in_its_own_year(self):
+        from taxjson.engine.ca.taxrules import CanadaTaxRules
+        from taxjson.lib.tx_load import coerce_transaction_row
+        from taxjson.model.transaction import TaxTransaction
+        a, b = self._copies()
+        (ev,), _err = self._combine((a, b))
+        rows, _ = s861(ev, alloc=110.0)       # 10 a share over 11 shares
+        buy = TaxTransaction(
+            action='BUYSELL', date='2026-01-05', date_settle='2026-01-05',
+            time='09:30:00', symbol='ZZP.TO', quantity=100, currency='CAD',
+            price=10.0, net_amount=-1000.0, account='margin')
+        tx = [buy] + [coerce_transaction_row(x, i, 'synthetic')
+                      for i, x in enumerate(rows)]
+        out = CanadaTaxRules().compute_gains(tx, detect_wash_sales=False)
+        sold = sorted((t['date'], round(t['gain'], 2))
+                      for t in out['transactions']
+                      if t.get('symbol') == 'ZZS.TO' and 'proceeds' in t)
+        # 5 cash less the half share's 5 of cost: nothing, in each year.
+        self.assertEqual(sold, [(DEC_DAY, 0.0), (JAN_DAY, 0.0)])
+
+    @rule(R.CA_CORP_07)
+    def test_taxable_spinoff_sells_each_days_fraction_on_its_day(self):
+        from taxjson.lib.corp_actions import resolve_event
+        a, b = self._copies()
+        (ev,), _err = self._combine((a, b))
+        rows, _ = _quiet(resolve_event, ev, 'taxable_deemed_dividend',
+                         'canada', {})
+        self.assertEqual(_sales(rows), [(DEC_DAY, 'ZZS.TO', -0.5, 5.0),
+                                        (JAN_DAY, 'ZZS.TO', -0.5, 5.0)])
+        div, = _rows(rows, 'DIVIDEND')
+        self.assertAlmostEqual(div['net_amount'], 110.0)
+
+    @rule(R.CA_CORP_05)
+    def test_questrade_marks_each_sale_to_replace_its_pair(self):
+        a, b = self._copies(cil_broker_booked=True)
+        (ev,), _err = self._combine((a, b))
+        rows, _ = s861(ev, alloc=100.0)
+        self.assertEqual([x.get('type') for x in _rows(rows, 'BUYSELL', -1)],
+                         ['cil_takeover', 'cil_takeover'])
+
+    @rule(R.CA_CORP_05)
+    def test_an_unsized_copy_splits_the_fraction_by_the_cash(self):
+        # One account's export does not size its fraction: the days'
+        # shares of what is sold follow the cash (one price a share).
+        a, b = self._copies()
+        b.fraction_in_lieu = 0.0
+        b.cash_in_lieu = 15.0
+        (ev,), _err = self._combine((a, b))
+        rows, _ = s861(ev, alloc=100.0)
+        self.assertEqual(_sales(rows), [(DEC_DAY, 'ZZS.TO', -0.125, 5.0),
+                                        (JAN_DAY, 'ZZS.TO', -0.375, 15.0)])
+
+    @rule(R.CA_CORP_04)
+    def test_merger_rollover_sells_each_days_fraction_on_its_day(self):
+        from taxjson.lib.corp_actions import resolve_event
+        kw = dict(action_type='merger', date='2026-12-20',
+                  target_isin='CA0000000002', source_isin='CA0000000001',
+                  ratio_new=1.05, ratio_old=1.0, qty_disposed=10.0,
+                  qty_received=10.0, cash_in_lieu_currency='CAD',
+                  event_id='EVT2')
+        a = _event(cash_in_lieu=6.0, cash_in_lieu_date=DEC_DAY,
+                   broker_account='99900011', **kw)
+        b = _event(cash_in_lieu=6.0, cash_in_lieu_date=JAN_DAY,
+                   broker_account='99900022', **kw)
+        (ev,), _err = self._combine((a, b))
+        rows, _ = _quiet(resolve_event, ev, 'rollover_s_85_1_5', 'canada', {})
+        got = [(d, sym, round(q, 9), n) for d, sym, q, n in _sales(rows)]
+        self.assertEqual(got, [(DEC_DAY, 'ZZS.TO', -0.5, 6.0),
+                               (JAN_DAY, 'ZZS.TO', -0.5, 6.0)])
+        # The taxable exchange keeps its rows on the exchange's day and
+        # names each day's cash for the cash ledger.
+        rows, _ = _quiet(resolve_event, ev, 'taxable_disposition', 'canada',
+                         {'fmv_per_share': 12.0})
+        self.assertEqual(rows[0]['corp_cash'],
+                         f'6 CAD @{DEC_DAY}; 6 CAD @{JAN_DAY}')
+
+    @rule(R.CA_CORP_05)
+    def test_rbc_one_account_paid_on_two_days(self):
+        late = r_cil(desc='CIL - ZZS SPINCO INC CASH IN LIEU OF 0.25 SHS',
+                     day='2026-06-29', value='6.00')
+        (evs, _err) = rbc_events(R_BUY + r_dis() + r_cil() + late)
+        ev, = evs
+        self.assertEqual(ev.cash_in_lieu_date, CIL_DAY)
+        self.assertEqual(ev.cash_in_lieu_parts,
+                         [(CIL_DAY, 0.5, 12.0), ('2026-06-29', 0.25, 6.0)])
+        rows, _ = s861(ev)
+        self.assertEqual(_sales(rows),
+                         [(CIL_DAY, 'ZZS.TO', -0.5, 12.0),
+                          ('2026-06-29', 'ZZS.TO', -0.25, 6.0)])
+        buy, = _rows(rows, 'BUYSELL', +1)
+        self.assertAlmostEqual(buy['quantity'], 10.75)
+
+    # A reversal and the payment made again correct the amount, not the
+    # day (owner, 2026-11-23): the payment that replaces a reversed one
+    # keeps the reversed payment's day, whatever day or order the broker
+    # posts the pair on, and whether the amount changed.
+    REVERSALS = (
+        ("repaid later", [('2026-06-22', '-12.00'), ('2026-06-25', CASH)],
+         12.0),
+        ("reversed and repaid the same day",
+         [('2026-06-25', '-12.00'), ('2026-06-25', CASH)], 12.0),
+        ("the repayment listed before the reversal",
+         [('2026-06-25', CASH), ('2026-06-25', '-12.00')], 12.0),
+        ("repaid at a corrected amount",
+         [('2026-06-25', '-12.00'), ('2026-06-25', '12.50')], 12.5),
+        ("reversed and repaid twice",
+         [('2026-06-22', '-12.00'), ('2026-06-23', '12.50'),
+          ('2026-06-24', '-12.50'), ('2026-06-26', CASH)], 12.0),
+    )
+
+    @rule(R.CA_CORP_05)
+    def test_rbc_a_payment_made_again_keeps_the_reversed_ones_day(self):
+        for name, later, cash in self.REVERSALS:
+            body = R_BUY + r_dis() + r_cil() + ''.join(
+                r_cil(day=d, value=v) for d, v in later)
+            (evs, _err) = rbc_events(body)
+            ev, = evs
+            self.assertAlmostEqual(ev.cash_in_lieu, cash, msg=name)
+            self.assertEqual((ev.cash_in_lieu_date, ev.cash_in_lieu_parts),
+                             (CIL_DAY, []), name)
+            self.assertEqual(_sales(s861(ev)[0]),
+                             [(CIL_DAY, 'ZZS.TO', -0.5, cash)], name)
+
+    @rule(R.CA_CORP_05)
+    def test_rbc_a_reversal_that_cancels_no_payment_keeps_the_first_day(self):
+        body = (R_BUY + r_dis() + r_cil()
+                + r_cil(desc='CIL - ZZS SPINCO INC CASH IN LIEU OF 0.25 SHS',
+                        day='2026-06-29', value='6.00')
+                + r_cil(desc='CIL - ZZS SPINCO INC CASH IN LIEU OF 0.1 SHS',
+                        day='2026-07-02', value='-3.00'))
+        (evs, _err) = rbc_events(body)
+        ev, = evs
+        self.assertEqual((ev.cash_in_lieu_date, ev.cash_in_lieu_parts),
+                         (CIL_DAY, []))
+        self.assertEqual(_sales(s861(ev)[0]),
+                         [(CIL_DAY, 'ZZS.TO', -0.65, 15.0)])
+
+    def test_the_days_payments_count_as_paid(self):
+        from types import SimpleNamespace as N
+        from taxjson.lib.corp_actions import cil_paid_days
+
+        def days(*rows, accounts=None):
+            said = []
+            paid = cil_paid_days(
+                [N(date=d, value=v, frac=(f[0] if f else 0.0),
+                   account=(accounts[i] if accounts else ''))
+                 for i, (d, v, *f) in enumerate(rows)],
+                lambda c: c.frac, said.append)
+            return (None if paid is None
+                    else [(d, c.value) for d, c in paid]), len(said)
+        self.assertEqual(days(('06-18', 12.0), ('06-29', 6.0)),
+                         ([('06-18', 12.0), ('06-29', 6.0)], 0))
+        self.assertEqual(days(('06-18', 12.0), ('06-22', -12.0),
+                              ('06-25', 12.0)), ([('06-18', 12.0)], 0))
+        # A reversal and a payment of its amount on one day cancel each
+        # other, whatever the rows' order: the earlier payments stand on
+        # their own days.
+        for pair in ((('06-25', -12.0), ('06-25', 12.0)),
+                     (('06-25', 12.0), ('06-25', -12.0))):
+            self.assertEqual(days(('06-18', 12.0), ('06-20', 12.0), *pair),
+                             ([('06-18', 12.0), ('06-20', 12.0)], 0))
+        # ... and with no earlier payment, the payment made later takes
+        # the cancelled one's day (a reversal posted with its payment).
+        self.assertEqual(days(('06-17', -12.0), ('06-17', 12.0),
+                              ('06-25', 12.0)), ([('06-17', 12.0)], 0))
+        # No payment made again: the reversal cancels the duplicate (the
+        # later one), the original keeps its day, and a later payment of
+        # the event is never re-dated (it was sold a month before it
+        # was paid).
+        self.assertEqual(days(('06-18', 12.0), ('06-20', 12.0),
+                              ('06-25', -12.0), ('07-20', 6.0)),
+                         ([('06-18', 12.0), ('07-20', 6.0)], 0))
+        # A corrected amount replaces the only payment, reversed, where
+        # the books show it: it states the reversed payment's fraction,
+        # or neither states one and nothing else stands.
+        self.assertEqual(days(('06-18', 12.0), ('06-25', -12.0),
+                              ('06-26', 12.5)), ([('06-18', 12.5)], 0))
+        self.assertEqual(days(('06-18', 12.0, 0.5), ('06-20', 6.0, 0.25),
+                              ('06-25', -12.0), ('07-01', 12.5, 0.5)),
+                         ([('06-20', 6.0), ('06-18', 12.5)], 0))
+        # Where they do not (another fraction stated, even with nothing
+        # else standing; or another payment standing), the later payment
+        # keeps its own day, and it is said.
+        self.assertEqual(days(('06-18', 12.0, 0.5), ('06-22', -12.0),
+                              ('07-20', 6.0, 0.25)), ([('07-20', 6.0)], 1))
+        self.assertEqual(days(('06-18', 12.0, 0.5), ('06-20', 6.0, 0.25),
+                              ('06-25', -12.0), ('07-01', 5.0, 0.2)),
+                         ([('06-20', 6.0), ('07-01', 5.0)], 1))
+        self.assertEqual(days(('06-17', 6.0), ('06-18', 12.0),
+                              ('06-22', -12.0), ('07-20', 7.0)),
+                         ([('06-17', 6.0), ('07-20', 7.0)], 1))
+        # A payment in another broker account is no replacement: it
+        # keeps its own day, and a reversal reads its own account's
+        # payments only.
+        self.assertEqual(days(('12-30', 12.0), ('01-04', -12.0),
+                              ('01-06', 12.0), accounts='AAB')[0],
+                         [('01-06', 12.0)])
+        self.assertIsNone(days(('12-30', 12.0), ('01-04', -12.0),
+                               accounts='AB')[0])
+        self.assertEqual(days(('06-18', 12.0), ('06-20', 6.0),
+                              ('06-25', -12.0)), ([('06-20', 6.0)], 0))
+        self.assertEqual(days(('06-18', 12.0), ('06-25', -3.0)), (None, 0))
+        self.assertEqual(days(), ([], 0))
+
+    @rule(R.CA_CORP_05)
+    def test_rbc_a_reversed_duplicate_moves_no_other_payment(self):
+        quarter = 'CIL - ZZS SPINCO INC CASH IN LIEU OF 0.25 SHS'
+        body = (R_BUY + r_dis() + r_cil() + r_cil(day='2026-06-20')
+                + r_cil(day='2026-06-25', value='-12.00')
+                + r_cil(desc=quarter, day='2026-07-20', value='6.00'))
+        (evs, _err) = rbc_events(body)
+        ev, = evs
+        self.assertEqual(ev.cash_in_lieu_parts,
+                         [(CIL_DAY, 0.5, 12.0), ('2026-07-20', 0.25, 6.0)])
+        self.assertEqual(_sales(s861(ev)[0]),
+                         [(CIL_DAY, 'ZZS.TO', -0.5, 12.0),
+                          ('2026-07-20', 'ZZS.TO', -0.25, 6.0)])
+        # A later payment the books do not show to replace the reversed
+        # one keeps its own day, and the reader says so.
+        fifth = 'CIL - ZZS SPINCO INC CASH IN LIEU OF 0.2 SHS'
+        body = (R_BUY + r_dis() + r_cil()
+                + r_cil(desc=quarter, day='2026-06-20', value='6.00')
+                + r_cil(day='2026-06-25', value='-12.00')
+                + r_cil(desc=fifth, day='2026-07-01', value='5.00'))
+        (evs, err) = rbc_events(body)
+        ev, = evs
+        self.assertEqual(ev.cash_in_lieu_parts,
+                         [('2026-06-20', 0.25, 6.0), ('2026-07-01', 0.2, 5.0)])
+        self.assertIn("the cash in lieu of 5.00 paid on 2026-07-01 follows "
+                      "the reversal of 2026-06-25 of the 12.00 paid on "
+                      "2026-06-18, and the books do not show it replaces "
+                      "that payment", ' '.join(err.split()))
+
+    @rule(R.CA_CORP_05)
+    def test_questrade_one_account_paid_on_two_days(self):
+        body = Q_BUY + q_dis() + q_cil() + q_cil(day='2026-06-29',
+                                                 net='13.00')
+        (evs, _err) = qt_events(body)
+        ev, = evs
+        self.assertAlmostEqual(ev.cash_in_lieu, 25.0)
+        self.assertAlmostEqual(ev.fraction_in_lieu, 1.0)
+        self.assertEqual(ev.cash_in_lieu_date, CIL_DAY)
+        self.assertEqual(ev.cash_in_lieu_parts,
+                         [(CIL_DAY, 0.5, 12.0), ('2026-06-29', 0.5, 13.0)])
+        rows, _ = s861(ev)
+        self.assertEqual(_sales(rows),
+                         [(CIL_DAY, 'ZZS.TO', -0.5, 12.0),
+                          ('2026-06-29', 'ZZS.TO', -0.5, 13.0)])
+        # Each sale replaces the parser's own pair of its day.
+        from taxjson.lib.corp_actions import drop_broker_cil_pairs
+        (txs, _e) = qt_parse(body)
+        for t in txs + rows:
+            t['account'] = 'margin'     # the stage's account label
+        merged, note = _quiet(drop_broker_cil_pairs, txs + rows)
+        self.assertEqual(note.count('replaces the broker'), 2, note)
+        left = sorted((t['date'], t['quantity'], t['net_amount'])
+                      for t in merged if t.get('symbol') == 'ZZS.TO'
+                      and t['action'] == 'BUYSELL' and t['quantity'] < 0)
+        self.assertEqual(left, [(CIL_DAY, -0.5, 12.0),
+                                ('2026-06-29', -0.5, 13.0)])
+        self.assertFalse(any(t.get('type') == 'cil_takeover'
+                             for t in merged))
+
+    @rule(R.CA_CORP_05)
+    def test_questrade_a_payment_made_again_keeps_the_reversed_ones_day(self):
+        for name, later, cash in self.REVERSALS[:3]:
+            body = Q_BUY + q_dis() + q_cil() + ''.join(
+                q_cil(day=d, net=v) for d, v in later)
+            (evs, _err) = qt_events(body)
+            ev, = evs
+            self.assertAlmostEqual(ev.cash_in_lieu, cash, msg=name)
+            self.assertEqual((ev.cash_in_lieu_date, ev.cash_in_lieu_parts),
+                             (CIL_DAY, []), name)
+            self.assertEqual(_sales(s861(ev)[0]),
+                             [(CIL_DAY, 'ZZS.TO', -0.5, cash)], name)
+
+    def test_the_date_is_the_first_parts_day(self):
+        # A copy paid before the event (its sale is never before it) or
+        # undated, beside one paid later: `cash_in_lieu_date` is the
+        # first part's day, as docs/commands.md says.
+        for first in ('2026-12-18', ''):
+            a, b = self._copies()
+            a.cash_in_lieu_date = first
+            for order in ((a, b), (b, a)):
+                (ev,), _err = self._combine(order)
+                self.assertEqual(ev.cash_in_lieu_parts,
+                                 [('2026-12-20', 0.5, 5.0),
+                                  (JAN_DAY, 0.5, 5.0)], first)
+                self.assertEqual(ev.cash_in_lieu_date, '2026-12-20', first)
+
+    def test_spinoffs_json_keeps_the_line_and_adds_the_parts(self):
+        # `--json` is the contract: `cash_in_lieu` is the line it was
+        # (the total and the first day); the days are a key of their own.
+        from taxjson.lib import corp_views as V
+        a, b = self._copies()
+        (ev,), _err = self._combine((a, b))
+        line = V._event_cil_line(ev, ev.fraction_in_lieu, ev.cash_in_lieu,
+                                 [{'action': 'BUYSELL', 'quantity': -0.5}])
+        self.assertEqual(line, f'1 of the 11 new shares, paid in cash: '
+                               f'10.00 CAD on {DEC_DAY} (booked as their '
+                               f'sale)')
+        parts = V._event_cil_parts(ev)
+        self.assertEqual(parts, [
+            {'date': DEC_DAY, 'amount': 5.0, 'currency': 'CAD'},
+            {'date': JAN_DAY, 'amount': 5.0, 'currency': 'CAD'}])
+        self.assertEqual(V._parts_text({'cash_in_lieu_parts': parts}),
+                         f'; by day: 5.00 on {DEC_DAY}, 5.00 on {JAN_DAY}')
+        one, _ = self._copies()
+        self.assertEqual(V._event_cil_parts(one), [])
+        self.assertEqual(V._parts_text({'cash_in_lieu_parts': []}), '')
+
+    def test_the_views_name_each_days_cash(self):
+        from taxjson.lib.corp_views import cash_in_lieu_line
+        a, b = self._copies()
+        (ev,), _err = self._combine((a, b))
+        self.assertEqual(
+            cash_in_lieu_line(ev.qty_received, ev.fraction_in_lieu,
+                              ev.cash_in_lieu, 'CAD', ev.cash_in_lieu_date,
+                              parts=ev.cash_in_lieu_parts),
+            f'1 of the 11 new shares, paid in cash: 10.00 CAD (5.00 on '
+            f'{DEC_DAY}, 5.00 on {JAN_DAY})')
+        self.assertEqual(
+            cash_in_lieu_line(10.0, 0.5, 12.0, 'CAD', CIL_DAY),
+            f'0.5 of the 10.5 new shares, paid in cash: 12.00 CAD on '
+            f'{CIL_DAY}')
+
+
 @rule(R.US_CORP_07)
 class TestUs355Unchanged(unittest.TestCase):
     """The US §355 path keeps the fraction's basis in the parent and books

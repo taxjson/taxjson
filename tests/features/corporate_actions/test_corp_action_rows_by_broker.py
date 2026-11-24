@@ -136,6 +136,88 @@ class TestDistributionsMap(unittest.TestCase):
         self.assertEqual(adj[0]["symbol"], "ABC.TO")
         self.assertAlmostEqual(adj[0]["net_amount"], 100.0)
 
+    def test_tj5044_a_malformed_map_line_stops_before_writing(self):
+        # `GLOBAL OLD.TO NEW.TO EXTRA` drops its rule: the [[distributions]]
+        # row on OLD.TO then named no holding, the book was rewritten
+        # with no adjustment and the tool exited 0. `tjs run` refuses
+        # the same map; the standalone tool now does, naming the line.
+        from taxjson.bin.taxjson_apply_distributions import main
+        from _tmpfiles import private_dir
+        t = Path(private_dir())
+        base = t / "margin_base.json"
+        book = json.dumps({"transactions": [
+            {"action": "BUYSELL", "date": "2025-02-03", "time": "10:00:00",
+             "symbol": "NEW.TO", "quantity": 10.0, "net_amount": 100.0,
+             "currency": "CAD", "account": "margin"}]})
+        _dist_toml(t / "taxjson.toml", "OLD.TO", "2025-12-29", "0.5")
+        argv = [str(base), "--config", str(t / "taxjson.toml"),
+                "--account", "margin", "--country", "canada",
+                "--ticker-map", str(t / "ticker.map")]
+        for line, rc_want, n_adj in (("GLOBAL OLD.TO NEW.TO EXTRA", 2, 0),
+                                     ("GLOBAL OLD.TO NEW.TO", 0, 1)):
+            with self.subTest(line=line):
+                base.write_text(book)
+                (t / "ticker.map").write_text(line + "\n")
+                rc, err = _quiet(main, argv)
+                self.assertEqual(rc, rc_want, err)
+                doc = json.loads(base.read_text())
+                adj = [x for x in doc["transactions"]
+                       if x["action"] == "ADJUST"]
+                self.assertEqual(len(adj), n_adj, err)
+        base.write_text(book)
+        (t / "ticker.map").write_text("GLOBAL OLD.TO NEW.TO EXTRA\n")
+        rc, err = _quiet(main, argv)
+        self.assertEqual(base.read_text(), book)     # nothing written
+        self.assertIn("1 problem(s) in", err)
+        self.assertIn("ticker.map:1:", err)
+        self.assertIn("'GLOBAL OLD.TO NEW.TO EXTRA'", err)
+        self.assertIn("nothing was written", err)
+
+    def test_tj5044_each_problem_is_headed_by_its_file(self):
+        # A tobase.map line's problem was headed with the ticker.map's path
+        # (the TJ-0125 class), and the reason given ("a dropped rename")
+        # was untrue of a QUOTE line or of two contradictory lines.
+        from taxjson.bin.taxjson_apply_distributions import main
+        from _tmpfiles import private_dir
+        t = Path(private_dir())
+        base = t / "margin_base.json"
+        book = json.dumps({"transactions": [
+            {"action": "BUYSELL", "date": "2025-02-03", "time": "10:00:00",
+             "symbol": "NEW.TO", "quantity": 10.0, "net_amount": 100.0,
+             "currency": "CAD", "account": "margin"}]})
+        # (a Canadian project's ticker.map is read with its tobase.map)
+        _dist_toml(t / "taxjson.toml", "OLD.TO", "2025-12-29", "0.5")
+        (t / "taxjson.toml").write_text(
+            '[settings]\nyear = 2025\ncountry = "canada"\n\n'
+            + (t / "taxjson.toml").read_text())
+        tmap = t / "ticker.map"
+        argv = [str(base), "--config", str(t / "taxjson.toml"),
+                "--account", "margin", "--country", "canada",
+                "--ticker-map", str(tmap)]
+        base.write_text(book)
+        tmap.write_text("GLOBAL OLD.TO NEW.TO\n")
+        (t / "tobase.map").write_text("TOBASE QZA.US\n")
+        rc, err = _quiet(main, argv)
+        self.assertEqual(rc, 2, err)
+        self.assertEqual(base.read_text(), book)
+        self.assertIn(f"1 problem(s) in {t / 'tobase.map'}; nothing was "
+                      f"written", err)
+        self.assertIn("- tobase.map:1:", err)
+        self.assertNotIn(f"in {tmap}", err)
+        # Both files' problems, each file named once; a reason true of
+        # every kind (a malformed QUOTE line, two targets for one symbol).
+        tmap.write_text("GLOBAL OLD.TO NEW.TO\nGLOBAL OLD.TO OTHER.TO\n"
+                        "QUOTE\n")
+        rc, err = _quiet(main, argv)
+        self.assertEqual(rc, 2, err)
+        self.assertIn(f"3 problem(s) in {tmap} and {t / 'tobase.map'}; "
+                      f"nothing was written", err)
+        self.assertIn("- ticker.map:2:", err)
+        self.assertIn("- ticker.map:3:", err)
+        self.assertNotIn("dropped rename", err)
+        self.assertIn("`tjs run` refuses these lines too", err)
+        self.assertEqual(base.read_text(), book)
+
     def test_s026_00_income_not_counted_is_said(self):
         adj, n, err = self._apply(
             [{"action": "BUYSELL", "date": "2024-01-15", "symbol": "XIC.TO",

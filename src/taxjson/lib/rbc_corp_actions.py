@@ -21,7 +21,7 @@ from taxjson.lib.corp_actions import (
     _rbc_norm_company, _rbc_removal_names, _rbc_same_account,
     _rbc_short_merger_leg, _rbc_tok_eq, _renamed, pair_rbc_reorganizations,
     rbc_is_temp_symbol, rbc_ratio_parts, rbc_row_company,
-    rbc_spinoff_cil_fraction)
+    rbc_cil_dated, rbc_spinoff_cil_fraction)
 from taxjson.lib.stage_msg import emit_line
 from taxjson.model import money as M
 
@@ -87,6 +87,23 @@ def _rbc_row_homes(file_rows) -> Dict[int, set]:
             where[k].add(i)
             keyed.append((id(r), k))
     return {rid: where[k] for rid, k in keyed}
+
+
+def _cil_fields(cils: List[Any], *, sized: bool) -> Dict[str, Any]:
+    """An RBC event's cash-in-lieu fields from its CIL rows. The cash is
+    SIGNED: a reversal CIL row cancels its posting (audit S063-19).
+    `sized`: a spin-off's rows state the fraction paid in cash (a
+    merger's is the ratio's). The day the cash was paid, and its parts
+    when it was paid on more than one: `rbc_cil_dated` (TJ-5057)."""
+    amount = max(0.0, sum(c.value for c in cils))
+    day, parts = rbc_cil_dated(cils, sized=sized)
+    return dict(
+        cash_in_lieu=amount,
+        cash_in_lieu_currency=(cils[0].currency or '') if cils else '',
+        fraction_in_lieu=(rbc_spinoff_cil_fraction(cils)
+                          if sized and amount > 0 else 0.0),
+        cash_in_lieu_date=day,
+        cash_in_lieu_parts=parts if amount > 0 else [])
 
 
 def parse_rbc_corporate_actions(
@@ -321,8 +338,6 @@ def parse_rbc_corporate_actions(
         cils = next((x.cil for x in _all_pairing.events
                      if x.removal is rem
                      and x.kind in ('merger', 'reorg')), ev.cil)
-        # SIGNED: a reversal CIL row cancels its posting (audit S063-19).
-        cil_amount = max(0.0, sum(c.value for c in cils))
         events.append(CorporateAction(
             date=rem.date, time='09:30:00', action_type='merger',
             source_symbol=src, source_isin=src,
@@ -332,12 +347,11 @@ def parse_rbc_corporate_actions(
             fmv=0.0, currency=rem.currency or 'USD',
             target_currency=rc.currency or 'USD',
             account=account,
-            cash_in_lieu=cil_amount,
-            cash_in_lieu_currency=(cils[0].currency if cils else ''),
             # The day the cash was paid: the fraction is sold for it then
             # (as the parser books a reorganization's cash in lieu), not
-            # on the exchange date (TJ-0866).
-            cash_in_lieu_date=min((c.date for c in cils), default=''),
+            # on the exchange date (TJ-0866); each day's payment on its
+            # own day (TJ-5057).
+            **_cil_fields(cils, sized=False),
             raw_descriptions=[rem.desc, rc.desc] + [c.desc for c in cils],
             broker_account=_rbc_account(rem),
         ))
@@ -443,9 +457,7 @@ def parse_rbc_corporate_actions(
                       f"temporary code {tgt} ({r.symdesc or r.desc[:60]!r}) "
                       f"— once the listed ticker is known, add to ticker.map:  "
                       f"GLOBAL {tgt} <TICKER>.{tgt.rsplit('.', 1)[-1]}")
-        # SIGNED: a reversal CIL row cancels its posting (S063-19).
         cils = spin_cil.get(id(r), [])
-        cil_amount = max(0.0, sum(c.value for c in cils))
         events.append(CorporateAction(
             date=r.date, time='09:30:00', action_type='spinoff',
             source_symbol=src, source_isin=parent_code or src,
@@ -455,11 +467,7 @@ def parse_rbc_corporate_actions(
             fmv=0.0, currency=r.currency or 'USD',
             target_currency=r.currency or 'USD',
             account=account,
-            cash_in_lieu=cil_amount,
-            cash_in_lieu_currency=(cils[0].currency or '' if cils else ''),
-            fraction_in_lieu=(rbc_spinoff_cil_fraction(cils)
-                              if cil_amount > 0 else 0.0),
-            cash_in_lieu_date=min((c.date for c in cils), default=''),
+            **_cil_fields(cils, sized=True),
             # Who is entitled, as Questrade's (a US §355 allocation,
             # TJ-0951, TJ-1193).
             record_date=income_facts_from_description(r.desc).get(

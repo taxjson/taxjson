@@ -33,6 +33,8 @@ import math
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from taxjson.lib.futures_prefixes import canonical_futures_symbol
+
 
 DIST_TABLE = "distributions"
 CGD_TABLE = "capital_gains_dividends"
@@ -132,7 +134,14 @@ def distribution_rows(cfg: Dict[str, Any]
         if bad:
             problems.append(f"{where}: " + "; ".join(bad))
             continue
-        key = (sym.strip().upper(), date)
+        # As the books spell it (a future's `/` or `\` prefix is `F:`:
+        # lib/futures_prefixes, backlog TJ-5150); one that names no
+        # contract is refused, naming the entry.
+        try:
+            key = (canonical_futures_symbol(sym.strip().upper()), date)
+        except ValueError as e:
+            problems.append(f"{where}: {e}")
+            continue
         if key in seen:
             warnings.append(
                 f"{where}: {key[0]} {date} repeats entry #{seen[key]} — "
@@ -206,13 +215,98 @@ def claimed_losses(cfg: Dict[str, Any]) -> Tuple[Dict[int, float], List[str]]:
     return out, problems + more
 
 
+def _back_targets(year: int, v: Dict[Any, Any], line: str
+                  ) -> Tuple[Dict[int, float], List[str]]:
+    """({target year: amount}, problems) of one by-target entry of [carryover]
+    carried_back, `YEAR = { TARGET = AMOUNT }`: the years the loss of `year`
+    went back to on its T1A, each one of the 3 before it, the amounts numbers
+    of 0 or more. `line`: the entry as a problem names it."""
+    out: Dict[int, float] = {}
+    problems: List[str] = []
+    if not v:
+        return {}, [f"{line} names no year: give each year the loss went back to "
+                    f"and its amount, e.g. `{year} = {{ {year - 1} = 40.00 }}`, or "
+                    f"`{year} = 0` for none"]
+    for k, a in v.items():
+        try:
+            t = int(str(k).strip())
+        except ValueError:
+            problems.append(f"{line}: {k!r} is not a tax year")
+            continue
+        amt = _number(a)
+        if not year - 3 <= t < year:
+            problems.append(f"{line}: {t} is not one of the 3 years before {year} "
+                            f"({year - 3} to {year - 1}): a net capital loss "
+                            f"carries back 3 years (T1A)")
+        elif t in out:
+            problems.append(f"{line}: {t} is given twice; keep one amount for {t}")
+        elif amt is None or amt < 0:
+            problems.append(f"{line}: {t} must be an amount >= 0 (a number, "
+                            f"unquoted), got {a!r}")
+        else:
+            out[t] = amt
+    return ({}, problems) if problems else (out, [])
+
+
+def carried_back_entries(cfg: Dict[str, Any]) -> Tuple[
+        Dict[int, float], Dict[int, Dict[int, float]], List[str]]:
+    """({year: total}, {year: {target year: amount}}, problems) of [carryover]
+    carried_back (Canada): the net capital loss each named year's return
+    carried back (T1A), the person's answer where `tjs carryover` says it
+    can't tell (backlog TJ-4880). `YEAR = AMOUNT` is a total, met the oldest
+    [carryover] claimed year first; `YEAR = { TARGET = AMOUNT }` says which
+    years it went to, and its total is their sum (backlog TJ-4882). A target
+    needs a `claimed` amount to meet, at least what is carried back to it.
+    The table's own problems are `claimed_losses`'s."""
+    where = f"[{CARRY_TABLE}] {STATED_BACK_KEY}"
+    tbl = _carry_table(cfg)[0]
+    v = tbl.get(STATED_BACK_KEY)
+    if not isinstance(v, dict):
+        totals, problems = _by_year(v, where, STATED_BACK_KEY)
+        return totals, {}, problems
+    # The years, read as `claimed`'s are (a tax year, once), then each amount.
+    years, problems = _by_year({k: 0 for k in v}, where, STATED_BACK_KEY)
+    claimed = _by_year(tbl.get(CLAIMED_KEY), "", CLAIMED_KEY)[0]
+    totals: Dict[int, float] = {}
+    to: Dict[int, Dict[int, float]] = {}
+    for k, a in v.items():
+        y = int(str(k).strip()) if str(k).strip().lstrip("-").isdigit() else None
+        if y not in years:
+            continue
+        if not isinstance(a, dict):
+            amt = _number(a)
+            if amt is None or amt < 0:
+                problems.append(f"{where}: {y} must be an amount >= 0 (a "
+                                f"number, unquoted), got {a!r}")
+            else:
+                totals[y] = amt
+            continue
+        line = (f"{where}: {y} = {{ "
+                + ", ".join(f"{t} = {x!r}" for t, x in a.items()) + " }")
+        got, bad = _back_targets(y, a, line)
+        for t, amt in sorted(got.items()):
+            have = claimed.get(t, 0.0)
+            if amt > have + 0.005:
+                bad.append(
+                    f"{line}: {amt:,.2f} carried back to {t}, but "
+                    f"[{CARRY_TABLE}] {CLAIMED_KEY} has "
+                    + ("no amount" if have <= 0.005 else f"{have:,.2f}")
+                    + f" under {t}: a carry-back is part of the losses applied "
+                      f"on the {t} return; correct the year or the amount, or "
+                      f"`{CLAIMED_KEY}`")
+        problems += bad
+        if not bad:
+            to[y] = got
+            totals[y] = math.fsum(got.values())
+    return totals, to, problems
+
+
 def carried_back_stated(cfg: Dict[str, Any]) -> Tuple[Dict[int, float], List[str]]:
-    """({year: amount}, problems) of [carryover] carried_back (Canada): the net
-    capital loss each named year's return carried back (T1A), the person's
-    answer where `tjs carryover` says it can't tell (backlog TJ-4880). The
-    table's own problems are `claimed_losses`'s."""
-    return _by_year(_carry_table(cfg)[0].get(STATED_BACK_KEY),
-                    f"[{CARRY_TABLE}] {STATED_BACK_KEY}", STATED_BACK_KEY)
+    """({year: amount}, problems) of [carryover] carried_back: each year's
+    total, a by-target entry's being the sum of its amounts
+    (`carried_back_entries`)."""
+    totals, _to, problems = carried_back_entries(cfg)
+    return totals, problems
 
 
 # ------------------------------------------------------------ all checks

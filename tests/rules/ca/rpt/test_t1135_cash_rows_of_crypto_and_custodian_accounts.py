@@ -436,7 +436,8 @@ class TestTJ0454CashInTheTest(unittest.TestCase):
         self.assertIs(rep["total_settled"], True)
         self.assertEqual(rep["cash_accounts"], {"crypto": "CRYPTO"})
         brief = " ".join(T.render_brief(rep).split())
-        self.assertIn("USD cash (crypto) CRYPTO 1 880.00 880.00", brief)
+        self.assertIn("USD cash (crypto) CRYPTO account 1 880.00 880.00",
+                      brief)
         self.assertIn("CAT: the form's category (1 cash; 2 shares;", brief)
         self.assertIn("! ZZCOIN, USD cash (crypto): crypto, check where "
                       "held — tjs t1135 --details", brief)
@@ -656,7 +657,7 @@ class TestTJ0609CashAtACustodianAbroad(unittest.TestCase):
         self.assertIs(j["total_settled"], True)
         self.assertEqual(j["cash_accounts"], {"abroad": "USA"})
         flat = " ".join(_cli(self.root, "t1135").stdout.split())
-        self.assertIn("CAD cash (abroad) USA 1 600.00 600.00", flat)
+        self.assertIn("CAD cash (abroad) USA account 1 600.00 600.00", flat)
 
     @rule(R.CA_RPT_20)
     def test_without_the_custodian_abroad_no_cash_is_read(self):

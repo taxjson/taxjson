@@ -141,11 +141,19 @@ class TestRunEndToEnd(unittest.TestCase):
             self.assertIn("basis: wash-adjusted", s.stdout)
             self.assertIn("480.10", s.stdout)
 
-    def test_run_ends_with_holdings_sanity_when_configured(self):
-        """`holdings = [...]` on an account makes `run` finish with the
-        broker-positions cross-check — a warning on mismatch, never a
-        failing exit (same-day trades not yet in the CSVs differ
-        routinely)."""
+    def test_run_compares_no_holdings_and_names_sanity(self):
+        """TJ-5170 (owner's decision of 2026-11-23): `tjs sanity` is a
+        step of its own. A run on a project with holdings files — an
+        account's `holdings = [...]`, a holdings/ snapshot — compares
+        nothing with them (no `Checking positions` step, no `tjs
+        sanity:` line, a differing file changes nothing) and its closing
+        list names `tjs sanity` and where the files are, under a
+        heading naming step 6; `tjs sanity` says OK, or the difference
+        with exit 1. A holdings file is a check-only input: the line
+        is worked out when the list is printed, never written to
+        reports/run_summary.json (the review of TJ-5170: the file moved,
+        and `tjs compare filed` with it); a changed file leaves the
+        summary as it was."""
         with tempfile.TemporaryDirectory() as tmp:
             root = self._project(tmp)
             ext = root / "ext"
@@ -156,27 +164,68 @@ class TestRunEndToEnd(unittest.TestCase):
                 'asset_type = "equity"\n\n')
             (root / "taxjson.toml").write_text(
                 _CONFIG + 'holdings = ["ext/rrsp_pos.toml"]\n')
-            r = _run_cli(root, "run")
-            self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
-            self.assertIn("==> Checking positions against the broker's "
-                          "holdings files", r.stdout)
-            self.assertRegex(r.stdout, r"accounts: +rrsp")
-            self.assertIn("OK: tickers and quantities agree", r.stdout)
-            self.assertNotIn("positions differ", r.stderr)
-            # Drift the broker file: warning on stderr, exit still 0.
+            named = ("Info: positions not yet compared with the broker's "
+                     "holdings files")
+            summaries = []
+
+            def run_compares_nothing(where):
+                r = _run_cli(root, "run")
+                self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+                both = r.stdout + r.stderr
+                for said in ("Checking positions", "tjs sanity:",
+                             "SANITY —", "QTY_MISMATCH", "positions differ",
+                             "positions match", "holdings check"):
+                    self.assertNotIn(said, both)
+                closing = r.stdout[r.stdout.index(
+                    "==> Before you trust these numbers"):]
+                self.assertTrue(closing.startswith(
+                    "==> Before you trust these numbers "
+                    "(docs/getting-started.md, step 6)"), closing)
+                flat = " ".join(closing.split())
+                self.assertIn(f"{named} ({where}): `tjs run` does not "
+                              f"compare them. Run `tjs sanity`", flat)
+                summaries.append(
+                    (root / "reports" / "run_summary.json").read_bytes())
+            run_compares_nothing("`holdings = [...]` of rrsp")
+            s = _run_cli(root, "sanity")
+            self.assertEqual(s.returncode, 0, s.stderr + s.stdout)
+            self.assertRegex(s.stdout, r"accounts: +rrsp")
+            self.assertIn("OK: tickers and quantities agree", s.stdout)
+            # Drift the broker file: the run still compares nothing;
+            # `tjs sanity` names the difference, exit 1.
             (ext / "rrsp_pos.toml").write_text(
                 'schema_version = "1.0"\n[meta]\naccount = "67890"\n\n'
                 '[[holding]]\nsymbol = "ZAG.TO"\nquantity = 60\n'
                 'asset_type = "equity"\n\n')
-            r = _run_cli(root, "run")
-            self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
-            self.assertIn("QTY_MISMATCH", r.stdout)
-            self.assertIn("positions differ", r.stderr)
-            # No `holdings` anywhere: no section at all.
+            run_compares_nothing("`holdings = [...]` of rrsp")
+            s = _run_cli(root, "sanity")
+            self.assertEqual(s.returncode, 1, s.stderr + s.stdout)
+            self.assertIn("QTY_MISMATCH", s.stdout)
+            # A holdings/ snapshot names the step too.
             (root / "taxjson.toml").write_text(_CONFIG)
+            (root / "holdings").mkdir()
+            (ext / "rrsp_pos.toml").rename(
+                root / "holdings" / "rrsp_holdings.toml")
+            run_compares_nothing("holdings/")
+            # The three runs with holdings files wrote the same summary.
+            self.assertEqual(len(set(summaries)), 1, summaries)
+            # No holdings anywhere: the line is not there, and the
+            # summary differs only in the accounts with no holdings file
+            # (unchecked_accounts, as before TJ-5170).
+            (root / "holdings" / "rrsp_holdings.toml").unlink()
             r = _run_cli(root, "run")
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
             self.assertNotIn("holdings files", r.stdout)
+            self.assertIn("no holdings file to check them against: rrsp",
+                          r.stdout)
+            doc = json.loads(
+                (root / "reports" / "run_summary.json").read_text())
+            self.assertEqual([u["account"] for u in
+                              doc["unchecked_accounts"]], ["rrsp"])
+            was = json.loads(summaries[0])
+            self.assertEqual(was["unchecked_accounts"], [])
+            self.assertEqual(dict(was, unchecked_accounts=[]),
+                             dict(doc, unchecked_accounts=[]))
 
     def test_second_run_rebuilds_by_default_and_is_idempotent(self):
         # Full rebuild is the DEFAULT (2026-07 flip): a plain re-run

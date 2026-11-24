@@ -21,7 +21,7 @@ FORMS = {
               "<amount> [value=<base amount>] [at=<book>]",
     "CASHMOVE": "CASHMOVE <date> <currency> <signed amount> "
                 "own|kept|spot|cost=<base amount>|proceeds=<base amount> "
-                "[at=<book>]",
+                "[at=<book>] [row=<file:line>]",
     "CASHOPEN": "CASHOPEN <date> <currency> <signed units> <base cost> "
                 "[at=<book>]",
     "CASHBAL": "CASHBAL <date> <currency> <balance> [at=<book>]",
@@ -29,6 +29,20 @@ FORMS = {
 }
 
 
+# A CASHMOVE line's `row=`: the broker's row the line declares, as the
+# ledger's messages name it (`kr_ledgers.csv:6`). Only needed where the
+# line fits two rows that are not alike in kind (a cash move and a Kraken
+# Hybrid Earn row of one day and amount: lib/cash_events
+# `apply_declarations`, backlog TJ-4951). A file name the line's words
+# would be split in (a space: a browser's `kraken_ledgers (1).csv`), or
+# that holds a `#` (the comment sign), a quote or a backslash, goes in
+# double quotes, a `"` or a backslash in it after a backslash, as a .tt
+# line's `reason="..."` is written: `row="kraken_ledgers (1).csv:6"`
+# (`_ROW_QUOTED`, `row_token`, which every message prints a row with).
+_ROW = "row"
+_ROW_QUOTED = re.compile(r'(?:^|(?<=\s))row="((?:[^"\\]|\\.)*)"(?=\s|$)')
+_ROW_RE = re.compile(r"^.*[^:]:[1-9]\d*$")
+_ROW_BARE = re.compile(r"^[^\s#\"'\\]+$")
 COMPLETE = "complete"
 MOVE_HOW = ("own", "kept", "spot")
 
@@ -41,6 +55,50 @@ _BOOK_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*(?::[0-9a-f]{1,10})?$")
 
 class CashLineError(ValueError):
     """A cash .tt line that cannot be read (named, with its form)."""
+
+
+def row_token(row: str) -> str:
+    """`row=<file:line>` as a CASHMOVE line takes it and every message
+    prints it: the row as it is, or in double quotes where the file's
+    name holds what the line's words are split at or a quote (`_ROW`)."""
+    if _ROW_BARE.match(row):
+        return f"{_ROW}={row}"
+    return _ROW + '="' + row.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _take_row(line: str) -> Tuple[str, Optional[str]]:
+    """(a CASHMOVE line without its quoted `row="..."`, that row or
+    None): the quoted form is taken out before the line is cut at its
+    comment and split into words, since the name may hold a `#` or a
+    space. One after the line's `#` is part of the comment."""
+    m = _ROW_QUOTED.search(line)
+    if (m is None or "#" in line[:m.start()]
+            or line.split(None, 1)[:1] != ["CASHMOVE"]):
+        return line, None
+    return (line[:m.start()] + " " + line[m.end():],
+            re.sub(r"\\(.)", r"\1", m.group(1)))
+
+
+def _line_row(quoted: Optional[str], keys: Dict[str, str], where: str,
+              shown: str) -> Optional[str]:
+    """A CASHMOVE line's row (`_ROW`): the quoted one (`_take_row`) or
+    the `row=` word among its `keys`, taken out of them; None without
+    one. A CashLineError naming `row=` for one given twice or that is
+    not `<file:line>` (a name with a space left unquoted ends at the
+    space)."""
+    kw = "CASHMOVE"
+    if quoted is not None and _ROW in keys:
+        raise CashLineError(f"{where}{kw}: {_ROW}= given twice: {shown!r}")
+    row = quoted if quoted is not None else keys.pop(_ROW, None)
+    if row is not None and not _ROW_RE.match(row):
+        raise CashLineError(
+            f"{where}malformed {kw} line — {_ROW}={row!r} is not a broker's "
+            f"row: {_ROW}= takes the row as the ledger's messages name it, "
+            f"<file:line> ({_ROW}=kr_ledgers.csv:6), in double quotes when the "
+            f"file's name holds a space, a `#` or a quote "
+            f"({_ROW}=\"kraken_ledgers (1).csv:6\") (expected `{FORMS[kw]}`): "
+            f"{shown!r}")
+    return row
 
 
 def _num(tok: str, what: str, where: str, line: str, kw: str) -> float:
@@ -84,7 +142,8 @@ def parse_line(line: str, source: str = "") -> Optional[Dict[str, Any]]:
     None when it is not a cash line. Raises CashLineError naming the
     form on a malformed one."""
     where = f"{source}: " if source else ""
-    text = line.split("#", 1)[0]
+    line_, quoted = _take_row(line)
+    text = line_.split("#", 1)[0]
     parts = text.split()
     if not parts or parts[0] not in KEYWORDS:
         return None
@@ -135,6 +194,8 @@ def parse_line(line: str, source: str = "") -> Optional[Dict[str, Any]]:
                             f"fx-cash --ledger v2` prints it): {shown!r}")
     ev: Dict[str, Any] = {"kind": kw, "date": d, "settle": d, "at": at,
                           "line": shown, "where": source, "origin": "tt"}
+    if kw == "CASHMOVE":        # (the row it declares: `_ROW`)
+        ev[_ROW] = _line_row(quoted, keys, where, shown)
     rest = toks[1:]
 
     def _bad(why: str) -> CashLineError:

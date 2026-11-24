@@ -227,6 +227,32 @@ def roc_adjust_row(*, symbol: str, currency: str, date: str, desc: str,
 # the trade is flagged ATTENTION (CA-DATE-03 / US-DATE-04, audit A2-0104).
 SETTLE_LAG_FLAG_DAYS = 7
 
+# The fields a row's content id hashes (model.transaction
+# `TaxTransaction.compute_id`), with the value a row that lacks one is
+# built with.
+FILL_IDENTITY_FIELDS: Tuple[Tuple[str, Any], ...] = (
+    ('action', ''), ('date', ''), ('time', '09:30:00'), ('symbol', ''),
+    ('quantity', 0.0), ('currency', ''), ('price', 0.0), ('net_amount', 0.0),
+    ('gross_amount', 0.0), ('account', 'PORTFOLIO'), ('type', ''),
+    ('date_settle', ''), ('description', ''))
+
+
+def fill_identity(tx: Dict[str, Any]) -> tuple:
+    """What a parsed row's content id will be made of
+    (FILL_IDENTITY_FIELDS): two rows of one file equal in all of it get
+    one id, and only they are split fills
+    (`BaseBrokerage.disambiguate_split_fills`; TJ-5038). A number is
+    compared as a number (10 and 10.0 are one quantity, as the id's
+    float has them), the rest as text."""
+    out: List[Any] = []
+    for name, default in FILL_IDENTITY_FIELDS:
+        value = tx.get(name)
+        if value is None:
+            value = default
+        numeric = isinstance(default, float) and isinstance(value, (int, float, Decimal))
+        out.append(value if numeric else str(value))
+    return tuple(out)
+
 
 # The project's ticker.map as `taxjson-brokerage --ticker-map` loaded it
 # (run passes it): (fixed-point renames incl. TOBASE/JOURNAL, the dated
@@ -1351,11 +1377,12 @@ class BaseBrokerage:
 
     def after_marks(self, transactions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """The parser's step after the split-fill marks and before the skip
-        summary: what must see the marks (an output order, so the marks
-        follow the file and a row's id does not change with the order) or
-        must not be seen by them (a costing the loop did after them, so the
-        ids stay as they were). Nothing by default; an override says what
-        it does and why it belongs here."""
+        summary: what must see the marks, or must not be seen by them (a
+        costing the loop did after them, so the ids stay as they were).
+        Not the order a newest-first export is read in: that is `finish`'s,
+        before the marks, so two exports listing a day in opposite orders
+        mark the same row (TJ-5038). Nothing by default; an override says
+        what it does and why it belongs here."""
         return transactions
 
     def release(self) -> None:
@@ -1441,9 +1468,9 @@ class BaseBrokerage:
             self.clamp_settlement_to_expiry(transactions, self._expiries)
             # Parser-level disambiguation so a downstream `taxjson-sort
             # --dedup` can't collapse byte-identical split-fill rows; the
-            # marks follow the rows as built, so the first of identical
-            # rows keeps its stable id whatever order the parser outputs
-            # them in.
+            # marks follow the rows in the order the parser outputs them
+            # (a newest-first export already put oldest first), so the
+            # first of identical rows keeps its stable id.
             # A row with its own id (an exchange's transaction id) needs
             # no fill mark: the rows without one alone, as Coinbase marked
             # them (Kraken's own marker goes with its conversion).
@@ -1836,12 +1863,20 @@ class BaseBrokerage:
 
     @staticmethod
     def disambiguate_split_fills(transactions: List[Dict[str, Any]]) -> None:
-        """Mark the second+ instance of identical-looking rows in this
-        file as split fills. Some brokerages emit multiple CSV rows for
-        one order that gets filled in pieces at the same price and time;
-        they're physically distinct trades that produce byte-identical
-        CSV rows. Without this, the deterministic id() hash collapses
-        them to one entry under taxjson-sort --dedup.
+        """Mark the second+ instance of identical rows in this file as
+        split fills. Some brokerages emit multiple CSV rows for one order
+        that gets filled in pieces at the same price and time; they're
+        physically distinct trades that produce byte-identical CSV rows.
+        Without this, the deterministic id() hash collapses them to one
+        entry under taxjson-sort --dedup.
+
+        Identical is every field of the row's id (`fill_identity`): rows a
+        description, a currency, a settlement date, a type or a gross
+        amount already tells apart keep two ids, and a mark on one of them
+        made the copy an overlapping export holds (unmarked there, alone)
+        a third row (TJ-5038). Called on the rows in the order the parser
+        outputs them, so two exports that list one day in opposite orders
+        mark the same row.
 
         Mutates transactions in place. Modifies only the 2nd+ occurrence
         so the first instance keeps its original (stable) id.
@@ -1851,12 +1886,7 @@ class BaseBrokerage:
             # A foreign issuer's return of capital (ISSUER_ROC_KEY) is no
             # split fill of an ordinary dividend that looks alike: they
             # pair among themselves alone (TJ-2594).
-            key = (
-                tx.get('date'), tx.get('time'), tx.get('symbol'),
-                tx.get('action'), tx.get('quantity'),
-                tx.get('price'), tx.get('net_amount'),
-                tx.get('account'), bool(tx.get(ISSUER_ROC_KEY)),
-            )
+            key = fill_identity(tx) + (bool(tx.get(ISSUER_ROC_KEY)),)
             seen[key] = seen.get(key, 0) + 1
             if seen[key] > 1:
                 existing = tx.get('description') or ''

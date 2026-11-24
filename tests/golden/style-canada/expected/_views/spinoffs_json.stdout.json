@@ -6,6 +6,7 @@
       "broker_currency": "USD",
       "broker_fmv": 250.0,
       "cash_in_lieu": "",
+      "cash_in_lieu_parts": [],
       "child": "SPNC.US",
       "currency": "CAD",
       "date": "2024-06-03",

@@ -252,6 +252,8 @@ ATTENTION_TOPICS = {
     "transfer-in": "Transfer-in",
     "unapplied basis adjustment": "Unapplied basis adjustment",
     "wash sale reaches a filed year": "Wash sale reaches a filed year",
+    "undated listing": "Undated listing",
+    "one payment in two exports": "One payment in two exports",
 }
 _TOPIC_RE = re.compile(r"(?P<topic>[a-z][a-z -]*?): ")
 

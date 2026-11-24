@@ -14,9 +14,10 @@ from typing import (
 from datetime import datetime
 
 from taxjson.model import money as M
-from taxjson.lib.futures_prefixes import FUTURES_PREFIXES
+from taxjson.lib.futures import buy_receives
+from taxjson.lib.futures_prefixes import canonical_futures_symbol
 from taxjson.lib.option_symbols import (
-    _FUTURES_PREFIX_RE, is_option_symbol, parse_option_right, parse_option_underlying,
+    is_option_symbol, parse_option_right, parse_option_underlying,
     root_matches_stock,
 )
 from taxjson.lib.contract_size import OPTION_CONTRACT_SHARES
@@ -34,13 +35,10 @@ def receives_on_buy(tx: TaxTransaction) -> bool:
     """A plain-futures BUY at a negative price: it RECEIVES cash, so
     its cost is negative (the schema's exemption, audit A2-0302). The
     engines' abs() of a buy's amount made it a positive cost in the
-    native view, while the settled (base) books were right."""
-    sym = tx.symbol or ''
-    return (float(tx.quantity or 0.0) > 0
-            and M.of(tx.net_amount or 0.0) < 0
-            and M.of(tx.price or 0.0) < 0
-            and sym.startswith(FUTURES_PREFIXES)
-            and not is_option_symbol(sym))
+    native view, while the settled (base) books were right. The test
+    is lib/futures.buy_receives, the one the settlement rewrite reads
+    too (backlog TJ-5162)."""
+    return buy_receives(tx)
 
 
 def _opening_option_buys(events: Iterable[TaxTransaction],
@@ -199,7 +197,7 @@ def detect_unresolved_option_replacement_matches(
     def _base(sym: str) -> Tuple[str, str]:
         # (base, suffix) with any futures prefix spelled 'F:'.
         b, ext = _split_underlying(sym)
-        return _FUTURES_PREFIX_RE.sub('F:', b), ext
+        return canonical_futures_symbol(b), ext
 
     acqs = []
     for ev, opening in _opening_option_buys(events, date_of):

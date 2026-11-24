@@ -158,7 +158,7 @@ class TestPendingElectionDocument(unittest.TestCase):
 
     FIELDS = ("summary", "qty_received", "ratio_new", "ratio_old",
               "fraction_in_lieu", "cash_in_lieu", "cash_in_lieu_currency",
-              "cash_in_lieu_date")
+              "cash_in_lieu_date", "cash_in_lieu_parts")
 
     def test_the_fields_the_doc_names(self):
         import json
@@ -176,6 +176,7 @@ class TestPendingElectionDocument(unittest.TestCase):
         self.assertEqual((ev["cash_in_lieu"], ev["cash_in_lieu_currency"],
                           ev["cash_in_lieu_date"]),
                          (12.0, "CAD", "2024-06-18"))
+        self.assertEqual(ev["cash_in_lieu_parts"], [])     # paid on one day
         doc = (REPO / "docs" / "commands.md").read_text(encoding="utf-8")
         elect = doc[doc.index("#### tjs elect"):]
         elect = elect[:elect.index("\n#### ", 1)]

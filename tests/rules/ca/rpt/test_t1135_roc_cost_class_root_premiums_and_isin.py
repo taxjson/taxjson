@@ -132,6 +132,9 @@ class TestT1135Report(unittest.TestCase):
 
     @rule(R.CA_RPT_02)
     def test_a2_0332_canadian_isin_on_us_listing_is_named(self):
+        # Named, and since TJ-4957 decided by the ISIN: not foreign
+        # property (it was counted as foreign, with a warning naming
+        # the `T1135 SYMBOL CA` line).
         rows = [_t(date="2025-01-03", symbol="QZBT.US", qty=1500,
                    net=-202501.35),
                 _t("DIVIDEND", "2025-03-03", symbol="QZBT.US", qty=0,
@@ -142,14 +145,19 @@ class TestT1135Report(unittest.TestCase):
             rc, out, err = _t1135([str(p), "--year", "2025",
                                    "--year-wash-only"])
             self.assertEqual(rc, 0, err)
-            self.assertIn("Canadian ISIN", err)
-            self.assertIn("QZBT.US", out.split("Canadian ISIN")[-1])
+            self.assertIn("no T1135 required", out)
+            flat = " ".join(out.split())
+            self.assertIn("QZBT.US: not foreign property by its ISIN (CA, ",
+                          flat)
+            self.assertIn("); its listing says USA.", flat)
+            self.assertIn("If you know otherwise: `T1135 QZBT.US USA`",
+                          flat)
             m = Path(d) / "ticker.map"
-            m.write_text("T1135 QZBT.US CA\n")
+            m.write_text("T1135 QZBT.US USA\n")
             rc, out, err = _t1135([str(p), "--year", "2025", "--map",
                                    str(m), "--year-wash-only"])
-            self.assertNotIn("Canadian ISIN", err + out)
-            self.assertIn("no T1135 required", out)
+            self.assertNotIn("by its ISIN", err + out)
+            self.assertIn("FILING REQUIRED", out)
 
     def test_a2_0660_refusal_does_not_advise_a_relabel(self):
         rows = [_t(date="2025-02-03", symbol="MSFT.US", qty=200,

@@ -66,6 +66,7 @@ from typing import Any, Dict, List, Optional
 
 from taxjson.lib.tax_forms import load_json
 from taxjson.lib.cli_diag import guard_main, tax_year
+from taxjson.lib.futures_prefixes import FuturesSymbolError
 from taxjson.lib.country import CANADA, USA
 from taxjson.model import money as M
 from taxjson.lib.numeric import nonneg_float_arg
@@ -360,12 +361,12 @@ def load_slip(path: Path, renames: Optional[Dict[str, str]] = None,
                 continue
             try:
                 sym = rename(slip_symbol(cells["symbol"], strict=True))
-            except UnrepresentableStrike as e:
+            except (UnrepresentableStrike, FuturesSymbolError) as e:   # TJ-5150
                 # Matching it to the nearest OCC strike certified a
                 # different contract (backlog TJ-0902).
-                _drop(f"line {lineno}: option {cells['symbol']!r}: an "
-                      f"OCC symbol cannot hold its strike {e} (it "
-                      f"counts in steps of 0.001, below 100000)")
+                _drop(f"line {lineno}: option {cells['symbol']!r}: an OCC symbol cannot "
+                      f"hold its strike {e} (it counts in steps of 0.001, below 100000)"
+                      if isinstance(e, UnrepresentableStrike) else f"line {lineno}: {e}")
                 continue
             if not sym:
                 if any(cells.get(k) for k in ("quantity", "proceeds",

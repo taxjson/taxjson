@@ -11,6 +11,7 @@ from pathlib import Path
 
 from _run_patch import patch_run
 import _paths
+from _support.planning_radar_row import base_rows
 
 
 REPO_ROOT = _paths.REPO
@@ -33,12 +34,13 @@ def _radar_doc(taxable, as_of, sheltered=None, country="canada",
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         t = tmp / "margin_base.json"
-        t.write_text(json.dumps({"transactions": taxable}))
+        t.write_text(json.dumps({"transactions": base_rows(taxable, country)}))
         cmd = RADAR + ["--country", country, "--taxable", str(t),
                        "--date", as_of, "--all", "--json", *extra]
         if sheltered is not None:
             s = tmp / "sheltered_base.json"
-            s.write_text(json.dumps({"transactions": sheltered}))
+            s.write_text(json.dumps({"transactions": base_rows(sheltered,
+                                                               country)}))
             cmd += ["--sheltered", str(s)]
         for i, g in enumerate(gains or []):
             gp = tmp / f"g{i}_gains_wash.json"

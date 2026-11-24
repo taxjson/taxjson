@@ -16,6 +16,7 @@ from taxjson.rules import ids as RID
 from _qa_project import project as qa_project, tj
 from _style import assert_concise, assert_legend_first, assert_styled
 from _style import project as style_project
+from _support.planning_radar_row import base_rows
 
 _W = {"TAXJSON_WIDTH": "100"}
 
@@ -35,13 +36,14 @@ def _radar(country, taxable, sheltered=None, as_of="2026-05-20",
     from taxjson.bin.taxjson_watch import flatten_radar
     with tempfile.TemporaryDirectory() as d:
         tp = Path(d) / "margin_base.json"
-        tp.write_text(json.dumps({"transactions": taxable}))
+        tp.write_text(json.dumps({"transactions": base_rows(taxable, country)}))
         argv = ["taxjson-wash-radar", "--country", country, "--date",
                 as_of, "--all", "--json", "--cleared-days", str(cleared),
                 "--taxable", str(tp)]
         if sheltered:
             sp = Path(d) / "sheltered_base.json"
-            sp.write_text(json.dumps({"transactions": sheltered}))
+            sp.write_text(json.dumps({"transactions": base_rows(sheltered,
+                                                                country)}))
             argv += ["--sheltered", str(sp)]
         out, old = io.StringIO(), sys.argv
         sys.argv = argv

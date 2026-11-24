@@ -185,7 +185,15 @@ class TestCutLegs(unittest.TestCase):
                     new = (c.date, float(c.quantity), float(c.price), c.action)
                 except V.EvidenceError:
                     new = "error"
-                self.assertEqual(_key(new), _key(old_cut_leg(leg)), leg)
+                # A fifth token is the row's own symbol (TJ-5005): the
+                # first four read as they did.
+                bits = leg.split()
+                four = " ".join(bits[:4]) if len(bits) == 5 else leg
+                self.assertEqual(_key(new), _key(old_cut_leg(four)), leg)
+                self.assertEqual(V.cut_leg_symbol(leg),
+                                 bits[4] if len(bits) == 5 else "")
+                if new != "error":
+                    self.assertEqual(c.symbol, V.cut_leg_symbol(leg))
 
     def test_the_writer_is_unchanged_and_reads_back(self):
         rng = random.Random(66)
@@ -210,8 +218,24 @@ class TestCutLegs(unittest.TestCase):
             self.assertEqual(V.format_commission_refunds(V.parse_commission_refunds(s)), s)
         self.assertEqual(V.join_cut_legs(None, []), "")   # lib/opening's _get gives '' for None
 
+    def test_a_leg_under_another_symbol_names_it(self):
+        # Backlog TJ-5005: a row a rename made the snapshot's keeps its
+        # own symbol as a fifth token; the snapshot's own rows as before.
+        leg = V.cut_leg("2025-06-02", 100, 10, "ASSIGN", "SYNO.US")
+        own = V.cut_leg("2025-06-02", 100, 10, "ASSIGN")
+        text = V.join_cut_legs("2025-05-30 1.0 2.0 BUYSELL", [leg, own])
+        self.assertEqual(text, "2025-05-30 1.0 2.0 BUYSELL;"
+                               "2025-06-02 100.0 10.0 ASSIGN SYNO.US;"
+                               "2025-06-02 100.0 10.0 ASSIGN")
+        self.assertEqual(V.format_cut_legs(V.parse_cut_legs(text)), text)
+        self.assertEqual([c.symbol for c in V.parse_cut_legs(text)],
+                         ["", "SYNO.US", ""])
+        self.assertEqual([V.cut_leg_symbol(x) for x in V.split_cut_legs(text)],
+                         ["", "SYNO.US", ""])
+
     def test_a_bad_leg_raises_an_evidence_error(self):
-        for leg in ("2024-12-27 100.0 5.0", "2024-12-27 x 5.0 ASSIGN", "2024-12-27 1 sNaN ASSIGN"):
+        for leg in ("2024-12-27 100.0 5.0", "2024-12-27 x 5.0 ASSIGN", "2024-12-27 1 sNaN ASSIGN",
+                    "2024-12-27 1 2 ASSIGN SYNO.US more"):
             with self.assertRaises(V.EvidenceError):
                 V.parse_cut_leg(leg)
         self.assertTrue(issubclass(V.EvidenceError, ValueError))

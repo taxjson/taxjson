@@ -351,6 +351,8 @@ case "${1:-}" in
   -*) echo "check-pii: unknown option $1 (scripts/check-pii.sh --help; a path that starts with -: put -- before it)" >&2; exit 2 ;;
 esac
 hits=0
+# A tree scan that could not list the files it scans (backlog TJ-5082).
+UNSCANNED=0
 CI=""        # "-i" while scanning the (case-insensitive) denylist
 # A genuine false positive carries a comment marker, not just the word.
 PII_OK='(#|//|<!--|/\*)[[:space:]]*pii-ok([^A-Za-z0-9_-]|$)|pii-ok:'
@@ -740,7 +742,15 @@ else
 "
     done
   else
-    LIST="$(git ls-files -z --cached --others --exclude-standard | tr '\0' '\n')"
+    # Fails closed (backlog TJ-5082): in a tree git cannot list (a source
+    # archive with no .git), or lists nothing in (the tree inside a folder
+    # another repository ignores), the scan of no file said "clean".
+    LIST="$(git ls-files -z --cached --others --exclude-standard | tr '\0' '\n')" \
+      || { LIST=""; UNSCANNED=1; fail "cannot list the files git sees (not a git checkout?): nothing was scanned — pass the paths instead (scripts/check-pii.sh .)"; }
+    if [ "$UNSCANNED" = 0 ] && [ -z "$LIST" ]; then
+      UNSCANNED=1
+      fail "git lists no file here (a folder git ignores, or a checkout with none): nothing was scanned — pass the paths instead (scripts/check-pii.sh .)"
+    fi
     NAMES="$LIST"
   fi
   SCANLIST="$(printf '%s\n' "$LIST" | while IFS= read -r f; do [ -n "$f" ] && ! is_bin "$f" && printf '%s\n' "$f"; done)"
@@ -1233,6 +1243,11 @@ else
   denynote="$denynote; figure list: $AMTSHOW"
 fi
 
+if [ "$hits" -gt 0 ] && [ "$UNSCANNED" = 1 ]; then
+  # (no file was read: no content to fix or mark)
+  echo; echo "check-pii: $hits problem(s) — the tree was not scanned: pass the paths to scan (scripts/check-pii.sh .)."
+  exit 1
+fi
 if [ "$hits" -gt 0 ]; then
   echo; echo "check-pii: $hits problem(s) — fix the content, or mark a genuine false positive with a '# pii-ok' (or 'pii-ok:') comment on that line (a figure-list match has no such escape: change the number)."
   exit 1

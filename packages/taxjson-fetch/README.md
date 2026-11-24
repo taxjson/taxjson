@@ -59,7 +59,7 @@ tax year's whole window), `--days N` / `--from YYYY-MM-DD` (override the
 Questrade window), `--refresh-token` (Questrade, first run) /
 `--flex-token` (IBKR), `--positions` (snapshot live Questrade holdings
 into the year's holdings folder, `holdings/<account>_live_holdings.toml`,
-where `tjs sanity` and the end of `tjs run` find it) and
+where `tjs sanity` finds it) and
 `--trim-overlap` (trim manually exported Questrade rows inside the
 fetched window, keeping a `.bak`; a symlink at that name is skipped,
 never followed, for the next free `.bakN`). The core adds `--list`, `--fetcher`,

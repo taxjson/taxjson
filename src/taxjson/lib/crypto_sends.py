@@ -1715,6 +1715,49 @@ def crypto_accounts(cfg: Dict[str, Any]) -> List[str]:
             if a.crypto]
 
 
+def cash_send_decisions(root: Path, cfg: Dict[str, Any], cache: Path,
+                        present: Optional[set] = None) -> List[Dict[str, Any]]:
+    """The unmatched sends of a USD stablecoin, each with the decision
+    `tjs crypto-sends` uses for it (None: undecided), for the FX-on-cash
+    ledger v2 (lib/cash_events `send_decisions`; backlog TJ-4953): the
+    stablecoin is US-dollar cash there, so the send is a cash move the
+    ledger asks about, and the owner already said what it was. Each
+    {"account", "exchange", "date", "symbol", "quantity" (sent, positive),
+    "id", "decision", "where" (the sends.json it is saved in)}. Read as
+    `build_report` reads them (the evidence in `cache`, of the exports
+    still in inputs/ alone, `present`: {(account, broker)}, so a sidecar
+    a removed export left behind neither decides nor pairs anything; the
+    pairing with an arrival: a paired send is an own move and has no
+    decision), with
+    no pool and no price, and nothing written: the saved ids of an old
+    sends.json are not moved here (`migrate_saved_ids`; they differ only
+    between sends alike to the second, which the ledger takes one
+    decision for or none). None of a Kraken Hybrid Earn move (no cash
+    move of the ledger). [] when no crypto account has a sends.json; a
+    ValueError for one that does not read."""
+    accts = crypto_accounts(cfg)
+    man_paths = {a: _PL.inputs_dir(root) / a / MANIFEST_NAME for a in accts}
+    if not any(p.exists() or p.is_symlink() for p in man_paths.values()):
+        return []
+    rows = load_transfer_rows(cache, accts, present)
+    assign_send_ids(rows)
+    decisions = {a: load_decisions(p)["sends"] for a, p in man_paths.items()}
+    unpaired = {(a, sid) for a, d in decisions.items()
+                for sid, rec in d.items() if rec.get("unpair")}
+    unmatched, _pairs = match_transfers(rows, unpaired)
+    out: List[Dict[str, Any]] = []
+    for s in unmatched:
+        if is_hybrid_earn(s) or not is_cash_stablecoin(s["symbol"], s["exchange"]):
+            continue
+        rec = decisions[s["account"]].get(s["sid"]) or {}
+        out.append({"account": s["account"], "exchange": s["exchange"],
+                    "date": s["date"], "symbol": s["symbol"],
+                    "quantity": -s["quantity"], "id": s["sid"],
+                    "decision": rec.get("decision"),
+                    "where": f"inputs/{s['account']}/{MANIFEST_NAME}"})
+    return out
+
+
 def build_report(root: Path, cfg: Dict[str, Any],
                  broker_files: Optional[Dict[str, List[Tuple[str, Path]]]]
                  = None,

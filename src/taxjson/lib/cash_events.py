@@ -31,7 +31,7 @@ moves and conversions; and `.tt` lines for whatever no export carries
 (Webull, a bank account), written date first like the other dated lines:
 
     FXCONV <date> <from> <amount> <to> <amount> [value=<base>] [at=<book>]
-    CASHMOVE <date> <cur> <signed amount> <how> [at=<book>]
+    CASHMOVE <date> <cur> <signed amount> <how> [at=<book>] [row=<file:line>]
         how: own | kept | spot | cost=<base> | proceeds=<base>
     CASHOPEN <date> <cur> <signed units> <base cost> [at=<book>]
     CASHBAL <date> <cur> <balance> [at=<book>]
@@ -63,7 +63,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 from taxjson.project.accounts import configured_accounts, typed_account
 from taxjson.lib import project_layout as _PL
-from taxjson.lib.cash_lines import CashLineError, KEYWORDS, parse_line
+from taxjson.lib.cash_lines import CashLineError, KEYWORDS, parse_line, row_token
 from taxjson.model import money as M
 
 # Parser ids (lib/brokerages/detect) -> the short name a book and an
@@ -135,32 +135,280 @@ def read_project_lines(root: Path, accounts: Dict[str, Any]
 
 
 def apply_declarations(events: List[Dict[str, Any]],
-                       lines: List[Dict[str, Any]]) -> None:
+                       lines: List[Dict[str, Any]],
+                       base: Optional[str] = None) -> None:
     """A .tt CASHMOVE line that matches a broker's move (the account,
     the currency, the amount within a cent, its date the move's trade
     or settlement date, and its book when it names one) declares it:
-    the move takes the line's `decl` (and `decl_where`), the line is
-    marked `matched`. A line matching none is a move of its own. In
-    place; the ledger (lib/fx_cash_v2.build) and `tjs cash` read
-    the same declarations."""
+    the move takes the line's `decl` (and `decl_where`, `decl_line`), the
+    line is marked `matched`. A line matching none is a move of its own.
+
+    A Kraken Hybrid Earn row of cash (a PARKED event; not one in the
+    base currency `base`) is no move and takes no line, and a line
+    written for one when it was read as a cash move fits it as a line
+    fits a move. So the lines are set against the moves and the PARKED
+    events together (backlog TJ-4951, review round 3):
+    - a line that fits PARKED events only is marked `parked` with the
+      event: it declares cash that never moved (`parked_lines`);
+    - a line that fits both a move and a PARKED event is marked
+      `unclear` with them, and declares nothing: nothing says which row
+      it was written for (a line for the Hybrid Earn row would silently
+      declare the move, with another's declaration). Every line alike
+      is marked, however many there are;
+    - unless the line names its row (`row=<file:line>`, as the messages
+      name a broker's row; any copy of a row that overlapping exports
+      hold, `_rows_of`): it is set against that row alone, a move it
+      declares or a PARKED event (`parked`, with `row_moved`, the moves
+      alike still undeclared: the export may have changed since the row
+      was named); a row that is neither, or that the line does not fit,
+      marks it `row_unknown`. A PARKED event a `row=` line names still
+      takes part for the lines without one: a line alike beside it is
+      `unclear` in the same run, not once the first is removed.
+    `refused_lines` lists what is marked, for the ledger and `tjs cash`.
+    A move still undeclared that a line written for it would fit a
+    PARKED event alike with is marked `row_needed`: the line asked for
+    is printed with its `row=` (the ledger's question, `tt_line`), so
+    that it is taken as it is copied.
+
+    Then a move that is a stablecoin send decided in the account's
+    sends.json (`send`, `send_decisions`) and that no line declared
+    takes that decision's `decl`; one a line declared the other way
+    (still yours against a disposition) is marked `send_conflict`. In
+    place; the ledger (lib/fx_cash_v2.build) and `tjs cash` read the
+    same declarations."""
     moves = [e for e in events if e["kind"] == "CASHMOVE"]
-    for ln in [x for x in lines if x["kind"] == "CASHMOVE"]:
-        cands = [m for m in moves
-                 if m.get("label") == ln.get("label")
-                 and m.get("decl") is None
-                 and m["currency"] == ln["currency"]
-                 and abs(m["amount"] - ln["amount"]) <= 0.01
-                 and ln["date"] in (m["date"], m["settle"])
-                 # The line's book, from its at= or its file's CASHBOOK
-                 # line (the folder's only book otherwise): a CASHBOOK-
-                 # scoped declaration matched another book's identical
-                 # move (2026-10 audit #85).
-                 and (not ln.get("book") or m.get("book") == ln.get("book"))]
-        if cands:
-            m = min(cands, key=lambda e: (e["date"], e.get("line_where", "")))
-            m["decl"] = ln["decl"]
-            m["decl_where"] = ln.get("where")
-            ln["matched"] = True
+    parked = [e for e in events if e["kind"] == "PARKED"
+              and not (base and str(e["currency"]).upper() == base.upper())]
+
+    def fits(m: Dict[str, Any], ln: Dict[str, Any]) -> bool:
+        return (m.get("label") == ln.get("label")
+                and str(m["currency"]).upper() == str(ln["currency"]).upper()
+                and abs(m["amount"] - ln["amount"]) <= 0.01
+                and ln["date"] in (m["date"], m["settle"])
+                # The line's book, from its at= or its file's CASHBOOK
+                # line (the folder's only book otherwise): a CASHBOOK-
+                # scoped declaration matched another book's identical
+                # move (2026-10 audit #85).
+                and (not ln.get("book") or m.get("book") == ln.get("book")))
+
+    def declare(m: Dict[str, Any], ln: Dict[str, Any]) -> None:
+        m["decl"] = ln["decl"]
+        m["decl_where"] = ln.get("where")
+        m["decl_line"] = ln.get("line")
+        ln["matched"] = True
+    todo = [x for x in lines if x["kind"] == "CASHMOVE" and not x.get("matched")]
+    for ln in [x for x in todo if x.get("row")]:
+        hit = next((e for e in moves + parked
+                    if ln["row"] in _rows_of(e) and fits(e, ln)
+                    and (e["kind"] == "PARKED" or e.get("decl") is None)), None)
+        if hit is None:
+            ln["row_unknown"] = True
+        elif hit["kind"] == "PARKED":
+            ln["parked"] = hit
+        else:
+            declare(hit, ln)
+    for ln in [x for x in todo if not x.get("row")]:
+        cands = [m for m in moves if m.get("decl") is None
+                 and m["currency"] == ln["currency"] and fits(m, ln)]
+        still = [e for e in parked if fits(e, ln)]
+        if cands and still:
+            ln["unclear"] = {"moves": cands, "parked": still}
+        elif cands:
+            declare(min(cands, key=lambda e: (e["date"], e.get("line_where", ""))), ln)
+        elif still:
+            ln["parked"] = still[0]
+    _mark_rows(moves, parked, todo, fits)
+    for m in moves:
+        send = m.get("send")
+        if not send or not send.get("decision"):
+            continue
+        if m.get("decl") is None:
+            m["decl"] = {"how": SEND_HOW[send["decision"]], "value": None}
+            m["decl_where"] = f"{send['where']} ({send['id']}: {send['decision']})"
+            m["decl_send"] = True
+        elif not m.get("decl_send") and (
+                (m["decl"].get("how") in STILL_YOURS)
+                != (SEND_HOW[send["decision"]] in STILL_YOURS)):
+            m["send_conflict"] = True
+
+
+def _rows_of(e: Dict[str, Any]) -> List[str]:
+    """Every `file:line` that names a broker's event: its own row and the
+    copies of it in overlapping exports that `dedup_across_files` read
+    as the same event (`_line_also`)."""
+    return [r for r in [e.get("line_where")] + list(e.get("_line_also") or ()) if r]
+
+
+def _mark_rows(moves: List[Dict[str, Any]], parked: List[Dict[str, Any]],
+               todo: List[Dict[str, Any]], fits: Any) -> None:
+    """After the lines are set against the rows (`apply_declarations`):
+    a `row=` line that names a PARKED event takes `row_moved`, the rows
+    of the moves alike that nothing declares (where the export was
+    replaced by a longer one, the row the line was written for is one of
+    them); and a move nothing declares that a line written for it (its
+    trade date, currency and amount) would fit a PARKED event alike with
+    is marked `row_needed`."""
+    for ln in todo:
+        if ln.get("row") and ln.get("parked"):
+            ln["row_moved"] = [m.get("line_where") for m in moves
+                               if m.get("decl") is None and m.get("line_where")
+                               and fits(m, ln)]
+    for m in moves:
+        if m.get("decl") is None and m.get("line_where") and any(
+                e.get("label") == m.get("label")
+                and str(e["currency"]).upper() == str(m["currency"]).upper()
+                and abs(e["amount"] - m["amount"]) <= 0.01
+                and m["date"] in (e["date"], e["settle"]) for e in parked):
+            m["row_needed"] = True
+
+
+# What a crypto-sends decision of a stablecoin send is as a CASHMOVE
+# declaration (backlog TJ-4953): a gift or a payment left your ownership
+# at the day's value, as `tjs crypto-sends` values it (its `fx-cash v2`
+# line's proceeds= is that value); a `self` send is still yours in a
+# wallet outside the books, `kept`, the line `tjs crypto-sends` prints
+# for it (not `own`: an own move must arrive in another book, and a send
+# that did is paired with its arrival and has no decision). A .tt line
+# of the same side (still yours: own, kept; a disposition: spot,
+# proceeds=) says it more exactly and wins; one of the other side
+# disagrees, and the ledger refuses.
+SEND_HOW = {"gift": "spot", "payment": "spot", "self": "kept"}
+STILL_YOURS = ("own", "kept")
+
+
+def parked_lines(lines: List[Dict[str, Any]], base: str) -> List[Dict[str, Any]]:
+    """The .tt CASHMOVE lines `apply_declarations` marked `parked`: each
+    declares no broker move and fits a Kraken Hybrid Earn row of cash (a
+    PARKED event of its account: the currency, the amount within a cent,
+    its date, and its book when the line names one, as a declaration fits
+    a move). Such a line was written when the row was read as cash
+    leaving or coming in; the row is a move within Kraken, so the line
+    moves cash that never moved. The ledger refuses one dated in the
+    year it computes and `tjs cash` leaves it out of its list and its
+    totals (backlog TJ-4951). Not a line in the base currency `base`:
+    no foreign cash, and the ledger asks for no declaration of it."""
+    return [ln for ln in lines if ln["kind"] == "CASHMOVE" and ln.get("parked")
+            and str(ln["currency"]).upper() != base.upper()]
+
+
+def parked_text(ln: Dict[str, Any]) -> str:
+    """What is said of a line `parked_lines` lists (`parked_fix`: what
+    to do about it)."""
+    hit = ln["parked"]
+    return (f"{ln.get('where')}: `{ln.get('line')}` declares a cash move that is a "
+            f"Kraken Hybrid Earn row ({hit.get('desc')}, {hit.get('line_where')}) — a "
+            f"Hybrid Earn row is a move within Kraken: the cash stays in "
+            f"{hit.get('book') or 'its book'}, so the line moves cash that never moved")
+
+
+def parked_fix(ln: Dict[str, Any]) -> str:
+    """What to do about a line `parked_lines` lists: remove it. A line
+    that names its row may have been written for a cash move whose row
+    has moved since (the export replaced by a longer one: the line
+    numbers shift), so the remedy allows that, and names the move alike
+    that nothing declares when there is one (`row_moved`)."""
+    if not ln.get("row"):
+        return "remove the line"
+    moved = [row_token(r) for r in ln.get("row_moved") or ()]
+    return ("remove the line; or, where it was written for a cash move and the export "
+            "has changed since (rows added above it move its line number), correct its "
+            "row=" + (f" (the cash move of that day and amount that nothing declares: "
+                      f"`{'`, `'.join(moved)}`)" if moved else ""))
+
+
+def refused_lines(lines: List[Dict[str, Any]], base: str
+                  ) -> List[Tuple[str, List[Dict[str, Any]], str]]:
+    """The .tt CASHMOVE lines `apply_declarations` marked as declaring
+    nothing it can take, each entry (kind, the lines, what is said of
+    them): "parked", a line written for a Kraken Hybrid Earn row
+    (`parked_lines`, `parked_text`); "unclear", the lines alike (one
+    account, book, day, currency and amount) that fit both a cash move
+    and a Hybrid Earn row, said together with every row they fit and
+    the way out (`row=`); "row", a line whose `row=` names no move it
+    fits. The ledger refuses those dated in the year it computes and
+    `tjs cash` leaves them out of its list and its totals."""
+    out: List[Tuple[str, List[Dict[str, Any]], str]] = [
+        ("parked", [ln], parked_text(ln)) for ln in parked_lines(lines, base)]
+    groups: Dict[Tuple, List[Dict[str, Any]]] = {}
+    for ln in lines:
+        if ln["kind"] != "CASHMOVE":
+            continue
+        if ln.get("unclear"):
+            groups.setdefault((ln.get("label"), ln.get("book"), ln["date"],
+                               str(ln["currency"]).upper(), M.units(ln["amount"], 2)),
+                              []).append(ln)
+        elif ln.get("row_unknown"):
+            out.append(("row", [ln], (
+                f"{ln.get('where')}: `{ln.get('line')}` names a row "
+                f"({row_token(ln['row'])}) that is no undeclared cash move of "
+                f"{ln.get('label')} on that day, in that currency and of that amount — "
+                f"a row is named as the ledger's messages name it (FILE:LINE, in double "
+                f"quotes where the file's name holds a space): correct the row, or "
+                f"remove row=")))
+    for alike in groups.values():
+        rows: Dict[str, List[str]] = {"moves": [], "parked": []}
+        for ln in alike:
+            for k in rows:
+                for e in ln["unclear"][k]:
+                    r = f"{e.get('desc')}, {e.get('line_where')}"
+                    if r not in rows[k]:
+                        rows[k].append(r)
+        named = " and ".join(f"{ln.get('where')}: `{ln.get('line')}`" for ln in alike)
+        first = alike[0]["unclear"]["moves"][0].get("line_where")
+        out.append(("unclear", alike, (
+            f"{named} — {'each fits' if len(alike) > 1 else 'the line fits'} both a "
+            f"cash move ({'; '.join(rows['moves'])}) and a Kraken Hybrid Earn row "
+            f"({'; '.join(rows['parked'])}) of one day and amount, and nothing says "
+            f"which row {'each' if len(alike) > 1 else 'it'} was written for. A Hybrid "
+            f"Earn row is a move within Kraken and takes no line: keep one line for "
+            f"each cash move, with its row after it (`{row_token(first)}`), and "
+            f"remove any other")))
+    return out
+
+
+def send_conflict_text(m: Dict[str, Any]) -> str:
+    """What is said of a move `apply_declarations` marked `send_conflict`."""
+    send, how = m["send"], m["decl"].get("how")
+    side = {True: "still yours", False: "a disposition"}
+    return (f"{m.get('decl_where')}: `{m.get('decl_line')}` declares the "
+            f"{send['symbol']} sent on {m['date']} `{how}` ({side[how in STILL_YOURS]}), "
+            f"and {send['where']} decides the same send `{send['decision']}` "
+            f"({send['id']}: {side[SEND_HOW[send['decision']] in STILL_YOURS]}) — one of "
+            f"the two is wrong: change the line, or the decision (`tjs crypto-sends "
+            f"{m.get('label')} --set {send['id']}=...`)")
+
+
+def send_decisions(events: List[Dict[str, Any]], sends: List[Dict[str, Any]]) -> None:
+    """Each broker CASHMOVE that is a stablecoin send takes the send's
+    saved decision (`sends`: lib/crypto_sends `cash_send_decisions`) as
+    `send` ({"id", "decision", "where", "symbol"}), in place: the move of
+    the send's account, exchange, day and coin (the event's `desc` ends
+    with it) with its units out. Moves alike in all of that are as many
+    as the sends alike and those carry one decision between them, or
+    none is taken: nothing says which row each decides (one of two moves
+    alike may be a send paired with its arrival, which has no decision),
+    and the moves are marked `send_unclear` with the sends' ids (backlog
+    TJ-4953)."""
+    groups: Dict[Tuple, List[Dict[str, Any]]] = {}
+    for s in sends:
+        groups.setdefault((s["account"], s["exchange"], s["date"], s["symbol"],
+                           M.units(s["quantity"], 2)), []).append(s)
+    moves: Dict[Tuple, List[Dict[str, Any]]] = {}
+    for e in events:
+        if e["kind"] == "CASHMOVE" and e.get("origin") != "tt" and e["amount"] < 0:
+            coin = str(e.get("desc") or "").rsplit(" ", 1)[-1]
+            moves.setdefault((e.get("label"), e.get("broker"), e["date"], coin,
+                              M.units(-e["amount"], 2)), []).append(e)
+    for key, alike in groups.items():
+        found = moves.get(key) or []
+        if len(found) == len(alike) and len({s["decision"] for s in alike}) == 1:
+            for e, one in zip(found, sorted(alike, key=lambda s: s["id"])):
+                e["send"] = {k: one[k] for k in ("id", "decision", "where", "symbol")}
+        elif any(s["decision"] for s in alike):
+            for e in found:
+                e["send_unclear"] = ", ".join(
+                    f"{s['id']}: {s['decision'] or 'undecided'}"
+                    for s in sorted(alike, key=lambda s: s["id"]))
 
 
 UNDECLARED = "?"        # a CASHMOVE line's how, when nothing declared it
@@ -188,8 +436,9 @@ def tt_line(e: Dict[str, Any], base: Optional[str] = None,
     book's `at=` token, at_token, when a copy needs one to keep its
     book; `tjs cash` lists them): an FXCONV, a CASHMOVE (a broker's
     move nothing declared shows UNDECLARED where own / kept / spot /
-    cost= / proceeds= goes, so the line is not copied as it is), a
-    CASHOPEN; a FLOW (the fee a cash event charged) as a `#FEE` comment
+    cost= / proceeds= goes, so the line is not copied as it is, and
+    its `row=` where a line without one would be refused: `row_needed`),
+    a CASHOPEN; a FLOW (the fee a cash event charged) as a `#FEE` comment
     line, which a .tt file ignores (a trade's cash leg, `leg` "trade":
     `#TRADE`; a FLOW received — a stock-lending receipt, a rebate — as a
     `#CREDIT` one, never a fee: backlog TJ-0693). None for a CASHBAL (a statement
@@ -214,6 +463,10 @@ def tt_line(e: Dict[str, Any], base: Optional[str] = None,
                     f"{M.shown(e['amount'], 2):+,.2f}")
         if not d:
             how = UNDECLARED
+            if e.get("row_needed"):
+                # A line without row= would fit a Kraken Hybrid Earn row
+                # alike and be refused (`apply_declarations`).
+                tail += " " + row_token(str(e["line_where"]))
         elif d.get("value") is not None:
             how = f"{d['how']}={M.shown(d['value'], 2):,.2f}"
         else:
@@ -295,10 +548,142 @@ def _identity(e: Dict[str, Any]) -> Tuple:
     if k == "CASHBAL":
         return (k, e.get("book"), e["date"], e["currency"],
                 M.units(e["balance"], 2))
-    if k in ("CASHMOVE", "FLOW"):
+    if k in ("CASHMOVE", "FLOW", "PARKED"):
         return (k, e.get("book"), e["date"], e["currency"],
                 M.units(e["amount"], 2), e.get("desc", ""))
     return (k, id(e))
+
+
+class CashIdConflict(ValueError):
+    """Two exports of one book hold one broker's id with different
+    content (`_id_conflicts`): an input refused, never both copies
+    booked (backlog TJ-5034). `conflicts`: what is said of each id, the
+    exception's text being those lines one below the other."""
+
+    def __init__(self, conflicts: List[str]) -> None:
+        super().__init__("\n".join(conflicts))
+        self.conflicts = list(conflicts)
+
+
+# What two copies of one broker's id must agree in, by kind (the default
+# under ""): (the event's key, what a message calls it). An amount to
+# the cent; the description is no part of it.
+_ID_CONTENT = {
+    "FXCONV": (("date", "date"), ("from_ccy", "currency sold"), ("from_amt", "amount sold"),
+               ("to_ccy", "currency bought"), ("to_amt", "amount bought")),
+    "": (("date", "date"), ("currency", "currency"), ("amount", "amount")),
+}
+
+
+def _id_differs(a: Dict[str, Any], b: Dict[str, Any]) -> Optional[Tuple[str, str, str]]:
+    """(the field, a's value, b's) of the first content two events of
+    one kind and broker's id differ in (`_ID_CONTENT`: an amount by more
+    than half a cent), None when they are one event."""
+    for key, what in _ID_CONTENT.get(a["kind"], _ID_CONTENT[""]):
+        x, y = a.get(key), b.get(key)
+        if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+            if abs(x - y) > 0.005:
+                return what, f"{M.shown(x, 2):,.2f}", f"{M.shown(y, 2):,.2f}"
+        elif str(x or "").upper() != str(y or "").upper():
+            return what, str(x), str(y)
+    return None
+
+
+def _id_key(e: Dict[str, Any]) -> Optional[Tuple]:
+    """(book, kind, the broker's id) of an event that carries one
+    (`_broker_id`), None of one that does not."""
+    bid = str(e.get("_broker_id") or "")
+    return (e.get("book"), e["kind"], bid) if bid else None
+
+
+def _id_conflicts(events: List[Dict[str, Any]]) -> List[str]:
+    """What is said of each broker's id (one book, one kind of event:
+    `_id_key`) that two files hold with different content: each of the
+    two files has an event of the id that the other has no copy of
+    (`_id_differs`). A file that holds one event more of an id than
+    another (a fee the older export did not state) is no conflict. An
+    amount the parse derives (`_derived`: what a Kraken Hybrid Earn row
+    brought back beyond what was parked, from the order of the account's
+    rows) is said as that: the exports list the rows of that second
+    differently, never "different content" of the id."""
+    from taxjson.lib.privacy import mask_id
+    by: Dict[Tuple, Dict[str, List[Dict[str, Any]]]] = {}
+    for e in events:
+        k = _id_key(e)
+        if k is not None:
+            by.setdefault(k, {}).setdefault(str(e.get("file") or ""), []).append(e)
+    out: List[str] = []
+    for (book, kind, bid), files in by.items():
+        names = sorted(files)
+        for i, f1 in enumerate(names):
+            for f2 in names[i + 1:]:
+                a = [x for x in files[f1] if all(_id_differs(x, y) for y in files[f2])]
+                b = [y for y in files[f2] if all(_id_differs(x, y) for x in files[f1])]
+                if not a or not b:
+                    continue
+                what, va, vb = _id_differs(a[0], b[0]) or ("content", "", "")
+                wa, wb = (str(x.get("line_where") or x.get("where") or f or "?")
+                          for x, f in ((a[0], f1), (b[0], f2)))
+                if a[0].get("_derived") or b[0].get("_derived"):
+                    out.append(
+                        f"{book or '?'}: {wa} and {wb} are one row of the broker (id "
+                        f"{mask_id(bid)}: {a[0].get('desc') or kind}), and its {what} is "
+                        f"derived as {va} from {f1 or '?'} and as {vb} from {f2 or '?'} — "
+                        f"the amount follows from the order of the account's rows of that "
+                        f"second, and the two exports list those rows differently. List "
+                        f"the second's rows in the order they happened in, the same in "
+                        f"both exports (or keep one export of those rows), then `tjs run`")
+                    continue
+                out.append(
+                    f"{book or '?'}: the broker's id {mask_id(bid)} of one {kind} is in "
+                    f"two exports with different content — the copies differ in the {what}: "
+                    f"{va} in {wa} ({a[0].get('desc') or kind}) against {vb} in {wb} "
+                    f"({b[0].get('desc') or kind}). One id is one event, and booking both copies would "
+                    f"count it twice: keep only the export with the right copy of the row "
+                    f"({f1 or '?'} or {f2 or '?'}; remove the other from the account's "
+                    f"folder, or the row from it), then `tjs run`")
+    return out
+
+
+def _id_kept(events: List[Dict[str, Any]]) -> Set[int]:
+    """The events that carry a broker's id which `dedup_across_files`
+    keeps, by `id()`: of one book, kind and id (`_id_key`), a file's
+    events alike in content and description are one, and each is the
+    copy of an event another file holds when their content agrees
+    (`_id_differs`), the one of the same description first; what is left
+    is kept (an event more of the id that only the newer file holds,
+    whatever its description). A kept event takes its copies' rows
+    (`_line_also`: a .tt line's `row=` may name any of them)."""
+    groups: Dict[Tuple, Dict[str, List[Dict[str, Any]]]] = {}
+    for e in events:
+        k = _id_key(e)
+        if k is not None:
+            groups.setdefault(k, {}).setdefault(str(e.get("file") or ""), []).append(e)
+    keep: Set[int] = set()
+    for files in groups.values():
+        kept: List[Dict[str, Any]] = []
+        for mine in files.values():
+            left: List[Dict[str, Any]] = []
+            for e in mine:
+                if not any(not _id_differs(x, e) and x.get("desc") == e.get("desc")
+                           for x in left):
+                    left.append(e)
+            free = list(kept)
+            for exact in (True, False):
+                rest = []
+                for e in left:
+                    hit = next((x for x in free if not _id_differs(x, e)
+                                and (not exact or x.get("desc") == e.get("desc"))), None)
+                    if hit is None:
+                        rest.append(e)
+                        continue
+                    free = [x for x in free if x is not hit]
+                    if e.get("line_where") and e["line_where"] != hit.get("line_where"):
+                        hit.setdefault("_line_also", []).append(e["line_where"])
+                left = rest
+            kept.extend(left)
+        keep.update(id(e) for e in kept)
+    return keep
 
 
 def dedup_across_files(events: List[Dict[str, Any]],
@@ -314,10 +699,21 @@ def dedup_across_files(events: List[Dict[str, Any]],
     IDs are two executions, and an ID-less copy (an older export with no
     ID column) adds only what its file holds beyond the IDs (backlog
     TJ-0865: two exports' distinct round trips alike in date and amount
-    were read as one). The settlement date is not part
+    were read as one). The copies of one ID agree in their content
+    (`_ID_CONTENT`: the date, the currency, the amount to the cent), and
+    the copy another file holds is the same event whatever else it says;
+    an ID that two files hold with different content (an export edited,
+    a row the broker restated: 100 in the older copy, 120 in the newer)
+    raises CashIdConflict, naming both rows, the ID (masked) and the
+    field (`_id_conflicts`): both copies were booked (backlog TJ-5034).
+    The settlement date is not part
     of an event's identity; when two files date one event's settlement
     differently, a line saying so (both files, both dates) is added to
     `warnings` (2026-10 audit #86)."""
+    bad = _id_conflicts(events)
+    if bad:
+        raise CashIdConflict(bad)
+    id_kept = _id_kept(events)
     per: Dict[Tuple, Dict[str, int]] = {}
     # The ID-less events per identity and file, and the IDs per identity.
     bare: Dict[Tuple, Dict[str, int]] = {}
@@ -356,7 +752,6 @@ def dedup_across_files(events: List[Dict[str, Any]],
               for k, v in bare.items()}
     keep_file = {k: max(v, key=lambda f: (v[f], f))
                  for k, v in bare.items()}
-    seen_ids: set = set()
     # A conversion's commission (a FLOW with `_fee_of`, the broker's row
     # of its conversion) is kept with its own conversion: deduplicated
     # apart, the file tie-break kept one file's fee and the other
@@ -378,11 +773,9 @@ def dedup_across_files(events: List[Dict[str, Any]],
             fees.append((i, e, conv))
             continue
         k = _identity(e)
-        bid = str(e.get("_broker_id") or "")
-        if bid:
-            if (k, bid) in seen_ids:
+        if _id_key(e) is not None:
+            if id(e) not in id_kept:
                 continue
-            seen_ids.add((k, bid))
         else:
             if e.get("file", "") != keep_file[k]:
                 continue
@@ -391,6 +784,7 @@ def dedup_across_files(events: List[Dict[str, Any]],
             keep_n[k] -= 1
         out.append(e)
         kept.add(id(e))
+    _note_copies(events, kept)
     if fees:
         pos = {id(e): i for i, e in enumerate(events)}
         for i, e, conv in fees:
@@ -398,6 +792,30 @@ def dedup_across_files(events: List[Dict[str, Any]],
                 out.append(e)
         out.sort(key=lambda e: pos[id(e)])
     return out
+
+
+def _note_copies(events: List[Dict[str, Any]], kept: set) -> None:
+    """Each event `dedup_across_files` kept takes the rows of its copies
+    in the other files as `_line_also`: the n-th copy an export holds of
+    an event is the n-th kept one. A .tt CASHMOVE line may name its row
+    in any of the exports (`row=`, `_rows_of`): the copy that is kept
+    changes when an overlapping export is added, and a line that named
+    the other was refused (review round 4). Events without a row of
+    their own (`line_where`) are left as they are; one with a broker's
+    id takes its copies' rows where it is kept (`dedup_across_files`)."""
+    by: Dict[Tuple, List[Dict[str, Any]]] = {}
+    for e in events:
+        if id(e) in kept and e.get("line_where") and not e.get("_broker_id"):
+            by.setdefault(_identity(e), []).append(e)
+    nth: Dict[Tuple, int] = {}
+    for e in events:
+        if id(e) in kept or not e.get("line_where") or e.get("_broker_id"):
+            continue
+        k = _identity(e)
+        n = nth.get((k, e.get("file", "")), 0)
+        nth[(k, e.get("file", ""))] = n + 1
+        if n < len(by.get(k, ())):
+            by[k][n].setdefault("_line_also", []).append(e["line_where"])
 
 
 def _d(s: str) -> _date:
@@ -652,19 +1070,14 @@ def _sidecar_files(work: Path, label: str, stable_cash: bool
 
 # ------------------------------------------------------------ collection
 
-def collect(root: Path, cfg: Dict[str, Any], country: str,
-            native_by_label: Dict[str, List[Dict[str, Any]]],
-            work: Optional[Path] = None) -> Dict[str, Any]:
-    """Every cash event of the taxable accounts: {"events": [...] (each
-    with `label` and `book`), "lines": [...] (the .tt cash lines, `book`
-    resolved where it can be), "books": Books, "problems": [...]}.
-    `native_by_label`: the accounts' native rows (their `source` and
-    `source_account` tell each CSV's accounts). The events of the exports
-    are the last run's parse's (`cash_sidecar`, in `work`, root/work by
-    default), in the order of the account folder's files: ValueError
-    naming `tjs run` when one is missing (`_sidecar_files`). Whether they
-    are as new as the inputs is the caller's to refuse (cli/common
-    `_refuse_cash_older_than_inputs`)."""
+def _export_events(root: Path, cfg: Dict[str, Any], country: str,
+                   native_by_label: Dict[str, List[Dict[str, Any]]],
+                   work: Optional[Path] = None) -> Tuple[List[Dict[str, Any]], "Books",
+                                                         List[str], bool]:
+    """(the exports' cash events, each with `label`, `broker`, `file` and
+    `book`, before any dedup; the Books; the problems; the stablecoin
+    basis) of the taxable accounts, from the last run's sidecars
+    (`collect`'s first half, and all `id_conflicts` reads)."""
     from taxjson.lib.country import stablecoin_model
     # (A missing country refused, as everywhere past the parse.)
     stable_cash = stablecoin_model(country) == "cash"
@@ -715,8 +1128,51 @@ def collect(root: Path, cfg: Dict[str, Any], country: str,
             if len(accts) == 1:
                 acct = next(iter(accts))
         ev["book"] = books.name(ev["label"], ev["broker"], acct)
+    return events, books, problems, stable_cash
+
+
+def id_conflicts(root: Path, cfg: Dict[str, Any], country: str,
+                 work: Optional[Path] = None) -> List[str]:
+    """What `collect` would refuse for (`CashIdConflict.conflicts`): each
+    broker's id that two exports of a taxable account hold with
+    different content, from the last run's sidecars alone (no .tt line,
+    no send decision). For `tjs run`'s ATTENTION and the checklist,
+    which read no other cash event. ValueError as `collect`'s when the
+    sidecars are missing or not the run's."""
+    events, _books, _problems, _stable = _export_events(root, cfg, country, {}, work)
+    return _id_conflicts(pair_internal(events))
+
+
+def collect(root: Path, cfg: Dict[str, Any], country: str,
+            native_by_label: Dict[str, List[Dict[str, Any]]],
+            work: Optional[Path] = None) -> Dict[str, Any]:
+    """Every cash event of the taxable accounts: {"events": [...] (each
+    with `label` and `book`), "lines": [...] (the .tt cash lines, `book`
+    resolved where it can be), "books": Books, "problems": [...]}.
+    `native_by_label`: the accounts' native rows (their `source` and
+    `source_account` tell each CSV's accounts). The events of the exports
+    are the last run's parse's (`cash_sidecar`, in `work`, root/work by
+    default; `_export_events`), in the order of the account folder's
+    files: ValueError naming `tjs run` when one is missing
+    (`_sidecar_files`), CashIdConflict when two exports hold one
+    broker's id with different content (`dedup_across_files`). Whether
+    they are as new as the inputs is the caller's to refuse (cli/common
+    `_refuse_cash_older_than_inputs`)."""
+    events, books, problems, stable_cash = _export_events(root, cfg, country,
+                                                          native_by_label, work)
+    work = Path(work) if work is not None else Path(root) / "work"
+    accounts = cfg.get("accounts") or {}
     warnings: List[str] = []
     events = dedup_across_files(pair_internal(events), warnings)
+    if stable_cash:
+        # A stablecoin send's crypto-sends decision (backlog TJ-4953).
+        from taxjson.lib import crypto_sends as CS
+        try:
+            send_decisions(events, CS.cash_send_decisions(
+                Path(root), cfg, work,
+                {(label, broker) for (label, _n), broker in books.file_broker.items()}))
+        except (OSError, ValueError) as e:
+            problems.append(str(e))
     lines, lp = read_project_lines(root, accounts)
     problems.extend(lp)
     for ev in [x for x in lines if x["kind"] == "CASHBOOK"]:

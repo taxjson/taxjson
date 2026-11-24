@@ -14,6 +14,7 @@ from tax_rules import rule
 from taxjson.rules import ids as R
 from _style import CapturedWidth
 import _paths
+from _support.planning_radar_row import base_rows
 
 
 # Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
@@ -48,12 +49,12 @@ class TestSafeToSellByCountry(unittest.TestCase):
                     "currency": "USD", "account": acct}
         with tempfile.TemporaryDirectory() as tmp:
             t = Path(tmp) / "margin_base.json"
-            t.write_text(json.dumps({"transactions": [
-                row("2026-01-05", 100, "margin")]}))
+            t.write_text(json.dumps({"transactions": base_rows([
+                row("2026-01-05", 100, "margin")], country)}))
             sp = Path(tmp) / "sheltered_base.json"
-            sp.write_text(json.dumps({"transactions": [
+            sp.write_text(json.dumps({"transactions": base_rows([
                 row("2026-09-18", 50, "plan"),
-                row("2026-09-22", -50, "plan")]}))
+                row("2026-09-22", -50, "plan")], country)}))
             r = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_safe_to_sell",
                  "--country", country, "--taxable", str(t),

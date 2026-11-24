@@ -82,7 +82,14 @@ def parse_line(line: str, source: str = "") -> Optional[Dict[str, Any]]:
         raise ValueError(
             f"{where}malformed {KEYWORD} line — expected `{FORM}`: "
             f"{shown!r}")
-    date, symbol = toks[0], toks[1].upper()
+    # The symbol as the books spell it: a future's `/` or `\` prefix is
+    # `F:` (lib/futures_prefixes, backlog TJ-5150); one that names no
+    # contract (`//QZM26.US`) is refused, quoting the line.
+    from taxjson.lib.futures_prefixes import canonical_futures_symbol
+    try:
+        date, symbol = toks[0], canonical_futures_symbol(toks[1].upper())
+    except ValueError as e:
+        raise ValueError(f"{where}{KEYWORD} {e}: {shown!r}") from None
     if not _is_date(date):
         raise ValueError(
             f"{where}{KEYWORD} date {date!r} is not a valid YYYY-MM-DD "

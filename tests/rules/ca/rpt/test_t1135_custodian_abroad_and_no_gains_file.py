@@ -95,7 +95,7 @@ class TestForeignCustody(unittest.TestCase):
         self.assertEqual(rep["custodians"], {"ibus": "USA"})
         self.assertEqual(rep["by_country"]["USA"]["max_cost"], 600.0)
         brief = render_brief(rep)
-        self.assertRegex(brief, r"QZCAN\.TO +USA +6 ")
+        self.assertRegex(brief, r"QZCAN\.TO +USA +custodian +6 ")
         self.assertIn("QZCAN.TO (ibus): a Canadian issuer held with a "
                       "custodian outside Canada, CAT 6 under its country",
                       brief)
@@ -242,21 +242,28 @@ class TestForeignCustody(unittest.TestCase):
                                   "income": 0.0, "gain": 0.0}})
 
     @rule(R.CA_RPT_02)
-    def test_a_canadian_isin_line_names_custody(self):
-        # The Canadian-ISIN warning no longer says such shares are never
-        # foreign property, and a custody pool is never named by it.
+    def test_a_canadian_isin_abroad_is_a_custody_row(self):
+        # A Canadian ISIN on a foreign listing decides (TJ-4957: it was
+        # a warning naming the line, and the shares counted as foreign):
+        # not foreign property held in Canada, the notes saying when it
+        # is; a custody row with a custodian outside Canada.
         from taxjson.bin import taxjson_t1135 as T
         rows = [_r("BUYSELL", "2025-01-02", "QZW.US", 10, -500.0,
                    issuer_country="CA")]
-        with mock.patch.object(_out, "warn") as w, \
-                mock.patch.object(T, "_DETAILS", True):
-            _report(rows, _no_gains("ibus"))
-        text = " ".join(" ".join(c.kwargs.get("details") or [])
-                        for c in w.call_args_list)
-        self.assertIn("unless held with a custodian outside Canada", text)
+        rep = _report(rows, _no_gains("ibus"))
+        self.assertEqual(rep["properties"], [])
+        self.assertEqual(rep["listing_overruled_symbols"], ["QZW.US"])
+        self.assertIn("A Canadian corporation's shares are not foreign "
+                      "property unless a custodian outside Canada holds "
+                      "them", " ".join(T.render_report(rep).split()))
+        rep = _report(rows, _no_gains("ibus"), custody={"ibus": "USA"})
+        self.assertEqual(
+            [(r["symbol"], r["country"], r["category"],
+              r["country_source"]) for r in rep["properties"]],
+            [("QZW.US", "USA", 6, "custodian")])
         rep = _report([dict(BUY, issuer_country="CA")],
                       _no_gains("ibus"), custody={"ibus": "USA"})
-        self.assertEqual(rep["canadian_issuer_symbols"], [])
+        self.assertNotIn("canadian_issuer_symbols", rep)
         self.assertEqual(len(rep["properties"]), 1)
 
     @rule(R.CA_RPT_02)
@@ -389,7 +396,8 @@ class TestNoGainsFile(unittest.TestCase):
                     contextlib.redirect_stderr(io.StringIO()):
                 main(argv)
         text = out.getvalue()
-        self.assertRegex(text, r"QZA\.US +USA +2 +500\.00 +250\.00 +n/a +n/a")
+        self.assertRegex(
+            text, r"QZA\.US +USA +assumed +2 +500\.00 +250\.00 +n/a +n/a")
         self.assertIn("INCOME and GAIN(LOSS) n/a: no gains file (--gains) "
                       "for margin", " ".join(text.split()))
 

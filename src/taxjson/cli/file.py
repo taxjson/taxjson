@@ -669,9 +669,13 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     for _y, _amt in sorted(claimed_losses(cfg)[0].items()):
         argv += ["--claimed-year", f"{_y}={_amt!r}"]
     if _country(settings) == "canada":
-        from taxjson.lib.project_tables import carried_back_stated
-        for _y, _amt in sorted(carried_back_stated(cfg)[0].items()):
-            argv += ["--carried-back-year", f"{_y}={_amt!r}"]
+        # A total, or by the year it went to (YEAR:TARGET=AMOUNT; TJ-4882).
+        from taxjson.lib.project_tables import carried_back_entries
+        _backs, _to, _ = carried_back_entries(cfg)
+        for _y, _amt in sorted(_backs.items()):
+            argv += [a for _t, _a in sorted(_to.get(_y, {}).items())
+                     for a in ("--carried-back-year", f"{_y}:{_t}={_a!r}")] or [
+                "--carried-back-year", f"{_y}={_amt!r}"]
     argv.append("--claims-in-project")      # the notes name the toml
     # Each filed-year lock — this project's filed/<year>.json and the
     # prior_year_record lock of the per-year layout (A2-0338, A2-0121):
@@ -1149,8 +1153,8 @@ def _close_year_checks(option_timing_from_settings: Callable[..., Any], settings
     _old_lock = None
     if taxjson_filed.snapshot_path(root, year).exists():
         try:
-            _old_lock = _json.loads(taxjson_filed.snapshot_path(
-                root, year).read_text(encoding="utf-8"))
+            _old_lock = filed_locks.fold_lock_symbols(_json.loads(
+                taxjson_filed.snapshot_path(root, year).read_text(encoding="utf-8")))
             if not isinstance(_old_lock, dict):
                 raise ValueError("not a close-year lock")
         except (OSError, ValueError) as e:
@@ -2298,6 +2302,8 @@ def _split_for_lock(root: Path, cfg: Dict[str, Any], settings: Settings,
     year = settings.year
     back = float(r.get("losses_carried_back") or 0.0)
     incomplete, stated = r.get("carry_back_incomplete"), r.get("carry_back_stated")
+    to: Any = (r.get("losses_carried_back_to"), r.get("carry_back_split"),
+               r.get("carry_back_stated_to"))
     if incomplete is not None and not (
             isinstance(incomplete, dict)
             and isinstance(incomplete.get("years"), list)):
@@ -2313,6 +2319,7 @@ def _split_for_lock(root: Path, cfg: Dict[str, Any], settings: Settings,
         except LedgerUnavailable as e:
             stop(e)
         back, incomplete, stated = cb.amount, cb.incomplete, cb.stated
+        to = (cb.to, cb.to_split, cb.stated_to)
     if incomplete:
         _stop_on_incomplete_split(incomplete, accepted)
         ncl["carry_back_incomplete"] = {
@@ -2326,6 +2333,10 @@ def _split_for_lock(root: Path, cfg: Dict[str, Any], settings: Settings,
         back = min(back, float(ncl["closing"]))
         ncl["carried_back"] = M.shown(back, 2)
         ncl["closing"] = M.shown(max(0.0, ncl["closing"] - back), 2)
+    from taxjson.lib.carry_back import lock_split
+    why = lock_split(ncl, back, *to)
+    if why:
+        stop(why)
 
 
 def _stop_on_incomplete_split(incomplete: Dict[str, Any],
@@ -2393,7 +2404,8 @@ def _carry_back_for_handoff(root: Path, cfg: Dict[str, Any],
     """What the carryover ledger says for handoff's claim comparison
     (lib/carryforward.LedgerCarryBack; backlog TJ-1426). No claim under an
     earlier year: no ledger."""
-    from taxjson.lib.carry_back import cant_tell_text, left_out_text, split_left_out
+    from taxjson.lib.carry_back import (cant_tell_text, left_out_text, split_left_out,
+                                        split_text)
     from taxjson.lib.carryforward import LedgerCarryBack
     if _country(settings) != "canada" \
             or not _claims_back(cfg, settings.year):
@@ -2401,19 +2413,23 @@ def _carry_back_for_handoff(root: Path, cfg: Dict[str, Any],
     year = int(settings.year or 0)
     try:
         doc = _ledger_doc(root)
-    except LedgerUnavailable as e:
+        why = cant_tell_text(doc)
+    except (LedgerUnavailable, ValueError) as e:
         return LedgerCarryBack(unknown=str(e))
-    why = cant_tell_text(doc)
     if why:
         return LedgerCarryBack(unknown=why)
     amounts: Dict[int, float] = {}
+    proposed = False
     for x in doc["rows"]:
         if x["year"] == year:
             for y, a in _carried_back_to(x).items():
                 amounts[y] = amounts.get(y, 0.0) + a
+            # The years are the ledger's proposal, another split open (TJ-4882).
+            proposed = proposed or bool(x.get("carried_back_split"))
     left = split_left_out(doc, year)
     return LedgerCarryBack(amounts=amounts,
-                           incomplete=left_out_text(left) if left else "")
+                           incomplete=left_out_text(left) if left else "",
+                           proposed=split_text(amounts) if proposed else "")
 
 
 def _books_loss_not_carried(root: Path, cf: Dict[str, Any],
@@ -2448,6 +2464,7 @@ def _carryforwards_summary(cf: Dict[str, Any], year: int,
                            details: bool = True) -> List[str]:
     """close-year's lines on what the lock carries into year + 1
     (`details`: the notes in full and what reads them)."""
+    from taxjson.lib.carry_back import by_year_said, split_proposed_said
     from taxjson.lib.out import kv_lines, labelled, wrap
     kv: List[Tuple[str, str]] = []
     notes: List[str] = []
@@ -2465,7 +2482,9 @@ def _carryforwards_summary(cf: Dict[str, Any], year: int,
                    f"{M.shown(ncl['closing'], 2):,.2f} (100% amounts)"
                    + "".join(f"; {y}'s carry-back {M.shown(a, 2):,.2f} is your "
                              f"figure ([carryover] carried_back)" for y, a in
-                             sorted((ncl.get("carry_back_stated") or {}).items()))))
+                             sorted((ncl.get("carry_back_stated") or {}).items()))
+                   + by_year_said(ncl)))
+        notes += [n for n in [split_proposed_said(ncl, year)] if n]
     cl = cf.get("capital_loss")
     if isinstance(cl, dict):
         from taxjson.lib.carryforward import CLAIMED_KEY

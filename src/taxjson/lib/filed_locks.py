@@ -19,6 +19,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Mapping, Any, Dict, List, Optional, Tuple
 
+from taxjson.lib.futures_prefixes import canonical_futures_symbol
 from taxjson.lib.tx_load import finite_num
 from taxjson.lib.project_tables import _plausible_year
 from taxjson.lib import cli_diag
@@ -362,12 +363,78 @@ def _unique_keys(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
     return out
 
 
+# The lists of rows a lock holds, each row naming its security in `symbol`,
+# and the {group: {symbol: ...}} tables (backlog TJ-5150).
+_LOCK_ROW_LISTS = ("dispositions", "filed_dispositions", "settle_next_year",
+                   "boundary_rows")
+_LOCK_SYMBOL_TABLES = ("year_end", "year_end_lots", "year_end_shorts")
+
+
+def _lock_symbol(sym: str) -> str:
+    """A lock's symbol as the books spell it; one the books would refuse
+    (`//QZM26.US`: FuturesSymbolError) as written, since a lock is a
+    record and the year's .tt line is refused, naming it."""
+    try:
+        return canonical_futures_symbol(sym)
+    except ValueError:
+        return sym
+
+
+def _merge_held(a: Any, b: Any) -> Any:
+    """One security's two entries under one spelling: a position's or a
+    short's figures summed ({qty, acb, deferred}), two lists of lots in
+    one list by acquisition date; None when they are not of that shape
+    (the record's validator then names the field)."""
+    if isinstance(a, list) and isinstance(b, list):
+        if all(isinstance(x, dict) for x in a + b):
+            return sorted(a + b, key=lambda x: str(x.get("date") or ""))
+        return None
+    if isinstance(a, dict) and isinstance(b, dict) and all(
+            finite_num(v) for v in list(a.values()) + list(b.values())):
+        return {k: a.get(k, 0.0) + b.get(k, 0.0) for k in {**a, **b}}
+    return None
+
+
+def fold_lock_symbols(doc: Any) -> Any:
+    """`doc` (a lock read from filed/<year>.json) with every symbol it holds
+    as the books spell it now: a future's `/` or `\\` prefix `F:`
+    (lib/futures_prefixes canonical_futures_symbol). A year closed by an
+    older taxjson keeps a .tt line's `/QZM26.US`; read as written, the
+    next year's `tjs handoff` found it held under two spellings (backlog
+    TJ-5150). A security held under both spellings is one: its figures
+    summed, its lots joined. Anything not of the shape close-year writes is
+    left for the validators."""
+    if not isinstance(doc, dict):
+        return doc
+    for key in _LOCK_ROW_LISTS:
+        rows = doc.get(key)
+        for r in rows if isinstance(rows, list) else ():
+            if isinstance(r, dict) and isinstance(r.get("symbol"), str):
+                r["symbol"] = _lock_symbol(r["symbol"])
+    for key in _LOCK_SYMBOL_TABLES:
+        table = doc.get(key)
+        for g, held in (table.items() if isinstance(table, dict) else ()):
+            if not isinstance(held, dict):
+                continue
+            out: Dict[str, Any] = {}
+            for sym, v in held.items():
+                k = _lock_symbol(sym)
+                out[k] = v if k not in out else _merge_held(out[k], v)
+                if out[k] is None:
+                    break
+            else:
+                table[g] = out
+    return doc
+
+
 def load_lock_json(path: Path) -> Any:
     """The JSON document of a lock file (UTF-8, a BOM tolerated). A key
     written twice in one object raises ValueError, as do bad JSON and
-    text that is not UTF-8 (UnicodeDecodeError); OSError propagates."""
-    return json.loads(Path(path).read_text(encoding="utf-8-sig"),
-                      object_pairs_hook=_unique_keys)
+    text that is not UTF-8 (UnicodeDecodeError); OSError propagates. Its
+    symbols are read as the books spell them (fold_lock_symbols)."""
+    return fold_lock_symbols(json.loads(
+        Path(path).read_text(encoding="utf-8-sig"),
+        object_pairs_hook=_unique_keys))
 
 
 def file_year(path: Path) -> Optional[int]:

@@ -193,6 +193,73 @@ class TestConciseItems(unittest.TestCase):
     def test_clean_is_silent(self):
         self.assertEqual(FR.render_blocks({"year": 2024}, concise=True), [])
 
+    def test_holdings_line_names_sanity(self):
+        """TJ-5170: the run compares nothing with the holdings files;
+        while the project has some (`holdings`, worked out by the run,
+        never in the summary doc), its list names `tjs sanity` (one
+        `Info:` line; in full with --details, naming where the files
+        are), beside the line of the accounts with no file at all, under
+        a heading naming step 6 when those are its only lines."""
+        doc = {"year": 2024}
+        self.assertTrue(FR.is_clean(doc))
+        lines = [ln for b in FR.render_blocks(doc, concise=True, width_=100,
+                                              holdings=["holdings/"])
+                 for ln in b]
+        self.assertEqual(lines[:2], [
+            "==> Before you trust these numbers (docs/getting-started.md,"
+            " step 6)",
+            "Info: positions not yet compared with the broker's holdings "
+            "files — `tjs sanity`"])
+        long = " ".join(" ".join(ln for b in FR.render_blocks(
+            doc, width_=0, holdings=["../snapshots/", "`holdings = [...]` "
+                                     "of m"]) for ln in b).split())
+        self.assertIn("==> Before you trust these numbers "
+                      "(docs/getting-started.md, step 6)", long)
+        self.assertIn("holdings files (../snapshots/; `holdings = [...]` of "
+                      "m): `tjs run` does not compare them. Run `tjs "
+                      "sanity`: it compares the quantities", long)
+        both = [t for _, t in FR.concise_items(dict(
+            doc, unchecked_accounts=[{"account": "m", "positions": 3}]),
+            holdings=["holdings/"])]
+        self.assertEqual(len(both), 2, both)
+        self.assertIn("1 account with positions not checked", both[1])
+        self.assertEqual(FR.render_blocks(doc, concise=True), [])
+        # Any other finding: step 5, as before.
+        mixed = FR.render_blocks(dict(doc, zero_cost_sold=[
+            {"symbol": "FFF", "account": "m"}]), concise=True, width_=100,
+            holdings=["holdings/"])
+        self.assertEqual(mixed[0], [
+            "==> Before you trust these numbers (docs/getting-started.md,"
+            " step 5)"])
+
+    def test_holdings_line_is_never_folded(self):
+        """TJ-5170 review P3-2: four or more Warnings fill the concise
+        budget and fold the other Info lines into "N more check(s)";
+        the line naming `tjs sanity` stays, as a Warning does."""
+        line = ("Info: positions not yet compared with the broker's "
+                "holdings files — `tjs sanity`")
+        warnings = [
+            ("no_purchase", [{"symbol": "ZZA", "account": "m"}]),
+            ("zero_cost_sold", [{"symbol": "ZZC", "account": "m"}]),
+            ("transfer_in_no_cost", [{"symbol": "ZZD", "account": "m"}]),
+            ("income_not_held", [{"symbol": "ZZE", "account": "m"}]),
+            ("booked_twice", ["margin and spare"])]
+        for n in range(len(warnings) + 1):
+            with self.subTest(warnings=n):
+                doc = dict({"year": 2024, "unchecked_accounts": [
+                    {"account": "crypto", "positions": 2}]},
+                    **dict(warnings[:n]))
+                body = [ln for b in FR.render_blocks(
+                    doc, concise=True, width_=120,
+                    holdings=["holdings/"])[1:] for ln in b]
+                self.assertEqual(len([ln for ln in body if ln.startswith(
+                    "Warning: ")]), n, body)
+                self.assertIn(line, body)
+                # The accounts with no file: their own line, or folded.
+                self.assertTrue(any("1 account with positions not checked"
+                                    in ln or "1 more check(s)" in ln
+                                    for ln in body), body)
+
     def test_read_short_line_agrees_with_its_count(self):
         def line(n):
             doc = {"no_purchase_in_sum": [

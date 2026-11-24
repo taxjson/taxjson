@@ -282,6 +282,15 @@ def latest_rate(history: Dict[str, Dict], cur: str,
     if not usable:
         return None, None
     d = max(usable)
+    # Real days only: `2025-02-30` sorts after every February day and
+    # was the "most recent" rate on March 1 (backlog TJ-5046; the
+    # loader drops such a line, a history built otherwise may hold one).
+    from taxjson.lib.exchange_rates import is_calendar_date
+    if not is_calendar_date(d):
+        usable = [x for x in usable if is_calendar_date(x)]
+        if not usable:
+            return None, None
+        d = max(usable)
     if max_age_days is not None:
         try:
             age = (datetime.strptime(on[:10], "%Y-%m-%d")

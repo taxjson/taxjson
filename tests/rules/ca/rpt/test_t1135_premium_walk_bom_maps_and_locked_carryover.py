@@ -210,7 +210,7 @@ class TestT1135Report(unittest.TestCase):
         self.assertIn("NOPE.US", err.getvalue())
         # The gains file's inventory is not read for the cost: the
         # engine's pool holds the 90000 paid.
-        self.assertEqual(rep["deferred_wash_not_in_cost"], {})
+        self.assertNotIn("deferred_wash_not_in_cost", rep)
         self.assertEqual(rep["properties"][0]["year_end_cost"], 90000.0)
         text = render_report(rep)
         self.assertNotIn("NOT reliable", text)

@@ -171,6 +171,7 @@ ACCOUNT_WORK = (
     "{a}_expired_options.diag",
     # pipeline/stages: the crypto sends' notes, the elections a run left pending
     "{a}_crypto_sends.diag", "{a}_pending_elections.json",
+    "{a}_listing_evidence.diag",                # pipeline/stages `_flag_undated_listings`
 )
 GROUP_WORK = (
     *(n for b in GROUP_BOOKS for n in _row(b)),

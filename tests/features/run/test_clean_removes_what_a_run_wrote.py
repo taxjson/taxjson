@@ -400,6 +400,7 @@ class TestWhatStaysAndWhatGoes(unittest.TestCase):
                   "{a}_expired_options.diag": ("pipeline/inputs.py", '_expired_options.diag"'),
                   "{a}_crypto_sends.diag": ("pipeline/stages.py", '_crypto_sends.diag"'),
                   "{a}_pending_elections.json": ("pipeline/stages.py", '_pending_elections.json"'),
+                  "{a}_listing_evidence.diag": ("pipeline/stages.py", '_listing_evidence.diag"'),
                   "{a}_{b}.overrides": ("pipeline/inputs.py", 'out.stem + ".overrides"'),
                   ".{tag}_all_base.json": ("cli/common.py", '_all_base.json"')}
         self.assertEqual(per - work_seen, set(others))

@@ -109,6 +109,44 @@ class TestTickerMapChains(unittest.TestCase):
         self.assertEqual(len(probs), 1, probs)
 
 
+class TestFuturesOptionPrefixes(unittest.TestCase):
+    """TJ-5037: an option on a future follows its future's rule in every
+    prefix spelling the option parser reads (`F:`, `/`, `\\`); only `F:`
+    did, so `/QZ260620C00010000.US` kept its old root under `GLOBAL
+    /QZ.US /QX.US` and the contract's rows split over two symbols."""
+
+    def test_each_prefix_maps_its_options(self):
+        from taxjson.lib.futures_prefixes import FUTURES_PREFIXES
+        for pre in FUTURES_PREFIXES:
+            with self.subTest(prefix=pre):
+                ren = {f"{pre}QZ.US": f"{pre}QX.US"}
+                self.assertEqual(map_symbol(f"{pre}QZ260620C00010000.US", ren),
+                                 f"{pre}QX260620C00010000.US")
+                self.assertEqual(map_symbol(f"{pre}QZ.US", ren), f"{pre}QX.US")
+                # Another underlying's option is left as it is.
+                self.assertEqual(map_symbol(f"{pre}QY260620C00010000.US", ren),
+                                 f"{pre}QY260620C00010000.US")
+
+    def test_a_parsed_rule_maps_the_option_rows(self):
+        # The line's `/` or `\` is read `F:`, the books' spelling of every
+        # future (TJ-5150): the rule maps the `F:` option rows.
+        from _tmpfiles import private_tmpfile
+        from taxjson.bin.taxjson_ticker_map import apply_mapping
+        from taxjson.model.transaction import TaxTransaction
+        for pre in ("/", "\\"):
+            with self.subTest(prefix=pre):
+                with private_tmpfile("w", suffix=".map", delete=False) as f:
+                    f.write(f"GLOBAL {pre}QZ.US {pre}QX.US\n")
+                self.assertEqual(map_file_problems(Path(f.name)), [])
+                ren = merge_renames(load_map_file(Path(f.name)), to_base=True)
+                tx = TaxTransaction(action="BUYSELL", date="2025-03-03",
+                                    symbol="F:QZ260620C00010000.US",
+                                    quantity=1, price=1.0, net_amount=100.0,
+                                    currency="USD", account="margin")
+                self.assertEqual(apply_mapping(tx, ren).symbol,
+                                 "F:QX260620C00010000.US")
+
+
 class TestDistinctConflict(unittest.TestCase):
     """S053-03: DISTINCT UNH.US UNH.TO next to TOBASE UNH.US UNH.TO —
     the engine pooled them while sell-check said they stay separate."""

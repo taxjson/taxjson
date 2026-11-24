@@ -45,18 +45,20 @@ from tax_rules import rule
 from taxjson.rules import ids as R
 
 from _support.planning_tools import REPO_ROOT, _QT_HEADER, _cli, _config, _disp, _gains, _qt, _row
+from _support.planning_radar_row import base_rows, radar_country
 
 
 def _radar(tmp, taxable, as_of, sheltered=None, gains=None, extra=()):
     tmp = Path(tmp)
     t = tmp / "margin_base.json"
-    t.write_text(json.dumps({"transactions": taxable}))
+    country = radar_country(extra)
+    t.write_text(json.dumps({"transactions": base_rows(taxable, country)}))
     cmd = [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar", "--country", "canada",
            "--taxable", str(t), "--date", as_of, "--all", "--json",
            *extra]
     if sheltered is not None:
         s = tmp / "sheltered_base.json"
-        s.write_text(json.dumps({"transactions": sheltered}))
+        s.write_text(json.dumps({"transactions": base_rows(sheltered, country)}))
         cmd += ["--sheltered", str(s)]
     for i, g in enumerate(gains or []):
         gp = tmp / f"g{i}_gains_wash.json"

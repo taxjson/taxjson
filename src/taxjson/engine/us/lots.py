@@ -13,7 +13,8 @@ from taxjson.lib.numeric import D
 from taxjson.model import money as M
 from taxjson.model.transaction import TaxTransaction
 
-from taxjson.engine.us.lot_store import _lot_wash_held, _us_insert_lots
+from taxjson.lib.stage_msg import YEAR_END_INEXACT, emit_line
+from taxjson.engine.us.lot_store import _lot_wash_held, _us_insert_lots, _us_lots_copy
 from taxjson.engine.us.terms import held_more_than_one_year
 from taxjson.engine.us.wash import (
     _us_rkey_on, _us_rep_units_factor, _us_ix, _us_set_ref, _us_split_rep_refs,
@@ -21,7 +22,7 @@ from taxjson.engine.us.wash import (
 )
 
 if TYPE_CHECKING:
-    from taxjson.engine.us.lot_store import _IKey, _USInventory, _USLot
+    from taxjson.engine.us.lot_store import _IKey, _USInventory, _USLot, _USLotsNow
     from taxjson.engine.us.run import _USRun
 
 
@@ -190,6 +191,137 @@ def _us_row_after(day: str, basis: Optional[str], *, get_sort_date: Callable[[Ta
     if _last + 1 < len(taxable_sorted):
         return taxable_sorted[_last + 1]
     return None
+
+def _us_lot_sig(lots: Sequence[_USLot]) -> List[Tuple[Tuple[str, Any], ...]]:
+    """A pool's lots by their own plain fields (units, basis or proceeds,
+    wash_deferred, dates), to tell whether a row changed them."""
+    return [tuple(sorted((k, v) for k, v in lot.items()
+                         if v is None or isinstance(v, (str, int, float, Decimal))))
+            for lot in lots]
+
+
+# The rows that change a position's lots (a dividend or a fee on it does not).
+_LOT_ACTIONS = ('BUYSELL', 'ASSIGN', 'TRANSFER', 'OPENING_BALANCE', 'SPLIT', 'ADJUST')
+
+
+class _USDayLots:
+    """The lots at the end of a day (`year_end`, `lots_at`), read as the walk
+    passes it: `at` before each row, `end` after the last. The copy is taken
+    before `nxt` (_us_row_after: the first row after the day, on its date
+    basis). On trade dates, the walk's own order, that is the whole of it. On
+    settlement dates a row that settles after the day can stand before rows
+    that settle by it (a December 29 sale settling in January, a December 30
+    purchase settled that day): the one cut left every later in-year row out,
+    silently (TJ-4984). So from `nxt` to the last row dated and settled by the
+    day the lots are read pool by pool (an account's lots of one security,
+    bought and written): a pool stands as it was before the first row
+    settling after the day that touched it, a row settled by the day gives
+    the pools it changed as they stand after it, and what a row changed is
+    read off the lots themselves (a split, a rename, a spin-off's two pools
+    and a wash sale's basis add are rows like any other). A row touches the
+    pools it changed and its own (its account's lots of its symbol, and of
+    the symbol it renames to: a split of a position the later-settling sale
+    emptied changes no lot, and on settlement dates it would have). A row
+    settled by the day that touches a pool a later-settling row touched
+    cannot be read on settlement dates (the later row's lots are drawn
+    already): none of the pools it touches takes it, they stay as they were,
+    and one warning per account names them (once for a day: `said`, shared
+    by the walk's two readers)."""
+
+    __slots__ = ('lots', '_run', '_day', '_next', '_last', '_open', '_stay', '_prev', '_left', '_said')
+
+    def __init__(self, run: _USRun, day: Optional[str], nxt: Optional[TaxTransaction],
+                 said: set[Any]) -> None:
+        self.lots: Optional[_USLotsNow] = None
+        self._run, self._day, self._next, self._said = run, day, nxt, said
+        self._last: Optional[TaxTransaction] = None      # the last row dated and settled by the day
+        self._open = False
+        self._stay: set[Any] = set()                     # the pools a later-settling row touched
+        self._prev: Optional[Tuple[TaxTransaction, _USLotsNow]] = None
+        self._left: Dict[Any, List[str]] = {}            # the crossed pools: their rows not taken
+        if day and nxt is not None:
+            _past = False
+            for _t in run.taxable_sorted:
+                _past = _past or _t is nxt
+                if _past and self._in(_t):
+                    self._last = _t
+
+    def _in(self, tx: TaxTransaction) -> bool:
+        return (str(self._run.get_sort_date(tx) or '')[:10] <= str(self._day)
+                and str(tx.date_settle or tx.date or '')[:10] <= str(self._day))
+
+    def at(self, tx: TaxTransaction) -> None:
+        """Before `tx` is walked."""
+        if self._open:
+            self._settle()
+        elif self.lots is None and self._day and tx is self._next:
+            self.lots = _us_lots_copy(self._run)
+            self._open = self._last is not None
+        if self._open:
+            self._prev = (tx, _us_lots_copy(self._run))
+
+    def end(self) -> Optional[_USLotsNow]:
+        """After the last row: the lots at the end of the day (None: no day)."""
+        if self._open:
+            self._settle()
+        if self._day and self.lots is None:
+            self.lots = _us_lots_copy(self._run)      # no row after the day
+        return self.lots
+
+    def _settle(self) -> None:
+        """The row walked last: the pools it touched, into the day's lots or out of them."""
+        assert self._prev is not None and self.lots is not None, "set when the window opens (at)"
+        tx, before = self._prev
+        run = self._run
+        now = _us_lots_copy(run)
+        touched = {k for b, a in zip(before, now) for k in set(b) | set(a)
+                   if _us_lot_sig(b.get(k, [])) != _us_lot_sig(a.get(k, []))}
+        if tx.action in _LOT_ACTIONS:
+            touched |= {(tx.account, _s) if run.per_account_basis else _s
+                        for _s in (tx.symbol, tx.symbol_new) if _s}
+        if not self._in(tx):
+            self._stay |= touched
+        else:
+            # The crossed accounts (per-account lots: only the account a
+            # later-settling row touched; another account's lots of the
+            # symbol are its own, exact) take none of the row.
+            crossed = touched & self._stay
+            whose = {k[0] for k in crossed} if run.per_account_basis else None
+            for k in touched:
+                if crossed and (whose is None or k[0] in whose):
+                    self._left.setdefault(k, []).append(str(tx.date)[:10])
+                    self._stay.add(k)
+                    continue
+                for side, a in zip(self.lots, now):
+                    side[k] = a.get(k, [])
+        if tx is self._last:
+            self._open = False
+            self._say()
+
+    def _say(self) -> None:
+        """One warning per account for the pools read across both date orders."""
+        by_acct: Dict[str, Tuple[set[str], set[str]]] = {}
+        for k, days in self._left.items():
+            acct, sym = k if isinstance(k, tuple) else ('', k)
+            syms, dates = by_acct.setdefault(acct, (set(), set()))
+            syms.add(sym)
+            dates.update(days)
+        for acct, (syms, dates) in sorted(by_acct.items()):
+            if (self._day, acct) in self._said:
+                continue
+            self._said.add((self._day, acct))
+            _whose = "this account's position" if acct else "this position"
+            emit_line(f"{YEAR_END_INEXACT}{acct + ': ' if acct else ''}{', '.join(sorted(syms))}: the lots "
+                      f"at the end of {self._day} (by settlement date) are not exact\n"
+                      f"  A row that settles after that day stands before {len(dates)} day(s) of rows settled "
+                      f"by it ({', '.join(sorted(dates))}) in trade order, and both touch "
+                      f"{_whose} (a trade, a split or a "
+                      f"ticker change), so its lots are drawn in the other order. The year-end lots keep it "
+                      f"as held before the first row settling after the day: the later rows are not in "
+                      f"them.\n"
+                      f"  Check these lots (`tjs edge-cases`, the closed year's record) against the "
+                      f"broker's statement.")
+
 
 def _us_tl_label(run: _USRun, acct: str, sym: str) -> Tuple[str, str]:
     return (acct or '', sym) if run.per_account_basis else ('', sym)

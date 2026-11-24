@@ -409,7 +409,9 @@ class TestAPartOfNoUnits(unittest.TestCase):
                 TaxTransaction(action="BUYSELL", date="2024-01-03", symbol="F:QZXZ5.US", quantity=0.0,
                                price=100.0, currency="USD", id="b")]
         out = process_transactions(rows, "USD", {}, Decimal(1), country="usa")
-        self.assertEqual([r.settle_native for r in out], ["LO -100.0 0 USD 1", ""])
+        # The buy's cost, written here as the cash paid out: its magnitude
+        # is the position's money, as the engines read it (backlog TJ-5162).
+        self.assertEqual([r.settle_native for r in out], ["LO 100.0 0 USD 1", ""])
 
 
 class TestJsonTtJson(unittest.TestCase):

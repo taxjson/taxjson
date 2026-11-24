@@ -79,7 +79,7 @@ class TestT1135EarlierYearDenial(unittest.TestCase):
         self.assertEqual(p["max_cost"], 120000.0)
         self.assertEqual(rep["max_total_cost"], 120000.0)
         self.assertTrue(rep["filing_required"])
-        self.assertEqual(rep["deferred_wash_not_in_cost"], {})
+        self.assertNotIn("deferred_wash_not_in_cost", rep)
 
     @rule(R.CA_RPT_12)
     def test_s009_01_partial_sale_and_later_year(self):

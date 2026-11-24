@@ -211,11 +211,12 @@ class TestTJ0630SanityUsageErrorsExit2(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("MISSING_IN_HOLDINGS", r.stdout)
 
-    def test_the_run_names_a_holdings_account_without_books(self):
-        # The one refusal `tjs run`'s own check (no arguments) can meet:
+    def test_sanity_names_a_holdings_account_without_books(self):
+        # The one refusal `tjs sanity` with no arguments can meet here:
         # an account taxjson.toml pairs with a holdings file has no
-        # books. Exit 2 now: the run still names it and goes on. (Its
-        # text says it has no inputs, not "not an account": TJ-0639.)
+        # books. Exit 2 (its text says it has no inputs, not "not an
+        # account": TJ-0639). The run compares nothing since TJ-5170:
+        # it goes on, names `tjs sanity`, and says no holdings Error.
         from _support.cli_command_runs import _tjs
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "p"
@@ -227,23 +228,18 @@ class TestTJ0630SanityUsageErrorsExit2(unittest.TestCase):
             self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
             self.assertIn("taxjson.toml: account 'zempty' has no inputs",
                           r.stderr)
-            r = _tjs(root, "run", "--no-input")
-            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            err = " ".join(r.stderr.split())
-            self.assertIn("error: taxjson.toml: account 'zempty' has no "
-                          "inputs", err)
-            self.assertIn("warning: holdings check could not run", err)
-            self.assertIn("The Error above names the file to fix", err)
-            # As a person reads it: the Error, then one line naming the
-            # command (the reason was "The Error above …" and the
-            # command twice).
+            # As a person reads it: the Error on its line.
             from _qa_project import console, tj
-            out = console(tj(root, "run", "--no-input"))
+            out = console(tj(root, "sanity", check=False))
             self.assertIn("Error: taxjson.toml: account 'zempty' has no "
                           "inputs", out)
-            self.assertIn("Warning: holdings check could not run — "
-                          "`tjs sanity`", out)
-            self.assertNotIn("could not run: The Error above", out)
+            r = _tjs(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            both = " ".join((r.stdout + r.stderr).split())
+            self.assertNotIn("holdings check", both)
+            self.assertNotIn("account 'zempty' has no inputs", both)
+            self.assertIn("positions not yet compared with the broker's "
+                          "holdings files", both)
 
 
 # ---- TJ-0631: an unreadable gains file named work/<file>, once ------------

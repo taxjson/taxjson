@@ -126,6 +126,24 @@ IN_KIND_TYPES = (IN_KIND_CONTRIBUTION_TYPE, IN_KIND_DISPOSITION_TYPE,
                  IN_KIND_WITHDRAWAL_TYPE)
 
 
+# Whether a row's amount moved as cash, where its shape does not say: the
+# row's `cash_leg` (model/transaction), a .tt line's `cash_leg=` token.
+# lib/cash_legs reads it; a row without one is read by its wording and
+# its source, as the parsers leave them (backlog TJ-5036).
+# * CASH_LEG_NONE: the amount is a value, the consideration property (a
+#   crypto-for-crypto leg, a fee taken in a coin): no cash moved.
+# * CASH_LEG_REWARD: a reward paid in the row's symbol, its income row
+#   or its acquisition: cash only where the symbol is (a fiat currency,
+#   or a US-dollar stablecoin in a book that counts one as cash).
+# * CASH_LEG_CASH: the amount was paid in cash: a return of capital a
+#   broker paid (an ADJUST of type roc), a corporate action's own cash
+#   leg (a row with `corp_event_id` and no `corp_cash`).
+CASH_LEG_NONE = 'none'
+CASH_LEG_REWARD = 'reward'
+CASH_LEG_CASH = 'cash'
+CASH_LEG_KINDS = (CASH_LEG_NONE, CASH_LEG_REWARD, CASH_LEG_CASH)
+
+
 def is_stock_dividend(tx: Any) -> bool:
     """A parser's stock-dividend row (a $0 BUYSELL of new shares)."""
     t = tx.get('type') if isinstance(tx, dict) else getattr(tx, 'type', '')

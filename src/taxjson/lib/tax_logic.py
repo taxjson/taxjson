@@ -249,6 +249,43 @@ def _stable_text() -> str:
             "per coin when the built-in list decided")
 
 
+# What a ticker change does to the option contracts on the old ticker
+# (CA-ACB-RENAME, US-BASIS-RENAME: one text, the rule is the same; TJ-5008).
+_RENAME_OPTIONS = (
+    " An account holds OLD when its books carry OLD, or an option contract "
+    "on OLD still open at the date (bought or written; one closed or "
+    "expired before it is no holding). Each option contract on OLD the "
+    "account still holds at its rename row (bought or written, not expired "
+    "before it) moves that day to the same expiry, right, strike and market "
+    "on NEW, premium and dates carried, no disposition. A contract closed "
+    "or expired before the row stays; one with a rename row of its own "
+    "within a week is left to that row; the same contract opened again "
+    "after an earlier change is a new position, moved by the next change. "
+    "While units the event moved are left in the account (bought or "
+    "written), every row after the change under that contract's OLD "
+    "symbol is the same contract the broker still names by its old root, "
+    "booked as NEW whatever late= says: a close (a sale or buy-to-close, "
+    "an expiry, an assignment or exercise and its share leg), an "
+    "addition, and a close of more than the account holds, whose excess "
+    "opens a written (or bought) position on NEW with an ATTENTION line "
+    "naming the row and the excess. A note names the rows and `tjs "
+    "renames` lists them under the contract's event. Only the units the "
+    "event moved count (with the rows under OLD so booked): each close "
+    "under either root takes from them and a purchase under NEW adds "
+    "none, so once they are closed a row under the OLD symbol is a late "
+    "row and follows late= as a share's does, even when the account has "
+    "opened the NEW contract again.")
+# A year end read on the date basis the engine does not walk in
+# (CA-RPT-07, US-RPT-13; TJ-4984, TJ-5132).
+_YE_CROSSING = (
+    " Every row of the year on those dates is in the year-end figure, "
+    "whatever row of the next year stands before it in the engine's order. "
+    "Where one position's own rows cross the two date orders (a row of "
+    "the next year touches it before a row of the year does: a trade, a "
+    "split, a ticker change), its year-end figure is not exact: an "
+    "ATTENTION line names the position.")
+
+
 def _evening_roots():
     """Option roots with a Cboe evening session in force (lib/markets)."""
     from taxjson.lib.markets import evening_session_roots
@@ -401,6 +438,153 @@ def _tz_rule_text(s: Dict[str, Any]) -> str:
             "they fall back, the rows' local times are compressed into "
             "that hour in the order they happened, so a sale and a "
             "rebuy across the change stay in order.")
+
+
+# CA-CARRY-04 and CA-CARRY-05 on the years a T1A carry-back went to (backlog
+# TJ-4882; the owner's ruling of 2026-11-23).
+_CARRY_BACK_YEARS = (
+    "A T1A names the years a loss is carried back to: a by-target [carryover] "
+    "carried_back entry (`{ 2022 = { 2021 = 40.00 } }`; each target one of the "
+    "3 years before, with a claimed amount it does not exceed) or a lock's "
+    "carried_back_to says them, and the ledger follows them. With neither, a "
+    "carry-back meets the oldest claimed year first: for the project year the "
+    "proposal for its T1A (the lock records the years; a by-target entry for "
+    "the year says another split of the same total, checked once the earlier "
+    "years are settled), for an earlier year one reading of several. Every "
+    "reading of those years is folded: a known amount along each order of the "
+    "claimed years in reach; for a year no lock checks, each of those cut "
+    "after any year, down to nothing; every combination across the years; a "
+    "reading that leaves a later lock short of its carry-back is dropped. "
+    "Where the project year's carry-back, the loss it carries forward or the "
+    "years its own carry-back goes to differ among them, the ledger says it "
+    "can't tell, as above, until an entry says the years (a plain total says "
+    "the amount only), each line it offers being one it takes; where they "
+    "agree, nothing is asked; past 64 combinations it asks. No entry is set "
+    "aside unfolded: one that changes the project year's figures is taken. "
+    "The lock records the years and the answers, a later year's project reads "
+    "them, and an entry that differs from the record is refused.")
+_HANDOFF_PROPOSED_YEARS = (
+    "Where that part, or the record's own carry-back by year, is `tjs "
+    "carryover`'s proposal (the oldest claimed year first, another split "
+    "open) and not years you gave, handoff says so.")
+
+
+def _ca_t1135_country() -> List[Rule]:
+    """The T1135 statements on a security's country: the order it is
+    decided in (CA-RPT-02), what makes two holdings one security
+    (CA-RPT-21), and a listed option (CA-RPT-22). Backlog TJ-4957."""
+    return [
+        Rule(R.CA_RPT_02,
+             "A security's country is decided in this order, and the report "
+             "says by which for each one (`country_source`). First, a "
+             "ticker.map `T1135 SYMBOL COUNTRY` line: COUNTRY an ISO 3166 "
+             "alpha-3 code, or CA/CAN/CANADA/EXCLUDE for not foreign "
+             "property; a line outside that vocabulary stops the report. "
+             "Then the issuer's data: the first two letters of the ISIN an "
+             "export gives the security (Interactive Brokers' instrument "
+             "section, for a stock or warrant row whose instrument it lists "
+             "on the row's own market; a dividend row's ISIN), "
+             "and tobase.map's issuer country (`country=` on a pair booked "
+             "under the US listing of an issuer the interlisted master "
+             "knows is domiciled outside Canada: a Bermuda issuer is BMU, a "
+             "Swiss one CHE). Then learned: the same security's ISIN in "
+             "another account of the project (CA-RPT-21). Last, assumed: the "
+             "listing suffix. An ISIN that disagrees with the listing "
+             "decides: a Canadian listing with another country's ISIN is "
+             "foreign property under that country, a foreign listing with a "
+             "Canadian ISIN is not foreign property; the report names such "
+             "securities, with the line to add by someone who knows "
+             "otherwise. An ISIN says where the issuer is registered; the "
+             "form asks for its country of residence, which can differ (a "
+             "company registered in one country and managed from another), "
+             "and a T1135 line decides it then. A CUSIP alone does not say "
+             "whether an issuer is American or Canadian and is not read. "
+             "Nothing is picked where sources of one rank disagree (two "
+             "ISINs of one security in the year, or in the years on either "
+             "side of a year with none; an ISIN and tobase.map) or "
+             "the ISIN's prefix is no country's (XS, EU): the security is "
+             "counted as foreign property under `??` and named for review "
+             "with the line to add, and while counting it the other way "
+             "would move the total across the threshold the test is NOT "
+             "RESOLVED and no verdict is given. A security an export calls a "
+             "depositary receipt takes its own ISIN's country (the receipt "
+             "is the property held) and is named for review, since the "
+             "company behind it may be of another country. A receipt with a "
+             "foreign ISIN is foreign property either way. One that is "
+             "Canadian by its own ISIN (a Canadian issuer's receipt for a "
+             "foreign company's shares) is not settled by it: it stays off "
+             "the form as counted, the threshold test is worked out with it "
+             "counted too, and the verdict stands only when both readings "
+             "agree, NOT RESOLVED otherwise, with the T1135 lines that "
+             "settle it. Nothing is looked "
+             "up outside the machine. Crypto held on an exchange counts, and "
+             "so does the cash such an account holds (CA-RPT-20). A T1135 "
+             "line naming a listing a TOBASE line books under another symbol "
+             "applies to that symbol, and a line that matches no symbol in "
+             "the books is named in a warning, with the symbol it is booked "
+             "as. Shares of a Canadian issuer (not foreign property by the "
+             "order above) held in an account whose custodian is outside "
+             "Canada (taxjson.toml `[accounts.NAME] custodian_country`; "
+             "unset, Canada) are property held outside Canada: a row of "
+             "their own under the custodian's country, at that account's "
+             "share of the ACB pooled over every taxable account (s.47: its "
+             "units at each moment the engine walks, at the end of the day "
+             "where a row cannot be placed between its steps, times the "
+             "pool's cost per unit: shares bought and sold in one day count "
+             "while held); the same shares held in Canada are not foreign "
+             "property.", cont=True),
+        Rule(R.CA_RPT_21,
+             "An ISIN, or a T1135 line, speaks for the security it was given "
+             "for, in every account and through its ticker changes, and for "
+             "no other. A holding of a symbol is one security from the day "
+             "it is bought to the end of the day it is flat over every "
+             "account of the project (a transfer out followed within 31 days "
+             "by a transfer in continues it), and a ticker change continues "
+             "it when it is a rename of one security: the same ISIN where "
+             "both symbols carry one, else a change into a symbol with no "
+             "position (a change into shares already held is a merger). So a "
+             "country an ISIN gave in one account applies to the same "
+             "security in the accounts whose exports carry none (`learned`, "
+             "with the account it came from), worked out from the books on "
+             "each run and never saved; a T1135 line on any symbol of a "
+             "renamed security decides it before and after the change (a "
+             "symbol's own line first, then the nearest earlier symbol's, "
+             "then the nearest later one's) and outranks tobase.map's issuer "
+             "country on every symbol of it; and neither crosses to a merger "
+             "partner's position, or to a ticker bought again after it was "
+             "sold or renamed away: that is another security, needing its "
+             "own ISIN or line. A holding is over when the taxable accounts' "
+             "pooled quantity, the gains engine's own, is flat and no "
+             "registered account, each counted on its own, holds it; a "
+             "registered account alone carries no holding over to the "
+             "taxable accounts (its books may lack a split or its later "
+             "exports), so shares the taxable accounts buy after their pool "
+             "was flat are a new holding, and the registered account's ISIN "
+             "from before is another holding's. A "
+             "country is not learned across such "
+             "a break, and the other holding's ISIN is not thrown away "
+             "either: where another holding of the ticker, in any account "
+             "and year, carried an ISIN that says otherwise on being foreign "
+             "property, the security stays as decided and the threshold test "
+             "is worked out the other way too, the verdict standing only "
+             "when both readings agree (NOT RESOLVED otherwise, with the "
+             "T1135 lines that settle it); where it only names another "
+             "foreign country, the security is named for review with both "
+             "lines, the total being the same. An ISIN is read for the report's "
+             "year: the rows of that year; with none, the last before it "
+             "and the first after, which must agree.", cont=True),
+        Rule(R.CA_RPT_22,
+             "A listed option keeps its own listing's country (CA-RPT-17 for "
+             "a pooled Canadian issuer's). Where that and its share's decided "
+             "classification disagree on being foreign property (a US-listed "
+             "option on a share an ISIN makes Canadian, a Montreal-listed "
+             "one on a foreign issuer's share) and no T1135 line names the "
+             "contract, the threshold test is worked out with the option "
+             "counted each way: the verdict stands only when both readings "
+             "agree, and is otherwise NOT RESOLVED, with the T1135 lines on "
+             "the option that settle it. The options of a share whose own "
+             "country is open are counted each way with it.", cont=True),
+    ]
 
 
 def _canada(s: Dict[str, Any]) -> List[RuleSection]:
@@ -590,34 +774,34 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "moved fill sorts before that day's other trades; the "
                  "broker's stamp is kept (broker_time)."),
             Rule(R.CA_DATE_14,
-                 "Rows at the same date and time keep the export's row "
-                 "order (Webull prints no clock time, nor does the "
-                 "generic importer unless its date format has one; "
-                 "Questrade stamps midnight): a write listed before "
-                 "its same-day buy-back is a write and a buy-back, and a "
-                 "sale listed before a same-day rebuy is made from the "
-                 "shares held before it. A Questrade file written by "
-                 "`tjs fetch` (the taxjson-fetch plugin) keeps the "
-                 "API's row order within a day, "
-                 "and a re-fetch merge keeps it too. A newest-first export "
-                 "is read "
-                 "bottom-up (each of one account's downloads pasted into "
-                 "one file in its own direction); rows of different "
-                 "accounts at one moment "
-                 "follow the accounts' names in alphabetical order (not "
-                 "their order in taxjson.toml, which reordering the file "
-                 "would change), in the run and in every recompute of the "
-                 "blended book (check-filed, audit, t1135, carryover, "
-                 "wash-sales --explain). "
-                 "Rows that "
-                 "settle on the same day but traded on different days "
-                 "(a Friday trade and the next trading day's trade both "
-                 "settling after a settlement holiday) go in TRADE order, "
-                 "the earlier trade date first. Fixed places "
-                 "at one "
-                 "moment: an opening balance first, then a split (effective "
-                 "at the open), an assignment's option leg before its "
-                 "stock leg, then the trades; cost adjustments last."),
+                 "Rows at the same date and time keep the export's row order (Webull "
+                 "prints no clock time, nor does the generic importer unless its "
+                 "date format has one; Questrade stamps midnight): a write listed "
+                 "before its same-day buy-back is a write and a buy-back, and a sale "
+                 "listed before a same-day rebuy is made from the shares held before "
+                 "it. A Questrade file written by `tjs fetch` (the taxjson-fetch "
+                 "plugin) keeps the API's row order within a day, and a re-fetch "
+                 "merge keeps it too. A newest-first export is read bottom-up (each "
+                 "of one account's downloads pasted into one file in its own "
+                 "direction); rows of different accounts at one moment follow the "
+                 "accounts' names in alphabetical order (not their order in "
+                 "taxjson.toml, which reordering the file would change), in the run "
+                 "and in every recompute of the blended book (check-filed, audit, "
+                 "t1135, carryover, wash-sales --explain). Rows that settle on the "
+                 "same day but traded on different days (a Friday trade and the next "
+                 "trading day's trade both settling after a settlement holiday) go "
+                 "in TRADE order, the earlier trade date first. Fixed places at one "
+                 "moment: an opening balance first, then a split (effective at the "
+                 "open), an assignment's option leg before its stock leg, then the "
+                 "trades; cost adjustments last. A cost adjustment read from an "
+                 "export (a return of capital, the generic importer's adjust row) is "
+                 "stamped 09:30:00 by every importer, whatever clock its row carries "
+                 "(the broker's posting): on its day it follows the rows stamped "
+                 "09:30:00 or earlier (every trade of an export with no clock) and "
+                 "precedes those clocked later; a trade stands at its settlement "
+                 "date, so one settling after the adjustment's day follows it. The "
+                 "generic importer's other rows keep its date format's time (an "
+                 "opening row: 00:00:00); a .tt ADJUST line the time written on it."),
             Rule(R.CA_DATE_18,
                  "Rows of ONE account at one moment that come from "
                  "different input files follow the files' name order "
@@ -1025,7 +1209,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "future, or two option contracts of another expiry, "
                  "right, strike or market; a respelling of one contract "
                  "(the same expiry, right, strike and market) may be "
-                 "joined.", cont=True),
+                 "joined." + _RENAME_OPTIONS, cont=True),
             Rule(R.CA_ACB_05,
                  "Accounts typed \"sheltered\" (RRSP, TFSA, FHSA, LIRA, "
                  "RESP...) are tracked but kept out of the filing totals. "
@@ -2278,8 +2462,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "its folder) is kept once (two of equal figures whose "
                  "pages name different recipient accounts are two), and "
                  "an amended slip replaces "
-                 "the original of the same issuer, account, fund and "
-                 "broker account (in the import or already in slips.toml) "
+                 "the original of the same issuer, account, fund, broker "
+                 "account and currency (in the import or already in slips.toml) "
                  "or, with no original there, the earlier amended slip; "
                  "where that cannot be told none is imported.",
                  cont=True),
@@ -2444,42 +2628,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Below $250,000 at every time in the year the simplified "
                  "method (Part A) is available; at $250,000 or more the "
                  "detailed method (Part B) is required.", cont=True),
-            Rule(R.CA_RPT_02,
-                 "Country comes from the listing suffix (ticker.map `T1135 "
-                 "SYMBOL COUNTRY` lines override it — COUNTRY an ISO 3166 "
-                 "alpha-3 code, or CA/CAN/CANADA/EXCLUDE for not foreign "
-                 "property; a line outside that vocabulary stops the report; a "
-                 "foreign listing whose rows carry a Canadian ISIN is named for "
-                 "a `T1135 SYMBOL CA` line, since a Canadian corporation's "
-                 "shares are not foreign property, and a Canadian listing whose "
-                 "rows carry another country's ISIN for a `T1135 SYMBOL "
-                 "COUNTRY` line, since a non-resident corporation's shares are "
-                 "foreign property wherever they are listed; no country is "
-                 "taken from the ISIN, and while counting such a holding the "
-                 "other way would move the total across the threshold the test "
-                 "is NOT RESOLVED, no verdict is given, and the lines that "
-                 "settle it are named); crypto held on an exchange counts, and "
-                 "so does the cash such an account holds (CA-RPT-20). A T1135 "
-                 "line follows its symbol through a rename (a TOBASE line's "
-                 "included: a line naming a listing booked under another symbol "
-                 "applies to that symbol), and a line that matches no symbol in "
-                 "the books is named in a warning, with the symbol it is booked "
-                 "as. A pair tobase.map books under the US listing of an issuer "
-                 "the interlisted master knows is domiciled outside Canada "
-                 "takes the issuer's country, not the .US suffix's (`country=` "
-                 "on its line: a Bermuda issuer is BMU, a Swiss one CHE); a "
-                 "T1135 line overrides it. Shares of a Canadian issuer (a "
-                 "Canadian listing, or a `T1135 SYMBOL CA` line) held in an "
-                 "account whose custodian is outside Canada (taxjson.toml "
-                 "`[accounts.NAME] custodian_country`; unset, Canada) are "
-                 "property held outside Canada: a row of their own under the "
-                 "custodian's country, at that account's share of the ACB "
-                 "pooled over every taxable account (s.47: its units at each "
-                 "moment the engine walks, at the end of the day where a row "
-                 "cannot be placed between its steps, times the pool's cost per "
-                 "unit: shares bought and sold in one day count while held); "
-                 "the same shares held in Canada are not foreign property.",
-                 cont=True),
+            *_ca_t1135_country(),
             Rule(R.CA_RPT_15,
                  "The test covers these books only: specified foreign "
                  "property held outside them (a foreign bank account, "
@@ -2949,21 +3098,20 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "meets a claim from its loss or the balance it took in; its return may have carried back nothing, or the same from a loss these books no longer "
                  "hold. A lock after it that took its opening from that year's record checks the row: opening no higher than the row left, the row stands; "
                  "higher, what the row carried back beyond that, past the cents of the loss rows behind the balance, is counted as waiting for a later year's "
-                 "loss. A balance you typed sets a floor on what the earlier years carried back; losses from before your files may be in it: [estimate] "
-                 "other_losses of the project year, or of the first lock after the unchecked years (its typed opening), is the balance carried in, so those "
-                 "years carried back at least what the books leave less that balance, and at most the claims they could meet; after a lock the balance they "
-                 "started from is known, and it says what they carried back. A year's own loss is not applied in that year; a gain year with no [carryover] "
-                 "claimed entry applied anything from nothing to its gain (the deduction is the taxpayer's choice, ITA s.111(1)(b)), which lowers the floor; "
-                 "floor and ceiling may meet in one figure, shown with where it comes from; a balance no reading leaves narrows nothing. A [carryover] "
-                 "carried_back entry that leaves less than the balance is taken (the rest was carried in from before the files, and is said); one that leaves "
-                 "more is refused. Where the readings that remain differ in the project year's carry-back, with a loss left to split there (the estimate's own "
-                 "test: the balance carried in less the year's net, the RETURN row and the T5 box 18 gains; a balance carried in can carry back in a gain year "
-                 "too), the ledger shows its working and says it can't tell: the estimate's carry-forward, `tjs close-year` and `tjs handoff`'s comparison give "
-                 "no figure until [carryover] carried_back says what that year carried back (the person's figure, shown as such and recorded in the lock; noted "
-                 "as not needed where a lock or the books give the same or nothing rests on it, refused where it contradicts them or exceeds the claims that "
-                 "year could meet) or that year's lock is read. An opening whose record was closed again since checks nothing, and that lock is stale: the "
-                 "estimate's carry-forward is unknown and `tjs close-year` stops until its year is closed again. A claim the lock took stays met however little "
-                 "the books rebuild.",
+                 "loss. A balance you typed ([estimate] other_losses, here or as the opening of the first lock after those years) settles none of it: set against "
+                 "those years' nets it would say what they carried back (at least what the nets leave less the balance; after a lock, at most that too), but the nets "
+                 "are the books' dispositions and the T5 box 18 gains named in [[capital_gains_dividends]], and a T3 box 21 gain, another box 18 gain or the FX gain "
+                 "or loss on foreign cash on such a return is in none of them. The figure is shown beside the question as the nets' alone, never taken. An entry and "
+                 "a typed balance the nets don't reconcile are both taken, and what must then be true is said: a loss from before the files, or a capital gain or "
+                 "loss those returns held outside the nets. Where the two readings (those years carried back nothing, or what the books show) differ in the project "
+                 "year's carry-back, with a loss left to split there (the estimate's own test: the balance carried in less the year's net, the RETURN row and the T5 "
+                 "box 18 gains; a balance carried in can carry back in a gain year too), the ledger shows its working and says it can't tell: the estimate's "
+                 "carry-forward, `tjs close-year` and `tjs handoff`'s comparison give no figure until [carryover] carried_back says what that year carried back (the "
+                 "person's figure, shown as such, recorded in the lock and read there by later years; noted as not needed where a lock or the books give the same or "
+                 "nothing rests on it, refused where it contradicts them, a recorded answer or the claims that year could meet) or that year's lock is read. An "
+                 "opening whose record was closed again since checks nothing, and that lock is stale: the estimate's carry-forward is unknown and `tjs close-year` "
+                 "stops until its year is closed again. A claim the lock took stays met however little the books rebuild. "
+                 + _CARRY_BACK_YEARS,
                  cont=True),
             Rule(R.CA_CARRY_05,
                  "`tjs handoff` flags a next-year input that differs "
@@ -2972,7 +3120,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "(vs the loss applied, less the part this project's own "
                  "loss carries back to it, a T1A carry-back the record "
                  "predates), and [estimate] amt_carryover by year of "
-                 "origin.",
+                 "origin. "
+                 + _HANDOFF_PROPOSED_YEARS,
                  cont=True),
             Rule(R.CA_RPT_11,
                  "`tjs instalments`: CRA instalments (ITA s.156) when "
@@ -3052,7 +3201,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "losses carried into the next year from the pools at "
                  "the end of Dec 31 on the tax_date's own dates (on "
                  "trade dates a sale traded Dec 31 that settles in "
-                 "January is this year's, its units gone)."),
+                 "January is this year's, its units gone)." + _YE_CROSSING),
             Rule(R.CA_RPT_08,
                  "`tjs close-year` records each closed year's sales, "
                  "year-end positions and cost (each superficial-loss "
@@ -3315,33 +3464,33 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "moved fill sorts before that day's other trades; the "
                  "broker's stamp is kept (broker_time)."),
             Rule(R.US_DATE_13,
-                 "Rows at the same date and time keep the export's row "
-                 "order (Webull prints no clock time, nor does the "
-                 "generic importer unless its date format has one; "
-                 "Questrade stamps midnight): a write listed before "
-                 "its same-day buy-back is a short sale closed by the "
-                 "buy-back, and FIFO takes same-moment lots in that order. "
-                 "A Questrade file written by `tjs fetch` (the "
-                 "taxjson-fetch plugin) keeps the "
-                 "API's row order within a day, and a re-fetch merge keeps "
-                 "it too. "
-                 "A newest-first export is read bottom-up (each of one "
-                 "account's downloads pasted into one file in its own "
-                 "direction); rows of "
-                 "different accounts at one moment follow the accounts' "
-                 "names in alphabetical order (not their order in "
-                 "taxjson.toml), in the run and in every "
-                 "recompute of the blended book (check-filed, audit, "
-                 "wash-sales --explain). Fixed places at one moment: an "
-                 "opening "
-                 "balance first, an assignment's option leg before its "
-                 "stock leg, a split before the trades; basis adjustments "
-                 "last. A split takes effect at its clock stamp; a rename "
-                 "(a split to a new ticker) that its new ticker trades "
-                 "ahead of takes effect at the day's open, because the new "
-                 "ticker cannot trade before it, unless the old ticker "
-                 "also traded earlier that day: then the stamp stands and "
-                 "a warning says so."),
+                 "Rows at the same date and time keep the export's row order (Webull "
+                 "prints no clock time, nor does the generic importer unless its "
+                 "date format has one; Questrade stamps midnight): a write listed "
+                 "before its same-day buy-back is a short sale closed by the "
+                 "buy-back, and FIFO takes same-moment lots in that order. A "
+                 "Questrade file written by `tjs fetch` (the taxjson-fetch plugin) "
+                 "keeps the API's row order within a day, and a re-fetch merge keeps "
+                 "it too. A newest-first export is read bottom-up (each of one "
+                 "account's downloads pasted into one file in its own direction); "
+                 "rows of different accounts at one moment follow the accounts' "
+                 "names in alphabetical order (not their order in taxjson.toml), in "
+                 "the run and in every recompute of the blended book (check-filed, "
+                 "audit, wash-sales --explain). Fixed places at one moment: an "
+                 "opening balance first, an assignment's option leg before its stock "
+                 "leg, a split before the trades; basis adjustments last. A split "
+                 "takes effect at its clock stamp; a rename (a split to a new "
+                 "ticker) that its new ticker trades ahead of takes effect at the "
+                 "day's open, because the new ticker cannot trade before it, unless "
+                 "the old ticker also traded earlier that day: then the stamp stands "
+                 "and a warning says so. A basis adjustment read from an export (a "
+                 "return of capital, the generic importer's adjust row) is stamped "
+                 "09:30:00 by every importer, whatever clock its row carries (the "
+                 "broker's posting): on its day it follows the rows stamped 09:30:00 "
+                 "or earlier (every trade of an export with no clock) and precedes "
+                 "those clocked later. The generic importer's other rows keep its "
+                 "date format's time (an opening row: 00:00:00); a .tt ADJUST line "
+                 "the time written on it."),
             Rule(R.US_DATE_17,
                  "Rows of ONE account at one moment that come from "
                  "different input files follow the files' name order "
@@ -3644,7 +3793,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "future, or two option contracts of another expiry, "
                  "right, strike or market; a respelling of one contract "
                  "(the same expiry, right, strike and market) may be "
-                 "joined.", cont=True),
+                 "joined." + _RENAME_OPTIONS, cont=True),
             Rule(R.US_XLIST_01,
                  "Two listings of one company's same class of shares (a "
                  "US line and its Canadian line, two currency lines of "
@@ -5083,7 +5232,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "disallows a December loss, and that lot, which takes "
                  "the basis add, is not a Dec 31 lot; a basis add to "
                  "shares sold before the loss (US-WASH-22) is in that "
-                 "sale, never in a held lot.", cont=True,
+                 "sale, never in a held lot." + _YE_CROSSING, cont=True,
                  keys=("tax_date",)),
             Rule(R.US_RPT_10,
                  "`tjs checklist`'s slip step names Form 1099-B for "

@@ -1212,8 +1212,11 @@ def _fold_class_separator(symbol: str) -> str:
     Unfolded, the query matched nothing and buy-check answered SAFE
     while a loss on SAMPLD.B.TO sat inside the window (S007-02). Option
     symbols pass through unchanged."""
+    from taxjson.lib.futures_prefixes import canonical_futures_symbol
     from taxjson.lib.option_symbols import is_option_symbol
-    s = " ".join(str(symbol).split()).upper()
+    # A future's `/` or `\` prefix is `F:`, as the books spell it
+    # (lib/futures_prefixes, backlog TJ-5150).
+    s = canonical_futures_symbol(" ".join(str(symbol).split()).upper())
     if is_option_symbol(s):
         return s
     m = re.fullmatch(r"([A-Z0-9]+)[-/ ]([A-Z]{1,2})((?:\.[A-Z]{1,3})?)", s)
@@ -1394,7 +1397,8 @@ def _flagged_share_rows(radar: Dict[str, Dict[str, Any]], q: str):
     replacement_matches)."""
     from taxjson.engine.assign import _split_underlying
     from taxjson.engine.replacement import right_underlying
-    from taxjson.lib.option_symbols import (_FUTURES_PREFIX_RE, root_matches_stock,
+    from taxjson.lib.futures_prefixes import canonical_futures_symbol
+    from taxjson.lib.option_symbols import (root_matches_stock,
                                             is_option_symbol, parse_option_right,
                                             parse_option_underlying)
     q = q.strip().upper()
@@ -1403,7 +1407,7 @@ def _flagged_share_rows(radar: Dict[str, Dict[str, Any]], q: str):
             return []
         und = parse_option_underlying(q) or ""
         b, ext = _split_underlying(und)
-        b = _FUTURES_PREFIX_RE.sub("F:", b)
+        b = canonical_futures_symbol(b)
         if b.startswith("F:"):
             kind = "futures_option_vs_loss"
         elif b[-1:].isdigit():
@@ -1422,7 +1426,7 @@ def _flagged_share_rows(radar: Dict[str, Dict[str, Any]], q: str):
         if is_option_symbol(tu) or tu == q:
             continue
         sb, sext = _split_underlying(tu)
-        sb = _FUTURES_PREFIX_RE.sub("F:", sb)
+        sb = canonical_futures_symbol(sb)
         if sext != ext:
             continue
         if kind == "right_vs_share_loss":

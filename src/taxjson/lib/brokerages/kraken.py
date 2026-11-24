@@ -109,8 +109,17 @@ _LEDGER_REQUIRED = ('txid', 'refid', 'time', 'type', 'asset', 'amount',
 # Ledger types that move your OWN fiat cash to or from Kraken (bank
 # funding, cash-outs, wallet transfers): not a tax event. Any other fiat
 # row with an amount (a credit, an adjustment) is UNBOOKED (A2-0578).
+# (The position book's list. A Hybrid Earn row is no cash move of the
+# cash events: `_HYBRID_EARN`, `_kr_cash_own`.)
 _FIAT_FUNDING_TYPES = ('deposit', 'withdrawal', 'transfer',
                        'hybridearnwithdrawal')
+
+# Kraken Hybrid Earn (`hybridearnwithdrawal` takes an asset out of the
+# spot balance into the product, `hybridearndeposit` brings it back; the
+# ledger has no row of another wallet for what is parked): every type
+# with this prefix is a move within Kraken, read by its sign
+# (`_kr_walk`, backlog TJ-4951, TJ-4954).
+_HYBRID_EARN = 'hybridearn'
 
 # Legacy (pre-Earn) moves between the spot and staking wallets: the
 # coins never leave the account — a recognised non-event.
@@ -553,18 +562,64 @@ def _kr_when(raw: str, where: str):
                          f"{raw!r}") from None
 
 
-def _kr_wallet(raw_asset: str) -> str:
+def _kr_frac(raw: str) -> Optional[int]:
+    """The fraction of a second a ledger row's `time` states, in
+    microseconds; None when it states none (or one that is no number).
+    Rows of one second that all state one are listed, for the walk, in
+    the order of those (`_kr_listed`, backlog TJ-5028: the fraction was
+    dropped, and a newest-first pair read in the lines' order). The
+    events' dates stay `_kr_when`'s."""
+    frac = (raw or '').strip().partition('.')[2].strip()
+    return int((frac + "000000")[:6]) if frac.isdigit() else None
+
+
+# Between a wallet's asset code and the name the export gives the wallet
+# (`_kr_wallet`): no asset code holds it.
+_KR_NAMED = " @ "
+
+
+def _kr_wallet(raw_asset: str, named: Any = '') -> str:
     """The wallet a row's balance belongs to: the bare asset and its
-    wallet suffix (USDC.F, USD.HOLD beside USDC, ZUSD)."""
+    wallet suffix (USDC.F, USD.HOLD beside USDC, ZUSD), and the wallet
+    the export names for the row (`named`, its `wallet` column: `spot /
+    main`, `earn / flexible`) where it names one. Two wallets of one
+    asset code keep a balance each: read by the code alone, the last
+    wallet's balance replaced the other's (backlog TJ-5027)."""
     sfx = _ASSET_SUFFIX_RE.search(raw_asset)
-    return (_normalize_asset(raw_asset, fold_stable=False)
+    code = (_normalize_asset(raw_asset, fold_stable=False)
             + (sfx.group(0).upper() if sfx else ''))
+    name = ' '.join(str(named or '').lower().split())
+    return f"{code}{_KR_NAMED}{name}" if name else code
+
+
+def _kr_is_move(r: Dict[str, Any]) -> bool:
+    """Whether the ledger row moves its asset between two wallets of the
+    account (an `earn` allocation, a legacy staking transfer): a row in
+    each wallet, the two adding up to nothing (`_kr_uncovered`). Not a
+    transfer to or from futures (`_KR_OUT_OF_BOOK`): that cash leaves
+    the book, a CASHMOVE of the cash events, and no wallet of the
+    ledger holds its other side."""
+    typ = (r.get('type') or '').strip().lower()
+    sub = (r.get('subtype') or '').strip().lower()
+    return ((typ == 'earn' and sub in _EARN_WALLET_MOVES)
+            or (typ == 'transfer' and sub in _STAKING_WALLET_MOVES
+                and sub not in _KR_OUT_OF_BOOK))
+
+
+_KR_OUT_OF_BOOK = ('spottofutures', 'spotfromfutures')
+# What the name of the wallet of an asset code's suffix holds, where an
+# export names its wallets (`_kr_join_unnamed`): a bare code is the spot
+# wallet's, `.F` the flexible Earn wallet's, `.S` / `.M` / `.B` / `.P`
+# a bonded or staked one's, `.HOLD` the holding balance's.
+_KR_SUFFIX_KIND = {'': ('spot',), '.F': ('flex',), '.S': ('bond', 'stak', 'lock'),
+                   '.M': ('bond', 'stak', 'lock'), '.B': ('bond', 'stak', 'lock'),
+                   '.P': ('bond', 'stak', 'lock', 'para'), '.HOLD': ('hold',)}
 
 
 def _kr_leg(r: Dict[str, Any], where: str, stable_cash: bool) -> tuple:
     """(day, currency, amount, fee, where, bare asset, fee currency when
-    it is cash) of another export's trade leg, as the groups hold it (its
-    currencies read without the stablecoin note, `_kr_quiet_norm`)."""
+    it is cash, txid) of another export's trade leg, as the groups hold
+    it (its currencies read without the stablecoin note, `_kr_quiet_norm`)."""
     raw_asset = (r.get('asset') or '').strip()
     bare = _normalize_asset(raw_asset, fold_stable=False)
     cur = _kr_quiet_norm(raw_asset, stable_cash)
@@ -574,22 +629,759 @@ def _kr_leg(r: Dict[str, Any], where: str, stable_cash: bool) -> tuple:
     fc = _fee_ccy(r, bare)
     fee_cur = (_kr_quiet_norm(fc, stable_cash)
                if _kr_quiet_cash(fc, stable_cash) else None)
-    return (day, cur, amt, fee, where, bare, fee_cur)
+    return (day, cur, amt, fee, where, bare, fee_cur, (r.get('txid') or '').strip())
 
 
-def _kr_cash_own(rows: List[tuple], name: str, stable_cash: bool) -> tuple:
+def _kr_close(a: float, b: float) -> bool:
+    """Two balances of one wallet the same, to the digits the export prints."""
+    return abs(a - b) <= 1e-8 * max(1.0, abs(a), abs(b))
+
+
+# The most steps `_kr_orders` walks, and the most orders it keeps, for one
+# second of one wallet: past either the balances are read as giving no
+# order (a second of many rows with blank balances).
+_KR_ORDER_STEPS = 4000
+_KR_ORDER_KEEP = 64
+
+
+@dataclass(eq=False)
+class _KrEntry:
+    """A ledger row in its wallet's timeline (`_kr_walk`): `when`, its
+    time to the second, and `frac`, the fraction of a second it states
+    (`_kr_frac`); `key` its (file, line), `where` that as `file:line`;
+    `down`, whether its export lists the wallet's rows newest first, and
+    `sure`, whether the export says so (`_kr_listing`: every pair of
+    rows of the wallet that follow each other with different times goes
+    one way); `seq`, its place in the file's order (the lines of an
+    export listed newest first counted from the last up); `own`, a row
+    of the export parsed;
+    `earlier`, an own row an export of an earlier name holds too; `before`
+    and `after`, the wallet's balance around it (None: a blank `balance`);
+    `hyb`, a Hybrid Earn row; `delta`, what it added to what is parked
+    (less what it brought back of it), and `over`, what it brought back
+    beyond that; `unsure`, why a balance read from the row is not sure
+    ("" when it is): a row of a second whose order its balances do not
+    settle, read in the file's order ("up", "down": the lines from the
+    first down, from the last up), in the order of the fractions of a
+    second its rows state ("frac"), or with no listing direction known
+    ("none"); or a row after a second of Hybrid Earn rows whose order is
+    not known, on which what is parked depends ("hybrid"; `taint`, that
+    second: its day and the export it is in); `ref`, its refid, and
+    `move`, a move between two wallets of the account (`_kr_is_move`);
+    `mixed`, a row of an export without a `wallet` column whose wallet
+    the exports that have one may name too (`_kr_join_unnamed`: the
+    named wallets it may be); `mine`, the export parsed's own row of
+    the entry as `file:line` ("" when it holds none); `copies`, the
+    entry's row in each export that holds it (the export's name -> that
+    copy, with its `key`, `seq`, `down` and `sure`: `_kr_one_listing`);
+    `net`, what the row adds to the wallet's balance (its amount less a
+    fee in the asset)."""
+    when: Any
+    key: tuple
+    where: str
+    own: bool
+    bare: str
+    wallet: str
+    amt: float
+    before: Optional[float]
+    after: Optional[float]
+    hyb: bool
+    frac: Optional[int] = None
+    seq: tuple = ()
+    down: bool = False
+    sure: bool = True
+    earlier: bool = False
+    delta: float = 0.0
+    over: float = 0.0
+    unsure: str = ""
+    taint: str = ""
+    ref: str = ""
+    move: bool = False
+    mixed: str = ""
+    mine: str = ""
+    net: float = 0.0
+    copies: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class _KrWalk:
+    """The account's ledger rows walked in time order, a wallet at a time
+    (`_kr_walk`): `wallets`, each wallet's rows in the order walked; `parked`,
+    beside each row of a wallet, what the wallet's Hybrid Earn rows up to
+    and with it had parked from its balance and not brought back;
+    `excess`, by an own row's `file:line`, the (bare asset, units, day) a
+    Hybrid Earn row brought back beyond what the rows before it had
+    parked; `earlier`, the own rows another export of an earlier name
+    holds too (that export says them); `unordered`, a `_KrUnordered` per
+    second holding Hybrid Earn rows whose order the balances do not give
+    and whose order matters."""
+    wallets: Dict[str, List[_KrEntry]] = field(default_factory=dict)
+    parked: Dict[str, List[float]] = field(default_factory=dict)
+    excess: Dict[str, tuple] = field(default_factory=dict)
+    earlier: set = field(default_factory=set)
+    unordered: List["_KrUnordered"] = field(default_factory=list)
+
+
+@dataclass
+class _KrUnordered:
+    """One second of one asset whose rows the balances put in no one
+    order, read in the file's order (`_kr_place`; `read`: the order it
+    was read in, as the parse says it): `rows` and `hybrid`,
+    how many rows and how many of them Hybrid Earn rows; `over` and
+    `held`, what the file's order finds brought back beyond what was
+    parked and left parked; `over_range`, `held_range` and `balance_range`,
+    the least and the most another order gives (the balance: the last
+    row's with what is parked, None without a balance); `own`, whether
+    this export says it."""
+    bare: str
+    day: str
+    rows: int
+    hybrid: int
+    over: float
+    held: float
+    balance: Optional[float]
+    over_range: tuple
+    held_range: tuple
+    balance_range: Optional[tuple]
+    own: bool
+    read: str = "the file's order"
+
+
+def _kr_is_hybrid(r: Dict[str, Any]) -> bool:
+    """Whether the ledger row is a Hybrid Earn row (`_HYBRID_EARN`)."""
+    return (r.get('type') or '').strip().lower().startswith(_HYBRID_EARN)
+
+
+def _kr_hybrid_step(held: float, amt: float) -> tuple:
+    """(units parked after a Hybrid Earn row of `amt`, what it brought
+    back beyond the `held` units parked before it)."""
+    if amt <= 0:
+        return _dec_sub(held, amt), 0.0
+    return max(0.0, _dec_sub(held, amt)), max(0.0, _dec_sub(amt, held))
+
+
+def _kr_listing(es: List["_KrEntry"]) -> tuple:
+    """Which way an export lists rows (`es`, in the order of its lines):
+    (newest first; whether the rows say so; how many pairs of rows that
+    follow each other have different times). Every such pair is counted,
+    never the first and the last row alone: an export sorted by asset,
+    two exports pasted one after the other and a row appended out of its
+    place each begin and end at times that say nothing of the order
+    between (review round 5). The rows say which way only when every
+    pair goes that way; otherwise the way most pairs go is read (oldest
+    first on a tie) and is not sure."""
+    up = down = 0
+    for a, b in zip(es, es[1:]):
+        # (to the fraction of a second where both rows state one)
+        both = a.frac is not None and b.frac is not None
+        ta, tb = (a.when, a.frac if both else 0), (b.when, b.frac if both else 0)
+        up, down = up + (ta < tb), down + (ta > tb)
+    return down > up, not (up and down), up + down
+
+
+def _kr_set_listing(mine: List["_KrEntry"]) -> None:
+    """Each row of one export (`mine`, in the order of its lines) takes
+    the way the export lists the rows of its wallet (`_kr_listing`:
+    `down`, `sure`) and its place in that order (`seq`). A wallet is
+    judged by its own rows: an export sorted by asset lists each wallet
+    one way. One whose rows share one time takes the way the export's
+    other wallets are listed, when their rows say one way and all the
+    same; else the way of the whole export's rows, when those say one;
+    and none where nothing says."""
+    by: Dict[str, list] = {}
+    for e in mine:
+        by.setdefault(e.wallet, []).append(e)
+    told = {w: _kr_listing(es) for w, es in by.items()}
+    ways = {(down, sure) for down, sure, pairs in told.values() if pairs}
+    whole = _kr_listing(mine)
+    if len(ways) == 1 and next(iter(ways))[1]:
+        rest = next(iter(ways))
+    else:
+        rest = (whole[0], not ways and whole[1] and whole[2] > 0)
+    for w, es in by.items():
+        down, sure = told[w][:2] if told[w][2] else rest
+        for e in es:
+            e.down, e.sure = down, sure
+            e.seq = (e.key[0], -e.key[1] if down else e.key[1])
+
+
+def _kr_entries(rows: List[tuple], siblings: List[tuple], name: str) -> Dict[str, list]:
+    """Every row of the export (`rows`: (row, line)) and of the account's
+    other ledger exports (`siblings`, `_kr_sibling_ledger_rows`) as a
+    `_KrEntry`, by wallet (`_kr_wallet`), an entry of a txid read once
+    whichever export is parsed: the union of the exports' rows, each
+    marked `own` with the parsed export's row (`mine`) when that export
+    holds it, and `earlier` when the copy read is another export's. The
+    copy read is the one of the export that lists the most rows of the
+    entry's second (`_kr_one_listing`). So every export of the account
+    walks the same rows in the same order, and what the walk derives
+    (what a Hybrid Earn row brought back beyond what was parked) is the
+    same from each: with the parsed export's own copy read, two exports
+    that list one second's rows in different orders derived two amounts
+    for one row (backlog TJ-5224).
+    An export's listing direction is read from all of its rows, the
+    copies not kept too (`_kr_set_listing`). A row whose time or amount
+    does not read is left out (its own parse reports it; an own Hybrid
+    Earn row's raises), and a `balance` that does not read is a blank
+    one."""
+    seen: Dict[str, Optional[_KrEntry]] = {}
+    out: Dict[str, list] = {}
+    files = sorted([(name, rows, True)] + [(n, r, False) for n, r in siblings],
+                   key=lambda f: f[0])
+    for fname, frows, own in files:
+        listed: List[_KrEntry] = []
+        for r, i in frows:
+            txid = (r.get('txid') or '').strip()
+            where = f"{fname}:{i}"
+            hyb = _kr_is_hybrid(r)
+            raw_asset = (r.get('asset') or '').strip()
+            bare = _normalize_asset(raw_asset, fold_stable=False)
+            try:
+                when = _kr_when(r.get('time', ''), where)
+                amt = strict_money(r.get('amount'), 'amount', f"Kraken {where}")
+                fee = strict_money(r.get('fee') or '0', 'fee', f"Kraken {where}")
+            except ValueError:
+                if own and hyb:
+                    raise
+                if txid:
+                    seen.setdefault(txid, None)
+                continue
+            try:
+                after = (strict_money(r.get('balance'), 'balance', f"Kraken {where}")
+                         if (r.get('balance') or '').strip() else None)
+            except ValueError:
+                after = None        # the cash events' own read refuses it
+            net = amt - (fee if _fee_ccy(r, bare) == bare else 0.0)
+            e = _KrEntry(when, (fname, i), where, own, bare,
+                         _kr_wallet(raw_asset, r.get('wallet')), amt,
+                         None if after is None else after - net, after, hyb,
+                         _kr_frac(r.get('time', '')),
+                         ref=(r.get('refid') or '').strip(), move=_kr_is_move(r),
+                         mine=where if own else "", net=net)
+            listed.append(e)
+            if txid and txid in seen:
+                first = seen[txid]
+                if first is not None:
+                    first.copies[fname] = e
+                    if own:
+                        first.own, first.mine = True, where
+                continue
+            if txid:
+                seen[txid] = e
+            e.copies[fname] = e
+            out.setdefault(e.wallet, []).append(e)
+        _kr_set_listing(listed)
+    _kr_join_unnamed(out)
+    _kr_one_listing(out)
+    return out
+
+
+def _kr_one_listing(out: Dict[str, list]) -> None:
+    """The rows of one wallet in one second are read as ONE export lists
+    them, where one does: of the exports that hold rows of the second
+    (`_KrEntry.copies`), the one holding the most, the earliest name
+    among equals; each row that export holds takes that copy's place
+    (`key`, `where`, `seq`, `down`, `sure`), in place. Read each from the
+    export of the earliest name that holds it, a second two exports
+    share in parts was ordered by the exports' names: a return in export
+    a and its parking in export b, both in b, were read return first
+    though b lists the parking first (review round 2, P2). A row is
+    `earlier` when the copy read is not the parsed export's own: the
+    export read says it, and its messages name the rows as read."""
+    for line in out.values():
+        seconds: Dict[Any, list] = {}
+        for e in line:
+            seconds.setdefault(e.when, []).append(e)
+        for es in seconds.values():
+            held: Dict[str, int] = {}
+            for e in es:
+                for fname in e.copies:
+                    held[fname] = held.get(fname, 0) + 1
+            best = min(held, key=lambda f: (-held[f], f)) if held else ""
+            for e in es:
+                c = e.copies.get(best)
+                if c is not None and c is not e:
+                    e.key, e.where, e.seq, e.down, e.sure = c.key, c.where, c.seq, c.down, c.sure
+                e.earlier = bool(e.mine) and e.mine != e.where
+
+
+def _kr_join_unnamed(out: Dict[str, list]) -> None:
+    """The rows of exports without a `wallet` column (`out`: the rows by
+    wallet, `_kr_wallet`), where other exports of the account name their
+    wallets, join the named wallet of their own kind, in place: the
+    asset's one named wallet whose name fits the code's suffix
+    (`_KR_SUFFIX_KIND`: a bare code the spot wallet, `.F` the flexible
+    Earn wallet, ...), whatever code that export writes the asset with.
+    Read as a wallet of their own beside it, the wallet was counted
+    twice in the account's balance. With no named wallet of their kind
+    they are a wallet of their own, added up with the others (an older
+    export's spot rows beside a newer one's Earn rows are two wallets).
+    Where the kind does not settle it (two named wallets of the kind; a
+    suffix this table does not know, beside named wallets of the asset
+    that are not spot wallets), they stay a wallet of their own and are
+    marked `mixed` with those wallets: a balance read from them says so
+    (`_kr_cash_balances`), never counted in silence (backlog TJ-5027)."""
+    def named(bare: str) -> List[str]:
+        return [w for w, es in out.items() if _KR_NAMED in w and es and es[0].bare == bare]
+    for code in [w for w in out if _KR_NAMED not in w]:
+        bare = out[code][0].bare
+        kind = _KR_SUFFIX_KIND.get(code[len(bare):] if code.startswith(bare) else None)
+        if kind is None:
+            maybe = [w for w in named(bare)
+                     if not w.partition(_KR_NAMED)[2].startswith('spot')]
+        else:
+            maybe = [w for w in named(bare)
+                     if any(k in w.partition(_KR_NAMED)[2] for k in kind)]
+            if len(maybe) == 1:
+                for e in out[code]:
+                    e.wallet = maybe[0]
+                out[maybe[0]].extend(out.pop(code))
+                continue
+        for e in out[code]:
+            e.mixed = ", ".join(sorted(w.partition(_KR_NAMED)[2] for w in maybe))
+
+
+def _kr_uncovered(walk: "_KrWalk") -> Dict[str, List[_KrEntry]]:
+    """The rows that move an asset between two wallets of the account
+    (`_KrEntry.move`) and whose other side no export read holds, by bare
+    asset: a move's rows add up to nothing, those of one refid, or else
+    one out and one in of the same units in two wallets. A row left
+    alone names a wallet the exports read do not cover (its export was
+    not downloaded, or not put in the folder): the account's balance of
+    that asset cannot be formed from the wallets seen (backlog TJ-5032)."""
+    by: Dict[str, Dict[str, List[_KrEntry]]] = {}
+    for line in walk.wallets.values():
+        for e in line:
+            if e.move and abs(e.amt) > 1e-9:
+                by.setdefault(e.bare, {}).setdefault(e.ref, []).append(e)
+    out: Dict[str, List[_KrEntry]] = {}
+    for bare, refs in by.items():
+        left = [e for ref, es in refs.items() for e in es
+                if not ref or not _kr_close(1.0 + abs(sum(x.amt for x in es)), 1.0)]
+        for e in [x for x in left if x.amt < 0]:
+            back = next((x for x in left if x.amt > 0 and x.wallet != e.wallet
+                         and _kr_close(x.amt, -e.amt)), None)
+            if back is not None:
+                left = [x for x in left if x is not e and x is not back]
+        if left:
+            out[bare] = sorted(left, key=lambda x: (x.when, x.key))
+    return out
+
+
+def _kr_orders(rows: List[_KrEntry], starts: Optional[List[float]],
+               ends: Optional[List[float]] = None) -> Optional[List[List[_KrEntry]]]:
+    """Every order of the rows of one wallet in one second (`rows`, in the
+    file's order, `_KrEntry.seq`) that their balances allow: each row's balance before it
+    (its `balance` less its amount plus its fee in the asset) is the
+    balance after the row before it, the first row's one of the balances
+    `starts` (None: not known, any row may be first), and the last row's
+    balance is one of `ends` when those are known. A row with a blank
+    balance fits anywhere, and the balance after it is not known. None
+    when there are more than can be walked (`_KR_ORDER_STEPS`,
+    `_KR_ORDER_KEEP`)."""
+    out: List[List[_KrEntry]] = []
+    steps = [0]
+
+    def fits(value: Optional[float], known: Optional[List[float]]) -> bool:
+        return known is None or value is None or any(_kr_close(value, k) for k in known)
+
+    def go(order: List[_KrEntry], left: List[_KrEntry], cur: Optional[float]) -> bool:
+        if not left:
+            if fits(cur, ends):
+                out.append(list(order))
+            return len(out) <= _KR_ORDER_KEEP
+        for k, x in enumerate(left):
+            steps[0] += 1
+            if steps[0] > _KR_ORDER_STEPS:
+                return False
+            if not fits(x.before, [cur] if cur is not None else starts if not order
+                        else None):
+                continue
+            order.append(x)
+            ok = go(order, left[:k] + left[k + 1:], x.after)
+            order.pop()
+            if not ok:
+                return False
+        return True
+
+    return out if go([], list(rows), None) else None
+
+
+def _kr_result(order: List[_KrEntry], held: float, moved: float = 0.0) -> tuple:
+    """What one order of a second's rows gives, `held` units parked before
+    them (`moved` of them from this wallet's balance): (the wallet's
+    balance after the last row, None when that row's is blank; the units
+    parked after them; what they brought back beyond what was parked;
+    the balance of the last row that has one with what the wallet's rows
+    up to it parked, None without such a row; the balance before the
+    first row that has one with what the rows before it parked: what a
+    balance before the second is read from)."""
+    over, shown, first = 0.0, None, None
+    for x in order:
+        if x.before is not None and first is None:
+            first = x.before + moved
+        if x.hyb:
+            after, more = _kr_hybrid_step(held, x.amt)
+            moved = _dec_add(moved, _dec_sub(after, held))
+            held, over = after, _dec_add(over, more)
+        if x.after is not None:
+            shown = x.after + moved
+    return (order[-1].after, held, over, shown, first)
+
+
+def _kr_same(a: tuple, b: tuple) -> bool:
+    """Two `_kr_result`s the same."""
+    return all((x is None and y is None)
+               or (x is not None and y is not None and _kr_close(x, y))
+               for x, y in zip(a, b))
+
+
+def _kr_span(values: List[Optional[float]]) -> tuple:
+    """(the least, the most) of the values that are known, (0, 0) without one."""
+    known = [v for v in values if v is not None]
+    return (min(known), max(known)) if known else (0.0, 0.0)
+
+
+def _kr_listed(rows: List[_KrEntry]) -> tuple:
+    """The rows of one wallet in one second (`rows`, by `seq`) in the
+    order the export gives them, and how it gives it: "frac", the
+    fractions of the second they state, when each states one and they
+    are not all the same; "up" or "down", the export's lines from the
+    first down or from the last up, when the export says which way it
+    lists the wallet's rows (`_KrEntry.sure`); "none", the lines as they
+    are, when it does not (or the rows are of two exports)."""
+    fracs = [x.frac for x in rows]
+    if None not in fracs and len(set(fracs)) > 1:
+        return sorted(rows, key=lambda x: (x.frac, x.seq)), "frac"
+    if all(x.sure for x in rows) and len({x.key[0] for x in rows}) == 1:
+        return rows, "down" if rows[0].down else "up"
+    return rows, "none"
+
+
+def _kr_taken(listed: List[_KrEntry], how: str, chains: List[List[_KrEntry]],
+              found: List[tuple], starts: Optional[List[float]],
+              ends: Optional[List[float]], first: Optional[float] = None
+              ) -> Optional[tuple]:
+    """The order of a second's rows that the chains its balances allow
+    (`chains`, their results `found`) settle, and whether it is sure:
+    (order, sure), or None when they settle none. `listed` and `how`:
+    the order the export gives the rows, `_kr_listed`.
+
+    Where the export says which way it lists the wallet's rows and the
+    listed order is a chain, every balance stated, that ends where the
+    next second's listed first row begins (`first`; or nothing follows
+    it), and the second holds no Hybrid Earn row (their order changes
+    what is parked: such a second stays said), it is taken, sure,
+    whatever else chains: a second that comes
+    back to the balance it began at chains both ways, and the balances
+    the next second's rows begin at fit both when that second does the
+    same (a deposit and its conversion, every month: review round 6).
+    Otherwise the chains give one result (or the rows state fractions of
+    the second and their order is a chain, whatever else chains), and
+    - the listed order is one of them: the balances and the listing
+      agree. Sure, unless the export does not say which way it lists
+      the wallet's rows (`how` "none");
+    - or, `how` being "none", the reverse of the lines is one of them:
+      taken, not sure;
+    - or they are anchored on both sides with every balance stated (one
+      balance before the second, one the next second begins at: a next
+      second of several rows that begin at different balances names
+      none): the amounts of such a chain add up to the difference of
+      the two balances, which a missing row breaks. Sure, unless the
+      rows state fractions of the second that say another order.
+    A chain anchored on one side only, or on none, that is not the
+    order the export gives the rows is not taken: a row missing inside
+    the second leaves rows that chain in another order to a balance
+    that reconciles and is wrong (review round 4). That rule holds
+    round 3's too, in either listing: a listed order that is a chain of
+    its own which only the balance before contradicts (that balance may
+    be stale: a row missing before the second) is never replaced by the
+    chain from that balance, which one side alone anchors."""
+    def among(order: List[_KrEntry]) -> bool:
+        return any(all(x is y for x, y in zip(o, order)) for o in chains)
+    if how == "frac" and among(listed):
+        # (The times the rows state, and a chain: whatever else chains.)
+        return listed, True
+    if (how in ("up", "down") and among(listed)
+            and all(x.after is not None for x in listed)
+            and not any(x.hyb for x in listed)
+            and (ends is None or (first is not None
+                                  and _kr_close(listed[-1].after, first)))):
+        # (The export says which way it lists the rows and that order
+        # chains, to where the next second's listed first row begins.)
+        return listed, True
+    if not all(_kr_same(r, found[0]) for r in found[1:]):
+        return None
+    if among(listed):
+        return listed, how != "none"
+    if how == "none" and among(listed[::-1]):
+        return listed[::-1], False
+    both = (starts is not None and len(starts) == 1
+            and ends is not None and all(_kr_close(e, ends[0]) for e in ends)
+            and all(x.after is not None for x in listed))
+    return (chains[0], how != "frac") if both else None
+
+
+# How the parse says the order a second was read in (`_KrUnordered.read`).
+_KR_READ = {"frac": "the order of the fractions of a second they state",
+            "none": "the order of the export's lines, the export not saying which way "
+                    "it lists them",
+            "taken": "the order their balances chain in, the export not saying which "
+                     "way it lists them"}
+
+
+def _kr_said(walked: List[_KrEntry], others: Optional[List[List[_KrEntry]]],
+             held: float, moved: float, read: str = "") -> tuple:
+    """What another order of a second's rows would give beside the one
+    walked (`walked`; `others`, the orders to set beside it, None when
+    there are too many to walk: the two orders of the Hybrid Earn rows
+    that find the least and the most brought back beyond what was parked
+    are taken then): (whether one gives another result; the
+    `_KrUnordered` to say, when the second holds a Hybrid Earn row and
+    another order changes what those rows give, else None)."""
+    here = _kr_result(walked, held, moved)
+    hyb = [x for x in walked if x.hyb]
+    if others:
+        found = [_kr_result(o, held, moved) for o in others]
+    else:
+        found = [_kr_result(sorted(hyb, key=lambda x: x.amt > 0), held)[:3] + (None, None),
+                 _kr_result(sorted(hyb, key=lambda x: x.amt <= 0), held)[:3] + (None, None)
+                 ] if hyb else []
+        here = here[:3] + (None, None)
+    differs = not others or not all(_kr_same(r, here) for r in found)
+    if not hyb or all(_kr_same(r[1:4], here[1:4]) for r in found):
+        return differs, None
+    return differs, _KrUnordered(
+        walked[0].bare, utc_to_local(walked[0].when).date().isoformat(), len(walked),
+        len(hyb), here[2], here[1], here[3], _kr_span([r[2] for r in found] + [here[2]]),
+        _kr_span([r[1] for r in found] + [here[1]]),
+        _kr_span([r[3] for r in found] + [here[3]]) if here[3] is not None else None,
+        any(x.own and not x.earlier for x in walked), read or "the file's order")
+
+
+def _kr_place(rows: List[_KrEntry], starts: Optional[List[float]],
+              ends: Optional[List[float]], held: float, moved: float = 0.0,
+              first: Optional[float] = None) -> tuple:
+    """The rows of one wallet in one second (`rows`, by `seq`) in the
+    order walked: (the order; the balances the wallet may hold after
+    it, None when not known; a `_KrUnordered` to say, or None).
+
+    The order is the one the balance column gives, when it settles one
+    (`_kr_orders`, `_kr_result`: the balance after, what is parked, what
+    came back beyond it, the balance a statement point reads; `_kr_taken`):
+    every row of the second chained from the wallet's balance before it
+    (`starts`: the balance after the second before, or, where that
+    second's own order is not known, one of its rows' balances) or to
+    the balance the next second begins at (`ends`: one of the balances
+    before its rows), or, with no balance on either side (the wallet's
+    only second; a blank `balance` beside it), among themselves, all
+    such chains giving one result, and
+    - the chain being the order the export gives the rows (`_kr_listed`:
+      its lines, from the last up where it lists the wallet's rows
+      newest first; the fractions of the second the rows state): the
+      balances and the listing agree; or
+    - the chain anchored on both sides, every balance stated: the rows
+      account for the whole difference between the balance before and
+      the balance after, whatever order the export lists them in.
+    The Hybrid Earn rows alone are never chained: a row of another type
+    between a return and a new parking is part of the chain (backlog
+    TJ-4954). Otherwise (no chain: a row missing; chains that disagree:
+    rows that come back to the balance they began at; a chain that is
+    not the listed order and that one balance only, or none, anchors: a
+    row may be missing inside the second or before it) the order is the
+    listed one, as it was before the balances were read at all, and its
+    rows are marked `unsure`: when a chain was found and not taken, and
+    otherwise when another order the balances allow (every order, when
+    they allow none) gives another result, or when the export states no
+    direction for the wallet's rows. So are the rows of a chain
+    taken that is not sure: one the export's direction would have to
+    confirm where the export states none (its rows of the wallet go
+    both ways in time, or share one time: review round 5), or one the
+    fractions the rows state contradict. A statement balance read
+    from them says so (`_kr_cash_balances`), and a second holding a
+    Hybrid Earn row is said by the parse (`_KrUnordered`). Never taken
+    in silence."""
+    if len(rows) == 1:
+        return rows, None if rows[0].after is None else [rows[0].after], None
+    listed, how = _kr_listed(rows)
+    anchors = starts is not None or ends is not None
+    chains = _kr_orders(listed, starts, ends) if anchors else _kr_orders(listed, None)
+    if chains:
+        found = [_kr_result(o, held, moved) for o in chains]
+        got = _kr_taken(listed, how, chains, found, starts, ends, first)
+        if got is not None:
+            after = None if found[0][0] is None else [found[0][0]]
+            if got[1]:
+                return got[0], after, None
+            for x in rows:
+                x.unsure = how
+            return got[0], after, _kr_said(
+                got[0], [listed, listed[::-1]] + chains, held, moved,
+                _KR_READ.get("taken" if how == "none" else how, ""))[1]
+    # The listed order: the balance after it is one of its rows'.
+    stated = [x.after for x in listed if x.after is not None]
+    after_all = stated if len(stated) == len(listed) else None
+    others = chains or (_kr_orders(listed, None) if anchors else None)
+    if not others and len(listed) <= 6:
+        from itertools import permutations
+        others = [list(p) for p in permutations(listed)]
+    differs, said = _kr_said(listed, others, held, moved, _KR_READ.get(how, ""))
+    if chains or differs or how == "none":
+        for x in rows:
+            x.unsure = how
+    return listed, after_all, said
+
+
+def _kr_walk(rows: List[tuple], siblings: List[tuple], name: str) -> _KrWalk:
+    """The rows of the export (`rows`: (row, line)) and of the account's
+    other ledger exports (`siblings`, `_kr_sibling_ledger_rows`) walked
+    in time order, a wallet at a time, the wallets of one asset together
+    (`_kr_entries`); the rows of one wallet in one second in the order
+    `_kr_place` gives (the balance column's when the wallet's balance
+    before or after that second settles it, else the file's: the lines
+    of an export listed newest first read from the last up).
+
+    A Hybrid Earn row with a negative amount parks its units, a positive
+    one brings back what is parked, and what it brings beyond that is the
+    row's excess: a return and a new parking in one second are an excess
+    when the return came first. Each row's part in what is parked is kept
+    by its wallet (`parked`), so a balance of the wallet adds what its
+    own rows up to that balance's row parked, and no more (backlog
+    TJ-4951). A second whose order is not given and matters is noted
+    (`unordered`): said by the parse (backlog TJ-4954)."""
+    out = _KrWalk()
+    by_wallet = _kr_entries(rows, siblings, name)
+    by_bare: Dict[str, list] = {}
+    for wallet, es in by_wallet.items():
+        es.sort(key=lambda e: (e.when, e.seq))
+        by_bare.setdefault(es[0].bare, []).append(wallet)
+    for bare, wallets in by_bare.items():
+        held = 0.0
+        # Each wallet's seconds in turn, the wallets taken together by
+        # time (those of one second in the file's order of their first
+        # rows, `_KrEntry.seq`): [(time, wallet, its rows of that second)].
+        seconds: List[tuple] = []
+        for wallet in sorted(wallets):
+            mine: List[tuple] = []
+            for e in by_wallet[wallet]:
+                if mine and mine[-1][0] == e.when:
+                    mine[-1][2].append(e)
+                else:
+                    mine.append((e.when, wallet, [e]))
+            # (the balances the next second may begin at: the end anchor)
+            for k, sec in enumerate(mine):
+                after = mine[k + 1][2] if k + 1 < len(mine) else []
+                nxt = [x.before for x in after]
+                seconds.append(sec + (nxt if nxt and None not in nxt else None,
+                                      _kr_listed(after)[0][0].before if after else None))
+        seconds.sort(key=lambda s: (s[0], min(x.seq for x in s[2]), s[1]))
+        known: Dict[str, Optional[List[float]]] = {}
+        # (Once a second of Hybrid Earn rows was read in an order that
+        # is not known, what is parked after it is not either: the rows
+        # after it say so, `_KrEntry.unsure` "hybrid".)
+        tainted = ""
+        for at, sec in enumerate(seconds):
+            when, wallet, group, ends, first = sec
+            sums = out.parked.setdefault(wallet, [])
+            order, known[wallet], said = _kr_place(group, known.get(wallet), ends, held,
+                                                   sums[-1] if sums else 0.0, first)
+            if said is None and any(x.hyb for x in group):
+                said = _kr_across(seconds, at, held)
+            if said is not None:
+                out.unordered.append(said)
+                tainted = f"on {said.day} in {group[0].key[0]}"
+            line = out.wallets.setdefault(wallet, [])
+            for x in order:
+                if tainted and not x.unsure:
+                    x.unsure, x.taint = "hybrid", tainted
+                if x.hyb:
+                    after, x.over = _kr_hybrid_step(held, x.amt)
+                    x.delta, held = _dec_sub(after, held), after
+                    if x.own and x.over > QTY_ZERO:
+                        out.excess[x.mine] = (bare, x.over,
+                                               utc_to_local(when).date().isoformat())
+                if x.own and x.earlier:
+                    out.earlier.add(x.mine)
+                line.append(x)
+                sums.append(_dec_add(sums[-1] if sums else 0.0, x.delta))
+    return out
+
+
+def _kr_across(seconds: List[tuple], at: int, held: float) -> Optional[_KrUnordered]:
+    """Hybrid Earn rows of two wallets of one asset in one second: no
+    balance says which wallet's came first. Said, once (at the first of
+    the wallets, `seconds[at]`), when parked first and brought back first
+    give another result; walked a wallet at a time, in the order the file
+    lists their first rows."""
+    when, lo, hi = seconds[at][0], at, at + 1
+    while lo > 0 and seconds[lo - 1][0] == when:
+        lo -= 1
+    while hi < len(seconds) and seconds[hi][0] == when:
+        hi += 1
+    same = [s for s in seconds[lo:hi] if any(x.hyb for x in s[2])]
+    if len(same) < 2 or same[0] is not seconds[at]:
+        return None
+    hyb = [x for s in same for x in s[2] if x.hyb]
+    here = _kr_result(hyb, held)
+    found = [_kr_result(sorted(hyb, key=lambda x: x.amt > 0), held),
+             _kr_result(sorted(hyb, key=lambda x: x.amt <= 0), held)]
+    if all(_kr_same(r[1:3], here[1:3]) for r in found):
+        return None
+    return _KrUnordered(
+        hyb[0].bare, utc_to_local(when).date().isoformat(),
+        sum(len(s[2]) for s in same), len(hyb), here[2], here[1], None,
+        _kr_span([r[2] for r in found] + [here[2]]),
+        _kr_span([r[1] for r in found] + [here[1]]), None,
+        any(x.own and not x.earlier for x in hyb))
+
+
+def _kr_parked_event(day: str, cur: str, amt: float, name: str, where: str,
+                     typ: str, bare: str, over: float = 0.0) -> Dict[str, Any]:
+    """A Hybrid Earn row of cash as the cash events hold it: a PARKED
+    event, no move of the ledger (the cash stays in the book), listed by
+    `tjs fx-cash --ledger v2 --cash-events` and read by the ledger for
+    one thing: a .tt CASHMOVE line written for the row when it was read
+    as a cash move declares no broker move now, and is refused by name
+    (lib/cash_events `parked_lines`, backlog TJ-4951). `over`: what the
+    row brought back beyond what was parked, the CASHMOVE of the same
+    row (`_kr_cash_own`): the event says so, so that the listing does
+    not show that part as no move and as a move without a word."""
+    more = (f", but for the {M.shown(over, 2):,.2f} beyond what was parked: the "
+            f"CASHMOVE of the same row ({where})" if over > 1e-9 else "")
+    return {"kind": "PARKED", "date": day, "settle": day, "currency": cur,
+            "amount": amt, "where": name, "line_where": where, "account": "",
+            "desc": f"Kraken {typ} {bare}", "origin": "broker",
+            "text": f"{M.shown(amt, 2):+,.2f} {cur} Kraken {typ} {bare}: "
+                    f"{'into' if amt < 0 else 'back from'} Hybrid Earn, the "
+                    f"account's cash throughout (no move{more})"}
+
+
+def _kr_cash_own(rows: List[tuple], name: str, stable_cash: bool,
+                 hybrid: Optional[_KrWalk] = None) -> tuple:
     """The export's own rows (`rows`: (row, line), in the file's order):
     (its events in that order: a CASHMOVE per fiat (or, at the cash basis,
     stablecoin) deposit, withdrawal or transfer and its fee a FLOW; its
     trade legs by refid; its balance rows). A row of a txid seen before is
-    read once."""
+    read once. A Hybrid Earn row is a move within Kraken, in either
+    direction no CASHMOVE but a PARKED event (`_kr_parked_event`; its fee
+    in cash a FLOW): the cash stays in the book, and the balances add
+    what is parked (`_kr_cash_balances`). Only
+    what a row brings back beyond what was parked (`hybrid.excess`) is a
+    CASHMOVE, undeclared: cash the export does not explain (backlog
+    TJ-4951, TJ-4954); a row that brings back nothing that was parked
+    is that CASHMOVE alone, with no PARKED event. Each event of a row
+    carries the row's txid (`_broker_id`): two deposits alike in day and
+    amount that two exports hold are two events, and one row that two
+    overlapping exports hold is one (cash_events.dedup_across_files;
+    without it the two deposits were read as one, backlog TJ-5033). The
+    balance rows: how many rows of cash state a `balance` (each read, a
+    cell that is no amount raising); the balances are the account's
+    (`_kr_cash_balances`)."""
     from taxjson.lib import cash_lines as CL
     cashlike = _FIAT_ASSETS if stable_cash else _FIAT_CURRENCIES
     out: List[Dict[str, Any]] = []
     groups: Dict[str, list] = {}
-    # (asset, wallet, day, UTC time, row order, balance after the row,
-    # amount, the fee in the asset itself), for CASHBAL
-    bal_rows: List[tuple] = []
+    bal_rows = 0
     seen_ids: set = set()
     for r, i in rows:
         where = f"{name}:{i}"
@@ -614,16 +1406,36 @@ def _kr_cash_own(rows: List[tuple], name: str, stable_cash: bool) -> tuple:
         fee_cur = (_normalize_asset(fc, fold_stable=stable_cash)
                    if fc in cashlike else None)
         if (r.get('balance') or '').strip():
-            # One balance series per wallet: USDC.F (Earn) and USD.HOLD
-            # keep their own balance beside the spot USDC / ZUSD, so the
-            # wallet suffix stays in the key (backlog TJ-0019: the
-            # reward wallet's balance replaced the spot one's).
-            bal_rows.append((cur, _kr_wallet(raw_asset), day, when, i, strict_money(
-                r.get('balance'), 'balance', f"Kraken {where}"), amt,
-                fee if fc == bare else 0.0))
+            strict_money(r.get('balance'), 'balance', f"Kraken {where}")
+            bal_rows += 1
         typ = (r.get('type') or '').strip().lower()
-        if typ in _FIAT_FUNDING_TYPES:
-            if abs(amt) > 1e-9:
+        first = len(out)
+        if typ.startswith(_HYBRID_EARN):
+            over = (hybrid.excess.get(where) if hybrid is not None else None)
+            # (A row that brought back nothing of what was parked, or
+            # under two cents of it, is the CASHMOVE below alone: one
+            # row, one event, and the line the ledger asks for fits it
+            # and no PARKED event of the same row, review round 4.)
+            if abs(amt) > 1e-9 and (over is None or amt - over[1] > 0.02):
+                out.append(_kr_parked_event(day, cur, amt, name, where, typ, bare,
+                                            over[1] if over is not None else 0.0))
+            if over is not None:
+                ev = CL.move(day, cur, over[1], where=name,
+                             desc=f"Kraken {typ} {bare}, over what was parked")
+                # (An amount the walk derives, not one the row states:
+                # cash_events `_id_conflicts` says so where two exports
+                # derive two.)
+                ev['line_where'], ev['_derived'] = where, True
+                out.append(ev)
+            if abs(fee) > 1e-9 and fee_cur:
+                out.append(CL.flow(day, fee_cur, -fee, where=where,
+                                   desc=f"Kraken {typ} fee"))
+        elif typ in _FIAT_FUNDING_TYPES:
+            # (A legacy transfer between the spot and the staking wallet
+            # is a move within Kraken, as an Earn allocation is: both
+            # wallets are the account's, in its balance; no CASHMOVE.
+            # It once asked for a declaration of each side: TJ-5227.)
+            if abs(amt) > 1e-9 and not _kr_is_move(r):
                 ev = CL.move(day, cur, amt, where=name,
                              desc=f"Kraken {typ} {bare}")
                 ev['line_where'] = where
@@ -634,27 +1446,28 @@ def _kr_cash_own(rows: List[tuple], name: str, stable_cash: bool) -> tuple:
         elif typ in ('trade', 'spend', 'receive'):
             groups.setdefault((r.get('refid') or '').strip() or txid,
                               []).append((day, cur, amt, fee, where, bare,
-                                          fee_cur))
+                                          fee_cur, txid))
+        if txid:
+            for ev in out[first:]:
+                ev['_broker_id'] = txid
     return out, groups, bal_rows
 
 
 def _kr_cash_siblings(rows: List[tuple], siblings: List[tuple],
-                      groups: Dict[str, list], stable_cash: bool) -> tuple:
+                      groups: Dict[str, list], stable_cash: bool) -> Dict[str, set]:
     """The account's other ledger exports (`siblings`,
     `_kr_sibling_ledger_rows`) read beside the export's own rows: a leg of
     one of its trades that another export holds joins its group (a
     conversion whose two legs a UTC-midnight export boundary split was a
     one-currency "spread" FLOW in each file, its paid CAD lost: backlog
-    TJ-0861), and the times another export moves a wallet (whether a
-    balance before this export's first row is the balance at a year end:
-    backlog TJ-0888). An entry in an overlapping export is read once.
-    -> (every asset of each trade's refid, the other exports' wallet
-    moves); the other exports' currencies read without the stablecoin
-    note (`_kr_quiet_cash`, `_kr_quiet_norm`: their own parse says it,
-    backlog TJ-4461)."""
+    TJ-0861). An entry in an overlapping export is read once.
+    -> every asset of each trade's refid; the other exports' currencies
+    read without the stablecoin note (`_kr_quiet_cash`, `_kr_quiet_norm`:
+    their own parse says it, backlog TJ-4461). (The other exports' wallet
+    rows are the walk's, `_kr_walk`: the balances are the account's,
+    `_kr_cash_balances`.)"""
     own_ids = {(r.get('txid') or '').strip() for r, _i in rows} - {''}
     sib_ids: set = set()
-    sib_wallets: Dict[tuple, list] = {}
     # A trade whose every leg is currency: a conversion (the position
     # book never sees it — the parser's fiat-for-fiat non-event).
     all_assets_by_ref: Dict[str, set] = {}
@@ -679,16 +1492,12 @@ def _kr_cash_siblings(rows: List[tuple], siblings: List[tuple],
             if not _kr_quiet_cash(bare, stable_cash):
                 continue
             try:
-                when = _kr_when(r.get('time', ''), where)
                 if ref and ref in groups and (r.get('type') or '').strip(
                         ).lower() in ('trade', 'spend', 'receive'):
                     groups[ref].append(_kr_leg(r, where, stable_cash))
             except ValueError:
                 continue        # that export's own read reports the row
-            sib_wallets.setdefault(
-                (_kr_quiet_norm(raw_asset, stable_cash), _kr_wallet(raw_asset)),
-                []).append((when, utc_to_local(when).date().isoformat()))
-    return all_assets_by_ref, sib_wallets
+    return all_assets_by_ref
 
 
 def _kr_cash_conversions(groups: Dict[str, list], all_assets_by_ref: Dict[str, set],
@@ -697,7 +1506,11 @@ def _kr_cash_conversions(groups: Dict[str, list], all_assets_by_ref: Dict[str, s
     for EUR; the legs of one refid added up per currency, each leg's cash
     fee a FLOW before it), in the groups' order; a stablecoin folded into
     USD against USD no conversion but its spread off par a FLOW of US
-    dollars. A ValueError for a refid trading three currencies."""
+    dollars. A ValueError for a refid trading three currencies. Each
+    event carries an id of the trade (`_broker_id`: its refid and what
+    the event is of it, `conv`, `spread`, or `fee` with the leg's txid),
+    the same in every export that holds a leg of it: kept once, and a
+    trade alike in another export a trade of its own (backlog TJ-5033)."""
     from taxjson.lib import cash_lines as CL
     out: List[Dict[str, Any]] = []
     for ref, legs in groups.items():
@@ -709,16 +1522,20 @@ def _kr_cash_conversions(groups: Dict[str, list], all_assets_by_ref: Dict[str, s
         if any(not _kr_quiet_cash(a, stable_cash)
                for a in all_assets_by_ref.get(ref, ())):
             continue        # a coin leg: the position book's fill
-        fees = [CL.flow(lg[0], lg[6], -lg[3], where=lg[4],
-                        desc="Kraken conversion fee")
-                for lg in legs if abs(lg[3]) > 1e-9 and lg[6]]
+        fees = []
+        for n, lg in enumerate(legs):
+            if abs(lg[3]) > 1e-9 and lg[6]:
+                fees.append(CL.flow(lg[0], lg[6], -lg[3], where=lg[4],
+                                    desc="Kraken conversion fee"))
+                if ref:
+                    fees[-1]['_broker_id'] = f"{ref}:fee:{lg[7] or n}"
         out.extend(fees)
         # The legs added up per (folded) currency: Kraken can write one
         # side of a trade as several ledger rows under one refid (two
         # receipt legs), which `one debit, one credit` used to skip
         # without a word (2026-10-24 audit C08).
         sides: Dict[str, Dict[str, Any]] = {}
-        for day, cur, amt, _fee, where, bare, _fc in legs:
+        for day, cur, amt, _fee, where, bare, _fc, _txid in legs:
             s = sides.setdefault(cur, {"amt": 0.0, "day": day,
                                        "where": where, "bare": []})
             s["amt"] += amt
@@ -741,6 +1558,8 @@ def _kr_cash_conversions(groups: Dict[str, list], all_assets_by_ref: Dict[str, s
             (cur, s), = sides.items()
             out.append(CL.flow(s["day"], cur, s["amt"], where=s["where"],
                                desc=f"Kraken {'/'.join(s['bare'])} spread"))
+            if ref:
+                out[-1]['_broker_id'] = f"{ref}:spread"
             continue
         neg = [(c, s) for c, s in sides.items() if s["amt"] < 0]
         pos = [(c, s) for c, s in sides.items() if s["amt"] > 0]
@@ -763,6 +1582,8 @@ def _kr_cash_conversions(groups: Dict[str, list], all_assets_by_ref: Dict[str, s
                            where=a["where"],
                            desc=f"Kraken {'/'.join(a['bare'])}->"
                                 f"{'/'.join(b['bare'])}"))
+        if ref:
+            out[-1]['_broker_id'] = f"{ref}:conv"
         for ev in fees:
             # The conversion it was charged on: in the base currency it
             # is part of the amount paid or received (lib/fx_cash_v2,
@@ -771,60 +1592,248 @@ def _kr_cash_conversions(groups: Dict[str, list], all_assets_by_ref: Dict[str, s
     return out
 
 
-def _kr_cash_balances(bal_rows: List[tuple], sib_wallets: Dict[tuple, list],
-                      name: str) -> List[Dict[str, Any]]:
-    """A CASHBAL per currency at the end of every year the export spans
-    and before its first row (the opening of the first year), from its
-    `balance` column, summed over the wallets that fold into one currency.
-    A balance is the one after the LATEST row by its clock, whatever order
-    the export lists the rows in; none before a wallet's first row when
-    another export moves the wallet in between."""
+# What a CASHBAL's `where` adds when the balance is read from a row
+# that is not sure (`_KrEntry.unsure`, the key here): a reconcile gap of
+# that day quotes it, and a balance that reconciles is a Warning of the
+# ledger (lib/fx_cash_v2 `_unsure`). Each says the order that was read
+# and what settles it.
+_KR_UNSURE_HEAD = (" (read from rows that share one second and whose balances do not say "
+                   "which came last: ")
+_KR_UNSURE_FIX = (". Where that is not their true order, listing the second's rows in it "
+                  "settles it; where it is, a row is missing from the export before or "
+                  "among them)")
+_KR_UNSURE = {
+    "up": _KR_UNSURE_HEAD + "the file's order was taken, its lines from the first down "
+          "(the export lists this wallet's rows oldest first)" + _KR_UNSURE_FIX,
+    "down": _KR_UNSURE_HEAD + "the file's order was taken, its lines from the last up "
+            "(the export lists this wallet's rows newest first)" + _KR_UNSURE_FIX,
+    "frac": _KR_UNSURE_HEAD + "the order of the fractions of a second they state was "
+            "taken, which is not the order their balances chain in" + _KR_UNSURE_FIX,
+    "none": _KR_UNSURE_HEAD + "the export does not say which way it lists this wallet's "
+            "rows (they are in no one order of time, or share one time), so the order "
+            "their balances chain in was taken where the lines, read down or up, chain, "
+            "and the lines' order where they do not. Sorting the export's rows by time, "
+            "oldest first or newest first throughout, settles it; where the second's rows "
+            "still do not chain then, a row is missing from the export before or among "
+            "them)",
+    "hybrid": " (what Hybrid Earn holds of it is counted from Hybrid Earn rows that share "
+              "one second {0} and whose order is not known: the ATTENTION line of `tjs "
+              "run` for that second says what settles it)",
+}
+
+
+def _kr_mixed_note(e: _KrEntry) -> str:
+    """What a CASHBAL's `where` adds when a wallet counted in it is of
+    rows without a `wallet` column that may be a wallet the other
+    exports name (`_kr_join_unnamed`)."""
+    return (f" (the {e.wallet} rows of {e.key[0]} name no wallet, and the account's other "
+            f"exports name wallets they may be of ({e.mixed}): they are counted as a "
+            f"wallet of their own, twice where they are one of those. One ledger export "
+            f"of the account that covers those rows, with its `wallet` column, in place "
+            f"of {e.key[0]} settles it)")
+
+
+def _kr_note(day: str, cur: str, name: str, text: str) -> Dict[str, Any]:
+    """A NOTE event of the cash events: the ledger says it."""
+    return {"kind": "NOTE", "date": day, "settle": day, "currency": cur,
+            "where": name, "origin": "broker", "text": text}
+
+
+def _kr_wallet_gaps(walk: _KrWalk, name: str, stable_cash: bool) -> tuple:
+    """The currencies whose balance the exports read cannot form, each
+    with the day from which (`_kr_uncovered`: cash moved to or from a
+    wallet no export read holds a row of; the balances before that day
+    stand), and a NOTE event for each such row of this export (`name`),
+    naming the row and its wallet: the ledger says it, and the currency
+    gets no CASHBAL from that day on, never the wallets seen as the
+    whole account (backlog TJ-5032)."""
+    gone: Dict[str, str] = {}
+    notes: List[Dict[str, Any]] = []
+    for bare, rows in sorted(_kr_uncovered(walk).items()):
+        if not _kr_quiet_cash(bare, stable_cash):
+            continue
+        cur = 'USD' if stable_cash and _kr_quiet_stable(bare) else bare
+        for e in rows:
+            day = utc_to_local(e.when).date().isoformat()
+            gone[cur] = min(gone.get(cur, day), day)
+            if not e.own or e.earlier:
+                continue        # (the export that holds the row says it)
+            notes.append(_kr_note(day, cur, name, (
+                f"{e.where}: {M.shown(abs(e.amt), 2):,.2f} {bare} moved "
+                f"{'out of' if e.amt < 0 else 'into'} the wallet "
+                f"{e.wallet.replace(_KR_NAMED, ', ')} on {day}, "
+                f"{'to' if e.amt < 0 else 'from'} another wallet of the account, "
+                f"and no Kraken ledger export read holds that wallet's row — the "
+                f"wallets read are not all of the account's {cur} from that day, so no "
+                f"ledger balance of {cur} is given from then on (a balance of the wallets "
+                f"read would be taken for the account's). Add the ledger export that "
+                f"holds the other wallet's rows to the account's folder (one "
+                f"export of the whole ledger holds every wallet), or give the "
+                f"account's balance as a CASHBAL .tt line")))
+    return gone, notes
+
+
+def _kr_wallet_at(line: List[tuple], parked: List[float], at: str) -> Optional[tuple]:
+    """(balance, what its Hybrid Earn rows had parked, the row read, how
+    it opens a gap or "") of one wallet at the end of the day `at`, from
+    its rows in the walk's order (`line`: (row, day)); None where it is
+    not known.
+
+    After the wallet's latest row at or before `at` that states a
+    balance, the balance after that row; unless the next row that states
+    one, in whichever export, begins at another balance than that one
+    and the rows between them (their `balance` blank) give: rows are
+    missing between the two, and the balance at a date between them is
+    the one the next row begins at, less what the blank rows after the
+    date added (the export after the gap opens at it; read from the row
+    before, the balance was stale by what the missing rows moved, and
+    the gap was never said: review P1). The last element says so, for
+    the ledger's gap line. Before its first row that states a balance,
+    the balance that row begins at (less the blank rows after the date),
+    from the year end just before the wallet's first row: earlier than
+    that nothing says the wallet held it (the rows that built it are in
+    no export read), unless it begins at nothing."""
+    upto = max((i for i, (_e, day) in enumerate(line) if day <= at), default=-1)
+    stated = [i for i, (e, _day) in enumerate(line) if e.after is not None]
+    last = max((i for i in stated if i <= upto), default=None)
+    nxt = min((i for i in stated if i > upto), default=None)
+    if nxt is None:
+        return (line[last][0].after, parked[last], line[last][0], "") if last is not None else None
+    n = line[nxt][0]
+    # (what the rows with no balance between the date and the next
+    # balance add: the wallet's balance at the date is that much less)
+    opening = n.before - sum(line[i][0].net for i in range(upto + 1, nxt))
+    units = parked[upto] if upto >= 0 else 0.0
+    if last is None:
+        if (at < f"{int(line[0][1][:4]) - 1}-12-31"
+                and (abs(opening) > 1e-9 or abs(units) > 1e-9)):
+            return None
+        return opening, units, n, ""
+    e = line[last][0]
+    expected = e.after + sum(line[i][0].net for i in range(last + 1, nxt))
+    if _kr_close(n.before, expected):
+        return e.after, parked[last], e, ""
+    return opening, units, n, (
+        f"{n.where} opens the wallet {n.wallet.replace(_KR_NAMED, ', ')} at "
+        f"{M.shown(opening, 2):,.2f} {n.bare} ({line[nxt][1]}), and the wallet's row "
+        f"before it, {e.where} ({line[last][1]}), ends at {M.shown(e.after, 2):,.2f}")
+
+
+def _kr_cash_balances(walk: _KrWalk, name: str, stable_cash: bool) -> List[Dict[str, Any]]:
+    """A CASHBAL per currency of the ACCOUNT at the end of every year its
+    ledger exports span and before their first row (the opening of the
+    first year), from the `balance` column of every export read (`walk`:
+    this export's rows and its siblings', `_kr_walk`): each wallet's
+    balance at the date (`_kr_wallet_at`: after its LATEST row at or
+    before it; before its first row, the balance before that row), the
+    wallets that fold into one currency added up. A wallet is its asset
+    code and the wallet the export names (`_kr_wallet`), so two wallets
+    of one code are two balances (backlog TJ-5027), and every export of
+    the account gives the same balances, kept once
+    (cash_events.dedup_across_files): each export once gave its own
+    wallets' balance as the account's, and wallets exported apart were
+    partial balances the ledger checked the whole account against
+    (backlog TJ-5032; a balance before a wallet's first row was left out
+    when `Another export moves the wallet` in between, backlog TJ-0888:
+    that export's rows are read here now). The event's `where` names the
+    exports whose rows were read. None of an export without a balance
+    row of cash; none of a currency from the day a wallet of it is
+    covered by no export read (`_kr_wallet_gaps`: a NOTE instead); and
+    none of a currency at a date a wallet of it is not known at (before
+    the year end just before the wallet's first row, when that row
+    begins at a balance: a NOTE of the export holding the row says so).
+
+    The latest row is by its clock, whatever order the export lists the
+    rows in; the rows of one second in the order the walk puts them in
+    (the balance column's where it is settled by the wallet's balance
+    before or after that second, `_kr_place`; else the file's order,
+    which for an export listed newest first is its lines from the last
+    up). What the wallet's own Hybrid Earn rows had parked from that
+    balance as of the balance row used is added (`_KrWalk.parked`): it
+    left the `balance` column and is still the account's cash (backlog
+    TJ-4951). As of that row, and of that wallet: a Hybrid Earn row with
+    a blank `balance` is after the balance it leaves stale, and a later
+    row of another wallet of the coin says nothing about this one's.
+    The event's `where` says how much of the balance is parked, and,
+    with the event's `unsure`, that it was read from rows of one second
+    whose order is not sure, or after such a second of Hybrid Earn rows
+    (`_KR_UNSURE`), or from rows whose wallet is not sure
+    (`_kr_mixed_note`)."""
     from taxjson.lib import cash_lines as CL
-    out: List[Dict[str, Any]] = []
-    if not bal_rows:
-        return out
-    assets = sorted({(c, a) for c, a, *_ in bal_rows})
-    by_asset: Dict[tuple, list] = {}
-    for cur, bare, day, when, i, bal, amt, fee in bal_rows:
-        by_asset.setdefault((cur, bare), []).append((when, i, day,
-                                                     bal, amt, fee))
-    first_day = min(x[2] for x in bal_rows)
-    last_day = max(x[2] for x in bal_rows)
-    y0, y1 = int(first_day[:4]), int(last_day[:4])
-    points = [(f"{y0 - 1}-12-31", "open")] + [
-        (min(f"{y}-12-31", last_day), "close")
-        for y in range(y0, y1 + 1)]
-    for at, _k in points:
+    # wallet -> (currency, its rows in the walk's order: (row, day)),
+    # of the wallets that state a balance
+    series: Dict[str, tuple] = {}
+    for wallet, line in walk.wallets.items():
+        if (any(e.after is not None for e in line)
+                and _kr_quiet_cash(line[0].bare, stable_cash)):
+            bare = line[0].bare
+            series[wallet] = ('USD' if stable_cash and _kr_quiet_stable(bare) else bare,
+                              [(e, utc_to_local(e.when).date().isoformat()) for e in line])
+    days = [d for _cur, rows in series.values() for e, d in rows if e.after is not None]
+    if not days:
+        return []
+    gone, out = _kr_wallet_gaps(walk, name, stable_cash)
+    y0, y1 = int(min(days)[:4]), int(max(days)[:4])
+    points = [f"{y0 - 1}-12-31"] + [min(f"{y}-12-31", max(days)) for y in range(y0, y1 + 1)]
+    late: Dict[str, _KrEntry] = {}      # a wallet not known at a date: its first row
+    for at in points:
         tot: Dict[str, float] = {}
-        unknown: set = set()
-        for (cur, bare) in assets:
-            # By the row's UTC time; the row order only breaks a
-            # tie. A day's rows listed newest-first took the first
-            # of the day as its end (2026-10 audit #71).
-            seq = sorted(by_asset[(cur, bare)])
-            before = [x for x in seq if x[2] <= at]
-            if before:
-                v = before[-1][3]
-            else:
-                f = seq[0]
-                if any(d > at and w <= f[0] for w, d in
-                       sib_wallets.get((cur, bare), ())):
-                    # Another export moves the wallet between `at`
-                    # and this export's first row: the balance
-                    # before that row is not the one at `at` (a
-                    # June export dated its opening to Dec 31 over
-                    # a January deposit: backlog TJ-0888). That
-                    # export gives its own.
-                    unknown.add(cur)
-                    continue
-                v = f[3] - f[4] + f[5]      # before its first row
+        parked: Dict[str, float] = {}
+        unsure: Dict[str, str] = {}
+        read: Dict[str, set] = {}
+        opens: Dict[str, str] = {}
+        unknown = {cur for cur, day in gone.items() if at >= day}
+        for wallet in sorted(series):
+            cur, rows = series[wallet]
+            if cur in unknown:
+                continue
+            got = _kr_wallet_at(rows, walk.parked[wallet], at)
+            if got is None:
+                unknown.add(cur)
+                late.setdefault(wallet, next(e for e, _d in rows if e.after is not None))
+                continue
+            v, units, e, gap = got
+            if gap:
+                opens.setdefault(cur, gap)
             tot[cur] = tot.get(cur, 0.0) + v
+            read.setdefault(cur, set()).add(e.key[0])
+            if e.unsure:
+                unsure.setdefault(cur, _KR_UNSURE[e.unsure].format(e.taint))
+            if e.mixed:
+                unsure[cur] = unsure.get(cur, "") + _kr_mixed_note(e)
+            if abs(units) > 1e-9:
+                tot[cur] = _dec_add(tot[cur], units)
+                parked[cur] = _dec_add(parked.get(cur, 0.0), units)
         for cur, v in sorted(tot.items()):
             if cur in unknown:
                 continue
+            units = parked.get(cur, 0.0)
+            more = (f" + {M.shown(units, 2):,.2f} parked in Hybrid Earn" if units > 1e-9
+                    else f" - {M.shown(-units, 2):,.2f} back from Hybrid Earn that a "
+                         f"balance not read here parked" if units < -1e-9 else "")
+            if cur in unsure:
+                # (Read from a second the balances put in no one order.)
+                more += unsure[cur]
+            files = ", ".join(sorted(read[cur]))
             out.append(CL.balance(at, cur, M.units(v, 8),
-                                  where=f"{name}: ledger balance",
-                                  statement=name))
+                                  where=f"{files}: ledger balance{more}",
+                                  statement=files))
+            if cur in unsure:       # (the ledger warns when it reconciles)
+                out[-1]["unsure"] = True
+            if cur in opens:        # (the ledger's gap line says it as that)
+                out[-1]["opens"] = opens[cur]
+    for wallet, e in sorted(late.items()):
+        if e.own and not e.earlier:
+            day = utc_to_local(e.when).date().isoformat()
+            cur = series[wallet][0]
+            out.append(_kr_note(day, cur, name, (
+                f"{e.where}: the wallet {wallet.replace(_KR_NAMED, ', ')} holds "
+                f"{M.shown(e.before, 2):,.2f} {e.bare} before its first balance ({day}), and "
+                f"no Kraken ledger export read holds the rows that brought it: the "
+                f"wallet's balance is known from {int(day[:4]) - 1}-12-31 on, and no ledger "
+                f"balance of {cur} is given before that date. Add the ledger export of "
+                f"the earlier rows to the account's folder, or give the balance as a "
+                f"CASHBAL .tt line")))
     return out
 
 
@@ -837,17 +1846,47 @@ def _kr_cash_of(rows: List[tuple], siblings: List[tuple], name: str,
     (`_kr_cash_own`), its conversions (`_kr_cash_conversions`, a leg another
     export holds joined to it: `_kr_cash_siblings`; each export holding a
     leg gives the same FXCONV, kept once by cash_events.dedup_across_files,
-    backlog TJ-0861), its balances (`_kr_cash_balances`). A fee is in its
-    `feecurrency` (`_fee_ccy`): a coin fee is the position book's. A cell
-    it cannot read raises: the file's cash problem (`_finish_cash`)."""
+    backlog TJ-0861), and, when it holds a balance row of cash, the
+    account's balances (`_kr_cash_balances`). A fee is in its
+    `feecurrency` (`_fee_ccy`): a coin fee is the position book's. The
+    account's rows are walked first (`_kr_walk`): the order of the rows
+    of one second, and what its Hybrid Earn rows park, which stays the
+    book's cash. A cell it cannot read raises: the
+    file's cash problem (`_finish_cash`)."""
     if not rows:
         return []
-    out, groups, bal_rows = _kr_cash_own(rows, name, stable_cash)
-    all_assets_by_ref, sib_wallets = _kr_cash_siblings(rows, siblings, groups,
-                                                       stable_cash)
+    walk = _kr_walk(rows, siblings, name)
+    out, groups, bal_rows = _kr_cash_own(rows, name, stable_cash, walk)
+    all_assets_by_ref = _kr_cash_siblings(rows, siblings, groups, stable_cash)
     out.extend(_kr_cash_conversions(groups, all_assets_by_ref, name, stable_cash))
-    out.extend(_kr_cash_balances(bal_rows, sib_wallets, name))
+    if bal_rows:
+        out.extend(_kr_cash_balances(walk, name, stable_cash))
     return out
+
+
+def _hybrid_unordered(u: _KrUnordered) -> str:
+    """What the parse says of a second whose rows the balances put in no
+    one order (`_kr_place`): the order read, what it finds, and what
+    another order would."""
+    def span(r: tuple) -> str:
+        return (f"{r[0]:.10g}" if _kr_close(r[0], r[1])
+                else f"{r[0]:.10g} to {r[1]:.10g}")
+    bal = ""
+    that = u.read if u.read == "the file's order" else "that order"
+    if u.balance_range is not None and not _kr_close(*u.balance_range):
+        bal = (f", and the balance after them with what is parked {span(u.balance_range)} "
+               f"({u.balance:.10g} in {that})")
+    return (f"{u.rows} rows of {u.bare} share one second on {u.day}, {u.hybrid} of them "
+            f"Hybrid Earn rows, and their balances do not say which came first — read in "
+            f"{u.read}, which finds {u.over:.10g} {u.bare} brought back beyond "
+            f"what was parked and leaves {u.held:.10g} parked. Another order gives "
+            f"{span(u.over_range)} brought back beyond what was parked, "
+            f"{span(u.held_range)} left parked{bal}: where {that} is not the "
+            f"true one, the difference is booked nowhere, or booked as an excess that is "
+            f"none. Check Kraken's Earn history for that day: listing the second's rows in "
+            f"the export in the order they happened in (each beginning at the balance the "
+            f"one before it ended at, the export's rows in one order of time) settles it, "
+            f"unless a row is missing from the export.")
 
 
 class KrakenAccountContext:
@@ -1095,7 +2134,11 @@ class KrakenBrokerage(BaseBrokerage):
                     and type_raw != 'hybridearnwithdrawal'
               ) or (type_raw == 'transfer'
                     and subtype in _STAKING_WALLET_MOVES):
-            if fee:
+            # (A Hybrid Earn row's fee in cash is a FLOW of the cash
+            # events, `_kr_cash_own`, as a funding row's is: not said
+            # unbooked here. Its fee in a coin still is.)
+            if fee and not (type_raw.startswith(_HYBRID_EARN)
+                            and fee_ccy in self._fiat):
                 st.unbooked.append((f"{type_raw}/{subtype} fee",
                                     date, fee_ccy, -abs(fee)))
             return Outcome.nonevent("Kraken Earn wallet move "
@@ -1646,6 +2689,7 @@ class KrakenBrokerage(BaseBrokerage):
                 self.zero_tx_reason = (
                     f"{sum(ignored_types.values())} fiat-cash or "
                     f"zero-amount row(s): not tax events")
+        self._finish_hybrid()
         legs_index = self.account_context.instant_legs if self.account_context else {}
         for refid, sides in instant_trades.items():
             # Joined whether or not this export holds both sides: one
@@ -1682,6 +2726,69 @@ class KrakenBrokerage(BaseBrokerage):
                 f"its {nonevents + sum(ignored_types.values())} row(s) "
                 f"are recognized non-events")
         return transactions
+
+    def _finish_hybrid(self) -> None:
+        """An ATTENTION line per asset whose Hybrid Earn rows brought back
+        more than the account's ledger rows had parked (`_kr_walk` over
+        the export's rows and the account's other ledger exports, read
+        only when the export has such a row): the excess, which the
+        books take as neither income nor coins acquired, and what that
+        leaves (`_hybrid_left`). Kraken's export does not say what the
+        excess is, so nothing is booked for it (backlog TJ-4954). And one
+        per second holding Hybrid Earn rows whose order the balances do
+        not give, where the order changes what is found: read in the
+        file's order, with what another order gives (`_hybrid_unordered`).
+        A row an export of an earlier name holds too is that export's to
+        say."""
+        st = self._kr
+        rows = list(self._cash_rows)
+        if not any(_kr_is_hybrid(r) for r, _i in rows):
+            return
+        walk = _kr_walk(
+            rows, _kr_sibling_ledger_rows(self._kraken_siblings(st.path)), st.shown)
+        by_asset: Dict[str, list] = {}
+        for where, (bare, over, day) in walk.excess.items():
+            if where not in walk.earlier:
+                by_asset.setdefault(bare, []).append((day, over))
+        for bare, found in sorted(by_asset.items()):
+            days = sorted(d for d, _o in found)
+            total = 0.0
+            for _d, over in found:
+                total = _dec_add(total, over)
+            span = days[0] if days[0] == days[-1] else f"{days[0]}..{days[-1]}"
+            emit_line(f"warning: ATTENTION: Kraken ledger {st.shown}: Hybrid Earn brought "
+                      f"back {total:.10g} {bare} more than this account's ledger rows had "
+                      f"parked ({len(found)} row(s), {span}) — the excess is not booked as "
+                      f"income or as coins acquired: the export does not say what it is. "
+                      f"Check Kraken's Earn history (a reward, or coins parked before the "
+                      f"first export here); {self._hybrid_left(bare, total)}.")
+        for u in sorted(walk.unordered, key=lambda u: (u.bare, u.day)):
+            if u.own:
+                emit_line(f"warning: ATTENTION: Kraken ledger {st.shown}: "
+                          f"{_hybrid_unordered(u)}")
+
+    def _hybrid_left(self, bare: str, total: float) -> str:
+        """What an excess of `total` units of `bare` leaves, for the
+        ATTENTION line: a coin, fewer units in the books than at Kraken;
+        the project's own currency, cash with no FX gain to compute; another
+        currency (at the cash basis a USD stablecoin too), a cash move of
+        the cash events (`_kr_cash_own`), which the FX-cash ledger takes
+        at the day's rate under [settings] fx_cash_inflow_cost = "spot"
+        and asks about otherwise (the parse is not told that setting, so
+        the line says both)."""
+        if bare not in self._fiat:
+            return (f"the books hold {total:.10g} {bare} fewer than Kraken shows until "
+                    f"the excess is entered via a .tt file")
+        country = getattr(self, 'country', None)
+        if country:
+            from taxjson.lib.country import home_currency
+            if self._norm(bare) == home_currency(country):
+                return (f"{bare} is the project's own currency: no coin is missing, and "
+                        f"`tjs fx-cash` computes no gain or loss on it")
+        return (f"{bare} is cash in the books, so no coin is missing; `tjs fx-cash "
+                f"--ledger v2` takes the excess as cash that came in: at the day's rate "
+                f"when [settings] fx_cash_inflow_cost = \"spot\", otherwise undeclared, "
+                f"with no figure until a .tt `CASHMOVE` line says what it was")
 
     def release(self) -> None:
         """The export's state released; the row readers' assets restored."""

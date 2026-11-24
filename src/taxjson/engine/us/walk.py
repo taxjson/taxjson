@@ -24,7 +24,7 @@ from taxjson.engine.journal import (
 )
 from taxjson.engine.replacement import receives_on_buy
 from taxjson.engine.us.lot_store import (
-    _us_ikey_on, _us_insert_lots, _us_inv_keys_for, _us_lots_copy,
+    _us_ikey_on, _us_insert_lots, _us_inv_keys_for,
 )
 from taxjson.engine.us.terms import (
     held_more_than_one_year, spin_entitlement, REORG_356_TYPE, _US_MONEY_EPSILON,
@@ -34,7 +34,7 @@ from taxjson.engine.us.wash import (
     _us_apply_other_stkdivs, _us_split_rep_refs,
 )
 from taxjson.engine.us.lots import (
-    _us_move_long_lots, _us_draw_long_lots, _us_tl_label, _us_tl_held,
+    _us_move_long_lots, _us_draw_long_lots, _us_tl_label, _us_tl_held, _USDayLots,
 )
 
 from taxjson.engine.us.trades import _us_walk_buy, _us_walk_sell, _us_deliver_to_short
@@ -991,6 +991,38 @@ def _us_walk_reorg(*, _boot_blocks: Dict[Tuple[str, str], Tuple[List[_ReorgBlock
     return False
 
 
+def _us_assign_route(run: _USRun, tx: TaxTransaction, symbol: str
+                     ) -> Tuple[bool, Optional[str]]:
+    """(is it an option leg whose premium rolls into its shares, the
+    underlying) for a row of `_us_walk_rows`. An ASSIGN that names an
+    underlying (its option root, or a marked warrant/right exercise's
+    target: US-OPT-06) rolls when that underlying trades as stock in
+    its account, or when its delivery, under the underlying's old name,
+    is in an opening snapshot of the symbol it was renamed to, whose
+    cost holds the premium (nothing is staged for it and nothing
+    realized here: TJ-5005). Otherwise it is cash-settled (index
+    options): no stock leg can consume a staged premium, so the option's
+    own P&L is realized by normal disposition accounting (mirrors the
+    Canada engine, note and all). (A row that carries an amount is
+    routed like any other: where a snapshot holds its delivery the
+    ledger says so.)"""
+    named = run.option_underlying(symbol) or exercise_target(tx)
+    if tx.action != 'ASSIGN' or not named:
+        return False, None
+    underlying = run._assign_underlying(tx)
+    if underlying is not None and (tx.account, underlying) in run.taxable_stock_symbols:
+        return True, underlying
+    renamed = run.pending_option_adjustments.renamed_delivery_underlying(tx)
+    if renamed:
+        return True, renamed
+    emit_line(f"note: {symbol}: assignment treated as "
+              f"cash-settled ({named} never "
+              f"trades as stock in this book) — option P&L "
+              f"realized directly. If a stock leg is missing "
+              f"from your input, add it and re-run.")
+    return False, None
+
+
 def _us_walk_rows(*, run: _USRun) -> Tuple[Optional[_USLotsNow], Optional[_USLotsNow]]:
     """The row loop of the US engine (step 4c), over `run`, the engine's state, and
     the two lots it returns. Its per-action blocks are functions (step 4n): the
@@ -1009,10 +1041,12 @@ def _us_walk_rows(*, run: _USRun) -> Tuple[Optional[_USLotsNow], Optional[_USLot
     # takes the basis add, was not held on Dec 31. Taken before the
     # row after the last one dated on or before year_end (an option
     # row an assignment moved in front of its December stock leg
-    # stays in). None without a year_end.
-    _ye_lots = None
+    # stays in), and row by row where a later row is in the year on
+    # its date basis (_USDayLots, TJ-4984). None without a year_end.
+    _said: Set[Any] = set()
+    _ye = _USDayLots(run, run.year_end, run._ye_next, _said)
     # The lots at the end of `lots_at` (backlog TJ-0554).
-    _la_lots = None
+    _la = _USDayLots(run, run.lots_at, run._la_next, _said)
     symbol_traces: Dict[str, List[str]] = {}
     _spin_done: Set[RowId] = set()
     _boot_blocks: Dict[Tuple[str, str], Tuple[List[_ReorgBlock], Decimal]] = {}
@@ -1034,10 +1068,8 @@ def _us_walk_rows(*, run: _USRun) -> Tuple[Optional[_USLotsNow], Optional[_USLot
                 (_tl_d, _tl_d if run.cost_timeline != 'settle'
                  else str(tx.date_settle or _tl_d)[:10]))
             _tl_prev[:] = [tx]
-        if tx is run._ye_next and _ye_lots is None:
-            _ye_lots = _us_lots_copy(run)
-        if tx is run._la_next and _la_lots is None:
-            _la_lots = _us_lots_copy(run)
+        _ye.at(tx)
+        _la.at(tx)
         if run._other_stkdivs:
             _us_apply_other_stkdivs(run, tx)
         symbol = tx.symbol
@@ -1202,33 +1234,7 @@ def _us_walk_rows(*, run: _USRun) -> Tuple[Optional[_USLotsNow], Optional[_USLot
         # the position from inventory, but emit no gain entry — the
         # would-be gain is staged in pending_option_adjustments[underlying]
         # and consumed by the stock-leg BUYSELL processed next.
-        is_option_assign = (tx.action == 'ASSIGN')
-        # A marked warrant/right exercise leg rolls its cost into the
-        # shares like a long call's premium (US-OPT-06).
-        _assign_und_named = (run.option_underlying(symbol)
-                             or exercise_target(tx))
-        underlying_for_assign = (run._assign_underlying(tx)
-                                 if is_option_assign
-                                 and _assign_und_named
-                                 else None)
-        if not is_option_assign or not _assign_und_named:
-            is_option_assign = False
-            underlying_for_assign = None
-        elif (underlying_for_assign is None
-              or (tx.account, underlying_for_assign)
-              not in run.taxable_stock_symbols):
-            # Cash-settled assignment/exercise (index options): the
-            # underlying never trades as stock in this book, so no
-            # stock leg can consume a staged premium — realize the
-            # option's own P&L via normal disposition accounting
-            # (mirrors the Canada engine, note and all).
-            emit_line(f"note: {symbol}: assignment treated as "
-                  f"cash-settled ({_assign_und_named} never "
-                  f"trades as stock in this book) — option P&L "
-                  f"realized directly. If a stock leg is missing "
-                  f"from your input, add it and re-run.")
-            is_option_assign = False
-            underlying_for_assign = None
+        is_option_assign, underlying_for_assign = _us_assign_route(run, tx, symbol)
 
         # ============================================================
         # BUY path: first close any existing shorts FIFO; if leftover
@@ -1243,16 +1249,12 @@ def _us_walk_rows(*, run: _USRun) -> Tuple[Optional[_USLotsNow], Optional[_USLot
         _us_walk_sell(ikey=ikey, is_option_assign=is_option_assign, run=run, symbol=symbol,
                       symbol_traces=symbol_traces, tx=tx, tx_net=tx_net, tx_qty_abs=tx_qty_abs,
                       underlying_for_assign=underlying_for_assign)
-    # The fallbacks and the last timeline step, once the rows are walked.
-    if run.year_end and _ye_lots is None:
-        _ye_lots = _us_lots_copy(run)     # no row after the year end
-    if run.lots_at and _la_lots is None:
-        _la_lots = _us_lots_copy(run)     # no row after the day
+    # The last timeline step, once the rows are walked.
     if run._tl is not None and _tl_prev:
         run._tl.touch(len(run._tl_dates) - 1,
                   [_us_tl_label(run, _tl_prev[0].account, _tl_prev[0].symbol)])
         run._tl.sweep(len(run._tl_dates) - 1, _us_tl_held(run))
-    return (_la_lots, _ye_lots)
+    return (_la.end(), _ye.end())
 
 
 def _us_carry_lots(run: _USRun, inv: _USInventory, src: _IKey, dst: _IKey, q: float,

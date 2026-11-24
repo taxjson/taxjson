@@ -157,7 +157,8 @@ class TestPortedTT(unittest.TestCase):
                 "transactions": [
                     {
                         "action": "BUYSELL", "date": "2025-01-01", "time": "09:30:00", 
-                        "symbol": "ABC", "quantity": 100.0, "currency": "USD", 
+                        "symbol": "ABC", "quantity": 100.0, "currency": "CAD",
+                        "trade_currency": "USD",
                         "price": 100.0, "net_amount": 10000.0
                     }
                 ]

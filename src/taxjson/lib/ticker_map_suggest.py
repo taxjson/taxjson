@@ -63,6 +63,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from taxjson.project.accounts import accounts_of
 from taxjson.lib import project_layout as _PL
+from taxjson.lib.clean import PARSE_GROUPS
 from taxjson.lib.ticker_map_rules import _TOKEN_RE
 
 # The keywords a suggestion may carry.
@@ -471,20 +472,83 @@ def _holdings_files(root: Path) -> List[Path]:
     return out
 
 
+# What follows `<account>_` in the name of an account's source book in
+# work/, as the run writes it (lib/clean GROUP_BOOKS and GROUP_WORK's
+# transfer evidence; the names pipeline/stages' sweep keeps): an export
+# group's parse, its corporate-action rows and its transfer evidence, the
+# group a parser's id (lib/clean PARSE_GROUPS) or a generic mapping's
+# `generic-<name>` (lib/brokerages/generic `_BROKER_NAME_RE`), and the .tt
+# journal's transfers (lib/dated_events). A .tt file's conversion,
+# `tt_<stem>`, is named by the account's .tt files (`_tt_stems`).
+_GROUP_BOOK_RE = re.compile(
+    r"(?:" + "|".join(sorted(PARSE_GROUPS))
+    + r"|generic-[a-z0-9][a-z0-9_-]{0,39})(?:_corp|_transfers)?"
+    r"|tt-journal_transfers")
+
+
+def _tt_stems(root: Path, name: str) -> Set[str]:
+    """The stems of the .tt files `tjs run` reads for the account `name`
+    (pipeline/stages `_account_tt_files`: inputs/<name>/*.tt in any case,
+    never a hidden file, a lock file or a redacted copy beside the
+    exports; with shared exports the crypto_sends.tt generated in work/).
+    Their conversions are work/<name>_tt_<stem>.json (lib/pipeline
+    `tt_json_path`)."""
+    from taxjson.lib import crypto_sends as CS
+    try:
+        kids = list((_PL.inputs_dir(root) / name).iterdir())
+    except OSError:
+        kids = []
+    stems = {p.stem for p in kids if p.suffix.lower() == ".tt"
+             and not p.name.startswith((".", "~$"))
+             and not _PL.redacted_copy_beside_exports(p)}
+    if CS.tt_path(root, name).is_file():
+        stems.add(Path(CS.TT_NAME).stem)
+    return stems
+
+
+def book_source_files(root: Path) -> List[Path]:
+    """The work/ files books_symbols reads: each taxjson.toml account's
+    source books, by the names the run writes them under: its export
+    groups' parses, corporate-action rows and transfer evidence
+    (`<account>_<group>.json`, `_corp`, `_transfers`: _GROUP_BOOK_RE), its
+    .tt files' conversions (`<account>_tt_<stem>.json` for a .tt it still
+    reads: _tt_stems) and its .tt journal's transfers. Nothing else in
+    work/ is evidence: a derived book (it carries the map's renames), the
+    file of an account the project no longer configures (removed or
+    renamed, `rrsp_spousal_ib.json` beside a configured rrsp too), a copy
+    (`margin_ib.json.bak.json`, `margin_old_questrade.json`), a dot-file,
+    the conversion of a .tt that is gone: each turned a conditional hint
+    into an offered TOBASE line (backlog TJ-5039). No readable
+    taxjson.toml: no account, none."""
+    cache = Path(root) / "work"
+    try:
+        cfg = _PL.read_config_soft(root) if _PL.has_config(root) else None
+        found = sorted(p.name for p in cache.iterdir())
+    except (OSError, ValueError, UnicodeDecodeError):
+        return []
+    out: Set[Path] = set()
+    for name in accounts_of(cfg if isinstance(cfg, dict) else None):
+        tts = _tt_stems(Path(root), name)
+        for n in found:
+            rest = (n[len(name) + 1:-len(".json")] if n.startswith(f"{name}_")
+                    and n.endswith(".json") else "")
+            if rest and (_GROUP_BOOK_RE.fullmatch(rest) or (
+                    rest.startswith("tt_") and rest[3:] in tts)):
+                out.add(cache / n)
+    return sorted(out)
+
+
 def books_symbols(root: Path) -> Set[str]:
     """Every symbol the project's books name before ticker.map renames
-    them — the evidence a conditional hint needs: each account's parsed
-    exports and transfer sidecars, corporate-action rows and .tt files
-    (OPENING balances too) in work/ (never a derived book: those carry
-    the map's renames), plus the holdings files (_holdings_files). An
-    option adds its underlying listing."""
-    from taxjson.lib.project_layout import _AUDIT_DERIVED_SUFFIXES
+    them — the evidence a conditional hint needs: the configured
+    accounts' parsed exports and transfer sidecars, corporate-action
+    rows and .tt files (OPENING balances too) in work/ (book_source_files;
+    never a derived book: those carry the map's renames), plus the
+    holdings files (_holdings_files). An option adds its underlying
+    listing."""
     from taxjson.lib.option_symbols import parse_option_underlying
     syms: Set[str] = set()
-    cache = Path(root) / "work"
-    for p in sorted(cache.glob("*.json")) if cache.is_dir() else []:
-        if p.name.endswith(_AUDIT_DERIVED_SUFFIXES):
-            continue
+    for p in book_source_files(root):
         try:
             doc = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, ValueError, RecursionError):

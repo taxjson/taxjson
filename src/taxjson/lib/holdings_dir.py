@@ -3,8 +3,9 @@
 A project keeps the broker's positions files for its year in holdings/
 (`[settings] holdings_dir` names another folder): a `[[holding]]` TOML
 per broker account, as a download tool writes it (taxjson-fetch
---positions writes the same shape). `tjs sanity` and the end of
-`tjs run` find them without any `holdings = [...]` setting:
+--positions writes the same shape). `tjs sanity` finds them without
+any `holdings = [...]` setting (`tjs run` compares nothing: its closing
+list names `tjs sanity` while the project has such files, in_use):
 
 - each file belongs to the account whose broker account ids include the
   file's `[meta] broker_account`, else its `[meta] account`
@@ -47,12 +48,12 @@ README = """\
 The broker's positions snapshots for this tax year, one [[holding]] TOML
 per broker account (a download tool writes them; `tjs fetch
 --positions` writes the same shape). Keep one taken at (or just after)
-the year end. `tjs sanity` and the end of `tjs run` compare the
-books with them at each file's date ([meta] as_of, else [meta]
-generated_at), with no setting: a file belongs to the account whose
-broker account id is its [meta] broker_account (or [meta] account)
-([accounts.NAME] account or broker_accounts in taxjson.toml), else the
-account its name starts with
+the year end. `tjs sanity` compares the books with them at each
+file's date ([meta] as_of, else [meta] generated_at), with no setting
+(`tjs run` does not: run `tjs sanity` after it): a file belongs to the
+account whose broker account id is its [meta] broker_account (or
+[meta] account) ([accounts.NAME] account or broker_accounts in
+taxjson.toml), else the account its name starts with
 (margin_holdings.toml, margin_ib_holdings.toml). To keep two dates of
 one broker account, give each file its [meta] broker_account.
 
@@ -190,6 +191,48 @@ def folder_for(root: Path, year: Optional[int] = None
     a note — none today)."""
     d = _PL.holdings_folder(Path(root))
     return (d if snapshot_files(d) else None), None
+
+
+def where_used(root: Path, accounts_cfg: Any) -> List[str]:
+    """Where the positions files are that `tjs sanity` compares with no
+    arguments, as the run's closing list names them (pipeline/run
+    `_first_run_summary`): the snapshot folder when it holds one
+    (folder_for: holdings/, or the folder `[settings] holdings_dir`
+    names, shown from the project), and the accounts whose own
+    `holdings = [...]` names files. [] when there are none."""
+    out: List[str] = []
+    folder = folder_for(Path(root))[0]
+    if folder is not None:
+        out.append(_folder_shown(Path(root), folder))
+    named = sorted(n for n, a in configured_accounts(accounts_cfg).items()
+                   if a.holdings)
+    if named:
+        shown = ", ".join(named[:3]) + (f" +{len(named) - 3} more"
+                                        if len(named) > 3 else "")
+        out.append(f"`holdings = [...]` of {shown}")
+    return out
+
+
+def _folder_shown(root: Path, folder: Path) -> str:
+    """`holdings/`, `../holdings/`: the folder from the project (a
+    `holdings_dir` stays beside the year folders, project_layout
+    folder_setting), else its name alone."""
+    import os
+    try:
+        rel = os.path.relpath(_resolved(folder), _resolved(root))
+    except ValueError:                  # another drive
+        rel = folder.name
+    if rel.startswith(("../../", "..\\..\\")) or os.path.isabs(rel):
+        rel = folder.name
+    return rel.replace(os.sep, "/").rstrip("/") + "/"
+
+
+def in_use(root: Path, accounts_cfg: Any) -> bool:
+    """The project holds positions files `tjs sanity` compares with no
+    arguments: an account's `holdings = [...]`, or a snapshot in the
+    year's holdings folder (where_used). The checklist's sanity step
+    asks it (checklist.d_sanity); the run's closing list names them."""
+    return bool(where_used(root, accounts_cfg))
 
 
 def _resolved(p: Path) -> Path:

@@ -158,7 +158,9 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
                         locked_opening: Optional[Dict[int, float]] = None,
                         back_caps: Optional[Dict[int, float]] = None,
                         given_back: Optional[Dict[int, float]] = None,
-                        stated: Optional[Dict[int, float]] = None) -> Dict[str, Any]:
+                        stated: Optional[Dict[int, float]] = None,
+                        latest_first_before: Optional[int] = None,
+                        back_to: Optional[Dict[int, Dict[int, float]]] = None) -> Dict[str, Any]:
     """`carried`: {year: balance a close-year lock recorded as carried
     out of that year} — at the end of that year the running balance
     becomes the recorded one (the lock is the record; the books of a
@@ -196,12 +198,13 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
     claim (TJ-1576, TJ-1585). `stated`: {year: what that rebuilt year's return
     carried back}, the person's answer where the books can't tell: the row takes
     that much, from a loss the books don't hold too, as a lock's does, and no
-    later lock's opening gives any of it back (TJ-4880)."""
-    locked_opening = locked_opening or {}
-    back_caps = back_caps or {}
+    later lock's opening gives any of it back (TJ-4880). `latest_first_before`:
+    the rows before that year meet the latest claimed year first, not the
+    oldest, the other end of an open split; `back_to`: {year: {earlier year: what
+    its return carried back to it}}, a split on record (`_claim_order`; TJ-4882)."""
+    locked_opening, back_caps = locked_opening or {}, back_caps or {}
     given_back, stated = given_back or {}, stated or {}
-    carried = carried or {}
-    locked_back = locked_back or {}
+    carried, locked_back = carried or {}, locked_back or {}
     locked_applied = locked_applied or {}
     # Union of book years and CLAIM years: a claim is applied on the
     # year of the RETURN it appears on, which may have no dispositions
@@ -241,8 +244,7 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
     # landing within the bound lost what it left (backlog TJ-1195).
     # `filed_over`: the filed loss above the ledger's (below it, when
     # negative). `_EPS` absorbs the float residue of an exact claim.
-    slack = 0.0
-    filed_over = 0.0
+    slack = filed_over = 0.0
     _EPS = 1e-6
     # The year before is a lock's record: the balance carried into this
     # one is the record's, not a rebuild (a partial history rebuilds
@@ -275,7 +277,8 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
             _gb[y] = _gb.get(y, 0.0) + _given
             return build_canada_ledger(
                 nets, claimed, carried, locked_back, locked_applied, own_year,
-                through_year, locked_opening, _caps, _gb, stated)
+                through_year, locked_opening, _caps, _gb, stated, latest_first_before,
+                back_to)
         carried_in = balance
         _expired_before = sum(expired.values())
         _rec_y = nets.get(y, _ZERO)
@@ -287,11 +290,10 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
             later_loss[_cy] += loss
         if loss:
             balance += loss
-            _rec = nets.get(y, _ZERO)
             # A year from another source (a lock, a return row alone)
             # names no sub-cent rows: each of its dispositions counts.
-            if 'filed_gap' in _rec:
-                filed_over -= float(_rec['filed_gap'])
+            if 'filed_gap' in _rec_y:
+                filed_over -= float(_rec_y['filed_gap'])
             else:
                 slack += 0.005 * _rows_y
                 cents_behind += _rows_y
@@ -346,7 +348,9 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
         carried_back = 0.0
         backs: List[Tuple[int, float]] = []
         back_room = stated.get(y, back_caps.get(y))
-        for _cy in sorted(pending_by_year):
+        _reach, _order, _latest, _held = _claim_order(
+            pending_by_year, y, latest_first_before, (back_to or {}).get(y))
+        for _cy in _order:
             if balance <= 0.005:
                 break
             take = min(balance, pending_by_year[_cy])
@@ -411,7 +415,7 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
             # year's loss to meet again (TJ-1554), down to its rows' cents
             # (TJ-1577). The project year's carry-back is the claims' (TJ-1579).
             short = float(stated.get(y, locked_back.get(y)) or 0.0) - carried_back
-            for _cy in sorted(c for c in pending_by_year if c < y):
+            for _cy in sorted((c for c in pending_by_year if c < y), reverse=_latest):
                 if short <= 0.005:
                     break
                 take = min(short, pending_by_year[_cy])
@@ -424,7 +428,7 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
                 carried_back += take
                 short -= take
                 backs.append((_cy, take))
-        pending_by_year = {k: v for k, v in pending_by_year.items()
+        pending_by_year = {k: v for k, v in _unheld(pending_by_year, _held).items()
                            if v > 0.005}
         rebuilt_balance = None
         over_balance = None
@@ -498,11 +502,7 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
             # The carry-back by the year it went to: handoff checks a
             # claim under the closed year less the part this year's loss
             # carries back to it (backlog TJ-0078).
-            _to: Dict[str, float] = {}
-            for _cy, take in backs:
-                _to[str(_cy)] = _to.get(str(_cy), 0.0) + take
-            row['carried_back_to'] = {k: M.shown(v, 2) for k, v in
-                                      sorted(_to.items()) if v > 0.005}
+            row.update(_backs_by_year(backs, _reach, pending_by_year, _latest))
         if y in given_back:
             # Of the claims still unmet after this lock's own carry-back, what
             # rests on the give-back: the lock met the rest (TJ-1583, TJ-1584).
@@ -564,6 +564,59 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
                              'excess': M.shown(float(amt) - gain, 2)}
     if _over:
         out['claims_over_gain'] = _over
+    return out
+
+
+def _claim_order(pending: Dict[int, float], y: int, latest_first_before: Optional[int],
+                 to: Optional[Dict[int, float]] = None
+                 ) -> Tuple[List[int], List[int], bool, Dict[int, float]]:
+    """(the claimed years a loss of `y` can go back to, before it does, where
+    the split between them is open; the order `build_canada_ledger` meets the
+    pending claims in; whether that is the latest first; the claims held out of
+    this row's reach). A T1A names the years a loss goes back to. `to`: {earlier
+    year: amount}, that row's split on record (a by-target [carryover]
+    carried_back entry, or its lock's `carried_back_to`): the row meets each
+    named year by that much and no other, the rest of every earlier claim held
+    out of `pending` until `_unheld` puts it back. With none on record the row
+    meets the claims under the oldest year first, the ledger's proposal: `claimed`
+    is one total per target year, and a lock's `carried_back` or a plain
+    [carryover] carried_back amount one total per loss year. The rows before
+    `latest_first_before` are folded the other way, the latest year first, the
+    other end of that choice, for `_Readings` to compare; the year's own entry is
+    met last either way (backlog TJ-4882)."""
+    held: Dict[int, float] = {}
+    for c in [c for c in pending if c < y] if to is not None else ():
+        held[c] = max(0.0, pending[c] - max(0.0, (to or {}).get(c, 0.0)))
+        pending[c] -= held[c]
+    reach = [c for c, v in sorted(pending.items()) if c < y and v > 0.005]
+    latest = latest_first_before is not None and y < latest_first_before
+    order = sorted(pending)
+    if latest:
+        order = reach[::-1] + [c for c in order if c not in reach]
+    return ([] if to is not None else reach), order, latest, held
+
+
+def _unheld(pending: Dict[int, float], held: Dict[int, float]) -> Dict[int, float]:
+    """`pending` with the claims `_claim_order` held out of a row's reach back."""
+    for c, v in held.items():
+        pending[c] = pending.get(c, 0.0) + v
+    return pending
+
+
+def _backs_by_year(backs: List[Tuple[int, float]], reach: List[int],
+                   pending: Dict[int, float], latest: bool) -> Dict[str, Any]:
+    """A row's `carried_back_to` ({year: the part of its carry-back that went
+    to it}), with `carried_back_split` (the order the fold met them in) when
+    another split was open to that return and none is on record: more than one
+    claimed year was in reach (`reach`, `_claim_order`) and something under
+    them is left (`pending`, after the fold) (backlog TJ-4882)."""
+    to: Dict[str, float] = {}
+    for cy, take in backs:
+        to[str(cy)] = to.get(str(cy), 0.0) + take
+    out: Dict[str, Any] = {'carried_back_to': {
+        k: M.shown(v, 2) for k, v in sorted(to.items()) if v > 0.005}}
+    if len(reach) > 1 and sum(pending.get(c, 0.0) for c in reach) > 0.005:
+        out['carried_back_split'] = 'latest_first' if latest else 'oldest_first'
     return out
 
 
@@ -747,6 +800,119 @@ def _record_closing_now(lock: Path, opening_source: str) -> Optional[float]:
     return v if math.isfinite(v) else None
 
 
+def _lock_answers(said: Any) -> Dict[int, float]:
+    """A lock's `carry_back_stated` as {year: amount}; ValueError (for
+    `lock_figure` to name the lock) when it is no table of years and amounts
+    of 0 or more."""
+    if not isinstance(said, dict):
+        raise ValueError("net_capital_loss.carry_back_stated is no table")
+    out = {int(k): _finite(v, 'net_capital_loss.carry_back_stated')
+           for k, v in said.items()}
+    if any(v < 0 for v in out.values()):
+        raise ValueError("net_capital_loss.carry_back_stated holds a negative "
+                         "amount")
+    return out
+
+
+def _lock_split(to: Any, key: str, year: int) -> Dict[int, float]:
+    """A lock's carry-back of `year` by the year it went to, as {target:
+    amount}; ValueError (for `lock_figure` to name the lock) when `key` is no
+    table of amounts of 0 or more under the 3 years before it."""
+    if not isinstance(to, dict):
+        raise ValueError(f"net_capital_loss.{key} is no table")
+    out = {int(k): _finite(v, f'net_capital_loss.{key}') for k, v in to.items()}
+    if any(v < 0 or not year - 3 <= t < year for t, v in out.items()):
+        raise ValueError(f"net_capital_loss.{key} holds a negative amount or a "
+                         f"year that is not one of the 3 before {year}")
+    return out
+
+
+def _canada_lock_carry(path: Path, ncl: Dict[str, Any], year: int) -> Dict[str, Any]:
+    """`lock_figure`'s part for a Canadian lock's net capital loss block: the
+    balance it carried out, its T1A carry-back and the years that went to, what
+    it opened with and applied, and the person's answers it rests on."""
+    out: Dict[str, Any] = {
+        'carried': _finite(ncl['closing'], 'net_capital_loss.closing'),
+        # The T1A carry-back close-year took out of it (0 when it records
+        # none: build_canada_ledger's locked_back).
+        'carried_back': _finite(ncl.get('carried_back') or 0.0,
+                                'net_capital_loss.carried_back')}
+    # What it took in from the record before it. A figure from elsewhere
+    # ([estimate] other_losses, the books) says nothing of what that record's
+    # return carried back (TJ-1574).
+    _os = str(ncl.get('opening_source') or '')
+    if _os.startswith(TYPED_OPENING) and ncl.get('opening') is not None:
+        # The person's own figure for the balance carried in: a fact about
+        # the years before it (TJ-4885).
+        out['opening_typed'] = _finite(ncl['opening'], 'net_capital_loss.opening')
+    if 'close-year record)' in _os and ncl.get('opening') is not None:
+        _op = _finite(ncl['opening'], 'net_capital_loss.opening')
+        _now = _record_closing_now(path, _os)
+        if _now is not None and M.cents_apart(_now, _op) > 1:
+            # That record was closed again since (TJ-0430): the lock's opening
+            # says nothing of what was carried back until this year is closed
+            # again (TJ-1587).
+            out['opening_stale'] = {'opening': _op, 'record_now': _now}
+        else:
+            out['opening'] = _op
+    # The person's answers that lock's split rested on ([carryover]
+    # carried_back of its project, `carry_back_stated`): a later year is not
+    # asked again (TJ-4886). Those given by the year a carry-back went to are
+    # in `carry_back_stated_to` too, and the lock's own carry-back by year in
+    # `carried_back_to` (TJ-4882); a lock written before has neither.
+    if ncl.get('carry_back_stated') is not None:
+        out['stated'] = _lock_answers(ncl['carry_back_stated'])
+    if ncl.get('carry_back_stated_to') is not None:
+        said = ncl['carry_back_stated_to']
+        if not isinstance(said, dict):
+            raise ValueError("net_capital_loss.carry_back_stated_to is no table")
+        out['stated_to'] = {int(k): _lock_split(v, 'carry_back_stated_to', int(k))
+                            for k, v in said.items()}
+    if ncl.get('carried_back_to') is not None:
+        to = _lock_split(ncl['carried_back_to'], 'carried_back_to', year)
+        if M.cents_apart(math.fsum(to.values()), out['carried_back']) > len(to):
+            raise ValueError("net_capital_loss.carried_back_to does not add up to "
+                             "carried_back")
+        out['back_to'] = to
+    # ...and the earlier losses it applied (locked_applied), if it says.
+    if ncl.get('applied') is not None:
+        out['applied'] = _finite(ncl['applied'], 'net_capital_loss.applied')
+    return out
+
+
+def _recorded_answers(lock_info: Dict[int, Dict[str, Any]], project_year: Optional[int]
+                      ) -> Dict[int, Tuple[float, int]]:
+    """{year: (the answer a close before the project year recorded for it,
+    that lock's year)}, the latest lock's word standing (`lock_figure`'s
+    `stated`; `_canada_ledger`'s `lock_stated`; backlog TJ-4886)."""
+    out: Dict[int, Tuple[float, int]] = {}
+    for y, info in sorted(lock_info.items()):
+        if project_year is None or y >= project_year or info.get('carried') is None:
+            continue
+        out.update({k: (float(v), y) for k, v in (info.get('stated') or {}).items()
+                    if k < y})
+    return out
+
+
+def _recorded_splits(lock_info: Dict[int, Dict[str, Any]], project_year: Optional[int]
+                     ) -> Tuple[Dict[int, Tuple[Dict[int, float], int]],
+                                Dict[int, Dict[int, float]]]:
+    """({year: (the split by target year a close before the project year
+    recorded as the person's answer for it, that lock's year)}, {locked year:
+    its own carry-back by target year}): `lock_figure`'s `stated_to` and
+    `back_to`, for `_canada_ledger`'s `lock_to` (backlog TJ-4882)."""
+    said: Dict[int, Tuple[Dict[int, float], int]] = {}
+    own: Dict[int, Dict[int, float]] = {}
+    for y, info in sorted(lock_info.items()):
+        if project_year is None or y >= project_year or info.get('carried') is None:
+            continue
+        said.update({k: (dict(v), y) for k, v in (info.get('stated_to') or {}).items()
+                     if k < y})
+        if info.get('back_to') is not None:
+            own[y] = dict(info['back_to'])
+    return said, own
+
+
 def lock_figure(path: Path, country: str) -> Dict[str, Any]:
     """What a close-year lock says was FILED for its year: {figure,
     source, st, lt, dispositions}. The figure is, by preference, the
@@ -849,40 +1015,8 @@ def lock_figure(path: Path, country: str) -> Dict[str, Any]:
                                                'deduction_used')
             elif country != 'usa' and isinstance(
                     cf.get('net_capital_loss'), dict):
-                out['carried'] = _finite(cf['net_capital_loss']['closing'],
-                                         'net_capital_loss.closing')
-                # The T1A carry-back close-year took out of it (0 when
-                # it records none: build_canada_ledger's locked_back).
-                out['carried_back'] = _finite(
-                    cf['net_capital_loss'].get('carried_back') or 0.0,
-                    'net_capital_loss.carried_back')
-                # What it took in from the record before it. A figure from
-                # elsewhere ([estimate] other_losses, the books) says nothing of
-                # what that record's return carried back (TJ-1574).
-                _ncl = cf['net_capital_loss']
-                _os = str(_ncl.get('opening_source') or '')
-                if _os.startswith(TYPED_OPENING) and _ncl.get('opening') is not None:
-                    # The person's own figure for the balance carried in: a
-                    # fact about the years before it (TJ-4885).
-                    out['opening_typed'] = _finite(_ncl['opening'],
-                                                   'net_capital_loss.opening')
-                if 'close-year record)' in _os and _ncl.get('opening') is not None:
-                    _op = _finite(_ncl['opening'], 'net_capital_loss.opening')
-                    _now = _record_closing_now(path, _os)
-                    if _now is not None and M.cents_apart(_now, _op) > 1:
-                        # That record was closed again since (TJ-0430): the
-                        # lock's opening says nothing of what was carried back
-                        # until this year is closed again (TJ-1587).
-                        out['opening_stale'] = {'opening': _op,
-                                                'record_now': _now}
-                    else:
-                        out['opening'] = _op
-                # ...and the earlier losses it applied (locked_applied), if
-                # it says.
-                if cf['net_capital_loss'].get('applied') is not None:
-                    out['applied'] = _finite(
-                        cf['net_capital_loss']['applied'],
-                        'net_capital_loss.applied')
+                out.update(_canada_lock_carry(Path(path), cf['net_capital_loss'],
+                                              out['year']))
     except (KeyError, TypeError, ValueError) as e:
         raise LockUnreadable(
             f"{path}: no usable filed figure ({type(e).__name__}: {e}) — "
@@ -941,9 +1075,10 @@ def _no_rows(ledger: Dict[str, Any]) -> str:
 def _final_line(ledger: Dict[str, Any], final_year: int) -> str:
     """Canada: the balance carried out of the final year, or that the ledger
     can't tell it, when it differs with what a rebuilt year's return carried
-    back (`_canada_ledger`; backlog TJ-1574). Two equal amounts are one
-    amount: the question is then the year's carry-back alone
-    (`_cant_tell_lines`; backlog TJ-4884)."""
+    back (`_canada_ledger`; backlog TJ-1574) or with the claimed years an
+    earlier carry-back went to (TJ-4882). Two equal amounts are one amount: the
+    question is then the year's carry-back alone (`_cant_tell_lines`; backlog
+    TJ-4884)."""
     ct = _CB.cant_tell(ledger)
     amount = _money(ledger['final_carryforward'])
     if ct and abs(ct['if_all']['carryforward'] - ct['if_none']['carryforward']) > 0.005:
@@ -951,12 +1086,24 @@ def _final_line(ledger: Dict[str, Any], final_year: int) -> str:
                   f"{_CB.years_text(ct['years'])} carried back what these "
                   f"books show, {_money(ct['if_none']['carryforward'])} if "
                   f"nothing)")
+    split = None if ct else _CB.split_cant_tell(ledger)
+    ends = [r['carryforward'] for r in split['readings']] if split else [0.0]
+    if max(ends) - min(ends) > 0.005:
+        amount = "can't tell (" + ", ".join(
+            f"{_money(r['carryforward'])} if {_CB.reading_when(split, r)}"
+            for r in split['readings']) + ")"
     return f"Net-capital-loss carryforward after {final_year}: {amount}"
 
 
 def _cant_tell_lines(ledger: Dict[str, Any], final_year: int) -> List[str]:
-    """Canada: the final year's carry-back, when the ledger can't tell it."""
+    """Canada: the final year's carry-back, when the ledger can't tell it, or
+    the years it goes to."""
     ct = _CB.cant_tell(ledger)
+    split = None if ct else _CB.split_cant_tell(ledger)
+    if split:
+        return [f"T1A carry-back of {final_year}'s loss: can't tell (" + ", ".join(
+            _money(r['carried_back']) + _CB.went_to(r.get('carried_back_to'))
+            + f" if {_CB.reading_when(split, r)}" for r in split['readings']) + ")"]
     if not ct:
         return []
     return [f"T1A carry-back of {final_year}'s loss: can't tell "
@@ -966,28 +1113,31 @@ def _cant_tell_lines(ledger: Dict[str, Any], final_year: int) -> List[str]:
 
 
 def _stated_lines(rows: Any) -> List[str]:
-    """Canada: a carry-back that is the person's figure, or one a balance they
-    gave settles, said to be, with where its bounds come from."""
-    out = [f"{r['year']}: carried back {_money(r['carried_back_stated'])}, "
-           f"your figure ([carryover] carried_back), not these books'"
-           for r in rows if r.get('carried_back_stated') is not None]
+    """Canada: a carry-back that is the person's figure, said to be, and one
+    whose years are (a by-target entry; TJ-4882). (A balance the person gave
+    settles none: `_Readings`; backlog TJ-4886.)"""
+    out: List[str] = []
     for r in rows:
-        inf = r.get('carried_back_inferred')
-        if not inf or r['year'] != inf['years'][0]:
-            continue                # (years settled together: one line)
-        out.append(
-            f"{_CB.years_text(inf['years'])}: carried back at least "
-            f"{_money(inf['at_least'])}"
-            + (" in all" if len(inf['years']) > 1 else "")
-            + f" (these books leave {_money(inf['books_leave'])}, you carried "
-            f"{_money(inf['carried_in'])} into {inf['into']}: [estimate] "
-            f"other_losses), at most {_money(inf['at_most'])} ("
-            + ("that balance again, after the lock before"
-               if inf['ceiling'] == 'balance'
-               else "the [carryover] claimed amounts in reach")
-            + "); from the books' nets: a T3 or FX gain on that return changes "
-            "it, and [carryover] carried_back overrides it")
+        how, lock = r.get('carried_back_to_said'), r.get('carried_back_to_in_lock')
+        to = _CB.split_text(r.get('carried_back_to')) if how and lock != r['year'] else ""
+        lock = r.get('carried_back_stated_in_lock') or lock
+        where = (f"[carryover] carried_back, as {lock}'s close-year lock recorded it"
+                 if lock else "[carryover] carried_back")
+        if r.get('carried_back_stated') is not None:
+            out.append(f"{r['year']}: carried back {_money(r['carried_back_stated'])}"
+                       + (f" (to {to})" if to else "")
+                       + f", your figure ({where}), not these books'")
+        elif to:
+            out.append(f"{r['year']}: its carry-back went to {to}, your figures "
+                       f"({where})")
     return out
+
+
+def _proposed_split(r: Dict[str, Any]) -> str:
+    """A row's carry-back by year, when it is the ledger's proposal with
+    another split open (`carried_back_split`); "" otherwise."""
+    return (_CB.split_text(r.get('carried_back_to'))
+            if r.get('carried_back_split') and not r.get('after_project_year') else "")
 
 
 def _before_books_lines(ledger: Dict[str, Any]) -> List[str]:
@@ -1046,8 +1196,21 @@ def render_brief(ledger: Dict[str, Any], cur: str,
     acts: List[str] = []
     cmd = "tjs carryover --details"
     if country == 'canada':
-        if _CB.cant_tell(ledger):
+        if _CB.cant_tell(ledger) or _CB.split_cant_tell(ledger):
             acts.append(_CB.cant_tell_act(ledger))
+        else:
+            acts += [f"{r['year']}: T1A carry-back by year, oldest first: "
+                     f"{_proposed_split(r)} (a proposal)"
+                     for r in rows if r['year'] == _final_year and _proposed_split(r)]
+        for _h in _CB.not_in_nets(ledger):
+            _gain = _h.get('gain_not_in_nets') is not None
+            acts.append(
+                f"{_h['into']}: carried in {_money(_h['carried_in'])}, "
+                + _money(_h['gain_not_in_nets'] if _gain else _h['loss_not_in_nets'])
+                + (" under" if _gain else " over")
+                + (f" what the answers in {_h['answered_in_lock']}'s lock leave on "
+                   f"these nets" if _h.get('answered_in_lock') else
+                   " what your carried_back entries leave on these nets"))
         for r in rows:
             if r['available_to_apply'] > 0.005:
                 acts.append(f"{r['year']}: apply up to "
@@ -1221,9 +1384,13 @@ def _render_balance(ledger: Dict[str, Any], rows: Any, country: Any, para: Any, 
                  f"not reduce the carryforward shown.", "", "  ")
         for _line in _stated_lines(rows) + _before_books_lines(ledger):
             para(f"- {_line}.", "", "  ")
-        if _CB.cant_tell(ledger):
+        for _line in [_CB.not_in_nets_text(_h) for _h in _CB.not_in_nets(ledger)]:
+            para(f"{_W}{_line}.", "", "  ")
+        if _CB.cant_tell(ledger) or _CB.split_cant_tell(ledger):
             para(f"{_W}{_CB.cant_tell_text(ledger)}. The rows above are "
-                 f"working, not an answer. {_CB.CANT_TELL_WAYS}", "", "  ")
+                 f"working, not an answer. "
+                 + (_CB.CANT_TELL_WAYS if _CB.cant_tell(ledger) else _CB.SPLIT_WAYS),
+                 "", "  ")
         for _y, _c in (ledger.get('claims_over_gain') or {}).items():
             para(f"{_W}{_claims} for {_y} is {_money(_c['claimed'])}, "
                  f"{_money(_c['excess'])} more than {_y}'s net gain "
@@ -1288,6 +1455,19 @@ def _render_notes(lines: List[str], country: Any, item: Any, _claims: str, claim
                 item(f"{r['year']}'s NET GAIN(LOSS) has the return filed with "
                      f"another tool; the books' total is "
                      f"{_money(r['engine_net_gain'])}.")
+        _own = ledger.get('final_year', rows[-1]['year'])
+        for r in ledger['rows']:
+            if _proposed_split(r):
+                # (TJ-4882)
+                item(f"{r['year']}: its carry-back is split between the "
+                     f"{_claims} years in reach oldest first ({_proposed_split(r)})"
+                     + (", the ledger's proposal for its T1A, which `tjs "
+                        "close-year` records. If the T1A names other years, say "
+                        f"so: `carried_back = {{ {r['year']} = {{ YEAR = AMOUNT }} "
+                        "}` under [carryover]." if r['year'] == _own else
+                        ": a T1A names the years, and nothing on record keeps "
+                        "them." + ("" if _CB.cant_tell_text(ledger) else
+                                   f" Nothing of {_own} rests on which.")))
     else:
         item("The $3,000 ordinary-income offset is assumed used whenever "
              f"available; a {_claims} "
@@ -1663,11 +1843,12 @@ def _carryover_parser() -> argparse.ArgumentParser:
                              "year's); a year a lock seeds keeps the "
                              "lock's figure.")
     parser.add_argument("--carried-back-year", action="append", default=[],
-                        metavar="YEAR=AMOUNT",
+                        metavar="YEAR[:TARGET]=AMOUNT",
                         help="Canada: the net capital loss that year's return "
                              "carried back (T1A), where the ledger says it "
-                             "can't tell ([carryover] carried_back; the "
-                             "wrapper passes it).")
+                             "can't tell; YEAR:TARGET=AMOUNT, once for each "
+                             "year it went to, says which ([carryover] "
+                             "carried_back; the wrapper passes it).")
     parser.add_argument("--carried-in", type=float, default=None, metavar="AMOUNT",
                         help="Canada: the net capital loss the estimate takes "
                              "into the project year (the wrapper passes it).")
@@ -1863,7 +2044,9 @@ def _carryover_ledger(slip: List[Any], lock_info: Dict[int, Dict[str, Any]],
 
     if country == 'canada':
         ledger = _canada_ledger(args, nets, claimed, carried, locked_back,
-                                locked_applied, own_year, locked_opening, typed_opening)
+                                locked_applied, own_year, locked_opening, typed_opening,
+                                _recorded_answers(lock_info, args.project_year),
+                                _recorded_splits(lock_info, args.project_year))
     else:
         ledger = build_usa_ledger(nets, claimed, carried, locked_deduction,
                                   through_year=args.project_year)
@@ -1890,24 +2073,37 @@ def _carryover_ledger(slip: List[Any], lock_info: Dict[int, Dict[str, Any]],
     return slip_by, seeded, engine_net, filed_net, ledger, first_tx_year
 
 
-def _stated_backs(args: argparse.Namespace) -> Dict[int, float]:
-    """--carried-back-year YEAR=AMOUNT ([carryover] carried_back): {year: the
-    net capital loss that year's return carried back}; a line that is no such
-    amount stops the ledger."""
+def _stated_backs(args: argparse.Namespace
+                  ) -> Tuple[Dict[int, float], Dict[int, Dict[int, float]]]:
+    """--carried-back-year ([carryover] carried_back): ({year: the net capital
+    loss that year's return carried back}, {year: {earlier year: the part that
+    went to it}}). YEAR=AMOUNT is a total; YEAR:TARGET=AMOUNT, repeated, says
+    the years it went to, and the year's total is their sum (backlog TJ-4882).
+    A line that is no such amount stops the ledger."""
     out: Dict[int, float] = {}
+    to: Dict[int, Dict[int, float]] = {}
     for item in args.carried_back_year:
         try:
             y_s, v_s = item.split("=", 1)
+            y_s, _, t_s = y_s.partition(":")
             y, v = int(y_s), _finite(v_s, "--carried-back-year")
-            if v < 0 or y in out:
+            if v < 0 or (y in out and not (t_s and y in to)):
                 raise ValueError
+            if t_s:
+                t = int(t_s)
+                if not y - 3 <= t < y or t in to.get(y, {}):
+                    raise ValueError
+                to.setdefault(y, {})[t] = v
+                v = math.fsum(to[y].values())
         except ValueError:
             _out.put(f"taxjson-carryover: --carried-back-year expects "
-                     f"YEAR=AMOUNT, an amount >= 0, once a year, got {item!r}",
+                     f"YEAR=AMOUNT, an amount >= 0, once a year, or "
+                     f"YEAR:TARGET=AMOUNT, once for each of the 3 years before "
+                     f"YEAR the loss went back to, got {item!r}",
                      file=sys.stderr)
             raise SystemExit(2) from None
         out[y] = v
-    return out
+    return out, to
 
 
 def _year_figures(ledger: Dict[str, Any], year: int,
@@ -1918,8 +2114,9 @@ def _year_figures(ledger: Dict[str, Any], year: int,
     other_losses, else the last lock's); with the year's net (the RETURN row
     and the T5 box 18 gains, the figure the estimate nets too) it gives the
     loss the estimate has left, which caps the row's carry-back: a gain year
-    applies the balance to its gain first. None (the tool run alone): the
-    row's own carry-back and the ledger's balance."""
+    applies the balance to its gain first (the years it goes to cut with it,
+    the latest giving back first). None (the tool run alone): the row's own
+    carry-back and the ledger's balance."""
     upto = [r for r in ledger['rows'] if r['year'] <= year]
     row = upto[-1] if upto and upto[-1]['year'] == year else {}
     back = row.get('carried_back', 0.0)
@@ -1929,7 +2126,7 @@ def _year_figures(ledger: Dict[str, Any], year: int,
     left = max(0.0, carried_in - (row.get('net_gain') or 0.0))
     took = min(back, left)
     return {'carried_back': M.shown(took, 2),
-            'carried_back_to': row.get('carried_back_to', {}) if took > back - 0.005 else {},
+            'carried_back_to': _CB.trim_to(row.get('carried_back_to'), took),
             'carryforward': M.shown(left - took, 2), 'loss_left': M.shown(left, 2)}
 
 
@@ -1951,33 +2148,42 @@ class _Readings:
     year is unchecked.
 
     Two readings bracket what the unchecked years could have carried back:
-    the least and the most (claims met oldest first, the earliest year first,
-    as everywhere in the ledger). A balance the person gave narrows them:
-    [estimate] other_losses of the project year, or of the first lock after
-    those years (its opening, when typed in), is the balance carried in. The
-    unchecked years' losses, less what they applied to their gains, less what
-    they carried back, plus whatever they started from, leave that balance.
-    After a lock the start is known and the balance says what they carried
-    back; with no lock before them a loss from before the books may be in the
-    balance, so it sets a floor only: at least what the books leave less the
-    balance (the owner's ruling of 2026-11-21: the books are not taken as the
-    whole history). A year's own loss is not applied in that year; what a gain
-    year with no [carryover] claimed entry applied is anything from nothing
-    to its gain (the deduction is the taxpayer's choice, ITA s.111(1)(b)),
-    which lowers the floor. Floor and ceiling (the claims those years could
-    meet) may meet in one figure. A balance no reading fits narrows nothing.
+    nothing, and the most the books show (claims met oldest first, the
+    earliest year first, as everywhere in the ledger).
+
+    A balance the person gave ([estimate] other_losses of the project year,
+    or the typed opening of the first lock after those years) does not narrow
+    them. What it implies comes from the nets of the rebuilt years: their
+    losses, less what they applied, less what they carried back, plus what
+    they started from, leave that balance. Those nets are the books'
+    dispositions and the T5 box 18 gains named in the project; a T3 box 21
+    gain, an unnamed box 18 gain or the FX gain or loss on foreign cash on one
+    of those returns is in none of them (`carry_back.NOT_IN_NETS`), and nothing
+    in the project bounds it. So the figure the balance would give is shown
+    beside the question as a hint (`_by_books`: at least what the nets leave
+    less the balance, since a loss from before the books may be in it and a
+    gain year with no [carryover] claimed entry applied anything up to its
+    gain; after a lock, at most that too), and the person answers from the
+    T1A. Until 2026-11 it was taken as a floor, and a close with nothing asked
+    rested on a net the return may not have had (backlog TJ-4886; the floor
+    itself was the ruling of 2026-11-21 on TJ-4885).
 
     The question is the estimate's: with a loss left to split in the project
     year, does its carry-back differ between the readings? Then the ledger
-    says so and its rows are working; otherwise it folds on the most the
-    facts allow, and a year the balance settles says where its figure came
-    from (backlog TJ-1574, TJ-4880, TJ-4884, TJ-4885)."""
+    says so and its rows are working; otherwise it folds on what the books
+    show (backlog TJ-1574, TJ-4880, TJ-4884, TJ-4885)."""
 
     def __init__(self, build: Any, year: Optional[int], carried: Dict[int, Any],
                  locked_opening: Dict[int, float], typed: Dict[int, float],
-                 carried_in: Optional[float]) -> None:
+                 carried_in: Optional[float], claims: Optional[Dict[int, float]] = None,
+                 locked_back: Optional[Dict[int, float]] = None,
+                 on_record: Optional[Dict[int, Dict[int, float]]] = None) -> None:
         self.build, self.year, self.carried = build, year, carried
         self.locked_opening, self.typed, self.carried_in = locked_opening, typed, carried_in
+        # For `_orders`: [carryover] claimed, the locks' carry-backs, and the
+        # splits on record (the live table: `_Said.in_force`).
+        self.claims, self.locked_back = claims or {}, locked_back or {}
+        self.on_record = on_record if on_record is not None else {}
         self.locks = sorted(y for y in carried if year is not None and y < year)
 
     @staticmethod
@@ -2005,17 +2211,19 @@ class _Readings:
             spans.setdefault(into, []).append(y)
         return sorted(spans.items())
 
-    def _range(self, given: Dict[int, float], into: int, years: List[int],
-               took: Dict[int, float]) -> Tuple[float, float, Optional[float], float]:
-        """(least, most, the balance given, what the books leave) for what those
-        years carried back in all. With a lock before them the balance they
-        start from is known, and the balance given says what they carried back
-        (a range, with a gain year between). With none, a loss from before the
-        books may be in the balance given: it sets a floor only."""
+    def _by_books(self, given: Dict[int, float], into: Optional[int], years: List[int],
+                  took: Dict[int, float]) -> Optional[Dict[str, Any]]:
+        """What the balance the person gave at `into` would say those years
+        carried back in all, on the books' nets alone: a hint, never a reading
+        (the class's note). With a lock before them the balance they started
+        from is known, and the nets give a ceiling as well as a floor; with
+        none, a loss from before the books may be in the balance, and only a
+        floor. None with no such balance, when it says no more than the two
+        readings do, or when no reading of the nets leaves it."""
+        fact = self.typed.get(into) if into is not None else None
+        if fact is None or into is None:
+            return None
         most = sum(took[y] for y in years)
-        fact = self.typed.get(into)
-        if fact is None:
-            return 0.0, most, None, 0.0
         rows = [r for r in self.build({**given, **dict.fromkeys(years, 0.0)})['rows']
                 if r['year'] < into]
         left = rows[-1]['carryforward_balance'] if rows else 0.0
@@ -2023,14 +2231,19 @@ class _Readings:
                       if r['year'] >= years[0] and r['year'] not in self.carried)
         low = max(0.0, left - fact - applied)
         high = min(most, left - fact) if any(k < years[0] for k in self.locks) else most
-        if low > high + 0.005:
-            return 0.0, most, None, left    # (no reading leaves that balance)
-        return low, max(low, high), fact, left
+        if low > high + 0.005 or (low <= 0.005 and high >= most - 0.005):
+            return None
+        return {'years': [y for y in years if took[y] > 0.005] or list(years),
+                'into': int(into), 'carried_in': M.shown(fact, 2),
+                'books_leave': M.shown(left, 2), 'at_least': M.shown(low, 2),
+                'at_most': M.shown(max(low, high), 2),
+                'ceiling': 'balance' if high < most - 0.005 else 'claims',
+                'not_in_nets': list(_CB.NOT_IN_NETS)}
 
     def _typed_spans(self, ledger: Dict[str, Any], given: Dict[int, float]) -> Any:
         """(into, the balance given, the least and the most `ledger` leaves
-        there, whether a lock comes before) for each balance the person gave
-        that follows years they answered for."""
+        there, whether a lock comes before, the rebuilt years between) for each
+        balance the person gave that follows years they answered for."""
         for into, fact in sorted(self.typed.items()):
             before = max((k for k in self.locks if k < into), default=None)
             rows = [r for r in ledger['rows'] if r['year'] < into]
@@ -2039,19 +2252,36 @@ class _Readings:
                 continue
             left = rows[-1]['carryforward_balance']
             least = max(0.0, left - sum(r['available_to_apply'] for r in span))
-            yield into, fact, least, left, before is not None
+            # The years whose nets the balance rests on: from the first loss
+            # (after a lock, from the first year: a balance came in).
+            years = [r['year'] for r in span]
+            if before is None:
+                first = next((r['year'] for r in span if r['net_gain'] < -0.005),
+                             years[0])
+                years = [y for y in years if y >= first]
+            yield into, fact, least, left, before is not None, years
 
-    def clash(self, ledger: Dict[str, Any], given: Dict[int, float]
-              ) -> Optional[Tuple[int, float, float, float]]:
-        """(into, the balance given, the least and the most `ledger` leaves
-        there) for a balance the person gave that their [carryover]
-        carried_back entries contradict: one below what they leave, whatever
-        the gains between took. One above it is a contradiction only after a
-        lock: with none, the rest is a loss from before the books."""
-        for into, fact, least, left, fixed in self._typed_spans(ledger, given):
-            if fact < least - 0.005 or (fixed and fact > left + 0.005):
-                return into, fact, least, left
-        return None
+    def not_in_nets(self, ledger: Dict[str, Any], given: Dict[int, float]
+                    ) -> List[Dict[str, Any]]:
+        """A balance the person gave that their [carryover] carried_back
+        entries don't leave on the books' nets: [{into, carried_in, leaves,
+        leaves_least, years, and gain_not_in_nets (the balance is below what
+        they leave, whatever the gains between took) or loss_not_in_nets (above
+        it, after a lock)}]. Both are the person's figures, from filed forms,
+        and a capital gain or loss of those returns that the nets don't hold
+        makes both true, so neither is refused: the ledger says what must then
+        be so (backlog TJ-4886). A balance above what they leave with no lock
+        before is `before_books`."""
+        out = []
+        for into, fact, least, left, fixed, years in self._typed_spans(ledger, given):
+            entry = {'into': int(into), 'carried_in': M.shown(fact, 2),
+                     'leaves': M.shown(left, 2), 'leaves_least': M.shown(least, 2),
+                     'years': years}
+            if fact < least - 0.005:
+                out.append({**entry, 'gain_not_in_nets': M.shown(least - fact, 2)})
+            elif fixed and fact > left + 0.005:
+                out.append({**entry, 'loss_not_in_nets': M.shown(fact - left, 2)})
+        return out
 
     def before_books(self, ledger: Dict[str, Any], given: Dict[int, float]
                      ) -> List[Dict[str, Any]]:
@@ -2059,60 +2289,37 @@ class _Readings:
         the books: [{into, carried_in, leaves, before_books}]."""
         return [{'into': into, 'carried_in': M.shown(fact, 2), 'leaves': M.shown(left, 2),
                  'before_books': M.shown(fact - left, 2)}
-                for into, fact, _least, left, fixed in self._typed_spans(ledger, given)
+                for into, fact, _least, left, fixed, _years in self._typed_spans(ledger, given)
                 if not fixed and fact > left + 0.005]
 
-    def question(self, given: Dict[int, float]) -> Dict[str, Any]:
-        """{asked: the `carry_back_cant_tell` entry or None, free: the unchecked
-        years, fold: {year: what the ledger's rows take, where a balance given
-        limits them}, settled: {year: (amount, balance, into, least, most, what
-        the books leave)}, a year the balance settles alone; inferred: {year:
-        the `carried_back_inferred` entry} of every year a balance settles,
-        alone or with others (`years`: their total is what is settled)}."""
-        free = self.unchecked(given)
+    def _ends(self, given: Dict[int, float], free: List[int]
+              ) -> Tuple[Dict[int, float], Dict[int, float], List[Dict[str, Any]]]:
+        """({year: the least each unchecked year carried back, nothing}, {year:
+        the most, what the books show}, the hints a balance the person gave
+        adds)."""
         low: Dict[int, float] = {}
         high: Dict[int, float] = {}
-        fold: Dict[int, float] = {}
-        settled: Dict[int, Tuple[float, ...]] = {}
-        inferred: Dict[int, Dict[str, Any]] = {}
-        open_years: List[int] = []
+        hints: List[Dict[str, Any]] = []
         for into, years in self._spans(free):
-            parts = []
-            for side in (low, high):
-                took = {y: self.back(self.build({**given, **side}, {}), y) for y in years}
-                parts.append((took, self._range({**given, **side}, into, years, took)))
-            for side, (took, _rng), amount in ((low, parts[0], parts[0][1][0]),
-                                              (high, parts[1], parts[1][1][1])):
-                for y in years:
-                    side[y] = min(took[y], amount)
-                    amount -= side[y]
-                if amount > 0.005:              # (a loss the books don't hold)
-                    side[years[-1]] += amount
-            fact = parts[1][1][2]
-            if fact is not None:
-                fold.update((y, high[y]) for y in years)
-            if fact is not None and all(abs(low[y] - high[y]) <= 0.005 for y in years):
-                takers = [y for y in years if high[y] > 0.005 or parts[1][0][y] > 0.005]
-                if len(takers) == 1:
-                    settled[takers[0]] = (high[takers[0]], fact, into) + (
-                        parts[1][1][0], parts[1][1][1], parts[1][1][3])
-                _low, _high, _fact, _left = parts[1][1]
-                # After a lock the balance is the ceiling too, when it is
-                # under what the claims would allow.
-                _most = sum(parts[1][0][y] for y in years)
-                inferred.update((y, {
-                    'carried_in': M.shown(fact, 2), 'into': int(into),
-                    'at_least': M.shown(_low, 2), 'at_most': M.shown(_high, 2),
-                    'books_leave': M.shown(_left, 2), 'years': takers,
-                    'ceiling': 'balance' if _high < _most - 0.005 else 'claims',
-                    'basis': 'books_net'}) for y in takers)
-            else:
-                open_years += years
+            took = {y: self.back(self.build({**given, **high}, {}), y) for y in years}
+            hint = self._by_books({**given, **high}, into, years, took)
+            hints += [hint] if hint else []
+            low.update(dict.fromkeys(years, 0.0))
+            high.update(took)
+        return low, high, hints
+
+    def question(self, given: Dict[int, float]) -> Dict[str, Any]:
+        """{asked: the `carry_back_cant_tell` entry or None, split: the
+        `carry_back_split_cant_tell` entry or None (`_orders`; never both),
+        free: the unchecked years, low and high: {year: what each carried back}
+        in the two readings}."""
+        free = self.unchecked(given)
+        low, high, hints = self._ends(given, free)
         year = self.year or 0
         none = _year_figures(self.build({**given, **low}), year, self.carried_in)
         every = _year_figures(self.build({**given, **high}), year, self.carried_in)
-        out = {'asked': None, 'free': free, 'fold': fold, 'settled': settled,
-               'inferred': inferred}
+        out: Dict[str, Any] = {'asked': None, 'split': None, 'free': free,
+                               'low': low, 'high': high}
         if self.carried_in is None:
             # The tool run alone: no estimate to ask; a year with a loss of
             # its own, whose row's carry-back differs.
@@ -2121,15 +2328,15 @@ class _Readings:
                 return out
         elif none['loss_left'] <= 0.005 and every['loss_left'] <= 0.005:
             return out
-        if not open_years or abs(none['carried_back'] - every['carried_back']) <= 0.005:
+        if not free or abs(none['carried_back'] - every['carried_back']) <= 0.005:
+            out['split'] = self._orders(given, free)
             return out
         # The years to ask about: each one that carries back in some reading
         # (with those before it at nothing, the next one can).
         could: List[int] = []
         while True:
-            rows = self.build({**given, **dict.fromkeys(could, 0.0),
-                               **{y: v for y, v in high.items() if y not in open_years}}, {})
-            more = [y for y in open_years if y not in could
+            rows = self.build({**given, **dict.fromkeys(could, 0.0)}, {})
+            more = [y for y in free if y not in could
                     and (high[y] > 0.005 or self.back(rows, y) > 0.005)]
             if not more:
                 break
@@ -2139,100 +2346,569 @@ class _Readings:
             'books': {str(y): M.shown(high[y], 2) for y in sorted(could)},
             'least': {str(y): M.shown(low[y], 2) for y in sorted(could)},
             'answered': {str(y): M.shown(v, 2) for y, v in sorted(given.items())}}
+        # Where the books' reading could have gone to more than one claimed
+        # year, the line for it names them, the oldest first (TJ-4882).
+        books_to = {str(r['year']): r['carried_back_to']
+                    for r in self.build({**given, **high})['rows']
+                    if r['year'] in could and r.get('carried_back_split')}
+        if books_to:
+            out['asked']['books_to'] = books_to
+        told = [h for h in hints if set(h['years']) & set(could)]
+        if told:
+            out['asked']['by_books_nets'] = told
         return out
+
+    def _orders(self, given: Dict[int, float], free: List[int]) -> Optional[Dict[str, Any]]:
+        """The `carry_back_split_cant_tell` entry, None when the ledger can
+        tell: {years, unchecked, readings, more}. A T1A names the years a loss
+        goes back to, the filer's choice; `claimed` is one total per target
+        year, and a lock's `carried_back` or a plain [carryover] carried_back
+        amount one total per loss year. So a year before the project year with
+        no split on record (`on_record`: a by-target entry, a lock's
+        `carried_back_to`) has readings: for a year whose amount is known (a
+        lock's, an answer's, a rebuilt row a later lock checks), that amount
+        met along every order of the claimed years in its reach; for an
+        unchecked year, each of those cut after any number of years, down to
+        nothing (`_options`: the corners of what its return could have done;
+        any split between lies between them). Every combination of the years'
+        readings is folded, one year after the other, each on the rows the
+        earlier choices leave (`_walk`), up to `MAX_READINGS`. A combination
+        that leaves a locked row short of the carry-back its lock records,
+        where another does not, is one no return could have had, and is
+        dropped (`_short`). If the project year's figures (its carry-back, the
+        loss it carries forward, the years its carry-back goes to, which its
+        lock records) are the ledger's own in every reading left, nothing
+        rests on those years and nothing is asked. Otherwise the ledger says
+        it can't tell, with one reading for each set of figures, the ledger's
+        own order first: each is a line the ledger takes, and that settles
+        it. Past the bound the ledger asks too (`more`), never passes
+        (backlog TJ-4882; the owner's rulings of 2026-11-23)."""
+        year = self.year or 0
+        base = self.build(given)
+        mine = _year_figures(base, year, self.carried_in)
+        cands = [r['year'] for r in base['rows']
+                 if r['year'] < year and r['year'] not in self.on_record]
+        leaves: List[Tuple[Dict[int, Dict[int, float]], Dict[str, Any]]] = []
+        more = self._walk(given, free, cands, {}, {}, leaves)
+        if not any(choice for choice, _doc in leaves):
+            return None
+        least = min(self._short(doc) for _c, doc in leaves)
+        kept = [(c, doc) for c, doc in leaves if self._short(doc) <= least + 0.005]
+        figs = [_year_figures(doc, year, self.carried_in) for _c, doc in kept]
+        if not more and all(_same_figures(f, mine) for f in figs):
+            return None
+        readings: List[Dict[str, Any]] = []
+        seen: List[Dict[str, Any]] = []
+        for (choice, _doc), fig in zip(kept, figs):
+            if any(_same_figures(fig, f) for f in seen):
+                continue
+            seen.append(fig)
+            readings.append({
+                'to': {str(y): {str(t): M.shown(a, 2) for t, a in sorted(to.items())}
+                       for y, to in sorted(choice.items())},
+                'carried_back': fig['carried_back'], 'carryforward': fig['carryforward'],
+                'carried_back_to': dict(fig['carried_back_to'])})
+        years = sorted({int(y) for r in readings for y in r['to']})
+        out: Dict[str, Any] = {'years': years, 'unchecked': [y for y in years if y in free],
+                               'readings': readings[:self.SHOWN]}
+        if more or len(readings) > self.SHOWN:
+            # More sets of figures than are shown, or more combinations than
+            # were folded: the readings listed are not all there are.
+            out['more'] = True
+        return out
+
+    MAX_READINGS = 64
+    SHOWN = 6
+
+    def _walk(self, given: Dict[int, float], free: List[int], cands: List[int],
+              choice: Dict[int, Dict[int, float]], totals: Dict[int, float],
+              leaves: List[Any]) -> bool:
+        """Fold every combination of the open years' readings into `leaves`
+        ([(the choice: {year: {earlier year: amount}}, the ledger)]); True when
+        there are more than `MAX_READINGS`. A year with one reading is left to
+        the fold."""
+        if len(leaves) >= self.MAX_READINGS:
+            return True
+        if not cands:
+            leaves.append((dict(choice), self.build({**given, **totals}, to=choice)))
+            return False
+        y, rest = cands[0], cands[1:]
+        options = self._options(y, {**given, **totals}, choice, y in free)
+        if len(options) < 2:
+            return self._walk(given, free, rest, choice, totals, leaves)
+        more = False
+        for to in options:
+            said = {**totals, y: math.fsum(to.values())} if y in free else totals
+            more = self._walk(given, free, rest, {**choice, y: to}, said, leaves) or more
+        return more
+
+    def _options(self, y: int, given: Dict[int, float], choice: Dict[int, Dict[int, float]],
+                 unchecked: bool) -> List[Dict[int, float]]:
+        """What the return of `y` could have carried back, by target year, on
+        the rows `choice` leaves: the corners. The amount, where it is known
+        (a lock's carry-back, an answer in `given`, a rebuilt row a later lock
+        checks), met along each order of the claimed years in reach; for an
+        `unchecked` year, what the books could meet along each order, cut
+        after each year, and nothing. Each fill is the fold's own, a year at a
+        time: a claim's room and the balance are what the rows before leave.
+        Each order is filled twice: to the claims' room, and to the room less
+        what the locks after `y` must take from each claim (`_held_for`): the
+        most `y` can have carried to a year is short of the claim by what a
+        later lock's carry-back needs of it."""
+        import itertools
+        targets = [c for c in self.claims if y - 3 <= c < y and self.claims[c] > 0.005]
+        kw: Dict[str, Any] = {'opening': {}} if unchecked else {}
+        total = None
+        if not unchecked:
+            total = (max(0.0, float(self.locked_back.get(y) or 0.0)) if y in self.carried
+                     else self.back(self.build(given, to=choice), y))
+            if total <= 0.005:
+                return [{}]
+        options: List[Dict[int, float]] = []
+
+        def add(to: Dict[int, float]) -> None:
+            to = {t: a for t, a in to.items() if a > 0.005}
+            if not any(_same_to(to, o) for o in options):
+                options.append(to)
+
+        def got(to: Dict[int, float], t: int, **how: Any) -> float:
+            """What `y` carries back to `t` after the years of `to` before it:
+            its carry-back less theirs (the fold meets the oldest year first,
+            whatever the order tried here)."""
+            doc = self.build({**given, **how.pop('said', {})}, to={**choice, y: to}, **how)
+            before = math.fsum(a for c, a in to.items() if c != t)
+            return max(0.0, min(to[t], M.shown(self.back(doc, y) - before, 2)))
+
+        held = {t: self._held_for(t, y) for t in targets}
+        for order, keep in itertools.product(itertools.permutations(targets),
+                                             (False, True) if any(held.values()) else (False,)):
+            fill: Dict[int, float] = {}
+            for t in order:
+                left = 1e15 if total is None else total - math.fsum(fill.values())
+                if left <= 0.005:
+                    break
+                if keep and held[t] > 0.005:
+                    # The claim under t as it stands (a row said to carry back
+                    # without limit takes all of it), less what is held.
+                    room = got({**fill, t: 1e15}, t, said={y: 1e15})
+                    left = min(left, max(0.0, room - held[t]))
+                fill[t] = got({**fill, t: left}, t, **kw) if left > 0.005 else 0.0
+                if total is None:
+                    add(fill)
+            if total is not None and abs(math.fsum(fill.values()) - total) <= 0.005 * (
+                    len(fill) + 1):
+                add(fill)
+        if total is None:
+            add({})
+        return options
+
+    def _held_for(self, t: int, y: int) -> float:
+        """What the locks after `y` must take of the claim under `t`: a lock's
+        split on record, or its carry-back less all the other claims in its
+        reach could hold."""
+        held = 0.0
+        for k in self.locks:
+            if not y < k <= t + 3:
+                continue
+            if k in self.on_record:
+                held += max(0.0, self.on_record[k].get(t, 0.0))
+                continue
+            others = sum(a for c, a in self.claims.items() if k - 3 <= c < k and c != t)
+            held += max(0.0, float(self.locked_back.get(k) or 0.0) - others)
+        return held
+
+    def _short(self, doc: Dict[str, Any]) -> float:
+        """How far a ledger's locked rows fall short of the carry-backs their
+        locks record: a reading short of a lock where another is not is one
+        no return could have had."""
+        short = 0.0
+        for r in doc['rows']:
+            y = r['year']
+            if y in self.carried and self.year is not None and y < self.year:
+                short += max(0.0, float(self.locked_back.get(y) or 0.0) - r['carried_back'])
+                short += sum(max(0.0, a - r.get('carried_back_to', {}).get(str(t), 0.0))
+                             for t, a in self.on_record.get(y, {}).items())
+        return short
+
+
+def _same_figures(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    """Whether two `_year_figures` are one: the carry-back, the loss carried
+    forward, and the years the carry-back goes to."""
+    to_a, to_b = a.get('carried_back_to') or {}, b.get('carried_back_to') or {}
+    return (abs(a['carried_back'] - b['carried_back']) <= 0.005
+            and abs(a['carryforward'] - b['carryforward']) <= 0.005
+            and all(abs(to_a.get(k, 0.0) - to_b.get(k, 0.0)) <= 0.005
+                    for k in set(to_a) | set(to_b)))
+
+
+class _Said:
+    """The answers to what a Canadian ledger can't tell, and which of them it
+    takes: [carryover] carried_back's entries (`stated`: {year: total}, a
+    by-target entry's sum included; `stated_to`: {year: {earlier year:
+    amount}}), the answers earlier closes recorded (`lock_stated`: {year:
+    (amount, that lock's year)}; `lock_to`: ({year: (split, that lock's year)},
+    {locked year: its own carry-back by year})).
+
+    An entry answers a question: it is used where the ledger asks about its
+    year (`take`), noted as no longer needed where a lock or the books say the
+    same or nothing rests on it, and refused where it contradicts them, a
+    recorded answer, or what that year could carry back (`others`,
+    `check_rows`). A recorded answer is the same person's figure: it answers
+    where the project has no entry of its own, so a question is asked once
+    along a chain of years, and an entry that differs from it is refused,
+    naming both. A lock's own `carried_back_to` is the record of that return
+    and always stands. The project year's by-target entry says how its own
+    carry-back is split (the owner's rulings of 2026-11-21 and 2026-11-23;
+    backlog TJ-1574, TJ-4880, TJ-4882, TJ-4886).
+
+    `use`: the totals in force for years with no lock; `in_force`: the splits
+    the fold follows; `to_said`: {year: ("entry" or "lock", the lock's year)}
+    for each of those; `from_lock`: {year: the lock whose answer is in use}."""
+
+    def __init__(self, year: Optional[int], stated: Dict[int, float],
+                 stated_to: Dict[int, Dict[int, float]],
+                 lock_stated: Optional[Dict[int, Tuple[float, int]]], lock_to: Any,
+                 carried: Dict[int, Any], locked_back: Dict[int, float]) -> None:
+        self.year, self.stated, self.stated_to = year, stated, stated_to
+        self.recorded = dict(lock_stated or {})
+        self.recorded_to, self.own_to = lock_to or ({}, {})
+        self.carried, self.locked_back = carried, locked_back
+        self.use: Dict[int, float] = {}
+        self.from_lock: Dict[int, int] = {}
+        self.in_force: Dict[int, Dict[int, float]] = {
+            y: dict(to) for y, to in self.own_to.items()}
+        self.to_said: Dict[int, Tuple[str, Optional[int]]] = {
+            y: ('lock', y) for y in self.own_to}
+        self.notes: List[str] = []
+
+    def _put(self, y: int, to: Dict[int, float], how: str, lock: Optional[int]) -> None:
+        self.in_force[y], self.to_said[y] = dict(to), (how, lock)
+        if y not in self.carried:
+            self.use[y] = math.fsum(to.values())
+
+    def _against_records(self, y: int) -> None:
+        """Refuse a by-target entry that differs from a recorded answer, or
+        from the total its year's lock records."""
+        mine = self.stated_to[y]
+        total = math.fsum(mine.values())
+        rec_to, rec = self.recorded_to.get(y), self.recorded.get(y)
+        if rec_to is not None and not _same_to(mine, rec_to[0]):
+            _refuse_stated(
+                f"[carryover] carried_back says {y} carried back "
+                f"{_by_year(mine)}, but {rec_to[1]}'s close-year lock "
+                f"records your answer {_by_year(rec_to[0])} for it "
+                f"(carry_back_stated_to): correct that entry in taxjson.toml, or "
+                f"close {rec_to[1]} again on the right one (`tjs close-year --force` "
+                f"in its project)")
+        if rec_to is None and rec is not None and abs(total - rec[0]) > 0.005:
+            _refuse_stated(_differs_from_record(y, total, rec))
+        locked = float(self.locked_back.get(y) or 0.0)
+        if y in self.carried and abs(total - locked) > 0.005:
+            _refuse_stated(
+                f"[carryover] carried_back says {y} carried back "
+                f"{_by_year(mine)}, "
+                f"but {y}'s close-year lock records {M.shown(locked, 2):,.2f}: the "
+                f"entry says which years that went to; make its amounts add up to "
+                f"it in taxjson.toml")
+
+    def take(self, q: Dict[str, Any]) -> bool:
+        """Take the entries and recorded answers for the years `q` (a
+        `_Readings.question`) asks about; whether any was new. A total answers
+        for a year with no lock; a split by target year, for any year."""
+        amount = set(q['asked']['years']) if q['asked'] else set()
+        split = set(q['split']['years']) if q['split'] else set()
+        new = False
+        for y in sorted(amount | split):
+            if y in self.use or y in self.in_force:
+                continue
+            total_ok = y not in self.carried and (y in amount or y in q['free'])
+            rec_to, rec = self.recorded_to.get(y), self.recorded.get(y)
+            if y in self.stated_to:
+                self._against_records(y)
+                self._put(y, self.stated_to[y], 'entry', None)
+            elif y in self.stated and total_ok:
+                said = (math.fsum(rec_to[0].values()), rec_to[1]) if rec_to else rec
+                if said is not None and abs(self.stated[y] - said[0]) > 0.005:
+                    _refuse_stated(_differs_from_record(y, self.stated[y], said))
+                if rec_to:      # the years that answer named stand
+                    self._put(y, rec_to[0], 'lock', rec_to[1])
+                self.use[y] = self.stated[y]
+            elif rec_to is not None:
+                self._put(y, rec_to[0], 'lock', rec_to[1])
+                self.from_lock[y] = rec_to[1]
+            elif rec is not None and total_ok:
+                self.use[y], self.from_lock[y] = rec
+            else:
+                continue
+            new = True
+        return new
+
+    def others(self, first: Dict[str, Any], final: Dict[str, Any],
+               known: Dict[str, Any], moves: Any) -> Optional[int]:
+        """The entries no question took: refused where they name the project
+        year or a later one (a by-target entry for the project year is its own
+        split: `_own_split_checked`) or contradict a lock, the books or an
+        answer a close recorded (asked about here or not: the record stands),
+        else noted as no longer needed (`notes`). Never without folding it:
+        `moves(y)` says whether the entry for `y`, folded, changes the project
+        year's figures; one that does is an answer to a question the ledger did
+        not think to ask, and is taken (the year returned, for the caller to
+        ask again; None when none was). `first`: the question with no answer in
+        use; `known`: the ledger then."""
+        year = self.year
+        self.notes = []
+        asking = set(final['split']['years']) if final['split'] else set()
+        for y, v in sorted(self.stated.items()):
+            if y in self.use or self.to_said.get(y, ('', None))[0] == 'entry':
+                continue
+            if y == year and y in self.stated_to:
+                continue
+            if year is None or y >= year:
+                _refuse_stated(
+                    f"[carryover] carried_back names {y}, not a year before the "
+                    f"project year: its carry-back is what `tjs carryover` "
+                    f"computes; remove that entry from taxjson.toml"
+                    + (f" (for {year} itself, `{year} = {{ YEAR = AMOUNT }}` says "
+                       f"which years its carry-back goes to)" if y == year else ""))
+            mine, own = self.stated_to.get(y), self.own_to.get(y)
+            if mine is not None and own is not None and not _same_to(mine, own):
+                _refuse_stated(
+                    f"[carryover] carried_back says {y} carried back "
+                    f"{_by_year(mine)}, but {y}'s close-year lock "
+                    f"records {_by_year(own)} (carried_back_to): "
+                    f"remove that entry from taxjson.toml")
+            rec_to, rec = self.recorded_to.get(y), self.recorded.get(y)
+            if mine is not None and own is None:
+                self._against_records(y)
+            elif mine is None and (rec_to or rec) is not None:
+                said = (math.fsum(rec_to[0].values()), rec_to[1]) if rec_to else rec
+                if abs(v - said[0]) > 0.005:
+                    _refuse_stated(_differs_from_record(y, v, said))
+            moot = y in first['free']
+            shows = (float(self.locked_back.get(y) or 0.0) if y in self.carried
+                     else _Readings.back(known, y))
+            by = (f"{y}'s close-year lock records" if y in self.carried
+                  else "the books and the lock after it show")
+            if not moot and abs(v - shows) > 0.005:
+                _refuse_stated(
+                    f"[carryover] carried_back says {y} carried back "
+                    f"{M.shown(v, 2):,.2f}, but {by} {M.shown(shows, 2):,.2f}: the "
+                    f"line answers `tjs carryover` only where it can't tell; remove "
+                    f"that entry from taxjson.toml")
+            if own is None and (mine is not None or y not in self.carried) and moves(y):
+                if mine is not None:
+                    self._put(y, mine, 'entry', None)
+                else:
+                    self.use[y] = v
+                return y
+            if y in asking:
+                continue    # a total: the question still open says what it needs
+            self.notes.append(
+                f"[carryover] carried_back's entry for {y} is no longer needed: "
+                + (f"nothing of {year} rests on it" if moot else
+                   f"{by} the same" if mine is None or own is not None else
+                   f"{by} the same in all, and nothing of {year} rests on which "
+                   f"years it went to")
+                + "; it can be removed from taxjson.toml")
+        return None
+
+    def check_rows(self, ledger: Dict[str, Any], settled: bool) -> None:
+        """Mark the rows whose carry-back is the person's figure, and refuse
+        an answer above what its year could carry back: in all, or (`settled`:
+        no question is open, so every earlier split is on record) to one of
+        the years it names."""
+        for r in ledger['rows']:
+            y = r['year']
+            how, lock = self.to_said.get(y, (None, None))
+            got = r.get('carried_back_to', {})
+            if how is not None and lock != y and settled:
+                for t, a in sorted(self.in_force[y].items()):
+                    if a - got.get(str(t), 0.0) > 0.005:
+                        _refuse_stated(_no_room(y, t, a, got.get(str(t), 0.0), lock))
+            if y in self.use:
+                if self.use[y] - r['carried_back'] > 0.005:
+                    _refuse_stated(
+                        (f"{self.from_lock[y]}'s close-year lock records your "
+                         f"answer that" if y in self.from_lock
+                         else "[carryover] carried_back says")
+                        + f" {y} carried back "
+                        f"{M.shown(self.use[y], 2):,.2f}, more than the "
+                        f"{M.shown(r['carried_back'], 2):,.2f} of [carryover] claimed "
+                        f"amounts a {y} loss could meet (those under the 3 "
+                        f"years before it, not yet met): "
+                        + (f"say what {y} carried back under [carryover] "
+                           f"carried_back in taxjson.toml, and close "
+                           f"{self.from_lock[y]} again on it"
+                           if y in self.from_lock else
+                           "correct that entry in taxjson.toml"))
+                r['carried_back_stated'] = r['carried_back']
+                if y in self.from_lock:
+                    r['carried_back_stated_in_lock'] = self.from_lock[y]
+            if how is not None:
+                r['carried_back_to_said'] = how
+                if lock is not None:
+                    r['carried_back_to_in_lock'] = lock
+
+    def answered(self) -> Dict[str, Any]:
+        """The answers in use, as the line that keeps them writes them: {year:
+        total, or {earlier year: amount}}. A lock's own record is not one."""
+        out: Dict[str, Any] = {str(y): M.shown(v, 2) for y, v in self.use.items()}
+        out.update({str(y): {str(t): M.shown(a, 2) for t, a in sorted(to.items())}
+                    for y, to in self.in_force.items() if self.to_said[y][1] != y})
+        return dict(sorted(out.items()))
+
+
+def _by_year(to: Dict[int, float]) -> str:
+    """A carry-back and the years it went to, for a message: "40.00 to 2021",
+    "60.00 to 2020 (40.00) and 2021 (20.00)"."""
+    return f"{M.shown(math.fsum(to.values()), 2):,.2f}{_CB.went_to(to)}"
+
+
+def _same_to(a: Dict[int, float], b: Dict[int, float]) -> bool:
+    return all(abs(a.get(t, 0.0) - b.get(t, 0.0)) <= 0.005 for t in set(a) | set(b))
+
+
+def _differs_from_record(y: int, mine: float, rec: Tuple[float, int]) -> str:
+    return (f"[carryover] carried_back says {y} carried back "
+            f"{M.shown(mine, 2):,.2f}, but {rec[1]}'s close-year lock "
+            f"records your answer {M.shown(rec[0], 2):,.2f} for it "
+            f"(carry_back_stated): correct that entry in taxjson.toml, or "
+            f"close {rec[1]} again on the right one (`tjs close-year "
+            f"--force` in its project)")
+
+
+def _no_room(y: int, t: int, said: float, room: float, lock: Optional[int]) -> str:
+    """Why a split by target year can't be: `y` is said to have carried `said`
+    back to `t`, where only `room` of the claim under `t` was left to meet."""
+    return ((f"{lock}'s close-year lock records your answer that {y} carried "
+             if lock is not None else f"[carryover] carried_back says {y} carried ")
+            + f"{M.shown(said, 2):,.2f} back to {t}, more than the "
+            f"{M.shown(room, 2):,.2f} of the [carryover] claimed amount under {t} "
+            f"that a {y} loss could meet (what the carry-backs before it left of "
+            f"it): "
+            + (f"say what {y} carried back under [carryover] carried_back in "
+               f"taxjson.toml, and close {lock} again on it" if lock is not None
+               else f"correct the entry for {y}, the one for an earlier year, or "
+                    f"`claimed`, in taxjson.toml"))
+
+
+def _own_split_checked(said: _Said, build: Any, carried_in: Optional[float]) -> None:
+    """The project year's by-target entry says which years its carry-back goes
+    to, not how much goes back: the amounts add up to what the ledger folds
+    without it (the claims in reach no earlier loss met, as far as the loss
+    left goes), or the entry is refused, naming both. Checked once the earlier
+    years are settled, against the fold that uses their answers, and only then
+    put in force: an entry in force while the earlier years' readings are
+    compared would cap every one of them to its own total (backlog TJ-4882)."""
+    year = said.year
+    if year is None or year not in said.stated_to:
+        return
+    own = said.stated_to[year]
+    base = _year_figures(build(said.use), year, carried_in)['carried_back']
+    total = math.fsum(own.values())
+    if abs(total - base) > 0.005:
+        _refuse_stated(
+            f"[carryover] carried_back says {year} carries back "
+            f"{_by_year(own)}, but "
+            f"{year} carries back {M.shown(base, 2):,.2f}: the [carryover] claimed "
+            f"amounts under the 3 years before it that no earlier loss met, as "
+            f"far as the loss it has left goes. The entry for the project year "
+            f"says which years that goes to: make its amounts add up to "
+            f"{M.shown(base, 2):,.2f} in taxjson.toml"
+            + (", or remove it" if base <= 0.005 else ""))
+    said.in_force[year], said.to_said[year] = dict(own), ('entry', None)
 
 
 def _canada_ledger(args: argparse.Namespace, nets: Dict[int, Dict[str, float]],
                    claimed: Dict[int, float], carried: Dict[int, Any],
                    locked_back: Dict[int, float], locked_applied: Dict[int, float],
                    own_year: Optional[int], locked_opening: Dict[int, float],
-                   typed_opening: Optional[Dict[int, float]] = None) -> Dict[str, Any]:
+                   typed_opening: Optional[Dict[int, float]] = None,
+                   lock_stated: Optional[Dict[int, Tuple[float, int]]] = None,
+                   lock_to: Any = None) -> Dict[str, Any]:
     """carryover: Canada's ledger, with what it can't tell (`_Readings`) and
-    the person's answers. `typed_opening`: {lock year: the opening its lock
-    took from [estimate] other_losses}; --carried-in / --carried-in-typed: the
-    balance the estimate takes into the project year, and whether the person
-    gave it. [carryover] carried_back answers a question per year: used where
-    the ledger asks, noted as no longer needed where a lock, the books or a
-    balance given now say the same or nothing rests on it, refused where it
-    contradicts them or is more than the year could carry back (the owner's
-    ruling of 2026-11-21; backlog TJ-1574, TJ-4880)."""
+    the person's answers (`_Said`). `typed_opening`: {lock year: the opening
+    its lock took from [estimate] other_losses}; --carried-in /
+    --carried-in-typed: the balance the estimate takes into the project year,
+    and whether the person gave it. [carryover] carried_back answers a question
+    per year: used where the ledger asks, noted as no longer needed where a
+    lock or the books now say the same or nothing rests on it, refused where
+    it contradicts them or is more than the year could carry back (the owner's
+    ruling of 2026-11-21; backlog TJ-1574, TJ-4880). A balance the person gave
+    refuses no entry (`_Readings.not_in_nets`; TJ-4886). `lock_stated` and
+    `lock_to` (`_recorded_answers`, `_recorded_splits`): the answers earlier
+    closes recorded and the locks' own carry-backs by target year. The answers
+    are taken a question at a time: one answer can open the next question (a
+    total says how much a year carried back, and which claimed years it went
+    to can still matter: `_Readings._orders`; TJ-4882). No entry is set aside
+    unfolded: one that changes the project year's figures is taken
+    (`_Said.others`)."""
     year = args.project_year
-    stated = _stated_backs(args)
+    stated, stated_to = _stated_backs(args)
     carried_in = getattr(args, 'carried_in', None)
     typed = dict(typed_opening or {})
     if year is not None and carried_in is not None and getattr(args, 'carried_in_typed', False):
         typed[year] = carried_in
+    said = _Said(year, stated, stated_to, lock_stated, lock_to, carried, locked_back)
 
-    def build(given: Dict[int, float], opening: Any = locked_opening) -> Dict[str, Any]:
+    def build(given: Dict[int, float], opening: Any = locked_opening,
+              to: Optional[Dict[int, Dict[int, float]]] = None) -> Dict[str, Any]:
+        """The fold on the answers in use; `to`: more splits to follow (a
+        reading `_Readings._orders` tries, an entry `moves` folds)."""
+        totals = {**given, **{y: math.fsum(t.values()) for y, t in said.in_force.items()
+                              if y not in carried or y == own_year}}
         return build_canada_ledger(
             nets, claimed, carried, locked_back, locked_applied, own_year=own_year,
-            through_year=year, locked_opening=opening, stated=given)
+            through_year=year, locked_opening=opening, stated=totals,
+            back_to={**said.in_force, **(to or {})})
 
-    readings = _Readings(build, year, carried, locked_opening, typed, carried_in)
-    first = readings.question({})
-    asked = first['asked']['years'] if first['asked'] else []
-    use = {y: v for y, v in stated.items() if y in asked}
-    known = build(first['fold'])
-    for y, v in sorted(stated.items()):
-        if y in use:
-            continue
-        if year is None or y >= year:
-            _refuse_stated(
-                f"[carryover] carried_back names {y}, not a year before the "
-                f"project year: its carry-back is what `tjs carryover` "
-                f"computes; remove that entry from taxjson.toml")
-        moot = y in first['free'] and y not in first['settled']
-        shows = (float(locked_back.get(y) or 0.0) if y in carried
-                 else first['settled'][y][0] if y in first['settled']
-                 else _Readings.back(known, y))
-        by = (f"{y}'s close-year lock records" if y in carried
-              else (f"the {M.shown(first['settled'][y][1], 2):,.2f} carried into "
-                    f"{first['settled'][y][2]} ([estimate] other_losses) says")
-              if y in first['settled'] else "the books and the lock after it show")
-        if not moot and abs(v - shows) > 0.005:
-            _refuse_stated(
-                f"[carryover] carried_back says {y} carried back "
-                f"{M.shown(v, 2):,.2f}, but {by} {M.shown(shows, 2):,.2f}: the "
-                f"line answers `tjs carryover` only where it can't tell; remove "
-                f"that entry from taxjson.toml")
-        from taxjson.lib.out import note as _note
-        _note(f"[carryover] carried_back's entry for {y} is no longer needed: "
-              + (f"nothing of {year} rests on it" if moot else f"{by} the same")
-              + "; it can be removed from taxjson.toml")
-    final = readings.question(use)
-    ledger = build({**use, **final['fold']})
-    for r in ledger['rows']:
-        y = r['year']
-        if y in final['inferred']:
-            r['carried_back_inferred'] = final['inferred'][y]
-        if y not in use:
-            continue
-        if use[y] - r['carried_back'] > 0.005:
-            _refuse_stated(
-                f"[carryover] carried_back says {y} carried back "
-                f"{M.shown(use[y], 2):,.2f}, more than the "
-                f"{M.shown(r['carried_back'], 2):,.2f} of [carryover] claimed "
-                f"amounts a {y} loss could meet (those under the 3 "
-                f"years before it, not yet met): correct that entry in "
-                f"taxjson.toml")
-        r['carried_back_stated'] = r['carried_back']
-    clash = readings.clash(ledger, use)
-    if clash and not readings.clash(known, {y: 0.0 for y in use}):
-        _into, _fact, _least, _most = clash
-        _refuse_stated(
-            "[carryover] carried_back ("
-            + ", ".join(f"{y} = {M.shown(v, 2):.2f}" for y, v in sorted(use.items()))
-            + f") leaves {M.shown(_most, 2):,.2f} carried into {_into}"
-            + (f" ({M.shown(_least, 2):,.2f} if the gains between took all they "
-               f"could)" if _most - _least > 0.005 else "")
-            + f", but [estimate] other_losses says {M.shown(_fact, 2):,.2f}"
-            + ("" if _fact > _most else ", less than that")
-            + ": correct whichever is wrong in taxjson.toml")
-    held = readings.before_books(ledger, use)
+    def moves(y: int) -> bool:
+        """Whether the entry for `y`, folded, changes the project year's figures."""
+        to = stated_to.get(y)
+        with_it = {**said.use, **({} if y in carried else {y: stated[y]})}
+        return not _same_figures(
+            _year_figures(build(said.use), year or 0, carried_in),
+            _year_figures(build(with_it, to={y: to} if to is not None else None),
+                          year or 0, carried_in))
+
+    readings = _Readings(build, year, carried, locked_opening, typed, carried_in,
+                         claimed, locked_back, said.in_force)
+    first = final = readings.question({})
+    known = build({})
+    while True:
+        while said.take(final):
+            final = readings.question(said.use)
+        if said.others(first, final, known, moves) is None:
+            break
+        final = readings.question(said.use)
+    from taxjson.lib.out import note as _note
+    for text in said.notes:
+        _note(text)
+    settled = not (final['asked'] or final['split'])
+    if settled:
+        _own_split_checked(said, build, carried_in)
+    ledger = build(said.use)
+    said.check_rows(ledger, settled)
+    off = readings.not_in_nets(ledger, said.use)
+    for h in off:
+        # Whose figures they are, for the sentence: a balance typed when an
+        # earlier year was closed, answers read from a lock (a later project
+        # has neither in its taxjson.toml).
+        if h['into'] != year:
+            h['carried_in_lock'] = h['into']
+        asked = [said.from_lock.get(y) for y in said.use if y < h['into']]
+        if asked and all(k is not None for k in asked):
+            h['answered_in_lock'] = max(k for k in asked if k is not None)
+    if off:
+        ledger['carried_in_not_in_nets'] = off
+    held = readings.before_books(ledger, said.use)
     if held:
         ledger['carried_in_before_books'] = held
     if final['asked']:
-        ledger['carry_back_cant_tell'] = final['asked']
+        ledger['carry_back_cant_tell'] = {**final['asked'], 'answered': said.answered()}
+    elif final['split']:
+        ledger['carry_back_split_cant_tell'] = {**final['split'],
+                                                'answered': said.answered()}
     return ledger
 
 

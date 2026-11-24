@@ -148,7 +148,10 @@ class TestTJ0985TradeCancelSurvivesTaxtext(unittest.TestCase):
     def test_the_token_is_written_and_read_back(self):
         from taxjson.lib import tt_format as CT
         line = CT.tx_to_tt_line(self.CANCEL)
-        self.assertTrue(line.endswith(" type=trade_cancel"), line)
+        # (then the trade date its line's settlement date is not:
+        # backlog TJ-5213)
+        self.assertTrue(line.endswith(" type=trade_cancel traded=2025-06-02"),
+                        line)
         row = CT.parse_tt_line(line, "margin")
         self.assertEqual(row["type"], "trade_cancel")
         self.assertNotIn("type=", CT.tx_to_tt_line(self.SALE))

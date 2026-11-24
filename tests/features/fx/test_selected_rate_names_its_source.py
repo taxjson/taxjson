@@ -62,8 +62,10 @@ class TestTJ0986SourceOfTheSelectedRate(unittest.TestCase):
         self.assertIn("1 from a rates file without a source column", text)
 
     def test_a_skipped_row_does_not_reserve_the_day(self):
+        # (A row to another currency is the one the loader still skips:
+        # a rate that is no plain decimal stops it, TJ-5045.)
         _h, sources = self._sources(
-            "2025-06-02 12:00:00 USD CAD 1_25 yahoo\n"
+            "2025-06-02 12:00:00 USD EUR 1_25 yahoo\n"
             "2025-06-02 12:00:00 USD EUR 1.10 yahoo\n"
             "2025-06-02 16:00:00 USD CAD 1.50 boc\n"
             "2025-06-03 16:00:00 USD CAD 1.40 boc\n"

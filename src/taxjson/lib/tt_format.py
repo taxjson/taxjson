@@ -24,10 +24,13 @@ from typing import Any, Dict, Optional
 from datetime import datetime
 from pathlib import Path
 
-from taxjson.lib.futures_prefixes import FUTURES_PREFIXES
+from taxjson.lib.futures_prefixes import FUTURES_PREFIXES, canonical_futures_symbol
 from taxjson.lib.derivative_checks import _derivative_kind, _rename_derivative_check
-from taxjson.model.evidence import (EvidenceError, corp_cash_of_tt, corp_cash_tt,
+from taxjson.model.evidence import (EvidenceError, commission_refunds_of_tt,
+                                    commission_refunds_tt, corp_cash_of_tt, corp_cash_tt,
                                     settle_native_of_tt, settle_native_tt)
+from taxjson.lib.row_types import (CASH_LEG_CASH, CASH_LEG_KINDS, CASH_LEG_NONE,
+                                   CASH_LEG_REWARD)
 from taxjson.model import money as M
 
 
@@ -160,6 +163,78 @@ _FACT_ACTIONS = ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'ADJUST')
 _CORP_KEYS = {'corp': 'corp_event_id', 'election': 'corp_election',
               'parent_qty': 'corp_parent_qty', 'cash': 'corp_cash'}
 _CORP_ACTIONS = ('BUYSELL', 'ASSIGN') + _FACT_ACTIONS
+# Optional cash facts at the end of a trade, income or ADJUST line, which
+# the FX-on-cash ledgers read (lib/cash_legs, lib/fx_cash_v2). A parser's
+# row says them by its wording and its source file, which a .tt line
+# does not keep: a json -> tt -> json round trip read a crypto-for-crypto
+# leg and an in-kind reward back as cash trades, a broker's cash return
+# of capital as no cash, and a refunded commission as paid net on the
+# trade's date (backlog TJ-5036).
+# `cash_leg=` (the row's `cash_leg`, row_types CASH_LEG_KINDS): `none`,
+# the line's amount is a value and no cash moved; `reward`, a reward
+# paid in the line's SYMBOL (cash only where that symbol is); `cash`,
+# the amount was paid in cash (an ADJUST of type=roc a broker paid, a
+# corp= line's own cash leg). Without it a line reads as it always did:
+# a trade or an income line moved its amount in cash (a corp= line
+# none but its cash=), an ADJUST none.
+# `refunds=` (a BUYSELL / ASSIGN line; the row's `commission_refunds`):
+# the commission refunds the line's TOTAL is net of, `<date>:<amount>`
+# joined by `;`: the commission left in full on the line's date and
+# each refund came in on its own.
+CASH_LEG_KEY = 'cash_leg'
+REFUNDS_KEY = 'refunds'
+_CASH_KEYS = {CASH_LEG_KEY: 'cash_leg', REFUNDS_KEY: 'commission_refunds'}
+# The lines that take each `cash_leg=` value (_cash_leg_problem).
+_CASH_LEG_NONE_ACTIONS = ('BUYSELL', 'ASSIGN', 'DIVIDEND', 'DIVIDEND_IN_LIEU',
+                          'TAX')
+_CASH_LEG_REWARD_ACTIONS = ('BUYSELL', 'DIVIDEND')
+_REFUND_ACTIONS = ('BUYSELL', 'ASSIGN')
+# The tokens parse_tt_line takes off a line for _check_corp.
+_TAIL_KEYS = (*_CORP_KEYS, *_CASH_KEYS)
+# Optional `settled=YYYY-MM-DD` at the end of any row line with a time
+# column: the row's settlement date, when it is not the line's date. A
+# line has one date, read as the trade (or pay) date and the settlement
+# date alike; an income row is written with the day it was paid
+# (TJ-0862) and a trade-basis book's trade with its trade date, so the
+# day the cash settled was lost, and the FX-on-cash ledgers, which walk
+# a row's cash on its settlement date, walked it on another day, in
+# another year across a year end (backlog TJ-5211). On or after the
+# line's date; it is the row's `date_settle`, part of its id.
+SETTLED_KEY = 'settled'
+# Optional `traded=YYYY-MM-DD`, the other way round: the row's trade
+# date, when the line's date is its settlement date (a trade written on
+# the settle basis, Canada's). On or before the line's date; it is the
+# row's `date`, part of its id, and the line's date stays the row's
+# `date_settle`. Read back without it the trade date was the settlement
+# date: `tjs t1135`'s cash on trade dates moved a day or two (backlog
+# TJ-5213). A line carries one of the two, never both.
+TRADED_KEY = 'traded'
+# The most days a `settled=` or a `traded=` date may be from its line's
+# date: a longer gap is a typo'd year, never a settlement cycle (the
+# reader refuses it; the writer has no line for such a row).
+MAX_DATE_GAP_DAYS = 366
+# `not_tt=<why>`: what the `tjs events` view ends a line with when no
+# .tt line can say the row (NOT_TT_WHY: taxjson-convert-tt refuses such
+# a row). Never read as a row: pasted into a .tt file the line is
+# refused, saying why (backlog TJ-5212).
+NOT_TT_KEY = 'not_tt'
+NOT_TT_WHY = {
+    'in_kind': (
+        "a move in kind that `tjs run` booked from the account's transfer "
+        "rows (securities valued, no cash paid): as a .tt row it would "
+        "read as a trade for cash. Keep the account's transfer rows and "
+        "the move's INKIND line or transfer settings"),
+    'cash_leg': (
+        "a row whose amount did not move as cash the way the line would "
+        "say it did (a reward's or a coin fee's INTEREST, FEE or TAX "
+        "row: no cash_leg= token on that line says it). Keep the row in "
+        "its export"),
+    'dates': (
+        "a row whose two dates a line cannot say (it settles before the "
+        "day it trades or is paid, or more than 366 days after). Fix "
+        "the row's dates in its export or book"),
+}
+_LINE_KEY_RE = re.compile(rf'^({SETTLED_KEY}|{TRADED_KEY}|{NOT_TT_KEY})=(\S*)$')
 # Optional `symbol=<SYMBOL>` at the end of an INTEREST line: the
 # property the interest is paid on (a foreign bond's coupon), the
 # income of that property's T1135 row (tax-logic CA-RPT-14). Without it
@@ -294,13 +369,13 @@ def parse_tt_line(line: str, account_name: str = 'default',
     _check_time(parts[2], line, source)
     facts = {}
     trade_keys = {}
-    corp = {}
+    corp = _take_line_keys(parts, line, source)
     if action in _FACT_ACTIONS:
         while parts and _FACT_RE.match(parts[-1]):
             key, val = _FACT_RE.match(parts.pop()).groups()
             _refuse_twice(key, val, facts, line, source)
             facts[key] = val
-        corp = {k: facts.pop(k) for k in _CORP_KEYS if k in facts}
+        corp.update({k: facts.pop(k) for k in _TAIL_KEYS if k in facts})
         facts = _check_facts(action, facts, line, source)
     elif action == 'INTEREST':
         # `symbol=<SYMBOL>`: the property the interest is paid on.
@@ -326,7 +401,7 @@ def parse_tt_line(line: str, account_name: str = 'default',
             _refuse_twice(m.group(1), m.group(2), trade_keys, line, source)
             trade_keys[m.group(1)] = m.group(2)
         parts = kept
-        corp = {k: trade_keys.pop(k) for k in _CORP_KEYS if k in trade_keys}
+        corp.update({k: trade_keys.pop(k) for k in _TAIL_KEYS if k in trade_keys})
     # A futures part already on the settlement basis: its total is the
     # realized P/L, not qty x price (backlog TJ-0662).
     _settled = trade_keys.get('type') == FUTURES_SETTLEMENT_TYPE
@@ -363,9 +438,9 @@ def parse_tt_line(line: str, account_name: str = 'default',
             # Symbols are canonical upper-case, like the currency: a
             # hand-typed `samplg.us` was its own ACB pool and the broker's
             # sale of SAMPLG.US opened a phantom short (S001-06).
-            tx['symbol'] = parts[3].upper()
+            tx['symbol'] = _book_symbol(parts[3])
             if action == 'SPLIT':
-                tx['symbol_new'] = parts[4].upper()
+                tx['symbol_new'] = _book_symbol(parts[4])
                 tx['quantity'] = _tt_num(parts[5])
                 tx['currency'] = ''     # no money: a ratio (a US project has no CAD rates)
                 tx['price'] = 0.0
@@ -486,7 +561,7 @@ def parse_tt_line(line: str, account_name: str = 'default',
                     )
 
         elif action in ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX'):
-            tx['symbol'] = parts[3].upper()
+            tx['symbol'] = _book_symbol(parts[3])
             tx['quantity'] = _tt_num(parts[4])
             tx['currency'] = parts[5].upper()
             # The per-share amount (PRICE): never read, the row booked
@@ -506,11 +581,11 @@ def parse_tt_line(line: str, account_name: str = 'default',
             tx['currency'] = parts[3].upper()
             tx['net_amount'] = _tt_num(parts[4])
             tx['type'] = action.lower()
-            tx['symbol'] = (str(facts.pop(INTEREST_SYMBOL_KEY, '')).upper()
+            tx['symbol'] = (_book_symbol(facts.pop(INTEREST_SYMBOL_KEY, ''))
                             or 'CASH')
 
         elif action == 'ADJUST' or action == 'DISALLOW':
-            tx['symbol'] = parts[3].upper()
+            tx['symbol'] = _book_symbol(parts[3])
             tx['currency'] = parts[4].upper()
             tx['net_amount'] = _tt_num(parts[5])
     except _LineRefusal:
@@ -535,34 +610,9 @@ def parse_tt_line(line: str, account_name: str = 'default',
             f"a zero or negative ratio is never a real corporate action "
             f"(RATIO is new shares per old: 0.1 for one-for-ten): {line.strip()!r}")
 
-    # A SELL total is the net proceeds (qty x price - fee; direction
-    # lives in the qty sign). A negative one is either a cash-signed
-    # proceeds figure typed with a '-' (booked as negative proceeds, a
-    # +1,000 gain became a -3,000 loss with no word: audit R1-117) or a
-    # sale whose commission exceeds its gross (a penny option close,
-    # S017-00). Only the second is unambiguous: the line's own fee is
-    # larger than qty x price (x size) and the total is qty x price -
-    # fee. That one is booked signed, like every parser books it (the
-    # whole commission is an outlay, CA-DISP-01); any other negative
-    # SELL total is refused. The .tt writers emit exactly that signed
-    # total, so json -> tt -> json round-trips (A2-0292, A2-0620,
-    # A2-0621, A2-0622, A2-0623, A2-1073, A2-1226, A2-1227). A negative
-    # BUY total cannot mean anything but the cash sign (qty x price +
-    # fee is never negative): the row keeps it as typed, and the engines
-    # take a buy's cost as its magnitude (engine _ca_trade_money).
-    if (action in ('BUYSELL', 'ASSIGN') and tx.get('quantity', 0) < 0
-            and tx.get('net_amount', 0) < 0
-            and not _settled
-            and not _excess_commission_sale(tx)):
-        raise ValueError(
-            f"{_where(source)}{action} sell total {parts[7]} is negative "
-            f"— a .tt total is the net proceeds (qty x price - "
-            f"commission); the sell direction lives in the negative qty. "
-            f"If you typed the cash sign, drop the '-'. A negative total "
-            f"is read only when the line's commission exceeds qty x "
-            f"price{' (add the contract size, e.g. x1000)' if str(tx.get('symbol') or '').startswith(FUTURES_PREFIXES) and not tx.get('multiplier') else ''} "
-            f"and the total equals qty x price - commission. "
-            f"Line: {line.strip()!r}")
+    if action in ('BUYSELL', 'ASSIGN') and not _settled:
+        _check_total_sign(action, tx, parts, 'type' in trade_keys, line,
+                          source)
 
     if _settled:
         tx.update(_check_futures_settlement(action, tx, trade_keys, line,
@@ -578,7 +628,7 @@ def parse_tt_line(line: str, account_name: str = 'default',
                                            source)
     # Not part of the id (as in TaxTransaction.compute_id).
     tx.update(facts)
-    tx.update(_check_corp(action, corp, line, source))
+    tx.update(_check_corp(action, corp, line, source, tx))
     _canonical_ca_symbols(tx)
     _warn_unknown_suffix(tx, line, source)
     tx['id'] = compute_tt_id(tx)
@@ -636,7 +686,8 @@ def parse_journal_line(line: str, source: str = ''):
             f"YYYY-MM-DD (expected `{JOURNAL_FORM}`): {shown!r}")
     # Spelled as the account's other .tt rows are (no currency: only the
     # unambiguous Canadian venues fold, as on a SPLIT line).
-    _sy = {'action': 'SPLIT', 'symbol': frm.upper(), 'symbol_new': to.upper()}
+    _sy = {'action': 'SPLIT', 'symbol': _book_symbol(frm),
+           'symbol_new': _book_symbol(to)}
     _canonical_ca_symbols(_sy)
     frm, to = _sy['symbol'], _sy['symbol_new']
     if frm == to:
@@ -770,7 +821,7 @@ def parse_unknown_opening_line(line: str, source: str = ''):
         raise ValueError(
             f"{where}malformed OPENING line — the date {date!r} is not "
             f"YYYY-MM-DD (expected `{UNKNOWN_OPENING_FORM}`): {shown!r}")
-    _sy = {'action': 'SPLIT', 'symbol': sym.upper()}
+    _sy = {'action': 'SPLIT', 'symbol': _book_symbol(sym)}
     _canonical_ca_symbols(_sy)
     sym = _sy['symbol']
     if sym.startswith(FUTURES_PREFIXES):
@@ -858,8 +909,8 @@ def parse_rename_line(line: str, source: str = ''):
         raise ValueError(
             f"{where}malformed RENAME line — {e} (expected "
             f"`{RENAME_FORM}`): {shown!r}") from None
-    _sy = {'action': 'SPLIT', 'symbol': parts[2].upper(),
-           'symbol_new': parts[3].upper()}
+    _sy = {'action': 'SPLIT', 'symbol': _book_symbol(parts[2]),
+           'symbol_new': _book_symbol(parts[3])}
     _canonical_ca_symbols(_sy)
     old, new = _sy['symbol'], _sy['symbol_new']
     if old == new and parts[2].upper() != parts[3].upper():
@@ -943,7 +994,7 @@ def parse_inkind_line(line: str, source: str = ''):
             raise ValueError(f"{where}INKIND quantity is 0 — the transfer "
                              f"row's quantity, negative for shares out: "
                              f"{line.strip()!r}")
-        return {'date': day, 'symbol': sym.upper(), 'quantity': qty,
+        return {'date': day, 'symbol': _book_symbol(sym), 'quantity': qty,
                 'currency': '', 'total': None, 'plan': 'own',
                 'source': source}
     if len(parts) not in (6, 7):
@@ -1005,7 +1056,7 @@ def parse_inkind_line(line: str, source: str = ''):
         if plan not in PLAN_COUNTRY or plan == 'taxable':
             raise ValueError(f"{where}INKIND plan={plan!r} is not a "
                              f"registered plan kind: {line.strip()!r}")
-    return {'date': day, 'symbol': sym.upper(), 'quantity': qty,
+    return {'date': day, 'symbol': _book_symbol(sym), 'quantity': qty,
             'currency': cur.upper(), 'total': float(total), 'plan': plan,
             'source': source, 'price': float(price),
             'total_stated': stated}
@@ -1026,6 +1077,13 @@ def parse_opening_line(parts, line: str, account_name: str,
     contract delivers on its exercise (backlog TJ-0963)."""
     from taxjson.lib.option_symbols import is_option_symbol
     where = _where(source)
+    for tok in parts[1:]:
+        m = _LINE_KEY_RE.match(tok)
+        if m is not None:
+            raise ValueError(
+                f"{where}{m.group(1)}= is not allowed on an OPENING line: "
+                f"it has one day, the snapshot's (and no time column): "
+                f"{line.strip()!r}")
     declared = None
     if len(parts) in (7, 8) and _MULT_RE.match(parts[-1]):
         declared = float(_MULT_RE.match(parts[-1]).group(1))
@@ -1063,7 +1121,7 @@ def parse_opening_line(parts, line: str, account_name: str,
     except ValueError as e:
         raise ValueError(f"{where}malformed OPENING line ({e}): "
                          f"{line.strip()!r}") from e
-    sym = sym.upper()
+    sym = _book_symbol(sym)
     if qty <= 0:
         raise ValueError(
             f"{where}OPENING quantity must be positive (a long position "
@@ -1100,9 +1158,19 @@ def parse_opening_line(parts, line: str, account_name: str,
     return tx
 
 
+def _book_symbol(tok: str) -> str:
+    """A .tt line's symbol as the books spell it: upper case, a future's
+    `/` or `\\` prefix `F:` (lib/futures_prefixes
+    canonical_futures_symbol), as every broker parser writes it: a .tt
+    `/QZZ6` was a pool apart from the broker's `F:QZZ6`, its id hashed
+    from the spelling typed (backlog TJ-5150)."""
+    return canonical_futures_symbol(str(tok).upper())
+
+
 def _canonical_ca_symbols(tx: dict) -> None:
     """Spell a Canadian listing as every broker parser does: ROOT.TO
-    with a dotted preferred series (base.canonical_ca_listing). A .tt
+    with a dotted preferred series (base.canonical_ca_listing), and a
+    future `F:` (_book_symbol). A .tt
     `ABC.V`, `ABC.VN` or `FTN.PRA.TO` used to stay its own ACB pool, so
     a loss sold here and the broker's repurchase of ABC.TO were never
     linked as identical property (audit A2-0300, A2-0635). A `.V` is
@@ -1112,13 +1180,45 @@ def _canonical_ca_symbols(tx: dict) -> None:
     from taxjson.lib.option_symbols import is_option_symbol
     cur = '' if tx.get('action') == 'SPLIT' else tx.get('currency', '')
     for key in ('symbol', 'symbol_new', EXERCISE_KEY):
-        sym = tx.get(key) or ''
+        sym = canonical_futures_symbol(tx.get(key) or '')
+        if sym:
+            tx[key] = sym
         if (not sym or sym == 'CASH' or is_option_symbol(sym)
                 or sym.startswith(FUTURES_PREFIXES)):
             continue
         canon = canonical_ca_listing(sym, cur)
         if canon:
             tx[key] = canon
+
+
+def _take_line_keys(parts: list, line: str, source: str) -> dict:
+    """Take the tokens any row line may end with off `parts` (in place):
+    `settled=<date>` or `traded=<date>`, returned as {key: date} for
+    _check_corp (given twice: refused). A `not_tt=<why>` token is refused here: the
+    line is the `tjs events` view's print of a row no .tt line can say
+    (NOT_TT_WHY)."""
+    out: dict = {}
+    for i in range(len(parts) - 1, 2, -1):
+        m = _LINE_KEY_RE.match(parts[i])
+        if m is None:
+            continue
+        key, val = m.groups()
+        if key == NOT_TT_KEY and val not in NOT_TT_WHY:
+            raise ValueError(
+                f"{_where(source)}{NOT_TT_KEY}={val}: `tjs events` ends a "
+                f"line with {NOT_TT_KEY}= when no .tt line can say the "
+                f"row, and {val!r} is not one of its reasons "
+                f"({', '.join(NOT_TT_WHY)}). The line is not a .tt row "
+                f"either way: remove it: {line.strip()!r}")
+        if key == NOT_TT_KEY:
+            raise ValueError(
+                f"{_where(source)}{NOT_TT_KEY}={val}: `tjs events` printed "
+                f"this line for {NOT_TT_WHY[val]}, and remove this line: "
+                f"{line.strip()!r}")
+        _refuse_twice(key, val, out, line, source)
+        out[key] = val
+        del parts[i]
+    return out
 
 
 def _refuse_twice(key: str, val: str, seen: dict, line: str,
@@ -1152,7 +1252,7 @@ def _check_exercise(action: str, tx: dict, keys: dict, line: str,
             f"warrant's or a right's exercise) or {STOCK_DIVIDEND_TOKEN} "
             f"[ex=DATE] [record=DATE] (a stock dividend's shares): "
             f"{shown!r}")
-    target = keys[EXERCISE_KEY].upper()
+    target = _book_symbol(keys[EXERCISE_KEY])
     sym = str(tx.get('symbol') or '')
     if action != 'ASSIGN':
         raise ValueError(
@@ -1302,15 +1402,54 @@ def _check_futures_settlement(action: str, tx: dict, keys: dict,
             f"{where}{SETTLE_KEY}={keys[SETTLE_KEY]}: a {leg.leg} leg "
             f"{'buys' if leg.leg in ('LO', 'SC') else 'sells'}, the line's "
             f"QTY {tx.get('quantity')} does not: {shown!r}")
+    if (leg.leg in ('LO', 'SC') and leg.money < 0
+            and (tx.get('price') or 0.0) > 0):
+        # A buy's money is its cost: negative only at a negative price.
+        # An older taxjson-convert-tt wrote a cost in the cash sign as a
+        # credit here, and the book's closes carry the gain it made of
+        # it (backlog TJ-5162): never booked.
+        raise ValueError(
+            f"{where}{SETTLE_KEY}={keys[SETTLE_KEY]}: a {leg.leg} leg "
+            f"buys, and its money {leg.money} is negative at a price "
+            f"above 0: this settled futures line was written by an "
+            f"older taxjson-convert-tt from a buy whose total was in the "
+            f"cash sign, and the closes of that contract in this file "
+            f"carry the wrong gain. Convert the source book again (your "
+            f"export or .tt file, through `tjs run`) and replace this "
+            f"file: {shown!r}")
     out['settle_native'] = native
     return out
 
 
-def _check_corp(action: str, corp: dict, line: str, source: str) -> dict:
+def _check_corp(action: str, corp: dict, line: str, source: str,
+                tx: dict) -> dict:
     """Validate a line's `corp=` / `election=` / `parent_qty=` tokens and
-    map them to their row fields."""
-    out = {}
+    its cash tokens (_CASH_KEYS: _check_cash_keys, which asks whether
+    the line has a `corp=` and the type of `tx`, the row read so far)
+    and its `settled=` date (on or after the line's date: the row's
+    `date_settle`) or `traded=` date (_check_traded: the row's `date`),
+    and map them to their row fields."""
+    cash_keys = {k: corp.pop(k) for k in _CASH_KEYS if k in corp}
+    settled = corp.pop(SETTLED_KEY, None)
+    traded = corp.pop(TRADED_KEY, None)
+    out = _check_cash_keys(action, cash_keys, 'corp' in corp,
+                           str(tx.get('type') or ''), line, source,
+                           'cash' in corp)
     shown = line.strip()
+    if settled is not None:
+        _check_date(settled, f'{SETTLED_KEY}=', line, source)
+        if settled < str(tx.get('date') or ''):
+            raise ValueError(
+                f"{_where(source)}{SETTLED_KEY}={settled} is before the "
+                f"line's date {tx.get('date')}: a row settles on or after "
+                f"the day it trades or is paid (write the trade or pay "
+                f"date first, its settlement date in {SETTLED_KEY}=): "
+                f"{shown!r}")
+        _check_date_gap(SETTLED_KEY, settled, tx, line, source)
+        out['date_settle'] = settled
+    if traded is not None:
+        out['date'] = _check_traded(action, traded, settled, tx, line,
+                                    source)
     for key, val in corp.items():
         if key == 'election' and not re.match(r'^[a-z0-9_]+$', val):
             raise ValueError(
@@ -1343,6 +1482,51 @@ def _check_corp(action: str, corp: dict, line: str, source: str) -> dict:
     return out
 
 
+def _check_date_gap(key: str, val: str, tx: dict, line: str,
+                    source: str) -> None:
+    """Refuse a `settled=` / `traded=` date more than MAX_DATE_GAP_DAYS
+    from the line's date: a typo'd year, not a settlement."""
+    days = abs((datetime.strptime(val, '%Y-%m-%d')
+                - datetime.strptime(tx['date'], '%Y-%m-%d')).days)
+    if days > MAX_DATE_GAP_DAYS:
+        raise ValueError(
+            f"{_where(source)}{key}={val} is {days} days from the line's "
+            f"date {tx['date']}: more than {MAX_DATE_GAP_DAYS} days is "
+            f"read as a typo (check the year), never a settlement: "
+            f"{line.strip()!r}")
+
+
+def _check_traded(action: str, traded: str, settled: Optional[str],
+                  tx: dict, line: str, source: str) -> str:
+    """A line's `traded=` date, checked: a date, on or before the line's
+    date (which is then the settlement date) and within
+    MAX_DATE_GAP_DAYS of it, on a line with no `settled=`, of a kind
+    whose line can show a settlement date (never an income, tax,
+    interest or fee line: PAID_DATE_ACTIONS show the day paid)."""
+    shown = line.strip()
+    if settled is not None:
+        raise ValueError(
+            f"{_where(source)}{TRADED_KEY}={traded} and {SETTLED_KEY}="
+            f"{settled} on one line: the line's date is the trade (or "
+            f"pay) date with {SETTLED_KEY}=, or the settlement date with "
+            f"{TRADED_KEY}= — keep one: {shown!r}")
+    if action in PAID_DATE_ACTIONS:
+        raise ValueError(
+            f"{_where(source)}{TRADED_KEY}={traded}: {_a(action)} line's "
+            f"date is the day it was paid, never a settlement date: it "
+            f"takes {SETTLED_KEY}=<date> (when the cash settled later), "
+            f"not {TRADED_KEY}=: {shown!r}")
+    _check_date(traded, f'{TRADED_KEY}=', line, source)
+    if traded > str(tx.get('date') or ''):
+        raise ValueError(
+            f"{_where(source)}{TRADED_KEY}={traded} is after the line's "
+            f"date {tx.get('date')}: a row trades on or before the day it "
+            f"settles (write the settlement date first, its trade date "
+            f"in {TRADED_KEY}=): {shown!r}")
+    _check_date_gap(TRADED_KEY, traded, tx, line, source)
+    return traded
+
+
 def _corp_tokens(tx: dict, action: str) -> str:
     """A row's corporate-action provenance tokens (_CORP_KEYS)."""
     if action not in _CORP_ACTIONS or not tx.get('corp_event_id'):
@@ -1357,6 +1541,99 @@ def _corp_tokens(tx: dict, action: str) -> str:
         val = str(val or '').strip()
         if val and not re.search(r'[\s#]', val):
             toks.append(f"{key}={val}")
+    return (" " + " ".join(toks)) if toks else ""
+
+
+def _a(action: str) -> str:
+    """`an ADJUST`, `a FEE`: an action with its article."""
+    return f"{'an' if action[:1] in 'AEIO' else 'a'} {action}"
+
+
+def _cash_leg_problem(action: str, kind: str, has_corp: bool,
+                      row_type: str, has_cash: bool = False) -> str:
+    """Why a line of `action` does not take `cash_leg=<kind>` ('' when
+    it does): the one rule of the reader and the writer. `has_cash`: the
+    line has a `cash=` (the event's cash, which the ledgers read alone:
+    a `cash_leg=cash` beside it would say the TOTAL moved too, and is
+    read by nothing)."""
+    if kind not in CASH_LEG_KINDS:
+        return (f"one of {CASH_LEG_NONE} (the amount is a value: no cash "
+                f"moved), {CASH_LEG_REWARD} (a reward paid in the line's "
+                f"SYMBOL), {CASH_LEG_CASH} (the amount was paid in cash)")
+    if kind == CASH_LEG_NONE and action not in _CASH_LEG_NONE_ACTIONS:
+        return (f"only a trade or an income line "
+                f"({', '.join(_CASH_LEG_NONE_ACTIONS)}) takes it: "
+                f"{_a(action)} line moves no cash without it")
+    if kind == CASH_LEG_REWARD and action not in _CASH_LEG_REWARD_ACTIONS:
+        return ("a reward is its DIVIDEND line (the income) and its "
+                "BUYSELL line (the coins acquired): only those take it")
+    if kind == CASH_LEG_CASH:
+        if action == 'ADJUST':
+            if row_type != 'roc':
+                return ("on an ADJUST line it marks a return of capital "
+                        "paid in cash: the line needs type=roc too")
+        elif not has_corp:
+            return (f"{_a(action)} line's amount is cash already: only an "
+                    f"ADJUST type=roc line, or a line with corp=<event "
+                    f"id> (the event's own cash leg), takes it")
+        if has_cash:
+            return ("the line has cash= too, and the cash a corp= line "
+                    "moved is its cash= alone: keep cash= (the event's "
+                    "cash), or cash_leg=cash (the line's own amount)")
+    return ''
+
+
+def _check_cash_keys(action: str, keys: dict, has_corp: bool,
+                     row_type: str, line: str, source: str,
+                     has_cash: bool = False) -> dict:
+    """Validate a line's `cash_leg=` / `refunds=` tokens and map them to
+    their row fields (_CASH_KEYS; neither is part of the row's id)."""
+    out = {}
+    shown = line.strip()
+    if CASH_LEG_KEY in keys:
+        kind = keys[CASH_LEG_KEY]
+        why = _cash_leg_problem(action, kind, has_corp, row_type, has_cash)
+        if why:
+            raise ValueError(
+                f"{_where(source)}{CASH_LEG_KEY}={kind}: {why}: {shown!r}")
+        out[_CASH_KEYS[CASH_LEG_KEY]] = kind
+    if REFUNDS_KEY in keys:
+        val = keys[REFUNDS_KEY]
+        if action not in _REFUND_ACTIONS:
+            raise ValueError(
+                f"{_where(source)}{REFUNDS_KEY}={val}: the commission "
+                f"refunds a trade's total is net of: only a BUYSELL or an "
+                f"ASSIGN line takes it: {shown!r}")
+        try:
+            out[_CASH_KEYS[REFUNDS_KEY]] = commission_refunds_of_tt(val)
+        except EvidenceError:
+            raise ValueError(
+                f"{_where(source)}{REFUNDS_KEY}={val}: the commission "
+                f"refunds the line's total is net of, <date>:<amount> "
+                f"(2025-02-14:1.00), joined by `;`, each date YYYY-MM-DD "
+                f"and each amount a number other than 0 written out: "
+                f"{shown!r}") from None
+    return out
+
+
+def _cash_tokens(tx: dict, action: str) -> str:
+    """A row's cash tokens (_CASH_KEYS): `cash_leg=` as lib/cash_legs
+    `cash_leg_of` reads the row (left out where the line does not take
+    it: json_to_tt_lines then refuses the row), `refunds=` on a trade."""
+    if action not in _CORP_ACTIONS:
+        return ""
+    from taxjson.lib.cash_legs import cash_leg_of
+    toks = []
+    kind = cash_leg_of(tx)
+    if kind and not _cash_leg_problem(
+            action, kind, bool(tx.get('corp_event_id')),
+            str(tx.get('type') or '').lower(),
+            bool(corp_cash_tt(tx.get('corp_cash')))):
+        toks.append(f"{CASH_LEG_KEY}={kind}")
+    if action in _REFUND_ACTIONS:
+        refunds = commission_refunds_tt(tx.get('commission_refunds'))
+        if refunds:
+            toks.append(f"{REFUNDS_KEY}={refunds}")
     return (" " + " ".join(toks)) if toks else ""
 
 
@@ -1398,14 +1675,17 @@ def tt_tail(tx: dict, action: str) -> str:
     writers append them (tx_to_tt_line and the `tjs events` view,
     cli/listings._tx_display_line): a trade's contract size and warrant
     exercise (`x<size>`, `exercise_of=`), an income row's facts
-    (`record=`, `label=` ...). The view wrote none of the facts, so a
+    (`record=`, `label=` ...), the cash facts (`cash_leg=`, `refunds=`).
+    The view wrote none of the facts, so a
     pasted trust distribution moved to its pay year (backlog TJ-0390).
     '' when there are none; else the tokens with a leading space."""
     if action in ('BUYSELL', 'ASSIGN'):
-        return _trade_tokens(tx, action) + _corp_tokens(tx, action)
+        return (_trade_tokens(tx, action) + _corp_tokens(tx, action)
+                + _cash_tokens(tx, action))
     if action == 'INTEREST':
         return _interest_tokens(tx)
-    return _fact_tokens(tx, action) + _corp_tokens(tx, action)
+    return (_fact_tokens(tx, action) + _corp_tokens(tx, action)
+            + _cash_tokens(tx, action))
 
 
 def _interest_tokens(tx: dict) -> str:
@@ -1566,6 +1846,117 @@ def _adjusted_series_total(tx: dict, total: float) -> bool:
     return abs(total - at_100) <= tolerance(at_100)
 
 
+def _check_total_sign(action: str, tx: dict, parts: list, typed: bool,
+                      line: str, source: str) -> None:
+    """The sign of an unsettled BUYSELL / ASSIGN line's TOTAL, refused
+    where it cannot be read as one trade. `parts`: the line's tokens
+    (the price and the total as written are quoted). `typed`: the line
+    carries a `type=` token (a cancellation, a stock dividend), whose
+    futures total is not read against the price."""
+    written = parts[7]
+    # A SELL total is the net proceeds (qty x price - fee; direction
+    # lives in the qty sign). A negative one is either a cash-signed
+    # proceeds figure typed with a '-' (booked as negative proceeds, a
+    # +1,000 gain became a -3,000 loss with no word: audit R1-117) or a
+    # sale whose commission exceeds its gross (a penny option close,
+    # S017-00). Only the second is unambiguous: the line's own fee is
+    # larger than qty x price (x size) and the total is qty x price -
+    # fee. That one is booked signed, like every parser books it (the
+    # whole commission is an outlay, CA-DISP-01); any other negative
+    # SELL total is refused. The .tt writers emit exactly that signed
+    # total, so json -> tt -> json round-trips (A2-0292, A2-0620,
+    # A2-0621, A2-0622, A2-0623, A2-1073, A2-1226, A2-1227). A negative
+    # BUY total at a price above 0 cannot mean anything but the cash
+    # sign (qty x price + fee is never negative): the row keeps it as
+    # typed, and the engines and the futures settlement take a buy's
+    # cost as its magnitude (engine _ca_trade_money, lib/futures
+    # _money). A future's price can be negative, where a buy receives
+    # money and a sale pays: _check_futures_total reads the total
+    # against the line (backlog TJ-5162).
+    if action == 'BUYSELL' and not typed:
+        _check_futures_total(tx, parts[6], written, line, source)
+    if (tx.get('quantity', 0) < 0 and tx.get('net_amount', 0) < 0
+            and not _excess_commission_sale(tx)):
+        raise ValueError(
+            f"{_where(source)}{action} sell total {written} is negative "
+            f"— a .tt total is the net proceeds (qty x price - "
+            f"commission); the sell direction lives in the negative qty. "
+            f"If you typed the cash sign, drop the '-'. A negative total "
+            f"is read only when the line's commission exceeds qty x "
+            f"price{' (add the contract size, e.g. x1000)' if str(tx.get('symbol') or '').startswith(FUTURES_PREFIXES) and not tx.get('multiplier') else ''} "
+            f"and the total equals qty x price - commission. "
+            f"Line: {line.strip()!r}")
+
+
+def _check_futures_total(tx: dict, price_text: str, written: str,
+                         line: str, source: str) -> None:
+    """A plain-futures fill's TOTAL against the line's own price: the
+    refusal of a total that cannot be read as one trade (backlog
+    TJ-5162). What is read, and booked alike in every figure:
+
+    * price above 0: a BUY total is the cost, written as the cost or
+      as the cash paid out (either sign: the magnitude is booked, as a
+      share line's is); a SELL total is the proceeds (the rule every
+      .tt sale follows, checked by the caller);
+    * price below 0 (a crude oil contract settled below zero in 2020):
+      a buy RECEIVES money and a sale PAYS it, so the total carries the
+      sign of qty x price x size + fee (a buy), - fee (a sale): a
+      negative total, or a buy's positive cost when its commission is
+      larger than the credit. That amount is booked signed, so it is
+      read only where the line proves it: the size on the line
+      (`x1000`), the total within the typo tolerance of it and of its
+      sign (the tolerance's 0.05 floor is for the size: +0.02 for -0.02
+      is the opposite trade). Anything else (a total of the other sign,
+      the magnitude alone, no size) is refused;
+    * no price (0): a negative BUY total is refused: nothing on the
+      line says whether it is a cost in the cash sign or the credit of
+      a negative price, and the two are opposite amounts.
+    """
+    from taxjson.lib.futures import is_plain_future
+    if not is_plain_future(str(tx.get('symbol') or '')):
+        return
+    # (the reader's own floats: _tt_num)
+    q = tx.get('quantity') or 0.0
+    price = tx.get('price') or 0.0
+    net = tx.get('net_amount') or 0.0
+    if not q or price > 0:
+        return
+    shown = ' '.join(line.split())
+    if price == 0:
+        if q > 0 and net < 0:
+            raise ValueError(
+                f"{_where(source)}futures buy total {written} is negative "
+                f"and the line has no price (0): it reads as a cost "
+                f"written with the cash sign, or as the money a buy at a "
+                f"negative price receives, and the two are opposite "
+                f"amounts. Write the total as the cost (drop the '-'), "
+                f"or write the contract's negative price and its size "
+                f"(e.g. x1000). Line: {shown!r}")
+        return
+    side = 'buy' if q > 0 else 'sell'
+    moves = 'receives' if q > 0 else 'pays'
+    head = (f"{_where(source)}futures {side} at the negative price "
+            f"{price_text}: a {side} at a negative price {moves} money, so "
+            f"its total is qty x price x size {'+' if q > 0 else '-'} fee "
+            f"with its sign")
+    if not tx.get('multiplier'):
+        raise ValueError(
+            f"{head}. The line has no contract size to read the total "
+            f"{written} against: add it after the fee (e.g. x1000). If "
+            f"the '-' of the price is a typo, write the price above 0. "
+            f"Line: {shown!r}")
+    fee = tx.get('fee') or 0.0
+    expected = (abs(q) * price * _tt_contract_size(tx)
+                + (fee if q > 0 else -fee))
+    if (abs(net - expected) > tolerance(expected)
+            or (expected != 0 and (net < 0) != (expected < 0))):
+        raise ValueError(
+            f"{head}, {M.shown(expected, 2):.2f} here; the line's total "
+            f"is {written}. Write that total (the other sign is the "
+            f"opposite trade), or the price above 0 if its '-' is a "
+            f"typo. Line: {shown!r}")
+
+
 def _excess_commission_sale(tx: dict) -> bool:
     """A SELL (or ASSIGN) line whose negative total is a commission
     larger than its gross: fee > |qty| x price x size and the total is
@@ -1673,7 +2064,39 @@ def tt_time(tx: dict) -> str:
     return text
 
 
+def date_token(tx: dict, date_basis: str = 'settle') -> str:
+    """A row's second date as a token, when its line's date (tx_tt_date)
+    is not both: ` settled=<date>`, the settlement date after a line's
+    trade or pay date (an income row; a trade on the trade basis), or
+    ` traded=<date>`, the trade date before a line's settlement date (a
+    trade on the settle basis). '' when the row has one date, for an
+    OPENING line (no time column, one day), and for a row no line
+    says: one that settles before it trades or is paid, or more than
+    MAX_DATE_GAP_DAYS after (json_to_tt_lines refuses it:
+    _unwritable_cash)."""
+    from taxjson.lib.row_types import is_opening_row
+    shown = str(tx_tt_date(tx, date_basis) or '')
+    td = str(tx.get('date') or '').strip()
+    sd = str(tx.get('date_settle') or '').strip()
+    if (not _is_date(shown) or not _is_date(td) or not _is_date(sd)
+            or td >= sd or is_opening_row(tx)
+            or tx.get('action') not in _VALID_ACTIONS
+            or (datetime.strptime(sd, '%Y-%m-%d')
+                - datetime.strptime(td, '%Y-%m-%d')).days
+            > MAX_DATE_GAP_DAYS):
+        return ''
+    return (f" {SETTLED_KEY}={sd}" if shown == td
+            else f" {TRADED_KEY}={td}")
+
+
 def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
+    """A row's .tt line (_row_line) with its `settled=` date
+    or `traded=` date (date_token); None for a row with no .tt line."""
+    line = _row_line(tx, date_basis)
+    return line if line is None else line + date_token(tx, date_basis)
+
+
+def _row_line(tx: dict, date_basis: str = 'settle'):
     """Emit a single `.tt` line for one transaction, in the field order
     parse_tt_line reads. Returns None for transactions whose action
     has no `.tt` representation (e.g. OPENING_BALANCE) so the caller can
@@ -1742,6 +2165,12 @@ def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
         # reads back when the line's fee explains it (A2-0620).
         # The contract size (`x<size>`) and a warrant exercise's
         # `exercise_of=` ride along (tt_tail).
+        # A BUY's total is written as the row holds it, the cash sign
+        # of a JSON book included (`net_amount` -200: -200.00000): the
+        # reader, the engines and the futures settlement book either
+        # sign as the one cost, and the row's id stays the one its
+        # source line has, so a re-import beside it still dedupes
+        # (backlog TJ-5162).
         return (f"{action} {date} {time} {symbol} {_num(qty)} {currency} "
                 f"{_num(price)} {M.units(net, 5):.5f} {M.units(fee, 5):.5f}"
                 + tt_tail(tx, action))
@@ -2013,23 +2442,159 @@ def tt_to_json(input_path: Path, account_name: str,
     }
 
 
+def _json_book_rows(input_path: Path) -> list:
+    """A JSON book's rows for the .tt writer, read and checked as every
+    tool reads a book (lib/tx_load: a BOM, `#` comments, each row's
+    coercion and refusals), written from the rows as the file holds
+    them. A trade row with no quantity or no net_amount is refused: its
+    .tt line carried a quantity of 0 beside the row's total, or a total
+    of 0, read back as a cost or proceeds of 0 (backlog TJ-5035);
+    `"net_amount": 0` is a real amount and stays."""
+    from taxjson.lib.cli_diag import InputContentError
+    from taxjson.lib.tx_load import (coerce_transaction_row, fold_row_symbols,
+                                     read_book_rows)
+    try:
+        rows = read_book_rows(input_path)
+        checked = [coerce_transaction_row(t, i, str(input_path))
+                   for i, t in enumerate(rows)]
+    except json.JSONDecodeError:
+        raise
+    except ValueError as e:
+        raise InputContentError(str(e)) from None
+    missing = [m for m in (getattr(t, '_missing_trade_fields', None)
+                           for t in checked) if m]
+    if missing:
+        ctx, fields = missing[0]
+        wrote = {("quantity",): "a quantity of 0 beside the row's total",
+                 ("net_amount",): "a total of 0, read as a cost or "
+                                  "proceeds of 0"}.get(
+            tuple(fields), "a quantity of 0 and a total of 0")
+        raise InputContentError(
+            f"{ctx}: required field(s) {', '.join(fields)} missing on a "
+            f"trade row ({len(missing)} such row(s)): its .tt line would "
+            f"carry {wrote} — nothing was written. Fix the input data.")
+    # The symbols as the books spell them, as the coercion reads them (a
+    # future's `/` or `\\` `F:`: backlog TJ-5150).
+    return [fold_row_symbols(dict(t)) for t in rows]
+
+
+def _row_named(input_path: Path, i: int, tx: dict) -> str:
+    """A JSON book's row as a refusal names it: the book, the row's
+    place and id, what it is, and the file its parser read it from."""
+    src = str(tx.get('source') or '').strip()
+    return (f"{input_path}: transaction at index {i} "
+            f"(id={tx.get('id', '?')!r}, {tx.get('action', '?')} "
+            f"{tx.get('date', '?')} {tx.get('symbol') or '-'}"
+            + (f", from {src}" if src else '') + ")")
+
+
+def not_tt_why(tx: dict, date_basis: str = 'settle') -> str:
+    """The NOT_TT_WHY key of a row taxjson-convert-tt refuses to write
+    ('' for a row it writes, or one with no line at all): what the `tjs
+    events` view marks its line with, so a pasted copy is refused
+    (backlog TJ-5212). The test is the writer's own, on the writer's
+    own line (never the view's rounded one)."""
+    try:
+        line = tx_to_tt_line(tx, date_basis)
+    except ValueError:
+        return ''
+    return _unwritable_cash(tx, line)[0] if line is not None else ''
+
+
+def _unwritable_cash(tx: dict, line: str) -> tuple:
+    """(NOT_TT_WHY key, why) when the .tt line of a row would not move
+    the cash the row moves on the days it moves it (the row's own trade
+    or pay date and settlement date; lib/cash_legs `cash_meaning`: the
+    legs, a later payment's date, a reward's own currency, the
+    commission refunds), or the row's kind is one a .tt row cannot say;
+    ('', '') for a row the line says. The line is read back the way
+    `tjs run` reads it; one the reader refuses is its own refusal
+    there, as before."""
+    import contextlib
+    from taxjson.lib.cash_legs import cash_leg_of, cash_meaning, same_cash_meaning
+    from taxjson.lib.row_types import IN_KIND_TYPES, TRANSFER_BOOK_VALUE_TYPE
+    typ = str(tx.get('type') or '')
+    if typ in IN_KIND_TYPES + (TRANSFER_BOOK_VALUE_TYPE,):
+        return 'in_kind', (
+            f"a row of type {typ} is a "
+            f"move in kind that `tjs run` booked from the account's "
+            f"transfer rows (securities valued, no cash paid): a .tt "
+            f"row cannot say it, and its line would read back as a "
+            f"trade for cash — nothing was written. Convert the "
+            f"account's parsed book (the transfer rows, before the run "
+            f"books them), and keep the move's INKIND line or transfer "
+            f"settings in the project.")
+    # (the reader's warnings of the line, and the market lists' notes,
+    # are the later read's to give: not said here)
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            back = parse_tt_line(line, account_name=str(
+                tx.get('account') or 'default'))
+            same = back is None or same_cash_meaning(cash_meaning(tx),
+                                                     cash_meaning(back))
+    except ValueError:
+        return '', ''
+    td = str(tx.get('date') or '')
+    sd = str(tx.get('date_settle') or '') or td
+    if (back is not None and _is_date(td) and _is_date(sd)
+            and not line.startswith('OPENING ')
+            and (back['date'], back['date_settle']) != (td, sd)):
+        # The ledgers walk a row's cash on its settlement date, and
+        # order it by its trade date.
+        return 'dates', (
+            f"its .tt line would not keep the row's dates (dated {td}, "
+            f"settled {sd}; the line reads back dated {back['date']}, "
+            f"settled {back['date_settle']}): a line says a settlement "
+            f"date on or after the trade or pay date, at most "
+            f"{MAX_DATE_GAP_DAYS} days later, and the FX-on-cash ledgers "
+            f"would walk this row's cash on another day — nothing was "
+            f"written. Fix the row's dates in the book. The line would "
+            f"be: {line!r}")
+    if same:
+        return '', ''
+    kind = cash_leg_of(tx)
+    action = str(tx.get('action') or '')
+    if kind and f"{CASH_LEG_KEY}=" not in line:
+        why = (f"it is a `{CASH_LEG_KEY}={kind}` row ("
+               + ("the row's own `cash_leg` field says so"
+                  if tx.get('cash_leg') else
+                  "lib/cash_legs: its wording, type and source say so")
+               + ") and "
+               + (f"{_a(action)} line has no place for the token"
+                  if action in ('INTEREST', 'FEE') else
+                  f"the token does not go on this line: "
+                  f"{_cash_leg_problem(action, kind, bool(tx.get('corp_event_id')), typ.lower(), bool(corp_cash_tt(tx.get('corp_cash'))))}"))
+    else:
+        why = ("the line holds less than the row (a type, a cash field "
+               "or a token value a .tt line cannot carry)")
+    return 'cash_leg', (
+        f"its .tt line would move "
+        f"other foreign cash than the row does in the FX-on-cash "
+        f"ledgers: {why} — nothing was written. The line would be: "
+        f"{line!r}")
+
+
+def _refuse_unwritable_cash(input_path: Path, i: int, tx: dict,
+                            line: str) -> None:
+    """Refuse a row no .tt line can say (_unwritable_cash), naming it:
+    never a line that reads back as another amount of currency, with no
+    word (backlog TJ-5036)."""
+    from taxjson.lib.cli_diag import InputContentError
+    why = _unwritable_cash(tx, line)[1]
+    if why:
+        raise InputContentError(f"{_row_named(input_path, i, tx)}: {why}")
+
+
 def json_to_tt_lines(input_path: Path, date_basis: str = 'settle'):
-    with input_path.open('r', encoding='utf-8') as f:
-        data = json.load(f)
-    transactions = data.get('transactions', data) if isinstance(data, dict) else data
+    transactions = _json_book_rows(input_path)
     skipped = 0
-    two_dates = 0
     mults = []
-    for tx in transactions:
+    for i, tx in enumerate(transactions):
         line = tx_to_tt_line(tx, date_basis=date_basis)
         if line is None:
             skipped += 1
             continue
-        if (tx.get('date_settle') and tx.get('date')
-                and tx['date_settle'] != tx['date']
-                and str(tx.get('action') or '').upper()
-                not in PAID_DATE_ACTIONS):
-            two_dates += 1
+        _refuse_unwritable_cash(input_path, i, tx, line)
         m = tx.get('multiplier')
         try:
             if (m not in (None, '') and float(m) not in (1.0, 100.0)
@@ -2044,16 +2609,6 @@ def json_to_tt_lines(input_path: Path, date_basis: str = 'settle'):
     if skipped:
         emit_line(
             f"note: skipped {skipped} transaction(s) with no .tt representation",
-            file=sys.stderr,
-        )
-    if two_dates:
-        which = ("SETTLEMENT" if date_basis == 'settle' else "TRADE")
-        emit_line(
-            f"note: {two_dates} row(s) have a trade date and a later "
-            f"settlement date; a .tt line carries one date, so each was "
-            f"written with its {which} date (--date-basis "
-            f"{'trade' if date_basis == 'settle' else 'settle'} for the "
-            f"other). The year a sale lands in follows that date.",
             file=sys.stderr,
         )
     if mults:
@@ -2126,7 +2681,7 @@ def parse_not_own_line(line: str, source: str = ""
             f"{where}{NOTOWN_KEYWORD} quantity {qty!r} is not the number of "
             f"units that arrived, positive (expected `{NOTOWN_FORM}`): "
             f"{shown!r}")
-    return {"date": date, "symbol": symbol.upper(), "quantity": float(q),
+    return {"date": date, "symbol": _book_symbol(symbol), "quantity": float(q),
             "from_account": frm, "from_date": fdate, "line": shown}
 
 

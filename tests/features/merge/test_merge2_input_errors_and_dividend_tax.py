@@ -274,15 +274,16 @@ class TestInputErrors(unittest.TestCase):
             self.assertIn("none of the input files could be read",
                           err.getvalue())
 
-    def test_bad_rates_file_is_a_clean_exit_1(self):
-        # m745 / m781: a rates file the loader refuses.
+    def test_bad_rates_file_is_a_clean_exit_2(self):
+        # m745 / m781: a rates file the loader refuses: a refused input,
+        # exit 2 (it was 1; TJ-5045 / TJ-5046).
         with tempfile.TemporaryDirectory() as tmp:
             rates = Path(tmp) / "rates.csv"
             rates.write_text("2025-03-03 12:00:00 USD CAD NaN\n")
             code, doc, err = _merge(tmp, [_row()],
                                     args=("--to", "CAD", "--rates",
                                           str(rates)))
-            self.assertEqual(code, 1)
+            self.assertEqual(code, 2)
             self.assertIsNone(doc)
             self.assertIn("error:", err)
 

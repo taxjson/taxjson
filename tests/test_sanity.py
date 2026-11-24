@@ -342,6 +342,43 @@ class TestSanity(unittest.TestCase):
                 ("RCI270618C00060000.TO", "QTY_MISMATCH"),
                 ("RCI.B270618C00060000.TO", "MISSING_IN_HOLDINGS")})
 
+    def test_futures_option_matched_via_underlying_in_each_spelling(self):
+        # The fallback's option pattern read the futures prefix `F:` only:
+        # an option on a future spelled `/` or `\` under the exchange's
+        # option root found no taxjson counterpart and showed twice (the
+        # pattern ticker_map_rules.map_symbol reads, backlog TJ-5037).
+        # The books spell every future `F:` (a .tt line's `/` is read so,
+        # TJ-5150); the holdings file's symbol and underlying are read
+        # `F:` too, and `file_symbol` shows the file's own spelling.
+        for pre in ("F:", "/", "\\"):
+            with self.subTest(prefix=pre), \
+                    tempfile.TemporaryDirectory() as tmp:
+                root = self._project(tmp)
+                e = root / "ext"
+                _gains(root, "margin", {"QLK.TO": 24000, "XIU.TO": 100,
+                                        "QNET.US": 50,
+                                        "F:QZF270618C00060000.US": 2})
+                # (TOML literal strings: a backslash is no escape there)
+                (e / "acct1_holdings.toml").write_text(
+                    'schema_version = "1.0"\n[meta]\naccount = "ACCT1"\n\n'
+                    '[[holding]]\nsymbol = "QLK.TO"\nquantity = 24000\n'
+                    'asset_type = "equity"\n\n'
+                    '[[holding]]\nsymbol = "QNET.US"\nquantity = 50\n'
+                    'asset_type = "equity"\n\n'
+                    f"[[holding]]\nsymbol = '{pre}QZO270618C00060000.US'\n"
+                    "quantity = 2\nasset_type = 'option'\n"
+                    f"underlying = '{pre}QZF.US'\nright = 'call'\n"
+                    "strike = 60.0\n\n")
+                r = _run(root, "sanity", f"margin={e / 'acct1_holdings.toml'}"
+                         f"+{e / 'acct2_holdings.toml'}", "--json")
+                self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+                doc = json.loads(r.stdout)
+                self.assertTrue(doc["clean"], doc)
+                self.assertEqual(
+                    doc["groups"][0]["matched_via_underlying"],
+                    [{"file_symbol": f"{pre}QZO270618C00060000.US",
+                      "taxjson_symbol": "F:QZF270618C00060000.US"}])
+
     # ---- pairings from taxjson.toml `holdings` -------------------------
 
     def _config_with_holdings(self, root, margin, rrsp=None):

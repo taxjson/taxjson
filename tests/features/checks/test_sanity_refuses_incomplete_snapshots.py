@@ -6,8 +6,6 @@ first-project#2 is two dated snapshots of one account summed. Synthetic
 data and fake ids only.
 
 Formerly: test_fix_audit_1025_sanity"""
-import contextlib
-import io
 import json
 import os
 import shutil
@@ -192,29 +190,34 @@ class TestWholeSnapshot(unittest.TestCase):
         """first-project#3: B37/B36 refusals reduced to an Info in
         sanity — a snapshot whose holdings_count says rows are missing
         was certified OK and `tjs run` said "positions match the
-        broker's holdings files". The run's end check now says the
-        check could not run and points at the Error, never "match" nor
-        "differ … missing history"."""
+        broker's holdings files". `tjs sanity` refuses the file (exit 2)
+        and its Error names it, never "OK" nor "differ … missing
+        history", captured or as a person reads it. Since TJ-5170 the
+        run compares nothing: it says neither, and names `tjs sanity`."""
         meta = ('as_of = "2024-12-31"\nbroker_account = "99900090"\n'
                 'holdings_count = 2\n')
         with tempfile.TemporaryDirectory() as td:
             root = _project(td, [("margin_2024-12-31.toml", meta,
                                   [_BOTH[0]])])
+            for env in (None, {"TAXJSON_WIDTH": "100"}):
+                with self.subTest(env=env):
+                    r = _tjs(root, "sanity", env=env)
+                    self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                    out = r.stdout + r.stderr
+                    self.assertIn("holdings_count = 2 but the file has 1",
+                                  " ".join(out.split()))
+                    self.assertNotIn("OK:", out)
+                    self.assertNotIn("positions match", out)
+                    self.assertNotIn("discrepanc", out)
+                    self.assertNotIn("missing history", out)
             r = _tjs(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             out = r.stdout + r.stderr
-            self.assertIn("holdings_count = 2 but the file has 1", out)
-            self.assertIn("holdings check could not run", out)
-            self.assertIn("The Error above names the file to fix", out)
+            self.assertNotIn("holdings_count = 2", out)
             self.assertNotIn("positions match", out)
             self.assertNotIn("positions differ", out)
-            # The console path (a terminal's width) says the same.
-            from taxjson.pipeline import run as pipeline_run
-            err = io.StringIO()
-            with contextlib.redirect_stderr(err), \
-                    self.assertRaises(SystemExit) as cm:
-                pipeline_run._sanity_console(root)
-            self.assertEqual(cm.exception.code, pipeline_run._SANITY_REFUSED)
-            self.assertIn("holdings_count = 2", err.getvalue())
+            self.assertIn("positions not yet compared with the broker's "
+                          "holdings files", " ".join(out.split()))
 
 
 class TestDatedSnapshots(unittest.TestCase):

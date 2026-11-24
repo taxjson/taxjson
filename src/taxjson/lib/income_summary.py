@@ -29,6 +29,21 @@ def get_base_ticker(symbol: str) -> str:
     return symbol
 
 
+def income_amount(tx: Dict[str, Any]) -> float:
+    """The amount the income summary counts for a row: the gross for a
+    dividend or a payment in lieu (its withholding is a line of its
+    own), the net otherwise; the next key when that one is missing or 0.
+    summarize_income's rule, and the one the hand-off's Dec-31 rows
+    record (lib/handoff `boundary_rows`, backlog TJ-5066)."""
+    action = str(tx.get('action') or '').upper()
+    type_ = str(tx.get('type') or '').lower()
+    if action in ('DIVIDEND', 'DIVIDEND_IN_LIEU') or type_ in ('dividend', 'dividend_in_lieu'):
+        amount_raw = tx.get('gross_amount') or tx.get('net_amount') or tx.get('amount')
+    else:
+        amount_raw = tx.get('net_amount') or tx.get('gross_amount') or tx.get('amount')
+    return float(amount_raw or 0)
+
+
 def _is_dil(e: Dict[str, Any]) -> bool:
     return e.get('action') == 'DIVIDEND_IN_LIEU'
 
@@ -118,13 +133,7 @@ def summarize_income(transactions: List[Dict[str, Any]], target_year: int = None
         # account's rows differently.
         currency = tx.get('currency') or '?'
         
-        # Get amount - gross_amount is primary for dividends, net_amount for others
-        if action in ('DIVIDEND', 'DIVIDEND_IN_LIEU') or type_ in ('dividend', 'dividend_in_lieu'):
-            amount_raw = tx.get('gross_amount') or tx.get('net_amount') or tx.get('amount')
-        else:
-            amount_raw = tx.get('net_amount') or tx.get('gross_amount') or tx.get('amount')
-
-        amount = float(amount_raw or 0)
+        amount = income_amount(tx)
         if (action in ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST')
                 and all(tx.get(k) is None for k in _AMOUNT_KEYS)):
             missing_amount.append({k: tx.get(k) for k in
