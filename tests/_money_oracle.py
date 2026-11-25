@@ -88,7 +88,8 @@ CLASSES = ("same", "noise", "tie", "text", "form", "typeerror", "bug")
 # rows at 4; tests/test_model_money_switch keeps the list whole).
 CUT_KEYS = {
     2: ("at_risk_amount", "loss_amount"),
-    4: ("rows", "capitalized_263h", "deferred", "deferred_wash"),
+    4: ("rows", "capitalized_263h", "deferred", "deferred_wash",
+        "stock_dividend_delivery"),
     6: ("deferred_loss_cut", "deferred_loss_recovered", "denied_contribution",
         "permanently_disallowed", "premium", "premium_after_cut"),
     9: ("units",),

@@ -135,6 +135,10 @@ US_RUN_HELPERS = ("_us_ikey_on", "_us_rkey_on", "_us_allot_sold_shares", "_us_ap
                   "_us_deliver_to_short",
                   # an ASSIGN's route: its premium rolls into its shares, or cash-settled (TJ-5005)
                   "_us_assign_route",
+                  # a stock dividend after its short's cover: the pre-pass's decision followed,
+                  # its delivered cost on the cover, the result's key (TJ-5282)
+                  "_us_stkdiv_no_shares", "_us_delivered_cost", "_us_with_delivery",
+                  "_us_no_shares_key", "_us_conserved_rows",
                   )
 # Three the pre-run scan and the timeline recorder share stay pure over one keyword
 # input, which the walk hands from the run.

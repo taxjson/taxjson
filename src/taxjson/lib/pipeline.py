@@ -1180,7 +1180,7 @@ def prepare_books(transactions, sheltered_transactions=(),
         from taxjson.lib.missing_history import sizing_until
         _until = sizing_until(year)
         transactions, missing_history_log = synthesize_openings(
-            transactions, mh_pairs, until=_until)
+            transactions, mh_pairs, until=_until, country=country)
         # The wash context too (audit S021-09): a registered or
         # affiliated account with truncated history otherwise looks
         # short here, so its in-window rebuy is not "still held at day
@@ -1191,10 +1191,10 @@ def prepare_books(transactions, sheltered_transactions=(),
         # a context book's pair is its own account's stage to flag.)
         sheltered_transactions, _sh_log = synthesize_openings(
             sheltered_transactions, mh_pairs, flag_stale=False,
-            until=_until)
+            until=_until, country=country)
         affiliated_transactions, _af_log = synthesize_openings(
             affiliated_transactions, mh_pairs, flag_stale=False,
-            until=_until)
+            until=_until, country=country)
         _ctx = {}
         for _label, _log in (('sheltered', _sh_log),
                              ('affiliated', _af_log)):
@@ -1230,7 +1230,7 @@ def prepare_books(transactions, sheltered_transactions=(),
         _types = {a: v for a, v in _types.items() if a}
         candidates = detect_missing_history(
             transactions + sheltered_transactions + affiliated_transactions,
-            registered_accounts=_types,
+            registered_accounts=_types, country=country,
             affiliated_accounts={t.account for t in affiliated_transactions})
         # Options coded CLOSING that the books cannot back — a sale or a
         # purchase, with the held contract under another root named
@@ -1347,6 +1347,10 @@ class GainsRequest:
     country: str
     year: Optional[int] = None
     taxable: bool = False
+    # The main book is a registered (sheltered) account's: its type in
+    # taxjson.toml. Not `not taxable`: a taxable account's native-currency
+    # books are run without --taxable too.
+    registered_book: bool = False
     tax_date: Optional[str] = None            # None → country-aware default
     incomplete_history: Optional[Path] = None
     # The books are a native-currency view (taxjson-gains --native-books).
@@ -1913,6 +1917,11 @@ def engine_options(req: GainsRequest) -> Dict[str, Any]:
     builder for run_gains, taxjson-audit and taxjson-explain
     (re-audit A2-0314/A2-0318)."""
     extra: Dict[str, Any] = {}
+    if req.registered_book:
+        # The main book is a registered account's (the account's type in
+        # taxjson.toml, taxjson-gains --registered-book): never short, so a
+        # stock dividend is never a covered short's obligation (TJ-5282).
+        extra['registered_book'] = True
     if req.loss_overrides:
         extra['loss_overrides'] = tuple(req.loss_overrides)
     if req.per_account_basis and req.country == 'usa':
@@ -2020,14 +2029,14 @@ def _ca_stock_dividend_cost_lines(transactions, req, warn_year) -> List[Tuple[An
 def _gains_with_stock_dividend_lines(rules, sd_lines, transactions, **kw):
     """`rules.compute_gains`, with Canada's $0-cost stock dividend lines (`sd_lines`) said
     before the engine's own lines, as they always were, less those of the rows the engine
-    booked on a short (its `stock_dividends_owed`, dropped from the result here: no gains
-    document carries it): such a row has no cost to add (CA-STKDIV-02; backlog TJ-5281:
-    the line asked for one). The engine's lines are held while it runs, then said as they
-    were; on an error every line is said first."""
+    booked on a short (its `stock_dividends_owed`): such a row has no cost to add
+    (CA-STKDIV-02; backlog TJ-5281: the line asked for one). The engine's lines are held
+    while it runs, then said as they were; on an error every line is said first. The
+    gains document keeps `stock_dividends_owed` (both engines name the rows: CA-STKDIV-02,
+    US-STKDIV-06), the one reading of those rows the views that replay the books take
+    (lib/missing_history owed_stock_dividends, TJ-5281)."""
     if not sd_lines:
-        results = rules.compute_gains(transactions, **kw)
-        results.pop('stock_dividends_owed', None)
-        return results
+        return rules.compute_gains(transactions, **kw)
     import contextlib
     import io
     held = io.StringIO()
@@ -2035,7 +2044,10 @@ def _gains_with_stock_dividend_lines(rules, sd_lines, transactions, **kw):
     try:
         with contextlib.redirect_stderr(held):
             results = rules.compute_gains(transactions, **kw)
-        owed = set(results.pop('stock_dividends_owed', None) or ())
+        owed = set(results.get('stock_dividends_owed') or ())
+        # (a covered short's row, booked as no shares: no cost to add either; the key
+        # stays, a key of the gains files: TJ-5282)
+        owed |= set(results.get('stock_dividends_after_cover') or ())
     finally:
         for _id, _line in sd_lines:
             if _id not in owed:

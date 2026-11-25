@@ -33,15 +33,15 @@ TOTAL    1,373.02  235.24  1,608.26  1,118.61  0.00  311.73  2,726.87
 DIVIDEND for crypto account(s) crypto (23.56) is STAKING rewards — ordinary income, not dividends.
 
 FOR THE RETURN — taxable accounts (crypto, margin, qt), CAD (Schedule 3, tax year 2024)
-GAIN = PROCEEDS − COST(ACB) − OUTLAYS, the allowed gain; DENIED = superficial losses denied.
+GAIN = PROCEEDS − COST(ACB) − OUTLAYS = PROCEEDS − TOTAL COST, the allowed gain; DENIED = superficial losses denied.
 The SUBTOTAL adds the account rows, RETURN each sale's cents: they can differ by a cent or two.
-SCHEDULE 3 LINE                                         PROCEEDS  COST(ACB)  OUTLAYS     GAIN  DENIED
------------------------------------------------------------------------------------------------------
-shares & fund units (P1) (10689/10690)                 45,461.25  45,233.03     8.03   220.19    0.00
-shares & fund units (P2) (13199/13200)                 31,313.38  31,399.22    19.33  -105.17  943.13
-options, crypto & other properties (P2) (15199/15300)  15,356.25  14,713.76    63.13   579.36    0.00
------------------------------------------------------------------------------------------------------
-RETURN                                                 92,130.88  91,346.01    90.49   694.38  943.13
+SCHEDULE 3 LINE                                         PROCEEDS  COST(ACB)  OUTLAYS  TOTAL COST     GAIN  DENIED
+-----------------------------------------------------------------------------------------------------------------
+shares & fund units (P1) (10689/10690)                 45,461.25  45,233.03     8.03   45,241.06   220.19    0.00
+shares & fund units (P2) (13199/13200)                 31,313.38  31,399.22    19.33   31,418.55  -105.17  943.13
+options, crypto & other properties (P2) (15199/15300)  15,356.25  14,713.76    63.13   14,776.89   579.36    0.00
+-----------------------------------------------------------------------------------------------------------------
+RETURN                                                 92,130.88  91,346.01    90.49   91,436.50   694.38  943.13
 
 - PROCEEDS − COST(ACB) − OUTLAYS = GAIN, the allowed gain. A short sale shows what it brought in, net of its opening commission, as PROCEEDS and the cover as ACB; the commissions of other sales are outlays, as on the form.
 - Where a superficial loss was DENIED (943.13 in all) the ACB is REDUCED by it, so the gain stays the allowed one; a deferred denial is added to the ACB of the replacement property, but one caused by a registered-account acquisition is lost for good, and one caused by an affiliated person's acquisition is permanent for this return (that person adds it to their own ACB, s.53(1)(f)) — no ACB addition here (101.93 of the DENIED total).

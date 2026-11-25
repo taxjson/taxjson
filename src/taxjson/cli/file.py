@@ -1,4 +1,4 @@
-"""The Before you file commands: form-export, t1135, carryover, option-boundary, close-year, check-filed, handoff (the slip ones: cli/slips.py)."""
+"""The Before you file commands: form-export, t1135, carryover, option-boundary, close-year, check-filed, handoff (the slip ones: cli/slips.py; gains-cra: cli/gains_filing.py)."""
 import argparse
 import contextlib
 import hashlib
@@ -27,6 +27,7 @@ from taxjson.cli.checklist_run import checklist_run_helpers, default_run_sub
 from taxjson.cli.common import (
     _accounts_skipped_for_no_inputs, _artifact_year_mismatch,
     _box18_fractions, _carried_back_to, _carry_back, _child_error, _claims_back,
+    _gain_left_out, _stop_on_incomplete_split,
     _carried_in, _stale_opening, _typed_opening,
     _FROZEN_NOTE_PREFIX, _ledger_amount, _ledger_doc, LedgerUnavailable,
     _relay_child_stderr,
@@ -2258,10 +2259,12 @@ def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any],
     if (isinstance(ncl, dict) and isinstance(filed_totals, dict)
             and filed_totals.get("gain") is not None):
         _as_filed(ncl, _doc, float(filed_totals["gain"]))
+    _filed_gain = ((filed_totals or {}).get("gain")
+                   if isinstance(filed_totals, dict) else None)
     if isinstance(ncl, dict) and float(ncl.get("closing") or 0.0) > 0.005:
-        _split_for_lock(root, cfg, settings, r, ncl, accepted,
-                        (filed_totals or {}).get("gain")
-                        if isinstance(filed_totals, dict) else None)
+        _split_for_lock(root, cfg, settings, r, ncl, accepted, _filed_gain)
+    elif isinstance(ncl, dict) and _filed_gain is None:
+        _gain_left_out(root, cfg, settings, ncl, accepted)  # cli/common; TJ-1488
     mt = block.get("minimum_tax")
     if federal_only and isinstance(mt, dict):
         mt["province"] = None
@@ -2274,7 +2277,7 @@ def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any],
     # (TJ-1465).
     if (res.stderr or "").strip():
         _relay_child_stderr(res.stderr, handled=(
-            "carry-back of this year's loss",
+            "carry-back of this year's loss", "this year's carry-back may change",
             "these books are not the clean result of the current inputs"))
     return block
 
@@ -2321,9 +2324,10 @@ def _split_for_lock(root: Path, cfg: Dict[str, Any], settings: Settings,
         back, incomplete, stated = cb.amount, cb.incomplete, cb.stated
         to = (cb.to, cb.to_split, cb.stated_to)
     if incomplete:
-        _stop_on_incomplete_split(incomplete, accepted)
-        ncl["carry_back_incomplete"] = {
-            k: incomplete[k] for k in ("years", "undated") if k in incomplete}
+        from taxjson.lib.carry_back import incomplete_record
+        _stop_on_incomplete_split(incomplete, accepted, int(year or 0),
+                                  float(ncl.get("created") or 0.0) > 0.005)
+        ncl["carry_back_incomplete"] = incomplete_record(incomplete)
     if stated:
         # The split rests on the person's own figures for those years.
         ncl["carry_back_stated"] = stated
@@ -2337,38 +2341,6 @@ def _split_for_lock(root: Path, cfg: Dict[str, Any], settings: Settings,
     why = lock_split(ncl, back, *to)
     if why:
         stop(why)
-
-
-def _stop_on_incomplete_split(incomplete: Dict[str, Any],
-                              accepted: Optional[str]) -> None:
-    """The split of the year's loss rests on a ledger that left sales with an
-    unknown cost out: stop, or, `accepted` (how: --force, or the yes of
-    close-year's question), lock it and say so, naming them in the default
-    view too. A stop with a way past it: an unknown cost can be settled, and no
-    hand-reported result can be entered in the ledger (the owner's decisions,
-    backlog TJ-1436, TJ-1460, TJ-1463)."""
-    from taxjson.lib import out as _out
-    from taxjson.lib.carry_back import left_out_text
-    sales = [f"- {s.get('date')} {s.get('symbol')}"
-             + (f" ({s['account']})" if s.get("account") else "")
-             + f": proceeds {M.shown(float(s.get('proceeds') or 0.0), 2):,.2f}"
-             for s in incomplete.get("sales") or []]
-    if len(sales) > 5:
-        sales[5:] = [f"- and {len(sales) - 5} more (`tjs carryover --json`)"]
-    years = left_out_text(incomplete)
-    if accepted:
-        _out.show(_out.message(
-            "warning", f"locking a split of this year's loss that leaves out "
-            f"sales with an unknown cost ({years}) ({accepted})",
-            prog=_cmd_prog(), details=sales, stream=sys.stderr), sys.stderr)
-        return
-    _die(f"the split of this year's loss leaves out sales with an unknown "
-         f"cost ({years})", *sales,
-         "Their results can change how [carryover] claimed folds, so the "
-         "part of this year's loss carried back may change.",
-         "Give them a cost (`tjs find-missing-history`), `tjs run`, then "
-         "close; or, if the cost stays unknown, pass --force to lock the "
-         "split as computed. Nothing was written.")
 
 
 def _as_filed(ncl: Dict[str, Any], doc: Dict[str, Any],

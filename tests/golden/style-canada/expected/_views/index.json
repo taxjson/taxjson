@@ -10,6 +10,16 @@
   "exit": 0
  },
  {
+  "view": "gains-base",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "gains-base --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
   "view": "estimate --province ON",
   "cwd": ".",
   "exit": 0
@@ -38,6 +48,22 @@
   "view": "form-export --json",
   "cwd": ".",
   "exit": 0
+ },
+ {
+  "view": "gains-cra",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "gains-cra --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "gains-cra",
+  "cwd": ".",
+  "exit": 0,
+  "width": 120
  },
  {
   "view": "wash-sales",

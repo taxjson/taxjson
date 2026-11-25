@@ -586,6 +586,15 @@ def _wash_flags(is_taxable: bool, is_crypto: bool, country: str) -> List[str]:
     return flags
 
 
+def _registered_flags(is_taxable: bool) -> List[str]:
+    """The flag that tells a gains run its book is a registered (sheltered)
+    account's, by the account's type in taxjson.toml: --registered-book,
+    the engines' word that the account is never short (a stock dividend
+    there is never a covered short's obligation, TJ-5282). Not the absence
+    of --taxable: a taxable account's native books are run without it too."""
+    return [] if is_taxable else ["--registered-book"]
+
+
 class PendingElectionsError(RuntimeError):
     """An account's corp-action events need elections and prompting
     isn't possible (--no-input or no TTY). Carries the pending-JSON
@@ -1547,7 +1556,8 @@ def _sweep_stale_parses(name: str, cache: Path, present: Set[str],
     export group, .tt file or corp file of the account names (`present`),
     a longer account's (`siblings`: the 2026-09 adversarial audit) and the
     books and the stages' own files beside them apart (each row's own
-    sweep takes those), what taxjson can vouch for goes, with its .diag;
+    sweep takes those), what taxjson can vouch for goes, with its .diag (a
+    parse a run wrote, whether that run completed or stopped: TJ-5273);
     the rest is moved to work/kept/ with its .diag, where no reader of
     work/<name>_*.json sees it, and named once with where it went; a
     folder, or a path through a link, is left and named (stage_table
@@ -2220,7 +2230,7 @@ def _gains_prepare(i: ST.Inst) -> List[str]:
         "--full-traces", str(traces),
     ]
     wash_flags = _wash_flags(c.taxable, c.crypto, a.country)
-    cmd += wash_flags
+    cmd += wash_flags + _registered_flags(c.taxable)
     if "--no-wash" in wash_flags:
         # A rule of the run, not of the account: said once.
         _say_once("no-crypto-wash", "note",
@@ -2256,9 +2266,37 @@ def _gains_build(i: ST.Inst, r: ST.Ready) -> None:
     run_to_file(r.prep, ST.output(i))
 
 
+def _say_presize_disagreements(base_json: Path, gains_json: Path, mh: Optional[Path],
+                               country: str) -> None:
+    """After an account's gains run: the stock dividend rows that
+    `[[distributions]]` sized as no shares (lib/stock_dividend_cover
+    `presized`, on the base book and the missing history the gains run
+    walks) against the ones the run booked so (its
+    `stock_dividends_after_cover`). Each row the two read differently is
+    an ATTENTION line naming both readings: a record-date balance sized
+    on other units than the books hold is never silent (backlog
+    TJ-5282). A file that does not read is the run's own checks'."""
+    import json
+    from taxjson.lib.stock_dividend_cover import presize_disagreements, presized
+    from taxjson.lib.missing_history import (STOCK_DIVIDENDS_AFTER_COVER,
+                                             load_missing_history)
+    try:
+        rows = json.loads(base_json.read_text(encoding="utf-8")).get("transactions") or []
+        booked = json.loads(gains_json.read_text(encoding="utf-8")).get(
+            STOCK_DIVIDENDS_AFTER_COVER) or []
+        phantoms = load_missing_history(mh) if mh is not None else None
+    except (OSError, ValueError, AttributeError):
+        return
+    for ln in presize_disagreements(rows, presized(rows, phantoms, country)[1], booked):
+        _echo_captured(f"{ATTENTION_PREFIX} {ln}")
+
+
 def _gains_every_run(i: ST.Inst, _r: ST.Ready) -> None:
     c, a = i.ctx, i.ctx.own
     name, gains_json = c.account, ST.output(i)
+    if c.dists:
+        _say_presize_disagreements(c.work / f"{name}_base.json", gains_json, c.mh,
+                                   a.country)
     # The gains stage's ATTENTION lines, from the persisted .diag on
     # EVERY run, cached or not: a broker-coded CLOSING row the books
     # cannot back (audit A2-0006), an unapplied basis adjustment
@@ -2370,7 +2408,7 @@ def _native_gains_build(i: ST.Inst, _r: ST.Ready) -> None:
         "--country", a.country,
     ] + option_timing_flags(c.settings)
         + income_dating_flags(c.settings) + _ph_raw
-        + [str(book)],
+        + _registered_flags(c.taxable) + [str(book)],
                 ST.output(i), capture_diag=False)
 
 
@@ -4988,6 +5026,11 @@ def stage_blended_wash_pass(names: List[str],
     from taxjson.lib.share_exchange_windows import ATTENTION_SHARE_EXCHANGE
     echo_attention_lines(combined_wash, once=True,
                          prefix=ATTENTION_SHARE_EXCHANGE[len(ATTENTION_PREFIX) + 1:])
+    # A covered short's stock dividend whose cover closes no short in the
+    # books pooled across accounts (another account holds the shares): its
+    # delivered cost is not in the figures filed. Said only by this pass
+    # (CA-STKDIV-02; backlog TJ-5308): on the console.
+    echo_attention_lines(combined_wash, prefix="pooled short: ", once=True)
     _mv = [ln for ln in _diag_lines(combined_wash)
            if ln.startswith(ATTENTION_PREFIX + " own-account move: ")]
     if _mv and strict:
@@ -5129,31 +5172,41 @@ def stage_sweep(cache: Path, reports_dir: Path, *, late: bool = False,
     run's row instances built and this run's do not (an account, a
     broker's export or a kind gone from the project: the stage table's
     `sweep_vanished`, TJ-4265), with the own files of an account not in
-    `accounts` (taxjson.toml's: TJ-4264), said in one line; what it kept
-    (edited since taxjson wrote it, or not taxjson's: TJ-4274) in another,
-    once a run. `late`: the run's reports built, the rest (a radar of an
-    account no longer taxable)."""
+    `accounts` (taxjson.toml's: TJ-4264), said in one line; what it cannot
+    vouch for (edited since taxjson wrote it, or with no record of
+    taxjson's: TJ-4274) moved to work/kept/, where no command that reads
+    work/ finds it, each named once with where it went (TJ-5274), in
+    another. A move that fails stops the run, after naming what was moved.
+    `late`: the run's reports built, the rest (a radar of an account no
+    longer taxable)."""
     if not late:
         _sweep_retired_exports(reports_dir)
-    swept = ST.sweep_vanished(cache, spare=() if late else ST.LATE_ROWS,
-                              configured=list(accounts))
+    try:
+        swept = ST.sweep_vanished(cache, spare=() if late else ST.LATE_ROWS,
+                                  configured=list(accounts))
+        stuck = None
+    except ST.SweepMoveError as e:
+        swept, stuck = e.swept, e
     gone = swept.gone
     if gone:
         _say("note", f"removed {_count_noun(len(gone), 'file')} the last run "
              f"built and this one does not (an account, an export or a kind "
              f"gone from the project): {', '.join(gone[:3])}"
              f"{' ...' if len(gone) > 3 else ''}", indent="  ", file=sys.stdout)
-    shown = run_state.current.shown
-    kept = [(f, why) for f, why in swept.kept if ("sweep-kept", f) not in shown]
-    shown.update(("sweep-kept", f) for f, _why in kept)
-    if kept:
-        _why = {ST.EDITED: "edited since taxjson wrote it", ST.NOT_OURS: "not written by taxjson"}
-        _say("note", f"kept {_count_noun(len(kept), 'file')} the last run listed "
-             f"and this one does not build: "
-             f"{', '.join(f'{f} ({_why[why]})' for f, why in kept[:3])}"
-             f"{' ...' if len(kept) > 3 else ''}; delete "
-             f"{'it' if len(kept) == 1 else 'them'} yourself if you do not need "
-             f"{'it' if len(kept) == 1 else 'them'}", indent="  ", file=sys.stdout)
+    _why = {ST.EDITED: "edited since taxjson wrote it",
+            ST.NOT_OURS: ST.NO_RECORD, ST.BESIDE: "written beside a file moved there"}
+    if swept.moved:
+        _say("note", f"moved {_count_noun(len(swept.moved), 'file')} the last run "
+             f"listed and this one does not build (an account, an export or a "
+             f"kind gone from the project) out of the books: "
+             f"{', '.join(f'{f} -> {to} ({_why[why]})' for f, to, why in swept.moved)}"
+             f"; taxjson reads nothing in work/{ST.KEPT_DIR}/ and deletes nothing "
+             f"there", indent="  ", file=sys.stdout)
+    if stuck is not None:
+        _die(f"cannot move {stuck.rel} to work/{ST.KEPT_DIR}/: {stuck.strerror}",
+             f"The last run listed it and this one does not build it "
+             f"({_why[stuck.why]}): taxjson reads and deletes only what it "
+             f"wrote. Move it out of {stuck.rel.split('/')[0]}/, then run again.")
 
 
 def _tt_has_no_rows(data: bytes) -> bool:

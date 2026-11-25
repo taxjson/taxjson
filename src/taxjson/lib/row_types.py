@@ -48,6 +48,16 @@ STOCK_DIVIDEND = 'stock_dividend'
 # boot exchange's two rows (the old shares' SELL and the new shares'
 # BUYSELL). Neither acquisition is "by purchase" for §1091(a).
 SPINOFF_355_TYPE = 'spinoff_355'
+# (the engine's own name for it: engine/us/terms REORG_356_TYPE)
+REORG_356_TYPE = 'reorg_356'
+
+
+# An s.86.1 spin-off's fraction sale that replaces the brokerage
+# parser's own pair for that cash in lieu (lib/corp_actions
+# CIL_TAKEOVER_TYPE, its own name for it): taxjson-merge2 drops the pair
+# and clears the mark, so it never reaches the engines; a book that still
+# holds it has no .tt line (lib/tt_format refuses the row).
+CIL_TAKEOVER_TYPE = 'cil_takeover'
 
 
 # A custody move between two of your own TAXABLE accounts, as a pair of
@@ -103,6 +113,8 @@ TRANSFER_BOOK_VALUE_TYPE = 'transfer_book_value'
 # wash-sale window. `[settings] transfers_as_acquisitions = true` books
 # such rows as 'transfer_rewrite' instead (CA-SL-17 / US-WASH-24).
 TRANSFER_CUSTODY_TYPE = 'transfer_custody'
+# (lib/pipeline writes the literal; engine/us/wash reads it)
+TRANSFER_REWRITE_TYPE = 'transfer_rewrite'
 
 
 # An in-kind move between a TAXABLE account and a REGISTERED account of

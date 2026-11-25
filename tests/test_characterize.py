@@ -47,6 +47,8 @@ STATEMENT = (
     'Trades,Data,Order,Stocks,USD,QZRX,"2026-01-05, 09:30:00",100,10.00,0,-1000,-1,0,0,0,O\n'
     'Trades,Data,Order,Stocks,USD,QZIE,"2026-01-05, 09:30:00",100,10.00,0,-1000,-1,0,0,0,O\n'
     'Trades,Data,Order,Stocks,USD,QZRY,"2026-01-05, 09:30:00",100,10.00,0,-1000,-1,0,0,0,O\n'
+    # (held: a row with no ISIN is booked on a listing only on evidence of it, TJ-5250)
+    'Trades,Data,Order,Stocks,USD,QZNO,"2026-01-05, 09:30:00",100,10.00,0,-1000,-1,0,0,0,O\n'
     'Dividends,Header,Currency,Account,Date,Description,Amount\n'
     # A foreign issuer's return of capital, an ordinary dividend alike in
     # every number on its day, two alike reversals.

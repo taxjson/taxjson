@@ -39,11 +39,15 @@ from taxjson.engine.ca.run_helpers import _futures_names, _ca_split_targets, _ca
 from taxjson.engine.ca.indexes import WashPlace, _WashAdjustIndex
 from taxjson.engine.ca.own_moves import _is_lot_move, _own_move_view
 from taxjson.engine.ca.router import (
-    _router_move_key, _place_own_move_legs, _split_crossing_marked_rows,
+    MarkedPositions, _router_move_key, _place_own_move_legs, _split_crossing_marked_rows,
 )
 from taxjson.engine.ca.holders import _SLIndexes, _CanadaRun
 
-from taxjson.engine.ca.walk import STOCK_DIVIDENDS_OWED, _conserved_rows
+from taxjson.engine.ca.walk import (
+    STKDIV_DELIVERED, STKDIV_DELIVERY, STOCK_DIVIDENDS_AFTER_COVER,
+    STOCK_DIVIDENDS_OWED, _conserved_rows, stock_dividend_after_cover_line,
+    stock_dividend_cost_unbooked_line, stock_dividend_near_cover_line)
+from taxjson.lib.stock_dividend_cover import no_share_rows
 from taxjson.lib.row_types import is_stock_dividend
 from taxjson.engine.ca.solve import _ca_solve
 from taxjson.engine.ca.denial import _ca_live_rules
@@ -64,11 +68,29 @@ class SplitStraddlesSettlementError(ValueError):
     correctly against the post-split pool."""
 
 
+def _stock_dividend_lines(run: _CanadaRun, transactions: List[TaxTransaction],
+                          gone: Dict[RowId, Dict[str, Any]]) -> None:
+    """Say the line of each stock dividend row booked as no shares (`gone`), now that the
+    walk is done: whether its cover closed a short in these books (and so took its
+    `delivered_cost`), whether the books pool several accounts, the cover's tax year
+    (`stock_dividend_after_cover_line`)."""
+    if not gone:
+        return
+    by_id = {t.id: t for t in transactions}
+    pooled = len({t.account for t in transactions if t.account}) > 1
+    closed = run._ev_memo.get(STKDIV_DELIVERED, ())
+    for _id in sorted(gone, key=str):
+        cover = by_id.get(gone[_id]['cover'])
+        emit_line(stock_dividend_after_cover_line(
+            gone[_id], _id in closed, pooled,
+            str(run.get_sort_date(cover))[:4] if cover is not None else ''))
+
+
 class CanadaTaxRules(TaxRules):
     country = _CANADA
 
     @M.engine
-    def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: Optional[List[TaxTransaction]] = None, affiliated_transactions: Optional[List[TaxTransaction]] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True, option_premium_timing: str = 'close', option_grant_since: Optional[int] = None, option_buyback_loss_superficial: bool = False, option_grant_basis: str = 'settle', loss_overrides: Sequence[Dict[str, Any]] = (), year_end: Optional[str] = None, year_end_basis: Optional[str] = None, cost_timeline: Optional[str] = None) -> Dict[str, Any]:
+    def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: Optional[List[TaxTransaction]] = None, affiliated_transactions: Optional[List[TaxTransaction]] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True, option_premium_timing: str = 'close', option_grant_since: Optional[int] = None, option_buyback_loss_superficial: bool = False, option_grant_basis: str = 'settle', loss_overrides: Sequence[Dict[str, Any]] = (), year_end: Optional[str] = None, year_end_basis: Optional[str] = None, cost_timeline: Optional[str] = None, registered_book: bool = False) -> Dict[str, Any]:
         """
         Detects Superficial Losses (Wash Sales) based on CRA rules and calculates gains.
         Handles multi-account pooling and iterative adjustments.
@@ -106,7 +128,7 @@ class CanadaTaxRules(TaxRules):
             sheltered_transactions=sheltered_transactions,
             year_end=year_end,
             year_end_basis=year_end_basis)
-        transactions, _owed = self._stock_dividends_owed(transactions, _kw)
+        transactions, _owed, _gone = self._stock_dividends_owed(transactions, _kw, registered_book)
         _run = self._prepare(
             cost_timeline=cost_timeline,
             detect_wash_sales=detect_wash_sales,
@@ -114,14 +136,21 @@ class CanadaTaxRules(TaxRules):
             trace=trace,
             transactions=transactions, **_kw)
         _run._ev_memo[STOCK_DIVIDENDS_OWED] = frozenset(_owed)
+        for _id, _f in _gone.items():       # (a covered short's row: its cost joins its cover)
+            _run._ev_memo.setdefault(STKDIV_DELIVERY, {}).setdefault(
+                _f['cover'], []).append((_id, max(M.of(_f['cost']), M.of(0.0))))
         books = _ca_solve(run=_run)
         res = self._finish(books=books, run=_run)
-        if _owed:       # (lib/pipeline run_gains reads and drops it: no gains document carries it)
+        _stock_dividend_lines(_run, transactions, _gone)
+        if _owed:       # (the gains document keeps it: the views read these rows as the engine did, TJ-5281)
             res[STOCK_DIVIDENDS_OWED] = _owed
+        if _gone:       # (a key of the gains files: every reader of the rows leaves these out)
+            res[STOCK_DIVIDENDS_AFTER_COVER] = sorted(_gone, key=str)
         return res
 
-    def _stock_dividends_owed(self, transactions: List[TaxTransaction], kw: Dict[str, Any]
-                              ) -> Tuple[List[TaxTransaction], List[RowId]]:
+    def _stock_dividends_owed(self, transactions: List[TaxTransaction], kw: Dict[str, Any],
+                              registered_book: bool = False) -> Tuple[List[TaxTransaction], List[RowId],
+                                         Dict[RowId, Dict[str, Any]]]:
         """The book with each stock dividend received by an account that is short the
         security written as what it is there, the short growing by the shares at no proceeds
         (CA-STKDIV-02: the row's quantity negative), and those rows' ids. One reading for
@@ -135,8 +164,28 @@ class CanadaTaxRules(TaxRules):
         there is the short's. So the pooled books of several accounts and each account's own
         books read a row alike: a holder's receipt stays one while another account's short
         leaves the pool net short (the pool alone made it the short's, and the holder's shares
-        were gone from the pooled books)."""
+        were gone from the pooled books).
+
+        A row posted with no short open, where the account was short on the row's
+        entitlement date and covered before it, is that short's obligation, which its cover
+        did not include (backlog TJ-5282; lib/stock_dividend_cover decides it from the rows
+        alone, as every reader of the rows does): no shares, so it is left out of the book
+        for every pass, the first walks here included (a $0 acquisition, it was shares held
+        and a purchase in a loss's 30 days), and returned with its facts (the third value: `compute_gains` names the rows
+        in the result's `stock_dividends_after_cover`, hands a row's `delivered_cost` to
+        its cover and says the line). A row with no entitlement date stays as booked;
+        where the account covered a short in the days before, a line says the row may be
+        its. A `delivered_cost` on any other stock dividend row is said as not booked."""
         owed: Set[RowId] = set()
+        # (the one decision, from the rows alone: lib/stock_dividend_cover)
+        # (never in a registered book, `registered_book`: such an account is never short)
+        gone, near = no_share_rows(transactions, entitled_lots=False, positions=MarkedPositions,
+                                   registered=registered_book)
+        for t in transactions:      # (a cost is above 0: one below is said, never booked)
+            if is_stock_dividend(t) and (t.delivered_cost or 0.0) < 0:
+                gone.get(t.id, {}).update(cost=0.0)
+                emit_line(stock_dividend_cost_unbooked_line(t))
+        transactions = [t for t in transactions if t.id not in gone]
         for acct in sorted({t.account for t in transactions
                             if is_stock_dividend(t) and t.quantity > 0}):
             with contextlib.redirect_stderr(io.StringIO()):
@@ -148,12 +197,17 @@ class CanadaTaxRules(TaxRules):
                 probe._ev_memo[STOCK_DIVIDENDS_OWED] = found
                 _ca_solve(run=probe)
             owed |= found
-        if not owed:
-            return transactions, []
+        for _id in sorted(near, key=str):
+            emit_line(stock_dividend_near_cover_line(near[_id]))
+        for t in transactions:
+            if is_stock_dividend(t) and (t.delivered_cost or 0.0) > 0 and t.id not in gone:
+                emit_line(stock_dividend_cost_unbooked_line(t))
+        if not owed and not gone:
+            return transactions, [], {}
         return ([replace(t, quantity=-t.quantity)
                  if t.id in owed and is_stock_dividend(t) and t.quantity > 0 else t
                  for t in transactions],
-                sorted(owed, key=str))
+                sorted(owed, key=str), gone)
 
     def _prepare(self, *, affiliated_transactions: Optional[List[TaxTransaction]], cost_timeline: Optional[str], detect_wash_sales: bool, loss_overrides: Sequence[Dict[str, Any]], option_buyback_loss_superficial: bool, option_grant_basis: str, option_grant_since: Optional[int], option_premium_timing: str, sheltered_transactions: Optional[List[TaxTransaction]], trace: bool, transactions: List[TaxTransaction], year_end: Optional[str], year_end_basis: Optional[str]) -> _CanadaRun:
         """The Canadian engine's preamble: the input contract, the books named, deduped and

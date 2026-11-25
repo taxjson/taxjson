@@ -60,6 +60,33 @@ def _day(text: str) -> str:
     return text
 
 
+def _add_account_type_args(parser: argparse.ArgumentParser) -> None:
+    """--taxable and --registered-book: what kind of account the input book is."""
+    parser.add_argument(
+        "--taxable",
+        action="store_true",
+        help=(
+            "Mark this input file as a taxable account. Two effects: "
+            "(1) TRANSFER rows are rejected with a hard error — the cost "
+            "basis must come from actual buy/sell history. (2) Wash-sale "
+            "/ superficial-loss detection is enabled (CRA ITA 54 or IRC "
+            "§1091). Default (no flag): treat as sheltered — TRANSFER "
+            "rows rewritten to BUYSELL using net_amount as approximate "
+            "basis (so the sheltered inventory report still tracks the "
+            "position), and wash-sale detection is OFF (the rule doesn't "
+            "apply within registered accounts). Use --no-wash to disable "
+            "wash-sale detection even when --taxable is set."
+        ),
+    )
+    parser.add_argument(
+        "--registered-book", action="store_true",
+        help=("The input file is a registered (sheltered) account's book, as "
+              "`tjs run` passes for an account of type sheltered. Such an "
+              "account is never short: a stock dividend posted after a sale "
+              "and a purchase is shares received, never a covered short's "
+              "obligation (CA-STKDIV-02 / US-STKDIV-06)."))
+
+
 def _parse_args():
     parser = argparse.ArgumentParser(
         description="Compute capital gains from a merged transaction "
@@ -272,22 +299,7 @@ def _parse_args():
             "--all-history to list every candidate regardless of year."
         ),
     )
-    parser.add_argument(
-        "--taxable",
-        action="store_true",
-        help=(
-            "Mark this input file as a taxable account. Two effects: "
-            "(1) TRANSFER rows are rejected with a hard error — the cost "
-            "basis must come from actual buy/sell history. (2) Wash-sale "
-            "/ superficial-loss detection is enabled (CRA ITA 54 or IRC "
-            "§1091). Default (no flag): treat as sheltered — TRANSFER "
-            "rows rewritten to BUYSELL using net_amount as approximate "
-            "basis (so the sheltered inventory report still tracks the "
-            "position), and wash-sale detection is OFF (the rule doesn't "
-            "apply within registered accounts). Use --no-wash to disable "
-            "wash-sale detection even when --taxable is set."
-        ),
-    )
+    _add_account_type_args(parser)
     args = parser.parse_args()
     if args.suggest_phantoms_old:
         emit_line("taxjson-gains: note: --suggest-phantoms is now "
@@ -428,6 +440,7 @@ def _request(args) -> GainsRequest:
         country=args.country,
         year=args.year,
         taxable=args.taxable,
+        registered_book=args.registered_book,
         tax_date=args.tax_date,
         incomplete_history=args.incomplete_history,
         native_books=args.native_books,

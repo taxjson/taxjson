@@ -11,13 +11,13 @@ rbc        24.30    0.00     24.30      0.00  0.00   0.00   24.30
 TOTAL     206.00    0.00    206.00      0.00  2.70  10.13  208.70
 
 FOR THE RETURN — taxable accounts (hand, margin, margin2, rbc), CAD (Schedule 3, tax year 2025)
-GAIN = PROCEEDS − COST(ACB) − OUTLAYS, the allowed gain; DENIED = superficial losses denied.
-SCHEDULE 3 LINE                                  PROCEEDS  COST(ACB)  OUTLAYS    GAIN  DENIED
----------------------------------------------------------------------------------------------
-Line 4 shares & fund units (13199/13200)         1,531.80   1,366.30     1.35  164.15    0.00
-Line 6 options & other properties (15199/15300)     41.85       0.00     0.00   41.85    0.00
----------------------------------------------------------------------------------------------
-RETURN                                           1,573.65   1,366.30     1.35  206.00    0.00
+GAIN = PROCEEDS − COST(ACB) − OUTLAYS = PROCEEDS − TOTAL COST, the allowed gain; DENIED = superficial losses denied.
+SCHEDULE 3 LINE                                  PROCEEDS  COST(ACB)  OUTLAYS  TOTAL COST    GAIN  DENIED
+---------------------------------------------------------------------------------------------------------
+Line 4 shares & fund units (13199/13200)         1,531.80   1,366.30     1.35    1,367.65  164.15    0.00
+Line 6 options & other properties (15199/15300)     41.85       0.00     0.00        0.00   41.85    0.00
+---------------------------------------------------------------------------------------------------------
+RETURN                                           1,573.65   1,366.30     1.35    1,367.65  206.00    0.00
 
 ! FX on foreign cash (line 15300): not in the rows; its estimate is NOT RELIABLE — tjs fx-cash
 Not in the rows: T3/T5 slip capital gains (lines 17600, 17400). More: tjs sum --details

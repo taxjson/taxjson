@@ -2556,16 +2556,32 @@ class GenericBrokerage(BaseBrokerage):
         leg, which is a buy's or a sell's money and never $0 (a warrant's
         or a right's exercise is a .tt line with exercise_of=). Neither is
         an expiry; `_check_assign_legs` pairs them in the file. A futures
-        contract (or its option) is refused: a .tt line books it. The
+        contract (or its option) is refused, naming the .tt lines that
+        book it (the option's ASSIGN line, the future's BUYSELL line). The
         shared checks weigh the leg's side and name its target."""
         where, target, symbol = r.where, r.target, f.symbol
         side = _ASSIGN_SIDE[target]
         what = f"generic importer: {where}: {r.raw_action} (-> {target})"
         if symbol.startswith(FUTURES_PREFIXES):
+            # The form that books (backlog TJ-5266): the .tt reader and
+            # the futures settlement refuse an ASSIGN line of the future
+            # itself (lib/tt_format _refuse_futures_assign).
+            option = is_option_symbol(symbol)
             raise ValueError(
-                f"{what} names the futures contract {symbol}: a futures "
-                f"exercise or assignment is not read from a mapping; book "
-                f"both legs as .tt ASSIGN lines.")
+                f"{what} names the "
+                f"{'option on a future' if option else 'futures contract'} "
+                f"{symbol}: a futures exercise or assignment is not read "
+                f"from a mapping. Book its two legs in a .tt file and "
+                f"delete their rows here: the option's leg as an ASSIGN "
+                f"line (the contracts closed, at price 0: `ASSIGN "
+                f"2025-06-18 16:00:00 {symbol if option else 'OPTION'} -1 "
+                f"USD 0 0`) and the future's leg as a BUYSELL line (the "
+                f"fill the exercise or assignment gave, at the strike, "
+                f"with the contract size after the fee: `BUYSELL "
+                f"2025-06-18 16:00:00 {'FUTURE' if option else symbol} 1 "
+                f"USD 60 600 0 x10`). An ASSIGN line of the future itself "
+                f"is refused: only BUYSELL fills of a futures contract "
+                f"are booked.")
         option = is_option_symbol(symbol)
         if option and f.price_v is None:
             f = f._replace(price_v=0.0, price=0.0)

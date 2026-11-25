@@ -1392,7 +1392,13 @@ def _merge_audit_json(docs: List[Dict[str, Any]], base_currency: str,
                   for k in ("checked", "tied", "untraced")},
                **{k: [m for d in docs for m in
                       (d.get("pool_trades") or {}).get(k) or []]
-                  for k in ("mismatched", "untraced_rows")}},
+                  for k in ("mismatched", "untraced_rows")},
+               # A fill reduced after a broker cancellation, where a book
+               # has one (backlog TJ-5270).
+               **{k: [m for d in docs for m in
+                      (d.get("pool_trades") or {}).get(k) or []]
+                  for k in ("reduced_rows",)
+                  if any((d.get("pool_trades") or {}).get(k) for d in docs)}},
            # The rows that are not trades, the same way (TJ-0359).
            "pool_other_rows": {
                **{k: sum(int((d.get("pool_other_rows") or {}).get(k) or 0)

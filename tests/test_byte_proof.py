@@ -99,7 +99,11 @@ def _hanging(kind: str, pgid_file: Path, own_death: bool = True, grandchild: boo
     death = "ctypes.CDLL(None).prctl(1, 9, 0, 0, 0)"    # PR_SET_PDEATHSIG, SIGKILL
     lines = ["import ctypes, os, signal, subprocess, sys, time", "signal.alarm(30)", "end = time.monotonic() + 30"]
     lines += [death] if own_death else []
-    lines.append(f"open({str(pgid_file)!r}, 'w').write(str(os.getpgrp()))")
+    # Written whole, then renamed into place: a test that sees the file
+    # reads its number (a plain open-then-write left it empty for a moment,
+    # and a loaded machine's test read '' there: TJ-5335).
+    lines.append(f"open({str(pgid_file) + '.part'!r}, 'w').write(str(os.getpgrp()))")
+    lines.append(f"os.replace({str(pgid_file) + '.part'!r}, {str(pgid_file)!r})")
     if grandchild:
         sleeper = "import signal, time; signal.alarm(30); time.sleep(30)"
         stdio = "" if kind == "holds" else (", stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, "

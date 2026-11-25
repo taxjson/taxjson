@@ -233,11 +233,18 @@ class TestTheExecutor(_Project):
 
     def test_a_build_is_vouched_for_at_once_when_asked(self):
         # A view command completes no run: its builds are recorded as each
-        # ends (`record_now`); a run's wait for commit_records.
+        # ends (`record_now`); a run's wait for commit_records, their bytes
+        # noted as the run's meanwhile (`pending`, TJ-5273): no ask reads it.
         table = self.bind()
         ST.execute(table, self.ctx, "t_row")
-        self.assertFalse(record_path(self.work / "m_x.out").exists())
+        rec = json.loads(record_path(self.work / "m_x.out").read_text(encoding="utf-8"))
+        self.assertEqual(rec, {"format": 2, "pending": hashlib.sha256(b"built\n").hexdigest()})
+        self.calls.clear()
+        ST.execute(table, self.ctx, "t_row", reuse=True)
+        self.assertIn("build", [c[0] for c in self.calls])
         commit_records()
+        self.assertNotIn("pending", json.loads(record_path(self.work / "m_x.out").read_text(
+            encoding="utf-8")))
         self.write("work/x.in", "edited\n")
         ST.execute(table, self.ctx, "t_row", reuse=True, at_once=True)
         rec = json.loads(record_path(self.work / "m_x.out").read_text(encoding="utf-8"))
@@ -335,7 +342,7 @@ class TestTheExecutor(_Project):
                 "work/m_webull.out", "work/m_webull.out.diag", "work/old_detect.diag",
                 "work/old_gains_all.json", "work/old_inputs.fingerprint",
                 "work/old_sources.list"])
-            self.assertEqual(swept.kept, [])
+            self.assertEqual((swept.moved, swept.kept), ([], []))
             self.assertEqual([p.exists() for p in (gone, beside, rec, *radar, *old)],
                              [False] * 10)
             self.assertEqual([p.exists() for p in (kept, late, *mine)], [True] * 5)
@@ -399,7 +406,7 @@ class TestTheExecutor(_Project):
         })
         with mock.patch.object(run_state, "current", run_state.RunState()):
             self.assertEqual(ST.sweep_vanished(self.work, configured=[]),
-                             ST.Swept(["work/m_kraken.out"], []))
+                             ST.Swept(["work/m_kraken.out"], [], []))
             self.assertFalse(os.path.lexists(self.work / "m_kraken.out"))
             self.assertEqual([p.exists() for p in (*secrets, *inputs, *yours, *table_s)],
                              [True] * 14)
@@ -415,11 +422,14 @@ class TestTheExecutor(_Project):
     def test_only_what_its_record_vouches_for_goes(self):
         # TJ-4274: an output goes only when a record taxjson wrote (format 2)
         # holds the hash of its bytes now. One edited since, or with no
-        # record, no hash in it or an older format's, is kept and said; a
-        # file beside it goes only with it, one with a record of its own only
-        # when that record vouches for it; a removed account's own files only
-        # when an output of its went; a link in an output's place goes alone
-        # when what it points to is the output as built.
+        # record, no hash in it or an older format's, is moved to work/kept/
+        # (TJ-5274: it was kept in place, where every reader of work/ found
+        # it) with its record gone, and said; a file beside it goes only with
+        # it, one with a record of its own only when that record vouches for
+        # it (moved aside when it does not); a removed account's own files
+        # only when an output of its went; a link in an output's place goes
+        # alone when what it points to is the output as built, and is moved
+        # as the link when it does not.
         outside = self.root.parent / "outside"
         outside.mkdir()
         (outside / "copy.out").write_text("as built\n", encoding="utf-8")
@@ -453,15 +463,26 @@ class TestTheExecutor(_Project):
         self.assertEqual(sorted(swept.gone), [
             "work/a_kraken.out", "work/a_kraken.out.diag", "work/a_questrade.out",
             "work/c_detect.diag", "work/c_sources.list", "work/c_webull.out"])
-        self.assertEqual(sorted(swept.kept), [
-            ("work/a_webull.out", ST.EDITED), ("work/b_kraken.out", ST.NOT_OURS),
-            ("work/b_questrade.out", ST.NOT_OURS), ("work/b_webull.out", ST.NOT_OURS),
-            ("work/c_kraken.out", ST.EDITED), ("work/c_rbc_direct.out", ST.EDITED)])
+        moved = [("work/a_questrade.out.diag", ST.EDITED), ("work/a_webull.out", ST.EDITED),
+                 ("work/b_kraken.out", ST.NOT_OURS), ("work/b_questrade.out", ST.NOT_OURS),
+                 ("work/b_webull.out", ST.NOT_OURS), ("work/c_kraken.out", ST.EDITED),
+                 ("work/c_rbc_direct.out", ST.EDITED)]
+        self.assertEqual(sorted(swept.moved), [
+            (f, f.replace("work/", "work/kept/"), why) for f, why in moved])
+        self.assertEqual(swept.kept, [])
         self.assertEqual([p.exists() for p in (ours, diag)], [False] * 2)
-        self.assertEqual([p.exists() for p in (edited, diag_rec, no_rec, no_hash, older,
-                                               *b_files)], [True] * 7)
+        kept = self.work / "kept"
+        for p in (edited, diag_rec, no_rec, no_hash, older):
+            with self.subTest(moved=p.name):
+                self.assertFalse(p.exists())
+                self.assertTrue((kept / p.name).is_file())
+                self.assertFalse(record_path(p).exists())
+        self.assertEqual((kept / "a_webull.out").read_text(encoding="utf-8"), "edited\n")
+        self.assertEqual([p.exists() for p in b_files], [True] * 2)
         self.assertEqual([p.is_file() for p in (*c_files,)], [False] * 2)
-        self.assertTrue(os.path.islink(self.work / "c_kraken.out"))
+        self.assertFalse(os.path.lexists(self.work / "c_kraken.out"))
+        self.assertEqual(os.readlink(kept / "c_kraken.out"), str(outside / "other.out"))
+        self.assertTrue(os.path.islink(kept / "c_rbc_direct.out"))
         self.assertEqual(sorted(p.name for p in outside.iterdir()),
                          ["copy.out", "other.out", "pipe"])
         self.assertFalse(record_path(absent).exists())

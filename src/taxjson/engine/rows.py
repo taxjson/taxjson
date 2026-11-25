@@ -73,6 +73,14 @@ def closed_record(row_id: RowId) -> str:
     return f"CLOSED_{row_id}"
 
 
+def after_cover_record(row_id: RowId) -> str:
+    """The rule table's key of a stock dividend row `row_id` booked as no
+    shares: the obligation of a short covered before it (US-STKDIV-06;
+    RuleTable). The row's own key names a dividend a short still open
+    grew by."""
+    return f"AFTER_COVER_{row_id}"
+
+
 class AmbiguousTransferDateError(ValueError):
     """A row rewritten from a TRANSFER sits inside a superficial-loss /
     wash-sale trigger window. Its date is the broker ARRIVAL date —

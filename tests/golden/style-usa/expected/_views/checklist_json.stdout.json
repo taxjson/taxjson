@@ -865,7 +865,7 @@
         },
         {
           "command": "tjs gains",
-          "note": "rows; also `tjs trades`, `tjs events`, `tjs divs`, `tjs dil`, `tjs roc`, `tjs fees`, `tjs leaps`",
+          "note": "rows; also `tjs gains-base` (as filed), `tjs trades`, `tjs events`, `tjs divs`, `tjs dil`, `tjs roc`, `tjs fees`, `tjs leaps`",
           "country": null
         },
         {

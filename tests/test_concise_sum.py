@@ -38,10 +38,12 @@ class TestSumConcise(unittest.TestCase):
         self.assertIn("More: tjs sum --details", r.stdout)
         # The warnings are the `! ` lines now, nothing on stderr.
         self.assertEqual(r.stderr.strip(), "")
-        # The filed figures stay: the RETURN row, and the denied total
-        # (its column dropped at width 100) in the legend.
-        self.assertIn("9,242.85", _return_row(r.stdout))
-        self.assertIn("superficial losses denied: 1,645.13", r.stdout)
+        # The filed figures stay: the RETURN row with every money column,
+        # TOTAL COST and DENIED too (at width 100 the line labels shorten
+        # instead: backlog TJ-5333).
+        ret = _return_row(r.stdout)
+        for cell in ("9,242.85", "90,748.40", "1,645.13"):
+            self.assertIn(cell, ret)
 
     def test_usa_default_view(self):
         r = self._sum("usa")

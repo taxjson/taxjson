@@ -44,6 +44,39 @@ if TYPE_CHECKING:
 _GainRow: TypeAlias = Dict[str, Any]
 
 
+def _us_delivered_cost(run: _USRun, ikey: _IKey, tx: TaxTransaction, chunk_qty: float
+                       ) -> Decimal:
+    """A covering chunk's part of what delivering a stock dividend's shares cost, where the
+    purchase `tx` is the cover a later stock dividend row names (the run's
+    `stkdiv_after_cover`: the row is the covered short's obligation and carries a
+    `delivered_cost`; US-STKDIV-06): a cost of closing that short, so in the gain or loss
+    the §1091 test sees, never in a lot the purchase opens. Shared over the units the
+    purchase covers (this chunk's and the shorts still open when its first chunk asks)."""
+    out = _ZERO
+    for f in run.stkdiv_after_cover.values():
+        if f['cover'] != tx.id or not f['cost']:
+            continue
+        if f.get('units_for') != tx.id:
+            f['units_for'], f['booked'] = tx.id, _ZERO
+            f['units'] = min(tx.quantity, chunk_qty + sum(
+                _s['qty'] for _s in run.inventory_short.get(ikey, [])))
+        part = f['cost'] * M.of(chunk_qty / f['units']) if f['units'] > 0 else _ZERO
+        f['booked'] += part
+        f['chunk'] = f.get('chunk', _ZERO) + part
+        out += part
+    return out
+
+
+def _us_with_delivery(run: _USRun, tx: TaxTransaction, entry: _GainRow) -> _GainRow:
+    """A cover's gain row with the part of a stock dividend's delivery cost its chunk took
+    (`stock_dividend_delivery`, as `_us_delivered_cost` left it); any other row as it is."""
+    for f in run.stkdiv_after_cover.values():
+        if f['cover'] == tx.id and f.get('chunk'):
+            entry['stock_dividend_delivery'] = M.present(
+                M.of(entry.get('stock_dividend_delivery') or 0.0) + f.pop('chunk'), 4)
+    return entry
+
+
 def _us_walk_buy(*, ikey: _IKey, is_option_assign: bool, run: _USRun, symbol: str, symbol_traces: Dict[str, List[str]], tx: TaxTransaction, tx_net: Decimal, tx_qty_abs: float,
                     underlying_for_assign: Optional[str], delivered: Optional[Dict[str, Any]] = None) -> None:
     """A buy row: the pending option-assignment premium taken once; a buy-to-close pops the
@@ -157,7 +190,7 @@ def _us_walk_buy(*, ikey: _IKey, is_option_assign: bool, run: _USRun, symbol: st
         _cap_263h = (_ZERO if is_option_assign else
                      M.of(chunk_qty) * run._comp_per_unit.get(
                          (tx.id, short_lot.get('id')), _ZERO))
-        chunk_close_cost += _cap_263h
+        chunk_close_cost += _cap_263h + _us_delivered_cost(run, ikey, tx, chunk_qty)
         # Gain on closing a short: opening_proceeds − closing_cost.
         raw_gain = chunk_open_proceeds - chunk_close_cost
 
@@ -342,7 +375,7 @@ def _us_walk_buy(*, ikey: _IKey, is_option_assign: bool, run: _USRun, symbol: st
             _loss_day = _dlv
         if _cap_263h:
             entry['capitalized_263h'] = M.present(_cap_263h, 4)
-        run.realized_gains.append(entry)
+        run.realized_gains.append(_us_with_delivery(run, tx, entry))
         _us_record_left_shares(run, short_lot, chunk_qty, tx, entry=entry, short=True)
         if run._comp_building:
             run._short_cover_chunks.append(

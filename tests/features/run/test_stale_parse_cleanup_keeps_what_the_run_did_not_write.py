@@ -24,7 +24,9 @@ fees.rpt's TOTAL).
 On the style-canada golden project (synthetic). The controls: an export
 group removed still has its parse files removed, with records and
 without, and a run that stopped after rewriting a parse leaves the
-reports as they are when the parse goes."""
+reports as they are when the parse goes: the parse is removed as one
+taxjson wrote (TJ-5273: its bytes are noted as the run's as the parse is
+written, the run completed or not)."""
 import json
 import os
 import shutil
@@ -255,15 +257,20 @@ class TheStaleParseCleanup(unittest.TestCase):
         self.assertIn("note: removed stale work/margin_ib_corp.json (its input "
                       "files are gone)", out)
 
-    def test_a_parse_a_stopped_run_rewrote_is_moved_aside(self):
-        # The stopped run wrote margin_ib.json after its record: the bytes
-        # are not the record's. Moved aside, it is read by no report: the
-        # fees are those of the IB exports removed after a clean run.
+    def test_a_parse_a_stopped_run_rewrote_is_removed_as_taxjsons(self):
+        # The stopped run rewrote margin_ib.json and stopped before its
+        # commit. It was moved aside ("its bytes are not the ones taxjson's
+        # record of it holds"), though taxjson wrote it (TJ-5273); its bytes
+        # are noted as the run's when the parse is written, so it goes with
+        # its companions, as a clean run's parse does. No report reads it:
+        # the fees are those of the IB exports removed after a clean run.
         root, out = self.roots["stopped"], self.out["stopped"]
         self.assertEqual(self.rc["stopped"], 0, out[-2000:])
-        self.assertIn(f"work/margin_ib.json -> work/kept/margin_ib.json ({OTHER_BYTES})",
-                      out)
-        self.assertFalse((root / "work/margin_ib.json").exists())
+        for n in IB_PARSE:
+            self.assertFalse((root / "work" / n).exists(), n)
+            self.assertIn(f"note: removed stale work/{n} (its input files are gone)", out)
+        self.assertNotIn("note: moved", out)
+        self.assertFalse((root / "work/kept").exists())
         self.assertEqual(_fees(root), _fees(self.roots["records"]))
 
     def test_with_no_records_a_parse_of_no_export_group_is_moved_aside(self):

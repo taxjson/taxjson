@@ -876,7 +876,7 @@
         },
         {
           "command": "tjs gains",
-          "note": "rows; also `tjs trades`, `tjs events`, `tjs divs`, `tjs dil`, `tjs roc`, `tjs fees`, `tjs leaps`",
+          "note": "rows; also `tjs gains-base` (as filed), `tjs trades`, `tjs events`, `tjs divs`, `tjs dil`, `tjs roc`, `tjs fees`, `tjs leaps`",
           "country": null
         },
         {
@@ -972,6 +972,11 @@
         {
           "command": "tjs form-export",
           "note": "the Schedule 3 rows",
+          "country": "canada"
+        },
+        {
+          "command": "tjs gains-cra",
+          "note": "each sale in the CRA's columns",
           "country": "canada"
         }
       ],

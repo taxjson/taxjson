@@ -223,11 +223,15 @@ class TestSumReturnBlock(unittest.TestCase):
             fe = _cli(root, "form-export", "--json")
             self.assertEqual(fe.returncode, 0, fe.stderr)
             rep = json.loads(fe.stdout)
-            self.assertEqual(f["lines"], rep["lines"])
+            # sum's lines are form-export's, with TOTAL COST added
+            # (COST(ACB) + OUTLAYS, the cells as shown).
+            self.assertEqual([{k: v for k, v in ln.items() if k != "total_cost"}
+                              for ln in f["lines"]], rep["lines"])
             for ln in f["lines"]:
                 self.assertAlmostEqual(
                     ln["proceeds"] - ln["acb"] - ln["outlays"], ln["gain"],
                     places=2)
+                self.assertAlmostEqual(ln["acb"] + ln["outlays"], ln["total_cost"], places=2)
             # --details: the notes under the RETURN row (docs/output-style.md)
             t = _cli(root, "sum", "--details")
             self.assertEqual(t.returncode, 0, t.stderr)

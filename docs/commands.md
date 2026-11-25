@@ -1175,6 +1175,13 @@ config year).
 - `--write-missing-history` writes the candidates instead, as `OPENING
   <date> <SYMBOL> <qty> cost=unknown` lines in
   `inputs/<account>/missing_history.tt` (merged with the lines there).
+  A line is dated the day before the account's first row, or the day
+  after an opening snapshot of the symbol that would replace a line
+  dated so (CA-OPEN-03 / US-OPEN-03). A line there that the run says a
+  snapshot replaced (it opens nothing) is written over in its place, the
+  previous file kept as a `.bak`: an account has one `OPENING ...
+  cost=unknown` line per symbol, and the message names the line, the
+  snapshot and where it wrote.
   `--outside-year` adds only the positions with no row in the tax year;
   `--all-history` writes every candidate, not only those affecting the
   tax year.
@@ -1552,9 +1559,15 @@ taxable account's book out, the estimate warns, says the carry-forward
 is unknown and leaves those last two out, with `carry_back_unknown` saying
 why: `tjs close-year` then stops. When the year has a split and the ledger
 left sales with an unknown cost out after the last locked year, up to this
-one, the split can change: the line and a warning say so, the figures stay,
-`--json` adds `carry_back_incomplete` (`years`, `sales`, `undated` for a sale
-with no year), and `tjs close-year` stops unless `--force`. `--json` gives the years
+one, or a sale whose result can change what this year carries back
+(`tjs carryover --json`'s `carry_back_left_out`, past a lock too), the split
+can change: the line and a warning say so ("carry-back of this year's loss
+may change", or "this year's carry-back may change" in a year with no loss of
+its own), the figures stay, `--json` adds `carry_back_incomplete` (`years`,
+`sales`, `undated` for a sale with no year, `claims`: the `[carryover]
+claimed` years whose part those sales can move, `unchecked`: the count of
+years when there were too many to check in full), and `tjs close-year` stops
+unless `--force`. `--json` gives the years
 the carry-back goes to as `losses_carried_back_to` (`{ YEAR: AMOUNT }`), with
 `carry_back_split`: `"entry"` when your by-target `[carryover] carried_back` entry for the
 year says them, `"oldest_first"` when they are `tjs carryover`'s proposal and another split
@@ -1862,21 +1875,40 @@ accounts:
   13199/13200; line 6 options, futures and other properties 15199/15300;
   line 7 crypto-assets 15200/15301, which were 15199/15300 before 2025;
   for 2024, January 1 – June 24 on the Period 1 codes 10689/10690 and
-  10693/10694) with PROCEEDS, COST(ACB), OUTLAYS, GAIN and the
-  superficial losses DENIED, on the Schedule 3 convention: a short sale's
+  10693/10694) with PROCEEDS, COST(ACB), OUTLAYS, TOTAL COST, GAIN and
+  the superficial losses DENIED, on the Schedule 3 convention: a short sale's
   proceeds as PROCEEDS and its cover as ACB, sell commissions as outlays;
   a denied loss REDUCES the ACB shown so proceeds − ACB − outlays is the
-  allowed gain, the denial going onto the replacement's ACB. Plus the
-  FX-on-cash line for line 15300 (NOT RELIABLE from the default ledger;
+  allowed gain, the denial going onto the replacement's ACB. TOTAL COST
+  is COST(ACB) + OUTLAYS, added from the cells as shown (each already at
+  the cent), so every line and the RETURN row foot: PROCEEDS − TOTAL
+  COST = GAIN. `--json` carries it as `total_cost`, beside `proceeds`,
+  `acb` and `outlays`, on each line (`filing.lines`), each account
+  (`filing.accounts`) and the totals (`filing.totals`). No money column
+  but DENIED is ever dropped for width. Too wide for the terminal, the
+  SCHEDULE 3 LINE label shortens first: its words to a short form
+  (`shares & units`, `options & other`, `crypto`), then cut with an
+  ellipsis, then the period mark and the line codes alone (`(P2)
+  15199/15300`); the codes, what is typed on the return, are always
+  whole. Only then DENIED drops, with a `! ` line giving the denied total
+  and `tjs sum --details` (which keeps it). Narrower than the other money
+  columns fit, the block shows one record per line, TOTAL COST in each.
+  The legend names TOTAL COST whenever the table shows it (always: GAIN =
+  PROCEEDS − COST(ACB) − OUTLAYS = PROCEEDS − TOTAL COST).
+  Plus the FX-on-cash line for line 15300 (NOT RELIABLE from the default ledger;
   the opt-in ledger v2's figure, or why it did not compute; with inputs
   changed since the last `tjs run`, "FX-on-cash (line 15300) estimate
   omitted" and the reason, until `tjs run`).
 - **USA**: Form 8949's own Part I / II (d) proceeds, (e) cost, (g)
   adjustment, (h) gain (from 2025 the crypto accounts' digital-asset
-  boxes G/H/I and J/K/L on rows of their own).
+  boxes G/H/I and J/K/L on rows of their own). No TOTAL COST: Form
+  8949's (e) cost already includes the costs of the sale, and it has no
+  outlays column.
 
 The rows equal `form-export`'s line totals, each row rounded to the
-cent, as filed. When that differs from the gains files' unrounded total
+cent, as filed, and so do [`tjs gains-cra`](#tjs-gains-cra)'s line totals
+and [`tjs gains-base`](#tjs-gains-base)'s THE RETURN row (its COST(ACB)
+this COST(ACB) + DENIED): the same computation. When that differs from the gains files' unrounded total
 gain or denied amount (US: the (g) adjustment) by a cent or more,
 `tjs sum --details` says so under the block, and `--json` carries `engine_gain_unrounded` and
 `engine_denied_unrounded`; `--json` adds the per-account split. The
@@ -2160,9 +2192,11 @@ view (the lines to copy) also ends a line with `settled=YYYY-MM-DD`
 shows the settlement date) when the row's two dates differ. A row no `.tt`
 line can say (a move in kind `tjs run` booked; a reward's or a coin
 fee's INTEREST, FEE or TAX row; a row that settles before the day it
-trades or is paid, or more than 366 days after: `taxjson-convert-tt`
-refuses those) ends with `not_tt=in_kind`, `not_tt=cash_leg` or
-`not_tt=dates`, in the one-account and the all-accounts view: pasted into a `.tt` file
+trades or is paid, or more than 366 days after; a row whose kind, its
+`type`, no line carries, such as a leg of a move between two of your
+taxable accounts: `taxjson-convert-tt`
+refuses those) ends with `not_tt=in_kind`, `not_tt=cash_leg`,
+`not_tt=dates` or `not_tt=row_type`, in the one-account and the all-accounts view: pasted into a `.tt` file
 that line is refused, saying why, where a plain line would read as a
 trade or a charge in cash. Rows with a missing or
 unparseable date are excluded with a warning.
@@ -2299,6 +2333,93 @@ project whose only books are crypto: the note says so, exit 0).
 instruments. A futures option (e.g. `F:SAMPLX251220P00053000.US`) is
 both a future and an option, so it matches `--futures` **and**
 `--options` / `--puts`.
+
+#### tjs gains-base
+
+`tjs gains-base [PERIOD] [ACCOUNT] [--options] [--equities] [--futures] [--puts] [--calls] [--json] [--details]`
+
+The base-currency twin of `tjs gains`: the **filing** figures, read from
+the books `tjs sum` and `tjs form-export` read (each account's
+`<account>_gains_wash.json`, else `<account>_gains.json`, after
+ticker.map's consolidation and the conversion; never the native
+`*_raw_gains.json`). The same window (default: the tax year; a
+settle-basis project takes a sale by its settlement date), account and
+instrument filters as `tjs gains`, and the same notes: an account with
+no books, and the sales with an unknown cost, which are not shown
+(`tjs form-export` lists them for manual reporting).
+
+One row per disposition, its cells the filed form's for that one sale,
+so a sale has one set of cents in every report:
+
+- **Canada**: Schedule 3's cells, the ones `tjs gains-cra` shows.
+  PROCEEDS as Schedule 3 shows them, never negative (gross of the
+  commission; a short sale's what it brought in; a future's gain as
+  proceeds and its loss as cost, the T5008 shape; a written option's
+  premium gross with its commission as an outlay), COST(ACB) before any
+  superficial-loss denial (Schedule 3's ACB, which the denial reduces,
+  plus DENIED), OUTLAYS, GAIN before the denial, DENIED (`*`: a
+  permanent denial, a registered-account or affiliated buy-back) and
+  ALLOWED, the gain filed. Every row foots twice: PROCEEDS − COST(ACB) −
+  OUTLAYS = GAIN, and GAIN + DENIED = ALLOWED (a loss negative, a denial
+  positive). An in-kind contribution's nil loss is in neither GAIN nor
+  DENIED: its COST(ACB) is reduced by it, as on Schedule 3.
+- **US**: Form 8949's cells: (d) PROCEEDS, (e) COST, (g) ADJUSTMENT (a
+  wash-sale loss disallowed, `W` beside it) and (h) GAIN = (d) − (e) +
+  (g). A section 1256 contract (`§1256`) is Form 6781's: its P/L as
+  GAIN, no (d), (e) or (g).
+
+The totals: each account's rows added, then the TAXABLE and the
+SHELTERED accounts apart (a sheltered account's sales are shown and
+totalled, never on the return), then **THE RETURN (tjs sum)**: `tjs
+sum`'s RETURN row, the same computation, in these columns. Its
+PROCEEDS, OUTLAYS, DENIED and ALLOWED are sum's; its COST(ACB) is sum's
+COST(ACB) + DENIED (sum shows the ACB the denial reduced) and its GAIN
+sum's GAIN − DENIED (US: sum's (d), (e), (g), (h)). Schedule 3 rounds
+each security's total and the rows each sale, so TAXABLE can be a cent a
+security from THE RETURN: a line under the table names the difference
+per column. When the return's gain is a cent or more from the engine's
+unrounded total, a line says so, as `tjs sum --details` does. A window
+other than the tax year, or an instrument filter, has no RETURN row: the
+line says `tjs sum` has it. US: the section 1256 contracts are named
+under the table, not on Form 8949. If the taxable rows' unrounded gains
+ever add to something other than `tjs sum`'s, a `! ` line says so
+(`--json`: `rows_match` false). Books older than the inputs are refused,
+exit 1, as `tjs sum` refuses them.
+
+```
+$ tjs gains-base
+REALIZED GAINS — CAD, tax year 2025, the filing figures (wash-adjusted)
+PROCEEDS − COST(ACB) − OUTLAYS = GAIN (a loss negative), before any superficial-loss denial; GAIN + DENIED = ALLOWED.
+Schedule 3's cells per sale; DENIED positive (* for good); THE RETURN's COST(ACB) = tjs sum's COST(ACB) + DENIED.
+ACCT    DATE        SYMBOL                  QTY  PROCEEDS  COST(ACB)  OUTLAYS    GAIN  DENIED  ALLOWED  DAYS
+------------------------------------------------------------------------------------------------------------
+margin  2025-03-10  QZRX.US                  10    168.75     135.67     1.35   31.73    0.00    31.73    63
+margin  2025-04-14  QZNW.TO                  20    240.00     204.95     4.95   30.10    0.00    30.10    97
+margin  2025-05-05  QZLS.TO                   5    100.00     150.00     0.00  -50.00   50.00     0.00    91
+...
+TAXABLE                                       5    711.25     559.88     8.05  143.32   50.00   193.32
+SHELTERED (not on the return)                 1    120.00     100.00     0.00   20.00    0.00    20.00
+THE RETURN (tjs sum)                               711.25     559.87     8.06  143.32   50.00   193.32
+
+The taxable rows differ from THE RETURN by COST(ACB) +0.01, OUTLAYS -0.01 CAD: Schedule 3 rounds each security's total,
+the rows each sale.
+More: tjs gains-base --details (the return's lines)
+```
+
+`--details` adds the return's lines (Canada: Schedule 3's; US: Form
+8949's parts). `--json` (schema `gains-base`): `form` (`schedule3` or
+`8949`), `columns` (a row's money keys, in the text's order), `rows`
+(each cell at the cent, with `taxable`, `form` and `gain_unrounded`, the
+engine's allowed gain at the books' places; Canada `permanently_denied`
+and `denied_contribution`; US `part`, `boxes`, `code`, and null (d), (e)
+and (g) on a Form 6781 row) and `totals`: `accounts`, `taxable`,
+`sheltered` (the rows added; US also `section_1256_gain`), `return`
+(THE RETURN row in these columns), `rows_less_return` (the taxable rows
+less it, where a cent or more apart) and `filing`, `tjs sum --json`'s
+own `filing` keys (`totals`, `lines` or `parts_8949`,
+`engine_gain_unrounded`, `engine_denied_unrounded`, `date_basis`) with
+`command` (the `tjs sum` it equals) and `rows_match`; `return` and
+`filing` are null when the view has no RETURN row.
 
 #### tjs leaps
 
@@ -3146,6 +3267,145 @@ the JSON as `manual_reporting_required`, and `tjs checklist` keeps
 the form-export step open until they are reported by hand. `--json`
 carries the same `readiness` record as `tjs sum --json`.
 
+#### tjs gains-cra
+
+`tjs gains-cra [ACCOUNT] [--csv FILE] [--json] [--details]` (Canada)
+
+The tax year's dispositions of the taxable accounts, one row per sale,
+in the columns `Sale date  Settle date  Description  Qty  Proceeds (USD)
+FX  Proceeds (CAD)  ACB (CAD)  Commissions (CAD)  Gain/Loss (CAD)`: the
+Schedule 3 figures `tjs form-export --form schedule3` adds up, for each
+sale alone. A US project is refused (Form 8949 is `tjs form-export
+--form 8949`); books older than the inputs are refused, exit 1, as
+`form-export` refuses them. The rows are scoped as form-export scopes
+them (the tax year on the project's date basis) and sorted by sale
+date, account and symbol. `ACCOUNT` (a taxable one; a sheltered one is
+refused) shows that account's rows alone, its totals headed `FOR
+ACCOUNT <account> — Schedule 3, as tjs sum <account> shows it (not the
+whole return)`, and the `! ` lines count its own sales.
+
+- **The money cells** are Schedule 3's cells for that one disposition
+  (gross proceeds, the commission as Commissions, the ACB the row's
+  footing residual), so every row foots: Proceeds − ACB − Commissions =
+  Gain/Loss, the allowed gain. A short sale shows what it brought in as
+  Proceeds and the cover as ACB; a future its settled P/L (a gain as
+  proceeds, a loss as ACB); a written option under grant timing its
+  premium at the write and the buy-back's cost on its own row.
+- **One table per currency**, the base currency's first. A foreign
+  table adds the proceeds in the trade's currency, from the native
+  record of the same trade (matched by its id; never the CAD figure
+  divided back), and **FX**: the Bank of Canada rate of the trade that
+  brought the proceeds in, on its rate date (its settlement date, as
+  the conversion read it), from the run's rate table (`work/to_base.csv`,
+  its gaps filled as the run fills them: a weekend sale takes the last
+  rate before it). Where the proceeds came from other trades (a short
+  sale's opening sales, a close-timing write, a future's legs), FX is the
+  proceeds-weighted rate, CAD ÷ native to 4 places, with a note. Every
+  foreign row is checked: native × FX more than a cent from the CAD
+  proceeds (a weighted rate: more than native × 0.00005 + a cent, what
+  its 4 places allow) gets a note with both figures. A native figure or
+  FX the books do not give shows `—`, with a note why (no native record
+  of the trade, no rate that day; a row that received nothing, a
+  buy-back, has none: its 0.00 proceeds say it); the subtotal then
+  says how many rows its native total leaves out (`(USD: 4 of 5 rows)`),
+  and an FX column empty on every row stays, with a line naming why.
+  Each table ends with its subtotal; with more than one table, ALL SALES
+  adds them.
+- **Description**: shares and fund units their ticker (`QZRX`, the
+  listing suffix dropped; the same in `--details` and `--csv`; two
+  securities of one ticker, such as `DISTINCT QZDD.US QZDD.TO` in
+  ticker.map, each their full symbol, `QZDD.US` and `QZDD.TO`, in every
+  table), an option
+  `QZRX $30 call exp 2025-02-21` (` (written)` for a written one), a
+  future `QZM26 future`, crypto `QZC (crypto)`. Qty is the units sold.
+- **Notes**: a mark in the Description (`[1]`), the list under the table.
+  A note with a row's own figure that is not a denial (an FX check, a
+  missing rate, a missing native record) has a mark of its own; a note
+  with the same meaning on several rows shares one mark, its line once
+  under the table: a grant-timing buy-back whose units Schedule 3 counts
+  once, at the write (`a buy-back of an option written this year: ...`),
+  a weighted rate, a future's P/L rate, a short sale, a future. A
+  buy-back counted at the write in part keeps a note of its own giving
+  the count.
+- **Denials**: one mark per kind in a table, its line once under the
+  table with that table's rows and total: `superficial loss denied (3
+  rows, 200.00 CAD in all): each row's ACB is reduced by its denied loss,
+  so Gain/Loss is the allowed part; the denied loss is added to the
+  replacement's ACB`; `superficial loss denied for good (1 row, 50.00
+  CAD; a registered-account or affiliated buy-back): ...`; a loss on an
+  in-kind contribution to a registered plan, denied for good. A row with
+  a deferred and a permanent part carries both marks. Each row's own
+  amount: `--details` lists it under the note (`- 2025-05-05 QZLS: 100.00
+  CAD`), the CSV's Denied column, and `--json` (`denied`,
+  `permanently_denied`, `denied_contribution`; each row's `notes` in full,
+  with `note_kinds` beside them).
+- **FOR THE RETURN**: Schedule 3's line totals, then the total: the
+  figures `tjs form-export` prints and `tjs sum`'s FOR THE RETURN rows,
+  always equal (the same computation; with `ACCOUNT`, `tjs sum
+  ACCOUNT`'s). Schedule 3 rounds each security's total, the rows each
+  sale: where a line's rows add to other cents, a line names the
+  difference per column (`--details`: both figures). The per-line table
+  keeps the rows' columns (no TOTAL COST).
+- The sales with an unknown cost are not in the rows or totals: a
+  MANUAL REPORTING REQUIRED section lists them, as form-export does.
+
+```
+$ tjs gains-cra
+CAPITAL GAINS, ONE ROW PER SALE — CAD, tax year 2025, Schedule 3's cells per disposition
+Proceeds − ACB − Commissions = Gain/Loss on each row; FX: the Bank of Canada rate that converted the proceeds.
+
+...
+SALES IN USD
+Sale date   Settle date  Description                                 Qty  Proceeds      FX  Proceeds     ACB  Commissions  Gain/Loss
+                                                                             (USD)             (CAD)   (CAD)        (CAD)      (CAD)
+------------------------------------------------------------------------------------------------------------------------------------
+2025-03-10  2025-03-10   QZRX                                         10    125.00  1.3500    168.75  135.67         1.35      31.73
+2025-06-02  2025-06-02   QZRX $15 call exp 2025-12-19 (written)        1    150.00  1.3500    202.50    0.00         1.75     200.75
+2025-08-04  2025-08-04   QZRX $15 call exp 2025-12-19 (written) [2]    1      0.00       —      0.00   69.26         0.00     -69.26
+...
+[2]  a buy-back of an option written this year: Schedule 3 counts its units once, at the write
+...
+FOR THE RETURN — Schedule 3, as tjs form-export and tjs sum show it
+SCHEDULE 3 LINE                     Proceeds     ACB  Commissions  Gain/Loss
+                                       (CAD)   (CAD)        (CAD)      (CAD)
+----------------------------------------------------------------------------
+Part 3, line 4 (lines 13199/13200)    508.75  440.62         6.30      61.83
+Part 3, line 6 (lines 15199/15300)    202.50   69.25         1.76     131.49
+----------------------------------------------------------------------------
+Total                                 711.25  509.87         8.06     193.32
+Part 3, line 6 (lines 15199/15300): the rows differ from the line by ACB +0.01, Commissions -0.01 CAD: Schedule 3 rounds
+each security's total, the rows each sale.
+```
+
+At width 120 piped (a terminal's, up to 160) a long Description is cut
+with an ellipsis; a money column is never dropped. `--details` shows the
+whole descriptions, a row's own notes beside its date and each
+denial's rows with their amounts. `--csv FILE` writes the same columns
+with Symbol (the full symbol, after Description), Denied (CAD) (after
+Gain/Loss: the row's denied losses, deferred, for good and an in-kind
+contribution's, added; empty when none), Currency, Account and Notes
+(every note in full) columns, raw numbers, through a temporary file (a
+failed write leaves the previous CSV intact); a path that is a folder,
+or in a missing folder,
+exits 1 naming it, as form-export's `--csv` does. `--json` (schema
+`gains-cra`): `scope` (`{"account": ...}` with `ACCOUNT`, else null),
+`rows` (every cell, the currency, `native_proceeds`, `fx_rate`,
+`fx_source` `rate_table` or `weighted`, `fx_rate_date` the day the row
+converts on and `fx_date` the day of the rate used, both null on a
+weighted row, `notes` and `note_kinds`, each note's kind:
+`counted_at_write`, `nothing_received`, `weighted_fx`, `futures_fx`,
+`fx_check`, `no_rate`, `no_native_record`, `denied`, `denied_permanent`,
+`denied_contribution`, `short_sale`, `future`, `filing_position`),
+`tables` (each currency's subtotal with its rows' `denied`,
+`permanently_denied` and `denied_contribution` added; a foreign one's
+`native_proceeds`, `native_missing` and the rows with no FX,
+`fx_missing` and `fx_missing_why`), `rows_total` (the same for every
+row), `lines` (each Schedule
+3 line's totals and `rows_sum`, what its rows add to), `totals` (the
+lines added, `tjs sum`'s RETURN row: PROCEEDS, ACB, OUTLAYS, GAIN,
+DENIED), the `manual_reporting_required` rows and the `readiness` record
+`tjs sum --json` carries.
+
 #### tjs t1135
 
 `tjs t1135 [--json] [--details]` (Canada)
@@ -3802,7 +4062,17 @@ year, as `tjs run` books it (US-WASH-22). A sale with an unknown
 cost (no purchase in the books; a crypto account's too) is in no year's
 net: a warning counts them with their years, and `--json` lists each
 (`excluded_unknown_cost`: year, date, symbol, account, qty, proceeds)
-with `incomplete_years`, each such year's row `incomplete: true`. The net per year counts
+with `incomplete_years`, each such year's row `incomplete: true`. Canada:
+`carry_back_left_out` (`{ YEAR: { CLAIM YEAR: [SALE YEARS] } }`, the project
+year's only) names the `[carryover] claimed` years whose part the project
+year carries back such a sale's result can move. A sale can only add a loss
+to its year or shrink or cancel the year's loss, so the ledger is folded
+again with each such year's loss as it is, at nothing and at more than any
+figure, in every combination, for up to 8 such years; a lock forced past
+such a sale (its `carry_back_incomplete`) folds as its re-close would, its
+balance kept. Past 8 years every claim the project year can carry back to is
+named, and `carry_back_left_out_unchecked` (`{ YEAR: COUNT }`) says the split
+was not checked in full. No figure changes. The net per year counts
 dispositions plus the T5 box 18 dividends named in
 `[[capital_gains_dividends]]`; other slip capital gains (lines
 17400/17600, US Schedule D line 13) and the line-15300 FX gain on foreign
@@ -3867,10 +4137,19 @@ the net capital loss that
 out of what it carries forward. It stops when the carryover ledger that
 decides that part cannot be used, and, unless `--force` (or a yes to the
 question on a terminal), when the ledger left sales with an unknown
-cost out after the last locked year, naming them: their results can change
-the part carried back. Locked past that, the block records
-`carry_back_incomplete` (the years), and the next year's `tjs handoff` says
-so. The block records the years the carry-back goes to (`carried_back_to`), which the
+cost out that can change the part carried back, naming them and what their
+result can change: one after the last locked year; one whose result can
+change what this year carries back (`tjs carryover --json`'s
+`carry_back_left_out`), before a lock too (past 8 years of such sales it
+names every claim in reach and says the split may not in fact move); and, in
+a year with no loss on the books but a claim in reach, a sale of the year
+itself, whose result can make a loss to carry back (there a ledger that can't
+be used gets a warning, not a stop: no carry-back rests on it). Locked past that, the block records
+`carry_back_incomplete` (the years, the sales by date, symbol and account,
+and `claims`, the claimed years whose part they can move), a later year's
+ledger folds that lock as its re-close would be while the sales stay
+unknown, and the next year's `tjs handoff` says the split can still move,
+naming them. The block records the years the carry-back goes to (`carried_back_to`), which the
 next years' ledgers read: your by-target `[carryover] carried_back` entry for the year,
 else `tjs carryover`'s proposal, the oldest `[carryover] claimed` year first
 (`carried_back_split: "oldest_first"` when another split was open: close-year says so
@@ -4323,6 +4602,15 @@ What it checks, and what it does not (the footer's `not traced` line;
   `type`, `symbol`, `date`, `quantity`, `field` and `amount`, `ties`,
   and its parsed file, `source`, with the `.tt` `line`, or its
   `origin`). A `.tt` row shows its line beside it (`[line 4]`).
+- **A fill the run reduced after a broker cancellation** of part of it
+  (`type=trade_cancel`), and the FEE row of a commission the broker kept
+  on a trade it cancelled in full, are checked against the parsed fill
+  and the cancellation netted as the run nets them, and named with the
+  input file of each, and its line for a `.tt` row (`--details`: "Netted from a parsed fill and a
+  broker cancellation"; `--json` `pool_trades.reduced_rows`, a
+  `pool_other_rows` row's `origin` and `parts`; a sale so reduced shows
+  both rows as its SOURCE, each with its input file, `--json` `origin` and each `sources` row's
+  `role`).
 - **Rows with no parsed row** (`with no parsed row`) are re-run, not
   traced, and named with what made each (`--details`; `--json`
   `origin`): a `[[distributions]]` table, a `.tt` RENAME line (with its
@@ -4560,7 +4848,9 @@ number (a decimal comma), a missing field (named, with the action's
 form), a stray column, a `SPLIT` ratio of 0 or below, a futures line at
 a negative price whose total is not qty x price x size +/- fee with its
 sign (or that has no size), a negative price on a trade line of
-anything but a futures contract, an `ASSIGN` line of a futures contract
+anything but a futures contract, a negative price on a `TRANSFER` line, a
+`type=` on a line that does not take it (or without the `corp=` or
+`pair=` its kind needs), an `ASSIGN` line of a futures contract
 (write it as `BUYSELL`), a futures buy with price 0 and a negative
 total, a settled futures line an older `taxjson-convert-tt` wrote with
 a buy's money negative at a price above 0, a `settled=` date before

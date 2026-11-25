@@ -37,15 +37,15 @@ webull        91.23   175.83    267.06      0.00  0.00   38.30    267.06
 TOTAL      2,241.31   103.40  2,344.71  1,903.33  0.00  285.93  4,248.04
 
 FOR THE RETURN — taxable accounts (crypto, ib, margin, questrade, webull), CAD (Schedule 3, tax year 2024)
-GAIN = PROCEEDS − COST(ACB) − OUTLAYS, the allowed gain; DENIED = superficial losses denied.
+GAIN = PROCEEDS − COST(ACB) − OUTLAYS = PROCEEDS − TOTAL COST, the allowed gain; DENIED = superficial losses denied.
 The SUBTOTAL adds the account rows, RETURN each sale's cents: they can differ by a cent or two.
-SCHEDULE 3 LINE                                          PROCEEDS   COST(ACB)  OUTLAYS      GAIN  DENIED
---------------------------------------------------------------------------------------------------------
-shares & fund units (P1) (10689/10690)                  63,787.50   63,458.03    14.72    314.75    0.00
-shares & fund units (P2) (13199/13200)                  21,404.25   21,337.39    10.73     56.13  511.65
-options, crypto & other properties (P2) (15199/15300)   16,638.75   15,518.65    72.65  1,047.45    0.00
---------------------------------------------------------------------------------------------------------
-RETURN                                                 101,830.50  100,314.07    98.10  1,418.33  511.65
+SCHEDULE 3 LINE                                          PROCEEDS   COST(ACB)  OUTLAYS  TOTAL COST      GAIN  DENIED
+--------------------------------------------------------------------------------------------------------------------
+shares & fund units (P1) (10689/10690)                  63,787.50   63,458.03    14.72   63,472.75    314.75    0.00
+shares & fund units (P2) (13199/13200)                  21,404.25   21,337.39    10.73   21,348.12     56.13  511.65
+options, crypto & other properties (P2) (15199/15300)   16,638.75   15,518.65    72.65   15,591.30  1,047.45    0.00
+--------------------------------------------------------------------------------------------------------------------
+RETURN                                                 101,830.50  100,314.07    98.10  100,412.17  1,418.33  511.65
 
 ! FX on foreign cash (line 15300): not in the rows; its estimate is NOT RELIABLE — tjs fx-cash
 Not in the rows: T3/T5 slip capital gains (lines 17600, 17400). More: tjs sum --details

@@ -346,7 +346,8 @@
         "dispositions": 4,
         "gain": 670.53,
         "outlays": 57.73,
-        "proceeds": 14141.25
+        "proceeds": 14141.25,
+        "total_cost": 13470.72
       },
       {
         "acb": 28883.25,
@@ -356,7 +357,8 @@
         "dispositions": 2,
         "gain": 132.3,
         "outlays": 2.7,
-        "proceeds": 29018.25
+        "proceeds": 29018.25,
+        "total_cost": 28885.95
       },
       {
         "acb": 1227.15,
@@ -366,7 +368,8 @@
         "dispositions": 3,
         "gain": 267.23,
         "outlays": 4.12,
-        "proceeds": 1498.5
+        "proceeds": 1498.5,
+        "total_cost": 1231.27
       },
       {
         "acb": 36456.68,
@@ -376,7 +379,8 @@
         "dispositions": 2,
         "gain": 81.21,
         "outlays": 13.36,
-        "proceeds": 36551.25
+        "proceeds": 36551.25,
+        "total_cost": 36470.04
       },
       {
         "acb": 20334.0,
@@ -386,7 +390,8 @@
         "dispositions": 2,
         "gain": 267.07,
         "outlays": 20.18,
-        "proceeds": 20621.25
+        "proceeds": 20621.25,
+        "total_cost": 20354.18
       }
     ],
     "date_basis": "date_settle",
@@ -437,7 +442,8 @@
         "proceeds_code": "10689",
         "rows": 2,
         "short": "shares & fund units (P1)",
-        "title": "Period 1 (January 1 to June 24, 2024), lines 10689/10690"
+        "title": "Period 1 (January 1 to June 24, 2024), lines 10689/10690",
+        "total_cost": 63472.75
       },
       {
         "acb": 21337.39,
@@ -455,7 +461,8 @@
         "proceeds_code": "13199",
         "rows": 4,
         "short": "shares & fund units (P2)",
-        "title": "Period 2 (June 25 to December 31, 2024), lines 13199/13200"
+        "title": "Period 2 (June 25 to December 31, 2024), lines 13199/13200",
+        "total_cost": 21348.12
       },
       {
         "acb": 15518.65,
@@ -473,7 +480,8 @@
         "proceeds_code": "15199",
         "rows": 4,
         "short": "options, crypto & other properties (P2)",
-        "title": "Period 2 (June 25 to December 31, 2024), lines 15199/15300"
+        "title": "Period 2 (June 25 to December 31, 2024), lines 15199/15300",
+        "total_cost": 15591.3
       }
     ],
     "totals": {
@@ -483,7 +491,8 @@
       "gain": 1418.33,
       "outlays": 98.1,
       "permanently_denied": 394.2,
-      "proceeds": 101830.5
+      "proceeds": 101830.5,
+      "total_cost": 100412.17
     }
   },
   "instalments": {

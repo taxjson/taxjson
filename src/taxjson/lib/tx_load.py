@@ -252,7 +252,7 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
     # — none of them caught by the tools' ValueError handlers.
     for _fld in ('quantity', 'price', 'proceeds', 'commission', 'fee',
                  'net_amount', 'gross_amount', 'multiplier',
-                 'market_value', 'corp_parent_qty'):
+                 'market_value', 'delivered_cost', 'corp_parent_qty'):
         if _fld not in clean_t:
             continue
         _v = clean_t[_fld]

@@ -18,7 +18,7 @@ reversing trade, with a warning.
 Rows may be dicts (parser output) or TaxTransaction objects (merge2).
 """
 
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
 from taxjson.model import money as M
 
 TRADE_CANCEL_TYPE = 'trade_cancel'
@@ -107,7 +107,10 @@ def _reduced(orig: Any, ca: Any) -> Any:
     the readers sign a reversing row's money differently), so a
     commission IB did not refund stays with the order (2026-10 audit
     #29). A field the cancellation does not carry is scaled by the
-    share that stays, as is one it carries larger than the order's."""
+    share that stays, as is one it carries larger than the order's.
+    The row's id is dropped: a TaxTransaction gets the content id of its
+    own fields, which no parsed file holds (`rows_made_by_cancellations`
+    names the rows it came from: backlog TJ-5270)."""
     q_o = float(_g(orig, 'quantity') or 0.0)
     q_c = float(_g(ca, 'quantity') or 0.0)
     keep = (q_o + q_c) / q_o
@@ -173,7 +176,8 @@ def retained_fee(orig: Any, ca: Any) -> Any:
 
 def pair_cancellations(txs: List[Any], partials: Optional[list] = None,
                        overlaps: Optional[list] = None,
-                       acct_of: Optional[Callable[[Any], str]] = None
+                       acct_of: Optional[Callable[[Any], str]] = None,
+                       fees: Optional[List[Tuple[Any, Any, Any]]] = None
                        ) -> Tuple[List[Any], List[Tuple[Any, Any]],
                                   List[Any]]:
     """Drop every cancellation row together with the original it reverses.
@@ -207,7 +211,8 @@ def pair_cancellations(txs: List[Any], partials: Optional[list] = None,
 
     A whole trade cancelled with its commission not (all) refunded
     leaves a FEE row of what the broker kept (`retained_fee`) in the
-    original's place in `kept`.
+    original's place in `kept`, and (the trade as it stood, cancellation,
+    fee row) is appended to `fees` when a list is given.
 
     `acct_of(row)` gives the broker account a parser read on a row that
     carries none (a combined statement's Account column, '' when
@@ -282,6 +287,52 @@ def pair_cancellations(txs: List[Any], partials: Optional[list] = None,
         fee = retained_fee(replaced.get(oi, txs[oi]), ca)
         if fee is not None:
             residual[oi] = fee
+            if fees is not None:
+                fees.append((replaced.get(oi, txs[oi]), ca, fee))
     kept = [residual[i] if i in residual else replaced.get(i, t)
             for i, t in enumerate(txs) if i not in used or i in residual]
     return kept, pairs, unmatched
+
+
+# What a row the netting made is (`rows_made_by_cancellations`).
+REDUCED_FILL = 'reduced_fill'       # a fill less the part the broker cancelled
+KEPT_COMMISSION = 'kept_commission'  # the commission kept on a whole cancellation
+
+
+class MadeRow(NamedTuple):
+    """A row `pair_cancellations` puts in its `kept` that none of its
+    input rows is: `kind` (REDUCED_FILL, KEPT_COMMISSION), the `row`
+    itself, the `fill` it was made from as the input holds it, and the
+    `cancellations` that made it, in the order they were applied."""
+    kind: str
+    row: Any
+    fill: Any
+    cancellations: Tuple[Any, ...]
+
+
+def rows_made_by_cancellations(txs: List[Any],
+                               acct_of: Optional[Callable[[Any], str]] = None
+                               ) -> List[MadeRow]:
+    """The rows the netting of `txs` (pair_cancellations, as the run's
+    merge nets an account's rows: taxjson_merge2 `cancel_trade_pairs`)
+    makes: each fill a partial cancellation reduced (one cancellation or
+    several, the order's original row the `fill`) and each FEE row of the
+    commission the broker kept on a trade it cancelled in full. A merge's
+    TaxTransaction row made so carries the content id of its own fields
+    (`_reduced`, `retained_fee`), not the fill's: `tjs audit` joins a book
+    row to the parsed rows it came from by this (backlog TJ-5270)."""
+    partials: List[Tuple[Any, Any, Any]] = []
+    fees: List[Tuple[Any, Any, Any]] = []
+    kept, _pairs, _unmatched = pair_cancellations(
+        list(txs), partials=partials, acct_of=acct_of, fees=fees)
+    chain: Dict[int, Tuple[Any, Tuple[Any, ...]]] = {}
+    for before, ca, red in partials:
+        fill, cas = chain.get(id(before), (before, ()))
+        chain[id(red)] = (fill, cas + (ca,))
+    kept_ids = {id(r) for r in kept}
+    out = [MadeRow(REDUCED_FILL, red, *chain[id(red)])
+           for _b, _c, red in partials if id(red) in kept_ids]
+    for traded, ca, fee in fees:
+        fill, cas = chain.get(id(traded), (traded, ()))
+        out.append(MadeRow(KEPT_COMMISSION, fee, fill, cas + (ca,)))
+    return out

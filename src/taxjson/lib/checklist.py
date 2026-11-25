@@ -4420,9 +4420,8 @@ def _spec(year: int, country: Optional[str]) -> List[Item]:
               Cmd("tjs staking --details", "reward quantities, commissions, "
                   "valuation and acquisition cost; `tjs staking-sum`: "
                   "totals by exchange and coin"),
-              Cmd("tjs gains", "rows; also `tjs trades`, `tjs events`, "
-                  "`tjs divs`, `tjs dil`, `tjs roc`, `tjs fees`, "
-                  "`tjs leaps`"),
+              Cmd("tjs gains", "rows; also `tjs gains-base` (as filed), `tjs trades`, "
+                  "`tjs events`, `tjs divs`, `tjs dil`, `tjs roc`, `tjs fees`, `tjs leaps`"),
               Cmd("tjs divs-sum", "totals; also `tjs dil-sum`, `tjs "
                   "roc-sum`, `tjs fees-sum`, `tjs leaps-sum`, `tjs "
                   "ccd-sum`, `tjs trades-sum`, `tjs winners`, `tjs "
@@ -4457,6 +4456,7 @@ def _spec(year: int, country: Optional[str]) -> List[Item]:
                "The export is what goes on the return; its totals must "
                "equal `tjs sum`.",
                (Cmd("tjs form-export", "the Schedule 3 rows", "canada"),
+                Cmd("tjs gains-cra", "each sale in the CRA's columns", "canada"),
                 Cmd("tjs form-export", "the Form 8949 rows and Schedule D",
                     "usa"),
                 Cmd("tjs form-export --form txf --out gains.txf",

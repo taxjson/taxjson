@@ -296,9 +296,21 @@ account holds no share and a short is open; Canada: the account's own position),
 seller's to make good: the short grows by the new shares, its proceeds unchanged, and nothing is covered
 (US-STKDIV-06, CA-STKDIV-02; no statute states the entry, so the run says it in an ATTENTION line). The
 wash-sale and superficial-loss rules read the row the same way: nothing is acquired, and no loss is denied
-against it. `tjs find-missing-history` and the run's closing `$0 cost` line add up the rows themselves and
-still list such a row as shares received at $0. A short covered between the ex-dividend date and the pay
-date leaves the row booked as a $0 purchase.
+against it, and `tjs find-missing-history`, the run's closing lines and the planning tools read it as the
+engine booked it (the gains file's `stock_dividends_owed`) where the account's books agree: its gains
+files hold, of the security, the units its rows give so read; where one holds other units, they list the
+row as shares at $0, as before. In books pooled across Canadian accounts, the shares one account's short
+owes are fewer pooled shares at the same cost, which raises the cost per share of another account's
+holding (backlog TJ-5321, an owner's decision: TJ-5285). A row posted after the short that owed it was covered
+(short on the row's ex-dividend date, no short at the pay date) is booked as no shares, by the run and by
+those lists alike; what delivering the shares cost goes on the row's `.tt` line as `delivered_cost=AMOUNT`
+(a cost of that short's cover; an ATTENTION line names the line until it is there). A row with no
+ex-dividend or record date cannot be told apart and stays a $0 purchase, with an ATTENTION line where a
+short was covered in the 90 days before it. `delivered_cost` is converted to the base currency at the
+stock dividend row's date, with the row's other amounts, while it is booked on the cover's date; and the
+FX-on-cash ledgers do not read it: the cash that paid for the delivery is in them only through its own
+row. Where another of your accounts holds the security, the books pooled across accounts read the short's
+cover as a purchase and do not book the cost (the account's own books do; the run says so).
 **Instead:** Canada: add the declared per-share amount as a `[[distributions]]` entry in taxjson.toml (or
 a `.tt` ADJUST); that raises the ACB only, and the dividend itself is reported from the T5/T3 slip.
 **Code:** `src/taxjson/lib/pipeline.py` — `stock dividend of`
@@ -752,7 +764,7 @@ The figures go on real returns, so correctness is checked in layers, not by test
   ACB or FIFO and the superficial-loss / wash-sale decision, and ties each figure to the pipeline's
   saved gains; any disagreement exits 1. The other filing commands (`sum`, `carryover`, `form-export`,
   `t1135`) are checked against it.
-- **16,500+ tests** (`scripts/ci.sh` prints the exact count): every fix lands with a regression test that
+- **17,500+ tests** (`scripts/ci.sh` prints the exact count): every fix lands with a regression test that
   failed before it. This figure is the one the deck and the website quote (`tests/test_deck.py`).
 - **Property fuzzers.** Seeded generators build thousands of random books per run and check
   conservation, determinism and ordering laws (the engine, custody transfers, settlement-lag and split

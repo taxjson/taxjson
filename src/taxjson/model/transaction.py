@@ -240,6 +240,14 @@ class TaxTransaction:
     # of its own. Evidence only: NOT part of compute_id, omitted from
     # to_dict() when 0.
     market_value: float = 0.0
+    # On a stock dividend row (`type == STOCK_DIVIDEND`) that is the
+    # obligation of a short covered before it (tax-logic CA-STKDIV-02 /
+    # US-STKDIV-06): what delivering the shares owed cost, in the row's
+    # currency (a .tt line's `delivered_cost=`). The engines book it as
+    # a cost of that short's cover; on any other row it is not booked
+    # and the run says so. Converted with the row's other amounts. NOT
+    # part of compute_id, omitted from to_dict() when 0 (backlog TJ-5282).
+    delivered_cost: float = 0.0
     # The id a parser gives the two legs of one broker CURRENCY journal
     # (Questrade's BRW "JOURNAL POSITION TO USD" / "FROM CAD" pair,
     # brokerages/questrade._plan_qt_journals): kept on the TRANSFER row
@@ -380,7 +388,7 @@ EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
                    'source_account', 'exercise_of', 'corp_cash', 'no_cash',
                    'cash_leg',
                    'no_share_count', 'corp_parent_qty', 'lot_date', 'opening_cut_legs',
-                   'market_value', 'journal_pair',
+                   'market_value', 'delivered_cost', 'journal_pair',
                    'event_source', 'listing_currency', 'settle_native',
                    'staking_reward', 'trade_currency', 'swap_fee',
                    'isin', 'isins', 'security_type')

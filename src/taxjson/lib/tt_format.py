@@ -30,7 +30,10 @@ from taxjson.model.evidence import (EvidenceError, commission_refunds_of_tt,
                                     commission_refunds_tt, corp_cash_of_tt, corp_cash_tt,
                                     settle_native_of_tt, settle_native_tt)
 from taxjson.lib.row_types import (CASH_LEG_CASH, CASH_LEG_KINDS, CASH_LEG_NONE,
-                                   CASH_LEG_REWARD)
+                                   CASH_LEG_REWARD, LISTING_JOURNAL_TYPE,
+                                   LOT_MOVE_TYPE, OWN_MOVE_TYPE, REORG_356_TYPE,
+                                   SPINOFF_355_TYPE, TRANSFER_CUSTODY_TYPE,
+                                   TRANSFER_REWRITE_TYPE)
 from taxjson.model import money as M
 from taxjson.model.transaction import event_identity
 
@@ -119,6 +122,15 @@ EXERCISE_KEY = 'exercise_of'
 # at $0: a US sale's gain moved (backlog TJ-0528).
 STOCK_DIVIDEND_TOKEN = 'type=stock_dividend'
 _STOCKDIV_DATE_KEYS = {'ex': 'ex_date', 'record': 'record_date'}
+# Optional `delivered_cost=<amount>` on a `type=stock_dividend` line:
+# the row is the obligation of a short covered before it (the account
+# was short on the ex-dividend date), and this is what delivering the
+# shares owed cost, in the line's currency. The gains engines book it
+# as a cost of that short's cover (tax-logic CA-STKDIV-02 /
+# US-STKDIV-06; the row's `delivered_cost`, no part of its id). On a
+# row the engines do not read as a covered short's the run says it is
+# not booked (backlog TJ-5282).
+DELIVERED_KEY = 'delivered_cost'
 # Optional `type=futures_settlement [settle=LEG,MONEY,PL,CUR[,RATE]]` on
 # a BUYSELL line of a futures contract: the line is a part of a book
 # already on the settlement basis (lib/futures: its total is the
@@ -139,6 +151,34 @@ FUTURES_SETTLEMENT_TOKEN = f'type={FUTURES_SETTLEMENT_TYPE}'
 # its reverse a purchase at the sale price (backlog TJ-0985).
 TRADE_CANCEL_TOKEN = 'type=trade_cancel'
 SETTLE_KEY = 'settle'
+# Optional `type=<kind>` for the row kinds `tjs run` makes and an engine
+# gives meaning to (lib/row_types), so a book of them converted to .tt
+# and back is the same book: a json -> tt -> json round trip wrote each
+# as an ordinary line, and a section 355 spin-off's shares read back as
+# a purchase, a section 356 exchange as a sale and a purchase, a custody
+# move as an acquisition (backlog TJ-5210). taxjson-convert-tt and `tjs
+# events` write them; the reader takes them on these lines only:
+# * a BUYSELL line (RUN_TRADE_TYPES): `type=spinoff_355 [ex=DATE]
+#   [record=DATE]` (the spun-off shares; QTY positive) and
+#   `type=reorg_356 [boot=AMOUNT]` (the old shares' sale, with the boot
+#   the engine reads from the row's `gross_amount`, and the new shares'
+#   purchase), each with its `corp=`; `type=transfer_custody` and
+#   `type=transfer_rewrite` (a sheltered account's transfer row in the
+#   loss-rule context);
+# * an ADJUST line: `type=spinoff_355` with its `corp=` (the parent's
+#   basis moved to the spun-off shares);
+# * a TRANSFER line (RUN_TRANSFER_TYPES): `type=listing_journal
+#   pair=<id>` (a leg of a journal between two listings: the row's
+#   `journal_pair`) and `type=own_account_move` (a netted move between
+#   two registered accounts, balance only).
+# A TRANSFER row of type lot_move is paired with its other account's
+# leg by its description, which no line carries: the writer refuses it.
+RUN_TRADE_TYPES = (SPINOFF_355_TYPE, REORG_356_TYPE, TRANSFER_CUSTODY_TYPE,
+                   TRANSFER_REWRITE_TYPE)
+RUN_TRANSFER_TYPES = (LISTING_JOURNAL_TYPE, OWN_MOVE_TYPE)
+BOOT_KEY = 'boot'
+PAIR_KEY = 'pair'
+_PAIR_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:-]*$')
 # Optional income facts at the END of a DIVIDEND / DIVIDEND_IN_LIEU /
 # TAX / ADJUST line, as `key=value` tokens: the record date that dates
 # trust income and ROC, the broker's "distribution" label, the paying
@@ -236,6 +276,10 @@ NOT_TT_WHY = {
         "a row whose two dates a line cannot say (it settles before the "
         "day it trades or is paid, or more than 366 days after). Fix "
         "the row's dates in its export or book"),
+    'row_type': (
+        "a row whose kind (its `type`) no .tt line carries: read back "
+        "it would be an ordinary row, booked by another rule. Keep the "
+        "row in the book `tjs run` made it in"),
 }
 _LINE_KEY_RE = re.compile(rf'^({SETTLED_KEY}|{TRADED_KEY}|{NOT_TT_KEY})=(\S*)$')
 # Optional `symbol=<SYMBOL>` at the end of an INTEREST line: the
@@ -379,7 +423,7 @@ def parse_tt_line(line: str, account_name: str = 'default',
             _refuse_twice(key, val, facts, line, source)
             facts[key] = val
         corp.update({k: facts.pop(k) for k in _TAIL_KEYS if k in facts})
-        facts = _check_facts(action, facts, line, source)
+        facts = _check_facts(action, facts, line, source, 'corp' in corp)
     elif action == 'INTEREST':
         # `symbol=<SYMBOL>`: the property the interest is paid on.
         while len(parts) > 5 and _FACT_RE.match(parts[-1]):
@@ -405,6 +449,8 @@ def parse_tt_line(line: str, account_name: str = 'default',
             trade_keys[m.group(1)] = m.group(2)
         parts = kept
         corp.update({k: trade_keys.pop(k) for k in _TAIL_KEYS if k in trade_keys})
+    elif action == 'TRANSFER':
+        trade_keys = _take_transfer_keys(parts, line, source)
     # A futures part already on the settlement basis: its total is the
     # realized P/L, not qty x price (backlog TJ-0662).
     _settled = trade_keys.get('type') == FUTURES_SETTLEMENT_TYPE
@@ -617,18 +663,8 @@ def parse_tt_line(line: str, account_name: str = 'default',
         _check_total_sign(action, tx, parts, 'type' in trade_keys, line,
                           source)
 
-    if _settled:
-        tx.update(_check_futures_settlement(action, tx, trade_keys, line,
-                                            source))
-    elif trade_keys.get('type') == _TRADE_CANCEL_TYPE:
-        tx.update(_check_trade_cancel(action, tx, trade_keys, line,
-                                      source))
-    elif trade_keys and 'type' in trade_keys:
-        tx.update(_check_stock_dividend(action, tx, trade_keys, line,
-                                        source))
-    elif trade_keys:
-        tx[EXERCISE_KEY] = _check_exercise(action, tx, trade_keys, line,
-                                           source)
+    tx.update(_check_line_keys(action, tx, trade_keys, 'corp' in corp,
+                               parts, line, source))
     # Not part of the id (as in TaxTransaction.compute_id).
     tx.update(facts)
     tx.update(_check_corp(action, corp, line, source, tx))
@@ -1348,14 +1384,15 @@ def _check_stock_dividend(action: str, tx: dict, keys: dict, line: str,
             f"{where}type={keys.get('type')}: a BUYSELL line's only types are "
             f"{STOCK_DIVIDEND} (a stock dividend's new shares), "
             f"{FUTURES_SETTLEMENT_TYPE} (a settled futures part) and "
-            f"{_TRADE_CANCEL_TYPE} (a broker's trade cancellation): "
-            f"{shown!r}")
-    bad = sorted(set(keys) - {'type'} - set(_STOCKDIV_DATE_KEYS))
+            f"{_TRADE_CANCEL_TYPE} (a broker's trade cancellation), and "
+            f"the kinds `tjs run` makes, as taxjson-convert-tt writes "
+            f"them ({', '.join(RUN_TRADE_TYPES)}): {shown!r}")
+    bad = sorted(set(keys) - {'type', DELIVERED_KEY} - set(_STOCKDIV_DATE_KEYS))
     if bad:
         raise ValueError(
             f"{where}unknown .tt token {bad[0]}={keys[bad[0]]} — a stock "
             f"dividend's line takes {STOCK_DIVIDEND_TOKEN} [ex=DATE] "
-            f"[record=DATE]: {shown!r}")
+            f"[record=DATE] [{DELIVERED_KEY}=AMOUNT]: {shown!r}")
     sym = str(tx.get('symbol') or '')
     if action != 'BUYSELL':
         raise ValueError(
@@ -1370,7 +1407,7 @@ def _check_stock_dividend(action: str, tx: dict, keys: dict, line: str,
         raise ValueError(
             f"{where}a stock dividend ({STOCK_DIVIDEND_TOKEN}) pays new "
             f"shares: its QTY is positive: {shown!r}")
-    out = {'type': STOCK_DIVIDEND}
+    out: dict = {'type': STOCK_DIVIDEND}
     for key, field in _STOCKDIV_DATE_KEYS.items():
         if key not in keys:
             continue
@@ -1379,6 +1416,163 @@ def _check_stock_dividend(action: str, tx: dict, keys: dict, line: str,
                 f"{where}{key}={keys[key]} is not a date (YYYY-MM-DD): "
                 f"{shown!r}")
         out[field] = keys[key]
+    if DELIVERED_KEY in keys:
+        try:
+            cost = _tt_num(keys[DELIVERED_KEY])
+        except ValueError:
+            cost = -1.0
+        if not cost > 0:
+            raise ValueError(
+                f"{where}{DELIVERED_KEY}={keys[DELIVERED_KEY]}: what "
+                f"delivering the shares a covered short owed cost, a "
+                f"number above 0 in the line's currency (leave the token "
+                f"out when it cost nothing): {shown!r}")
+        out['delivered_cost'] = cost
+    return out
+
+
+def _check_line_keys(action: str, tx: dict, keys: dict, has_corp: bool,
+                     parts: list, line: str, source: str) -> dict:
+    """The `key=value` tokens past the fields of a BUYSELL, ASSIGN or
+    TRANSFER line (`keys`; none on any other), checked by the kind the
+    line's `type=` names: the fields they set on the row. A TRANSFER
+    line's price is checked here too (`parts`: the line's tokens)."""
+    typ = keys.get('type')
+    if action == 'TRANSFER':
+        _refuse_negative_transfer_price(tx, parts[6], line, source)
+        return _check_transfer_type(tx, keys, line, source)
+    if typ == FUTURES_SETTLEMENT_TYPE:
+        return _check_futures_settlement(action, tx, keys, line, source)
+    if typ == _TRADE_CANCEL_TYPE:
+        return _check_trade_cancel(action, tx, keys, line, source)
+    if typ in RUN_TRADE_TYPES:
+        return _check_run_type(action, tx, keys, has_corp, line, source)
+    if 'type' in keys:
+        return _check_stock_dividend(action, tx, keys, line, source)
+    if keys:
+        return {EXERCISE_KEY: _check_exercise(action, tx, keys, line,
+                                              source)}
+    return {}
+
+
+def _check_run_type(action: str, tx: dict, keys: dict, has_corp: bool,
+                    line: str, source: str) -> dict:
+    """The `type=` token of a BUYSELL line for a row kind `tjs run`
+    makes (RUN_TRADE_TYPES), checked, with the tokens that kind takes:
+    a spin-off's `ex=` / `record=` dates, a section 356 sale's `boot=`.
+    Returns the fields they set on the row (backlog TJ-5210)."""
+    where = _where(source)
+    shown = line.strip()
+    typ = keys['type']
+    takes = {SPINOFF_355_TYPE: tuple(_STOCKDIV_DATE_KEYS),
+             REORG_356_TYPE: (BOOT_KEY,)}.get(typ, ())
+    bad = sorted(set(keys) - {'type'} - set(takes))
+    if bad:
+        raise ValueError(
+            f"{where}unknown .tt token {bad[0]}={keys[bad[0]]} — a "
+            f"type={typ} line takes "
+            f"{' '.join(f'[{k}=...]' for k in takes) or 'no other token'}"
+            f": {shown!r}")
+    if action != 'BUYSELL':
+        raise ValueError(
+            f"{where}type={typ} marks a row `tjs run` made: only a "
+            f"BUYSELL line takes it: {shown!r}")
+    qty = float(tx.get('quantity') or 0.0)
+    if not abs(qty) > 0:
+        raise ValueError(
+            f"{where}a type={typ} line moves shares: its QTY is not 0: "
+            f"{shown!r}")
+    out: dict = {'type': typ}
+    if typ in (SPINOFF_355_TYPE, REORG_356_TYPE) and not has_corp:
+        raise ValueError(
+            f"{where}type={typ} marks a row of a corporate action: the "
+            f"line needs the event it belongs to (corp=<event id>, as "
+            f"taxjson-convert-tt writes it; the engine joins the event's "
+            f"rows by it): {shown!r}")
+    if typ == SPINOFF_355_TYPE and not qty > 0:
+        raise ValueError(
+            f"{where}type={typ} marks the shares a section 355 spin-off "
+            f"delivered: its QTY is positive: {shown!r}")
+    for key, field in _STOCKDIV_DATE_KEYS.items():
+        if key not in keys:
+            continue
+        if not _is_date(keys[key]):
+            raise ValueError(
+                f"{where}{key}={keys[key]} is not a date (YYYY-MM-DD): "
+                f"{shown!r}")
+        out[field] = keys[key]
+    if BOOT_KEY in keys:
+        try:
+            boot = _tt_num(keys[BOOT_KEY])
+        except ValueError:
+            boot = -1.0
+        if not boot >= 0 or not qty < 0:
+            raise ValueError(
+                f"{where}{BOOT_KEY}={keys[BOOT_KEY]}: the cash (boot) a "
+                f"section 356 exchange paid, a number of 0 or more, on "
+                f"the old shares' line (QTY negative): {shown!r}")
+        out['gross_amount'] = boot
+    return out
+
+
+def _take_transfer_keys(parts: list, line: str, source: str) -> dict:
+    """Take a TRANSFER line's `key=value` tokens past its 8 fields off
+    `parts` (in place): {key: value}; one given twice is refused."""
+    keys: dict = {}
+    for i in range(len(parts) - 1, 7, -1):
+        m = _FACT_RE.match(parts[i])
+        if m is None:
+            continue
+        _refuse_twice(m.group(1), m.group(2), keys, line, source)
+        keys[m.group(1)] = m.group(2)
+        del parts[i]
+    return keys
+
+
+def _check_transfer_type(tx: dict, keys: dict, line: str,
+                         source: str) -> dict:
+    """The `type=` token of a TRANSFER line (RUN_TRANSFER_TYPES) and a
+    listing journal's `pair=`, checked. Returns the fields they set on
+    the row; {} for a line with neither (backlog TJ-5210)."""
+    if not keys:
+        return {}
+    where = _where(source)
+    shown = line.strip()
+    form = (f"type={LISTING_JOURNAL_TYPE} {PAIR_KEY}=<id> (a leg of a "
+            f"journal between two listings) or type={OWN_MOVE_TYPE} (a "
+            f"netted move between two registered accounts), the rows "
+            f"`tjs run` makes, as taxjson-convert-tt writes them")
+    typ = keys.get('type')
+    if typ == LOT_MOVE_TYPE:
+        raise ValueError(
+            f"{where}type={typ}: a move between two of your taxable "
+            f"accounts is two rows `tjs run` pairs by their description, "
+            f"which a .tt line does not carry: no line says it. Remove "
+            f"the line; the run books the move from the accounts' "
+            f"transfer rows: {shown!r}")
+    bad = sorted(set(keys) - {'type', PAIR_KEY})
+    if bad or typ not in RUN_TRANSFER_TYPES:
+        tok = (f"{bad[0]}={keys[bad[0]]}" if bad else
+               f"type={typ}" if typ is not None else
+               f"{PAIR_KEY}={keys[PAIR_KEY]}")
+        raise ValueError(
+            f"{where}unknown .tt token {tok} — a TRANSFER line takes "
+            f"DECLARED, and {form}: {shown!r}")
+    if not abs(float(tx.get('quantity') or 0.0)) > 0:
+        raise ValueError(
+            f"{where}a type={typ} line moves units: its QTY is not 0: "
+            f"{shown!r}")
+    out = {'type': typ}
+    pair = keys.get(PAIR_KEY)
+    if (typ == LISTING_JOURNAL_TYPE) != (pair is not None) or (
+            pair is not None and not _PAIR_RE.match(pair)):
+        raise ValueError(
+            f"{where}a TRANSFER line takes {form}: {PAIR_KEY}= names the "
+            f"journal the leg belongs to (letters, digits, `-`, `_`, "
+            f"`.`, `:`), on a type={LISTING_JOURNAL_TYPE} line only: "
+            f"{shown!r}")
+    if pair is not None:
+        out['journal_pair'] = pair
     return out
 
 
@@ -1658,9 +1852,11 @@ def _cash_tokens(tx: dict, action: str) -> str:
     return (" " + " ".join(toks)) if toks else ""
 
 
-def _check_facts(action: str, facts: dict, line: str, source: str) -> dict:
+def _check_facts(action: str, facts: dict, line: str, source: str,
+                 has_corp: bool = False) -> dict:
     """Validate the `key=value` income-fact tokens of one line and map
-    them to their row fields."""
+    them to their row fields. `has_corp`: the line has a `corp=` (an
+    ADJUST line's `type=spinoff_355` needs its event)."""
     out = {}
     for key, val in facts.items():
         field = _FACT_KEYS.get(key)
@@ -1677,10 +1873,20 @@ def _check_facts(action: str, facts: dict, line: str, source: str) -> dict:
                     f"{_where(source)}{key}={val} must be a two-letter "
                     f"country code (CA, US): {line.strip()!r}")
         elif key == 'type':
-            if action != 'ADJUST' or val not in _ADJUST_TYPES:
+            if (action == 'ADJUST' and val == SPINOFF_355_TYPE
+                    and not has_corp):
+                raise ValueError(
+                    f"{_where(source)}type={val} marks the parent's basis "
+                    f"a section 355 spin-off moved to the new shares: the "
+                    f"line needs the event it belongs to (corp=<event "
+                    f"id>, as taxjson-convert-tt writes it): "
+                    f"{line.strip()!r}")
+            if action != 'ADJUST' or val not in _ADJUST_TYPES + (
+                    SPINOFF_355_TYPE,):
                 raise ValueError(
                     f"{_where(source)}type={val}: only an ADJUST line "
-                    f"takes a type ({', '.join(_ADJUST_TYPES)}): "
+                    f"takes a type ({', '.join(_ADJUST_TYPES)}; "
+                    f"{SPINOFF_355_TYPE} with corp=<event id>): "
                     f"{line.strip()!r}")
         elif key == 'label':
             if not re.match(r'^[a-z_]+$', val):
@@ -1707,6 +1913,8 @@ def tt_tail(tx: dict, action: str) -> str:
         return _interest_tokens(tx)
     if action == 'SPLIT':
         return _corp_tokens(tx, action)
+    if action == 'TRANSFER':
+        return _transfer_tokens(tx)
     return (_fact_tokens(tx, action) + _corp_tokens(tx, action)
             + _cash_tokens(tx, action))
 
@@ -1783,13 +1991,39 @@ def _trade_tokens(tx: dict, action: str) -> str:
     if is_trade_cancel(tx):
         toks.append(TRADE_CANCEL_TOKEN)
     from taxjson.lib.row_types import is_stock_dividend
+    typ = str(tx.get('type') or '')
+    run_type = action == 'BUYSELL' and typ in RUN_TRADE_TYPES
     if action == 'BUYSELL' and is_stock_dividend(tx):
         toks.append(STOCK_DIVIDEND_TOKEN)
+    elif run_type:
+        toks.append(f"type={typ}")
+    if (STOCK_DIVIDEND_TOKEN in toks
+            or (run_type and typ == SPINOFF_355_TYPE)):
         for key, field in _STOCKDIV_DATE_KEYS.items():
             val = str(tx.get(field) or '').strip()
             if _is_date(val):
                 toks.append(f"{key}={val}")
+    if STOCK_DIVIDEND_TOKEN in toks and tx.get('delivered_cost'):
+        toks.append(f"{DELIVERED_KEY}={_num(tx['delivered_cost'])}")
+    if run_type and typ == REORG_356_TYPE and tx.get('gross_amount'):
+        # The boot the engine reads from the sale's `gross_amount`.
+        toks.append(f"{BOOT_KEY}={_num(tx['gross_amount'])}")
     return (" " + " ".join(toks)) if toks else ""
+
+
+def _transfer_tokens(tx: dict) -> str:
+    """A TRANSFER line's `type=` token and a listing journal's `pair=`
+    (RUN_TRANSFER_TYPES); '' for any other row. A journal leg whose
+    `journal_pair` is not one word gets none (json_to_tt_lines then
+    refuses the row: _unwritable_type)."""
+    typ = str(tx.get('type') or '')
+    if typ not in RUN_TRANSFER_TYPES:
+        return ""
+    pair = str(tx.get('journal_pair') or '')
+    if typ == LISTING_JOURNAL_TYPE:
+        return (f" type={typ} {PAIR_KEY}={pair}" if _PAIR_RE.match(pair)
+                else "")
+    return f" type={typ}"
 
 
 def _fact_tokens(tx: dict, action: str) -> str:
@@ -1803,7 +2037,10 @@ def _fact_tokens(tx: dict, action: str) -> str:
         if not val:
             continue
         if key == 'type':
-            if action != 'ADJUST' or val.lower() not in _ADJUST_TYPES:
+            if action != 'ADJUST' or not (
+                    val.lower() in _ADJUST_TYPES
+                    or (val == SPINOFF_355_TYPE
+                        and tx.get('corp_event_id'))):
                 continue
             val = val.lower()
         if ' ' in val:
@@ -1933,6 +2170,12 @@ def _check_total_sign(action: str, tx: dict, parts: list, typed: bool,
             f"Line: {line.strip()!r}")
 
 
+# A price this near 0 is 0: float noise of a computed price (-1e-13) is
+# not a negative price. One figure for the reader and the run's row
+# check (lib/brokerages/schema `_negative_price`; backlog TJ-5261).
+PRICE_ZERO = 1e-9
+
+
 def _refuse_negative_price(action: str, tx: dict, price_text: str,
                            line: str, source: str) -> None:
     """A BUYSELL / ASSIGN line whose price is below 0 and whose symbol
@@ -1943,7 +2186,7 @@ def _refuse_negative_price(action: str, tx: dict, price_text: str,
     a share's or an equity option's later, naming no line, and let an
     option on a future through (backlog TJ-5031)."""
     from taxjson.lib.futures import is_plain_future
-    if not (tx.get('price') or 0.0) < 0 \
+    if not (tx.get('price') or 0.0) < -PRICE_ZERO \
             or is_plain_future(str(tx.get('symbol') or '')):
         return
     raise ValueError(
@@ -1952,6 +2195,28 @@ def _refuse_negative_price(action: str, tx: dict, price_text: str,
         f"trades below 0; a share's price and an option's premium never "
         f"do. Write the price above 0 (the direction is the QTY's sign, "
         f"and the total is the net cash). Line: {' '.join(line.split())!r}")
+
+
+def _refuse_negative_transfer_price(tx: dict, price_text: str, line: str,
+                                    source: str) -> None:
+    """A TRANSFER line whose price is below 0, refused naming the line,
+    as an INKIND line's negative value and an OPENING line's negative
+    cost are: the price of a transfer is the per-unit value of what
+    moved, never below 0, and no check read it (the total checks are a
+    trade line's; the run's row check reads a trade's price only), so
+    the line reached the books as written (backlog TJ-5262). A plain
+    future's line reads as its BUYSELL line does: a future trades below
+    0."""
+    from taxjson.lib.futures import is_plain_future
+    if not (tx.get('price') or 0.0) < -PRICE_ZERO \
+            or is_plain_future(str(tx.get('symbol') or '')):
+        return
+    raise ValueError(
+        f"{_where(source)}TRANSFER price {price_text} is negative: a "
+        f"transfer line's price is the value of one unit moved, never "
+        f"below 0 (the direction is the QTY's sign: negative = out). "
+        f"Write the price above 0, or 0 when the value is unknown. "
+        f"Line: {' '.join(line.split())!r}")
 
 
 def _refuse_futures_assign(action: str, tx: dict, line: str,
@@ -2279,7 +2544,7 @@ def _row_line(tx: dict, date_basis: str = 'settle'):
         # rows (and could never re-grant it, by design).
         if tx.get('description') == MANUAL_TRANSFER_DECLARATION:
             line += " DECLARED"
-        return line
+        return line + tt_tail(tx, action)
 
     if action == 'SPLIT':
         # SPLIT date time symbol_old symbol_new ratio
@@ -2598,6 +2863,60 @@ def not_tt_why(tx: dict, date_basis: str = 'settle') -> str:
     return _unwritable_cash(tx, line)[0] if line is not None else ''
 
 
+def _unwritable_type(tx: dict, line: str) -> str:
+    """Why the .tt line of a row does not carry the row's kind (its
+    `type`, which the engines book it by and which is part of its id):
+    '' for a row with no type, one whose line reads back with it, or
+    one of the kinds whose cash differs (_unwritable_cash names those).
+    A line the reader refuses is its own refusal there, as before. A
+    round trip wrote such a row as an ordinary line with no word
+    (backlog TJ-5210)."""
+    import contextlib
+    from taxjson.lib.row_types import IN_KIND_TYPES, TRANSFER_BOOK_VALUE_TYPE
+    typ = str(tx.get('type') or '').strip()
+    if not typ or typ in IN_KIND_TYPES + (TRANSFER_BOOK_VALUE_TYPE,):
+        return ''
+    nothing = "nothing was written"
+    if tx.get('action') == 'TRANSFER' and typ == LOT_MOVE_TYPE:
+        return (
+            f"a row of type {typ} is one leg of a move between two of "
+            f"your taxable accounts, which `tjs run` pairs with the "
+            f"other account's leg by the rows' description (the peer "
+            f"account, how the rows are signed): a .tt line carries no "
+            f"description, and the leg would read back as a plain "
+            f"transfer — {nothing}. Convert the account's parsed book "
+            f"(the transfer rows, before the run pairs them).")
+    if (tx.get('action') == 'TRANSFER' and typ == LISTING_JOURNAL_TYPE
+            and f" {PAIR_KEY}=" not in line):
+        return (
+            f"a row of type {typ} is one leg of a journal between two "
+            f"listings, joined to the other leg by its `journal_pair`, "
+            f"and this row's ({tx.get('journal_pair')!r}) is not a "
+            f"single word a `{PAIR_KEY}=` token can carry — {nothing}. "
+            f"Fix the row in the book.")
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            back = parse_tt_line(line, account_name=str(
+                tx.get('account') or 'default'))
+    except ValueError as e:
+        if f" type={typ}" not in line or typ not in (
+                RUN_TRADE_TYPES + RUN_TRANSFER_TYPES):
+            return ''
+        return (
+            f"a row of type {typ} is a kind `tjs run` makes, and this "
+            f"one lacks what its line needs — {nothing}. The reader's "
+            f"refusal of the line: {e}")
+    if back is None or str(back.get('type') or '').lower() == typ.lower():
+        return ''
+    return (
+        f"a row of type {typ} is a kind no {tx.get('action')} line "
+        f"carries: its .tt line would read back as "
+        + (f"a row of type {back['type']}" if back.get('type') else
+           "an ordinary row")
+        + f", booked by another rule and under another id — {nothing}. "
+          f"The line would be: {line!r}")
+
+
 def _unwritable_cash(tx: dict, line: str) -> tuple:
     """(NOT_TT_WHY key, why) when the .tt line of a row would not move
     the cash the row moves on the days it moves it (the row's own trade
@@ -2611,6 +2930,9 @@ def _unwritable_cash(tx: dict, line: str) -> tuple:
     from taxjson.lib.cash_legs import cash_leg_of, cash_meaning, same_cash_meaning
     from taxjson.lib.row_types import IN_KIND_TYPES, TRANSFER_BOOK_VALUE_TYPE
     typ = str(tx.get('type') or '')
+    why_type = _unwritable_type(tx, line)
+    if why_type:
+        return 'row_type', why_type
     if typ in IN_KIND_TYPES + (TRANSFER_BOOK_VALUE_TYPE,):
         return 'in_kind', (
             f"a row of type {typ} is a "

@@ -71,7 +71,11 @@ _INCOME_GRACE_DAYS = 60
 
 
 def load_books(cache: Path) -> Tuple[List[TaxTransaction], List[str]]:
-    """(rows of every book, [book files that could not be read])."""
+    """(rows of every book, [book files that could not be read]); a stock
+    dividend the gains engine booked on a short read as it booked it
+    (lib/missing_history owed_reading: the short grew, nothing was
+    acquired; backlog TJ-5281)."""
+    from taxjson.lib.missing_history import owed_reading, owed_stock_dividends
     txs: List[TaxTransaction] = []
     failed: List[str] = []
     for p in _PL.book_files(cache):
@@ -79,7 +83,7 @@ def load_books(cache: Path) -> Tuple[List[TaxTransaction], List[str]]:
             txs.extend(load_transactions(p))
         except (OSError, ValueError):
             failed.append(p.name)
-    return txs, failed
+    return owed_reading(txs, owed_stock_dividends(cache)), failed
 
 
 def read_missing_history_pairs(path: Optional[Path]) -> Set[Tuple[str, str]]:
@@ -197,12 +201,13 @@ def uncovered_short_sales(txs: Sequence[TaxTransaction], year: Any, *,
     cands = [c for c in detect_missing_history(
                  txs, include_broker_shorts=True,
                  registered_accounts=sheltered or None,
-                 journal_symbols=journal or set())
+                 journal_symbols=journal or set(), country=country)
              if not c.broker_marked_short]
     rows = assess_tax_year_relevance(txs, cands, year,
                                      date_basis=date_basis,
                                      journal_symbols=journal or set(),
-                                     registered_accounts=sheltered or None)
+                                     registered_accounts=sheltered or None,
+                                     country=country)
     return [r for r in rows
             if r.affects_year and not r.candidate.registered
             and (r.candidate.symbol, r.candidate.account) not in linked_old
@@ -384,7 +389,8 @@ def _zero_cost_rows(txs: Sequence[TaxTransaction], year: Any, *,
     spread = country is not None and not stock_dividend_zero_cost(country)
     return [r for r in detect_zero_basis_acquisitions(
                 txs, year, date_basis=date_basis, include_held=True,
-                stock_dividends_spread=spread, declared_events=declared)
+                stock_dividends_spread=spread, declared_events=declared,
+                country=country)
             if (r.symbol, r.account) not in linked_new
             and not is_registered_account(r.account, sheltered or None,
                                           country)
@@ -753,7 +759,8 @@ def collect(root: Path, cfg: Dict[str, Any], *,
                                date_basis=basis, journal=journal,
                                country=country, cache=cache)
     from taxjson.lib.corp_actions import declared_zero_value_events
-    _zrows = _zero_cost_rows(txs, year, sheltered=sheltered,
+    from taxjson.lib.missing_history import without_no_shares
+    _zrows = _zero_cost_rows(without_no_shares(txs, cache), year, sheltered=sheltered,
                              country=country, date_basis=basis,
                              declared=declared_zero_value_events(root))
     zero_sold = [r for r in _zrows if not r.declared and r.sold

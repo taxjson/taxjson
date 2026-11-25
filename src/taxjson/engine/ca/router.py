@@ -427,6 +427,68 @@ class _MarkedShortRouter:
                 dst[k] = units
 
 
+def _as_row(row: Any) -> TaxTransaction:
+    """A book row as the router reads one (a dict of a JSON book made a
+    TaxTransaction of its own fields)."""
+    if isinstance(row, TaxTransaction):
+        return row
+    names = TaxTransaction.__dataclass_fields__
+    return TaxTransaction(**{k: v for k, v in row.items()
+                             if k in names and v is not None})
+
+
+class MarkedPositions:
+    """An account's units short and held of one security, as the walk pools
+    them: what lib/stock_dividend_cover asks of a Canadian book (its
+    `positions`). The router itself, row by row in the caller's order, a
+    crossing trade cut as the walk cuts it (`crossing_units`, `_row_part`):
+    a broker-marked short stays apart from the shares the account holds
+    (CA-DISP-04, backlog TJ-4993), so "short on the entitlement date" is
+    that pool, never the account's net position. An unmarked sale past
+    the shares held leaves the pooled long below 0: short too."""
+
+    def __init__(self) -> None:
+        self._router = _MarkedShortRouter()
+
+    def before(self, row: Any) -> Tuple[float, float]:
+        """(units short, units held) of the row's security in its account."""
+        t = _as_row(row)
+        k = (t.symbol, t.account)
+        held = self._router.long.get(k, 0.0)
+        return self._router.short.get(k, 0.0) + max(-held, 0.0), max(held, 0.0)
+
+    def walk(self, row: Any, owed: bool = False) -> None:
+        """Book `row` (`owed`: a stock dividend a short still open makes
+        good, written as the passes get it: its quantity negative)."""
+        t = _as_row(row)
+        if t.action == 'SPLIT':
+            self._router.split(t.symbol, (t.symbol_new or '').strip() or t.symbol,
+                               float(t.quantity or 0.0))
+            return
+        if owed:
+            k = (t.symbol, t.account)       # (the short grows, whichever pool holds it)
+            if self._router.short.get(k, 0.0) > 0:
+                self._router.short[k] += float(t.quantity or 0.0)
+            else:
+                self._router.long[k] = self._router.long.get(k, 0.0) - float(t.quantity or 0.0)
+            return
+        if t.action == 'TRANSFER' and not (_is_lot_move(t) or _is_listing_journal(t)):
+            # A plain transfer in or out (a sheltered book's, which the
+            # walk gets as held units): the account's long.
+            k, q = (t.symbol, t.account), float(t.quantity or 0.0)
+            held = self._router.long.get(k, 0.0) + q
+            self._router.long[k] = max(held, 0.0) if q < 0 else held
+            return
+        units = self._router.crossing_units(t)
+        if units is None:
+            self._router.walk(t)
+            return
+        first = _row_part(t, units, 'C', t.id)
+        self._router.walk(first)
+        self._router.walk(_row_part(t, abs(float(t.quantity)) - units, 'O',
+                                    f"{t.id}#2", rest_of=first))
+
+
 def _say_late_covers(pairs: Sequence[Tuple[TaxTransaction, TaxTransaction]]) -> None:
     """One ATTENTION per marked cover that found the short already covered
     by an unmarked purchase (a .tt line, a row of an export with no cover

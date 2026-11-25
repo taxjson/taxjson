@@ -209,7 +209,7 @@ def money_lineage(rid: str, raw: Dict[str, Any], base_row: Dict[str, Any],
                   default_rate: Optional[Decimal],
                   futures_native: Optional[Dict[str, float]] = None,
                   filled_index: Optional[Dict[str, Dict[str, Any]]] = None,
-                  field: str = "net_amount"
+                  field: str = "net_amount", source_what: str = ""
                   ) -> Tuple[Dict[str, Any], List[str], List[str]]:
     """(fx, warnings, failures): a book row's net amount re-derived from
     the row the conversion read — the parsed broker row, or for a crypto
@@ -225,7 +225,9 @@ def money_lineage(rid: str, raw: Dict[str, Any], base_row: Dict[str, Any],
 
     `field`: the amount compared — the net amount, or a dividend's gross
     amount (row_money_field: the merge nets the withholding into a
-    dividend's net amount, backlog TJ-0359)."""
+    dividend's net amount, backlog TJ-0359). `source_what`: what `raw`
+    is, when it is no single parsed row (_DERIVED: a fill less a broker
+    cancellation, re-derived from the two; backlog TJ-5270)."""
     warnings: List[str] = []
     failures: List[str] = []
     pre = (filled_index or {}).get(rid)
@@ -308,8 +310,9 @@ def money_lineage(rid: str, raw: Dict[str, Any], base_row: Dict[str, Any],
         elif native:
             failures.append(
                 f"AMOUNT cross-check FAILED{_what}: the "
-                f"{'priced' if pre is not None else 'parsed'} row "
-                f"carries {_fmt(nominal)} {cur or base_currency} but the "
+                + (source_what or ('priced' if pre is not None else 'parsed')
+                   + " row")
+                + f" carries {_fmt(nominal)} {cur or base_currency} but the "
                 f"base book row carries {_fmt(book)} {base_currency} — "
                 + (f"no conversion applies to a {base_currency} row."
                    if not cur or cur == base_currency else
@@ -444,19 +447,125 @@ def load_dated_renames(path: Optional[Path]
     return out
 
 
+# What made a row the run's netting of a broker cancellation made
+# (lib/trade_cancel rows_made_by_cancellations), as row_origin says it.
+_MADE_BY_CANCELLATION = {
+    "reduced_fill": ("a fill less the part the broker cancelled "
+                     "(type=trade_cancel), booked by the run"),
+    "kept_commission": ("the commission the broker kept on a trade it "
+                        "cancelled in full (type=trade_cancel), booked by "
+                        "the run"),
+}
+# What such a row's amount is compared with (money_lineage `source_what`).
+_DERIVED = "netting of the parsed fill and its broker cancellation"
+
+
+def _part_where(hit: Dict[str, Any], account: str) -> str:
+    """Where a parsed row was read: its input file (as a `.tt` RENAME's
+    origin names one: inputs/<account>/<file>) and its `.tt` line, else
+    the parsed file's label."""
+    row = hit["row"]
+    src = str(row.get("source") or "")
+    where = f"inputs/{account}/{src}" if src and account else hit["label"]
+    line = row.get("source_line")
+    return f"{where}:{line}" if line else where
+
+
+def _content_id(row: Dict[str, Any]) -> Optional[str]:
+    """The id the books give `row` from its content (TaxTransaction
+    .compute_id), as the merge gives a row the netting made; None for a
+    row the books could not load."""
+    from taxjson.lib.tx_load import coerce_transaction_row
+    try:
+        return coerce_transaction_row(dict(row, id=None), 0, "taxjson-audit").id
+    except ValueError:
+        return None
+
+
+def cancellation_rows(source_index: Dict[str, List[Dict[str, Any]]],
+                      base_index: Dict[str, Dict[str, Any]]
+                      ) -> Dict[str, Dict[str, Any]]:
+    """id -> how the run made each book row that its netting of a broker
+    cancellation (a `type=trade_cancel` row, lib/trade_cancel) made: a
+    fill less the part a partial cancellation reversed, or the commission
+    the broker kept on a trade it cancelled in full. Each account's
+    parsed rows are netted as the run's merge nets them (in date and time
+    order: taxjson_merge2 `cancel_trade_pairs`); a row made so carries the
+    content id the merge gives it, which no parsed file holds, so it read
+    "a row of hand.tt that no parsed file holds now — stale work/ files:
+    re-run `tjs run`" on fresh books, its amount never compared (backlog
+    TJ-5270). Each: {"kind", "row" (the row the netting of the parsed rows
+    makes, which the book row's amount is compared with), "parts"
+    ([{"label", "row", "role"}]: the fill, then each cancellation), and
+    "origin" (what row_origin says: each part's file and line)}."""
+    from taxjson.lib.trade_cancel import (is_trade_cancel,
+                                          rows_made_by_cancellations)
+    from taxjson.lib.tx_load import coerce_transaction_row
+    out: Dict[str, Dict[str, Any]] = {}
+    books: Dict[str, List[Any]] = {}
+    hit_of: Dict[int, Dict[str, Any]] = {}
+    for rid, hits in source_index.items():
+        if not hits:
+            continue
+        try:
+            tx = coerce_transaction_row(dict(hits[0]["row"]), 0, "taxjson-audit")
+        except ValueError:
+            continue            # a row the books could not load either
+        hit_of[id(tx)] = hits[0]
+        acct = str((base_index.get(rid) or {}).get("account") or tx.account or "")
+        books.setdefault(acct, []).append(tx)
+    for acct, book in books.items():
+        if not any(is_trade_cancel(t) for t in book):
+            continue
+        book.sort(key=lambda t: (t.date or "9999-99-99", t.time or "00:00:00"))
+        for made in rows_made_by_cancellations(book):
+            rid = str(made.row.id or "")
+            if rid not in base_index or rid in source_index:
+                continue
+            parts = [dict(hit_of[id(made.fill)], role="fill")] + [
+                dict(hit_of[id(c)], role="cancellation") for c in made.cancellations]
+            what = "the fill" if made.kind == "reduced_fill" else "the trade"
+            cas = [_part_where(p, acct) for p in parts[1:]]
+            out[rid] = {
+                "kind": made.kind, "row": made.row.to_dict(), "parts": parts,
+                "origin": (f"{_MADE_BY_CANCELLATION[made.kind]}: {what} "
+                           f"{_part_where(parts[0], acct)}, the "
+                           f"cancellation{'s' if len(cas) > 1 else ''} "
+                           f"{', '.join(cas)}")}
+    return out
+
+
+def _made_entry(made: Dict[str, Any], fails: List[str]) -> Dict[str, Any]:
+    """A pool check's fields of a row the netting of a broker cancellation
+    made (cancellation_rows): what made it, its parsed rows (each file,
+    `.tt` line and role) and whether its amount ties."""
+    e: Dict[str, Any] = {"origin": made["origin"], "ties": not fails, "parts": [
+        {"source": p["label"], "role": p["role"],
+         **({"line": p["row"]["source_line"]} if p["row"].get("source_line") else {})}
+        for p in made["parts"]]}
+    if fails:
+        e["failure"] = fails[0]
+    return e
+
+
 def row_origin(row: Dict[str, Any], *,
                renames: Optional[Dict[Tuple[str, str, str],
                                       List[str]]] = None,
-               filled_index: Optional[Dict[str, Dict[str, Any]]] = None
+               filled_index: Optional[Dict[str, Dict[str, Any]]] = None,
+               cancelled: Optional[Dict[str, Dict[str, Any]]] = None
                ) -> str:
     """What made a book row that no parsed broker row (or `.tt` line)
     holds, in a few words: the declaration it came from where the row
     says (a [[distributions]] table, a dated RENAME line, an OPENING
-    ... cost=unknown line, a corporate action), else the stage. Rows
-    with no parsed row were counted with no word on what they were
-    (backlog TJ-0359)."""
+    ... cost=unknown line, a corporate action), the parsed fill and
+    broker cancellation the run netted it from (`cancelled`:
+    cancellation_rows, backlog TJ-5270), else the stage. Rows with no
+    parsed row were counted with no word on what they were (backlog
+    TJ-0359)."""
     from taxjson.lib import row_types as _rt
     rid = str(row.get("id") or "")
+    if rid in (cancelled or {}):
+        return str((cancelled or {})[rid]["origin"])
     desc = str(row.get("description") or "").strip()
     typ = str(row.get("type") or "")
     sym = str(row.get("symbol") or "")
@@ -527,7 +636,9 @@ def _pool_entry(rid: str, row: Dict[str, Any]) -> Dict[str, Any]:
 def pool_trade_check(events: List[Dict[str, Any]],
                      base_index: Dict[str, Dict[str, Any]],
                      source_index: Dict[str, List[Dict[str, Any]]],
-                     *, origin=None, **money: Any) -> Dict[str, Any]:
+                     *, origin=None,
+                     cancelled: Optional[Dict[str, Dict[str, Any]]] = None,
+                     **money: Any) -> Dict[str, Any]:
     """The audited sales' cost side, traced like the sales themselves:
     every trade of an audited security in the base book (its buys, its
     earlier sales, an assignment; under an earlier ticker too:
@@ -536,13 +647,19 @@ def pool_trade_check(events: List[Dict[str, Any]],
     name, re-derived from its parsed row (money_lineage) and compared
     with the book's amount. A buy whose amount or conversion differed
     from the broker's changed the cost the audit re-ran and the gain it
-    tied, and passed: only the sales were traced (backlog TJ-0333).
+    tied, and passed: only the sales were traced (backlog TJ-0333). A
+    fill the run reduced after a partial broker cancellation
+    (`cancelled`: cancellation_rows) is re-derived from its parsed fill
+    less the cancellation (backlog TJ-5270).
 
     {"checked", "tied", "untraced" (a row with no parsed row: one the
     run made), "mismatched": [{id, symbol, date, quantity, failure}],
     "untraced_rows": [{id, action, type, symbol, date, quantity,
     origin}]: what made each row with no parsed row (`origin`, a
-    callable row -> text, default row_origin; backlog TJ-0359)}."""
+    callable row -> text, default row_origin; backlog TJ-0359), and
+    where there is one, "reduced_rows": [{id, action, type, symbol, date,
+    quantity, origin, parts: [{source, line, role}], ties, [failure]}]:
+    each reduced fill, counted with the rows checked}."""
     origin = origin or row_origin
     scope = pool_scope(events, base_index)
     own, syms = scope["own"], scope["symbols"]
@@ -559,12 +676,19 @@ def pool_trade_check(events: List[Dict[str, Any]],
             if _row_day(row) > until:
                 continue
         hits = source_hits(rid, source_index, base_index)
-        if not hits:
+        made = (cancelled or {}).get(rid) if not hits else None
+        if made:
+            _fx, _w, fails = money_lineage(rid, made["row"], row,
+                                           source_what=_DERIVED, **money)
+            out.setdefault("reduced_rows", []).append(
+                {**_pool_entry(rid, row), **_made_entry(made, fails)})
+        elif not hits:
             out["untraced"] += 1
             out["untraced_rows"].append(
                 {**_pool_entry(rid, row), "origin": origin(row)})
             continue
-        _fx, _w, fails = money_lineage(rid, hits[0]["row"], row, **money)
+        else:
+            _fx, _w, fails = money_lineage(rid, hits[0]["row"], row, **money)
         out["checked"] += 1
         if fails:
             out["mismatched"].append({
@@ -580,6 +704,7 @@ def pool_other_rows_check(events: List[Dict[str, Any]],
                           base_index: Dict[str, Dict[str, Any]],
                           source_index: Dict[str, List[Dict[str, Any]]],
                           *, engine_rows=(), origin=None,
+                          cancelled: Optional[Dict[str, Dict[str, Any]]] = None,
                           **money: Any) -> Dict[str, Any]:
     """The audited securities' rows that are not trades — return of
     capital and the other cost adjustments, reinvested distributions,
@@ -592,13 +717,16 @@ def pool_other_rows_check(events: List[Dict[str, Any]],
     what made it (`origin`, default row_origin). `engine_rows`: rows
     the computation adds to the books (an OPENING ... cost=unknown
     line's units, pipeline.prepare_books) — none has a parsed row. Only
-    the trades were traced (backlog TJ-0359).
+    the trades were traced (backlog TJ-0359). The commission a broker
+    kept on a trade it cancelled in full (`cancelled`: cancellation_rows)
+    is re-derived from the trade and its cancellation (backlog TJ-5270).
 
     {"checked", "tied", "untraced", "mismatched": [{id, action, symbol,
     date, quantity, failure}], "rows": [{id, action, type, symbol,
     date, quantity, [symbol_new], field, amount, ties (true / false /
     null: no parsed row), source (the parsed file) and line (a `.tt`
-    line) | origin, [failure]}]}."""
+    line) | origin (and, for a row netted from a broker cancellation,
+    parts: [{source, line, role}] with ties true / false), [failure]}]}."""
     origin = origin or row_origin
     scope = pool_scope(events, base_index)
     own, syms = scope["own"], scope["symbols"]
@@ -618,20 +746,28 @@ def pool_other_rows_check(events: List[Dict[str, Any]],
         entry = _pool_entry(rid, row)
         hits = (source_hits(rid, source_index, base_index)
                 if rid in base_index else [])
-        if not hits:
+        made = (cancelled or {}).get(rid) if not hits else None
+        if made:
+            field = row_money_field(made["row"])
+            _fx, _w, fails = money_lineage(rid, made["row"], row, field=field,
+                                           source_what=_DERIVED, **money)
+            entry.update(field=field, amount=row.get(field),
+                         **_made_entry(made, fails))
+        elif not hits:
             field = row_money_field(row)
             entry.update(field=field, amount=row.get(field), ties=None,
                          origin=origin(row))
             out["untraced"] += 1
             out["rows"].append(entry)
             continue
-        raw = hits[0]["row"]
-        field = row_money_field(raw)
-        _fx, _w, fails = money_lineage(rid, raw, row, field=field, **money)
-        entry.update(field=field, amount=row.get(field),
-                     source=hits[0]["label"])
-        if raw.get("source_line"):
-            entry["line"] = raw.get("source_line")
+        else:
+            raw = hits[0]["row"]
+            field = row_money_field(raw)
+            _fx, _w, fails = money_lineage(rid, raw, row, field=field, **money)
+            entry.update(field=field, amount=row.get(field),
+                         source=hits[0]["label"])
+            if raw.get("source_line"):
+                entry["line"] = raw.get("source_line")
         out["checked"] += 1
         if fails:
             entry.update(ties=False, failure=fails[0])
@@ -679,7 +815,9 @@ def futures_native_nets(source_index: Dict[str, List[Dict[str, Any]]],
     them before the ticker map (taxjson_merge2 `cancel_trade_pairs`): a
     whole one drops the pair, one of part of a fill reduces the fill,
     which the books hold under a new id (a close after it read nothing
-    to close and a P/L of 0: backlog TJ-5193). The parsed rows of a
+    to close and a P/L of 0: backlog TJ-5193), the content id the merge
+    gives it (`_content_id`), so its own settled net is here too (backlog
+    TJ-5270). The parsed rows of a
     settled symbol that the books do not hold are read for that netting
     only. A cancellation the audit cannot place (it nets one the books
     hold as a trade of its own, or the books net one whose fill is in
@@ -743,6 +881,10 @@ def futures_native_nets(source_index: Dict[str, List[Dict[str, Any]]],
                 continue            # a FEE row the cancellation leaves: no fill
             if kid is not None and kid not in base_index:
                 continue            # a parsed row the books leave out (not netted)
+            if kid is None:
+                # A fill a partial cancellation reduced, under the id the
+                # merge gives it: its settled net is compared too (TJ-5270).
+                r["id"] = _content_id(r)
             r["symbol"] = (base_index[kid].get("symbol") if kid is not None
                            else names.get((a, str(r.get("symbol") or "")),
                                           r.get("symbol")))   # after ticker.map
@@ -1195,6 +1337,34 @@ def _map_note(raw_sym: str, base_sym: str, tmap,
     return f"{raw_sym} -> {base_sym}"
 
 
+def _event_sources(ev: Dict[str, Any], rid: str,
+                   source_index: Dict[str, List[Dict[str, Any]]],
+                   base_index: Dict[str, Dict[str, Any]],
+                   cancelled: Optional[Dict[str, Dict[str, Any]]]
+                   ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """build_event: the parsed rows a disposition came from, as its
+    `sources` (with a warning when there are none), and (the row its
+    amount is re-derived from, the netting that made it: cancellation_rows,
+    or None). A sale the run reduced after a partial broker cancellation
+    is traced to the fill and the cancellation, each with its `role`, and
+    says what made it (`origin`; backlog TJ-5270)."""
+    hits = source_hits(rid, source_index, base_index)
+    made = (cancelled or {}).get(rid) if not hits else None
+    ev["sources"] = ([{"file": p["label"], "row": p["row"], "role": p["role"]}
+                      for p in made["parts"]] if made else
+                     [{"file": h["label"], "row": h["row"]} for h in hits])
+    if made:
+        ev["origin"] = made["origin"]
+        return made["row"], made
+    if not hits:
+        ev["warnings"].append(
+            "no parsed source row found for this id — the disposition "
+            "cannot be traced to a broker file (synthesized row, or "
+            "stale work/ artifacts).")
+        return None, None
+    return hits[0]["row"], None
+
+
 def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
                 source_index: Dict[str, List[Dict[str, Any]]],
                 check_index: Dict[str, List[Dict[str, Any]]],
@@ -1204,10 +1374,13 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
                 checks_supplied: bool,
                 futures_native: Optional[Dict[str, float]] = None,
                 filled_index: Optional[Dict[str, Dict[str, Any]]] = None,
-                effective_map=None) -> Dict[str, Any]:
+                effective_map=None,
+                cancelled: Optional[Dict[str, Dict[str, Any]]] = None
+                ) -> Dict[str, Any]:
     """Assemble the full provenance record for one engine disposition.
     `effective_map`: the run's effective map (--effective-map), naming
-    a listing the run joined (backlog TJ-0773)."""
+    a listing the run joined (backlog TJ-0773). `cancelled`: the rows
+    the run netted from a broker cancellation (`_event_sources`)."""
     gid = g.get("id") or ""
     ev: Dict[str, Any] = {
         "id": gid, "symbol": g.get("symbol"), "date": g.get("date"),
@@ -1244,15 +1417,7 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
     rid = gid[:-len(RETRO_WASH_ID_SUFFIX)] if retro_add else gid
 
     # --- source rows (nominal) --------------------------------------
-    hits = source_hits(rid, source_index, base_index)
-    ev["sources"] = [{"file": h["label"], "row": h["row"]} for h in hits]
-    if not hits:
-        ev["warnings"].append(
-            "no parsed source row found for this id — the disposition "
-            "cannot be traced to a broker file (synthesized row, or "
-            "stale work/ artifacts).")
-
-    raw = hits[0]["row"] if hits else None
+    raw, made = _event_sources(ev, rid, source_index, base_index, cancelled)
 
     # --- ticker mapping ----------------------------------------------
     base_row = base_index.get(rid)
@@ -1284,7 +1449,8 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
         fx, _w, _f = money_lineage(
             rid, raw, base_row, base_currency=base_currency,
             fx_history=fx_history, default_rate=default_rate,
-            futures_native=futures_native, filled_index=filled_index)
+            futures_native=futures_native, filled_index=filled_index,
+            source_what=_DERIVED if made else "")
         ev["warnings"].extend(_w)
         ev["failures"].extend(_f)
     ev["fx"] = fx
@@ -1534,7 +1700,17 @@ def _render_event_origin(ev: Dict[str, Any], out: List[str], paint: Any, OK: str
     """audit: an event's SOURCE rows, its MAPPING and its CURRENCY or FX
     line, added to `out`."""
     # ---- source ------------------------------------------------------
-    if ev["sources"]:
+    if ev.get("origin"):
+        # A sale the run netted from its parsed fill and a broker
+        # cancellation: each row with its role and its own input file (a
+        # parse's label names every statement it read; backlog TJ-5270).
+        _sec(out, paint, "SOURCE", paint(str(ev["origin"]).split(": ")[0], "dim"))
+        for src in ev["sources"]:
+            name, acct = str(src["row"].get("source") or ""), ev.get("account")
+            where = f"inputs/{acct}/{name}" if name and acct else src["file"]
+            _cont(out, paint(f"the {src.get('role')}: {where}", "dim"))
+            _cont(out, _row_line(src["row"]))
+    elif ev["sources"]:
         seen = []
         for src in ev["sources"]:
             if src["file"] in seen:
@@ -1736,9 +1912,24 @@ def _untraced_text(e: Dict[str, Any]) -> str:
 
 def untraced_rows(pool: Optional[Dict[str, Any]],
                   other: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """The pool checks' rows with no parsed row, by date (--details)."""
+    """The pool checks' rows with no parsed row, by date (--details). A
+    row the run netted from a parsed fill and a broker cancellation is
+    traced to the two (cancelled_rows), not one of these (TJ-5270)."""
     rows = list((pool or {}).get("untraced_rows") or []) + [
-        r for r in (other or {}).get("rows") or [] if r.get("origin")]
+        r for r in (other or {}).get("rows") or []
+        if r.get("origin") and r.get("ties") is None]
+    return sorted(rows, key=lambda r: (str(r.get("date") or ""),
+                                       str(r.get("symbol") or "")))
+
+
+def cancelled_rows(pool: Optional[Dict[str, Any]],
+                   other: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The pool checks' rows the run netted from a parsed fill and a
+    broker cancellation (cancellation_rows), by date (--details): each
+    named with what made it, its amount checked against the two (backlog
+    TJ-5270)."""
+    rows = list((pool or {}).get("reduced_rows") or []) + [
+        r for r in (other or {}).get("rows") or [] if r.get("parts")]
     return sorted(rows, key=lambda r: (str(r.get("date") or ""),
                                        str(r.get("symbol") or "")))
 
@@ -1846,6 +2037,14 @@ def render_reconciliation(events: List[Dict[str, Any]],
                    for ln in _wrap(totals_note(country), None, "  ", "  "))
         # Each pool row with no parsed row, with what made it (backlog
         # TJ-0359): they were counted with no word on what they were.
+        _made = cancelled_rows(pool, other)
+        if _made:
+            out.append("  Netted from a parsed fill and a broker cancellation "
+                       "(checked against the two):")
+            for r in _made:
+                out.extend(_wrap(_untraced_text(r) + "  "
+                                 + (OK if r.get("ties") else paint("✗", "bad")),
+                                 None, "    ", "      "))
         _un = untraced_rows(pool, other)
         if _un:
             out.append("  With no parsed row (re-run, not traced):")
@@ -2153,6 +2352,9 @@ def main(argv=None) -> int:
                                g.get("symbol") or ""))
 
     futures_native = futures_native_nets(source_index, base_index, country)
+    # The rows the run netted from a fill and a broker cancellation
+    # (backlog TJ-5270).
+    cancelled = cancellation_rows(source_index, base_index)
     filled_index: Dict[str, Dict[str, Any]] = {}
     for fp in args.filled:
         for row in (_load_doc(Path(fp)).get("transactions") or []):
@@ -2166,7 +2368,7 @@ def main(argv=None) -> int:
                           checks_supplied=bool(args.check),
                           futures_native=futures_native,
                           filled_index=filled_index,
-                          effective_map=emap)
+                          effective_map=emap, cancelled=cancelled)
               for g in merged]
     # The sales' cost side traced like the sales: the audited
     # securities' buys and earlier trades against their parsed rows
@@ -2175,18 +2377,19 @@ def main(argv=None) -> int:
                                   if args.dated_events else None)
 
     def _origin(row):
-        return row_origin(row, renames=_renames, filled_index=filled_index)
+        return row_origin(row, renames=_renames, filled_index=filled_index,
+                          cancelled=cancelled)
     _money = dict(base_currency=base_currency, fx_history=fx_history,
                   default_rate=_default_rate, futures_native=futures_native,
                   filled_index=filled_index)
     pool = pool_trade_check(events, base_index, source_index,
-                            origin=_origin, **_money)
+                            origin=_origin, cancelled=cancelled, **_money)
     # ...and the rows that are not trades (ROC, splits, corporate
     # actions, transfers, openings, the securities' income), with the
     # rows the computation adds (missing history's openings): backlog
     # TJ-0359.
     other = pool_other_rows_check(
-        events, base_index, source_index, origin=_origin,
+        events, base_index, source_index, origin=_origin, cancelled=cancelled,
         engine_rows=[t.to_dict() for t in transactions
                      if t.id not in base_index], **_money)
     _tainted_ids = _audit_manual_tie(merged, events, args, manual_index, date_key)

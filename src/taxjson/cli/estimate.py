@@ -500,6 +500,13 @@ def _return_figures(files: Dict[str, Path], root: Path, cfg: Dict[str, Any], _ac
             for v in _views_8949), 2)
     if _filing_6781 is not None:
         filing_total["section_1256_gain"] = _filing_6781["gain"]
+    if not _is_us:
+        # TOTAL COST: COST(ACB) + OUTLAYS, added from the cells as shown
+        # (each already at the cent), so PROCEEDS − TOTAL COST = GAIN on
+        # every line, account and the RETURN row; never recomputed from
+        # the unrounded figures.
+        for _r in filing_rows + filing_line_rows + [filing_total]:
+            _r["total_cost"] = M.json_money(M.of(_r["acb"]) + M.of(_r["outlays"]), 2)
     # The RETURN row sums the per-row cents, as filed; the gains files,
     # wash-sales and audit total the unrounded engine values — a few
     # cents apart on a large year (R1-166). Shown, not hidden. (US: the
@@ -1113,6 +1120,86 @@ def _sum_return_us(d: Doc,
                  "tjs form-export")
 
 
+# FOR THE RETURN's Canadian table (`_s3_block`): its columns, every money
+# one always shown but DENIED, and Schedule 3's line names shortened in
+# turn when the table is too wide (`_s3_label`).
+_S3_HEADS = ("SCHEDULE 3 LINE", "PROCEEDS", "COST(ACB)", "OUTLAYS", "TOTAL COST", "GAIN",
+             "DENIED")
+_S3_CELLS = ("proceeds", "acb", "outlays", "total_cost", "gain", "denied")
+_S3_SHORT = {"shares & fund units": "shares & units",
+             "options & other properties": "options & other",
+             "options, crypto & other properties": "options, crypto & other",
+             "crypto-assets": "crypto"}
+_S3_LEGEND = "GAIN = PROCEEDS − COST(ACB) − OUTLAYS = PROCEEDS − TOTAL COST"
+
+
+def _s3_label(r: Dict[str, Any], limit: Optional[int] = None) -> str:
+    """A Schedule 3 line's label: its line number, words, period mark and
+    line codes ("shares & fund units (P2) (13199/13200)"). With `limit`,
+    the longest form within it: the words, the short words (`_S3_SHORT`),
+    the short words cut after a whole word with an ellipsis ("options,
+    crypto…"), then the period mark and the codes alone ("(P2)
+    13199/13200", `limit` 0), returned even over the limit: the codes are
+    what a filer types, always whole."""
+    short = str(r["short"])
+    words, pmark = short, ""
+    if short.endswith(")") and " (P" in short:
+        words, pmark = short.rsplit(" (P", 1)[0], " (P" + short.rsplit(" (P", 1)[1]
+    pre = f"Line {r['line']} " if r["line"] else ""
+    codes = f"{r['proceeds_code']}/{r['gain_code']}"
+    tail = f"{pmark} ({codes})"
+    sw = _S3_SHORT.get(words, words).split(" ")
+    forms = [words, " ".join(sw)] + [" ".join(sw[:k]).rstrip(" ,&") + "…"
+                                     for k in range(len(sw) - 1, 0, -1)]
+    for form in forms:
+        if limit is None or len(pre) + len(form) + len(tail) <= limit:
+            return f"{pre}{form}{tail}"
+    return f"{pmark.strip()} {codes}".strip()
+
+
+def _s3_block(line_rows: List[Dict[str, Any]], total: Dict[str, Any],
+              money: Callable[[Any], str], w: int, keep_denied: bool
+              ) -> Tuple[List[str], str]:
+    """FOR THE RETURN's table at width `w` (0: unwrapped) and its layout:
+    "table" every column; "no-denied" DENIED left out (the caller says
+    so in a `! ` line); "records" one record per line, every column.
+    PROCEEDS, COST(ACB), OUTLAYS, TOTAL COST and GAIN are never dropped:
+    too wide, the line labels shorten first (`_s3_label`), then DENIED
+    goes (never with `keep_denied`, --details), then the records."""
+    from taxjson.lib import out as _out
+    nums = [[money(r[k]) for k in _S3_CELLS] for r in line_rows]
+    foot = ["RETURN"] + [money(total[k]) for k in _S3_CELLS]
+
+    def render(labels: List[str], cols: List[int]) -> List[str]:
+        body = [[lab] + n for lab, n in zip(labels, nums)]
+        return _out.fit_table([_S3_HEADS[i] for i in cols],
+                              [[r[i] for i in cols] for r in body],
+                              aligns=["<" if i == 0 else ">" for i in cols],
+                              foot=[[foot[i] for i in cols]], width_=0)
+
+    def widest(lines: List[str]) -> int:
+        return max(map(len, lines), default=0)
+
+    every = list(range(len(_S3_HEADS)))
+    lines = render([_s3_label(r) for r in line_rows], every)
+    if w <= 0 or widest(lines) <= w:
+        return lines, "table"
+    # The labels shorten, all to the codes alone once one is; DENIED goes
+    # only after that, the labels kept at the codes.
+    rest = widest(render([""] * len(line_rows), every)) - len(_S3_HEADS[0])
+    labels = [_s3_label(r, w - rest) for r in line_rows]
+    codes = [_s3_label(r, 0) for r in line_rows]
+    if set(labels) & set(codes):
+        labels = codes
+    for cols, labs in ([(every, labels)] if keep_denied
+                       else [(every, labels), (every[:-1], codes)]):
+        lines = render(labs, cols)
+        if widest(lines) <= w:
+            return lines, ("table" if cols == every else "no-denied")
+    body = [[_s3_label(r, w)] + n for r, n in zip(line_rows, nums)]
+    return _out.records(list(_S3_HEADS), body + [foot], w), "records"
+
+
 def _sum_return_ca(d: Doc,
                    _para: Callable[..., None], base: str, _names: str, _fyear: Any,
                    _ynote: str, _det: bool, money: Callable[[Any], str],
@@ -1131,32 +1218,18 @@ def _sum_return_ca(d: Doc,
         _para(_ynote if _det else
               f"Tax year {_fyear} has not ended: these are "
               f"YEAR-TO-DATE figures.")
-    _body = [[f"Line {r['line']} {r['short']} "
-              f"({r['proceeds_code']}/{r['gain_code']})"
-              if r["line"] else
-              f"{r['short']} ({r['proceeds_code']}/"
-              f"{r['gain_code']})",
-              money(r["proceeds"]), money(r["acb"]),
-              money(r["outlays"]), money(r["gain"]),
-              money(r["denied"])] for r in filing_line_rows]
-    _foot = [["RETURN", money(filing_total["proceeds"]),
-              money(filing_total["acb"]),
-              money(filing_total["outlays"]),
-              money(filing_total["gain"]),
-              money(filing_total["denied"])]]
-    # Too wide: DENIED goes first (its total moves to the legend),
-    # then one record per line.
-    _s3 = _out.fit_table(
-        ["SCHEDULE 3 LINE", "PROCEEDS", "COST(ACB)", "OUTLAYS",
-         "GAIN", "DENIED"], _body,
-        aligns=["<", ">", ">", ">", ">", ">"], foot=_foot,
-        drop=(5,))
-    _den_shown = any("DENIED" in _ln for _ln in _s3[:1])
-    _para("GAIN = PROCEEDS − COST(ACB) − OUTLAYS, the allowed "
-          "gain; "
-          + ("DENIED = superficial losses denied." if _den_shown
-             else f"superficial losses denied: "
-                  f"{money(filing_total['denied'])}."))
+    _w = _out.width()
+    _s3, _layout = _s3_block(filing_line_rows, filing_total, money, _w, keep_denied=_det)
+    if _layout == "no-denied":
+        _legend = _S3_LEGEND + ", the allowed gain."
+        _acts.append(_out.act(f"DENIED left out at this width (superficial losses "
+                              f"denied: {money(filing_total['denied'])})",
+                              "tjs sum --details"))
+    else:
+        _legend = _S3_LEGEND + ", the allowed gain; DENIED = superficial losses denied."
+        if 0 < _w < len(_legend):
+            _legend = _S3_LEGEND + ", after DENIED (superficial losses)."
+    _para(_legend)
     _rounding_legend()
     for _ln in _s3:
         print(_ln)
@@ -2302,7 +2375,12 @@ def _carry_back_or_warn(root: Optional[Path], cfg: Dict[str, Any], year: Any,
         return CarryBack(unknown=str(e))
     left_out = _left_out_shown(root, cfg, year, cb)
     if left_out:
-        _out.warn(f"carry-back of this year's loss may change (`tjs "
+        # "this year's loss" only where the year has one: a year with a
+        # balance carried in and no loss of its own can carry back once a
+        # left-out sale makes one (backlog TJ-1488).
+        what = ("carry-back of this year's loss" if (est.get("losses_created") or 0.0)
+                > 0.005 else "this year's carry-back")
+        _out.warn(f"{what} may change (`tjs "
                   f"carryover`): sales with an unknown cost left out, "
                   f"{left_out_text(left_out)}", prog=_cmd_prog(),
                   details=["`tjs close-year` stops on this until they have a "

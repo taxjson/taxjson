@@ -34,7 +34,7 @@ Per-account content:
 import argparse
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib import cli_diag
 from taxjson.lib import out as _out
@@ -237,6 +237,24 @@ def _split_inventory(rows: List[Dict[str, Any]], account: str,
     return inventory
 
 
+def _no_shares_cut(combined: Dict[str, Any], base_txs: Optional[List[dict]]
+                   ) -> Tuple[Optional[List[dict]], Dict[str, List[str]]]:
+    """An account's book without the stock dividend rows the blended pass
+    booked as no shares, a covered short's obligation (the pass's
+    `stock_dividends_after_cover`), and that key for the account's own
+    document ({} when it has no such row): they are no shares of the
+    account's balance either, or its share of a pool counted units the
+    pool does not hold, and `tjs list` showed 60 where the engine held 50
+    (backlog TJ-5282)."""
+    gone = {str(i) for i in combined.get("stock_dividends_after_cover") or ()}
+    mine = sorted(str(t.get("id")) for t in (base_txs or [])
+                  if str(t.get("id")) in gone)
+    if not mine:
+        return base_txs, {}
+    return ([t for t in base_txs or [] if str(t.get("id")) not in gone],
+            {"stock_dividends_after_cover": mine})
+
+
 def split_for_account(combined: Dict[str, Any], account: str,
                       base_txs: Optional[List[dict]],
                       pool_rows: Optional[List[dict]] = None
@@ -244,8 +262,7 @@ def split_for_account(combined: Dict[str, Any], account: str,
     # What the pass across accounts cut at this account's snapshot is
     # not in its walk either (backlog TJ-1168).
     from taxjson.lib.positions_check import without_pool_cut
-    if base_txs is not None:
-        base_txs = without_pool_cut(base_txs, pool_rows, account)
+    base_txs, _no_shares = _no_shares_cut(combined, base_txs if base_txs is None else without_pool_cut(base_txs, pool_rows, account))
     txs = [e for e in combined.get("transactions", [])
            if e.get("account") == account]
     manual = [e for e in combined.get("manual_reporting_required", [])
@@ -273,10 +290,9 @@ def split_for_account(combined: Dict[str, Any], account: str,
     # shares too, so its count is walked with them (backlog TJ-0696).
     from taxjson.lib.positions_check import pool_splits
     _pool = pool_splits(pool_rows or [], account)
-    starts = (_position_starts(list(base_txs) + openings + _pool, _basis)
-              if base_txs is not None else {})
-    book = ((list(base_txs) + openings + _pool) if base_txs is not None
-            else None)
+    book = _owed_as_booked((list(base_txs) + openings + _pool)
+                           if base_txs is not None else None, combined)
+    starts = _position_starts(book, _basis) if book is not None else {}
     inventory = _split_inventory(combined.get("inventory", []), account,
                                  book, starts, "9999-12-31",
                                  pool_rows=pool_rows)
@@ -361,6 +377,7 @@ def split_for_account(combined: Dict[str, Any], account: str,
            if ye_inventory is not None
            and "inventory_year_end_basis" in combined else {}),
         "summary": summary,
+        **_no_shares,
     }
     # The manual superficial-loss warnings (unknown-cost neighbours)
     # follow their loss's account (audit R1-325: the split dropped them).
@@ -396,11 +413,39 @@ def split_for_account(combined: Dict[str, Any], account: str,
              if c.get("account") == account]
     if later:
         out["covers_realized_next_year"] = later
-    plog =[e for e in _mh_log(combined)
-            if e.get("account") == account]
+    plog = [e for e in _mh_log(combined) if e.get("account") == account]
     if plog:
         out["missing_history_log"] = plog
+    out.update(_owed_part(combined, base_txs))
     return out
+
+
+def _owed_as_booked(book: Optional[List[dict]], combined: Dict[str, Any]
+                    ) -> Optional[List[dict]]:
+    """`book` with each row the engine booked as a stock dividend owed on a
+    short (the combined file's `stock_dividends_owed`) counted as it booked
+    it: the short grows by its units (CA-STKDIV-02 / US-STKDIV-06). Counted
+    as units received, the account's balance, and so its share of the
+    pool, held them twice over (backlog TJ-5321)."""
+    owed = {str(i) for i in combined.get("stock_dividends_owed") or ()}
+    if book is None or not owed:
+        return book
+    return [dict(t, quantity=-float(t.get("quantity") or 0.0))
+            if str(t.get("id")) in owed and float(t.get("quantity") or 0.0) > 0
+            else t for t in book]
+
+
+def _owed_part(combined: Dict[str, Any], base_txs: Optional[List[dict]]
+               ) -> Dict[str, Any]:
+    """The account's part of the stock dividends the engine booked on a
+    short (`stock_dividends_owed`, CA-STKDIV-02 / US-STKDIV-06): the ids
+    of its own rows (`base_txs`; every id without them). Backlog TJ-5281:
+    the split dropped them, and the wash radar read the shares as held."""
+    own = ({str(t.get("id")) for t in base_txs if t.get("id")}
+           if base_txs is not None else None)
+    owed = [i for i in combined.get("stock_dividends_owed") or []
+            if own is None or str(i) in own]
+    return {"stock_dividends_owed": owed} if owed else {}
 
 
 def main(argv=None) -> int:

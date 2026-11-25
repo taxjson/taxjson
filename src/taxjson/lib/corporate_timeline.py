@@ -102,6 +102,10 @@ class WalkPriority(IntEnum):
     OPENING_BALANCE = -1
     SPLIT = 0
     OTHER = 1
+    # A trade that settles after its trade date, on a day its symbol does
+    # not split, in a walk that books it on its settlement date (Canada:
+    # lib/country walk_settle_lag "settle"): after the day's other rows.
+    SETTLE_LAGGED = 2
 
 
 class CaPriority(IntEnum):
@@ -204,7 +208,8 @@ def _ca_priority(tx: Any) -> int:
     return CaPriority.OTHER
 
 
-def _walk_rest(tx: Any) -> Tuple:
+def _walk_rest(tx: Any, settle_lag: str = 'first',
+               split_day: bool = True) -> Tuple:
     """Missing-history-walk key after the trade date: (group, time, rung).
 
     group -1: OPENING_BALANCE. group 0: SPLITs, and trades that SETTLE
@@ -214,6 +219,15 @@ def _walk_rest(tx: Any) -> Tuple:
     (engine/ca/taxrules.py settle-lag rule; audit S021-00: the walk
     applied the split first and invented a short). group 1: every other
     same-day execution (post-split: splits are effective at market open).
+    On a day its symbol does not split (`split_day` False) a settle-lagged
+    trade is placed as the country's engine books it (`settle_lag`,
+    lib/country walk_settle_lag; backlog TJ-5264): "settle" (Canada,
+    which books it on its settlement date) after the day's other rows,
+    in settlement-date order (group 2); "clock" (the US, trade date and
+    clock) with them, by clock (group 1). "first", a walk with no
+    country: group 0 always, as before — a T+1 sale ahead of a same-day
+    reinvestment listed above it read 5 units short that both engines
+    booked long.
     Rung: at one moment a SPLIT first, then buys before sells, so no
     walk depends on the order of tied rows (audit S075-12 / S076-04).
     DELIBERATE divergence from the engines, which take tied trades in
@@ -239,8 +253,27 @@ def _walk_rest(tx: Any) -> Tuple:
     ds = getattr(tx, 'date_settle', '') or ''
     lagged = (act in ('BUYSELL', 'ASSIGN') and bool(ds) and bool(tx.date)
               and ds > tx.date)
+    if lagged and not split_day and settle_lag == 'settle':
+        return (WalkPriority.SETTLE_LAGGED, f"{ds} {tx.time or '00:00:00'}",
+                rung)
+    if lagged and not split_day and settle_lag == 'clock':
+        lagged = False
     return ((WalkPriority.SPLIT if lagged else WalkPriority.OTHER),
             tx.time or '00:00:00', rung)
+
+
+def walk_sort_key(rows: Iterable[Any], settle_lag: str = 'first'
+                  ) -> Callable[[Any], Tuple]:
+    """The missing-history walks' key (profile 'missing_history_walk')
+    over the book `rows`, a settle-lagged trade placed by `settle_lag`
+    (_walk_rest) on the days its symbol has no SPLIT row in `rows`."""
+    days = ({(t.symbol, t.date) for t in rows if t.action == 'SPLIT'}
+            if settle_lag != 'first' else set())
+
+    def key(t: Any) -> Tuple:
+        return (t.date,) + _walk_rest(
+            t, settle_lag, settle_lag == 'first' or (t.symbol, t.date) in days)
+    return key
 
 
 def _us_priority(tx: Any) -> int:

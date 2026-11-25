@@ -68,6 +68,7 @@ SCHEMAS: Dict[str, int] = {
     "events": 1,
     "fees": 1,
     "gains": 1,
+    "gains-base": 1,
     "leaps": 1,
     "roc": 1,
     "staking": 1,
@@ -94,6 +95,7 @@ SCHEMAS: Dict[str, int] = {
     "watch": 1,
     # Before you file
     "form-export": 1,
+    "gains-cra": 1,
     "t1135": 2,
     "reconcile-slips": 1,
     "slip-audit": 1,
@@ -146,7 +148,7 @@ COUNTRIES: Dict[str, Tuple[str, ...]] = {o: ("canada",) for o in (
     "checklist --done/--undo/--reset", "years", "years --diff", "align",
     "align --write", "elect --pending", "update-tobase-map", "compare",
     "compare --save", "compare --delete", "compare --list", "snapshot",
-    "handoff")}
+    "handoff", "gains-cra")}
 
 
 def countries(output: str) -> Tuple[str, ...]:

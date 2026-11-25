@@ -1,0 +1,39 @@
+REALIZED GAINS — CAD, tax year 2024, the filing figures (wash-adjusted)
+PROCEEDS − COST(ACB) − OUTLAYS = GAIN (a loss negative), before any superficial-loss denial; GAIN + DENIED = ALLOWED.
+Schedule 3's cells per sale; DENIED positive (* for good); THE RETURN's COST(ACB) = tjs sum's COST(ACB) + DENIED.
+ACCT    DATE        SYMBOL                   QTY   PROCEEDS  COST(ACB)  OUTLAYS     GAIN   DENIED  ALLOWED  DAYS
+----------------------------------------------------------------------------------------------------------------
+rrsp    2024-05-10  AAPL.US                   75  18,326.25  18,225.00     6.68    94.57     0.00    94.57    51
+qt      2024-05-14  AAPL.US                   75  18,326.25  18,231.68     6.68    87.89     0.00    87.89    51
+margin  2024-06-20  MSFT.US                   50  27,135.00  27,001.35     1.35   132.30     0.00   132.30   127
+margin  2024-08-02  QZQ240920C00030000.US      2     405.00     812.70     2.70  -410.40     0.00  -410.40    92
+crypto  2024-09-01  ETH                      0.1     337.50     488.07     0.00  -150.57     0.00  -150.57    51
+margin  2024-09-11  QZQ.US                   200   7,695.00   8,101.36     1.35  -407.71  305.78*  -101.93   193
+tfsa    2024-09-12  RY.TO                    100  14,000.00  13,346.60     9.95   643.45     0.00   643.45   141
+margin  2024-10-02  QZQ241220C00035000.US      1     270.00       0.00     1.35   268.65     0.00   268.65     0
+crypto  2024-10-08  BTC                     0.05   3,307.50   3,250.83    26.46    30.21     0.00    30.21   139
+margin  2024-11-01  SAMPA.TO                 100   3,500.00   4,009.95     9.95  -519.90   519.90     0.00   296
+qt      2024-11-07  AAPL.US                   75  18,235.13  18,231.69     6.68    -3.24     0.00    -3.24   230
+crypto  2024-11-08  BTC                      0.1   6,682.50   6,501.66    13.37   167.47     0.00   167.47   170
+margin  2024-11-18  QZQ250117C00040000.US      1     202.50       0.00     1.35   201.15     0.00   201.15     0
+margin  2024-11-21  NVDA.US                   10   1,883.25   1,999.35     1.35  -117.45   117.45     0.00   133
+crypto  2024-12-03  ETH                      0.5   2,835.00   2,440.33     7.37   387.30     0.00   387.30   144
+crypto  2024-12-15  ETH                     0.25   1,316.25   1,220.16    10.53    85.56     0.00    85.56   156
+rrsp    2024-12-15  ABCD270219C00045000.US    10   2,295.00   2,105.66    13.50   175.84     0.00   175.84    21
+
+TOTALS — CAD
+ACCOUNT                        TYPE       SALES   PROCEEDS  COST(ACB)  OUTLAYS     GAIN  DENIED  ALLOWED
+--------------------------------------------------------------------------------------------------------
+crypto                         taxable        5  14,478.75  13,901.05    57.73   519.97    0.00   519.97
+margin                         taxable        7  41,090.75  41,924.71    19.40  -853.36  943.13    89.77
+qt                             taxable        2  36,561.38  36,463.37    13.36    84.65    0.00    84.65
+rrsp                           sheltered      2  20,621.25  20,330.66    20.18   270.41    0.00   270.41
+tfsa                           sheltered      1  14,000.00  13,346.60     9.95   643.45    0.00   643.45
+--------------------------------------------------------------------------------------------------------
+TAXABLE                                      14  92,130.88  92,289.13    90.49  -248.74  943.13   694.39
+SHELTERED (not on the return)                 3  34,621.25  33,677.26    30.13   913.86    0.00   913.86
+THE RETURN (tjs sum)                             92,130.88  92,289.14    90.49  -248.75  943.13   694.38
+
+The taxable rows differ from THE RETURN by COST(ACB) -0.01, GAIN +0.01, ALLOWED +0.01 CAD: Schedule 3 rounds each security's total, the rows each sale.
+Each line of the return is rounded to the cent, as filed: the engine's unrounded total is 694.39 (-0.01 on the return's ALLOWED).
+More: tjs gains-base --details (the return's lines)

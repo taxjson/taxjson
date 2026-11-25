@@ -663,6 +663,131 @@ def _ca_assign_close_units(run: _CanadaRun, it: _CanadaIteration, tx: TaxTransac
 # The result key (and the first walk's `_ev_memo` key) of the stock dividends
 # booked on a short (CA-STKDIV-02): their row ids.
 STOCK_DIVIDENDS_OWED = 'stock_dividends_owed'
+# The result's key of the stock dividend rows booked as no shares, each the
+# obligation of a short covered before it (CA-STKDIV-02; the decision is
+# lib/stock_dividend_cover's, from the rows alone): the gains files carry it.
+STOCK_DIVIDENDS_AFTER_COVER = 'stock_dividends_after_cover'
+# The passes' `_ev_memo` keys for those rows' covers (the last purchase that
+# bought the short back): the cover's row id -> [(the stock dividend row's
+# id, what delivering its shares cost)], and the stock dividend rows whose
+# cover closed a short in these books (and so booked the cost).
+STKDIV_DELIVERY = 'stkdiv_delivery'
+STKDIV_DELIVERED = 'stkdiv_delivered'
+# How a pooled pass's line for a row whose cover closes no short in it
+# starts: the run shows it on the console (pipeline/stages).
+ATTENTION_POOLED_COVER = "ATTENTION: pooled short: "
+
+
+def _ca_delivered_cost(run: _CanadaRun, tx: TaxTransaction) -> Decimal:
+    """What delivering a stock dividend's shares cost, where the purchase `tx` closes a
+    short and is the cover a later stock dividend row names (the row is the covered
+    short's obligation; CA-STKDIV-02): a cost of closing that short, in the gain or loss
+    the superficial-loss rule reads, never in the pool's cost or units. Asked where the
+    purchase meets a short pool only; a row with no `delivered_cost` adds 0 and is noted
+    as one whose cover these books closed."""
+    out = _ZERO
+    for row_id, cost in run._ev_memo.get(STKDIV_DELIVERY, {}).get(tx.id, ()):
+        run._ev_memo.setdefault(STKDIV_DELIVERED, set()).add(row_id)
+        out += cost
+    return out
+
+
+def stock_dividend_after_cover_line(f: Dict[str, Any], closed: bool, pooled: bool,
+                                    cover_year: str) -> str:
+    """The line of a stock dividend booked as no shares (`f`: the facts
+    lib/stock_dividend_cover names; `closed`: its cover closed a short in these books,
+    which then took the row's `delivered_cost`; `pooled`: the books hold several
+    accounts; `cover_year`: the cover's tax year):
+
+    * the cost booked: a note; an ATTENTION where the cover's tax year is not the row's
+      (a figure of an earlier year moves: both years and `tjs check-filed` named);
+    * no `delivered_cost` on the row: an ATTENTION naming the one line that carries it,
+      which the account's own books book;
+    * a cover that closes no short in pooled books (another account holds the shares:
+      the short sale sold pool shares): the cost is not, or would not be, booked in
+      them, said under ATTENTION_POOLED_COVER (TJ-5308, on TJ-5285)."""
+    cost = M.of(f['cost'])
+    head = (f"{f['symbol']}: stock dividend of {f['units']:g} share(s) "
+            f"on {f['date']}: booked as no shares. The account {f['account']} was short "
+            f"{f['short']:g} share(s) on the row's entitlement date {f['entitlement']} and "
+            f"covered them on {', '.join(f['covered'])}, before the row was posted: the "
+            f"new shares are what that short owed the lender, which its cover did not "
+            f"include, not shares acquired at $0 (CA-STKDIV-02, an assumption: check the "
+            f"broker's statement). It needs no declared amount.")
+    line = (f"`BUYSELL {f['date']} {f['time']} {f['symbol']} {f['units']:g} "
+            f"{f['currency']} 0 0 type=stock_dividend {f['dated_by']}={f['entitlement']} "
+            f"delivered_cost=COST`")
+    if not closed and pooled:
+        return (f"warning: {ATTENTION_POOLED_COVER}{head} "
+                + (f"Its delivered_cost of {cost:,.2f} is not booked in the books "
+                   f"pooled across your accounts, the figures you file"
+                   if cost else
+                   "What delivering them cost, once on the row as delivered_cost=, is "
+                   "booked in the account's own books and not in the books pooled "
+                   "across your accounts, the figures you file")
+                + f": the purchase on {f['cover_date']} closes no short in them "
+                f"(another account holds the shares, so the short sale sold pool "
+                f"shares). Enter that cost in the pooled figures by hand.")
+    if cost and closed and cover_year and cover_year != f['date'][:4]:
+        return (f"warning: ATTENTION: {head} Its delivered_cost of {cost:,.2f} is "
+                f"booked as a cost of the cover on {f['cover_date']}, in tax year "
+                f"{cover_year}: the row is dated {f['date'][:4]}, and {cover_year}'s "
+                f"gain is lower by it than without the row. If {cover_year} is filed, "
+                f"`tjs check-filed` shows the difference.")
+    if cost and closed:
+        return (f"note: {head} Its delivered_cost of {cost:,.2f} is booked as a "
+                f"cost of the cover on {f['cover_date']}.")
+    if cost:
+        return (f"warning: ATTENTION: {head} Its delivered_cost of {cost:,.2f} is "
+                f"not booked: the purchase on {f['cover_date']} closed no short in "
+                f"these books. Enter it by hand.")
+    return (f"warning: ATTENTION: {head} What delivering them cost is in no row: put it "
+            f"on the row itself, as `delivered_cost=COST` on its .tt line ({line}, in "
+            f"place of the broker's row): the account's own books then book it as a "
+            f"cost of the cover on {f['cover_date']}. If the row is shares you "
+            f"received, check its ex_date / record_date.")
+
+
+def stock_dividend_cost_unbooked_line(t: TaxTransaction) -> str:
+    """The ATTENTION line of a stock dividend row whose `delivered_cost` no rule books:
+    the row is not read as a covered short's obligation, or the amount is below 0 (a
+    JSON book's: the .tt reader refuses it)."""
+    if (t.delivered_cost or 0.0) < 0:
+        return (f"warning: ATTENTION: {t.symbol}: stock dividend of {t.quantity:g} "
+                f"share(s) on {t.date}: its delivered_cost of "
+                f"{M.of(t.delivered_cost):,.2f} is below 0 and is not booked: it is "
+                f"what delivering the shares cost, an amount above 0. Correct the row.")
+    return (f"warning: ATTENTION: {t.symbol}: stock dividend of {t.quantity:g} share(s) "
+            f"on {t.date}: its delivered_cost of {M.of(t.delivered_cost):,.2f} is not "
+            f"booked. The row is not read as the obligation of a short covered before it "
+            f"(CA-STKDIV-02): that takes an ex-dividend or record date on the row, and "
+            f"the account short on that date and bought back since. Check the row's "
+            f"ex_date, or remove the delivered_cost.")
+
+
+def stock_dividend_near_cover_line(f: Dict[str, Any]) -> str:
+    """The ATTENTION line of a stock dividend with no entitlement date, booked as shares
+    received at $0, that a short covered in the days before may owe (`f`: the facts
+    lib/stock_dividend_cover names). `beside` in them: a dated row of an account that
+    held shares on the entitlement date and was short beside them (a sale its broker
+    marked short, bought back since): booked as shares received on the shares held, the
+    covered short's own part in no row."""
+    if f.get('beside'):
+        return (f"warning: ATTENTION: {f['symbol']}: stock dividend of {f['units']:g} "
+                f"share(s) on {f['date']}: {f['account']} held {f['held']:g} share(s) "
+                f"on its entitlement date {f['entitlement']} and was also short "
+                f"{f['short']:g} of the security (a sale the broker marked short), "
+                f"covered on {', '.join(f['covered'])}. The row is booked as shares "
+                f"received on the shares held; the part that short owed the lender is "
+                f"not in it: enter that by hand (.tt), CA-STKDIV-02.")
+    return (f"warning: ATTENTION: {f['symbol']}: the stock dividend of {f['units']:g} "
+            f"share(s) on {f['date']} carries no ex-dividend or record date, and "
+            f"{f['account']} covered a short of the security on "
+            f"{', '.join(f['covered'])}, within the 90 days before it: a "
+            f"short open on the ex-dividend date owes the new shares, and the row is then "
+            f"that short's obligation, not shares acquired at $0 (CA-STKDIV-02). It is "
+            f"booked as shares received. Check the issuer's ex-dividend date and give the "
+            f"row its ex_date (`ex=DATE` on a .tt type=stock_dividend line).")
 
 
 def _ca_stock_dividend_owed(run: _CanadaRun, it: _CanadaIteration, pool: AcbPool, tx: TaxTransaction,
@@ -682,7 +807,11 @@ def _ca_stock_dividend_owed(run: _CanadaRun, it: _CanadaIteration, pool: AcbPool
     leave long gives the units up at the same cost, no gain or loss booked (one holding no
     more than the row owes gives up all it holds, its cost kept, and is short by the rest).
     Said once, on every branch. False: any other row, shares
-    received among them (booked as before; a marked short open beside them is said)."""
+    received among them (booked as before; a marked short open beside them is said).
+
+    A row posted with no short open, after the short that owed it was covered, is no
+    shares at all (lib/stock_dividend_cover, from the rows alone; backlog TJ-5282): it is
+    left out of the book before any walk, this one included."""
     if not is_stock_dividend(tx) or not qty:
         return False
     named = run._ev_memo.get(STOCK_DIVIDENDS_OWED)
@@ -893,7 +1022,7 @@ def _walk_trade(*, account: str, internal_adj: Decimal, internal_dw: Decimal, in
         # Apportion adjustment
         chunk_adj = internal_adj * M.of(_close_share)
         proceeds = _ca_trade_money(tx) * M.of(_close_share)
-        effective_proceeds = proceeds + (chunk_adj if pool.qty < 0 else -chunk_adj)
+        effective_proceeds = proceeds + ((chunk_adj + _ca_delivered_cost(run, tx)) if pool.qty < 0 else -chunk_adj)
 
         gain = (effective_proceeds - cost_basis) if pool.qty > 0 else (cost_basis - effective_proceeds)
 

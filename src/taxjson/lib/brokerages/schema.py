@@ -140,6 +140,7 @@ KNOWN_SUFFIXES = _known_sfx()
 # refused.
 _QTY_EPS = QTY_ZERO
 _MONEY_EPS = 0.005
+_PRICE_ZERO = 1e-9      # (lib/tt_format PRICE_ZERO: one figure)
 
 
 # Leading tag of a WARNING the caller must put on the console (the run's
@@ -170,6 +171,27 @@ def _who(tx: Dict[str, Any], i: int) -> str:
         return f"{src} line {tx['line']}: {what}"
     rid = _masked_id(tx.get('id'))
     return f"{src}{f' (row id {rid})' if rid else ''}: {what}"
+
+
+def _negative_price(tx: Dict[str, Any], i: int, sym: str,
+                    price: float) -> List[str]:
+    """The error of a trade row whose price is below 0 on anything but a
+    plain future ([] otherwise). A futures price can be negative (WTI,
+    April 2020; a calendar spread): booked correctly, so not an error
+    there (audit S053-13), whichever futures prefix the symbol carries
+    (F:, / or \\, A2-1087/A2-1089). A plain future only, the .tt reader's
+    rule (lib/tt_format _refuse_negative_price): an option on a future
+    has a premium, never below 0, and nothing defines such a row's money;
+    by the prefix alone it passed (backlog TJ-5261). A price within
+    `_PRICE_ZERO` of 0 is 0 (a computed price's float noise), the
+    reader's figure too (lib/tt_format PRICE_ZERO)."""
+    if not price < -_PRICE_ZERO or (sym.startswith(FUTURES_PREFIXES)
+                                    and not is_option_symbol(sym)):
+        return []
+    return [f"{_who(tx, i)}: negative price {price}: only a futures "
+            f"contract (an F: or / symbol, not an option on one) trades "
+            f"below 0 — correct the row in the export, or enter it as a "
+            f".tt line and delete the row."]
 
 
 def validate_transactions(txs: List[Dict[str, Any]],
@@ -270,12 +292,7 @@ def validate_transactions(txs: List[Dict[str, Any]],
                 errors.append(f"{_who(tx, i)}: trade net_amount must be "
                               f">= 0 (got {net}); direction belongs in "
                               f"the quantity sign")
-            # A futures price can be negative (WTI, April 2020; a
-            # calendar spread): booked correctly, so not an error
-            # there (audit S053-13) — whichever futures prefix the
-            # symbol carries (F:, / or \, A2-1087/A2-1089).
-            if price < -_MONEY_EPS and not _fut:
-                errors.append(f"{_who(tx, i)}: negative price {price}")
+            errors.extend(_negative_price(tx, i, _sym, price))
             # Notional sanity: net_amount vs qty * price * multiplier
             # (brokers round, and fees sit inside net for buys / outside
             # for sells). price==0 rows (crypto awaiting fill-crypto,

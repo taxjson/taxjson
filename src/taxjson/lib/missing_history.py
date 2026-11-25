@@ -935,8 +935,181 @@ def _journal_day(journal_symbols: Any, t: Any) -> bool:
     return str(t.symbol or '').upper() in journal_symbols
 
 
-def _walk_key(t, journal_symbols: Any = None) -> Tuple:
-    """The missing-history walks' order. A journal's trades and transfer
+# The gains document's part naming, by row id, the stock dividends the gains
+# engine booked on a short (CA-STKDIV-02 / US-STKDIV-06): the short grew by
+# the shares, nothing was acquired (lib/pipeline
+# _gains_with_stock_dividend_lines keeps it in the file).
+STOCK_DIVIDENDS_OWED = 'stock_dividends_owed'
+# The type owed_reading gives such a row: a view's reading of it, never
+# written to a book. The walks move the position by it and read no sale.
+OWED_STOCK_DIVIDEND = 'stock_dividend_owed'
+
+
+def is_owed_stock_dividend(tx: Any) -> bool:
+    """A row owed_reading read as a stock dividend owed on a short."""
+    t = tx.get('type') if isinstance(tx, dict) else getattr(tx, 'type', '')
+    return t == OWED_STOCK_DIVIDEND
+
+
+def _gains_docs(cache: Any, accounts: Optional[Iterable[str]] = None,
+                wash: bool = False) -> List[Tuple[str, Dict[str, Any]]]:
+    """[(account, its plain gains file)] of the run's work/ (`cache`;
+    `accounts`: theirs only; `wash`: its blended file where there is
+    one); [] without a readable one."""
+    from taxjson.lib.report_model import resolve_gains_files
+    if cache is None:
+        return []
+    try:
+        files = resolve_gains_files(Path(cache), prefer_wash=wash,
+                                    warn_stale=False, accounts=accounts)
+    except OSError:
+        return []
+    out = []
+    for acct, f in files.items():
+        try:
+            doc = json.loads(Path(f).read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        if isinstance(doc, dict):
+            out.append((acct, doc))
+    return out
+
+
+def owed_stock_dividends(cache: Any, accounts: Optional[Iterable[str]] = None
+                         ) -> Set[str]:
+    """The ids of the rows the gains engine booked as stock dividends owed
+    on a short (STOCK_DIVIDENDS_OWED), from the plain gains files in
+    `cache` (work/; `accounts`: theirs only): the engine's own reading of
+    those rows, which the walks here take (owed_reading; backlog TJ-5281).
+    Only where the account's books agree with that reading
+    (_owed_where_books_agree); a row where they do not is left out, read as
+    before (shares at $0), since those lines are then the ones pointing at
+    the books. Empty without a readable file."""
+    docs: Dict[str, List[Dict[str, Any]]] = {}
+    for acct, doc in _gains_docs(cache, accounts) + _gains_docs(
+            cache, accounts, wash=True):
+        docs.setdefault(acct, []).append(doc)
+    out: Set[str] = set()
+    for acct, doc in _gains_docs(cache, accounts):
+        ids = {str(i) for i in doc.get(STOCK_DIVIDENDS_OWED) or ()}
+        if ids:
+            out |= _owed_where_books_agree(Path(cache), acct, ids, docs[acct])
+    return out
+
+
+def _owed_where_books_agree(cache: Path, acct: str, ids: Set[str],
+                            docs: List[Dict[str, Any]]) -> Set[str]:
+    """The `ids` (rows of the account's book in work/, `cache`) whose
+    security every gains file of the account (`docs`: plain and blended)
+    holds as many units of at the end as the book's rows give, with the
+    owed rows counted as the engine counts them (owed_reading): under its
+    symbol and each one it was renamed to, splits applied (unit_balance
+    balance_on, the per-account split's count). A stock dividend row those
+    files name as no shares (`stock_dividends_after_cover`, a covered
+    short's obligation: TJ-5282) is no unit of the book here either, as it
+    is none of the engine's. Pooled books whose account lines do not add
+    up hold other units (backlog TJ-5321); a row of an unreadable book is
+    not found."""
+    from dataclasses import asdict
+    from taxjson.lib.unit_balance import balance_on
+    from taxjson.model.result import Holding
+    gone = {str(i) for d in docs for i in d.get('stock_dividends_after_cover') or ()}
+    rows = [t for t in _book_rows(cache, acct) if str(t.id) not in gone]
+    read = [asdict(t) for t in owed_reading(rows, ids)]
+    after = rename_successors(rows)
+
+    def _agree(sym: str) -> bool:
+        units = balance_on(read, sym, '9999-12-31')
+        return all(abs(units - sum(
+            float(Holding(i).quantity or 0) for i in d.get('inventory') or ()
+            if isinstance(i, dict) and i.get('symbol') == sym)) < 1e-6
+            for d in docs)
+    return {str(t.id) for t in rows if str(t.id) in ids and all(
+        _agree(s) for s in {t.symbol} | after.get((t.symbol, t.account), set()))}
+
+
+def _book_rows(cache: Path, acct: str) -> List[Any]:
+    """The rows of the account's book in work/ (`cache`); [] unreadable."""
+    from taxjson.lib.tx_load import load_transactions
+    try:
+        return load_transactions(cache / f"{acct}_base.json")
+    except (OSError, ValueError):
+        return []
+
+
+def replaced_opening_lines(cache: Any) -> Dict[str, Tuple[str, str]]:
+    """{a .tt line's place (`inputs/<acct>/<file>.tt:<n>`): (snapshot
+    symbol, snapshot date)}: the OPENING cost=unknown lines the account's
+    gains file says an opening snapshot replaced (its
+    `missing_history_log`, `replaced_by_snapshot`: lib/first_run
+    replaced_openings reads the same). plan_tt_write writes in their
+    place (backlog TJ-5243). Empty without a readable gains file."""
+    out: Dict[str, Tuple[str, str]] = {}
+    for acct, doc in _gains_docs(cache):
+        for e in doc.get("missing_history_log") or []:
+            snap = e.get("replaced_by_snapshot") if isinstance(e, dict) \
+                else None
+            if (isinstance(snap, dict) and e.get("account") == acct
+                    and e.get("source")):
+                out[str(e["source"])] = (str(snap.get("symbol") or ""),
+                                         str(snap.get("date") or "")[:10])
+    return out
+
+
+def owed_reading(transactions: Iterable[Any], owed: Set[str]) -> List[Any]:
+    """`transactions` with each stock dividend the engine booked on a short
+    (`owed`: owed_stock_dividends) read as it booked it: the short grows by
+    the shares (the row's quantity negative, as the engines' passes read
+    it), so no walk here sees $0-cost shares acquired or a position held
+    (CA-STKDIV-02 / US-STKDIV-06; backlog TJ-5281), typed
+    OWED_STOCK_DIVIDEND: the walks move the position by it and read no
+    sale, no acquisition. Copies, ids kept; a book's row dicts read
+    alike."""
+    rows = list(transactions)
+    if not owed:
+        return rows
+
+    def _read(t: Any) -> Any:
+        d = isinstance(t, dict)
+        rid, q = ((t.get('id'), t.get('quantity')) if d
+                  else (getattr(t, 'id', ''), t.quantity))
+        if not (str(rid or '') in owed and is_stock_dividend(t)
+                and float(q or 0) > 0):
+            return t
+        return (dict(t, quantity=-float(q), type=OWED_STOCK_DIVIDEND) if d
+                else replace(t, quantity=-float(q), type=OWED_STOCK_DIVIDEND))
+    return [_read(t) for t in rows]
+
+
+def _walk_order(rows: Sequence[Any], journal_symbols: Any = None,
+                country: Optional[str] = None):
+    """The key the walks sort the book `rows` by: _walk_key, a trade that
+    settles after its trade date placed among its day's rows as
+    `country`'s engine books it (lib/country walk_settle_lag; backlog
+    TJ-5264: a T+1 sale ahead of the same day's reinvestment read short
+    what both engines booked long). No country: as before."""
+    from taxjson.lib.corporate_timeline import walk_sort_key
+    from taxjson.lib.country import walk_settle_lag
+    base = walk_sort_key(rows, walk_settle_lag(country))
+    return lambda t: _walk_key(t, journal_symbols, base)
+
+
+def _walked(rows: Iterable[Any], journal_symbols: Any = None,
+            country: Optional[str] = None, buys_first: bool = False
+            ) -> List[Any]:
+    """`rows` in the walks' order (_walk_order), a split reported twice
+    once (_drop_duplicate_splits); `buys_first`: at one moment a
+    purchase before a sale."""
+    rows = list(rows)
+    order = _walk_order(rows, journal_symbols, country)
+    return _drop_duplicate_splits(sorted(rows, key=(
+        (lambda t: (order(t), 0 if float(t.quantity or 0) > 0 else 1))
+        if buys_first else order)))
+
+
+def _walk_key(t, journal_symbols: Any = None, base: Any = None) -> Tuple:
+    """The missing-history walks' order (`base`: _walk_order's key of the
+    book, else the missing_history_walk profile). A journal's trades and transfer
     legs of one day read buys and in-legs first whatever their clock:
     RBC stamps a day's rows with its row ORDINAL (09:30:00 + k s,
     newest-first export), so the Norbert's-gambit sale of SAMPLF.TO
@@ -948,7 +1121,8 @@ def _walk_key(t, journal_symbols: Any = None) -> Tuple:
     walk_journal_symbols (JournalDays: only the days that hold a
     journal). Every other day keeps the clock: a same-day sale and
     rebuy of shares bought before the data IS missing history."""
-    k = event_sort_key(t, profile='missing_history_walk')
+    k = (base(t) if base is not None
+         else event_sort_key(t, profile='missing_history_walk'))
     if (journal_symbols and t.action in ('BUYSELL', 'TRANSFER')
             and _journal_day(journal_symbols, t)):
         k = (k[0], k[1], '', k[3])
@@ -1005,12 +1179,9 @@ def detect_missing_history(
     journal_symbols = _book_journals(transactions, journal_symbols)
     # (A split another account of the book reports re-denominates this
     # account's units too, as in the engines: backlog TJ-0832, TJ-1022.)
-    sorted_txs = _drop_duplicate_splits(sorted(
-        _spread_global_splits(transactions, registered_accounts, country,
-                              affiliated_accounts),
-        key=lambda t: (_walk_key(t, journal_symbols),
-                       0 if float(t.quantity or 0) > 0 else 1),
-    ))
+    sorted_txs = _walked(_spread_global_splits(
+        transactions, registered_accounts, country, affiliated_accounts),
+        journal_symbols, country, buys_first=True)
     orders = OrderStarts()
     books = FutureBrokerBooks(transactions)
 
@@ -1092,7 +1263,8 @@ def detect_missing_history(
         # A disposition while running is negative is one of the events
         # consuming shares bought before the data. Catches both "ran negative on this
         # disposition" and "was already negative when this disposition fired."
-        if tx.quantity < 0 and (prev < 0 or s['running'] < 0):
+        if (tx.quantity < 0 and not is_owed_stock_dividend(tx)  # (TJ-5281)
+                and (prev < 0 or s['running'] < 0)):
             s['disposition_count'] += 1
             if s['running'] < -1e-9:
                 # A sale that OPENS (or extends) the short side — also
@@ -1200,12 +1372,13 @@ def detect_unbacked_covers(
     books = FutureBrokerBooks(transactions)
     journal_symbols = _book_journals(transactions, journal_symbols)
 
+    spread = _spread_global_splits(transactions, registered_accounts, country)
+    order = _walk_order(spread, journal_symbols, country)
+
     def _key(t):
-        k = _walk_key(t, journal_symbols)
+        k = order(t)
         return k[:3] + ((3 - k[3]) if k[3] in (1, 2) else k[3],)
-    for tx in _drop_duplicate_splits(sorted(
-            _spread_global_splits(transactions, registered_accounts,
-                                  country), key=_key)):
+    for tx in _drop_duplicate_splits(sorted(spread, key=_key)):
         key = (tx.symbol, tx.account)
         if tx.action == 'SPLIT':
             ratio = float(tx.quantity or 0.0)
@@ -1314,7 +1487,8 @@ def drop_answered_covers(transactions: Iterable[TaxTransaction],
     if not start:
         return out
     left: Dict[Tuple[str, str], float] = {}
-    for i in sorted(range(len(out)), key=lambda j: _walk_key(out[j])):
+    order = _walk_order(out, country=country)
+    for i in sorted(range(len(out)), key=lambda j: order(out[j])):
         tx = out[i]
         key = (tx.symbol, tx.account)
         s = start.get(key)
@@ -1370,13 +1544,15 @@ def stale_missing_history_entries(
     *, phantoms: Optional[Set[Tuple[str, str]]] = None,
     file_name: Optional[str] = None,
     complete: bool = False,
+    country: Optional[str] = None,
 ) -> List[StaleMissingHistoryEntry]:
     """The listed pairs that are a broker-marked real short or a
     derivative the broker did not code CLOSING (the two cases
     detect_missing_history leaves out by default) — and, with
     `complete=True`, the listed pairs whose rows never go short any more
     (reason 'complete': the purchase is now in the books, so the entry
-    does nothing). `phantoms=`: the old keyword for `pairs`."""
+    does nothing), walked as `country`'s engine books a day's rows
+    (TJ-5264). `phantoms=`: the old keyword for `pairs`."""
     if pairs is None:
         pairs = phantoms
     if not pairs:
@@ -1385,7 +1561,8 @@ def stale_missing_history_entries(
     listed = {(str(s).upper(), str(a)) for s, a in pairs}
     txs = list(transactions)
     cands = detect_missing_history(txs, include_options=True,
-                                   include_broker_shorts=True)
+                                   include_broker_shorts=True,
+                                   country=country)
     out: List[StaleMissingHistoryEntry] = []
     for c in cands:
         pair = (str(c.symbol).upper(), c.account)
@@ -1608,10 +1785,9 @@ def assess_tax_year_relevance(
 
     transactions = list(transactions)
     journal_symbols = _book_journals(transactions, journal_symbols)
-    for tx in _drop_duplicate_splits(
-            sorted(_spread_global_splits(transactions, registered_accounts,
-                                         country, affiliated_accounts),
-                   key=lambda t: _walk_key(t, journal_symbols))):
+    for tx in _walked(_spread_global_splits(
+            transactions, registered_accounts, country, affiliated_accounts),
+            journal_symbols, country):
         key = (tx.symbol, tx.account)
         d = _basis_date(tx, date_basis)
         if tx.action == 'SPLIT':
@@ -1642,9 +1818,10 @@ def assess_tax_year_relevance(
         run[key] = cur
         if year_start is not None and d < year_start:
             before[key] = cur
-        draws = ((tx.quantity < 0 and (prev < -1e-9 or cur < -1e-9))
-                 or (tx.quantity > 0 and prev < -1e-9
-                     and tx.action in ('BUYSELL', 'ASSIGN')))
+        draws = (((tx.quantity < 0 and (prev < -1e-9 or cur < -1e-9))
+                  or (tx.quantity > 0 and prev < -1e-9
+                      and tx.action in ('BUYSELL', 'ASSIGN')))
+                 and not is_owed_stock_dividend(tx))
         if not draws:
             continue
         if year_str is not None and not d.startswith(year_str):
@@ -1883,6 +2060,42 @@ class ZeroBasisRow:
     event_ids: Tuple[str, ...] = ()
 
 
+# The gains files' key of the stock dividend rows the engine booked as
+# no shares, each the obligation of a short covered before it (engine/
+# ca/taxrules, engine/us/taxrules; tax-logic CA-STKDIV-02 / US-STKDIV-06):
+# the row ids. Every reader that adds up the rows leaves them out.
+STOCK_DIVIDENDS_AFTER_COVER = 'stock_dividends_after_cover'
+
+
+def stock_dividends_after_cover(cache: Optional[Path]) -> frozenset:
+    """The ids of the stock dividend rows the last `tjs run` booked as
+    no shares (STOCK_DIVIDENDS_AFTER_COVER), from every gains file of
+    work/ (`cache`); none without a run, or from a file that does not
+    read (the run's own checks report it)."""
+    ids: Set[str] = set()
+    if cache is None or not Path(cache).is_dir():
+        return frozenset()
+    for path in sorted(Path(cache).glob('*_gains*.json')):
+        try:
+            doc = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        if isinstance(doc, dict):
+            ids.update(str(i) for i in doc.get(STOCK_DIVIDENDS_AFTER_COVER) or ())
+    return frozenset(ids)
+
+
+def without_no_shares(transactions: Iterable[TaxTransaction],
+                      cache: Optional[Path]) -> List[TaxTransaction]:
+    """`transactions` less the stock dividend rows the last run booked as
+    no shares (`stock_dividends_after_cover`): the rows a walk that adds
+    up shares itself reads. Listed as shares held at $0, the run's
+    closing line and `tjs find-missing-history` contradicted the run's
+    own books (backlog TJ-5301)."""
+    gone = stock_dividends_after_cover(cache)
+    return [t for t in transactions if not (gone and str(t.id) in gone)]
+
+
 def detect_zero_basis_acquisitions(
     transactions: Iterable[TaxTransaction],
     year: Any = None,
@@ -1892,6 +2105,7 @@ def detect_zero_basis_acquisitions(
     include_held: bool = False,
     stock_dividends_spread: bool = False,
     declared_events: Iterable[Tuple[str, str]] = (),
+    country: Optional[str] = None,
 ) -> List[ZeroBasisRow]:
     """Flag (symbol, account) pairs that ACQUIRED shares at ~$0 cost — almost
     always a broker corporate-action row (a merger/spinoff "shares received"
@@ -1927,6 +2141,7 @@ def detect_zero_basis_acquisitions(
     .declared_zero_value_events): spin-offs whose election declares the
     $0 value. A pool whose every $0 acquisition is one of them is
     reported with `declared` set — the user's answer, listed apart.
+    `country`: _walk_order's (TJ-5264); owed_reading's rows (TJ-5281).
     """
     year_str = str(year) if year is not None else None
     declared = set(declared_events)
@@ -2000,9 +2215,7 @@ def detect_zero_basis_acquisitions(
     # assess_tax_year_relevance): per-broker duplicate SPLIT rows would
     # double-apply the ratio to `running`, so the drain-to-zero check
     # never cleared and clean later buys stayed flagged contaminated.
-    for tx in _drop_duplicate_splits(sorted(
-            transactions,
-            key=lambda t: event_sort_key(t, profile='missing_history_walk'))):
+    for tx in _walked(transactions, country=country):
         if not include_options and is_option_symbol(tx.symbol):
             continue
         # An ASSIGN stock leg (Questrade, Webull) moves the pool like a
@@ -2492,6 +2705,8 @@ class TtOpening:
     # The symbol as the line writes it, when the books spell it another
     # way (ticker.map / tobase.map: load_missing_history); '' otherwise.
     declared: str = ''
+    # The file the line is in (read_tt_openings); '' when not read there.
+    path: str = ''
 
 
 class TtOpeningError(ValueError):
@@ -2667,7 +2882,7 @@ def read_tt_openings(root: Any, accounts: Optional[Iterable[str]] = None
                 if o is None:
                     continue
                 t = TtOpening(acct, o['date'], o['symbol'], o['quantity'],
-                              where, o['reason'], o['line'])
+                              where, o['reason'], o['line'], path=str(tt))
                 prev = seen.get((acct, t.symbol))
                 if prev is not None:
                     problems.append(
@@ -2884,6 +3099,46 @@ def day_before(day: str) -> str:
     return (date.fromisoformat(day) - timedelta(days=1)).isoformat()
 
 
+def day_after(day: str) -> str:
+    return (date.fromisoformat(day) + timedelta(days=1)).isoformat()
+
+
+def replacing_snapshot(cache: Path, account: str, symbol: str, day: str
+                       ) -> Optional[Tuple[str, str]]:
+    """(snapshot symbol, snapshot date) of the opening snapshot in
+    `account`'s merged books (work/<account>_base.json) that replaces an
+    `OPENING <day> <symbol> <qty> cost=unknown` line, as the run replaces
+    one (opening.unknown_opening_reading: CA-OPEN-03 / US-OPEN-03); None
+    when none does or the books cannot be read. A line dated after it
+    opens its units (backlog TJ-5243)."""
+    try:
+        doc = json.loads((Path(cache) / f"{account}_base.json")
+                         .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    rows = doc.get("transactions") if isinstance(doc, dict) else doc
+    rows = [r for r in rows or [] if isinstance(r, dict)]
+    snap = unknown_opening_reading(rows, account, [symbol], day)
+    return (snap[0], snap[1]) if snap is not None else None
+
+
+def opening_line_date(cache: Path, account: str, symbol: str, reason: str
+                      ) -> Optional[Tuple[str, str]]:
+    """(date, reason) of a written OPENING cost=unknown line of `symbol`
+    in `account`: default_opening_date's, or the day after an opening
+    snapshot that would replace a line dated so (it would open nothing;
+    the snapshot is the position at its day's end: the cut-off leaves
+    that day's rows out; backlog TJ-5243), the reason saying so. None
+    when the account has no books."""
+    d = default_opening_date(cache, account)
+    snap = replacing_snapshot(cache, account, symbol, d) if d else None
+    if d is None or snap is None:
+        return (d, reason) if d else None
+    return (day_after(snap[1]),
+            f"{reason}; dated after the opening snapshot of {snap[0]} dated "
+            f"{snap[1]}, which replaces a line dated before it")
+
+
 def default_opening_date(cache: Path, account: str) -> Optional[str]:
     """The date a written OPENING cost=unknown line gets: the day before
     the first row of the account's history (before every sale that can
@@ -2908,12 +3163,22 @@ class TtWritePlan:
     `add` the new lines, `same` the symbols a line already opens with
     the same quantity (never duplicated), `differ` [(TtLine, the line
     there, its quantity)] the symbols a line already opens with another
-    quantity (flagged, never replaced)."""
+    quantity (flagged, never replaced). `swap` [(TtLine, the line
+    there, (snapshot symbol, date))]: a line there an opening snapshot
+    replaces (it opens nothing) and the units sold beyond the snapshot,
+    written in its place, dated after the snapshot: one OPENING
+    cost=unknown line per symbol per account (backlog TJ-5243)."""
     root: Path
     files: Dict[str, Path] = field(default_factory=dict)
     add: Dict[str, List[TtLine]] = field(default_factory=dict)
     same: List[Tuple[TtLine, TtOpening]] = field(default_factory=list)
     differ: List[Tuple[TtLine, TtOpening]] = field(default_factory=list)
+    swap: List[Tuple[TtLine, TtOpening, Tuple[str, str]]] = field(
+        default_factory=list)
+    # What apply_tt_plan wrote of `swap`: (TtLine, TtOpening, snapshot,
+    # the backup of the file).
+    swapped: List[Tuple[TtLine, TtOpening, Tuple[str, str],
+                        Optional[Path]]] = field(default_factory=list)
 
     @property
     def n_add(self) -> int:
@@ -2937,17 +3202,22 @@ def _tt_header(shared: bool) -> List[str]:
     return out + [""]
 
 
-def plan_tt_write(root: Any, lines: Iterable[TtLine]) -> TtWritePlan:
+def plan_tt_write(root: Any, lines: Iterable[TtLine],
+                  cache: Optional[Path] = None) -> TtWritePlan:
     """Merge `lines` into the accounts' existing OPENING cost=unknown
     lines (every .tt file of the account): a symbol already opened with
     the same quantity is not written again; one opened with another
     quantity is flagged in `differ` and left as it is. New lines go to
-    inputs/<account>/MISSING_HISTORY_TT. Raises TtOpeningError when the
-    existing lines cannot be read."""
+    inputs/<account>/MISSING_HISTORY_TT. With the run's work/ (`cache`),
+    a line there the run says an opening snapshot replaced (it opens
+    nothing, whatever its quantity: replaced_opening_lines)
+    gets the new line in its place, dated after the snapshot (`swap`).
+    Raises TtOpeningError when the existing lines cannot be read."""
     from taxjson.lib import project_layout as _PL
     root = Path(root)
     plan = TtWritePlan(root)
     lines = list(lines)
+    replaced = replaced_opening_lines(cache) if cache is not None else {}
     # A line already there opens the security when the books spell its
     # symbol as this one (ticker.map / tobase.map, issue #23).
     try:
@@ -2971,6 +3241,13 @@ def plan_tt_write(root: Any, lines: Iterable[TtLine]) -> TtWritePlan:
         seen.add(key)
         old = have.get(key) or have.get(
             (ln.account, _books(ln.account, ln.symbol)))
+        snap = replaced.get(old.where) if old is not None else None
+        if old is not None and snap is not None and old.path:
+            # (the line as the file spells it; dated after the snapshot)
+            plan.swap.append((replace(
+                ln, symbol=old.symbol,
+                date=max(ln.date, day_after(snap[1]))), old, snap))
+            continue
         if old is not None:
             if abs(float(old.quantity) - float(ln.quantity)) <= 1e-9 * max(
                     1.0, abs(float(ln.quantity))):
@@ -3008,11 +3285,14 @@ def tt_plan_text(plan: TtWritePlan, account: str) -> str:
 
 
 def apply_tt_plan(plan: TtWritePlan) -> List[Path]:
-    """Write the plan's new lines (the user-file guard: a symlink that
-    leaves the project's folder is refused, the previous file kept as a
-    .bak). Returns the files written."""
+    """Write the plan's swaps (apply_tt_swaps: `swapped`), then its new
+    lines (the user-file guard: a symlink that leaves the project's
+    folder is refused, the previous file kept as a .bak). Returns the
+    files the new lines were written to. Raises TtSwapError (an OSError)
+    when a line to write over changed since it was read."""
     from taxjson.lib import project_layout as _PL
     from taxjson.lib.safe_write import write_user_file
+    plan.swapped = apply_tt_swaps(plan)
     out = []
     for acct in sorted(plan.add):
         path = plan.files[acct]
@@ -3022,6 +3302,103 @@ def apply_tt_plan(plan: TtWritePlan) -> List[Path]:
         write_user_file(path, text, _PL.write_boundary(plan.root),
                         backup=False)
         out.append(path)
+    return out
+
+
+class TtSwapError(OSError):
+    """A line the plan would write over is no longer as it was read: a
+    guard (an edit of a .tt input makes the books stale, which the command
+    refuses first), raised before any file is written."""
+
+
+_AGAIN = " (run `tjs run`, then this command again)"
+
+
+def apply_tt_swaps(plan: TtWritePlan) -> List[Tuple[TtLine, TtOpening,
+                                                    Tuple[str, str],
+                                                    Optional[Path]]]:
+    """Write each `swap` line in the place of the line there (the same
+    file and line; a comment after it kept; the line ends and a byte
+    order mark as they were; the previous file kept as a .bak, the
+    user-file guard). Returns [(the line written, the line it replaced,
+    the snapshot, the backup)]. Every line of every file is checked first:
+    TtSwapError when one is not the one read, and then nothing is
+    written."""
+    from taxjson.lib import project_layout as _PL
+    from taxjson.lib.safe_write import write_user_file
+    by_file: Dict[str, List[Tuple[TtLine, TtOpening, Tuple[str, str]]]] = {}
+    for item in plan.swap:
+        by_file.setdefault(item[1].path, []).append(item)
+    new = {f: _swapped_bytes(Path(f), items) for f, items in by_file.items()}
+    out = []
+    for path_s, items in sorted(by_file.items()):
+        bak = write_user_file(Path(path_s), new[path_s],
+                              _PL.write_boundary(plan.root), backup=True)
+        out += [(ln, old, snap, bak) for ln, old, snap in items]
+    return out
+
+
+def _swapped_bytes(path: Path, items: List[Tuple[TtLine, TtOpening,
+                                                 Tuple[str, str]]]) -> bytes:
+    """The file's bytes with each item's line written over (apply_tt_swaps);
+    TtSwapError when a line there is not the one read."""
+    from taxjson.lib.tt_format import (_cut_comment_outside_quotes,
+                                       parse_unknown_opening_line,
+                                       unknown_opening_text)
+    bom = b'\xef\xbb\xbf'
+    raw = path.read_bytes()
+    has_bom = raw.startswith(bom)
+    try:
+        text = raw[len(bom) if has_bom else 0:].decode('utf-8')
+    except UnicodeDecodeError as e:
+        raise TtSwapError(f"{items[0][1].where}: not UTF-8 ({e}): "
+                          f"nothing written") from None
+    # Numbered as tt_lines numbers the file read_text gives (a
+    # \r\n or a lone \r ends a line too), each end kept.
+    parts = re.split(r'(\r\n|\r|\n)', text)
+    for ln, old, _snap in items:
+        n = int(old.where.rsplit(':', 1)[1])
+        i = 2 * (n - 1)
+        if i >= len(parts):
+            raise TtSwapError(f"{old.where}: the file has no line {n} "
+                              f"any more: nothing written{_AGAIN}")
+        phys = parts[i]
+        try:
+            o = parse_unknown_opening_line(phys, old.where)
+        except ValueError:
+            o = None
+        if (o is None or o['date'] != old.date
+                or o['symbol'] != old.symbol
+                or float(o['quantity']) != float(old.quantity)):
+            raise TtSwapError(f"{old.where}: the line changed since it "
+                              f"was read: nothing written{_AGAIN}")
+        body = _cut_comment_outside_quotes(phys)
+        comment = phys[len(body):].strip() if phys.startswith(body) \
+            else ''
+        lead = phys[:len(phys) - len(phys.lstrip())]
+        parts[i] = (lead + unknown_opening_text(ln.date, ln.symbol,
+                                                ln.quantity, ln.reason)
+                    + (f"  {comment}" if comment else ''))
+    return (bom if has_bom else b'') + ''.join(parts).encode('utf-8')
+
+
+def tt_swap_lines(plan: TtWritePlan) -> List[str]:
+    """What each written swap (`swapped`) says: the line there, the
+    snapshot that replaced it, the line written in its place and where."""
+    from taxjson.lib import project_layout as _PL
+    from taxjson.lib.tt_format import unknown_opening_text
+    out = []
+    for ln, old, snap, bak in plan.swapped:
+        q = float(ln.quantity)
+        out.append(
+            f"{ln.account} {ln.symbol}: {old.where} rewritten as "
+            f"`{unknown_opening_text(ln.date, ln.symbol, q)}`, dated after "
+            f"the opening snapshot of {snap[0]} dated {snap[1]}, which "
+            f"replaced the line there (OPENING {old.date} {old.symbol} "
+            f"{float(old.quantity):g} cost=unknown)"
+            + (f"; the previous file kept as "
+               f"{_PL.shown(Path(bak), plan.root)}" if bak else "")
+            + ".")
     return out
 
 
@@ -3591,9 +3968,7 @@ def synthesize_openings(
     # detect_missing_history but restricted to listed pairs (expanded to their
     # rename chains), and tracking the earliest activity so the synthetic
     # opening lands before any real transaction touches the pool.
-    sorted_txs = _drop_duplicate_splits(
-        sorted(transactions,
-               key=lambda t: event_sort_key(t, profile='missing_history_walk')))
+    sorted_txs = _walked(transactions, country=country)
 
     # --- Rename-chain expansion. detect_missing_history migrates the running
     # balance across SPLIT-renames and reports candidates under the NEW
@@ -3722,10 +4097,9 @@ def synthesize_openings(
     # reports re-denominates this pair's units too, as in the engines:
     # backlog TJ-0832, TJ-1022); such a copy never anchors the opening.
     _own = {id(t) for t in transactions}
-    _sizing = _drop_duplicate_splits(
-        sorted(_spread_global_splits(transactions, registered_accounts,
-                                     country, affiliated_accounts),
-               key=lambda t: event_sort_key(t, profile='missing_history_walk')))
+    _sizing = _walked(_spread_global_splits(
+        transactions, registered_accounts, country, affiliated_accounts),
+        country=country)
     for tx in _sizing:
         key = (tx.symbol, tx.account)
         pair = member_to_pair.get(key)
@@ -3754,7 +4128,9 @@ def synthesize_openings(
             continue
         q = tx.quantity / split_factor[pair]
         held = running[pair] + real_short[pair]
-        if q < 0 and tx.action in ('BUYSELL', 'ASSIGN'):
+        if is_owed_stock_dividend(tx):      # a real short's own (TJ-5281)
+            real_short[pair] -= q if real_short[pair] > 1e-9 else 0.0
+        elif q < 0 and tx.action in ('BUYSELL', 'ASSIGN'):
             if broker_short_marker(tx) and not unbacked_close(
                     tx, held * split_factor[pair]):
                 real_short[pair] += (max(0.0, -(held + q))
@@ -3933,7 +4309,7 @@ def synthesize_openings(
             _members |= chains[fp]
         stale = stale_missing_history_entries(
             [t for t in sorted_txs if (t.symbol, t.account) in _members],
-            inserted, file_name=label)
+            inserted, file_name=label, country=country)
         # A .tt line whose rows never go short without it: its purchase
         # is in the books now, yet the line still opens its units (never
         # sized) — said every run, not only by find-missing-history
@@ -3945,7 +4321,8 @@ def synthesize_openings(
             _opens = {(e['symbol'].upper(), e['account']): e['opening_qty']
                       for e in applied if e.get('inserted')}
             for e in stale_missing_history_entries(
-                    sorted_txs, _fixed_in, file_name=label, complete=True):
+                    sorted_txs, _fixed_in, file_name=label, complete=True,
+                    country=country):
                 pair = (e.symbol.upper(), e.account)
                 if e.reason == 'complete' and pair not in _said:
                     e.opens = float(_opens.get(pair) or 0.0)

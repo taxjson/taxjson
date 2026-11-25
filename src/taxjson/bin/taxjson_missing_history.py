@@ -52,6 +52,7 @@ from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.lib.tx_load import load_transactions
 from taxjson.lib.missing_history import (
     detect_missing_history, assess_tax_year_relevance, detect_zero_basis_acquisitions,
+    without_no_shares,
     detect_corp_action_links, detect_unbacked_covers, stale_missing_history_entries,
     stale_entry_message, is_registered_account, DRAFT_NAME,
     DATE_PLACEHOLDER as _PH_DATE, COST_PLACEHOLDER as _PH_COST,
@@ -336,7 +337,7 @@ def _listed_pairs(mh_path):
     return load_missing_history(Path(mh_path))
 
 
-def _opening_sizes(txs, mh_path, year, types=None):
+def _opening_sizes(txs, mh_path, year, types=None, country=None):
     """What `tjs run` opens for each .tt OPENING cost=unknown line —
     the same synthesize_openings call, sized from the rows through
     `year`'s end (or the project's): (symbol, account) -> its applied-
@@ -348,7 +349,8 @@ def _opening_sizes(txs, mh_path, year, types=None):
         pairs = load_missing_history(Path(mh_path))
         _o, log = synthesize_openings(txs, pairs, flag_stale=False,
                                       until=sizing_until(year),
-                                      registered_accounts=types or None)
+                                      registered_accounts=types or None,
+                                      country=country)
     except (OSError, ValueError):
         return {}
     return {(e['symbol'], e['account']): e for e in log}
@@ -922,17 +924,18 @@ def _mh_drop_covers(args, txs, types, country=None):
                                                  short_opening_rows)
         txs = drop_answered_covers(txs, short_opening_rows(
             _opening_sizes(txs, args.missing_history, args.year,
-                           types or None).values()), country)
+                           types or None, country).values()), country)
     return txs
 
 
-def _mh_candidates(txs, args, types, journal):
+def _mh_candidates(txs, args, types, journal, country=None):
     """The positions that go short (the account's only with --account),
-    split into the broker-marked real shorts and the rest (main)."""
+    split into the broker-marked real shorts and the rest (main), a
+    day's rows walked as the country's engine books them (TJ-5264)."""
     candidates = detect_missing_history(txs, include_options=args.include_options,
                                  include_broker_shorts=True,
                                  registered_accounts=types or None,
-                                 journal_symbols=journal)
+                                 journal_symbols=journal, country=country)
     if args.account:
         candidates = [c for c in candidates if c.account == args.account]
     # A short the broker itself marks as a short sale (RBC "SHORT." /
@@ -954,7 +957,8 @@ def _mh_short_rows(year_pool, txs, candidates, args, country, types, basis, jour
                                                        date_basis=basis,
                                                        journal_symbols=journal,
                                                        pool=_pool,
-                                                       registered_accounts=types or None)
+                                                       registered_accounts=types or None,
+                                                       country=country)
                   if (r.candidate.symbol, r.candidate.account) not in linked_old]
     return short_rows
 
@@ -988,7 +992,8 @@ def _mh_covers_stale(txs, args, basis, journal, types, mh_name, country=None):
         except (OSError, ValueError):
             pass                     # reported below (the _ph read)
         stale = [e for e in stale_missing_history_entries(
-                     txs, ph_pairs, file_name=mh_name, complete=True)
+                     txs, ph_pairs, file_name=mh_name, complete=True,
+                     country=country)
                  if not args.account or e.account == args.account]
         for e in stale:
             # (a .tt OPENING cost=unknown line is named by its place)
@@ -1065,13 +1070,15 @@ def _mh_zero(args, txs, basis, country, linked_new, types):
     from taxjson.lib.corp_actions import declared_zero_value_events
     _root = _project_root(args.files[0])
     zero_all = [r for r in detect_zero_basis_acquisitions(
-                    txs, args.year, include_options=args.include_options,
+                    without_no_shares(txs, _root / "work" if _root is not None else None),
+                    args.year, include_options=args.include_options,
                     date_basis=basis, include_held=True,
                     stock_dividends_spread=(
                         country is not None
                         and not stock_dividend_zero_cost(country)),
                     declared_events=(declared_zero_value_events(_root)
-                                     if _root is not None else ()))
+                                     if _root is not None else ()),
+                    country=country)
                 if (r.symbol, r.account) not in linked_new
                 and (not args.account or r.account == args.account)]
     zero_declared = [r for r in zero_all if r.declared
@@ -1269,7 +1276,7 @@ def _mh_covered_by(args, yr, short_rows, txs, types, journal, basis, year_pool, 
                           _with, include_options=args.include_options,
                           include_broker_shorts=True,
                           registered_accounts=types or None,
-                          journal_symbols=journal)
+                          journal_symbols=journal, country=country)
                       if not c.broker_marked_short]
             _walked = {
                 (str(r.candidate.symbol).upper(),
@@ -1279,7 +1286,7 @@ def _mh_covered_by(args, yr, short_rows, txs, types, journal, basis, year_pool, 
                     journal_symbols=journal,
                     pool=year_pool(_with, _after, yr, country=country,
                                    registered=types, date_basis=basis),
-                    registered_accounts=types or None)
+                    registered_accounts=types or None, country=country)
                 if r.affects_year or r.pooled_with}
     return _ph, _walked, _logged
 
@@ -1316,7 +1323,7 @@ def _mh_truncated(txs, args, yr, types, short_rows, _walked, _covered, mh_name, 
     # === Section 1: truncated history ===
     # The opening the run applies for each pair the file lists, said
     # under its row in whichever section it is (CA-ACB-11 / US-BASIS-04).
-    _sizes = (_opening_sizes(txs, args.missing_history, yr, types)
+    _sizes = (_opening_sizes(txs, args.missing_history, yr, types, country)
               if args.missing_history and short_rows
               and (_walked is not None
                    or any(_covered(r) for r in short_rows)) else {})
@@ -1577,6 +1584,14 @@ def main(argv=None):
     mh_name = "missing_history.tt"
 
     txs, failed = _load_all(args.files)
+    if txs:
+        # A stock dividend the gains engine booked on a short, as it booked
+        # it: the short grew, no $0-cost shares, none held (its gains files'
+        # stock_dividends_owed; CA-STKDIV-02 / US-STKDIV-06, TJ-5281).
+        from taxjson.lib.missing_history import owed_reading, owed_stock_dividends
+        txs = owed_reading(txs, owed_stock_dividends(
+            Path(args.files[0]).resolve().parent,
+            accounts={t.account for t in txs if t.account}))
     if not txs:
         _out.put("No transactions loaded.", file=sys.stderr)
         # An input that could not be read is exit 2, not the 'finding'
@@ -1623,7 +1638,7 @@ def main(argv=None):
         return _write_purchases(args, txs, country=country, basis=basis,
                                 types=types, journal=journal,
                                 unchecked=unchecked)
-    broker_shorts, candidates = _mh_candidates(txs, args, types, journal)
+    broker_shorts, candidates = _mh_candidates(txs, args, types, journal, country)
     # Canada: the other taxable accounts of a symbol's ACB pool that
     # trade it in the year (lib/missing_history.year_pool) — the same
     # test `tjs run` lists a short on its console by.

@@ -472,6 +472,32 @@ def _order_notes(cfg: Dict[str, Any], block: Dict[str, Any], ry: int,
     return tuple(notes)
 
 
+def _split_note(ncl: Dict[str, Any], ry: int) -> Optional[str]:
+    """handoff's note on a record whose T1A split can still move: its lock
+    was written on a carryover ledger that left sales with an unknown cost
+    out (`carry_back_incomplete`), named by year and, where it records them,
+    by sale and by the [carryover] claimed years whose part carried back their
+    results can move (backlog TJ-1436, TJ-1487, TJ-1488). None with no such
+    record."""
+    locked_on = ncl.get("carry_back_incomplete")
+    if not locked_on:
+        return None
+    from taxjson.lib.carry_back import claims_text, left_out_text, sales_text
+    years = left_out_text(locked_on) if isinstance(locked_on, dict) else ""
+    sales = sales_text(locked_on) if isinstance(locked_on, dict) else ""
+    claims = claims_text(locked_on) if isinstance(locked_on, dict) else ""
+    return (f"The {ry} record's T1A carry-back split can still move: it was "
+            f"locked on a carryover ledger that left out sales with an "
+            f"unknown cost"
+            + (f" ({years}" + (f": {sales}" if sales else "") + ")"
+               if years or sales else "")
+            + f", and their results can change what {ry} carries back to "
+            + (f"[carryover] claimed {claims}" if claims else
+               "a [carryover] claimed year")
+            + f". Once they have a cost, re-close {ry} with --force: the part "
+              f"carried back may change.")
+
+
 def handoff_issues(root: Path, cfg: Dict[str, Any],
                    record: Dict[str, Any],
                    carry_back: Optional[LedgerCarryBack] = None
@@ -508,17 +534,7 @@ def handoff_issues(root: Path, cfg: Dict[str, Any],
 
     if country == "canada":
         ncl = block.get("net_capital_loss") or {}
-        locked_on = ncl.get("carry_back_incomplete")
-        if locked_on:
-            from taxjson.lib.carry_back import left_out_text
-            years = (left_out_text(locked_on)
-                     if isinstance(locked_on, dict) else "")
-            split_note = (
-                f"The {ry} record split that year's loss on a carryover "
-                f"ledger that left out sales with an unknown cost"
-                + (f" ({years})" if years else "")
-                + f". Once they have a cost, re-close {ry} with --force: the "
-                  f"part carried back may change.")
+        split_note = _split_note(ncl, ry)
         if "closing" in ncl and isinstance(est.other_losses,
                                            (int, float)) \
                 and not isinstance(est.other_losses, bool) \

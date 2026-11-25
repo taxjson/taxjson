@@ -671,19 +671,19 @@
    198
   ],
   "src/taxjson/bin/taxjson_carryover.py::build_canada_ledger": [
-   417
+   406
   ],
   "src/taxjson/bin/taxjson_export.py::_holdings_toml_to_inventory": [
    243
   ],
   "src/taxjson/bin/taxjson_export.py::_load_trade_events": [
-   201
+   199
   ],
   "src/taxjson/bin/taxjson_fx_cash.py::build_ledger": [
    157
   ],
   "src/taxjson/bin/taxjson_gains.py::_parse_args": [
-   238
+   223
   ],
   "src/taxjson/bin/taxjson_harvest.py::_harvest_rows": [
    199
@@ -704,7 +704,7 @@
    237
   ],
   "src/taxjson/bin/taxjson_split_gains.py::split_for_account": [
-   164
+   163
   ],
   "src/taxjson/bin/taxjson_t1135.py::build_report": [
    359
@@ -784,9 +784,6 @@
   "src/taxjson/engine/us/walk.py::_us_walk_spinoff": [
    173
   ],
-  "src/taxjson/engine/us/walk.py::_us_walk_stock_dividend": [
-   158
-  ],
   "src/taxjson/lib/brokerages/coinbase.py::CoinbaseBrokerage._build_convert": [
    198
   ],
@@ -812,7 +809,7 @@
    207
   ],
   "src/taxjson/lib/brokerages/schema.py::validate_transactions": [
-   217
+   212
   ],
   "src/taxjson/lib/brokerages/webull.py::WebullBrokerage._mark_assignments": [
    165
@@ -893,7 +890,7 @@
    186
   ],
   "src/taxjson/lib/missing_history.py::detect_missing_history": [
-   191
+   189
   ],
   "src/taxjson/lib/missing_history.py::detect_zero_basis_acquisitions": [
    229
@@ -950,7 +947,7 @@
    207
   ],
   "src/taxjson/lib/purchase_drafts.py::draft_purchases": [
-   260
+   259
   ],
   "src/taxjson/lib/rbc_corp_actions.py::parse_rbc_corporate_actions": [
    371
@@ -997,12 +994,6 @@
   "src/taxjson/lib/tax_estimate.py::estimate_canada": [
    393
   ],
-  "src/taxjson/lib/tax_forms.py::build_8949": [
-   181
-  ],
-  "src/taxjson/lib/tax_forms.py::build_schedule3": [
-   215
-  ],
   "src/taxjson/lib/tax_logic.py::_canada": [
    2740
   ],
@@ -1031,7 +1022,7 @@
    266
   ],
   "src/taxjson/lib/tt_format.py::parse_tt_line": [
-   296
+   288
   ],
   "src/taxjson/lib/tx_load.py::coerce_transaction_row": [
    161
@@ -1111,7 +1102,7 @@
    "src/taxjson/cli/elect.py": 1,
    "src/taxjson/cli/estimate.py": 15,
    "src/taxjson/cli/explain.py": 2,
-   "src/taxjson/cli/file.py": 14,
+   "src/taxjson/cli/file.py": 13,
    "src/taxjson/cli/listings.py": 21,
    "src/taxjson/cli/plan.py": 3,
    "src/taxjson/cli/positions.py": 2,

@@ -182,6 +182,13 @@ class _USRun:
     rules: RuleTable
     short_replacements: Dict[str, List[_RepRecord]]
     split_timeline: SplitTimeline
+    # The stock dividend rows that book no shares, each the obligation of
+    # a short covered before it (lib/stock_dividend_cover, the one
+    # decision, read before the pre-pass: engine/us/prepare
+    # `_us_no_share_rows`): row id -> the short's units, the cover's row
+    # and dates, the row's delivered cost and how much of it the cover
+    # has booked (US-STKDIV-06).
+    stkdiv_after_cover: Dict[RowId, Dict[str, Any]]
     symbol_currency: Dict[str, str]
     taxable_sorted: List[TaxTransaction]
     taxable_stock_symbols: Set[Tuple[str, str]]

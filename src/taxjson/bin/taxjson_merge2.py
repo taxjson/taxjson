@@ -33,12 +33,14 @@ from collections import defaultdict
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.tx_load import coerce_transaction_row, strip_json_comments
-from taxjson.bin.taxjson_sort import (deduplicate, sort_transactions,
-                                      source_accounts_of, source_brokers_of)
+from taxjson.bin.taxjson_sort import (RenameDestinationConflict, deduplicate,
+                                      rename_conflicts, sort_transactions,
+                                      source_accounts_of, source_brokers_of,
+                                      source_lines_of)
 from taxjson.lib.ticker_map_rules import merge_renames, bare_target_warnings
 from taxjson.lib.map_file import load_map_file
 from taxjson.bin.taxjson_ticker_map import (apply_mapping, apply_drops,
@@ -148,6 +150,24 @@ def warn_duplicate_splits(txs, conflicts=None) -> int:
                       f"event, applied ONCE on {d1}; delete the manual .tt "
                       f"SPLIT line.")
     return n
+
+
+def _refuse_rename_conflicts(txs: list[Any], sources: list[dict[str, Any]],
+                             written: dict[int, tuple[Any, str, str]]) -> None:
+    """Two rename rows of one holding (one account, one symbol as
+    ticker.map maps it) on one day or within the split-date window that
+    name different destinations as the map gives them: refused
+    (RenameDestinationConflict, exit 2), each row named by its file and,
+    for a .tt line, its line (the converter's metadata.source_lines), its
+    own spelling beside it where the map changed it. Judged here, after
+    the mapping and the dated renames, not in the dedup on the rows as
+    read: two destinations the map makes one symbol are one rename (the
+    engines apply it once), and two holdings the map makes one are one
+    holding (backlog TJ-5283)."""
+    lines = source_lines_of(s.get('original_metadata') for s in sources)
+    conflicts = rename_conflicts(txs, lines=lines, written=written)
+    if conflicts:
+        raise RenameDestinationConflict(" ".join(conflicts))
 
 
 def _ratio_digits(r: float) -> int:
@@ -527,45 +547,12 @@ def main():
     txs, held_openings = _hold_openings(args, txs)
 
     # --- Stage 3: ticker-map ------------------------------------------
+    written: dict[int, tuple[Any, str, str]] = {}
     if args.map_file:
-        tmap = load_map_file(Path(args.map_file))
-        # GLOBAL renames always apply; TOBASE/JOURNAL apply only when
-        # converting to base (--to) — pre-conversion they'd merge
-        # different-currency legs into one ACB pool.
-        renames = merge_renames(tmap, to_base=bool(args.target_currency))
-        # DELETE first, then rename — the same order as the standalone
-        # taxjson-ticker-map (the crypto path). A DELETE line names the
-        # broker's RAW symbol; mapping first meant `GLOBAL FOO BAR` +
-        # `DELETE FOO` deleted nothing here while the crypto path
-        # deleted FOO, so one map file meant two things (stage-tools
-        # audit). DELETE lines nuke a ticker's transactions (audited).
-        txs = apply_drops(txs, tmap.delete)
-        # Dated RENAME lines are EVENTS (lib/renames): a SPLIT row on the
-        # date in every account holding the old symbol, and `late=fold`
-        # rows re-booked under the new one — on the RAW symbols, before
-        # the undated renames below map both (A2-0197).
-        # (this is the securities path: a coin's .tt RENAME — declared
-        # in a crypto account — never books here.)
-        from taxjson.lib.renames import RenameConflict, apply_dated_renames
-        from taxjson.lib.rename_decl import KIND_SECURITIES
-        try:
-            txs = apply_dated_renames(txs, tmap.dated,
-                                      kind=KIND_SECURITIES,
-                                      country=args.country or "",
-                                      mapping=renames)
-        except RenameConflict as e:
-            emit_line(f"error: {e}")
+        mapped, written = _map_stage(args, txs)
+        if mapped is None:
             return 1
-        # An option the underlying rule would move onto a contract the
-        # book already trades natively keeps its own symbol (R1-16).
-        renames = guard_option_listing_collisions(
-            [t.symbol for t in txs], renames, prog="taxjson-merge2")
-        # A rename to a bare symbol in a listed book (A2-0304).
-        for _w in bare_target_warnings([t.symbol for t in txs], renames):
-            emit_line(f"warning: ATTENTION: {_w}")
-        # apply_mapping mutates and returns the same tx; that's fine here
-        # because we built fresh TaxTransaction instances above.
-        txs = [apply_mapping(t, renames) for t in txs]
+        txs = mapped
 
     # --- Stage 3b: opening-balance cut-off -----------------------------
     # An OPENING snapshot replaces the account's earlier rows of its
@@ -587,7 +574,9 @@ def main():
     txs = _release_openings(txs, opening_cut, held_openings)
 
     # Post-mapping (a DELETE'd or renamed row is judged as the engine will
-    # see it): one account carrying the same split twice.
+    # see it): a holding renamed to two symbols is refused, one account
+    # carrying the same split twice is said.
+    _refuse_rename_conflicts(txs, sources, written)
     split_conflicts = []
     warn_duplicate_splits(txs, split_conflicts)
     canonicalize_split_ratios(txs)
@@ -648,6 +637,58 @@ def main():
     # print() it replaces printed it.
     d = _out.Doc(exact=True, width_=0, live=True)
     d.blank()
+
+
+def _map_stage(args: argparse.Namespace, txs: list[Any]
+               ) -> tuple[Optional[list[Any]], dict[int, tuple[Any, str, str]]]:
+    """merge2: stage 3, ticker.map applied (`--map`): its DELETE lines,
+    its dated renames booked, its renames mapped. Returns the rows (None
+    when a dated rename disagrees with the books: said, exit 1) and each
+    rename row's own spelling before the map ({id(row): (row, symbol,
+    symbol_new)}), which the refusal of a rename to two symbols names."""
+    tmap = load_map_file(Path(args.map_file))
+    # GLOBAL renames always apply; TOBASE/JOURNAL apply only when
+    # converting to base (--to) — pre-conversion they'd merge
+    # different-currency legs into one ACB pool.
+    renames = merge_renames(tmap, to_base=bool(args.target_currency))
+    # DELETE first, then rename — the same order as the standalone
+    # taxjson-ticker-map (the crypto path). A DELETE line names the
+    # broker's RAW symbol; mapping first meant `GLOBAL FOO BAR` +
+    # `DELETE FOO` deleted nothing here while the crypto path
+    # deleted FOO, so one map file meant two things (stage-tools
+    # audit). DELETE lines nuke a ticker's transactions (audited).
+    txs = apply_drops(txs, tmap.delete)
+    # Dated RENAME lines are EVENTS (lib/renames): a SPLIT row on the
+    # date in every account holding the old symbol, and `late=fold`
+    # rows re-booked under the new one — on the RAW symbols, before
+    # the undated renames below map both (A2-0197).
+    # (this is the securities path: a coin's .tt RENAME — declared
+    # in a crypto account — never books here.)
+    from taxjson.lib.renames import RenameConflict, apply_dated_renames
+    from taxjson.lib.rename_decl import KIND_SECURITIES
+    try:
+        txs = apply_dated_renames(txs, tmap.dated,
+                                  kind=KIND_SECURITIES,
+                                  country=args.country or "",
+                                  mapping=renames)
+    except RenameConflict as e:
+        emit_line(f"error: {e}")
+        return None, {}
+    # An option the underlying rule would move onto a contract the
+    # book already trades natively keeps its own symbol (R1-16).
+    renames = guard_option_listing_collisions(
+        [t.symbol for t in txs], renames, prog="taxjson-merge2")
+    # A rename to a bare symbol in a listed book (A2-0304).
+    for _w in bare_target_warnings([t.symbol for t in txs], renames):
+        emit_line(f"warning: ATTENTION: {_w}")
+    # Each rename row's own spelling, before the map changes it (named
+    # by `_refuse_rename_conflicts`).
+    written = {id(t): (t, t.symbol, t.symbol_new) for t in txs
+               if t.action == 'SPLIT' and t.symbol_new}
+    # apply_mapping mutates and returns the same tx; that's fine here
+    # because we built fresh TaxTransaction instances above.
+    txs = [apply_mapping(t, renames) for t in txs]
+    return txs, written
 
 
 def _parse_args() -> argparse.Namespace:
@@ -761,8 +802,10 @@ def _sort_dedup(args: argparse.Namespace, txs: list[Any],
     if args.sort or args.dedup:
         txs = sort_transactions(txs)
     if args.dedup:
+        # The renames of one holding to two symbols are refused after the
+        # ticker.map mapping (`_refuse_rename_conflicts`), not here.
         txs, dropped = deduplicate(
-            txs, return_dropped=True, report=sys.stderr,
+            txs, return_dropped=True, report=sys.stderr, check_renames=False,
             source_accounts=source_accounts_of(
                 s.get('original_metadata') for s in sources),
             source_brokers=source_brokers_of(

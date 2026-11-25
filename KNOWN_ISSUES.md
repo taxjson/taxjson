@@ -21,9 +21,11 @@ until it is fixed. A fixed bug leaves this file, and the CHANGELOG names the rel
   another listing the income is moved to that holding. A row of any other ISIN country (an Irish
   fund's) is booked on the listing the account holds, a ticker.map line names or the statement's
   instrument list gives, and the parse stops when nothing settles one. A row whose Description
-  carries no ISIN is booked on `.US`.
+  carries no ISIN follows the same rule: it is booked on the listing the account holds, a
+  ticker.map line names or the instrument list gives the ticker, and the parse stops when
+  nothing settles one.
 - **Meanwhile:** add a ticker.map `GLOBAL` line that rewrites the parsed symbol to the right listing.
-- **Code:** `src/taxjson/lib/brokerages/ib_extractor.py` — `_isin_ext`, `_reattribute_income_to_holdings`, `_ib_settle_assumed_listings`; `src/taxjson/data/markets.toml` — `isin_country_suffix`, `isin_domicile_suffix`, `currency_suffix`
+- **Code:** `src/taxjson/lib/brokerages/ib_extractor.py` — `_isin_ext`, `_reattribute_income_to_holdings`, `_ib_settle_assumed_listings`, `_ib_ticker_venues`; `src/taxjson/data/markets.toml` — `isin_country_suffix`, `isin_domicile_suffix`, `currency_suffix`
 
 ## Opening balances: edges the cut-off does not see
 
@@ -46,15 +48,22 @@ until it is fixed. A fixed bug leaves this file, and the CHANGELOG names the rel
 - **Meanwhile:** the gains are right; for a fee total, add the coin fees from the Kraken ledger.
 - **Code:** `src/taxjson/lib/brokerages/kraken.py` — `_ledger_trade_legs`; `src/taxjson/bin/taxjson_fees.py`
 
-## A stock dividend received while short: `tjs find-missing-history` still lists it as shares at $0
+## A stock dividend a short owes: the rows still read as shares at $0
 
-- **What happens:** the gains run and its loss rules raise the short by the new shares (tax-logic
-  US-STKDIV-06, CA-STKDIV-02). `tjs find-missing-history` and the run's closing "position at a $0
-  cost" line add up the rows themselves and still list the row as shares held at $0 cost. A short
-  covered between the ex-dividend date and the pay date leaves the row booked as a $0 purchase.
-- **Meanwhile:** the books are right in the first case: ignore the two lines for that row. In the
-  second, replace the row in a `.tt` file with the entry that matches the broker's statement.
-- **Code:** `src/taxjson/lib/missing_history.py` — `detect_zero_basis_acquisitions`; `src/taxjson/lib/row_types.py` — `STOCK_DIVIDEND`
+- **What happens:** a stock dividend received while the account is short is booked as the
+  short's to make good (tax-logic US-STKDIV-06, CA-STKDIV-02), and `tjs find-missing-history`,
+  the run's closing lines and the planning tools read it so where the account's books agree
+  (its gains files hold the units its rows then give; where one holds others, they list the row
+  as shares at $0, as before). A row posted after its short was covered is booked as no shares
+  where it carries an ex-dividend or record date, and none of them lists it; with no date it
+  stays a $0 purchase, and the run says a short covered in the 90 days before may owe it.
+- **Meanwhile:** where `tjs find-missing-history` or the run's closing `$0 cost` line still
+  lists a row received while short, check `tjs list` against the broker's statement: the line
+  points at units the account's gains files hold. For a row with no date posted after a short
+  was covered, check the issuer's ex-dividend date and, if the short was open on it, replace
+  the row in a `.tt` file with one that carries it (`type=stock_dividend ex=DATE`, with
+  `delivered_cost=AMOUNT` for what delivering the shares cost).
+- **Code:** `src/taxjson/lib/missing_history.py` — `owed_stock_dividends`, `_owed_where_books_agree`; `src/taxjson/engine/us/walk.py` — `_us_stkdiv_cover_hint`; `src/taxjson/engine/ca/walk.py` — `stock_dividend_near_cover_line`
 
 ## Limitations and things taxjson does not do
 

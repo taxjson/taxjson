@@ -76,8 +76,8 @@ from taxjson.lib import project_layout as _PL
 from taxjson.pipeline import run_state
 from taxjson.lib import records as _R
 from taxjson.pipeline.freshness import (
-    FolderInputError, commit_records, mark_built, needs_rebuild, record_now,
-    timeline_beside, unmark,
+    PENDING, FolderInputError, commit_records, mark_built, needs_rebuild,
+    record_now, record_written, timeline_beside, unmark,
 )
 from taxjson.pipeline.inputs import (
     _account_sidecars, _country_has_corp_rules, _is_generic_group,
@@ -387,7 +387,9 @@ def execute(table: Mapping[str, Stage], ctx: StageCtx, *rows: str,
     every time: no derived figure comes from a record's word.
     `at_once`: each build is vouched for as it ends (`record_now`: a command
     that builds a view of its own, outside a run); else the run's
-    `commit_records` vouches for it when the run completes. Each output run
+    `commit_records` vouches for it when the run completes, and its bytes
+    are noted as the run's as it ends (`record_written`: a run that stops
+    later still wrote them, TJ-5273). Each output run
     is kept in run_state's `stage_outputs`, with what names its instance
     (what work/.deps/run.json lists: `commit_run`). Returns the
     instances run, in order."""
@@ -424,6 +426,8 @@ def execute(table: Mapping[str, Stage], ctx: StageCtx, *rows: str,
                     unmark(out)
             if built and at_once:
                 record_now(out)
+            elif built:
+                record_written(out)
             run_state.current.stage_outputs[out] = (
                 row, i.account or None, i.broker,
                 i.tt.name if i.tt is not None else None, i.ctx.tag or None)
@@ -569,18 +573,22 @@ def _linked_work(root: Path) -> bool:
 def _vouched(p: Path) -> Optional[bool]:
     """Whether taxjson wrote `p` as it is now (TJ-4274): True when its record
     (lib/records, format 2: written for an output a run built) holds the hash
-    of its bytes, False when it holds another (edited since: a link's target
-    is read, if a file), None when there is no such record or no hash in it
-    (not taxjson's)."""
+    of its bytes, as the output of a run that completed (`out`) or as what a
+    run's stage wrote before that run stopped (`pending`:
+    freshness.record_written, TJ-5273); False when it holds others (edited
+    since: a link's target is read, if a file); None when there is no such
+    record or no hash in it (not taxjson's)."""
     rec = _R.read_record(p)
-    if rec is None or not isinstance(rec.get("out"), str):
+    hashes = [h for h in (rec.get("out"), rec.get(PENDING)) if isinstance(h, str)] \
+        if rec is not None else []
+    if not hashes:
         return None
     try:
         if not stat.S_ISREG(os.stat(p).st_mode):
             return False
     except OSError:
         return False
-    return rec["out"] == _R.sha256_file(p)
+    return _R.sha256_file(p) in hashes
 
 
 # Where the stale-parse cleanup moves what it cannot vouch for (work/kept/:
@@ -594,11 +602,21 @@ LEFT = "left"
 
 def _has_records(work: Path) -> bool:
     """Whether work/ holds records (work/.deps/: an output's, or the last
-    run's list, run.json)."""
+    run's list, run.json). A record that holds nothing but a run's note of
+    the bytes it wrote (`pending`: freshness.record_written, this run's or a
+    stopped one's) is none: an older taxjson's work/ stays one while the run
+    writes its notes (TJ-5273)."""
     try:
-        return any((Path(work) / _R.DEPS_DIR).glob("*.json"))
+        for rp in (Path(work) / _R.DEPS_DIR).glob("*.json"):
+            try:
+                doc = json.loads(rp.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, ValueError):
+                return True
+            if not (isinstance(doc, dict) and set(doc) <= {"format", PENDING}):
+                return True
     except OSError:
         return False
+    return False
 
 
 def stale_parse_fates(work: Path, account: str,
@@ -608,9 +626,10 @@ def stale_parse_fates(work: Path, account: str,
     work/<account>_<x>.json no export group, .tt file or corp file of the
     account names now (by absolute path). taxjson never deletes or reads a
     file it did not write (TJ-5071, TJ-4275): None, it goes, only when it
-    can vouch for it; otherwise why it is moved aside (`move_aside`):
-    OTHER_BYTES (its record holds other bytes: edited since, or written by
-    a run that stopped before it recorded them) or NO_RECORD; LEFT for one
+    can vouch for it (a parse a run wrote, that run completed or not:
+    `_vouched`, TJ-5273); otherwise why it is moved aside (`move_aside`):
+    OTHER_BYTES (its record holds other bytes: edited since) or NO_RECORD;
+    LEFT for one
     the sweep may not touch (`_sweepable`: a folder, a path through a
     link other than work/ itself), which stays where it is.
 
@@ -790,34 +809,60 @@ def account_files(work: Path, account: str, brokers: Sequence[str] = ()) -> List
 
 
 class Swept(NamedTuple):
-    """What `sweep_vanished` did: the files it removed, and the outputs it
-    kept, each with why (`edited` since taxjson wrote it, or not taxjson's:
-    TJ-4274), relative to the project."""
+    """What `sweep_vanished` did, relative to the project: the files it
+    removed; those it could not vouch for (edited since taxjson wrote them,
+    or with no record of taxjson's: TJ-4274), each moved to work/kept/
+    (`move_aside`, TJ-5274) as (file, where it went, why); and, only when
+    asked not to move (`move` False), those left where they are, as (file,
+    why)."""
     gone: List[str]
+    moved: List[Tuple[str, str, str]]
     kept: List[Tuple[str, str]]
 
 
-EDITED, NOT_OURS = "edited", "not taxjson's"
+# Why `sweep_vanished` moved a file aside: its record holds other bytes, it
+# has no record of taxjson's, or (no record of its own) it was written beside
+# an output moved aside.
+EDITED, NOT_OURS, BESIDE = "edited", "not taxjson's", "beside"
+
+
+class SweepMoveError(OSError):
+    """A file `sweep_vanished` cannot vouch for could not be moved to
+    work/kept/ (`move_aside`): `rel` (relative to the project), `why` (EDITED,
+    NOT_OURS, BESIDE) and `swept`, what the sweep did before it (the caller
+    names what was moved, then stops)."""
+
+    def __init__(self, rel: str, why: str, error: OSError, swept: Swept) -> None:
+        super().__init__(error.errno, error.strerror or str(error))
+        self.rel, self.why, self.swept = rel, why, swept
 
 
 def sweep_vanished(work: Path, *, spare: Sequence[str] = (),
-                   configured: Optional[Sequence[str]] = None) -> Swept:
+                   configured: Optional[Sequence[str]] = None,
+                   move: bool = True) -> Swept:
     """A full run, once the instances of every row but `spare`'s ran: what
     the last run's instances built and this run's did not goes, so an
     account, a broker export or a kind gone from the project leaves no
     book a view or a report could read (backlog TJ-4265). Each output is
     the table's (`derived` from the instance run.json lists, which must
     name that output too), only one `_sweepable` (backlog TJ-4269), and
-    only one its record vouches for as taxjson wrote it (`_vouched`: one
-    edited since, or not taxjson's, is kept and said: TJ-4274). The files
-    beside a removed output go with it, and its record: the row's
-    `companions`, each one with a record of its own only when that record
-    vouches for it. A spared row's instance goes too when its account ran
-    nothing now (a removed account's radar, with its books). An account
-    `configured` no longer names, that ran nothing and whose outputs went,
-    leaves none of its own files either (`account_files`: TJ-4264). What a
-    current instance writes or keeps beside its output stays, and so do the
-    stamps of an account that ran."""
+    only one its record vouches for as taxjson wrote it (`_vouched`). One
+    edited since, or not taxjson's (TJ-4274), is moved to work/kept/ with
+    its .diag (`move_aside`), where no reader of work/ sees it (TJ-5274):
+    taxjson reads nothing it did not write. The files beside a removed
+    output go with it, and its record: the row's `companions`, each one
+    with a record of its own only when that record vouches for it (moved
+    aside when it does not). Those beside an output moved aside go with it
+    to work/kept/ (BESIDE; one with a record of its own as its record
+    says), and its record goes. A spared row's instance goes too when its
+    account ran nothing now (a removed account's radar, with its books). An
+    account `configured` no longer names, that ran nothing and whose
+    outputs went, leaves none of its own files either (`account_files`:
+    TJ-4264). What a current instance writes or keeps beside its output
+    stays, and so do the stamps of an account that ran. `move` False: what
+    it cannot vouch for is left where it is (`Swept.kept`; the run's commit,
+    after the run's own sweeps moved each one and said so). A move that
+    fails raises SweepMoveError."""
     work = Path(os.path.abspath(work))
     root = work.parent
     now = _ran_now()
@@ -830,7 +875,7 @@ def sweep_vanished(work: Path, *, spare: Sequence[str] = (),
             for q in [p, *companions(v["row"] or "", p)]}
     keep.update(Path(os.path.abspath(q)) for a in ran
                 for q in account_files(work, a, brokers_now.get(a, ())))
-    swept = Swept([], [])
+    swept = Swept([], [], [])
 
     def remove(p: Path) -> bool:
         try:
@@ -843,12 +888,34 @@ def sweep_vanished(work: Path, *, spare: Sequence[str] = (),
             swept.gone.append(rel)
         return True
 
-    def remove_beside(files: Sequence[Path]) -> None:
+    def aside(p: Path, why: str) -> None:
+        rel = _inside(p, root) or str(p)
+        if not move:
+            swept.kept.append((rel, why))
+            return
+        try:
+            to = move_aside(work, p)
+        except OSError as e:
+            raise SweepMoveError(rel, why, e, swept) from e
+        swept.moved.append((rel, _inside(to, root) or str(to), why))
+        rec = _R.record_path(p)             # it vouched for nothing there
+        if _sweepable(root, rec):
+            remove(rec)
+
+    def remove_beside(files: Sequence[Path], *, moved: bool = False) -> None:
+        # `moved`: beside an output moved aside, where a file with no record
+        # of its own goes too.
         for q in files:
             q = Path(os.path.abspath(q))
             if q in keep or not _sweepable(root, q):
                 continue
-            if _R.read_record(q) is not None and _vouched(q) is not True:
+            if _R.read_record(q) is not None:
+                ok = _vouched(q)
+                if ok is not True:
+                    aside(q, EDITED if ok is False else NOT_OURS)
+                    continue
+            elif moved:
+                aside(q, BESIDE)
                 continue
             remove(q)
 
@@ -869,7 +936,9 @@ def sweep_vanished(work: Path, *, spare: Sequence[str] = (),
             continue
         why = _vouched(out)
         if why is not True:
-            swept.kept.append((rel, EDITED if why is False else NOT_OURS))
+            aside(out, EDITED if why is False else NOT_OURS)
+            if move:
+                remove_beside(companions(ident["row"] or "", out), moved=True)
             continue
         if not remove(out):
             continue
@@ -895,13 +964,15 @@ def commit_run(work: Path, *, full: bool) -> List[Path]:
     """A run completed: its records vouched for (freshness.commit_records)
     and work/.deps/run.json written, the row instances it executed: a full
     run's in place of the last run's (what vanished since swept first:
-    `sweep_vanished`), a partial run's added to them. Returns the files
-    that could not be written (the next run writes them again)."""
+    `sweep_vanished`; what it cannot vouch for left where it is, unsaid: a
+    run's own sweeps, `stage_sweep`, moved each such file aside and said
+    so), a partial run's added to them. Returns the files that could not be
+    written (the next run writes them again)."""
     work = Path(os.path.abspath(work))
     unwritten = commit_records()
     last = last_run(work)
     if full:
-        sweep_vanished(work)
+        sweep_vanished(work, move=False)
     if not last:
         deps = work / _R.DEPS_DIR
         try:

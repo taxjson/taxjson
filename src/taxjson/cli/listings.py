@@ -1,4 +1,4 @@
-"""The Row listings commands: cash, dil, divs, events, fees, gains, leaps, roc, staking, trades, transfers."""
+"""The Row listings commands: cash, dil, divs, events, fees, gains, leaps, roc, staking, trades, transfers (gains-base: cli/gains_filing.py)."""
 import argparse
 import re
 from decimal import Decimal

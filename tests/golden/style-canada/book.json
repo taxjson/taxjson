@@ -4,12 +4,20 @@
  "views": [
   "sum",
   "sum --json",
+  "gains-base",
+  "gains-base --json",
   "estimate --province ON",
   "estimate --json",
   "carryover",
   "carryover --json",
   "form-export",
   "form-export --json",
+  "gains-cra",
+  "gains-cra --json",
+  {
+   "argv": "gains-cra",
+   "width": 120
+  },
   "wash-sales",
   "wash-sales --json",
   "fx-cash",

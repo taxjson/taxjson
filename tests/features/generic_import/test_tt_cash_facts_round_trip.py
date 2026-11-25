@@ -691,7 +691,7 @@ class TestEventsViewLines(unittest.TestCase):
         with self.assertRaises(ValueError) as cm:
             _parse_quiet("FEE 2025-04-04 10:00:00 USD 0.50 not_tt=whatever")
         self.assertIn("'whatever' is not one of its reasons (in_kind, "
-                      "cash_leg, dates). The line is not a .tt row either "
+                      "cash_leg, dates, row_type). The line is not a .tt row either "
                       "way: remove it", str(cm.exception))
 
     def test_check_tt_names_the_pasted_line(self):

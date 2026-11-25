@@ -1,0 +1,35 @@
+REALIZED GAINS — USD, tax year 2024, the filing figures (wash-adjusted)
+Form 8949's cells per sale: (d) PROCEEDS − (e) COST + (g) ADJUSTMENT = (h) GAIN, a loss negative.
+(g): a wash-sale loss disallowed (code W), positive; §1256: a section 1256 contract, Form 6781's P/L as GAIN.
+ACCT    DATE        SYMBOL                      QTY   PROCEEDS       COST  ADJUSTMENT     GAIN  DAYS
+                                                           (d)        (e)         (g)      (h)
+----------------------------------------------------------------------------------------------------
+margin  2024-06-18  MSFT.US                      50  20,099.00  20,001.00        0.00    98.00   127
+qt      2024-06-21  KELPQ240621C00008000.US       1       0.00      36.25        0.00   -36.25    18
+margin  2024-08-01  QZQ240920C00030000.US         2     298.00     602.00        0.00  -304.00    92
+crypto  2024-09-10  USDC                       1.35       1.35       1.35        0.00     0.00    40
+margin  2024-09-10  QZQ.US                      200   5,599.00   6,001.00    301.50 W  -100.50   193
+crypto  2024-10-01  ETH                      0.0012       3.17       4.60        0.00    -1.43   210
+crypto  2024-10-08  BTC                        0.05   2,182.40   2,167.20        0.00    15.20   264
+crypto  2024-10-15  USDC                       0.27       0.27       0.27        0.00     0.00    75
+margin  2024-11-01  SAMPA.US                    100   3,490.05   4,009.95    519.90 W     0.00   296
+crypto  2024-11-05  USDC                       0.13       0.13       0.13        0.00     0.00    96
+crypto  2024-11-12  BTC                         0.1   4,391.20   4,208.40        0.00   182.80   276
+margin  2024-11-20  NVDA.US                      10   1,399.00   1,481.00     82.00 W     0.00   133
+crypto  2024-12-03  ETH                      0.4988   2,095.50   1,910.60        0.00   184.90   273
+crypto  2024-12-03  ETH                      0.0012       5.04       3.84        0.00     1.20   225
+crypto  2024-12-15  ETH                      0.0013       5.03       4.16        0.00     0.87   237
+crypto  2024-12-15  ETH                      0.2487     962.17     872.71        0.00    89.46   183
+margin  2024-12-20  QZQ241220C00035000.US         1     199.00       0.00        0.00   199.00    80
+
+TOTALS — USD
+ACCOUNT               TYPE     SALES  PROCEEDS (d)   COST (e)  ADJUSTMENT (g)  GAIN (h)
+---------------------------------------------------------------------------------------
+crypto                taxable     10      9,646.26   9,173.26            0.00    473.00
+margin                taxable      6     31,084.05  32,094.95          903.40   -107.50
+qt                    taxable      1          0.00      36.25            0.00    -36.25
+---------------------------------------------------------------------------------------
+TAXABLE                           17     40,730.31  41,304.46          903.40    329.25
+THE RETURN (tjs sum)                     40,730.31  41,304.46          903.40    329.25
+
+More: tjs gains-base --details (the return's lines)

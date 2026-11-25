@@ -210,8 +210,8 @@ class TestARenameToTwoDestinationsIsRefused(unittest.TestCase):
             deduplicate(list(rows), report=io.StringIO())
         self.assertIsInstance(cm.exception, InputContentError)
         text = str(cm.exception)
-        for part in ('QZO.US', '2025-03-03', 'account m', 'QZA.US (in one.csv)',
-                     'QZB.US (in two.csv)', 'refused', 'delete or correct'):
+        for part in ('QZO.US', '2025-03-03', 'account m', 'QZA.US (in inputs/m/one.csv)',
+                     'QZB.US (in inputs/m/two.csv)', 'refused', 'delete or correct'):
             self.assertIn(part, text)
 
     def test_rows_with_no_source_are_refused_too(self):
@@ -247,7 +247,8 @@ class TestARenameToTwoDestinationsIsRefused(unittest.TestCase):
 
 
 class TestTheRunStopsOnARenameToTwoDestinations(unittest.TestCase):
-    def test_tjs_run_refuses_and_names_both_files(self):
+    def test_tjs_run_refuses_and_names_both_lines(self):
+        # Each .tt row by its file and line (TJ-5283; the file alone before).
         import tempfile
         from _support.tt_fx_project import _cli, _tt_project
         with tempfile.TemporaryDirectory() as td:
@@ -259,8 +260,8 @@ class TestTheRunStopsOnARenameToTwoDestinations(unittest.TestCase):
             r = _cli(root, home, "run", "--no-input")
             self.assertEqual(r.returncode, 1, r.stdout[-2000:])
             for part in ("QZO.TO is renamed on 2026-03-02 in account m to 2 "
-                         "different symbols", "QZA.TO (in a.tt)",
-                         "QZB.TO (in manual.tt)", "delete or correct"):
+                         "different symbols", "QZA.TO (in inputs/m/a.tt:2)",
+                         "QZB.TO (in inputs/m/manual.tt:1)", "delete or correct"):
                 self.assertIn(part, r.stderr)
             self.assertFalse((root / "work" / "m_gains.json").exists())
 

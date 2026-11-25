@@ -14,9 +14,10 @@ the result to stdout. Optionally deduplicates by transaction ID or synthetic UID
 from taxjson.lib.stage_msg import emit_line
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from taxjson.lib.brokerages.base import source_identity
 from taxjson.lib.cli_diag import InputContentError, guard_main
@@ -111,16 +112,17 @@ def sort_transactions(transactions: List[TaxTransaction]) -> List[TaxTransaction
 # keep the old id-only rule: the id carries the corporate event and a
 # rename's destination (model/transaction `event_identity`), so two
 # events' rows are never one id, and the copies of one event still are.
-# Two renames of one holding on one day to DIFFERENT symbols are no
-# copies and cannot both be right: `rename_conflicts`, refused by
-# `deduplicate` (backlog TJ-4985).
+# Two renames of one holding on one day (or within the split-date
+# window) to DIFFERENT symbols are no copies and cannot both be right:
+# `rename_conflicts`, refused by `deduplicate` (backlog TJ-4985), or by
+# taxjson-merge2 after its ticker.map mapping (TJ-5283).
 
 TT_SUFFIX = ".tt"
 # ATTENTION lines show this many example rows per file pair.
 _DEDUP_EXAMPLES = 3
 
 
-def _row_get(tx, key, default=None):
+def _row_get(tx: Any, key: str, default: Any = None) -> Any:
     if isinstance(tx, dict):
         return tx.get(key, default)
     return getattr(tx, key, default)
@@ -401,19 +403,157 @@ def plan_dedup(rows, source_accounts: Optional[Dict[str, Any]] = None,
 
 
 class RenameDestinationConflict(InputContentError):
-    """Two rows rename one holding on one day to different symbols."""
+    """Two rows rename one holding, on one day or within the split-date
+    window, to different symbols."""
 
 
-def rename_conflicts(rows) -> List[str]:
-    """One line per holding (account, symbol, date) whose SPLIT rows
-    name more than one rename destination: two exports that disagree on
-    a ticker change, a hand-kept line beside the broker's row. A rename
-    moves the whole holding to one symbol, so the engines would apply
-    the first and find nothing for the second: one of the rows is
-    false. With one id (the destination was no part of it) the second
-    was dropped as an identical row and never shown (backlog TJ-4985).
-    A plain split (no destination, or its own symbol) is not a rename."""
-    dests: Dict[Tuple[str, str, str], Dict[str, List[int]]] = {}
+# A row relabelled by the dedup as a separate record (`<id>~<n>`): its
+# file's metadata names it by the plain id.
+_RELABEL = re.compile(r"~\d+\Z")
+
+
+def source_lines_of(metadata_blocks: Iterable[Any]) -> Dict[Tuple[str, str], int]:
+    """(file identity, row id) -> line, from the `source_lines` ({id:
+    line}) a converted .tt file's metadata holds (taxjson-convert-tt,
+    beside its `source_file`). The identity is a row's own
+    (`source_identity` of its `source` and `source_key`), so a row is
+    joined to the line of ITS file, not to another file's line of the
+    same content."""
+    from taxjson.lib.brokerages.base import shown_name, source_key
+    out: Dict[Tuple[str, str], int] = {}
+    for meta in metadata_blocks:
+        if not isinstance(meta, dict):
+            continue
+        lines = meta.get("source_lines")
+        path = meta.get("source_file")
+        if not isinstance(lines, dict) or not path:
+            continue
+        ident = source_identity(shown_name(path), source_key(path))
+        for rid, line in lines.items():
+            if isinstance(line, int) and not isinstance(line, bool):
+                out.setdefault((ident, str(rid)), line)
+    return out
+
+
+def _row_line(t: Any, lines: Dict[Tuple[str, str], int]) -> Optional[int]:
+    """The .tt line row `t` came from (`source_lines_of`), else None."""
+    rid = str(_row_get(t, "id", "") or "")
+    if not rid or not lines:
+        return None
+    ident = source_identity(_row_get(t, "source", ""),
+                            _row_get(t, "source_key", ""))
+    return lines.get((ident, rid), lines.get((ident, _RELABEL.sub("", rid))))
+
+
+def _day_number(day: str) -> Optional[int]:
+    from datetime import date
+    try:
+        return date.fromisoformat(day[:10]).toordinal()
+    except (TypeError, ValueError):
+        return None
+
+
+def _window_runs(found: List[Tuple[str, str, int]]) -> List[List[Tuple[str, str, int]]]:
+    """A holding's rename rows (date, destination, index) in runs: each
+    row within SPLIT_DATE_WINDOW_DAYS of the run's previous row (the
+    window inside which two dates of a split or rename are ONE event,
+    lib/corporate_timeline). A date that does not read joins only rows
+    of its own date string."""
+    from taxjson.lib.corporate_timeline import SPLIT_DATE_WINDOW_DAYS
+    runs: List[List[Tuple[str, str, int]]] = []
+    odd: Dict[str, List[Tuple[str, str, int]]] = {}
+    last: Optional[int] = None
+    for row in sorted(found):
+        n = _day_number(row[0])
+        if n is None:
+            odd.setdefault(row[0], []).append(row)
+            continue
+        if last is None or n - last > SPLIT_DATE_WINDOW_DAYS:
+            runs.append([])
+        runs[-1].append(row)
+        last = n
+    return runs + list(odd.values())
+
+
+def _written_as(t: Any, written: Dict[int, Tuple[Any, str, str]]) -> Tuple[str, str]:
+    """Row t's own (symbol, symbol_new) before ticker.map's mapping
+    (`written`), else as it reads."""
+    raw = written.get(id(t))
+    if raw is not None and raw[0] is t:
+        return str(raw[1] or ""), str(raw[2] or "").strip()
+    return (str(_row_get(t, "symbol", "") or ""),
+            str(_row_get(t, "symbol_new", "") or "").strip())
+
+
+def _map_lines(sym: str, run: List[Tuple[str, str, int]], rows: Sequence[Any],
+               written: Dict[int, Tuple[Any, str, str]]) -> Tuple[List[str], List[str]]:
+    """(the symbols the rows were written under, the ticker.map lines that
+    make their new symbols one) when each new symbol's rows were written
+    under a symbol of its own that ticker.map joins into `sym`: two
+    listings the map makes one holding, each renamed by its issuer, so
+    both rows can be right (TJ-5283). ([], []) when one written symbol
+    names two new symbols (one of those rows is false). The lines map
+    each other new symbol to the one the row written as `sym` names (else
+    the first), as `GLOBAL RAW CANONICAL`."""
+    dest_of: Dict[str, Set[str]] = {}
+    for _d, new, i in run:
+        dest_of.setdefault(_written_as(rows[i], written)[0], set()).add(new)
+    if len(dest_of) < 2 or any(len(v) > 1 for v in dest_of.values()):
+        return [], []
+    target = (min(dest_of[sym]) if sym in dest_of
+              else min(min(v) for v in dest_of.values()))
+    news = sorted({new for _d, new, _i in run} - {target})
+    return sorted(dest_of), [f"GLOBAL {n} {target}" for n in news]
+
+
+def _rename_remedy(acct: str, srcs: List[str], maps: List[str], mapped: str) -> str:
+    """The ways out of a rename to two symbols: a ticker.map line first when
+    the rows were written under symbols the map joined (`_map_lines`: both
+    can be right), and deleting or correcting the false row."""
+    fix = (f"the file named (a hand-kept .tt line: delete it; a corporate "
+           f"action's row: `tjs elect {acct} --set <event id>=ignore`)")
+    if not maps:
+        return (f"A rename moves the whole holding to one symbol, so only one "
+                f"of them can be right: refused.{mapped} Keep the right one: "
+                f"delete or correct the other row in {fix}.")
+    lines = " and ".join(f"`{m}`" for m in maps)
+    head = f"{mapped.strip()} " if mapped else ""
+    return (f"{head}The rows were written under different symbols "
+            f"({', '.join(srcs)}) that ticker.map makes one holding, so both "
+            f"renames can be right (each listing renamed by its issuer): then "
+            f"add {lines} to ticker.map, so the new symbols are one holding "
+            f"too. Otherwise one row is wrong: delete or correct it in {fix}. "
+            f"Refused until then: a rename moves the whole holding to one "
+            f"symbol, and taxjson cannot tell which case this is.")
+
+
+def rename_conflicts(rows: Sequence[Any], *, lines: Optional[Dict[Tuple[str, str], int]] = None,
+                     written: Optional[Dict[int, Tuple[Any, str, str]]] = None
+                     ) -> List[str]:
+    """One line per holding (account, symbol) whose SPLIT rows, on one
+    day or within the split-date window (SPLIT_DATE_WINDOW_DAYS: the
+    copies of one event), name more than one rename destination: two
+    exports that disagree on a ticker change, a hand-kept line beside
+    the broker's row. A rename moves the whole holding to one symbol,
+    so the engines would apply the first and find nothing for the
+    second: one of the rows is false. With one id (the destination was
+    no part of it) the second was dropped as an identical row and never
+    shown (backlog TJ-4985); copies a few days apart were never compared
+    (TJ-5283). A plain split (no destination, or its own symbol) is not
+    a rename.
+
+    The rows are judged by the symbols they carry: taxjson-merge2 passes
+    them after ticker.map's mapping, so two destinations the map makes
+    one symbol are one rename, and two it keeps apart are refused;
+    `written` ({id(row): (row, symbol, symbol_new)} before the mapping)
+    names a row's own spelling where the map changed it, and two rows
+    written under symbols the map joined can both be right: the remedy
+    names the ticker.map line first (`_map_lines`, `_rename_remedy`). Each
+    row is named by its file as the project holds it (`inputs/<account>/
+    <file>`, the audit's and the missing-history writer's form), with its
+    line for a .tt line (`lines`: `source_lines_of`), or by the corporate
+    action that made it."""
+    by_holding: Dict[Tuple[str, str], List[Tuple[str, str, int]]] = {}
     for i, t in enumerate(rows):
         if str(_row_get(t, "action", "") or "") != "SPLIT":
             continue
@@ -421,32 +561,59 @@ def rename_conflicts(rows) -> List[str]:
         new = str(_row_get(t, "symbol_new", "") or "").strip()
         if not new or new == sym:
             continue
-        key = (str(_row_get(t, "account", "") or ""), sym,
-               str(_row_get(t, "date", "") or ""))
-        dests.setdefault(key, {}).setdefault(new, []).append(i)
-    out: List[str] = []
-    for (acct, sym, day), by_new in sorted(dests.items()):
-        if len(by_new) < 2:
-            continue
+        key = (str(_row_get(t, "account", "") or ""), sym)
+        by_holding.setdefault(key, []).append(
+            (str(_row_get(t, "date", "") or ""), new, i))
+    from taxjson.lib.corporate_timeline import SPLIT_DATE_WINDOW_DAYS
+    lines = lines or {}
+    written = written or {}
 
-        def where(idx: List[int]) -> str:
-            names = sorted({str(_row_get(rows[i], "source", "") or "")
-                            for i in idx} - {""})
-            events = sorted({str(_row_get(rows[i], "corp_event_id", "")
-                                 or "") for i in idx} - {""})
-            said = [f"in {', '.join(names)}"] if names else []
-            said += [f"corporate action {e}" for e in events]
-            return f" ({'; '.join(said)})" if said else " (a row with no source file)"
-        both = " and ".join(f"{new}{where(idx)}"
-                            for new, idx in sorted(by_new.items()))
-        out.append(
-            f"dedup: {sym} is renamed on {day} in account {acct} to "
-            f"{len(by_new)} different symbols: {both}. A rename moves the "
-            f"whole holding to one symbol, so only one of them can be "
-            f"right: refused. Keep the right one: delete or "
-            f"correct the other row in the file named (a hand-kept .tt "
-            f"line: delete it; a corporate action's row: `tjs elect "
-            f"{acct} --set <event id>=ignore`).")
+    def where(i: int, dated: bool) -> Tuple[str, bool]:
+        """Row i named (its date first when the run spans days), and
+        whether the mapping changed its spelling."""
+        t = rows[i]
+        src = str(_row_get(t, "source", "") or "")
+        line = _row_line(t, lines) if src else None
+        event = str(_row_get(t, "corp_event_id", "") or "")
+        said = []
+        if src:
+            row_acct = str(_row_get(t, "account", "") or "")
+            src = f"inputs/{row_acct}/{src}" if row_acct else src
+            said.append(f"in {src}:{line}" if line is not None else f"in {src}")
+        if event:
+            said.append(f"corporate action {event}")
+        text = ", ".join(said) or "a row with no source file"
+        if dated:
+            text = f"on {_row_get(t, 'date', '')} {text}"
+        was = " -> ".join(_written_as(t, written))
+        if was != f"{_row_get(t, 'symbol', '')} -> {_row_get(t, 'symbol_new', '')}":
+            return f"{text}, written {was}", True
+        return text, False
+
+    out: List[str] = []
+    for (acct, sym), found in sorted(by_holding.items()):
+        for run in _window_runs(found):
+            by_new: Dict[str, List[int]] = {}
+            for _day, new, i in run:
+                by_new.setdefault(new, []).append(i)
+            if len(by_new) < 2:
+                continue
+            days = sorted({d for d, _n, _i in run})
+            dated = len(days) > 1
+            named = {i: where(i, dated) for _d, _n, i in run}
+            both = " and ".join(
+                f"{new} ({'; '.join(dict.fromkeys(named[i][0] for i in idx))})"
+                for new, idx in sorted(by_new.items()))
+            when = (days[0] if not dated else
+                    ", ".join(days[:-1]) + f" and {days[-1]}")
+            within = (f" (rows within {SPLIT_DATE_WINDOW_DAYS} days of each "
+                      f"other are one event)" if dated else "")
+            mapped = (" Symbols are shown as ticker.map maps them."
+                      if any(m for _t, m in named.values()) else "")
+            out.append(
+                f"dedup: {sym} is renamed on {when} in account {acct} to "
+                f"{len(by_new)} different symbols{within}: {both}. "
+                + _rename_remedy(acct, *_map_lines(sym, run, rows, written), mapped))
     return out
 
 
@@ -535,7 +702,8 @@ def _tt_near_duplicates(rows, srcs, keep, is_tt) -> List[str]:
 def deduplicate(transactions: List[TaxTransaction], return_dropped: bool = False,
                 *, source_accounts: Optional[Dict[str, Any]] = None,
                 source_brokers: Optional[Dict[str, str]] = None,
-                report=None):
+                report=None, check_renames: bool = True,
+                lines: Optional[Dict[Tuple[str, str], int]] = None):
     """Remove duplicate transactions (rules: `plan_dedup`).
 
     With `return_dropped=True` returns `(kept, dropped)` so callers can
@@ -546,13 +714,17 @@ def deduplicate(transactions: List[TaxTransaction], return_dropped: bool = False
     `report`, when given, is a file the ATTENTION/note lines go to.
     A row kept although another kept row shares its id (separate
     records) gets the id `<id>~<n>`.
-    Two renames of one holding on one day to different symbols are
-    refused first (`rename_conflicts`: RenameDestinationConflict, an
-    InputContentError naming both), before any row is dropped.
+    Two renames of one holding to different symbols (one day, or within
+    the split-date window) are refused first (`rename_conflicts`:
+    RenameDestinationConflict, an InputContentError naming each row,
+    with its line for a .tt line: `lines`, `source_lines_of`), before
+    any row is dropped — unless `check_renames` is False: taxjson-merge2
+    refuses them after its ticker.map mapping instead (backlog TJ-5283).
     """
-    conflicts = rename_conflicts(transactions)
-    if conflicts:
-        raise RenameDestinationConflict(" ".join(conflicts))
+    if check_renames:
+        conflicts = rename_conflicts(transactions, lines=lines)
+        if conflicts:
+            raise RenameDestinationConflict(" ".join(conflicts))
     plan = plan_dedup(transactions, source_accounts, source_brokers)
     for i, new_id in plan.relabel.items():
         transactions[i].id = new_id
@@ -652,12 +824,14 @@ def main():
     # (backlog TJ-0976).
     meta_accounts: Dict[str, List[str]] = {}
     meta_brokers: Dict[str, str] = {}
+    meta_lines: Dict[Tuple[str, str], int] = {}
     try:
         if args.input:
             transactions = load_transactions(Path(args.input))
             _text = Path(args.input).read_text(encoding="utf-8")
             meta_accounts = _doc_source_accounts(_text)
             meta_brokers = source_brokers_of(_doc_metadata_blocks(_text))
+            meta_lines = source_lines_of(_doc_metadata_blocks(_text))
         else:
             import io
             from taxjson.lib.pipeline import load_stdin_transactions
@@ -666,6 +840,7 @@ def main():
             transactions = load_stdin_transactions(io.StringIO(_stdin))
             meta_accounts = _doc_source_accounts(_stdin)
             meta_brokers = source_brokers_of(_doc_metadata_blocks(_stdin))
+            meta_lines = source_lines_of(_doc_metadata_blocks(_stdin))
     except ValueError as e:
         emit_line(f"{PROG}: error: {e}")
         sys.exit(1)
@@ -703,7 +878,8 @@ def main():
         # the same rule merge2 and the fee report apply (A2-0297).
         transactions = deduplicate(transactions, report=sys.stderr,
                                    source_accounts=meta_accounts,
-                                   source_brokers=meta_brokers)
+                                   source_brokers=meta_brokers,
+                                   lines=meta_lines)
 
     # Sort is a passthrough — preserve full input precision so downstream
     # calculations don't see truncated values.

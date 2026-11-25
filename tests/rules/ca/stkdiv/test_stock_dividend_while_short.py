@@ -236,7 +236,9 @@ class TestStockDividendWhileShort(unittest.TestCase):
                            _t('c', '2025-05-05', 110, -440)])
         self.assertNotIn('entered at $0 cost', short)
         self.assertIn('while m is short the security', short)
-        self.assertNotIn('stock_dividends_owed', res)
+        # The gains document names the row for the views that replay the
+        # books (backlog TJ-5281: run_gains dropped it).
+        self.assertEqual(res.get('stock_dividends_owed'), ['d'])
         _res, long_ = said([_t('b', '2025-03-03', 100, -500), _div()])
         self.assertIn('stock dividend of 10 share(s) on 2025-04-01 entered at '
                       '$0 cost', long_)

@@ -322,12 +322,17 @@ class Book:
         self.missing: List[str] = []
         self.missing_history_openings = 0
         mh_pairs = self._missing_history()
+        # A stock dividend the engine booked on a short, as it booked it:
+        # the short grew, nothing acquired in a loss's window (the gains
+        # files' stock_dividends_owed; CA-STKDIV-02 / US-STKDIV-06, TJ-5281).
+        from taxjson.lib.missing_history import owed_reading, owed_stock_dividends
+        _owed = owed_stock_dividends(self.cache, accounts=sorted(accounts))
         for name in sorted(accounts):
             p = self.cache / f"{name}_base.json"
             if not p.exists():
                 self.missing.append(name)
                 continue
-            rows = [dict(r, _acct=name) for r in _rows(p)]
+            rows = owed_reading([dict(r, _acct=name) for r in _rows(p)], _owed)
             if mh_pairs:
                 rows += self._openings(rows, mh_pairs)
             self.txs.extend(rows)
@@ -486,8 +491,12 @@ class Book:
         from taxjson.engine.rows import not_a_purchase
         from taxjson.lib.row_types import is_stock_dividend
         from taxjson.lib.country import stock_dividend_in_loss_window
-        # An opening balance is not a purchase (CA-OPEN-01 / US-OPEN-01).
+        # An opening balance is not a purchase (CA-OPEN-01 / US-OPEN-01);
+        # nor a stock dividend the engine booked on a short (the short
+        # grew, CA-STKDIV-02 / US-STKDIV-06; backlog TJ-5281).
+        from taxjson.lib.missing_history import is_owed_stock_dividend
         if (r.get("action") not in ACQ_ACTIONS
+                or is_owed_stock_dividend(r)
                 or r.get("action") == "OPENING_BALANCE"
                 or not_a_purchase(r)
                 or not self.in_wash_scope(r["_acct"])):

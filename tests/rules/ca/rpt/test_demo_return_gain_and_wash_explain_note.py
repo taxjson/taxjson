@@ -31,11 +31,14 @@ def _money(s: str) -> float:
 
 
 def _return_gain(stdout: str) -> float:
-    """The GAIN column of the Schedule 3 RETURN row."""
-    row = next(ln for ln in stdout.splitlines()
-               if ln.startswith("RETURN "))
-    # PROCEEDS COST(ACB) OUTLAYS GAIN DENIED
-    return _money(row.split()[4])
+    """The GAIN cell of the Schedule 3 RETURN row, read under its header:
+    the cells are right-aligned, so it ends where the header's GAIN ends
+    (whichever columns the table shows: TOTAL COST, DENIED)."""
+    lines = stdout.splitlines()
+    i = next(i for i, ln in enumerate(lines) if ln.startswith("SCHEDULE 3 LINE"))
+    end = re.search(r"\bGAIN\b", lines[i]).end()
+    row = next(ln for ln in lines[i:] if ln.startswith("RETURN "))
+    return _money(row[:end].split()[-1])
 
 
 def _estimate_realized(stdout: str) -> float:

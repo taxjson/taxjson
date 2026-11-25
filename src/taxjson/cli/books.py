@@ -1265,7 +1265,8 @@ def _write_missing_history_tt(root: Path, cache: Path,
     covers (lib/first_run.unanswered_covers), each pair's units a negative
     line. Merged with the lines the account's .tt files have: never
     written twice; a symbol opened with another quantity is listed and
-    left as it is."""
+    left as it is; one an opening snapshot replaced is written over in
+    place, and a line is dated after such a snapshot (TJ-5243)."""
     from taxjson.lib import missing_history as MH
     prog = f"{_PROG} find-missing-history"
     if outside:
@@ -1304,12 +1305,12 @@ def _write_missing_history_tt(root: Path, cache: Path,
         if not q or not sym or not acct:
             unsized.append(f"{sym} / {acct}")
             continue
-        d = MH.default_opening_date(cache, acct)
+        d = MH.opening_line_date(cache, acct, sym,
+                                 f"find-missing-history: {how}")
         if d is None:
             nodate.append(f"{sym} / {acct}")
             continue
-        lines.append(MH.TtLine(acct, sym, float(q), d,
-                               f"find-missing-history: {how}"))
+        lines.append(MH.TtLine(acct, sym, float(q), *d))
     # A short held before the data (TJ-0844): the units the broker codes
     # as closing with no short in the rows.
     _longs = {(ln.symbol, ln.account) for ln in lines}
@@ -1322,15 +1323,15 @@ def _write_missing_history_tt(root: Path, cache: Path,
         if (sym, acct) in _longs:
             both.append(f"{sym} / {acct}")
             continue
-        d = MH.default_opening_date(cache, acct)
+        d = MH.opening_line_date(cache, acct, sym,
+                                 "find-missing-history: the broker codes the "
+                                 "cover closing, with no short in the rows")
         if d is None:
             nodate.append(f"{sym} / {acct}")
             continue
-        lines.append(MH.TtLine(acct, sym, -q, d,
-                               "find-missing-history: the broker codes the "
-                               "cover closing, with no short in the rows"))
+        lines.append(MH.TtLine(acct, sym, -q, *d))
     try:
-        plan = MH.plan_tt_write(root, lines)
+        plan = MH.plan_tt_write(root, lines, cache=cache)
     except MH.TtOpeningError as e:
         _die_input(f"{flag}: the accounts' OPENING cost=unknown lines "
                    f"cannot be read — fix them first; nothing was written:",
@@ -1359,7 +1360,7 @@ def _write_missing_history_tt(root: Path, cache: Path,
              + ", ".join(unsized + nodate),
              "No shortage to size (the rows never go short), or no books "
              "for the account (run `tjs run`).", prog=prog)
-    if not plan.n_add:
+    if not plan.n_add and not plan.swap:
         _say("note", f"nothing to add: "
              + (f"{len(plan.same)} line(s) already there"
                 if plan.same else "no line to write for the pair(s) above"
@@ -1375,6 +1376,8 @@ def _write_missing_history_tt(root: Path, cache: Path,
         _die_input(f"{flag}: {e}")
     except OSError as e:
         _die_input(f"{flag}: cannot write: {e}")
+    for _ln in MH.tt_swap_lines(plan):
+        _say("warning", f"{flag}: {_ln}", prog=prog)
     # OPENING cost=unknown lines: read from v0.27.0 (lib/requires); with
     # shared exports by every year.
     _raise_requirements(root, ("missing_history_tt",),
@@ -1700,7 +1703,8 @@ def _find_missing_history_write(args: argparse.Namespace, root: Path, cache: Pat
                 _txs, include_options=True, include_broker_shorts=True,
                 registered_accounts=(account_types_near(files[0])
                                      or None) if files else None,
-                journal_symbols=_journal)}
+                journal_symbols=_journal,
+                country=_country(load_settings(root, missing_ok=True)))}
             for k in sorted(_js - _still):
                 del merged[k]
                 _note_out(f"left out {k[0]} / {k[1]}: its short is the "

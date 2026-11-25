@@ -81,7 +81,7 @@ def _checked_rows(doc, path):
                      f'a ticker — the file is damaged or hand-edited: '
                      f'fix it or re-run `tjs run`')
     return doc
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 
 from taxjson.lib.ticker_map import (
@@ -799,9 +799,35 @@ def _net_transfer_leg(legs: List[Tuple[str, float, str]], date: str,
         legs.append((date, qty, kind))
 
 
+def _booked_rows(rows: List[Any], gains: Sequence[Any]) -> List[Dict[str, Any]]:
+    """A book's rows (the objects among them) as the gains run booked its
+    stock dividends, by the engine's own record in the gains files the
+    report is given, `gains`, never decided again here: less the rows
+    booked as no shares, a covered short's obligation (lib/
+    stock_dividend_cover `booked_rows`; the report's `trades` listed such
+    a row as a BUY at 0 beside a quantity that left it out, backlog
+    TJ-5282), and a row booked on an open short (the files'
+    `stock_dividends_owed`) read as the short growing by its units
+    (lib/missing_history `owed_reading`): it was listed as a BUY at 0
+    beside a short that grew."""
+    import json
+    from taxjson.lib.missing_history import STOCK_DIVIDENDS_OWED, owed_reading
+    from taxjson.lib.stock_dividend_cover import booked_rows
+    owed: set = set()
+    for path in gains:
+        try:
+            doc = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(doc, dict):
+            owed.update(str(i) for i in doc.get(STOCK_DIVIDENDS_OWED) or ())
+    return owed_reading(booked_rows([t for t in rows if isinstance(t, dict)], gains),
+                        owed)
+
+
 def _load_trade_events(paths, mapping=None, drops=None,
                        current_position_only=True, country=None,
-                       position_starts=None, arrivals=None
+                       position_starts=None, arrivals=None, gains=()
                        ) -> Dict[str, List[Dict[str, Any]]]:
     """Group BUYSELL/ASSIGN rows from pre-gains transaction file(s) into a
     per-symbol list of {date, action, qty, price} events, in native currency.
@@ -862,9 +888,7 @@ def _load_trade_events(paths, mapping=None, drops=None,
         # read as no trades (issue #6).
         data = _read_rows_doc(p, list_key="transactions",
                               require_key="transactions")
-        for tx in data["transactions"]:
-            if not isinstance(tx, dict):
-                continue
+        for tx in _booked_rows(data["transactions"], gains):
             act = tx.get("action")
             sym = tx.get("symbol")
             # TRANSFER / OPENING_BALANCE rows move units in or out too:
@@ -2292,6 +2316,7 @@ def _export_base(args: argparse.Namespace, holdings_map: Dict[Any, Any], holding
     trades_by_symbol = (
         _load_trade_events(args.trades, holdings_map, holdings_drops,
                            country=args.country,
+                           gains=list(args.inputs) + list(args.base_gains),
                            position_starts={
                                s: b.get("position_start_date")
                                for s, b in agg.items()},

@@ -1,0 +1,1 @@
+tjs gains-cra: error: `tjs gains-cra` is Canada-only (the CRA's columns: Schedule 3's cells per sale in CAD with the Bank of Canada rate; a US return uses Form 8949 (`tjs form-export --form 8949`)); this project is country = "usa"

@@ -163,6 +163,18 @@ an opening balance (`tjs opening`) or statements you kept.
   for another security) is no evidence, and neither is a `.tt` line (an
   `OPENING` of `ZZQ.L` in the account's `.tt` file): the parse reads
   the statements and ticker.map only.
+- **A row with no ISIN.** An older statement names a dividend's
+  security by its ticker alone ("ZZQ Cash Dividend USD 0.10 per
+  Share"). Nothing on such a row names a market, so it follows the
+  same rule: it is booked on the listing the account holds, on a
+  ticker.map line naming `ZZQ.US` (the symbol the parse looks for), on
+  the one listing held under a currency's code (with the same
+  "ZZQ income booked on ZZQ.EUR ... by its name alone" line), or on
+  the one venue the statement's Financial Instrument Information
+  gives the ticker `ZZQ`. Otherwise the parse stops and names the line
+  to add (`QUOTE ZZQ.US ZZQ` when it is the US listing, `GLOBAL ZZQ.US
+  ZZQ.SUFFIX` when it is another). It is never booked on `.US` by
+  default.
 - **Two distributions on one pay date.** Nothing on a Dividends row
   names the accrual it pays. Where a security has two Change in
   Dividend Accruals rows of one pay date (a regular and a special

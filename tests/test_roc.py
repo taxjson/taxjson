@@ -260,11 +260,16 @@ class TestIbRoc(unittest.TestCase):
 
     def test_no_isin_keeps_adjust(self):
         # Issuer country unknown → no reclassification (kept as before).
-        body = (self.DIV_HDR +
+        # The account holds QZNO.US: a row with no ISIN is booked on a
+        # listing only on evidence of it (backlog TJ-5250).
+        body = (self.TRADES_HDR +
+                'Trades,Data,Order,Stocks,USD,QZNO,"2026-01-05, 09:30:00",'
+                '100,10.00,0,-1000,-1,0,0,0,O\n' + self.DIV_HDR +
                 'Dividends,Data,USD,U1,2026-06-30,'
                 'QZNO Return of Capital USD 0.20 per Share,20.00\n')
         txs = self._parse(body)
-        self.assertEqual([t['action'] for t in txs], ['ADJUST'])
+        self.assertEqual([(t['action'], t['symbol']) for t in txs],
+                         [('BUYSELL', 'QZNO.US'), ('ADJUST', 'QZNO.US')])
 
 
 class TestNegativeAcbWarning(unittest.TestCase):

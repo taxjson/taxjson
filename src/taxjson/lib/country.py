@@ -223,6 +223,26 @@ def engine_sort_profile(country: str) -> str:
     return ENGINE_SORT_PROFILE[canonical_country(country)]
 
 
+# Where the missing-history check walks a trade that settles after its
+# trade date among its day's rows (lib/corporate_timeline walk_sort_key;
+# backlog TJ-5264): where the country's engine books it. Canada's engine
+# orders by settlement date (CA-DATE-14), so after the day's rows that
+# settle that day; the US engine by trade date and clock (US-DATE-13), so
+# with them, by clock. On a day its symbol splits, both keep its clock
+# against the split (the settle-lag rule, audit S021-00).
+WALK_SETTLE_LAG = {CANADA: "settle", USA: "clock"}
+
+
+def walk_settle_lag(country: Optional[str]) -> str:
+    """``"settle"`` | ``"clock"``: how the missing-history walks of a
+    project of `country` place a settle-lagged trade; ``"first"`` (ahead
+    of its day's other rows, the walks' order before TJ-5264) for a walk
+    outside a project (no country)."""
+    if not country:
+        return "first"
+    return WALK_SETTLE_LAG[canonical_country(country)]
+
+
 def default_tax_date(country: str) -> str:
     """CRA dates a disposition by settlement, the IRS by trade date."""
     return DEFAULT_TAX_DATE[canonical_country(country)]
@@ -495,6 +515,7 @@ COMMAND_COUNTRY: Dict[str, str] = {
     "amt": CANADA,
     "slip-audit": CANADA,
     "update-tobase-map": CANADA,
+    "gains-cra": CANADA,
 }
 
 COMMAND_WHY: Dict[str, str] = {
@@ -522,6 +543,9 @@ COMMAND_WHY: Dict[str, str] = {
                          "identical property across listings (ITA s.47, "
                          "tax-logic CA-XLIST-06); a US project keeps its "
                          "own ticker.map lines (US-XLIST-05)",
+    "gains-cra": "the CRA's columns: Schedule 3's cells per sale in CAD with "
+                 "the Bank of Canada rate; a US return uses Form 8949 "
+                 "(`tjs form-export --form 8949`)",
 }
 
 

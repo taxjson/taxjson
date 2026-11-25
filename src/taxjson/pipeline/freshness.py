@@ -21,7 +21,11 @@ The inputs are read when the stage asks (what it is about to build from),
 and the record is written when the output is vouched for: a `tjs run` records
 what it built when it completes (`commit_records`: a run that stops half-way
 vouches for nothing), and a command that builds a view of its own records it
-as soon as it is built (`record_now`). A build decided on another ground (a
+as soon as it is built (`record_now`). What a run's stage writes is noted in
+its record as soon as it is written (`record_written`: the `pending` hash), so
+a file taxjson wrote is known as its own even when that run stops later; the
+pending hash says who wrote the bytes, never what they are built from, so no
+ask reads it (backlog TJ-5273). A build decided on another ground (a
 rates file whose coverage ended) says so with `mark_built`. An input the stage no longer declares (a map removed,
 the missing history withdrawn) or one now absent is a change by itself: no
 marker says so (backlog TJ-1807). Input names in a record are relative to
@@ -43,8 +47,8 @@ _PKG_SKIP_SUFFIXES = (".pyc", ".pyo", ".md", ".rst", "~", ".swp", ".swo",
                       ".orig", ".rej", ".bak")
 
 __all__ = ["record_path", "needs_rebuild", "commit_records", "record_now",
-           "mark_built", "unmark", "package_fingerprint", "FolderInputError",
-           "timeline_beside"]
+           "record_written", "PENDING", "mark_built", "unmark",
+           "package_fingerprint", "FolderInputError", "timeline_beside"]
 
 
 def _package_files(pkg_root: Path) -> List[Path]:
@@ -198,9 +202,13 @@ def _config_key() -> Optional[str]:
     return None if cp is None else _file_hash(Path(cp))
 
 
+# A record's hash of the bytes a run's stage wrote before that run completed
+# (`record_written`): who wrote them, read only by the sweeps
+# (pipeline/stage_table `_vouched`); the run's commit drops it.
+PENDING = "pending"
 # What a record holds that freshness writes; the rest is another module's
 # (a wash pass's `wash`: lib/report_model), kept.
-_OWN = frozenset({"format", "out", "inputs", "config", "code"})
+_OWN = frozenset({"format", "out", "inputs", "config", "code", PENDING})
 
 
 def _write_record(out: Path, pending: Dict[str, object]) -> None:
@@ -285,6 +293,28 @@ def record_now(out: Path) -> List[Path]:
     except OSError:
         return [out]
     return []
+
+
+def record_written(out: Path) -> None:
+    """A run's stage just wrote `out`: the hash of its bytes noted in its
+    record as PENDING, the rest of the record kept (backlog TJ-5273). A run
+    that stops later vouches for nothing it built (`_is_stale` reads only
+    `out`), but the bytes are still taxjson's: the next run's sweeps remove
+    such a file as one it wrote. `commit_records` drops the note when the run
+    completes. Nothing is written when the record already holds those bytes,
+    and a record that cannot be written (a full disk) is left: the sweeps then
+    move the file aside, as one whose record holds other bytes."""
+    out = Path(out)
+    digest = _file_hash(out)
+    if digest is None:
+        return
+    rec = read_record(out) or {}
+    if digest in (rec.get("out"), rec.get(PENDING)):
+        return
+    try:
+        write_record(out, {**rec, PENDING: digest})
+    except OSError:
+        pass
 
 
 def commit_records() -> List[Path]:

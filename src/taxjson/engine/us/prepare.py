@@ -17,6 +17,7 @@ from decimal import Decimal
 from taxjson.model import money as M
 from taxjson.lib.readiness import UNSETTLED_COMPENSATION_MARK
 from taxjson.lib.row_types import LOT_MOVE_TYPE, POOL_FREE_ACTIONS, is_stock_dividend
+from taxjson.lib.stock_dividend_cover import no_share_rows
 from taxjson.engine.assign import _day_gap
 from taxjson.engine.consts import _ZERO, _HALF_CENT, _MINUS_HALF_CENT
 from taxjson.engine.journal import _is_listing_journal
@@ -322,12 +323,32 @@ def _us_stkdiv_units(held: float, shares: float, epsilon: float) -> float:
     return held - shares if held < -epsilon else held + shares
 
 
+def _us_no_share_rows(all_events: List[TaxTransaction], sheltered_ids: Set[RowId],
+                      affiliated_ids: Set[RowId], per_account_basis: bool,
+                      registered_book: bool = False) -> Dict[RowId, Dict[str, Any]]:
+    """The stock dividend rows of the taxable books that book no shares, each the
+    obligation of a short covered before it (US-STKDIV-06): row id -> the facts, with the
+    row's delivered cost and how much of it the cover has booked. THE decision is
+    lib/stock_dividend_cover's, from the rows alone (shares entitled to the dividend
+    first), made once here before the pre-pass; the pre-pass's running position, the walk
+    (engine/us/walk `_us_stkdiv_no_shares`) and every reader of the rows follow it
+    (backlog TJ-5282: a second test in the walk booked a row on a lot the pre-pass did
+    not see, and a loss was allowed with no word). Never in a registered book
+    (`registered_book`): such an account is never short."""
+    gone, _ = no_share_rows(
+        [e for e in all_events
+         if e.id not in sheltered_ids and e.id not in affiliated_ids],
+        entitled_lots=True, pooled=not per_account_basis, registered=registered_book)
+    return {i: dict(f, cost=max(M.of(f['cost']), _ZERO), booked=_ZERO)   # (a cost is above 0)
+            for i, f in gone.items()}
+
+
 def _us_scan_events(*, _nkey: Callable[[str, str], _IKey], _rep_key: Callable[[str, str], str], _split_covers: Callable[[TaxTransaction, Set[_RenameKey]], Optional[Callable[[str], bool]]], affiliated_ids: Set[RowId], all_events: List[TaxTransaction], epsilon: float,
-                       non_capital: Callable[[str, str], bool], per_account_basis: bool, sheltered_ids: Set[RowId]) -> Tuple[Dict[str, List[_RepRecord]], Dict[str, List[_RepRecord]], List[Tuple[TaxTransaction, str, Optional[str], float]]]:
+                       non_capital: Callable[[str, str], bool], per_account_basis: bool, registered_book: bool, sheltered_ids: Set[RowId]) -> Tuple[Dict[str, List[_RepRecord]], Dict[str, List[_RepRecord]], List[Tuple[TaxTransaction, str, Optional[str], float]], Dict[RowId, Dict[str, Any]]]:
     """The replacement scan over the book's events in order (the pre-pass of the US engine's
     preamble): every buy, cover, split, option and corporate row of the taxable, sheltered
-    and affiliated books; returns the long and short replacement candidates and the
-    context books' stock dividends to apply, keeping the net and the other books' running
+    and affiliated books; returns the long and short replacement candidates, the context
+    books' stock dividends to apply and the rows `_us_no_share_rows` names, keeping the net and the other books' running
     quantities and the groups a split covers as it goes."""
     # === PRE-PASS: classify each event and build replacement indexes. ===
     # The "opening portion" of each transaction is what's eligible to be
@@ -340,6 +361,7 @@ def _us_scan_events(*, _nkey: Callable[[str, str], _IKey], _rep_key: Callable[[s
     # capacity of that account's replacement records by it (TJ-0492).
     _other_stkdivs: List[Tuple[TaxTransaction, str, Optional[str], float]] = []
     net_qty_state: Dict[_IKey, float] = {}
+    stkdiv_after_cover = _us_no_share_rows(all_events, sheltered_ids, affiliated_ids, per_account_basis, registered_book)
 
     # Context (sheltered/affiliated) books' running balances, keyed
     # (account, symbol) — partitions an other-scope SELL into its
@@ -479,8 +501,7 @@ def _us_scan_events(*, _nkey: Callable[[str, str], _IKey], _rep_key: Callable[[s
             # purchase for §1091 (US-STKDIV-01, audit A2-0205: a
             # dividend posted after a loss sale washed 5% of it).
             if not is_other_scope:
-                net_qty_state[_nkey(ev.account, sym)] = \
-                    _us_stkdiv_units(prev, ev.quantity, epsilon)
+                net_qty_state[_nkey(ev.account, sym)] = _us_stkdiv_units(prev, 0.0 if ev.id in stkdiv_after_cover else ev.quantity, epsilon)
             else:
                 _ok = (ev.account, sym)
                 _oprev = other_qty_state.get(_ok, 0.0)
@@ -602,7 +623,7 @@ def _us_scan_events(*, _nkey: Callable[[str, str], _IKey], _rep_key: Callable[[s
             _ok = (ev.account, sym)
             other_qty_state[_ok] = (other_qty_state.get(_ok, 0.0)
                                     + ev.quantity)
-    return (long_replacements, short_replacements, _other_stkdivs)
+    return (long_replacements, short_replacements, _other_stkdivs, stkdiv_after_cover)
 
 
 def _us_symbol_currencies(*, affiliated_transactions: Optional[List[TaxTransaction]], sheltered_transactions: Optional[List[TaxTransaction]], transactions: List[TaxTransaction]) -> Dict[str, str]:

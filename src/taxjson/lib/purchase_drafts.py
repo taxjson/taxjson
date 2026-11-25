@@ -29,9 +29,10 @@ from taxjson.lib.missing_history import (DraftGap, FutureBrokerBooks,
                                          PurchaseDraft, _basis_date,
                                          _book_journals, _close_unbacked,
                                          _derivative_symbol,
-                                         _drop_duplicate_splits, _mask_id,
-                                         _spread_global_splits, _walk_key,
+                                         _mask_id,
+                                         _spread_global_splits, _walked,
                                          broker_short_marker,
+                                         is_owed_stock_dividend,
                                          is_registered_account)
 
 
@@ -227,10 +228,8 @@ def draft_purchases(
     journal_symbols = _book_journals(txs, journal_symbols)
     # A split another account of the book reports re-denominates this
     # account's units too, as in the engines (backlog TJ-0832, TJ-1022).
-    sorted_txs = _drop_duplicate_splits(sorted(
-        _spread_global_splits(txs, registered_accounts, country),
-        key=lambda t: (_walk_key(t, journal_symbols),
-                       0 if float(t.quantity or 0) > 0 else 1)))
+    sorted_txs = _walked(_spread_global_splits(txs, registered_accounts, country),
+                         journal_symbols, country, buys_first=True)
 
     # 'virt': the units the drafts so far add before the data (the walk
     # reads the pair as if they were in: _draft_sale's lines). 'low':
@@ -288,7 +287,8 @@ def draft_purchases(
                     .lower().endswith('.tt')):
                 s['tt_qty'] += q
             continue
-        if q >= 0:
+        if q >= 0 or is_owed_stock_dividend(tx):    # (a short grown: TJ-5281)
+            s['qty'] = prev + min(q, 0.0)
             continue
         held = max(prev, 0.0)
         held_cost = s['cost'] if held > 1e-12 else 0.0

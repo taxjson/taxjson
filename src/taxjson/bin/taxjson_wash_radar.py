@@ -104,6 +104,9 @@ class _EngineLosses:
         # The project's option_buyback_loss_superficial as the gains
         # files state it (CA-SL-11 / CA-SL-12).
         self.buyback_wash = False
+        # The stock dividends the engine booked on a short (the files'
+        # stock_dividends_owed: CA-STKDIV-02 / US-STKDIV-06), by row id.
+        self.owed: set = set()
 
     @classmethod
     def load(cls, paths):
@@ -136,6 +139,9 @@ class _EngineLosses:
                 for suf in ('_gains_wash.json', '_gains.json'):
                     if stem.endswith(suf):
                         accts.add(stem[:-len(suf)])
+            if doc.get('stock_dividends_owed'):   # where the books agree
+                from taxjson.lib.missing_history import owed_stock_dividends
+                self.owed |= owed_stock_dividends(Path(p).parent, sorted(accts))
             for r in doc.get('transactions') or []:
                 if r.get('action') or 'id' not in r:
                     continue
@@ -1494,6 +1500,17 @@ class _Radar:
 
             if tx.action == 'SPLIT':
                 self._walk_split(tx, ticker, group, acct, key)
+                continue
+
+            if (is_stock_dividend(tx) and tx.quantity > 0
+                    and str(getattr(tx, 'id', '') or '') in self.engine.owed):
+                # A stock dividend the engine booked on a short: the short
+                # grows by the shares, nothing is acquired (never a recent
+                # buy) and nothing covered (CA-STKDIV-02 / US-STKDIV-06;
+                # backlog TJ-5281: the radar held them as shares).
+                self.account_pool_qty.setdefault(key, 0.0)
+                self.account_pool_acb.setdefault(key, 0.0)
+                self._move(key, tx, -tx.quantity)
                 continue
 
             self._walk_trade(tx, ticker, cls, acct, key)
@@ -3398,6 +3415,11 @@ def main():
     transactions, _show_paths, _show_symbols = _load_books(args, us_mode, radar._tax_day)
 
     transactions, _strict_xfer = _prepare_books(transactions, args, us_mode, radar._tax_day)
+    # (a stock dividend row the gains run booked as no shares is no row of
+    # this walk either: the engine's own record in the --gains files,
+    # never decided again here, TJ-5282)
+    from taxjson.lib.stock_dividend_cover import booked_rows
+    transactions = booked_rows(transactions, args.gains)
 
     radar.load(args, transactions, _strict_xfer, today_epoch, window_sec)
 

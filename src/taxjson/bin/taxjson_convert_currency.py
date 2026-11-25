@@ -319,7 +319,7 @@ def convert_transaction(
         staged: Dict[str, float] = {}
         any_failure = False
         for field in ["proceeds", "commission", "fee", "price", "net_amount", "gross_amount",
-                      "market_value"]:
+                      "market_value", "delivered_cost"]:
             value = getattr(tx, field, None)
             if value is None:
                 continue

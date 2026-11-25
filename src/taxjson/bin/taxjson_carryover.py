@@ -47,11 +47,12 @@ Or through the project wrapper: `tjs carryover`.
 """
 from taxjson.lib.stage_msg import emit_line
 import argparse
+import itertools
 import json
 import math
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.lib.country import add_country_argument, refuse_foreign_flags
@@ -160,7 +161,9 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
                         given_back: Optional[Dict[int, float]] = None,
                         stated: Optional[Dict[int, float]] = None,
                         latest_first_before: Optional[int] = None,
-                        back_to: Optional[Dict[int, Dict[int, float]]] = None) -> Dict[str, Any]:
+                        back_to: Optional[Dict[int, Dict[int, float]]] = None,
+                        left_out: Optional[Set[int]] = None,
+                        reopen: Optional[Dict[int, Dict[int, List[int]]]] = None) -> Dict[str, Any]:
     """`carried`: {year: balance a close-year lock recorded as carried
     out of that year} — at the end of that year the running balance
     becomes the recorded one (the lock is the record; the books of a
@@ -201,7 +204,11 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
     later lock's opening gives any of it back (TJ-4880). `latest_first_before`:
     the rows before that year meet the latest claimed year first, not the
     oldest, the other end of an open split; `back_to`: {year: {earlier year: what
-    its return carried back to it}}, a split on record (`_claim_order`; TJ-4882)."""
+    its return carried back to it}}, a split on record (`_claim_order`; TJ-4882).
+    `left_out`, `reopen`: what sales with an unknown cost can move (`_left_out_moves`)."""
+    if left_out or reopen:      # locals(): the arguments, first thing in the function
+        kw = {k: v for k, v in locals().items() if k not in ('nets', 'left_out', 'reopen')}
+        return _left_out_moves(build_canada_ledger, nets, kw, set(left_out or ()), dict(reopen or {}))
     locked_opening, back_caps = locked_opening or {}, back_caps or {}
     given_back, stated = given_back or {}, stated or {}
     carried, locked_back = carried or {}, locked_back or {}
@@ -544,27 +551,156 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
             if v > 0.005}
     if _exp:
         out['expired_claims'] = _exp
-    # A claim above its year's net gain: a net capital loss applied in a
-    # year (carried forward or back) is at most that year's taxable
-    # capital gains (ITA s.111(1.1)). The ledger applies the claim as
-    # recorded (slip gains and the FX gain on cash are not in the nets,
-    # so the return can have more gain), and says so: the estimate caps
-    # it and carries the rest (backlog TJ-0432). A year with no
-    # disposition in these books is not judged.
-    _over: Dict[str, Dict[str, float]] = {}
+    _over = _claims_over_gain(nets, claimed)
+    if _over:
+        out['claims_over_gain'] = _over
+    return out
+
+
+def _claims_over_gain(nets: Dict[int, Dict[str, float]],
+                      claimed: Dict[int, float]) -> Dict[str, Dict[str, float]]:
+    """A claim above its year's net gain: a net capital loss applied in a
+    year (carried forward or back) is at most that year's taxable
+    capital gains (ITA s.111(1.1)). The ledger applies the claim as
+    recorded (slip gains and the FX gain on cash are not in the nets,
+    so the return can have more gain), and says so: the estimate caps
+    it and carries the rest (backlog TJ-0432). A year with no
+    disposition in these books is not judged."""
+    over: Dict[str, Dict[str, float]] = {}
     for c, amt in sorted(claimed.items()):
-        rec = nets.get(c) or _ZERO
+        rec = nets.get(c) or {}
         n_disp = int(rec.get('dispositions') or 0)
         if not n_disp:
             continue
         gain = max(0.0, float(rec.get('net') or 0.0))
         if float(amt or 0.0) > gain + 0.005 * n_disp + 0.005:
-            _over[str(c)] = {'claimed': M.shown(float(amt), 2),
-                             'net_gain': M.shown(gain, 2),
-                             'excess': M.shown(float(amt) - gain, 2)}
-    if _over:
-        out['claims_over_gain'] = _over
-    return out
+            over[str(c)] = {'claimed': M.shown(float(amt), 2),
+                            'net_gain': M.shown(gain, 2),
+                            'excess': M.shown(float(amt) - gain, 2)}
+    return over
+
+
+# The most years of left-out sales whose results are folded in every
+# combination (3**8 folds); past it every claim in reach is named, and the
+# ledger says it could not check them in full (`_left_out_moves`; TJ-5291).
+_LEFT_OUT_YEARS = 8
+
+
+def _left_out_moves(fold: Callable[..., Dict[str, Any]], nets: Dict[int, Dict[str, Any]],
+                    kw: Dict[str, Any], left_out: Set[int],
+                    reopen: Dict[int, Dict[int, List[int]]]) -> Dict[str, Any]:
+    """`build_canada_ledger` given `left_out`: the ledger, with
+    `carry_back_left_out` ({project year: {[carryover] claimed year: the years
+    of the sales}}) where a result of those sales with an unknown cost can
+    change what the project year carries back to that claimed year (backlog
+    TJ-1487, TJ-1488). Such a sale can only add a loss to its year, or shrink
+    or cancel the loss the year shows, and a year's net reaches the fold only
+    as its loss: so the ledger is folded again on those results
+    (`_folds_that_move`). Past `_LEFT_OUT_YEARS` of them every claim the
+    project year can carry back to is named, and `carry_back_left_out_unchecked`
+    ({project year: the count of years}) says so. `reopen`: the locks whose
+    own split rests on such a sale ({lock year: {claim year: sale years}},
+    their `carry_back_incomplete`); a carry-back of the project year to a claim
+    one names is named too (TJ-1487). No figure changes."""
+    doc = fold(nets, **kw)
+    rows = doc.get('rows') or []
+    now = kw.get('through_year')
+    now = rows[-1]['year'] if now is None and rows else now
+    years = sorted(v for v in left_out if now is not None and v <= now)
+    claimed = kw.get('claimed') or {}
+    if now is None or not years or not claimed:    # no claim: nothing goes back
+        return doc
+    if len(years) > _LEFT_OUT_YEARS:
+        moved = {c: set(years) for c, a in claimed.items()
+                 if now - 3 <= c < now and (a or 0.0) > 0.005}
+    else:
+        moved = _folds_that_move(fold, nets, kw, years, reopen, now)
+    to = _carried_to(doc, now)
+    for by in reopen.values():
+        for c, ys in by.items():
+            if to.get(c, 0.0) > 0.005 and set(ys) & set(years):
+                moved.setdefault(c, set()).update(set(ys) & set(years))
+    if moved:
+        doc['carry_back_left_out'] = {str(now): {str(c): sorted(v)
+                                                 for c, v in sorted(moved.items())}}
+        if len(years) > _LEFT_OUT_YEARS:
+            doc['carry_back_left_out_unchecked'] = {str(now): len(years)}
+    return doc
+
+
+def _folds_that_move(fold: Callable[..., Dict[str, Any]], nets: Dict[int, Dict[str, Any]],
+                     kw: Dict[str, Any], years: List[int],
+                     reopen: Dict[int, Dict[int, List[int]]], now: int) -> Dict[int, Set[int]]:
+    """{claimed year: the `years` whose results moved what `now` carries back
+    to it}: the ledger folded with each year's loss as it is, at nothing (its
+    known loss cancelled) and at more than every figure in the ledger, in
+    every combination, one disposition more in each year changed, each year
+    alone first. A reopened lock is folded as its re-close would be: its
+    carry-back as the books' fold gives it, its balance the lock's with the
+    change of the books' own balance there added (a typed balance stays)."""
+    free = dict(kw)     # the reopened locks dropped: their years fold from the books
+    for k in ('carried', 'locked_back', 'locked_applied', 'locked_opening', 'back_to'):
+        free[k] = {y: v for y, v in (kw.get(k) or {}).items() if y not in reopen}
+    locks = [y for y in reopen if y in (kw.get('carried') or {})]
+    books = _at_locks(fold(nets, **free), locks) if locks else {}
+    # What the books give at those locks rests only on the years up to the
+    # last of them: one fold for each set of results there.
+    seen: Dict[Tuple[Tuple[int, float], ...], Dict[int, Tuple[float, float]]] = {}
+
+    def world(n2: Dict[int, Dict[str, Any]], loss_at: Dict[int, float]) -> Dict[int, float]:
+        if not locks:
+            return _carried_to(fold(n2, **kw), now)
+        key = tuple(sorted((v, x) for v, x in loss_at.items() if v <= max(locks)))
+        if key not in seen:
+            seen[key] = _at_locks(fold(n2, **free), locks) if key else books
+        got = seen[key]
+        return _carried_to(fold(n2, **dict(
+            kw, back_to=free['back_to'],
+            carried={**kw['carried'], **{y: max(0.0, kw['carried'][y] + got[y][0] - books[y][0])
+                                         for y in locks}},
+            locked_back={**(kw.get('locked_back') or {}), **{y: got[y][1] for y in locks}})), now)
+
+    base = world(nets, {})
+    big = 2.0 * (1.0 + sum(abs(v.get('net') or 0.0) for v in nets.values()) + sum(
+        abs(a or 0.0) for k in ('claimed', 'carried', 'locked_back', 'locked_applied',
+                                'locked_opening', 'stated')
+        for a in (kw.get(k) or {}).values()))
+    _no = {'net': 0.0, 'dispositions': 0}
+    ends = {v: [x for x in (0.0, big)
+                if abs(x - max(0.0, -(nets.get(v, _no)['net'] or 0.0))) > 0.005] for v in years}
+    probes = sorted((c for c in ({v: x for v, x in zip(years, combo) if x is not None}
+                                 for combo in itertools.product(*([None, *ends[v]] for v in years)))
+                     if c), key=len)
+    moved: Dict[int, Set[int]] = {}
+    for loss_at in probes:
+        n2 = {y: dict(v) for y, v in nets.items()}
+        for v, x in loss_at.items():
+            rec = n2.setdefault(v, dict(_no))
+            rec['net'] = -x if x else max(0.0, rec['net'] or 0.0)
+            rec['dispositions'] = int(rec.get('dispositions') or 0) + 1   # the sale's row
+            if 'subcent' in rec:
+                rec['subcent'] = int(rec['subcent'] or 0) + 1
+        to = world(n2, loss_at)
+        for c in (c for c in set(base) | set(to)
+                  if abs(base.get(c, 0.0) - to.get(c, 0.0)) > 0.005):
+            if len(loss_at) == 1 or not moved.get(c, set()) & set(loss_at):
+                moved.setdefault(c, set()).update(loss_at)
+    return moved
+
+
+def _at_locks(doc: Dict[str, Any], years: List[int]) -> Dict[int, Tuple[float, float]]:
+    """{year: (the balance its row carries forward, what it carries back)} in a
+    Canadian ledger, 0 with no row."""
+    by = {x['year']: (x.get('carryforward_balance') or 0.0, x.get('carried_back') or 0.0)
+          for x in doc.get('rows') or []}
+    return {y: by.get(y, (0.0, 0.0)) for y in years}
+
+
+def _carried_to(doc: Dict[str, Any], year: int) -> Dict[int, float]:
+    """{claimed year: what `year`'s row carries back to it} in a Canadian ledger."""
+    row = next((x for x in doc.get('rows') or [] if x['year'] == year), None)
+    to = (row or {}).get('carried_back_to') or {}
+    return {int(c): v for c, v in to.items()}
 
 
 def _claim_order(pending: Dict[int, float], y: int, latest_first_before: Optional[int],
@@ -877,6 +1013,18 @@ def _canada_lock_carry(path: Path, ncl: Dict[str, Any], year: int) -> Dict[str, 
     # ...and the earlier losses it applied (locked_applied), if it says.
     if ncl.get('applied') is not None:
         out['applied'] = _finite(ncl['applied'], 'net_capital_loss.applied')
+    # The years of the sales with an unknown cost its split was locked past
+    # (close-year --force): a later ledger folds it as its re-close would be
+    # (`_left_out_years`; backlog TJ-1487).
+    inc = ncl.get('carry_back_incomplete')
+    if isinstance(inc, dict) and isinstance(inc.get('years'), list):
+        out['incomplete'] = sorted({v for v in inc['years']
+                                    if isinstance(v, int) and not isinstance(v, bool)})
+        by = inc.get('claims')
+        out['incomplete_claims'] = {int(c): sorted({v for v in ys if isinstance(v, int)
+                                                    and not isinstance(v, bool)})
+                                    for c, ys in (by.items() if isinstance(by, dict) else ())
+                                    if str(c).isdigit() and isinstance(ys, list)}
     return out
 
 
@@ -1720,6 +1868,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     except ValueError as exc:
         _out.put(f"taxjson-carryover: {exc}", file=sys.stderr)
         return 2
+    args.left_out_years, args.reopen_locks = _left_out_years(manual, req, args, lock_info)
     (slip_by, seeded, engine_net, filed_net, ledger, first_tx_year) = _carryover_ledger(
         slip, lock_info, args, country, nets, return_row, claimed, transactions, crypto_txs,
         results, claimed_ignored)
@@ -2852,15 +3001,20 @@ def _canada_ledger(args: argparse.Namespace, nets: Dict[int, Dict[str, float]],
     said = _Said(year, stated, stated_to, lock_stated, lock_to, carried, locked_back)
 
     def build(given: Dict[int, float], opening: Any = locked_opening,
-              to: Optional[Dict[int, Dict[int, float]]] = None) -> Dict[str, Any]:
+              to: Optional[Dict[int, Dict[int, float]]] = None,
+              probe: bool = False) -> Dict[str, Any]:
         """The fold on the answers in use; `to`: more splits to follow (a
-        reading `_Readings._orders` tries, an entry `moves` folds)."""
+        reading `_Readings._orders` tries, an entry `moves` folds); `probe`:
+        with what the sales left out can move (`_left_out_moves`), the final
+        ledger's."""
         totals = {**given, **{y: math.fsum(t.values()) for y, t in said.in_force.items()
                               if y not in carried or y == own_year}}
         return build_canada_ledger(
             nets, claimed, carried, locked_back, locked_applied, own_year=own_year,
             through_year=year, locked_opening=opening, stated=totals,
-            back_to={**said.in_force, **(to or {})})
+            back_to={**said.in_force, **(to or {})},
+            left_out=getattr(args, 'left_out_years', None) if probe else None,
+            reopen=getattr(args, 'reopen_locks', None) if probe else None)
 
     def moves(y: int) -> bool:
         """Whether the entry for `y`, folded, changes the project year's figures."""
@@ -2887,7 +3041,7 @@ def _canada_ledger(args: argparse.Namespace, nets: Dict[int, Dict[str, float]],
     settled = not (final['asked'] or final['split'])
     if settled:
         _own_split_checked(said, build, carried_in)
-    ledger = build(said.use)
+    ledger = build(said.use, probe=True)
     said.check_rows(ledger, settled)
     off = readings.not_in_nets(ledger, said.use)
     for h in off:
@@ -3033,6 +3187,41 @@ def _carryover_rows(args: argparse.Namespace, ledger: Dict[str, Any],
                            "the settings or use `tjs check-filed`."]))
 
 
+def _manual_year(t: Dict[str, Any], req: GainsRequest) -> Optional[int]:
+    """The tax year of an unknown-cost disposition the ledger leaves out, by
+    the project's date basis; None for a date that names none."""
+    d = str(t.get('date_settle' if req.effective_tax_date() == 'settle' else 'date')
+            or t.get('date') or '')
+    return int(d[:4]) if d[:4].isdigit() else None
+
+
+def _left_out_years(manual: List[Dict[str, Any]], req: GainsRequest,
+                    args: argparse.Namespace, lock_info: Dict[int, Any]
+                    ) -> Tuple[Set[int], Dict[int, Dict[int, List[int]]]]:
+    """(the years of the unknown-cost sales the ledger leaves out whose result
+    can still reach a figure, the locks to fold again as their re-close would
+    be: {lock year: {claim year: sale years}}) for `_left_out_moves`. A year
+    before the project year a lock seeds is its lock's, unless that lock
+    records that its split was locked past such a sale (`carry_back_incomplete`,
+    read as `incomplete` and `incomplete_claims`): then that lock is reopened,
+    and the years it names that the books still leave out count (backlog
+    TJ-1487). The project year's own sales don't count when --filed-net gives
+    its net (lib/carry_back `filed_left_out` spares it on a lock's own filed
+    figure too). A sale with no year is lib/carry_back's to count
+    (`split_left_out`)."""
+    py = args.project_year
+    sold = {y for y in (_manual_year(t, req) for t in manual) if y is not None}
+    reopen = {y: {c: sorted(set(ys) & sold) for c, ys in (info.get('incomplete_claims') or {}).items()
+                  if set(ys) & sold}
+              for y, info in lock_info.items()
+              if py is not None and y < py and info.get('carried') is not None
+              and set(info.get('incomplete') or ()) & sold}
+    years = {y for y in sold
+             if not (py is not None and y < py and y in lock_info and y not in reopen)
+             and not (y == py and args.filed_net is not None)}
+    return years, reopen
+
+
 def _carryover_manual(manual: List[Dict[str, Any]], req: GainsRequest,
                       ledger: Dict[str, Any]) -> None:
     """carryover: the unknown-cost dispositions the ledger leaves out,
@@ -3041,14 +3230,11 @@ def _carryover_manual(manual: List[Dict[str, Any]], req: GainsRequest,
         # Machine-readable too (TJ-0323): each excluded disposition
         # (`excluded_unknown_cost`), and the years whose nets lack them
         # (`incomplete_years`; each such row `incomplete: true`).
-        _mk = ('date_settle' if req.effective_tax_date() == 'settle'
-               else 'date')
         excl: List[Dict[str, Any]] = []
         for t in manual:
-            d = str(t.get(_mk) or t.get('date') or '')
             g = GainRow(t)
             excl.append({
-                'year': int(d[:4]) if d[:4].isdigit() else None,
+                'year': _manual_year(t, req),
                 'date': t.get('date'), 'symbol': t.get('symbol'),
                 'account': t.get('account'),
                 'qty': abs(float(g.quantity or 0.0)),

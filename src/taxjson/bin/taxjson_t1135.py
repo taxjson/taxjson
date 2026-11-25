@@ -93,7 +93,7 @@ from taxjson.model.result import GainRow
 from taxjson.lib.exchange_rates import norm_currency
 from taxjson.lib import out as _out
 from taxjson.lib import t1135_issuer as _TI
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 # Filing threshold: ITA 233.3(1) "reporting entity" — SFP total cost more
 # than $100,000 CAD at any time in the year requires the form. The
@@ -444,6 +444,8 @@ class Custody:
         # stablecoin's reward is that cash's income, CA-CRYPTO-02).
         self.cash_rows: Dict[str, Tuple[str, str, str]] = {}
         self.cash_coins: Dict[Tuple[str, str], str] = {}
+        # (`rows`: less the stock dividend rows the gains run booked as no
+        # shares, build_report's `booked_rows`: CA-STKDIV-02, TJ-5282)
         self._rows = list(rows)
         self._books: Dict[str, List[Dict[str, Any]]] = {}
         # (account, symbol, basis) -> (the rows that move those units,
@@ -1543,14 +1545,20 @@ def full_history_wash_sales(base_paths: List[Path],
 def _custody_and_cash(custody: Optional[Dict[str, Optional[str]]],
                       overrides: Dict[str, Optional[str]],
                       txs: List[Dict[str, Any]],
-                      cash: Optional[Dict[str, Any]]
+                      cash: Optional[Dict[str, Any]],
+                      gains_paths: Sequence[Path] = ()
                       ) -> Tuple["Custody", Dict[str, Dict[str, Any]]]:
     """build_report's Custody over `overrides` (it adds its keys to
     them) and the cash pools walk_costs reads: one of each per
     classification walked (classification_check walks another)."""
     # A custody account's part of a Canadian issuer's pool is a pool of
     # its own: its units times the pool's cost per unit (Custody).
-    cust = Custody(custody, overrides, txs)
+    # (a stock dividend row the gains run booked as no shares, a covered
+    # short's obligation, moves no units of a custody account either: the
+    # engine's own record in the gains files `gains_paths`, never decided
+    # again here; CA-STKDIV-02, TJ-5282)
+    from taxjson.lib.stock_dividend_cover import booked_rows
+    cust = Custody(custody, overrides, booked_rows(txs, gains_paths))
     # The cash held outside Canada (CA-RPT-20): a pool per account and
     # currency, at the cost lib/t1135_cash gives each day.
     cash_pools: Dict[str, Dict[str, Any]] = {}
@@ -2249,12 +2257,12 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
                      load_transactions(list(sheltered_paths)), timeline),
         year, mapped, dict(issuer_countries or {}), _by_listing)
     overrides = countries.overrides(symbols)  # the walk adds custody keys
-    cust, cash_pools = _custody_and_cash(custody, overrides, txs, cash)
+    cust, cash_pools = _custody_and_cash(custody, overrides, txs, cash, gains_paths)
     walk = walk_costs(txs, year, overrides, tax_date, today=today,
                       timeline=timeline, custody=cust, cash=cash_pools)
 
     def _walk_with(ov: Dict[str, Optional[str]]) -> Dict[str, Any]:
-        c2, pools2 = _custody_and_cash(custody, ov, txs, cash)
+        c2, pools2 = _custody_and_cash(custody, ov, txs, cash, gains_paths)
         return walk_costs(txs, year, ov, tax_date, today=today,
                           timeline=timeline, custody=c2, cash=pools2)
 

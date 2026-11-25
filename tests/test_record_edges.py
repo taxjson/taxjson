@@ -946,36 +946,49 @@ class TestTheSweepStaysInItsFolders(unittest.TestCase):
         self.assertEqual((self.root / "taxjson.toml").read_bytes(), self.toml)
 
     def test_nothing_of_yours_goes(self):
+        # (the run.json lists two of them as outputs: moved to work/kept/,
+        # where no reader of work/ or reports/ finds them: TJ-5274)
         for rel in ("reports/mynotes.txt", "reports/adir/x.txt", "work/saved_by_me.json",
                     "work/in", "work/sub", "reports/link", "work/linkfile",
-                    "work/margin_manifest.json", "reports/notes.sum",
-                    "reports/mine_holdings.toml"):
+                    "work/margin_manifest.json", "work/kept/notes.sum",
+                    "work/kept/mine_holdings.toml"):
             with self.subTest(file=rel):
                 self.assertTrue(os.path.lexists(self.root / rel))
+        self.assertEqual((self.root / "work/kept/notes.sum").read_text(encoding="utf-8"),
+                         "mine\n")
 
-    def test_a_file_taxjson_did_not_write_is_kept_and_said(self):
+    def test_a_file_taxjson_did_not_write_is_moved_aside_and_said(self):
         # A link in an output's place (not what the run built there), and
-        # files of yours with the table's names: kept, said once (TJ-4274).
-        self.assertTrue(os.path.islink(self.root / "work/ghost_webull.json"))
+        # files of yours with the table's names: kept in place and said
+        # (TJ-4274), where every reader of work/ and reports/ found them;
+        # moved to work/kept/ (the link as the link), each named once with
+        # where it went (TJ-5274).
+        self.assertFalse(os.path.lexists(self.root / "work/ghost_webull.json"))
+        self.assertTrue(os.path.islink(self.root / "work/kept/ghost_webull.json"))
         self.assertEqual((self.outside / "parse.json").read_text(encoding="utf-8"), "{}\n")
         said = [line for line in self.swept.stdout.splitlines()
                 if "the last run listed and this one does not build" in line]
         self.assertEqual(len(said), 1, self.swept.stdout[-2000:])
-        self.assertTrue(said[0].lstrip().startswith(("note: kept 3 files", "Info: kept 3 files")))
+        self.assertTrue(said[0].lstrip().startswith(("note: moved 3 files",
+                                                     "Info: moved 3 files")))
         for rel in ("work/ghost_webull.json", "reports/notes.sum", "reports/mine_holdings.toml"):
-            self.assertIn(f"{rel} (not written by taxjson)", self.swept.stdout)
+            self.assertIn(f"{rel} -> work/kept/{rel.split('/')[-1]} (taxjson has no record "
+                          f"of writing it)", self.swept.stdout)
+            self.assertFalse(os.path.lexists(self.root / rel), rel)
         self.assertNotIn("work/margin_manifest.json", self.swept.stdout)
 
-    def test_a_book_you_edited_is_kept_and_said(self):
+    def test_a_book_you_edited_is_moved_aside_and_said(self):
         root, out = self.edited, self.edited_run.stdout
-        self.assertTrue((root / "work/qt_base.json").is_file())
-        self.assertIn("work/qt_base.json (edited since taxjson wrote it)", out)
+        self.assertFalse((root / "work/qt_base.json").exists())
+        self.assertTrue((root / "work/kept/qt_base.json").is_file())
+        self.assertTrue((root / "work/kept/qt_base.json.diag").is_file())
+        self.assertIn("work/qt_base.json -> work/kept/qt_base.json (edited since taxjson "
+                      "wrote it)", out)
         self.assertIn("the last run built and this one does not", out)
         left = [p.relative_to(root).as_posix() for d in ("work", "reports")
                 for p in (root / d).rglob("*") if p.is_file()]
-        # (the stamps went with the books that did; its notes stay with it)
-        self.assertEqual(sorted(f for f in _own_files(left, "qt") if "/.deps/" not in f),
-                         ["work/qt_base.json", "work/qt_base.json.diag"])
+        # (the stamps went with the books that did; its record with it)
+        self.assertEqual(_own_files(left, "qt"), [])
 
     def test_a_removed_account_leaves_what_a_view_built_for_it_too(self):
         self.assertTrue(self.removed_had)

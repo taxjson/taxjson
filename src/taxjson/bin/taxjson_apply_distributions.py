@@ -261,22 +261,6 @@ def _warn_roc_overlaps(txs: List[dict], symbol: str, key: str,
                   f"slip ({slip} part is not income).", file=sys.stderr)
 
 
-def _missing_history_openings(txs: List[dict], phantoms) -> List[dict]:
-    """The OPENING_BALANCE rows the gains stage will synthesize from
-    .tt OPENING cost=unknown lines for this book — the SAME synthesize_openings call, so
-    the record-date balance here agrees with the position the engine
-    books. Used for sizing only; never written to the base book (the
-    gains stage adds its own)."""
-    if not phantoms:
-        return []
-    from taxjson.lib.tx_load import coerce_transaction_row
-    from taxjson.lib.missing_history import synthesize_openings
-    rows = [coerce_transaction_row(t, i, PROG) for i, t in enumerate(txs)]
-    out, _log = synthesize_openings(rows, phantoms)
-    return [t.to_dict() for t in out[len(rows):]
-            if t.action == "OPENING_BALANCE"]
-
-
 # Where the income of a reinvested distribution is reported, by the
 # project's country (the tool books the cost side only).
 _INCOME_SLIP = {"canada": "the T3/T5 slip",
@@ -327,7 +311,12 @@ def apply_distributions(doc: dict, map_rows, account: str,
     # Regenerate, never accumulate: drop rows this tool added before.
     txs = [t for t in txs
            if not str(t.get("id") or "").startswith("DIST-")]
-    sizing = txs + _missing_history_openings(txs, phantoms)
+    # Sized on the book the gains run will walk (its missing-history
+    # openings first), less a stock dividend row that books no shares:
+    # decided on that book, checked against the run's answer after it
+    # (pipeline/stages `_say_presize_disagreements`; TJ-5282).
+    from taxjson.lib.stock_dividend_cover import presized
+    sizing, _no_shares = presized(txs, phantoms, country, PROG)
     applied = 0
     used_ids: set = set()
     for key, date, per_share in map_rows:

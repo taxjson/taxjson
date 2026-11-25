@@ -79,7 +79,7 @@ def validate_transactions(transactions, filename="input",
         nums = {}
         for _fld in ("quantity", "price", "net_amount", "gross_amount",
                      "fee", "commission", "proceeds", "multiplier",
-                     "market_value", "corp_parent_qty"):
+                     "market_value", "delivered_cost", "corp_parent_qty"):
             if _fld not in tx:
                 nums[_fld] = 0.0
                 continue

@@ -7,7 +7,7 @@ reads the child's output as it comes, and `cli.common._ledger_doc` refuses it.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 from taxjson.model import money as M
 
@@ -34,6 +34,11 @@ def _is_year(v: Any) -> bool:
     return isinstance(v, int) and not isinstance(v, bool)
 
 
+def _count(v: Any) -> int:
+    """`v` when it is a count above 0, else 0."""
+    return v if _is_year(v) and v > 0 else 0
+
+
 def _is_amount(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
@@ -44,25 +49,80 @@ def _rows(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
             ] if isinstance(rows, list) else []
 
 
+def left_out_marks(doc: Dict[str, Any]) -> Dict[int, Dict[int, List[int]]]:
+    """A Canadian ledger's `carry_back_left_out`: {year: {claim year: the
+    years of the sales with an unknown cost these nets leave out whose result
+    can change what that year carries back to the [carryover] claimed amount
+    under it}}: the ledger folded again on the results they can have
+    (bin/taxjson_carryover `_left_out_moves`), past a lock too, through a
+    claim it leaves pending, and in a gain year whose own sale can make a loss
+    (backlog TJ-1487, TJ-1488).
+    {} with none; ValueError for an entry that is not whole: `_ledger_doc`
+    refuses it, the checklist's reading of the child takes none."""
+    marks = doc.get("carry_back_left_out") if isinstance(doc, dict) else None
+    if marks is None:
+        return {}
+    ok = isinstance(marks, dict) and all(
+        str(y).isdigit() and isinstance(by, dict) and by and all(
+            str(c).isdigit() and isinstance(ys, list) and ys
+            and all(_is_year(v) for v in ys) for c, ys in by.items())
+        for y, by in marks.items())
+    if not ok:
+        raise ValueError(f"`tjs carryover --json` gave carry_back_left_out "
+                         f"{marks!r}")
+    return {int(y): {int(c): sorted(set(ys)) for c, ys in by.items()}
+            for y, by in marks.items()}
+
+
+def left_out_unchecked(doc: Dict[str, Any]) -> Dict[int, int]:
+    """A Canadian ledger's `carry_back_left_out_unchecked`: {year: the count
+    of years of sales left out}, where they were too many to fold every
+    result and `carry_back_left_out` names every claim the year can carry
+    back to (bin/taxjson_carryover `_left_out_moves`; backlog TJ-5291). {}
+    with none; ValueError for an entry that is not whole."""
+    by = doc.get("carry_back_left_out_unchecked") if isinstance(doc, dict) else None
+    if by is None:
+        return {}
+    if not (isinstance(by, dict) and all(str(y).isdigit() and _count(n)
+                                         for y, n in by.items())):
+        raise ValueError(f"`tjs carryover --json` gave carry_back_left_out_unchecked "
+                         f"{by!r}")
+    return {int(y): n for y, n in by.items()}
+
+
+def _marks_of(doc: Dict[str, Any], year: int) -> Dict[int, List[int]]:
+    try:
+        return left_out_marks(doc).get(year, {})
+    except ValueError:
+        return {}
+
+
 def ledger_left_out(doc: Dict[str, Any], year: int) -> Optional[Dict[str, Any]]:
-    """{years, sales, and `undated` when so} of the sales with an unknown cost
-    whose results can still move `year`'s figures in this ledger, None when no
-    such sale. A later year's cannot, and neither can one at or before the last
-    locked year before `year`: the balance restarts from that lock's. A sale
-    with no year cannot be cleared by either (backlog TJ-1453, TJ-1455)."""
+    """{years, sales, `undated` when so, `claims` where the ledger names them,
+    and `unchecked` where it named them without every fold} of the sales
+    with an unknown cost whose results can still move
+    `year`'s figures in this ledger, None when no such sale. A later year's
+    cannot. One at or before the last locked year before `year` only where the
+    ledger marks it (`left_out_marks`): through a [carryover] claimed amount
+    that lock left pending (the balance restarts from the lock, the claim
+    survives it), or a lock that records its split rests on it (backlog
+    TJ-1487). A sale with no year cannot be cleared by either (backlog
+    TJ-1453, TJ-1455)."""
     rows = _rows(doc)
     locked = max((x["year"] for x in rows
                   if x.get("balance_from_lock") and x["year"] < year),
                  default=None)
+    marked = {v for ys in _marks_of(doc, year).values() for v in ys}
 
     def counts(y: int) -> bool:
-        return y <= year and (locked is None or y > locked)
+        return y in marked or (y <= year and (locked is None or y > locked))
 
     listed = doc.get("incomplete_years")
     years = sorted(
         {y for y in (listed if isinstance(listed, list) else [])
          if _is_year(y) and counts(y)}
-        | {x["year"] for x in rows if x.get("incomplete") and counts(x["year"])})
+        | {x["year"] for x in rows if x.get("incomplete") and counts(x["year"])}
+        | {y for y in marked if y <= year})
     excluded = doc.get("excluded_unknown_cost")
     sales = [e for e in (excluded if isinstance(excluded, list) else [])
              if isinstance(e, dict)
@@ -70,28 +130,61 @@ def ledger_left_out(doc: Dict[str, Any], year: int) -> Optional[Dict[str, Any]]:
     undated = any(not _is_year(e.get("year")) for e in sales)
     if not years and not undated:
         return None
+    # The [carryover] claimed years whose part carried back those sales can
+    # move, where the ledger knows: what close-year and handoff name.
+    claims = {c: vs for c, ys in _marks_of(doc, year).items()
+              if (vs := [v for v in ys if v in years])}
+    try:
+        unchecked = left_out_unchecked(doc).get(year) if claims else None
+    except ValueError:
+        unchecked = None
     return {"years": years, "sales": sales,
-            **({"undated": True} if undated else {})}
+            **({"undated": True} if undated else {}),
+            **({"claims": claims} if claims else {}),
+            **({"unchecked": unchecked} if unchecked else {})}
+
+
+def _claim_pending(doc: Dict[str, Any], year: int, row: bool) -> bool:
+    """Whether the ledger has a [carryover] claimed amount still pending that a
+    loss of `year` can carry back to: one under the 3 years before it, unmet
+    (`claims_waiting`; `claims_beyond`, the 3rd year's, when `year` has a row:
+    with none it can hold a claim past its window)."""
+    if doc.get("project_year") not in (None, year):
+        return False
+    waiting = doc.get("claims_waiting")
+    beyond = (float(doc["claims_beyond"]) if _is_amount(doc.get("claims_beyond"))
+              else 0.0)
+    return (isinstance(waiting, dict) and any(
+        str(c).isdigit() and year - 3 <= int(c) < year and _is_amount(a) and a > 0.005
+        for c, a in waiting.items())) or (row and beyond > 0.005)
 
 
 def split_left_out(doc: Dict[str, Any], year: int) -> Optional[Dict[str, Any]]:
     """`ledger_left_out`, when there is a split for those sales to move: the
-    ledger's row for `year` shows a loss or a carry-back. A carried-in balance
-    alone is no split, but the row can carry back with no loss this year, when
-    the lock before it recorded none (backlog TJ-1454). A row on a filed return
-    is spared the year's own sales (`filed_left_out`; TJ-1490)."""
+    ledger's row for `year` shows a loss or a carry-back, or the ledger marks
+    a claim the sales can move (`left_out_marks`: through a claim a lock
+    between them leaves pending, TJ-1487; a gain year's own sale, which can
+    make a loss to carry back, TJ-1488), or a sale with no year meets a claim
+    still pending (it may be the year's own). A carried-in balance alone is no
+    split, but the row can carry back with no loss this year, when the lock
+    before it recorded none (backlog TJ-1454). A row on a filed return is
+    spared the year's own sales (`filed_left_out`; TJ-1490)."""
     left = ledger_left_out(doc, year)
     if left is None:
         return None
-    for x in _rows(doc):
-        if x["year"] != year:
-            continue
-        # A figure of another kind is no split; NaN compares False.
-        if (_is_amount(x.get("carried_back")) and x["carried_back"] > 0.005) \
-                or (_is_amount(x.get("net_gain")) and x["net_gain"] < -0.005):
-            return (filed_left_out(left, year)
-                    if x.get("net_source") == "filed_return" else left)
-    return None
+    row = next((x for x in _rows(doc) if x["year"] == year), None)
+    x = row or {}
+    filed = x.get("net_source") == "filed_return"
+    # A figure of another kind is no split; NaN compares False.
+    split = ((_is_amount(x.get("carried_back")) and x["carried_back"] > 0.005)
+             or (_is_amount(x.get("net_gain")) and x["net_gain"] < -0.005)
+             or any(v != year or not filed
+                    for ys in _marks_of(doc, year).values() for v in ys)
+             or (not filed and bool(left.get("undated"))
+                 and _claim_pending(doc, year, row is not None)))
+    if not split:
+        return None
+    return filed_left_out(left, year) if filed else left
 
 
 def filed_left_out(left: Optional[Dict[str, Any]], year: int
@@ -106,7 +199,11 @@ def filed_left_out(left: Optional[Dict[str, Any]], year: int
     sales = [s for s in left.get("sales") or [] if s.get("year") != year]
     if not years and not left.get("undated"):
         return None
-    return {**left, "years": years, "sales": sales}
+    claims = {c: [v for v in ys if v != year] for c, ys in _claims_of(left).items()}
+    out = {**left, "years": years, "sales": sales}
+    out.pop("claims", None)
+    return {**out, **({"claims": {c: ys for c, ys in claims.items() if ys}}
+                      if any(claims.values()) else {})}
 
 
 def left_out_text(left: Dict[str, Any]) -> str:
@@ -118,7 +215,119 @@ def left_out_text(left: Dict[str, Any]) -> str:
         years[_YEARS_SHOWN:] = [f"and {len(years) - _YEARS_SHOWN} more"]
     if left.get("undated"):
         years.append("undated")
-    return ", ".join(years)
+    n = _count(left.get("unchecked"))
+    return ", ".join(years) + (f"; {n} years in all, not checked in full" if n else "")
+
+
+def incomplete_record(left: Dict[str, Any]) -> Dict[str, Any]:
+    """What a lock records of a `split_left_out` result
+    (`carry_back_incomplete`): the years, `undated` when so, each sale by its
+    date, symbol and account, the [carryover] claimed years whose part
+    carried back they can move (`claims`, where the ledger said), and the
+    count of years when they were too many to check in full (`unchecked`), so
+    the next year's handoff can name them (backlog TJ-1487, TJ-1488,
+    TJ-5291)."""
+    sales = [{k: e[k] for k in ("date", "symbol", "account")
+              if isinstance(e.get(k), str) and e[k]}
+             for e in left.get("sales") or [] if isinstance(e, dict)]
+    claims = _claims_of(left)
+    n = _count(left.get("unchecked"))
+    return {"years": list(left.get("years") or []),
+            **({"undated": True} if left.get("undated") else {}),
+            **({"sales": [e for e in sales if e]} if any(sales) else {}),
+            **({"claims": {str(c): ys for c, ys in claims.items()}} if claims else {}),
+            **({"unchecked": n} if n else {})}
+
+
+def claims_text(left: Dict[str, Any]) -> str:
+    """The [carryover] claimed years a result (or a lock's record of one)
+    names as moved, for a sentence; "" with none."""
+    return years_text(sorted(_claims_of(left)))
+
+
+def _claims_of(left: Dict[str, Any]) -> Dict[int, List[int]]:
+    """A result's (or a lock's record's) `claims`, {claimed year: sale years},
+    the entries that are whole."""
+    by = left.get("claims")
+    return {int(c): sorted(v for v in ys if _is_year(v))
+            for c, ys in (by.items() if isinstance(by, dict) else ())
+            if str(c).isdigit() and isinstance(ys, list)}
+
+
+class SplitWords(NamedTuple):
+    """What close-year says of a split resting on sales with an unknown cost:
+    the headline, the reasons, what --force locks, and the warning it locks
+    with (`split_words`)."""
+    head: str
+    why: List[str]
+    locks: str
+    accepted: str
+
+
+def split_words(left: Dict[str, Any], year: int, loss: bool) -> SplitWords:
+    """The words for `left` (a `split_left_out` result) in `year`, each true of
+    the row and the sales: "this year's loss" only where the year has one
+    (`loss`), the loss a sale can make only for a sale of the year itself (or
+    one with no year, which may be), and a sale of an earlier year by the
+    [carryover] claimed years whose part still unmet its result can change
+    (backlog TJ-1487, TJ-1488)."""
+    years = left_out_text(left)
+    sold = [y for y in left.get("years") or [] if _is_year(y)]
+    earlier = [y for y in sold if y < year]
+    own = year in sold or bool(left.get("undated"))
+    by_earlier = sorted(c for c, ys in _claims_of(left).items() if any(v < year for v in ys))
+    claims = years_text(by_earlier)
+    if loss:
+        head = f"the split of this year's loss leaves out sales with an unknown cost ({years})"
+        accepted = (f"locking a split of this year's loss that leaves out sales with an "
+                    f"unknown cost ({years})")
+    elif year in sold:
+        head = f"this year's gain leaves out sales with an unknown cost ({years})"
+        accepted = (f"locking a gain that leaves out sales with an unknown cost ({years}): "
+                    f"they can make a loss [carryover] claimed carries back")
+    else:
+        head = f"this year's carry-back rests on sales with an unknown cost ({years})"
+        accepted = f"locking a carry-back that rests on sales with an unknown cost ({years})"
+    sales = [e for e in left.get("sales") or [] if isinstance(e, dict)]
+    n_own = sum(1 for e in sales if e.get("year") == year or not _is_year(e.get("year")))
+    n_earlier = sum(1 for e in sales if _is_year(e.get("year")) and e["year"] < year)
+    why = []
+    if own:
+        what = "Its result" if n_own <= 1 else "Their results"
+        why.append(("A sale with no year may be this year's own. " if year not in sold else "")
+                   + (f"{what} can change this year's loss, so the part of it [carryover] "
+                      f"claimed carries back may change." if loss else
+                      f"{what} can make a loss of this year, and [carryover] claimed carries "
+                      f"a loss back (T1A): the lock would then carry part of it back."))
+    if earlier:
+        n = len(by_earlier)
+        why.append(f"The result of the {years_text(earlier)} "
+                   + ("sale" if n_earlier <= 1 else "sales")
+                   + " can change how much of "
+                   + (f"[carryover] claimed {claims}" if claims else "[carryover] claimed")
+                   + " is still unmet when this year folds, so what this year carries back"
+                   + (" to it" if n == 1 else " to them" if n > 1 else "") + " may change.")
+    many = _count(left.get("unchecked"))
+    if many:
+        why.append(f"With {many} years of such sales the ledger does not fold every result "
+                   f"they can have: it names every [carryover] claimed year this year can carry "
+                   f"back to, so the split may not in fact move.")
+    return SplitWords(head, why, "split" if loss else "year", accepted)
+
+
+def sales_text(left: Dict[str, Any], shown: int = 3) -> str:
+    """The sales of a `ledger_left_out` result (or of a lock's record of one)
+    for a sentence: "2022-03-01 QZRX.TO in margin", the first `shown` of them;
+    "" with none named."""
+    names = []
+    for e in left.get("sales") or []:
+        if not isinstance(e, dict) or not e.get("symbol"):
+            continue
+        names.append(" ".join(str(e[k]) for k in ("date", "symbol") if e.get(k))
+                     + (f" in {e['account']}" if e.get("account") else ""))
+    if len(names) > shown:
+        names[shown:] = [f"and {len(names) - shown} more"]
+    return ", ".join(names)
 
 
 def years_text(years: List[int]) -> str:

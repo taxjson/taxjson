@@ -57,7 +57,8 @@
         "dispositions": 1,
         "gain": 125.0,
         "outlays": 0.0,
-        "proceeds": 900.0
+        "proceeds": 900.0,
+        "total_cost": 775.0
       },
       {
         "acb": 0.0,
@@ -67,7 +68,8 @@
         "dispositions": 1,
         "gain": 24.3,
         "outlays": 0.0,
-        "proceeds": 24.3
+        "proceeds": 24.3,
+        "total_cost": 0.0
       },
       {
         "acb": 267.3,
@@ -77,7 +79,8 @@
         "dispositions": 2,
         "gain": 32.4,
         "outlays": 1.35,
-        "proceeds": 301.05
+        "proceeds": 301.05,
+        "total_cost": 268.65
       },
       {
         "acb": 324.0,
@@ -87,7 +90,8 @@
         "dispositions": 2,
         "gain": 24.3,
         "outlays": 0.0,
-        "proceeds": 348.3
+        "proceeds": 348.3,
+        "total_cost": 324.0
       }
     ],
     "date_basis": "date_settle",
@@ -138,7 +142,8 @@
         "proceeds_code": "13199",
         "rows": 4,
         "short": "shares & fund units",
-        "title": "Part 3, line 4 (lines 13199/13200)"
+        "title": "Part 3, line 4 (lines 13199/13200)",
+        "total_cost": 1367.65
       },
       {
         "acb": 0.0,
@@ -156,7 +161,8 @@
         "proceeds_code": "15199",
         "rows": 1,
         "short": "options & other properties",
-        "title": "Part 3, line 6 (lines 15199/15300)"
+        "title": "Part 3, line 6 (lines 15199/15300)",
+        "total_cost": 0.0
       }
     ],
     "totals": {
@@ -166,7 +172,8 @@
       "gain": 206.0,
       "outlays": 1.35,
       "permanently_denied": 0.0,
-      "proceeds": 1573.65
+      "proceeds": 1573.65,
+      "total_cost": 1367.65
     }
   },
   "no_purchase_in_totals": [],

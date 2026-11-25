@@ -780,10 +780,15 @@ _MON_MAP = {
 # lib/markets.isin_domicile_suffix, else .US) is only where the row
 # waits; `fallback` keeps (the symbol, the country, the ISIN), and the
 # end of the parse books the row there only on evidence of the listing
-# (`_ib_settle_assumed_listings`, TJ-5016).
+# (`_ib_settle_assumed_listings`, TJ-5016). A Description with no ISIN
+# (an older statement's 'QZNO Cash Dividend ...') names no market at
+# all: the row waits on .US the same way, kept in `fallback` with an
+# empty country and ISIN, and is booked there only on that evidence
+# (TJ-5250: it was booked on .US with nothing said).
 def _isin_ext(isin: str, ticker: str, fallback: set) -> str:
     from taxjson.lib.markets import isin_country_suffix, isin_domicile_suffix
     if not isin or len(isin) < 2:
+        fallback.add((f"{ticker}.US", '', ''))
         return 'US'
     cc = isin[:2].upper()
     ext = isin_country_suffix(cc)
@@ -813,6 +818,65 @@ def _ib_isin_venues(isin: str, fii_all) -> Tuple[set, set]:
             else:
                 unknown.add(exch)
     return known, unknown
+
+
+def _ib_ticker_venues(root: str, fii_all) -> Tuple[set, set]:
+    """`_ib_isin_venues` for an income row that prints no ISIN: what the
+    statement's Financial Instrument Information says of the listing of
+    the stock it lists under the ticker `root` (TJ-5250)."""
+    from taxjson.lib.markets import canadian_suffixes, ib_venue_suffix
+    known, unknown = set(), set()
+    for (cat, text), infos in (fii_all or {}).items():
+        if cat not in ('Stocks', 'Warrants') or re.sub(r'\s+', '.', text) != root:
+            continue
+        for i in infos:
+            exch = (i.get('exch') or '').strip().upper()
+            if not exch:
+                continue
+            v = ib_venue_suffix(exch)
+            if v:
+                known.add('TO' if v in canadian_suffixes() else v)
+            else:
+                unknown.add(exch)
+    return known, unknown
+
+
+def _ib_corp_holdings(st) -> set:
+    """The listings a statement's Corporate Actions rows left the account
+    holding, with no trade or transfer row of their own: a spin-off's new
+    shares (`corp_received`) and the new ticker of a rename or a split (a
+    SPLIT row's `symbol_new`, else its symbol). Holdings for the listing
+    of an income row, as a trade's are (TJ-5250: with no Open Positions
+    section the dividend of spun-off shares was refused)."""
+    return set(st.corp_received.values()) | {
+        t.get('symbol_new') or t.get('symbol') for t in st.transactions
+        if t.get('action') == 'SPLIT'}
+
+
+def _ib_class_share_refusal(rows, sym: str, name: str, kin) -> str:
+    """The refusal of income rows with no ISIN whose ticker cannot be read
+    for sure: the Description's words after it read as a share class
+    ('QZN B Cash Dividend ...' is QZN or QZN.B), or the account holds a
+    symbol that starts with it (`kin`). The plain refusal's advice,
+    `QUOTE QZN.US QZN`, would book the rows on the wrong security, so
+    this one names the holding (TJ-5250)."""
+    root = sym.rsplit('.', 1)[0]
+    lines = sorted({o['_line'] for o in rows if o.get('_line')})
+    head = (f"{name} line{'s' if len(lines) != 1 else ''} "
+            f"{', '.join(str(n) for n in lines)}: the Description carries no ISIN, and "
+            f"its ticker cannot be read for sure: it starts {root}, which may be "
+            f"the first word of a class share's ticker ({root} B is {root}.B)")
+    tail = (f"refusing to book {len(rows)} row{'s' if len(rows) != 1 else ''} "
+            f"({_ib_income_kinds(rows)}) on {sym}, a guess")
+    if kin:
+        return (f"{head}, and the account holds {' and '.join(kin)} — {tail}. If the "
+                "rows are that holding's, say so in the project's ticker.map: "
+                + ' or '.join(f"`GLOBAL {sym} {h}`" for h in kin)
+                + ". If they are another security's, add the statement that holds its "
+                "trades or its Open Positions row.")
+    return (f"{head} — {tail}. Say which security it is in the project's ticker.map: "
+            f"`GLOBAL {sym} SYMBOL` with the symbol the account's trades of it carry, "
+            "or add the statement that holds its trades or its Open Positions row.")
 
 
 def _ib_income_kinds(rows) -> str:
@@ -852,7 +916,9 @@ def _ib_assumed_listing_refusal(rows, sym: str, cc: str, isin: str, name: str,
     gives the ticker these ISINs, not the rows'; `cost`: a return of
     capital, which the one listing held under a currency's code does not
     take unasked); or the instrument list gives the ISIN more than one
-    listing exchange (`venues`, worded); or nothing names a listing."""
+    listing exchange (`venues`, worded); or nothing names a listing. A
+    row with no ISIN (`isin` empty, TJ-5250) is worded as one: the
+    instrument list is then read by the ticker."""
     from taxjson.lib.markets import isin_domicile_suffix, yahoo_suffix
     root, ext = sym.rsplit('.', 1)
     lines = sorted({o['_line'] for o in rows if o.get('_line')})
@@ -864,6 +930,11 @@ def _ib_assumed_listing_refusal(rows, sym: str, cc: str, isin: str, name: str,
     head = (f"{name} line{'s' if len(lines) != 1 else ''} "
             f"{', '.join(str(n) for n in lines)}: {root} (ISIN {isin}): the ISIN's "
             f"country ({cc}) {why}")
+    its = "the ISIN" if isin else root
+    if not isin:
+        head = (f"{name} line{'s' if len(lines) != 1 else ''} "
+                f"{', '.join(str(n) for n in lines)}: {root}: the Description "
+                f"carries no ISIN, so the row does not say where {root} is listed")
     tail = (f"refusing to book {len(rows)} row{'s' if len(rows) != 1 else ''} "
             f"({_ib_income_kinds(rows)}) on {sym}, a guess")
     if held:
@@ -891,7 +962,7 @@ def _ib_assumed_listing_refusal(rows, sym: str, cc: str, isin: str, name: str,
                 f"naming that symbol ({keep}).")
     if venues:
         return (f"{head}, and the statement's Financial Instrument Information gives "
-                f"the ISIN more than one listing exchange ({'; '.join(venues)}), which "
+                f"{its} more than one listing exchange ({'; '.join(venues)}), which "
                 f"does not say which line paid — {tail}. Say which in the project's "
                 f"ticker.map: if it is {sym}, any line naming that symbol ({keep}); "
                 f"else `GLOBAL {sym} {root}.SUFFIX` with the symbol the account's "
@@ -900,7 +971,7 @@ def _ib_assumed_listing_refusal(rows, sym: str, cc: str, isin: str, name: str,
         f"{head}, and nothing "
         f"says where {root} is listed: no trade, transfer or Open Positions row of the "
         f"account's statements holds it, and no Financial Instrument Information row "
-        f"gives the ISIN a listing exchange taxjson knows — {tail}. "
+        f"gives {its} a listing exchange taxjson knows — {tail}. "
         f"Name its listing in the project's ticker.map: if it is {sym}, any "
         f"line naming that symbol ({keep}); if it is listed elsewhere, "
         f"`GLOBAL {sym} {root}.SUFFIX` with the symbol the account's trades of it "
@@ -939,7 +1010,11 @@ def _ib_settle_assumed_listings(transactions, assumed, held, open_syms, fii_all,
        one listing exchange, one the market data knows: that venue's
        listing. Two, or one known and one not: refused, naming them.
 
-    Else refused: nothing names a listing."""
+    Else refused: nothing names a listing. A row whose Description
+    carries no ISIN (`assumed` holds its symbol with an empty country
+    and ISIN) follows the same rules, the instrument list read by its
+    ticker (rule 3's other-ISIN test has nothing to compare, and its
+    ATTENTION is always said): never .US by default (TJ-5250)."""
     for sym, cc, isin in sorted(assumed):
         rows = [t for t in transactions if t.get('symbol') == sym
                 and (t.get('action') in _INCOME_ACTIONS
@@ -948,11 +1023,19 @@ def _ib_settle_assumed_listings(transactions, assumed, held, open_syms, fii_all,
         if not rows or sym in held or sym.upper() in named:
             continue
         root = sym.rsplit('.', 1)[0]
-        known = (isins_by_root or {}).get(root) or set()
+        if not isin:
+            # (a class share's ticker read short: never the plain advice)
+            kin = sorted(h for h in held if h and h.startswith(root + '.')
+                         and h.rsplit('.', 1)[0] != root)
+            if kin or any(re.match(rf'{re.escape(root)}\s+[A-Z]{{1,2}}\s',
+                                   str(t.get('description') or '')) for t in rows):
+                raise BrokerageParseError(_ib_class_share_refusal(rows, sym, name, kin))
+        known = ((isins_by_root or {}).get(root) or set()) if isin else set()
         others = sorted(h for h in held if h and h != sym and '.' in h
                         and h.rsplit('.', 1)[0] == root)
         as_held = [_ib_held_as(h, transactions, open_syms) for h in others]
-        venues, strange = _ib_isin_venues(isin, fii_all)
+        venues, strange = (_ib_isin_venues(isin, fii_all) if isin
+                           else _ib_ticker_venues(root, fii_all))
         if others:
             cost = [t for t in rows if t.get('action') == 'ADJUST'
                     or t.get(ISSUER_ROC_KEY)]
@@ -974,9 +1057,15 @@ def _ib_settle_assumed_listings(transactions, assumed, held, open_syms, fii_all,
                     f"{ATTENTION_PREFIX} {name} line{'s' if len(lines) != 1 else ''} "
                     f"{', '.join(str(n) for n in lines)}: {root} income booked on "
                     f"{target}, the one listing of {root} the account holds, by its "
-                    f"name alone. The {len(rows)} row{'s' if len(rows) != 1 else ''} "
-                    f"({_ib_income_kinds(rows)}) name ISIN {isin}, whose country "
-                    f"names no market, and the rows of {as_held[0]} carry no ISIN. "
+                    f"name alone. "
+                    + (f"The {len(rows)} row{'s' if len(rows) != 1 else ''} "
+                       f"({_ib_income_kinds(rows)}) name ISIN {isin}, whose country "
+                       f"names no market, and the rows of {as_held[0]} carry no "
+                       f"ISIN. " if isin else
+                       f"Neither the {len(rows)} row{'s' if len(rows) != 1 else ''} "
+                       f"({_ib_income_kinds(rows)}) nor the rows of {as_held[0]} "
+                       f"carry an ISIN. ")
+                    +
                     f"If it is this security, add "
                     f"`GLOBAL {sym} {target}` to the project's ticker.map: the line "
                     f"says so, books the rows the same way and this is not said "
@@ -3206,6 +3295,10 @@ class _IbParse:
     # the end of the parse so a later `Ca` of the row withdraws them.
     late_warnings: List[str] = field(default_factory=list)
     corp_owned_rows: List[str] = field(default_factory=list)
+    # The listing a spin-off's Corporate Actions row credited shares of
+    # (description -> symbol): a holding of the account, as a trade's or
+    # a transfer's is, for the listing of an income row (TJ-5250).
+    corp_received: Dict[str, str] = field(default_factory=dict)
     # Corporate Actions rows that are real events nothing books (an
     # option adjustment, a spin-off debit on a short parent, a
     # share-for-share tender): one UNBOOKED line each at the end.
@@ -6057,6 +6150,7 @@ class IbBrokerage(BaseBrokerage):
         elif kind in ('corp_owned', 'spinoff'):
             if eff['desc'] in st.corp_owned_rows:
                 st.corp_owned_rows.remove(eff['desc'])
+            st.corp_received.pop(eff['desc'], None)
         elif kind == 'unbooked':
             if eff['msg'] in st.unbooked_ca:
                 st.unbooked_ca.remove(eff['msg'])
@@ -7658,6 +7752,8 @@ class IbBrokerage(BaseBrokerage):
             if ca.qty > 0 and ib_spinoff_parts(ca.description) is not None:
                 ca.eff.update(kind='spinoff')
                 st.corp_owned_rows.append(ca.description)
+                _got = ib_spinoff_parts(ca.description)['target']
+                st.corp_received[ca.description] = f"{_got}.{ca.listing_ext(_got)}"
                 return self._ib_ca_nonevent(
                     ca, f"{ca.section} spin-off row (booked by "
                     f"taxjson-corp-actions after the election)")
@@ -8852,7 +8948,8 @@ class IbBrokerage(BaseBrokerage):
             st.transactions, rs.isin_fallback,
             set(rs.open_position_syms) | set((ctx or {}).get('held') or ()) | {
                 t.get('symbol') for t in st.transactions
-                if t.get('action') in _POSITION_ACTIONS},
+                if t.get('action') in _POSITION_ACTIONS}
+            | _ib_corp_holdings(st),
             rs.open_position_syms, rs.pre.get('fii_all'),
             {**(ctx or {}).get('stock_isins', {}), **rs.pre['stock_isins']},
             _project_map_names([st.path]), shown_name(st.path))

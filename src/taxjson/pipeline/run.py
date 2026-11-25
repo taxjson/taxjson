@@ -1403,13 +1403,15 @@ def _cmd_run(args: argparse.Namespace) -> None:
 
 def _short_positions_cands(base_json: Path, account: str,
                            ticker_map: Optional[Path],
-                           missing_history: Optional[Path]) -> List[Any]:
+                           missing_history: Optional[Path],
+                           country: Optional[str] = None) -> List[Any]:
     """A taxable account's positions that go short in its books — a sale
     with no purchase in the files, unless the broker marks it a short
     sale or codes it closing (those are said as ATTENTION lines) — read
     like find-missing-history reads them (a journal's same-day legs —
     lib/missing_history.walk_journal_symbols — and the .tt OPENING
-    cost=unknown lines are not missing history). [] when the
+    cost=unknown lines are not missing history), a day's rows walked as
+    `country`'s engine books them (TJ-5264). [] when the
     books cannot be read (advisory: never breaks a run)."""
     try:
         from taxjson.lib.tx_load import load_transactions
@@ -1417,8 +1419,13 @@ def _short_positions_cands(base_json: Path, account: str,
         from taxjson.lib.missing_history import (account_types_near,
                                                   detect_missing_history,
                                                   forward_dated,
+                                                  owed_reading,
+                                                  owed_stock_dividends,
                                                   walk_journal_symbols)
-        txs = load_transactions(base_json)
+        # (A stock dividend the gains engine booked on a short, as it
+        # booked it: TJ-5281.)
+        txs = owed_reading(load_transactions(base_json), owed_stock_dividends(
+            Path(base_json).parent, accounts=[account]))
         journal = walk_journal_symbols(
             Path(base_json).parent,
             ticker_map if ticker_map and Path(ticker_map).is_file()
@@ -1445,7 +1452,7 @@ def _short_positions_cands(base_json: Path, account: str,
             return [c for c in detect_missing_history(
                         rows, include_broker_shorts=True,
                         registered_accounts=registered,
-                        journal_symbols=journal)
+                        journal_symbols=journal, country=country)
                     if c.account == account and not c.broker_marked_short
                     and not c.broker_says_closing
                     and (str(c.symbol).upper(), account.lower())
@@ -1548,7 +1555,8 @@ def _report_short_positions(root: Path, settings: Settings,
             blocks.append(((m["sym"], m["acct"]) if m else ("", ""), b))
         if taxable_equity:
             unmarked.append((name, _short_positions_cands(
-                base_json, name, ticker_map, missing_history)))
+                base_json, name, ticker_map, missing_history,
+                _country(settings))))
     if not blocks and not any(c for _n, c in unmarked):
         return
     rows = (_year_short_rows(root, _project_base_files(cache), year)

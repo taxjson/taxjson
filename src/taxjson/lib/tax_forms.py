@@ -140,122 +140,115 @@ def short_carried_loss(e: Dict[str, Any]) -> float:
     return v if v > 0.0 else 0.0
 
 
-def build_8949(entries: List[Dict[str, Any]],
-               year: Optional[int] = None) -> Dict[str, Any]:
-    """Form 8949 rows by part. `year` (default: the latest year among
-    the rows) decides whether `_crypto` rows go on the digital-asset
-    boxes (2025 and later) or with the securities."""
-    if year is None:
-        year = _infer_year(entries)
-    da_boxes = year is not None and int(year) >= DIGITAL_ASSET_BOXES_FROM
-    parts: Dict[str, List[Dict[str, Any]]] = {"I": [], "II": []}
-    sec1256: List[Dict[str, Any]] = []
-    drift_warned = 0
-    for e in entries:
-        g = GainRow(e)
-        term = e.get("term")
-        if term not in ("SHORT_TERM", "LONG_TERM"):
-            raise SystemExit(
-                exit_text("taxjson-form-export: entry for "
-                          f"{e.get('symbol')!r} on {e.get('date')!r} has no ST/LT "
-                          "term — Form 8949 needs a country=usa gains file "
-                          "(Canada has no term concept; use --form schedule3)."))
-        _kind = section_1256_kind(str(e.get("symbol") or ""))
-        if _kind:
-            # A §1256 contract (a future, an option on one, a broad-
-            # based index option) is reported on Form 6781 — 60/40,
-            # marked to market at year end — never on Form 8949; Form
-            # 6781 is by hand (tax-logic US-FUT-02 / US-OPT-04; the
-            # estimate and carryover split its net, US-FUT-03). It
-            # went on Part I as a covered short-term sale, a futures
-            # loss as NEGATIVE proceeds (A2-0118, A2-0322, A2-0323): a
-            # user following tax-logic reported it twice. Kept off the
-            # parts and their totals, listed for Form 6781 by hand.
-            sec1256.append({
-                "description": str(e.get("symbol") or ""),
-                "kind": _kind,
-                "date_acquired": (_acquired_date(e)
-                                  if (e.get("direction") or "LONG")
-                                  != "SHORT" else e.get("date") or ""),
-                "date_sold": e.get("date") or "",
-                "gain": _cents(g.gain),
-                "account": e.get("account") or "",
-            })
-            continue
-        part = "I" if term == "SHORT_TERM" else "II"
-        proceeds = float(g.proceeds or 0.0)
-        cost = float(g.cost or 0.0)
-        direction = e.get("direction") or "LONG"
-        if direction == "SHORT":
-            # Engine signed short convention (FUZZ #E): `cost` holds the
-            # NEGATED opening short-sale proceeds and `proceeds` the
-            # NEGATED buy-to-cover cost, so gain = proceeds - cost is
-            # direction-free inside the engine. The FILED row wants the
-            # real-world figures — (d) what the short sale brought in,
-            # (e) what covering cost — so the fields un-negate AND swap.
-            # (h) = (d) - (e) + (g) is preserved: the swap+negation
-            # leaves the difference unchanged (which is also why the
-            # drift check below never caught the raw rendering).
-            proceeds, cost = -cost + 0.0, -proceeds + 0.0   # +0.0 kills -0.00 rendering
-            # A re-short that replaced an earlier short's washed loss
-            # carries that loss off its opening proceeds in the engine
-            # (`deferred_loss_recovered`). The 1099-B reports what the
-            # short sale brought in, and a §1091(d) add is basis: (d)
-            # gets the carried amount back and (e) takes it, (h)
-            # unchanged (backlog TJ-0465: (d) was below the slip by it).
-            _carried = short_carried_loss(e)
-            proceeds, cost = proceeds + _carried, cost + _carried
-        if (is_plain_future(str(e.get("symbol") or ""))
-                and (proceeds < 0 or cost < 0)):
-            # A security future off §1256 (ticker.map SECFUT, TJ-0730)
-            # is booked on its settled P/L (lib/futures): a loss came
-            # out as negative proceeds, a short's gain as negative cost.
-            # The row shows the P/L as the T5008 shape does: a gain as
-            # (d), a loss as (e); (h) unchanged.
-            _pl = proceeds - cost
-            proceeds, cost = max(_pl, 0.0) + 0.0, max(-_pl, 0.0) + 0.0
-        adj = float(g.disallowed_amount or 0.0)
-        gain = float(g.gain or 0.0)
-        code = "W" if adj > _EPS else ""
-        if adj < -_EPS:
-            # A negative disallowance is not a shape this renderer can
-            # file (code W adjustments are positive); rendering would
-            # silently disagree with the engine's allowed gain.
-            from taxjson.lib.out import warn as _warn
-            _warn(f"{e.get('symbol')} {e.get('date')}: NEGATIVE "
-                  f"disallowed_amount {M.shown(adj, 2):.2f} — row rendered without an "
-                  f"adjustment", details=["Inspect it before filing."])
-        # (h) must equal (d) - (e) + (g) with the RENDERED adjustment;
-        # the engine's allowed gain is the authority — surface drift
-        # instead of silently printing either.
-        rendered_adj = adj if code else 0.0
-        if abs((proceeds - cost + rendered_adj) - gain) > 0.02:
-            drift_warned += 1
+def form8949_row(e: Dict[str, Any], da_boxes: bool) -> Dict[str, Any]:
+    """One disposition's Form 8949 row, as build_8949 files it: (d)
+    proceeds, (e) cost, (g) adjustment and (h) gain at the cent, footing
+    (h) = (d) - (e) + (g), with its part ("I" / "II"; None for a section
+    1256 contract, Form 6781's: `row` is then its Form 6781 line, the
+    P/L as `gain`), `drift` (the row's (h) is more than $0.02 from the
+    engine's allowed gain) and `negative_adjustment` (a negative
+    disallowance, rendered without one). `da_boxes`: the 2025+
+    digital-asset boxes. build_8949 adds the rows up; `tjs gains-base`
+    shows each sale's own (US)."""
+    g = GainRow(e)
+    term = e.get("term")
+    if term not in ("SHORT_TERM", "LONG_TERM"):
+        raise SystemExit(
+            exit_text("taxjson-form-export: entry for "
+                      f"{e.get('symbol')!r} on {e.get('date')!r} has no ST/LT "
+                      "term — Form 8949 needs a country=usa gains file "
+                      "(Canada has no term concept; use --form schedule3)."))
+    _kind = section_1256_kind(str(e.get("symbol") or ""))
+    if _kind:
+        # A §1256 contract (a future, an option on one, a broad-
+        # based index option) is reported on Form 6781 — 60/40,
+        # marked to market at year end — never on Form 8949; Form
+        # 6781 is by hand (tax-logic US-FUT-02 / US-OPT-04; the
+        # estimate and carryover split its net, US-FUT-03). It
+        # went on Part I as a covered short-term sale, a futures
+        # loss as NEGATIVE proceeds (A2-0118, A2-0322, A2-0323): a
+        # user following tax-logic reported it twice. Kept off the
+        # parts and their totals, listed for Form 6781 by hand.
+        return {"part": None, "row": {
+            "description": str(e.get("symbol") or ""),
+            "kind": _kind,
+            "date_acquired": (_acquired_date(e)
+                              if (e.get("direction") or "LONG")
+                              != "SHORT" else e.get("date") or ""),
+            "date_sold": e.get("date") or "",
+            "gain": _cents(g.gain),
+            "account": e.get("account") or "",
+        }}
+    part = "I" if term == "SHORT_TERM" else "II"
+    proceeds = float(g.proceeds or 0.0)
+    cost = float(g.cost or 0.0)
+    direction = e.get("direction") or "LONG"
+    if direction == "SHORT":
+        # Engine signed short convention (FUZZ #E): `cost` holds the
+        # NEGATED opening short-sale proceeds and `proceeds` the
+        # NEGATED buy-to-cover cost, so gain = proceeds - cost is
+        # direction-free inside the engine. The FILED row wants the
+        # real-world figures — (d) what the short sale brought in,
+        # (e) what covering cost — so the fields un-negate AND swap.
+        # (h) = (d) - (e) + (g) is preserved: the swap+negation
+        # leaves the difference unchanged (which is also why the
+        # drift check below never caught the raw rendering).
+        proceeds, cost = -cost + 0.0, -proceeds + 0.0   # +0.0 kills -0.00 rendering
+        # A re-short that replaced an earlier short's washed loss
+        # carries that loss off its opening proceeds in the engine
+        # (`deferred_loss_recovered`). The 1099-B reports what the
+        # short sale brought in, and a §1091(d) add is basis: (d)
+        # gets the carried amount back and (e) takes it, (h)
+        # unchanged (backlog TJ-0465: (d) was below the slip by it).
+        _carried = short_carried_loss(e)
+        proceeds, cost = proceeds + _carried, cost + _carried
+    if (is_plain_future(str(e.get("symbol") or ""))
+            and (proceeds < 0 or cost < 0)):
+        # A security future off §1256 (ticker.map SECFUT, TJ-0730)
+        # is booked on its settled P/L (lib/futures): a loss came
+        # out as negative proceeds, a short's gain as negative cost.
+        # The row shows the P/L as the T5008 shape does: a gain as
+        # (d), a loss as (e); (h) unchanged.
+        _pl = proceeds - cost
+        proceeds, cost = max(_pl, 0.0) + 0.0, max(-_pl, 0.0) + 0.0
+    adj = float(g.disallowed_amount or 0.0)
+    gain = float(g.gain or 0.0)
+    code = "W" if adj > _EPS else ""
+    # (h) must equal (d) - (e) + (g) with the RENDERED adjustment;
+    # the engine's allowed gain is the authority — surface drift
+    # instead of silently printing either.
+    rendered_adj = adj if code else 0.0
+    drift = abs((proceeds - cost + rendered_adj) - gain) > 0.02
+    sold = e.get("date") or ""
+    acquired = _column_b(e, direction, sold)
+    if direction == "SHORT":
         sold = e.get("date") or ""
-        acquired = _column_b(e, direction, sold)
-        if direction == "SHORT":
-            sold = e.get("date") or ""
-        desc = f"{_qty_str(abs(float(g.quantity or 0)))} {e.get('symbol')}"
-        if e.get("deemed"):
-            # §301(c)(3): no shares were sold (US-ROC-02); a row says
-            # its own kind when it is another (US-WASH-22).
-            desc = e.get("deemed_desc") or (
-                f"{e.get('symbol')} nondividend distribution in excess "
-                f"of basis (§301(c)(3))")
-        if e.get("is_option"):
-            desc += " (option)"
-        if direction == "SHORT":
-            desc += " (short sale)"
-        # Every row FOOTS: (h) = (d) - (e) + (g) on the rounded cells,
-        # (d) and (e) as the 1099-B reports them. Rounding the four
-        # independently left rows (and the part totals, and the TXF
-        # that carries only d/e/g) off by cents (S032-16); the engine
-        # drift check above still compares the unrounded gain.
-        _d, _e = _cents(proceeds), _cents(cost)
-        _g = _cents(adj) if code else 0.0
-        _da = bool(da_boxes and e.get("_crypto"))
-        _fp = _filing_position(e, "usa")
-        parts[part].append({
+    desc = f"{_qty_str(abs(float(g.quantity or 0)))} {e.get('symbol')}"
+    if e.get("deemed"):
+        # §301(c)(3): no shares were sold (US-ROC-02); a row says
+        # its own kind when it is another (US-WASH-22).
+        desc = e.get("deemed_desc") or (
+            f"{e.get('symbol')} nondividend distribution in excess "
+            f"of basis (§301(c)(3))")
+    if e.get("is_option"):
+        desc += " (option)"
+    if direction == "SHORT":
+        desc += " (short sale)"
+    # Every row FOOTS: (h) = (d) - (e) + (g) on the rounded cells,
+    # (d) and (e) as the 1099-B reports them. Rounding the four
+    # independently left rows (and the part totals, and the TXF
+    # that carries only d/e/g) off by cents (S032-16); the engine
+    # drift check above still compares the unrounded gain.
+    _d, _e = _cents(proceeds), _cents(cost)
+    _g = _cents(adj) if code else 0.0
+    _da = bool(da_boxes and e.get("_crypto"))
+    _fp = _filing_position(e, "usa")
+    return {
+        "part": part, "drift": drift,
+        # A negative disallowance is not a shape this renderer can
+        # file (code W adjustments are positive): build_8949 warns.
+        "negative_adjustment": adj if adj < -_EPS else None,
+        "row": {
             "boxes": _BOXES[(part, _da)],
             "digital_asset": _da,
             "description": desc,
@@ -271,7 +264,33 @@ def build_8949(entries: List[Dict[str, Any]],
             # no code W, no (g) — the row claims the loss; said here
             # and under the table (pre-release review M7).
             **({"filing_position": _fp} if _fp else {}),
-        })
+        },
+    }
+
+
+def build_8949(entries: List[Dict[str, Any]],
+               year: Optional[int] = None) -> Dict[str, Any]:
+    """Form 8949 rows by part. `year` (default: the latest year among
+    the rows) decides whether `_crypto` rows go on the digital-asset
+    boxes (2025 and later) or with the securities."""
+    if year is None:
+        year = _infer_year(entries)
+    da_boxes = year is not None and int(year) >= DIGITAL_ASSET_BOXES_FROM
+    parts: Dict[str, List[Dict[str, Any]]] = {"I": [], "II": []}
+    sec1256: List[Dict[str, Any]] = []
+    drift_warned = 0
+    for e in entries:
+        r = form8949_row(e, da_boxes)
+        if r["part"] is None:
+            sec1256.append(r["row"])
+            continue
+        if r["negative_adjustment"] is not None:
+            from taxjson.lib.out import warn as _warn
+            _warn(f"{e.get('symbol')} {e.get('date')}: NEGATIVE "
+                  f"disallowed_amount {M.shown(r['negative_adjustment'], 2):.2f} — row "
+                  f"rendered without an adjustment", details=["Inspect it before filing."])
+        drift_warned += r["drift"]
+        parts[r["part"]].append(r["row"])
     if drift_warned:
         from taxjson.lib.out import warn as _warn
         _warn(f"{drift_warned} row(s) where (d)-(e)+(g) differs from the "
@@ -493,6 +512,125 @@ def grant_buyback_units(e: Dict[str, Any], year: Optional[int]) -> float:
     return abs(float(GainRow(e).quantity or 0.0))
 
 
+def schedule3_disposition(e: Dict[str, Any], year: Optional[int],
+                          date_key: str = "date_settle") -> Dict[str, Any]:
+    """One disposition's part of its Schedule 3 row, before any rounding:
+    the line it lands on (`line_key`, schedule3_line's key; `property`,
+    property_class), the PROCEEDS and OUTLAYS it adds (a sale's commission
+    split back out of its net proceeds, a rebate left netted in, a grant-
+    timing write's premium gross, a write for a net debit as an outlay, a
+    short sale's proceeds the short sale's, a futures contract's settled
+    P/L as proceeds when a gain), the allowed gain, the denials, and its
+    units (`units`; a grant-timing write's in `grant_units`, a buy-back of
+    a same-year write in `short_close_units`: grant_buyback_units). Each
+    figure is 0.0 where the disposition adds nothing. build_schedule3 sums
+    them per security; `tjs gains-cra` foots one disposition's alone
+    (_foot_cells). The gain is the stored allowed gain, so PROCEEDS −
+    OUTLAYS − GAIN is the ACB less any denied loss."""
+    g = GainRow(e)
+    symbol = e.get("symbol") or "?"
+    pclass = property_class(e)
+    lkey = schedule3_line(_line_key(pclass), year,
+                          schedule3_period(e, year, date_key))["key"]
+    d: Dict[str, Any] = {
+        "symbol": symbol, "line_key": lkey, "property": pclass,
+        "position": _filing_position(e, "canada"),
+        "proceeds": 0.0, "outlays": 0.0, "short": False,
+        "grant": bool(e.get("grant")),
+        "units": 0.0, "grant_units": 0.0, "short_close_units": 0.0,
+    }
+    qty = abs(float(g.quantity or 0.0))
+    proceeds = float(g.proceeds or 0.0)
+    cost = float(g.cost or 0.0)
+    gain = float(g.gain or 0.0)
+    outlays = float(g.commission or 0.0) + float(g.fee or 0.0)
+    if outlays < 0:
+        # A net REBATE (IB, Questrade: a negative commission/fee)
+        # is not an outlay or expense: it stays netted in the
+        # proceeds, so the OUTLAYS cell is never negative (A2-0653,
+        # A2-1053; tax software can reject a negative outlay). The
+        # gain is unchanged.
+        outlays = 0.0
+    direction = e.get("direction") or "LONG"
+    if pclass == "futures" and is_plain_future(symbol):
+        # A futures contract is booked on its settled P/L
+        # (lib/futures.py): nothing is paid to open one, so the
+        # notional is neither proceeds nor ACB. Each closed contract
+        # shows the T5008 shape — a gain as PROCEEDS, a loss as ACB
+        # (the P/L before any superficial-loss denial; the footing
+        # ACB below absorbs a denial the usual way). Commissions are
+        # inside the P/L, so no separate outlays.
+        pl = (float(e["raw_gain"]) if e.get("raw_gain") is not None
+              else gain)
+        d["proceeds"] = max(pl, 0.0)
+    elif direction == "SHORT":
+        # Engine signed short convention (FUZZ #E): `cost` is the
+        # NEGATED opening short-sale proceeds and `proceeds` the
+        # NEGATED buy-to-cover cost. Filing wants the real-world
+        # mapping — disposition PROCEEDS = what the short sale
+        # brought in, ACB = what covering cost — so the fields swap
+        # as they un-negate (the ACB itself is derived below).
+        d["short"] = True
+        _sold = -cost           # what the short sale brought in (net)
+        if e.get("grant") and _sold + outlays >= 0:
+            # A WRITE under grant timing (s.49(1)): the row's
+            # commission/fee is the write's own, netted into the
+            # premium. Show the premium GROSS with the commission
+            # as an outlay, as for a sale (audit R1-40, CA-DISP-06;
+            # gain unchanged). A buy-back row's fee is a cost of
+            # acquiring the cover and stays in the ACB.
+            d["proceeds"] = _sold + outlays
+            d["outlays"] = outlays
+        elif _sold >= 0:
+            d["proceeds"] = _sold
+        else:
+            # A write for a net DEBIT (commission above the premium):
+            # abs() turned the debit into proceeds and invented an ACB
+            # of twice it (S032-19). Nothing was received: the debit
+            # is an outlay, the ACB (the cover) is what it cost.
+            d["outlays"] = -_sold
+    else:
+        # taxjson proceeds are net of sell-side costs; Schedule 3 wants
+        # them split back out. gain = (net + outlays) - acb - outlays
+        # stays identical.
+        d["proceeds"] = proceeds + outlays
+        d["outlays"] = outlays
+    # Grant timing books a written option twice — the WRITE and its
+    # buy-back — while the contracts were disposed of once: count
+    # them once (S003-04, S033-02; as reconcile-slips, R1-18). A
+    # write still open (or closed next year) counts at the write.
+    if e.get("grant"):
+        d["grant_units"] = qty
+    else:
+        if direction == "SHORT":
+            d["short_close_units"] = grant_buyback_units(e, year)
+        d["units"] = qty
+    d["gain"] = gain
+    d["denied"] = float(g.disallowed_amount or 0.0)
+    d["perm_denied"] = float(g.permanently_disallowed or 0.0)
+    # An in-kind contribution's loss (s.40(2)(g)(iv), CA-INKIND-03):
+    # nil, like a denied superficial loss the footing ACB absorbs it
+    # — but its own figure, never in DENIED.
+    d["denied_contrib"] = float(g.denied_contribution or 0.0)
+    d["acquired"] = _acquired_date(e)
+    return d
+
+
+def disposition_cells(e: Dict[str, Any], year: Optional[int],
+                      date_key: str = "date_settle") -> Dict[str, Any]:
+    """One disposition's Schedule 3 cells at the cent, the one place a
+    sale's cents come from in `tjs gains-cra` and `tjs gains-base`:
+    schedule3_disposition (`d`) footed alone by _foot_cells (`proceeds`,
+    `acb`, `outlays`, `gain`, the allowed gain: PROCEEDS − ACB − OUTLAYS =
+    GAIN, the ACB reduced by a denied loss) and the denials at the cent
+    (`denied`, `perm_denied`, `denied_contrib`)."""
+    d = schedule3_disposition(e, year, date_key)
+    proceeds, acb, outlays, gain = _foot_cells(d["proceeds"], d["outlays"], d["gain"])
+    return {"d": d, "proceeds": proceeds, "acb": acb, "outlays": outlays, "gain": gain,
+            "denied": _cents(d["denied"]), "perm_denied": _cents(d["perm_denied"]),
+            "denied_contrib": _cents(d["denied_contrib"])}
+
+
 def build_schedule3(entries: List[Dict[str, Any]],
                     year: Optional[int] = None,
                     date_key: str = "date_settle") -> Dict[str, Any]:
@@ -508,98 +646,28 @@ def build_schedule3(entries: List[Dict[str, Any]],
         year = _infer_year(entries)
     recs: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for e in entries:
-        g = GainRow(e)
-        symbol = e.get("symbol") or "?"
-        pclass = property_class(e)
-        lkey = schedule3_line(_line_key(pclass), year,
-                              schedule3_period(e, year, date_key))["key"]
-        rec = recs.setdefault((lkey, symbol), {
-            "symbol": symbol, "units": 0.0, "acq_year": None,
+        d = schedule3_disposition(e, year, date_key)
+        rec = recs.setdefault((d["line_key"], d["symbol"]), {
+            "symbol": d["symbol"], "units": 0.0, "acq_year": None,
             "proceeds": 0.0, "outlays": 0.0, "gain": 0.0,
             "denied": 0.0, "perm_denied": 0.0, "denied_contrib": 0.0,
             "short": False,
             "classes": set(), "n": 0, "grant_units": 0.0,
             "short_close_units": 0.0, "positions": [],
         })
-        _fp = _filing_position(e, "canada")
-        if _fp:
-            rec["positions"].append(_fp)
-        rec["classes"].add(pclass)
+        if d["position"]:
+            rec["positions"].append(d["position"])
+        rec["classes"].add(d["property"])
         rec["n"] += 1
-        qty = abs(float(g.quantity or 0.0))
-        proceeds = float(g.proceeds or 0.0)
-        cost = float(g.cost or 0.0)
-        gain = float(g.gain or 0.0)
-        outlays = float(g.commission or 0.0) + float(g.fee or 0.0)
-        if outlays < 0:
-            # A net REBATE (IB, Questrade: a negative commission/fee)
-            # is not an outlay or expense: it stays netted in the
-            # proceeds, so the OUTLAYS cell is never negative (A2-0653,
-            # A2-1053; tax software can reject a negative outlay). The
-            # gain is unchanged.
-            outlays = 0.0
-        direction = e.get("direction") or "LONG"
-        if pclass == "futures" and is_plain_future(symbol):
-            # A futures contract is booked on its settled P/L
-            # (lib/futures.py): nothing is paid to open one, so the
-            # notional is neither proceeds nor ACB. Each closed contract
-            # shows the T5008 shape — a gain as PROCEEDS, a loss as ACB
-            # (the P/L before any superficial-loss denial; the footing
-            # ACB below absorbs a denial the usual way). Commissions are
-            # inside the P/L, so no separate outlays.
-            pl = (float(e["raw_gain"]) if e.get("raw_gain") is not None
-                  else gain)
-            rec["proceeds"] += max(pl, 0.0)
-        elif direction == "SHORT":
-            # Engine signed short convention (FUZZ #E): `cost` is the
-            # NEGATED opening short-sale proceeds and `proceeds` the
-            # NEGATED buy-to-cover cost. Filing wants the real-world
-            # mapping — disposition PROCEEDS = what the short sale
-            # brought in, ACB = what covering cost — so the fields swap
-            # as they un-negate (the ACB itself is derived below).
+        if d["short"]:
             rec["short"] = True
-            _sold = -cost           # what the short sale brought in (net)
-            if e.get("grant") and _sold + outlays >= 0:
-                # A WRITE under grant timing (s.49(1)): the row's
-                # commission/fee is the write's own, netted into the
-                # premium. Show the premium GROSS with the commission
-                # as an outlay, as for a sale (audit R1-40, CA-DISP-06;
-                # gain unchanged). A buy-back row's fee is a cost of
-                # acquiring the cover and stays in the ACB.
-                rec["proceeds"] += _sold + outlays
-                rec["outlays"] += outlays
-            elif _sold >= 0:
-                rec["proceeds"] += _sold
-            else:
-                # A write for a net DEBIT (commission above the premium):
-                # abs() turned the debit into proceeds and invented an ACB
-                # of twice it (S032-19). Nothing was received: the debit
-                # is an outlay, the ACB (the cover) is what it cost.
-                rec["outlays"] += -_sold
-        else:
-            # taxjson proceeds are net of sell-side costs; Schedule 3 wants
-            # them split back out. gain = (net + outlays) - acb - outlays
-            # stays identical.
-            rec["proceeds"] += proceeds + outlays
-            rec["outlays"] += outlays
-        # Grant timing books a written option twice — the WRITE and its
-        # buy-back — while the contracts were disposed of once: count
-        # them once (S003-04, S033-02; as reconcile-slips, R1-18). A
-        # write still open (or closed next year) counts at the write.
-        if e.get("grant"):
-            rec["grant_units"] += qty
-        else:
-            if direction == "SHORT":
-                rec["short_close_units"] += grant_buyback_units(e, year)
-            rec["units"] += qty
-        rec["gain"] += gain
-        rec["denied"] += float(g.disallowed_amount or 0.0)
-        rec["perm_denied"] += float(g.permanently_disallowed or 0.0)
-        # An in-kind contribution's loss (s.40(2)(g)(iv), CA-INKIND-03):
-        # nil, like a denied superficial loss the footing ACB absorbs it
-        # — but its own figure, never in DENIED.
-        rec["denied_contrib"] += float(g.denied_contribution or 0.0)
-        acq = _acquired_date(e)
+        # Each cell is the disposition's own contribution (0.0 where its
+        # branch adds nothing: a sum that starts at 0.0 is never -0.0, so
+        # adding 0.0 leaves it as it was).
+        for k in ("proceeds", "outlays", "grant_units", "short_close_units", "units", "gain",
+                  "denied", "perm_denied", "denied_contrib"):
+            rec[k] += d[k]
+        acq = d["acquired"]
         if acq:
             y = acq[:4]
             if rec["acq_year"] is None or y < rec["acq_year"]:

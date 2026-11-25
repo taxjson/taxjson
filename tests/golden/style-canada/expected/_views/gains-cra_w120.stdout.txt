@@ -1,0 +1,62 @@
+CAPITAL GAINS, ONE ROW PER SALE — CAD, tax year 2024, Schedule 3's cells per disposition
+Proceeds − ACB − Commissions = Gain/Loss on each row; FX: the Bank of Canada rate that converted the proceeds.
+
+SALES IN CAD
+Sale date   Settle date  Description   Qty  Proceeds       ACB  Commissions  Gain/Loss
+                                               (CAD)     (CAD)        (CAD)      (CAD)
+--------------------------------------------------------------------------------------
+2024-09-01  2024-09-01   ETH (crypto)  0.1    337.50    488.07         0.00    -150.57
+2024-11-01  2024-11-01   SAMPA [1]     100  3,500.00  3,490.05         9.95       0.00
+--------------------------------------------------------------------------------------
+Subtotal                                    3,837.50  3,978.12         9.95    -150.57
+
+[1]  superficial loss denied (1 row, 519.90 CAD): each row's ACB is reduced by its denied loss, so Gain/Loss is the
+     allowed part; the denied loss is added to the replacement's ACB
+
+SALES IN USD
+Sale date   Settle date  Description                Qty   Proceeds      FX   Proceeds        ACB  Commissions  Gain/Loss
+                                                             (USD)              (CAD)      (CAD)        (CAD)      (CAD)
+------------------------------------------------------------------------------------------------------------------------
+2024-05-10  2024-05-14   AAPL                        75  13,575.00  1.3500  18,326.25  18,231.68         6.68      87.89
+2024-06-18  2024-06-20   MSFT                        50  20,100.00  1.3500  27,135.00  27,001.35         1.35     132.30
+2024-08-01  2024-08-02   QZQ $30 call exp 2024-0…     2     300.00  1.3500     405.00     812.70         2.70    -410.40
+2024-09-10  2024-09-11   QZQ [2,3]                  200   5,700.00  1.3500   7,695.00   7,795.58         1.35    -101.93
+2024-10-01  2024-10-02   QZQ $35 call exp 2024-1…     1     200.00  1.3500     270.00       0.00         1.35     268.65
+2024-10-08  2024-10-08   BTC (crypto)              0.05   2,450.00  1.3500   3,307.50   3,250.83        26.46      30.21
+2024-11-05  2024-11-07   AAPL                        75  13,507.50  1.3500  18,235.13  18,231.69         6.68      -3.24
+2024-11-08  2024-11-08   BTC (crypto)               0.1   4,950.00  1.3500   6,682.50   6,501.66        13.37     167.47
+2024-11-15  2024-11-18   QZQ $40 call exp 2025-0…     1     150.00  1.3500     202.50       0.00         1.35     201.15
+2024-11-20  2024-11-21   NVDA [2]                    10   1,395.00  1.3500   1,883.25   1,881.90         1.35       0.00
+2024-12-03  2024-12-03   ETH (crypto)               0.5   2,100.00  1.3500   2,835.00   2,440.33         7.37     387.30
+2024-12-15  2024-12-15   ETH (crypto)              0.25     975.00  1.3500   1,316.25   1,220.16        10.53      85.56
+------------------------------------------------------------------------------------------------------------------------
+Subtotal                                                 65,402.50          88,293.38  87,367.88        80.54     844.96
+
+[2]  superficial loss denied (2 rows, 321.30 CAD in all): each row's ACB is reduced by its denied loss, so Gain/Loss is
+     the allowed part; the denied loss is added to the replacement's ACB
+[3]  superficial loss denied for good (1 row, 101.93 CAD; a registered-account or affiliated buy-back): each row's ACB
+     is reduced by it
+
+ALL SALES — CAD
+TABLE         ROWS   Proceeds        ACB  Commissions  Gain/Loss
+                        (CAD)      (CAD)        (CAD)      (CAD)
+----------------------------------------------------------------
+Sales in CAD     2   3,837.50   3,978.12         9.95    -150.57
+Sales in USD    12  88,293.38  87,367.88        80.54     844.96
+----------------------------------------------------------------
+Total           14  92,130.88  91,346.00        90.49     694.39
+
+FOR THE RETURN — Schedule 3, as tjs form-export and tjs sum show it
+SCHEDULE 3 LINE                                              Proceeds        ACB  Commissions  Gain/Loss
+                                                                (CAD)      (CAD)        (CAD)      (CAD)
+--------------------------------------------------------------------------------------------------------
+Period 1 (January 1 to June 24, 2024), lines 10689/10690    45,461.25  45,233.03         8.03     220.19
+Period 2 (June 25 to December 31, 2024), lines 13199/13200  31,313.38  31,399.22        19.33    -105.17
+Period 2 (June 25 to December 31, 2024), lines 15199/15300  15,356.25  14,713.76        63.13     579.36
+--------------------------------------------------------------------------------------------------------
+Total                                                       92,130.88  91,346.01        90.49     694.38
+Period 2 (June 25 to December 31, 2024), lines 15199/15300: the rows differ from the line by ACB -0.01, Gain/Loss +0.01
+CAD: Schedule 3 rounds each security's total, the rows each sale.
+
+! 2 sales with no purchase in your files NOT in these rows — tjs find-missing-history
+More: tjs gains-cra --details (whole descriptions, the rounding)

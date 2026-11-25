@@ -662,6 +662,12 @@ class TestJunkReachesNoLock(_Project):
 
 _UNKNOWN_SALE = ('OPENING 2020-12-31 ZZQE.TO 50 cost=unknown reason="synthetic"\n'
                  "BUYSELL %s 09:30:00 ZZQE.TO -50 CAD 2.00 100.00 0.00\n")
+# What a lock records of a split locked past that sale in 2021: its year, the
+# sale by date, symbol and account, and the claimed year whose part carried
+# back its result can move, for the next handoff (TJ-1487).
+_LOCKED_2021 = {"years": [2021], "sales": [
+    {"date": "2021-03-01", "symbol": "ZZQE.TO", "account": "margin"}],
+    "claims": {"2022": [2021]}}
 
 
 class TestAnIncompleteLedger(_Project):
@@ -1316,7 +1322,7 @@ class TestAnAcceptedSplit(_Project):
         self.ok(r)
         self.assertIn("(answered yes)", " ".join(r.stderr.split()))
         ncl = self.lock()["carryforwards"]["net_capital_loss"]
-        self.assertEqual(ncl["carry_back_incomplete"], {"years": [2021]})
+        self.assertEqual(ncl["carry_back_incomplete"], _LOCKED_2021)
 
     @rule(R.CA_CARRY_03)
     def test_force_on_a_pipe_does_not_ask_for_yes_about_the_split(self):
@@ -1334,7 +1340,7 @@ class TestAnAcceptedSplit(_Project):
     def test_the_lock_records_it(self):
         self.ok(_cli(self.y, "close-year", "--yes", "--force"))
         ncl = self.lock()["carryforwards"]["net_capital_loss"]
-        self.assertEqual(ncl["carry_back_incomplete"], {"years": [2021]})
+        self.assertEqual(ncl["carry_back_incomplete"], _LOCKED_2021)
         self.assertEqual((ncl["carried_back"], ncl["closing"]), (40.0, 60.0))
 
     @rule(R.CA_CARRY_03)
@@ -1362,7 +1368,7 @@ class TestAnAcceptedSplit(_Project):
         self.ok(r)
         self.assertIn("answered yes", " ".join(r.stderr.split()))
         self.assertEqual(self.lock()["carryforwards"]["net_capital_loss"]
-                         ["carry_back_incomplete"], {"years": [2021]})
+                         ["carry_back_incomplete"], _LOCKED_2021)
 
     @rule(R.CA_CARRY_03)
     def test_no_on_a_terminal_locks_nothing(self):

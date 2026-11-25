@@ -35,7 +35,7 @@ from taxjson.pipeline.sanity import _has_inputs
 from taxjson.pipeline.stages import (
     _locked_year_flags,
     _mh_prepare, _missing_history_arg, _read_work_doc,
-    _SKIPPED_ACCOUNTS_FILE, _wash_flags,
+    _SKIPPED_ACCOUNTS_FILE, _registered_flags, _wash_flags,
 )
 from taxjson.pipeline.tools import _cmd, run_to_file
 
@@ -704,7 +704,7 @@ def _gains_all_file(root: Path, cache: Path, account: str,
                                     blend[1], settings)
     cmd = _cmd("taxjson-gains") + ["--country", country,
                                   "--tax-date", _tax_date(settings)]
-    cmd += _wash_flags(is_taxable, is_crypto, country)
+    cmd += _wash_flags(is_taxable, is_crypto, country) + _registered_flags(is_taxable)
     cmd += option_timing_flags(settings)
     cmd += income_dating_flags(settings)
     cmd += _locked_year_flags(root, settings)
@@ -2206,6 +2206,12 @@ def _ledger_doc(root: Path, *flags: str) -> Dict[str, Any]:
         raise LedgerUnavailable("`tjs carryover --json` gave an "
                                 "excluded_unknown_cost that is no list of "
                                 "sales")
+    from taxjson.lib.carry_back import left_out_marks, left_out_unchecked
+    try:
+        left_out_marks(doc)     # which claims those sales can move (TJ-1487)
+        left_out_unchecked(doc)     # ...named without every fold (TJ-5291)
+    except ValueError as e:
+        raise LedgerUnavailable(str(e)) from None
     books = doc.get("missing_books")
     if books is not None and not isinstance(books, list):
         raise LedgerUnavailable(f"`tjs carryover --json` gave missing_books "
@@ -2341,6 +2347,64 @@ def _stale_opening(root: Path, source: Any) -> Optional[str]:
 def _claims_back(cfg: Dict[str, Any], year: Any) -> bool:
     from taxjson.lib.project_tables import claims_back
     return claims_back(cfg, year)
+
+
+def _gain_left_out(root: Path, cfg: Dict[str, Any], settings: Settings,
+                   ncl: Dict[str, Any], accepted: Optional[str]) -> None:
+    """close-year (cli/file `_carryforwards_for_lock`): a lock with no loss to
+    split whose split can still move: a gain on books that leave out a sale
+    of the year with an unknown cost is no proof there is no loss, and a loss
+    [carryover] claimed carries back (T1A); the ledger marks it where a result
+    of such a sale can move what the year carries back. So the stop and the record of
+    `_split_for_lock` follow, on the ledger's own rule (lib/carry_back
+    `split_left_out`; backlog TJ-1488). Only with a claim in reach; the
+    books' net, as the estimate's ledger folds it (a filed return's holds the
+    year's sales: no call). A ledger that can't be used checks nothing here,
+    and says so: no carry-back of the lock rests on it."""
+    from taxjson.lib.carry_back import incomplete_record, split_left_out
+    if not _claims_back(cfg, settings.year):
+        return
+    try:
+        left = split_left_out(_ledger_doc(root, "--on-books"),
+                              int(settings.year or 0))
+    except LedgerUnavailable as e:
+        _out.warn("could not check whether this year's sales with an unknown "
+                  "cost can make a loss that [carryover] claimed carries back "
+                  "(`tjs carryover`): the carryover ledger could not be used",
+                  prog=_cmd_prog(), details=[str(e)])
+        return
+    if left:
+        _stop_on_incomplete_split(left, accepted, int(settings.year or 0), False)
+        ncl["carry_back_incomplete"] = incomplete_record(left)
+
+
+def _stop_on_incomplete_split(incomplete: Dict[str, Any], accepted: Optional[str],
+                              year: int, loss: bool) -> None:
+    """close-year (cli/file `_split_for_lock`, `_gain_left_out`): the year's
+    T1A carry-back rests on a ledger that left sales with an unknown cost out:
+    stop, or, `accepted` (how: --force, or the yes of close-year's question),
+    lock it and say so, naming them in the default view too. A stop with a way
+    past it: an unknown cost can be settled, and no hand-reported result can
+    be entered in the ledger (the owner's decisions, backlog TJ-1436, TJ-1460,
+    TJ-1463). The words follow the year's row (`loss`: the year has a loss of
+    its own) and the sales (lib/carry_back `split_words`; TJ-1487, TJ-1488)."""
+    from taxjson.lib.carry_back import split_words
+    sales = [f"- {s.get('date')} {s.get('symbol')}"
+             + (f" ({s['account']})" if s.get("account") else "")
+             + f": proceeds {M.shown(s.get('proceeds') or 0.0, 2):,.2f}"
+             for s in incomplete.get("sales") or [] if _good_left_out_sale(s)]
+    if len(sales) > 5:
+        sales[5:] = [f"- and {len(sales) - 5} more (`tjs carryover --json`)"]
+    said = split_words(incomplete, year, loss)
+    if accepted:
+        _out.show(_out.message(
+            "warning", f"{said.accepted} ({accepted})",
+            prog=_cmd_prog(), details=sales, stream=sys.stderr), sys.stderr)
+        return
+    _die(said.head, *sales, *said.why,
+         "Give them a cost (`tjs find-missing-history`), `tjs run`, then "
+         "close; or, if the cost stays unknown, pass --force to lock the "
+         f"{said.locks} as computed. Nothing was written.")
 
 
 def _radar_config(root: Path, prog: str = "tjs") -> Dict[str, Any]:

@@ -253,6 +253,7 @@ country's commands (`tjs help --all` lists them). Every command takes
 | [`tjs events`](docs/commands.md#tjs-events) | Every transaction over a window |
 | [`tjs fees`](docs/commands.md#tjs-fees) | Fees per trade over a window |
 | [`tjs gains`](docs/commands.md#tjs-gains) | Realized gains in the trade's own currency |
+| [`tjs gains-base`](docs/commands.md#tjs-gains-base) | Realized gains in the base currency, as filed |
 | [`tjs leaps`](docs/commands.md#tjs-leaps) | Closed LEAPS positions |
 | [`tjs roc`](docs/commands.md#tjs-roc) | Return-of-capital and other cost adjustments |
 | [`tjs staking`](docs/commands.md#tjs-staking) | Rewards, commissions, net income and acquisition evidence |
@@ -291,6 +292,7 @@ country's commands (`tjs help --all` lists them). Every command takes
 | Command | Purpose |
 | --- | --- |
 | [`tjs form-export`](docs/commands.md#tjs-form-export) | Schedule 3 / Form 8949 rows, or a TurboTax TXF |
+| [`tjs gains-cra`](docs/commands.md#tjs-gains-cra) | One row per sale in the CRA's columns |
 | [`tjs t1135`](docs/commands.md#tjs-t1135) | Canada: the foreign-property test and tables |
 | [`tjs reconcile-slips`](docs/commands.md#tjs-reconcile-slips) | Compare broker T5008 / 1099-B slips with the books |
 | [`tjs slip-audit`](docs/commands.md#tjs-slip-audit) | Canada: T5 / T3 slips against the books' income |

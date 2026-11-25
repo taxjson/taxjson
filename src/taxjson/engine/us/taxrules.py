@@ -63,19 +63,35 @@ if TYPE_CHECKING:
     from taxjson.engine.us.trades import _GainRow
 
 
+def _us_owed_ids(run: _USRun) -> set[Any]:
+    """The ids of the stock dividends the walk booked on a short (US-STKDIV-06: it named the
+    rule on each)."""
+    return {_i for _i, _recs in run.rules.items() if _recs.get(_i) == R.US_STKDIV_06}
+
+
+def _us_no_shares_key(run: _USRun) -> Dict[str, List[RowId]]:
+    """The result's `stock_dividends_after_cover` (a key of the gains files, written only
+    with such a row): the stock dividend rows booked as no shares, which every reader of
+    the rows leaves out (US-STKDIV-06)."""
+    return ({'stock_dividends_after_cover': sorted(run.stkdiv_after_cover, key=str)}
+            if run.stkdiv_after_cover else {})
+
+
 def _us_conserved_rows(run: _USRun) -> List[TaxTransaction]:
     """The taxable rows the conservation check replays (`_finish`): the trades, openings,
     splits, own moves and listing journals; a stock dividend that made a short owe more
-    shares at its effect on the position (US-STKDIV-06: the walk named the rule on it)."""
-    _owed = {_i for _i, _recs in run.rules.items()
-             if _recs.get(_i) == R.US_STKDIV_06}
+    shares at its effect on the position (US-STKDIV-06: the walk named the rule on it), and
+    one posted after its short's cover left out, as the walk booked no shares for it."""
+    _owed = _us_owed_ids(run)
+    _none = set(run.stkdiv_after_cover)
     return [(replace(t, quantity=-t.quantity) if t.id in _owed else t)
             for t in run.taxable_sorted
-            if (not run.non_capital(t.action, t.type)
-                and t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE',
-                                 'SPLIT'))
-            or (t.action == 'TRANSFER' and t.type == LOT_MOVE_TYPE)
-            or _is_listing_journal(t)]
+            if t.id not in _none
+            and ((not run.non_capital(t.action, t.type)
+                  and t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE',
+                                   'SPLIT'))
+                 or (t.action == 'TRANSFER' and t.type == LOT_MOVE_TYPE)
+                 or _is_listing_journal(t))]
 
 
 class USATaxRules(TaxRules):
@@ -133,7 +149,7 @@ class USATaxRules(TaxRules):
     def _plan_paid_compensation(self, transactions: List[TaxTransaction], sheltered: Optional[List[TaxTransaction]], affiliated: Optional[List[TaxTransaction]], *,
                                 cross_asset: bool = False,
                                 detect_wash_sales: bool = True,
-                                per_account_basis: bool = False,
+                                per_account_basis: bool = False, registered_book: bool = False,
                                 loss_overrides: Sequence[Dict[str, Any]] = (),
                                 filed_rows: Sequence[Dict[str, Any]] = ()
                                 ) -> Dict[str, Any]:
@@ -171,7 +187,7 @@ class USATaxRules(TaxRules):
             _paid_comp=plan, cross_asset=cross_asset,
             detect_wash_sales=detect_wash_sales,
             per_account_basis=per_account_basis, loss_overrides=loss_overrides,
-            trace=False, year_end=None, year_end_basis=None, cost_timeline=None,
+            registered_book=registered_book, trace=False, year_end=None, year_end_basis=None, cost_timeline=None,
             lots_at=None, lots_at_basis=None, filed_rows=filed_rows)
         # A drifted call fails here, loudly: the silent run below swallows
         # what the booking walk would raise again, never a signature
@@ -197,7 +213,7 @@ class USATaxRules(TaxRules):
         return {'per_unit': plan['per_unit'], 'payments': plan['payments']}
 
     @M.engine
-    def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: Optional[List[TaxTransaction]] = None, affiliated_transactions: Optional[List[TaxTransaction]] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True, per_account_basis: bool = False, loss_overrides: Sequence[Dict[str, Any]] = (), year_end: Optional[str] = None, year_end_basis: Optional[str] = None, cost_timeline: Optional[str] = None, lots_at: Optional[str] = None, lots_at_basis: Optional[str] = None, _paid_comp: Optional[Dict[str, Any]] = None, filed_rows: Sequence[Dict[str, Any]] = ()) -> Dict[str, Any]:
+    def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: Optional[List[TaxTransaction]] = None, affiliated_transactions: Optional[List[TaxTransaction]] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True, per_account_basis: bool = False, loss_overrides: Sequence[Dict[str, Any]] = (), year_end: Optional[str] = None, year_end_basis: Optional[str] = None, cost_timeline: Optional[str] = None, lots_at: Optional[str] = None, lots_at_basis: Optional[str] = None, _paid_comp: Optional[Dict[str, Any]] = None, filed_rows: Sequence[Dict[str, Any]] = (), registered_book: bool = False) -> Dict[str, Any]:
         _run = self._prepare(
             _paid_comp=_paid_comp,
             affiliated_transactions=affiliated_transactions,
@@ -209,6 +225,7 @@ class USATaxRules(TaxRules):
             lots_at=lots_at,
             lots_at_basis=lots_at_basis,
             per_account_basis=per_account_basis,
+            registered_book=registered_book,
             sheltered_transactions=sheltered_transactions,
             trace=trace,
             transactions=transactions,
@@ -217,9 +234,14 @@ class USATaxRules(TaxRules):
         lots = _us_walk_rows(run=_run)
         _us_say_retests(_run)
 
-        return self._finish(lots=lots, run=_run)
+        res = self._finish(lots=lots, run=_run)
+        # The rows booked on a short, as the Canadian engine's result names its own
+        # (CA-STKDIV-02): the gains file keeps them for the views (backlog TJ-5281).
+        if (_owed := _us_owed_ids(_run)):
+            res['stock_dividends_owed'] = sorted(_owed, key=str)
+        return res
 
-    def _prepare(self, *, _paid_comp: Optional[Dict[str, Any]], affiliated_transactions: Optional[List[TaxTransaction]], cost_timeline: Optional[str], cross_asset: bool, detect_wash_sales: bool, filed_rows: Sequence[Dict[str, Any]], loss_overrides: Sequence[Dict[str, Any]], lots_at: Optional[str], lots_at_basis: Optional[str], per_account_basis: bool, sheltered_transactions: Optional[List[TaxTransaction]], trace: bool, transactions: List[TaxTransaction], year_end: Optional[str], year_end_basis: Optional[str]) -> _USRun:
+    def _prepare(self, *, _paid_comp: Optional[Dict[str, Any]], affiliated_transactions: Optional[List[TaxTransaction]], cost_timeline: Optional[str], cross_asset: bool, detect_wash_sales: bool, filed_rows: Sequence[Dict[str, Any]], loss_overrides: Sequence[Dict[str, Any]], lots_at: Optional[str], lots_at_basis: Optional[str], per_account_basis: bool, registered_book: bool, sheltered_transactions: Optional[List[TaxTransaction]], trace: bool, transactions: List[TaxTransaction], year_end: Optional[str], year_end_basis: Optional[str]) -> _USRun:
         """The US engine's preamble: the input contract, the compensation plan (the
         planner's silent run on the booking run; given on the building run), the books
         named, deduped and indexed (`TaxRules`' shared stages), the corporate events, the
@@ -245,7 +267,7 @@ class USATaxRules(TaxRules):
                 transactions, sheltered_transactions,
                 affiliated_transactions, cross_asset=cross_asset,
                 detect_wash_sales=detect_wash_sales,
-                per_account_basis=per_account_basis,
+                per_account_basis=per_account_basis, registered_book=registered_book,
                 loss_overrides=loss_overrides, filed_rows=filed_rows)
         _comp_building = bool(_paid_comp.get('building'))
         _comp_per_unit: Dict[Tuple[RowId, RowId], Decimal] = _paid_comp.get('per_unit') or {}
@@ -360,11 +382,11 @@ class USATaxRules(TaxRules):
             all_events, lambda ev: ev.date,
             rule_text="the wash-sale rule (US-BASIS-06)")
 
-        long_replacements, short_replacements, _other_stkdivs = _us_scan_events(
+        long_replacements, short_replacements, _other_stkdivs, stkdiv_after_cover = _us_scan_events(
             _nkey=_nkey, _rep_key=_rep_key, _split_covers=_split_covers,
             affiliated_ids=affiliated_ids, all_events=all_events, epsilon=epsilon,
             non_capital=non_capital, per_account_basis=per_account_basis,
-            sheltered_ids=sheltered_ids)
+            registered_book=registered_book, sheltered_ids=sheltered_ids)
 
         # === MAIN PASS STATE ===
         inventory_long: _USInventory = {}
@@ -555,7 +577,7 @@ class USATaxRules(TaxRules):
             _spin_adj=_spin_adj,
             _tl=_tl,
             _tl_dates=_tl_dates,
-            _us_dust=_us_dust,
+            _us_dust=_us_dust, stkdiv_after_cover=stkdiv_after_cover,
             _us_dust_absorbed=_us_dust_absorbed,
             _us_retests=_us_retests,
             filed_rows=filed_rows,
@@ -775,7 +797,7 @@ class USATaxRules(TaxRules):
                 run._tl_dates, basis=_tl_basis,
                 stamp='min' if run.cost_timeline != 'settle' else 'pool')}
                if run._tl is not None else {}),
-            **({'rules': run.rules} if run.rules else {}),    # (engine/rows RuleTable)
+            **({'rules': run.rules} if run.rules else {}), **_us_no_shares_key(run),    # (engine/rows RuleTable)
             'summary': {
                 'total_gain': sum(g['gain'] for g in run.realized_gains),
                 'total_disallowed': sum(w['disallowed_amount'] for w in run.wash_sale_records),

@@ -23,6 +23,7 @@ from taxjson.engine.journal import (
     _MOVE_DESC_RE, _opening_source, _is_listing_journal, _journal_factor,
 )
 from taxjson.engine.replacement import receives_on_buy
+from taxjson.engine.rows import after_cover_record
 from taxjson.engine.us.lot_store import (
     _us_ikey_on, _us_insert_lots, _us_inv_keys_for,
 )
@@ -736,10 +737,150 @@ def _us_stkdiv_short_beside(run: _USRun, ikey: _IKey, symbol: str, tx: TaxTransa
             f"own part (US-STKDIV-06): if the broker charged it, enter it by hand (.tt)."]
 
 
+def _us_stkdiv_covers(run: _USRun, ikey: _IKey, symbol: str, tx: TaxTransaction, since: str,
+                      sold_before: str = '') -> List[_GainRow]:
+    """The gain rows of the shorts of a stock dividend's security that the account covered
+    from `since` to its pay date (the cover's trade date), under the ticker a rename in
+    between replaced too; with `sold_before`, only the shorts sold before that date."""
+    _cls_now = run.split_timeline.class_at(symbol, tx.date)
+    return [e for e in run.realized_gains
+            if e.get('direction') == 'SHORT' and e.get('qty')
+            and not is_option_symbol(e.get('symbol') or '')
+            and (e.get('symbol') == symbol
+                 or run.split_timeline.class_at(e.get('symbol') or '', e.get('date') or None)
+                 == _cls_now)
+            and _us_ikey_on(run, e['account'], symbol) == ikey
+            and since <= (e.get('trade_date') or e.get('date') or '') <= tx.date
+            and (not sold_before or (e.get('acquired_date') or '') < sold_before)]
+
+
+def _us_cover_days(covers: List[_GainRow]) -> str:
+    return ", ".join(sorted({e.get('trade_date') or e.get('date') or '' for e in covers}))
+
+
+def _us_stkdiv_no_shares(run: _USRun, symbol: str, symbol_traces: Dict[str, List[str]],
+                         tx: TaxTransaction) -> bool:
+    """A stock dividend posted after the short that owes it was covered (US-STKDIV-06): the
+    rows decided it (lib/stock_dividend_cover, the one decision, read before the pre-pass;
+    the run's `stkdiv_after_cover`), and the walk follows: no lot, no shares held at $0. The
+    new shares are what that short owed the lender, which its cover did not include.
+    Booked as the $0 purchase the row looks like, the account held shares it never
+    received and their sale was all gain (backlog TJ-5282).
+
+    What delivering them cost is the row's `delivered_cost` (a .tt line's
+    `delivered_cost=`): a cost of that short's cover, which the cover booked as it closed
+    the short (engine/us/trades `_us_delivered_cost`), so the wash-sale rule read the
+    cover with it. With one a note says so; without, an ATTENTION line names the row, the
+    short, the cover and the one line that carries the cost. A row with a
+    `delivered_cost` that is not such a row is told it is not booked. False: any other
+    row (booked as before)."""
+    f = run.stkdiv_after_cover.get(tx.id)
+    cost = M.of(tx.delivered_cost or 0.0)
+    if cost < 0:        # (a JSON book's: the .tt reader refuses it)
+        _us_note(run, tx.date,
+              f"warning: ATTENTION: {symbol}: stock dividend of {tx.quantity:g} "
+              f"share(s) on {tx.date}: its delivered_cost of {cost:,.2f} is below 0 "
+              f"and is not booked: it is what delivering the shares cost, an amount "
+              f"above 0. Correct the row.")
+        cost = _ZERO
+    if f is None:
+        if cost:
+            _us_note(run, tx.date,
+                  f"warning: ATTENTION: {symbol}: stock dividend of {tx.quantity:g} "
+                  f"share(s) on {tx.date}: its delivered_cost of {cost:,.2f} is not "
+                  f"booked. The row is not read as the obligation of a short covered "
+                  f"before it (US-STKDIV-06): that takes an ex-dividend or record date "
+                  f"on the row, a short open on that date and bought back since, and no "
+                  f"shares entitled to the dividend. Check the row's ex_date, or remove "
+                  f"the delivered_cost.")
+        return False
+    run.rules.setdefault(tx.id, {})[after_cover_record(tx.id)] = R.US_STKDIV_06
+    _who = (f"The account {tx.account} was" if run.per_account_basis
+            else "The accounts pooled here were")
+    _head = (f"{symbol}: stock dividend of {tx.quantity:g} share(s) on {tx.date}: booked "
+             f"as no shares. {_who} short {f['short']:g} share(s) on the row's "
+             f"entitlement date {f['entitlement']} and covered them on "
+             f"{', '.join(f['covered'])}, before the row was posted: the new shares are "
+             f"what that short owed the lender, which its cover did not include, not "
+             f"shares held at $0 (US-STKDIV-06, an assumption: check the broker's "
+             f"statement).")
+    if cost and abs(f['booked'] - cost) < _HALF_CENT and f['cover_date'][:4] != tx.date[:4]:
+        # (a figure of an earlier year moves: never a quiet note)
+        _us_note(run, tx.date,
+              f"warning: ATTENTION: {_head} Its delivered_cost of {cost:,.2f} is booked "
+              f"as a cost of the cover on {f['cover_date']}, in tax year "
+              f"{f['cover_date'][:4]}: the row is dated {tx.date[:4]}, and "
+              f"{f['cover_date'][:4]}'s gain is lower by it than without the row. If "
+              f"{f['cover_date'][:4]} is filed, `tjs check-filed` shows the difference.")
+    elif cost and abs(f['booked'] - cost) < _HALF_CENT:
+        _us_note(run, tx.date,
+              f"note: {_head} Its delivered_cost of {cost:,.2f} is booked as a cost of "
+              f"the cover on {f['cover_date']}.")
+    elif cost:
+        _us_note(run, tx.date,
+              f"warning: ATTENTION: {_head} Its delivered_cost of {cost:,.2f} is not "
+              f"booked: the purchase on {f['cover_date']} closed no short lot in the "
+              f"walk. Enter it by hand.")
+    else:
+        _us_note(run, tx.date,
+              f"warning: ATTENTION: {_head} What delivering them cost is in no row: put "
+              f"it on the row itself, as `delivered_cost=COST` on its .tt line (`BUYSELL "
+              f"{tx.date} {tx.time or '09:30:00'} {symbol} {tx.quantity:g} "
+              f"{f['currency']} 0 0 type=stock_dividend "
+              f"{'ex' if tx.ex_date else 'record'}={f['entitlement']} "
+              f"delivered_cost=COST`, in place of the broker's row): it is booked as a "
+              f"cost of the cover on {f['cover_date']}. If the row is shares you "
+              f"received, check its ex_date / record_date.")
+    if run.trace:
+        symbol_traces[symbol].append(
+            f"# {tx.date} STOCK DIVIDEND +{tx.quantity:g} sh after the short's cover | "
+            f"no shares booked ({f['short']:g} sh short on {f['entitlement']}, covered "
+            f"{f['cover_date']})")
+    return True
+
+
+def _us_stkdiv_cover_hint(run: _USRun, ikey: _IKey, symbol: str, tx: TaxTransaction,
+                          ent_date: str) -> str:
+    """How the $0-purchase warning of a stock dividend received with no shares held ends:
+    what to do about its basis and, for a row with no entitlement date, where the account
+    covered a short of the security within the 90 days before the row (the window an
+    undated row's recent lots are named by), that nothing tells whether that short was
+    open on the ex-dividend date, and if it was the row is its obligation, not shares held
+    (US-STKDIV-06; backlog TJ-5282)."""
+    # Held before and sold out by the pay date (sold between the record and pay dates): the
+    # history is complete, the §307 share belongs to the sold lots (audit A2-0562). Never a
+    # wash-sale replacement (US-STKDIV-01, A2-0205). A sale of shares held: a short sale
+    # sold no lot (TJ-5282: any earlier sale row counted).
+    _sold_out = any(
+        e.get('direction') == 'LONG' and e.get('qty') and e.get('symbol') == symbol
+        and _us_ikey_on(run, e['account'], symbol) == ikey
+        and (e.get('trade_date') or e.get('date') or '') <= tx.date
+        for e in run.realized_gains)
+    said = ("the shares were disposed of before the pay date, so the §307 basis allocation "
+            "reaches the SOLD lots: adjust their basis and this lot's by hand (.tt ADJUST "
+            "rows)." if _sold_out else
+            "add the missing purchase history so it can share their basis (§307).")
+    _covers = ([] if ent_date else
+               [e for e in _us_stkdiv_covers(run, ikey, symbol, tx, '')
+                if _day_gap(e.get('trade_date') or e.get('date') or '', tx.date) in range(91)])
+    if not _covers:
+        return said
+    _who = tx.account if run.per_account_basis else "an account pooled here"
+    return (f"{said} ATTENTION: {_who} covered a short of {symbol} on "
+            f"{_us_cover_days(_covers)}, within the 90 days before the row, which carries "
+            f"no ex-dividend or record date: a short open on the ex-dividend date owes "
+            f"the new shares, and the row is then that short's obligation, not shares "
+            f"held at $0 (US-STKDIV-06). Check the issuer's ex-dividend date and give the "
+            f"row its ex_date (`ex=DATE` on a .tt type=stock_dividend line).")
+
+
 def _us_walk_stock_dividend(*, _boot_blocks: _BootBlocks, ikey: _IKey, run: _USRun, symbol: str, symbol_traces: Dict[str, List[str]], tx: TaxTransaction) -> bool:
     """A stock dividend's shares: the lots entitled to it (bought before the ex-date, else the
     record date; the shares sold or exchanged since counted) share their basis with the new shares
-    (Pub. 550), whose lot carries its share (short: `_us_stock_dividend_owed`); True when spent."""
+    (Pub. 550), whose lot carries its share (short: `_us_stock_dividend_owed`; after its
+    short's cover: `_us_stkdiv_no_shares`, asked first); True when spent."""
+    if _us_stkdiv_no_shares(run, symbol, symbol_traces, tx):
+        return True
     _lots = run.inventory_long.get(ikey, [])
     _held = sum(l['qty'] for l in _lots)
     # The shares ENTITLED to the dividend share their basis
@@ -869,30 +1010,12 @@ def _us_walk_stock_dividend(*, _boot_blocks: _BootBlocks, ikey: _IKey, run: _USR
               f"the row's ex_date / record_date.")
         # Falls through to the $0 purchase below.
     else:
-        # Held before and sold out by the pay date (sold between
-        # the record and pay dates): the history is complete, the
-        # §307 share belongs to the sold lots (audit A2-0562). Never
-        # a wash-sale replacement (US-STKDIV-01, A2-0205).
-        _sold_out = any(
-            _p is not tx and _p.symbol == tx.symbol
-            and _p.account == tx.account
-            and _p.action in ('BUYSELL', 'ASSIGN')
-            and _p.quantity < 0
-            and (_p.date, _p.time or '') <= (tx.date,
-                                             tx.time or '')
-            for _p in run.taxable_sorted)
         _us_note(run, tx.date,
               f"warning: {symbol}: stock dividend of "
               f"{tx.quantity:g} share(s) on {tx.date} with no "
               f"shares held — booked as a $0 purchase (not a "
               f"wash-sale replacement); "
-              + ("the shares were disposed of before the pay "
-                 "date, so the §307 basis allocation reaches the "
-                 "SOLD lots: adjust their basis and this lot's by "
-                 "hand (.tt ADJUST rows)."
-                 if _sold_out else
-                 "add the missing purchase history so it can "
-                 "share their basis (§307)."))
+              + _us_stkdiv_cover_hint(run, ikey, symbol, tx, _ent_date))
     return False
 
 

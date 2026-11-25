@@ -3,7 +3,7 @@ import argparse
 from typing import Any, Optional, Tuple
 
 from taxjson.cli import (
-    books, elect, estimate, explain, file, listings,
+    books, elect, estimate, explain, file, gains_filing, listings,
     maintainer, maps, migrate, plan, positions, setup,
     slips, summaries, technicals, tips, tools, totals, unclose,
 )
@@ -42,13 +42,14 @@ _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
                    "sum", "win-rates")),
     ("Positions", ("list", "shares", "technicals")),
     ("Row listings", ("cash", "dil", "divs", "events", "fees", "gains",
-                      "leaps", "roc", "staking", "trades", "transfers")),
+                      "gains-base", "leaps", "roc", "staking", "trades",
+                      "transfers")),
     ("Totals by type", ("ccd-sum", "dil-sum", "divs-sum", "fees-sum",
                         "leaps-sum", "losers", "roc-sum", "staking-sum", "trades-sum",
                         "winners")),
     ("Before you trade", ("wash-radar", "buy-check", "sell-check",
                           "rebuy", "harvest", "tips", "watch")),
-    ("Before you file", ("form-export", "t1135",
+    ("Before you file", ("form-export", "gains-cra", "t1135",
                          "reconcile-slips", "slip-audit", "carryover",
                          "option-boundary",
                          "close-year", "unclose-year", "check-filed",
@@ -165,8 +166,8 @@ class _GroupedHelpParser(argparse.ArgumentParser):
 # The groups, in help-page order: an unknown command's error lists the
 # names in this order.
 _GROUPS = (setup, maps, migrate, elect, books, summaries, estimate,
-           positions, technicals, listings, totals, tips, plan, file, unclose, slips, explain,
-           maintainer, tools)
+           positions, technicals, listings, totals, tips, plan, file, gains_filing, unclose,
+           slips, explain, maintainer, tools)
 
 
 def _build_parser(prog: str = "tjs"
@@ -255,4 +256,4 @@ _DETAILS_CMDS = frozenset({
     "redact", "migrate", "new-year", "init", "elect", "journals",
     "renames", "opening", "transfers", "format", "crypto-sends", "stats",
     "fees-sum", "option-boundary", "spinoffs", "splits", "staking", "staking-sum",
-    "technicals"})
+    "technicals", "gains-base", "gains-cra"})

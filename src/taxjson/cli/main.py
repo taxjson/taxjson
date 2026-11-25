@@ -773,7 +773,7 @@ def _reads_cash_events(args: argparse.Namespace, cfg: Dict[str, Any]) -> bool:
 # The report commands that print the run-state banner themselves: like
 # _RUN_STATE_BANNER_CMDS, they read the books.
 _NO_INPUT_REPORT_CMDS = _RUN_STATE_BANNER_CMDS | frozenset({
-    "sum", "t1135", "carryover", "form-export"})
+    "sum", "t1135", "carryover", "form-export", "gains-base", "gains-cra"})
 
 
 def _refuse_no_input_books(args: argparse.Namespace) -> None:

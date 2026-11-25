@@ -10,6 +10,16 @@
   "exit": 0
  },
  {
+  "view": "gains-base",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
+  "view": "gains-base --json",
+  "cwd": ".",
+  "exit": 0
+ },
+ {
   "view": "estimate",
   "cwd": ".",
   "exit": 0
@@ -38,6 +48,11 @@
   "view": "form-export --json",
   "cwd": ".",
   "exit": 0
+ },
+ {
+  "view": "gains-cra",
+  "cwd": ".",
+  "exit": 1
  },
  {
   "view": "wash-sales",
