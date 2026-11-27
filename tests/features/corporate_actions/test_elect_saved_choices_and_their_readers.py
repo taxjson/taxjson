@@ -1,15 +1,15 @@
-"""Backlog fix round 2 of 2026-10-29, group `elect`: `tjs elect` (the
-corporate-event choices saved in inputs/<account>/manifest.json) and the
+"""Backlog fix round 2 of 2026-10-29, group `elections`: `tjs elections` (the
+corporate-event choices saved in inputs/<account>/elections.json) and the
 option and trading views.
 
-TJ-0539  elect --pending lists only the account asked for and refuses a
+TJ-0539  elections --pending lists only the account asked for and refuses a
          --set/--hint/--redo/--reset/--event beside it; a flag elect
          refuses exits 2 (a usage error), not 1.
-TJ-0540  elect --set never saves an election the project's country does
+TJ-0540  elections --set never saves an election the project's country does
          not know, though a stale pending file offers it.
 TJ-0544  two elect commands at once both keep their election: the
          manifest's load-change-save is one step under a lock.
-TJ-0556  elect --redo clears nothing it cannot ask again about (no
+TJ-0556  elections --redo clears nothing it cannot ask again about (no
          corporate-action export, an event no export holds).
 TJ-0541  leaps / leaps-sum --json for an empty window keeps the
          taxable_gain and sheltered_gain keys.
@@ -92,8 +92,8 @@ def _two_accounts_pending():
 
 
 class TestElectPendingScopeAndFlags(unittest.TestCase):
-    """TJ-0539: `elect margin --pending` listed every account's pending
-    events, and `elect margin --pending --set EV=ignore` exited 0 having
+    """TJ-0539: `elections margin --pending` listed every account's pending
+    events, and `elections margin --pending --set EV=ignore` exited 0 having
     saved nothing (the --pending branch returned before the account and
     the other flags were read)."""
 
@@ -101,16 +101,16 @@ class TestElectPendingScopeAndFlags(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root = _project(d, ("margin", "other"),
                             pending=_two_accounts_pending())
-            r = _tjs(root, "elect", "margin", "--pending", "--json")
+            r = _tjs(root, "elections", "margin", "--pending", "--json")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(sorted(json.loads(r.stdout)["accounts"]),
                              ["margin"])
-            t = _tjs(root, "elect", "other", "--pending")
+            t = _tjs(root, "elections", "other", "--pending")
             self.assertEqual(t.returncode, 0, t.stderr)
             self.assertIn("other: 20251022-zza-zzb-0001", t.stdout)
             self.assertNotIn(EV, t.stdout)
             # Every account's without one.
-            a = _tjs(root, "elect", "--pending", "--json")
+            a = _tjs(root, "elections", "--pending", "--json")
             self.assertEqual(sorted(json.loads(a.stdout)["accounts"]),
                              ["margin", "other"])
 
@@ -118,16 +118,16 @@ class TestElectPendingScopeAndFlags(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             pend = copy.deepcopy(_PENDING)
             root = _project(d, ("margin", "other"), pending=pend)
-            r = _tjs(root, "elect", "other", "--pending")
+            r = _tjs(root, "elections", "other", "--pending")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("No pending elections for other", r.stdout)
-            j = _tjs(root, "elect", "other", "--pending", "--json")
+            j = _tjs(root, "elections", "other", "--pending", "--json")
             self.assertEqual(json.loads(j.stdout)["accounts"], {})
 
     def test_pending_refuses_an_unknown_account(self):
         with tempfile.TemporaryDirectory() as d:
             root = _project(d, pending=copy.deepcopy(_PENDING))
-            r = _tjs(root, "elect", "nosuch", "--pending")
+            r = _tjs(root, "elections", "nosuch", "--pending")
             self.assertEqual(r.returncode, 2, r.stderr)
             self.assertIn("no [accounts.nosuch]", r.stderr)
 
@@ -137,18 +137,18 @@ class TestElectPendingScopeAndFlags(unittest.TestCase):
             for extra in (["--set", f"{EV}=ignore"],
                           ["--set", f"{EV}=ignore", "--hint", "a=1"],
                           ["--redo"], ["--reset"], ["--event", EV]):
-                r = _tjs(root, "elect", "margin", "--pending", *extra)
+                r = _tjs(root, "elections", "margin", "--pending", *extra)
                 self.assertEqual(r.returncode, 2, (extra, r.stderr))
                 self.assertIn("--pending lists the pending elections",
                               r.stderr)
                 self.assertIn(extra[0], r.stderr)
             self.assertFalse(
-                (root / "inputs" / "margin" / "manifest.json").exists())
+                (root / "inputs" / "margin" / "elections.json").exists())
 
     def test_event_without_redo_or_reset_is_refused(self):
         with tempfile.TemporaryDirectory() as d:
             root = _project(d, pending=copy.deepcopy(_PENDING))
-            r = _tjs(root, "elect", "margin", "--event", EV)
+            r = _tjs(root, "elections", "margin", "--event", EV)
             self.assertEqual(r.returncode, 2, r.stderr)
             self.assertIn("--event applies to --redo/--reset only",
                           r.stderr)
@@ -159,21 +159,21 @@ class TestElectPendingScopeAndFlags(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root = _project(d, pending=copy.deepcopy(_PENDING))
             cases = [
-                (("elect", "--redo"), "--redo/--reset need an account"),
-                (("elect", "--set", f"{EV}=ignore"),
+                (("elections", "--redo"), "--redo/--reset need an account"),
+                (("elections", "--set", f"{EV}=ignore"),
                  "--set/--hint need an account"),
-                (("elect", "nosuch"), "no [accounts.nosuch]"),
-                (("elect", "margin", "--hint", "a=1"),
+                (("elections", "nosuch"), "no [accounts.nosuch]"),
+                (("elections", "margin", "--hint", "a=1"),
                  "--hint only applies with --set"),
-                (("elect", "margin", "--set", "nonsense"),
+                (("elections", "margin", "--set", "nonsense"),
                  "--set expects EVENT_ID=ELECTION"),
-                (("elect", "margin", "--set", f"{EV}=bogus"),
+                (("elections", "margin", "--set", f"{EV}=bogus"),
                  "is not valid for event"),
-                (("elect", "margin", "--set",
+                (("elections", "margin", "--set",
                   f"{EV}=rollover_s_85_1_5"), "needs fmv_per_share"),
-                (("elect", "margin", "--set", "zz-none=ignore"),
+                (("elections", "margin", "--set", "zz-none=ignore"),
                  "matches no pending event"),
-                (("elect", "margin", "--reset", "--event", "zz-none"),
+                (("elections", "margin", "--reset", "--event", "zz-none"),
                  "no election 'zz-none'"),
             ]
             for argv, text in cases:
@@ -181,7 +181,7 @@ class TestElectPendingScopeAndFlags(unittest.TestCase):
                 self.assertEqual(r.returncode, 2, (argv, r.stderr))
                 self.assertIn(text, r.stderr, argv)
             self.assertFalse(
-                (root / "inputs" / "margin" / "manifest.json").exists())
+                (root / "inputs" / "margin" / "elections.json").exists())
 
 
 def _us_pending():
@@ -197,23 +197,23 @@ def _us_pending():
 class TestElectNeverSavesAnotherCountrysElection(unittest.TestCase):
     """TJ-0540: a pending Canadian merger kept in
     work/pending_elections.json after the project's country became usa:
-    `elect --set EV=rollover_s_85_1_5` took the stale entry's options as
+    `elections --set EV=rollover_s_85_1_5` took the stale entry's options as
     the event's, saved the Canadian rollover at exit 0, and the next
-    `elect --pending` called it a wrong-country election."""
+    `elections --pending` called it a wrong-country election."""
 
     def test_stale_canadian_option_is_refused_in_a_us_project(self):
         with tempfile.TemporaryDirectory() as d:
             root = _project(d, country="usa", pending=copy.deepcopy(_PENDING))
-            r = _tjs(root, "elect", "margin", "--set",
+            r = _tjs(root, "elections", "margin", "--set",
                      f"{EV}=rollover_s_85_1_5", "--hint", "fmv_per_share=10")
             self.assertEqual(r.returncode, 2, r.stderr)
             self.assertIn("with another country's elections", r.stderr)
             self.assertIn("tjs run --no-input", r.stderr)
             self.assertIn("Nothing was saved", r.stderr)
             self.assertFalse(
-                (root / "inputs" / "margin" / "manifest.json").exists())
+                (root / "inputs" / "margin" / "elections.json").exists())
             # The listing says the file is stale.
-            p = _tjs(root, "elect", "--pending")
+            p = _tjs(root, "elections", "--pending")
             self.assertEqual(p.returncode, 0, p.stderr)
             self.assertIn("warning: work/pending_elections.json lists "
                           "margin's events with another country's "
@@ -229,27 +229,27 @@ class TestElectNeverSavesAnotherCountrysElection(unittest.TestCase):
                 {"election": "rollover_s_85_1_5", "description": "defer",
                  "hints": []})
             root = _project(d, country="usa", pending=doc)
-            r = _tjs(root, "elect", "margin", "--set", f"{EV}=reorg_368")
+            r = _tjs(root, "elections", "margin", "--set", f"{EV}=reorg_368")
             self.assertEqual(r.returncode, 2, r.stderr)
             self.assertIn("with another country's elections", r.stderr)
 
     def test_this_countrys_entry_still_saves(self):
         with tempfile.TemporaryDirectory() as d:
             root = _project(d, country="usa", pending=_us_pending())
-            r = _tjs(root, "elect", "margin", "--set", f"{EV}=reorg_368")
+            r = _tjs(root, "elections", "margin", "--set", f"{EV}=reorg_368")
             self.assertEqual(r.returncode, 0, r.stderr)
             man = json.loads((root / "inputs" / "margin" /
-                              "manifest.json").read_text())
+                              "elections.json").read_text())
             self.assertEqual(man["elections"][EV]["election"], "reorg_368")
             # A Canadian key for a current US entry: not this event's.
-            r = _tjs(root, "elect", "margin", "--set",
+            r = _tjs(root, "elections", "margin", "--set",
                      f"{EV}=rollover_s_85_1_5", "--hint", "fmv_per_share=1")
             self.assertEqual(r.returncode, 2, r.stderr)
             self.assertIn("election 'rollover_s_85_1_5' is not valid "
                           "for event", r.stderr)
 
 
-# A child that saves one election with `tjs elect --set`, holding each
+# A child that saves one election with `tjs elections --set`, holding each
 # manifest save until the other child is about to save too (or 2 s
 # pass): unlocked, both have loaded the original file by then and the
 # later save drops the other's election; locked, the second waits
@@ -274,14 +274,14 @@ def save(self, path):
 
 
 ca.Manifest.save = save
-sys.argv = ["tjs", "-C", str(root), "elect", "margin", "--set",
+sys.argv = ["tjs", "-C", str(root), "elections", "margin", "--set",
             eid + "=ignore"]
 R.main()
 '''
 
 
 class TestConcurrentElectionsBothKept(unittest.TestCase):
-    """TJ-0544: two `elect --set`s at once each loaded manifest.json,
+    """TJ-0544: two `elections --set`s at once each loaded elections.json,
     added their own election and replaced the file: both said
     "Election saved", and the file held one. The load, the change and
     the save are one step under the manifest's lock
@@ -310,13 +310,13 @@ class TestConcurrentElectionsBothKept(unittest.TestCase):
                 self.assertEqual(p.returncode, 0, err)
                 self.assertIn("Election saved", out)
             man = json.loads((root / "inputs" / "margin" /
-                              "manifest.json").read_text())
+                              "elections.json").read_text())
             self.assertEqual(sorted(man["elections"]),
                              ["event-a", "event-b"])
             # The lock is a hidden file beside the manifest, which no
             # inputs scan reads.
             self.assertTrue((root / "inputs" / "margin" /
-                             ".manifest.json.lock").exists())
+                             ".elections.json.lock").exists())
 
     def test_update_holds_the_lock_across_load_and_save(self):
         import threading
@@ -345,7 +345,7 @@ class TestConcurrentElectionsBothKept(unittest.TestCase):
                                   election="ignore")) or True)
 
         with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / "inputs" / "margin" / "manifest.json"
+            path = Path(d) / "inputs" / "margin" / "elections.json"
             with mock.patch.object(ca.Manifest, "load", classmethod(load)):
                 with ThreadPoolExecutor(2) as pool:
                     list(pool.map(lambda e: elect(path, e),
@@ -353,7 +353,7 @@ class TestConcurrentElectionsBothKept(unittest.TestCase):
             self.assertEqual(sorted(ca.Manifest.load(path).records),
                              ["event-a", "event-b"])
             self.assertEqual(ca.manifest_lock_path(path).name,
-                             ".manifest.json.lock")
+                             ".elections.json.lock")
 
     def test_redo_interrupted_keeps_an_election_saved_meanwhile(self):
         """--redo clears under the lock and, interrupted, puts back the
@@ -363,12 +363,12 @@ class TestConcurrentElectionsBothKept(unittest.TestCase):
         import contextlib
         import io
         from unittest import mock
-        from taxjson.cli import elect as cli_elect
+        from taxjson.cli import elections as cli_elect
         from taxjson.lib import corp_actions as ca
         with tempfile.TemporaryDirectory() as d:
             root = _project(d)
             (root / "inputs" / "margin" / "zz_ib.csv").write_text("x\n")
-            path = root / "inputs" / "margin" / "manifest.json"
+            path = root / "inputs" / "margin" / "elections.json"
             m = ca.Manifest()
             m.set(ca.ElectionRecord(event_id="event-a", summary="A",
                                     election="taxable_disposition"))
@@ -394,7 +394,7 @@ class TestConcurrentElectionsBothKept(unittest.TestCase):
                     contextlib.redirect_stdout(io.StringIO()), \
                     contextlib.redirect_stderr(io.StringIO()), \
                     self.assertRaises(SystemExit) as cm:
-                cli_elect.cmd_elect(args)
+                cli_elect.cmd_elections(args)
             # Exit 1 (SystemExit carries the message).
             self.assertIn("--redo interrupted", str(cm.exception.code))
             recs = ca.Manifest.load(path).records
@@ -403,14 +403,14 @@ class TestConcurrentElectionsBothKept(unittest.TestCase):
 
 
 def _redo(root, event=None, run_to_file=None):
-    """`elect margin --redo [--event ID]` in-process on a 'terminal'
+    """`elections margin --redo [--event ID]` in-process on a 'terminal'
     (stdin.isatty patched); the corp-actions child is `run_to_file`
     (default: records each command). Returns (stdout, stderr, calls)."""
     import argparse
     import contextlib
     import io
     from unittest import mock
-    from taxjson.cli import elect as cli_elect
+    from taxjson.cli import elections as cli_elect
     calls = []
     args = argparse.Namespace(
         dir=str(root), account="margin", redo=True, reset=False,
@@ -420,7 +420,7 @@ def _redo(root, event=None, run_to_file=None):
             lambda cmd, o, **kw: calls.append(cmd))), \
             mock.patch.object(sys.stdin, "isatty", lambda: True), \
             contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        cli_elect.cmd_elect(args)
+        cli_elect.cmd_elections(args)
     return out.getvalue(), err.getvalue(), calls
 
 
@@ -434,7 +434,7 @@ def _save_elections(path, **elections):
 
 
 class TestRedoNeverClearsWhatItCannotAskAgain(unittest.TestCase):
-    """TJ-0556: `elect margin --redo --event old-event` in an account
+    """TJ-0556: `elections margin --redo --event old-event` in an account
     whose exports hold no corporate action (only .tt trades) cleared
     the saved election, then printed "No corp-action events to
     re-elect" and exited 0: the choice was gone and nothing asked."""
@@ -444,7 +444,7 @@ class TestRedoNeverClearsWhatItCannotAskAgain(unittest.TestCase):
             root = _project(d)
             (root / "inputs" / "margin" / "trades.tt").write_text(
                 "BUYSELL 2025-01-06 10:00:00 ZZQ.TO 1 CAD 10 10 0\n")
-            path = root / "inputs" / "margin" / "manifest.json"
+            path = root / "inputs" / "margin" / "elections.json"
             _save_elections(path, **{"old-event": "ignore"})
             before = path.read_bytes()
             for event in ("old-event", None):
@@ -456,14 +456,14 @@ class TestRedoNeverClearsWhatItCannotAskAgain(unittest.TestCase):
     def test_an_event_no_export_holds_is_refused_or_kept(self):
         from _support.ib_corp_projects import _ib_spinoff_project
         from taxjson.lib import corp_actions as ca
-        from taxjson.cli import elect as cli_elect
+        from taxjson.cli import elections as cli_elect
         with tempfile.TemporaryDirectory() as d:
             root = _ib_spinoff_project(d)
             (root / "ticker.map").write_text("")
             acct = root / "inputs" / "margin"
             live = sorted(cli_elect._extracted_event_ids(acct, "margin", root))
             self.assertEqual(len(live), 1, live)
-            path = acct / "manifest.json"
+            path = acct / "elections.json"
             _save_elections(path, **{live[0]: "taxable_deemed_dividend",
                                      "old-event": "ignore"})
             before = path.read_bytes()

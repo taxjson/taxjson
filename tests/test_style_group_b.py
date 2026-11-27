@@ -104,12 +104,15 @@ class TestBothCountries(unittest.TestCase):
         # The default view says it in one `! ` line after the tables;
         # --details prints the message with its detail lines
         # (docs/output-style.md, Essentials first).
-        self.assertIn("! 2 sales with no purchase NOT in these totals",
-                      project("canada").run("sum").stdout)
+        # (GHOSTQ's; OLDCO's sale, coded closing by the broker, is
+        # reported by hand at an unknown cost: TJ-5349)
+        out = project("canada").run("sum").stdout
+        self.assertIn("! 1 sale with no purchase NOT in these totals", out)
+        self.assertIn("! 1 sale with an unknown cost NOT in these totals", out)
         r = project("canada").run("sum", "--details")
         lines = r.stderr.splitlines()
-        self.assertTrue(lines[0].startswith("Warning: 2 "
-                                            "position(s) sold"), r.stderr)
+        self.assertTrue(any(ln.startswith("Warning: 1 position(s) sold")
+                            for ln in lines), r.stderr)
         # Its details flush-left (docs/output-style.md, Messages).
         self.assertTrue(all(not ln[:1].isspace() for ln in lines[1:]))
         assert_styled(self, r.stderr)

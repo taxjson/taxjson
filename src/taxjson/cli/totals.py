@@ -15,15 +15,17 @@ from taxjson.lib.report_fmt import fmt_money
 from taxjson.lib import out as _out
 
 from taxjson.cli.common import (
-    _account_group_of, _base_currency, _box18_fractions, _CAPITALIZED_LBL,
+    _account_group_of, _accounts, _base_currency, _basis_label, _box18_fractions,
+    _CAPITALIZED_LBL,
     _capitalized_pil_shares, _collect_period_txs, _discover_tx_accounts,
     _dist_adjust_rows, _exec_tool, _foot, _gains_all_file, _gains_row_date,
     _ISO_DATE_RE, _leaps_closed, _leaps_contracts, _leaps_empty_doc,
     _leaps_rule, _leaps_scope_guard, _load_json_or_die, _lone_positional,
-    _period_end, _print_scope_split, _real_world_legs, _require_books, _scope_split,
+    _period_end, _print_scope_split, _real_world_legs, _require_books,
+    _require_listed, _scope_split,
     _settle_basis, _split_pool_of, _staking_view, _TAX_YEAR_TOKENS,
     _trade_total, _tx_fee, _tx_period_cutoff, _view_income_rules, _view_msg,
-    _view_window, _vprint, _warn_accounts_without_books, _warn_bad_dates,
+    _view_scope, _vprint, _warn_accounts_without_books, _warn_bad_dates,
     _warn_dist_double_entry, _window_gains_files, _YEAR_TOKEN_RE,
     _PERIOD_HELP, _add_staking_parser,
 )
@@ -51,13 +53,16 @@ def cmd_leaps_sum(args: argparse.Namespace) -> None:
     older entries are included."""
     from taxjson.lib.option_symbols import parse_option_expiry, parse_option_underlying
     root = Path(args.dir).resolve()
-    # `leaps-sum margin` → the lone positional is an account, not a window.
-    keep, scope, account = _view_window(args, root)
+    # `leaps-sum margin` → the lone positional is an account, not a window;
+    # `leaps-sum margin,beta` the accounts listed (lib/account_list).
+    keep, scope, account = _view_scope(args, root)
+    # (a listed account with no gains file is refused there, exit 1,
+    # before any note or full-history file: _gains_files_of)
     _files = _leaps_scope_guard(root, account, args)
     leaps = _leaps_contracts(root, account, "leaps-sum")
     if not leaps:
         if getattr(args, "json", False):
-            _json_out(_leaps_empty_doc(root, account), schema="leaps-sum")
+            _json_out(_leaps_empty_doc(root, account, files=_files), schema="leaps-sum")
             return
         _out.put(f"No LEAPS contracts found ({_leaps_rule(root)}).")
         return
@@ -360,21 +365,22 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     canonical wash-adjusted gains basis as `leaps-sum`; the windowed
     query twin of the pipeline's cross-account `reports/ccd.rpt`."""
     from taxjson.lib.option_symbols import is_option_symbol, parse_option_right
-    from taxjson.lib.report_model import gains_basis_label
     root = Path(args.dir).resolve()
     cache = root / "work"
-    keep, scope, account = _view_window(args, root)
+    keep, scope, account = _view_scope(args, root)
+    # (a listed account with no gains file is refused there, exit 1,
+    # before any note or full-history file: _gains_files_of)
     resolved, _all_history = _window_gains_files(root, cache, account,
                                                  args)
-    if resolved and not account:
+    if resolved and account is None:
         _warn_accounts_without_books(root, resolved, "ccd-sum",
                                      "gains file")
     if not resolved:
         if account:
-            _die_input(f"no gains for account {account!r} in work/ — run "
+            _die_input(f"no gains for account {account[0]!r} in work/ — run "
                        f"`tjs run` first, or check the name")
         _die_input("no gains files in work/ — run `tjs run` first")
-    basis = gains_basis_label(resolved)
+    basis = _basis_label(root, resolved)
 
     agg, _ccd_pairs, tainted_skipped = _ccd_gains(resolved, cache, root, keep, _all_history,
                                                   parse_option_right, is_option_symbol)
@@ -551,16 +557,21 @@ def _ranked_gains(root: Path, resolved: Dict[str, Path], cache: Path,
     return agg, tainted_skipped, grp_gain, shel_accts
 
 
-def _ranked_text(account: Optional[str], ranked: List[Tuple[str, Dict[str, Any]]], scope: str,
+def _ranked_text(named: Optional[Tuple[str, ...]], ranked: List[Tuple[str, Dict[str, Any]]],
+                 scope: str,
                  losers: bool, side_rows: List[Tuple[str, Dict[str, Any]]], basis: str,
                  top: int, base_cur: str, root: Path, side_shel: Set[str],
                  side_grp: Dict[str, float]) -> None:
     """winners / losers' text: the empty states, the side's top N with a
     DENIED column when a shown row has a denial, the taxable / sheltered
-    split, the side's total and the overall one (_ranked_view's tail)."""
-    # One account asked for: the title and the side's total name it,
-    # as the TOTAL REALIZED GAIN line does (backlog TJ-0260).
-    where = f"account {account}" if account else ""
+    split, the side's total and the overall one (_ranked_view's tail).
+    `named`: the accounts asked for (an ACCOUNT list, lib/account_list)."""
+    # The accounts asked for: the title and the side's total name them,
+    # as the TOTAL REALIZED GAIN line does (backlog TJ-0260), a list as
+    # it was given (`accounts margin,beta`).
+    account = ",".join(named) if named else ""
+    where = (f"account{'s' if len(named) > 1 else ''} {account}" if named
+             else "")
     page = _out.Doc(exact=True, width_=0, live=True)
     if not ranked:
         page.line(f"No realized dispositions in {scope}"
@@ -634,7 +645,6 @@ def _ranked_view(args: argparse.Namespace, side: str) -> Optional[Dict[str, Any]
     from that side, as `winners --json` always did, with the side's own
     totals beside the overall ones: returned, not printed, for the
     command to write under its output's id (lib/json_contract)."""
-    from taxjson.lib.report_model import gains_basis_label
     losers = side == "losers"
     top = getattr(args, "top", None)
     if top is None:
@@ -648,14 +658,16 @@ def _ranked_view(args: argparse.Namespace, side: str) -> Optional[Dict[str, Any]
         _die_input(f"--top must be >= 1, got {top}")
     root = Path(args.dir).resolve()
     cache = root / "work"
-    keep, scope, account = _view_window(args, root)
+    keep, scope, account = _view_scope(args, root)
+    # (a listed account with no gains file is refused there, exit 1,
+    # before any note or full-history file: _gains_files_of)
     resolved, _all_history = _window_gains_files(root, cache, account,
                                                  args)
-    if resolved and not account:
+    if resolved and account is None:
         _warn_accounts_without_books(root, resolved, side, "gains file")
     if not resolved:
         _die_input("no gains files in work/ — run `tjs run` first")
-    basis = gains_basis_label(resolved)
+    basis = _basis_label(root, resolved)
     agg, tainted_skipped, grp_gain, shel_accts = _ranked_gains(root, resolved, cache, keep,
                                                                _all_history)
     ranked = sorted(agg.items(), key=lambda kv: (kv[1]["gain"]
@@ -740,6 +752,16 @@ def cmd_staking_sum(args: argparse.Namespace) -> None:
         _json_out(report, schema="staking-sum")
 
 
+def _total_scope(args: argparse.Namespace, every: str) -> str:
+    """The accounts a total line says it adds: an ACCOUNT list's names
+    (`accounts margin,rrsp`, lib/account_list), else `every` (one name
+    or none: the words they always had)."""
+    names = _accounts(args, Path(args.dir).resolve())
+    if names is not None and len(names) > 1:
+        return f"accounts {','.join(names)}"
+    return every
+
+
 def _divs_text(agg: Dict[Tuple[str, str], float], money: Callable[[Any], str], scope: str,
                n_pil_div: int, args: argparse.Namespace, shel_accts: Set[str],
                staking_taxable: Dict[str, float], slips: Dict[str, float],
@@ -782,7 +804,8 @@ def _divs_text(agg: Dict[Tuple[str, str], float], money: Callable[[Any], str], s
         if shel_accts:
             _figs.append((f"SHELTERED ({', '.join(sorted(shel_accts))}, "
                           f"not taxable)", _tot(by_group['sheltered'])))
-        _figs.append(("TOTAL DIVIDEND (all accounts)", _tot(totals)))
+        _figs.append((f"TOTAL DIVIDEND ({_total_scope(args, 'all accounts')})",
+                      _tot(totals)))
     else:
         _figs.append(("TOTAL DIVIDEND", _tot(totals)))
     if staking_accts:
@@ -1086,7 +1109,7 @@ def cmd_dil_sum(args: argparse.Namespace) -> None:
         _vprint(f"{_CAPITALIZED_LBL} {_tot(capitalized)}", hang="  ")
     page.blank()
     _vprint(f"TOTAL DIVIDEND IN LIEU"
-            + (" (all accounts)" if shel_accts else "")
+            + (f" ({_total_scope(args, 'all accounts')})" if shel_accts else "")
             + f": {_tot(totals) or '0.00'}", hang="  ")
 
 
@@ -1110,9 +1133,9 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
     _root = Path(args.dir).resolve()
     _accts = sorted({a for a, _t in rows}
                     | set(_discover_tx_accounts(_root / "work")))
-    _acct_arg = _view_window(args, _root)[2]
-    if _acct_arg:
-        _accts = [_acct_arg]
+    _acct_arg = _view_scope(args, _root)[2]         # (lib/account_list)
+    if _acct_arg is not None:
+        _accts = list(_acct_arg)
     dist_rows = _dist_adjust_rows(_root / "work", _accts, _keep)
     _warn_dist_double_entry(_root, _accts, _rules, _keep, "roc-sum")
     rows = list(rows) + dist_rows
@@ -1222,8 +1245,8 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
         _vprint(f"SHELTERED ({', '.join(sorted(shel_accts))} — no {_cw} "
                 f"to track, no {'1099-DIV' if _us else 'T3'}): "
                 f"{_tot(by_group['sheltered'])}", hang="  ")
-        _vprint(f"TOTAL CAPITAL RETURNED (all accounts): {_tot(totals)}",
-                hang="  ")
+        _vprint(f"TOTAL CAPITAL RETURNED ({_total_scope(args, 'all accounts')}): "
+                f"{_tot(totals)}", hang="  ")
     else:
         _vprint(f"TOTAL CAPITAL RETURNED ({_cw} reduced): {_tot(totals)}",
                 hang="  ")
@@ -1385,6 +1408,37 @@ def cmd_trades_sum(args: argparse.Namespace) -> None:
                 f"{', '.join(sorted(shel_accts))})", hang="  ")
 
 
+def _fees_sum_files(root: Path, cache: Path,
+                    named: Tuple[str, ...]) -> List[Path]:
+    """The parsed per-broker files of the accounts named (lib/account_list),
+    each once, sorted: fees-sum scopes taxjson-fees-sum to them. Non-broker
+    JSONs (…_base.json etc.) are skipped by taxjson-fees-sum. A file that
+    belongs to a LONGER-named sibling account sharing a name's prefix is
+    not that name's (accounts `margin` and `margin_us`: the glob
+    "margin_*.json" also matches margin_us_ib.json, leaking the sibling's
+    fees into this account's total); a list naming both reads each file
+    once. A named account with no file is refused: one in the words and
+    code it always was (2), several naming each (1, as every list's
+    refusal)."""
+    accounts_cfg = load_config(root, missing_ok=True).get("accounts") or {}
+    files: Set[Path] = set()
+    have = []
+    for account in named:
+        siblings = [a for a in accounts_cfg
+                    if a != account and a.startswith(f"{account}_")]
+        own = [f for f in cache.glob(f"{account}_*.json")
+               if not any(f.name.startswith(f"{sib}_") for sib in siblings)]
+        if own:
+            have.append(account)
+        files.update(own)
+    if len(named) == 1 and not files:
+        _die_input(f"no files for account {named[0]!r} in work/ — run "
+                   f"`tjs run` first, or check the name")
+    _require_listed(named, have, "files", code=1,
+                    fix="Run `tjs run` first, or check the names.")
+    return sorted(files)
+
+
 def cmd_fees_sum(args: argparse.Namespace) -> None:
     """Convenience wrapper over `taxjson-fees-sum`: trading-fee report by brokerage
     (converted to the base currency), reading the parsed per-broker JSONs in
@@ -1399,26 +1453,13 @@ def cmd_fees_sum(args: argparse.Namespace) -> None:
     _require_books(root, also=("*_*.json",))
     settings = load_settings(root, missing_ok=True)
 
-    period, account = _lone_positional(root, args.period, args.account)
+    period, _account = _lone_positional(root, args.period, args.account)
+    # The accounts named: one, or an ACCOUNT list (lib/account_list).
+    named = _accounts(args, root, text=_account or "")
 
     cmd = _cmd("taxjson-fees")
-    if account:
-        # Scope to one account by feeding only its parsed per-broker files;
-        # non-broker JSONs (…_base.json etc.) are skipped by taxjson-fees-sum.
-        # Exclude files that actually belong to a LONGER-named sibling
-        # account sharing this prefix (accounts `margin` and `margin_us`:
-        # the glob "margin_*.json" also matches margin_us_ib.json, leaking
-        # the sibling's fees into this account's total).
-        accounts_cfg = load_config(root, missing_ok=True).get("accounts") or {}
-        siblings = [a for a in accounts_cfg
-                    if a != account and a.startswith(f"{account}_")]
-        files = sorted(
-            f for f in cache.glob(f"{account}_*.json")
-            if not any(f.name.startswith(f"{sib}_") for sib in siblings))
-        if not files:
-            _die_input(f"no files for account {account!r} in work/ — run "
-                       f"`tjs run` first, or check the name")
-        cmd += [str(f) for f in files]
+    if named is not None:
+        cmd += [str(f) for f in _fees_sum_files(root, cache, named)]
     else:
         cmd += ["--cache", str(cache)]
         _warn_accounts_without_books(root, _discover_tx_accounts(cache),
@@ -1471,9 +1512,10 @@ def _register_divs_sum(sub: argparse._SubParsersAction) -> None:
                     "record date (`tjs tax-logic` states the "
                     "rule).")
     p_dsum.add_argument("period", nargs="?", help=_PERIOD_HELP)
-    p_dsum.add_argument("account", nargs="?", help="Account (default: all)")
+    p_dsum.add_argument("account", nargs="?", help="Account or comma-separated accounts (default: all)")
     p_dsum.add_argument("--json", action="store_true",
                        help="Emit JSON instead of text")
+    p_dsum.set_defaults(account_list=True)
     p_dsum.set_defaults(func=cmd_divs_sum)
 
 
@@ -1493,9 +1535,10 @@ def _register_dil_sum(sub: argparse._SubParsersAction) -> None:
              "on a Canadian corporation's share, a dividend under ITA "
              "s.260 (also in divs-sum).")
     p_dilsum.add_argument("period", nargs="?", help=_PERIOD_HELP)
-    p_dilsum.add_argument("account", nargs="?", help="Account (default: all)")
+    p_dilsum.add_argument("account", nargs="?", help="Account or comma-separated accounts (default: all)")
     p_dilsum.add_argument("--json", action="store_true",
                          help="Emit JSON instead of text")
+    p_dilsum.set_defaults(account_list=True)
     p_dilsum.set_defaults(func=cmd_dil_sum)
 
 
@@ -1507,9 +1550,10 @@ def _register_roc_sum(sub: argparse._SubParsersAction) -> None:
              "(default: the tax year): the ACB (Canada, T3 box 42) or "
              "basis (USA, Form 1099-DIV box 3) adjustments.")
     p_rsum.add_argument("period", nargs="?", help=_PERIOD_HELP)
-    p_rsum.add_argument("account", nargs="?", help="Account (default: all)")
+    p_rsum.add_argument("account", nargs="?", help="Account or comma-separated accounts (default: all)")
     p_rsum.add_argument("--json", action="store_true",
                        help="Emit JSON instead of text")
+    p_rsum.set_defaults(account_list=True)
     p_rsum.set_defaults(func=cmd_roc_sum)
 
 
@@ -1533,12 +1577,13 @@ def _register_winners_losers(sub: argparse._SubParsersAction) -> None:
                         f"side.")
         p_win.add_argument("period", nargs="?", help=_PERIOD_HELP)
         p_win.add_argument("account", nargs="?",
-                           help="Account (default: all)")
+                           help="Account or comma-separated accounts (default: all)")
         p_win.add_argument("--top", type=int, default=10, metavar="N",
                            help="Show the first N (default: "
                                 "%(default)s); --json carries all")
         p_win.add_argument("--json", action="store_true",
                            help="Emit JSON instead of text")
+        p_win.set_defaults(account_list=True)
         p_win.set_defaults(func=_fn)
 
 
@@ -1551,9 +1596,10 @@ def _register_ccd_sum(sub: argparse._SubParsersAction) -> None:
                     "split into taxable and sheltered parts when "
                     "registered accounts contribute.")
     p_ccd.add_argument("period", nargs="?", help=_PERIOD_HELP)
-    p_ccd.add_argument("account", nargs="?", help="Account (default: all)")
+    p_ccd.add_argument("account", nargs="?", help="Account or comma-separated accounts (default: all)")
     p_ccd.add_argument("--json", action="store_true",
                        help="Emit JSON instead of text")
+    p_ccd.set_defaults(account_list=True)
     p_ccd.set_defaults(func=cmd_ccd_sum)
 
 
@@ -1565,9 +1611,10 @@ def _register_leaps_sum(sub: argparse._SubParsersAction) -> None:
                     "per contract with a total, over a window (default: "
                     "the tax year).")
     p_lsum.add_argument("period", nargs="?", help=_PERIOD_HELP)
-    p_lsum.add_argument("account", nargs="?", help="Account (default: all)")
+    p_lsum.add_argument("account", nargs="?", help="Account or comma-separated accounts (default: all)")
     p_lsum.add_argument("--json", action="store_true",
                        help="Emit JSON instead of text")
+    p_lsum.set_defaults(account_list=True)
     p_lsum.set_defaults(func=cmd_leaps_sum)
 
 
@@ -1578,9 +1625,10 @@ def _register_trades_sum(sub: argparse._SubParsersAction) -> None:
         description="Trade summary per ticker (buys and sells, value, "
                     "fees) over a window (default: the tax year).")
     p_tsum.add_argument("period", nargs="?", help=_PERIOD_HELP)
-    p_tsum.add_argument("account", nargs="?", help="Account (default: all)")
+    p_tsum.add_argument("account", nargs="?", help="Account or comma-separated accounts (default: all)")
     p_tsum.add_argument("--json", action="store_true",
                        help="Emit JSON instead of text")
+    p_tsum.set_defaults(account_list=True)
     p_tsum.set_defaults(func=cmd_trades_sum)
 
 
@@ -1593,13 +1641,14 @@ def _register_fees_sum(sub: argparse._SubParsersAction) -> None:
              "`tjs run` writes to reports/fees.rpt, by account by "
              "default.")
     p_fsum.add_argument("period", nargs="?", help=_PERIOD_HELP)
-    p_fsum.add_argument("account", nargs="?", help="Account (default: all)")
+    p_fsum.add_argument("account", nargs="?", help="Account or comma-separated accounts (default: all)")
     p_fsum.add_argument("--by-account", action=argparse.BooleanOptionalAction,
                         default=True,
                         help="Break fees down by account (default; use "
                              "--no-by-account for brokerage totals only)")
     p_fsum.add_argument("--json", action="store_true",
                         help="Machine-readable JSON instead of the report")
+    p_fsum.set_defaults(account_list=True)
     p_fsum.set_defaults(func=cmd_fees_sum)
 
 

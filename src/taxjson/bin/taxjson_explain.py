@@ -101,11 +101,11 @@ def parse_args():
     parser.add_argument("--id", dest="gain_id", help="Filter to one tx id (prefix match).")
     parser.add_argument("--year", type=tax_year, help="Filter to one tax year.")
     parser.add_argument(
-        "--account", metavar="NAME",
-        help="Show only this account's dispositions; the computation "
-             "still runs on every book given (a merged book's pooled "
-             "ACB and its wash windows), as `tjs wash-sales "
-             "ACCOUNT --explain` passes it.")
+        "--account", metavar="NAME", action="append",
+        help="Show only this account's dispositions (repeat it for "
+             "several); the computation still runs on every book given "
+             "(a merged book's pooled ACB and its wash windows), as `tjs "
+             "wash-sales ACCOUNT[,ACCOUNT...] --explain` passes it.")
     parser.add_argument(
         "--tax-date",
         choices=["trade", "settle"],
@@ -216,8 +216,11 @@ def gain_matches(g, args) -> bool:
         return False
     # A display filter after the pooled run: the merged book's other
     # accounts stay in the computation (backlog TJ-0413).
-    _acct = getattr(args, 'account', None)
-    if _acct and str(g.get('account') or '') != _acct:
+    # --account is repeatable: one name per flag (a list).
+    _acct = getattr(args, 'account', None) or ()
+    if isinstance(_acct, str):
+        _acct = (_acct,)
+    if _acct and str(g.get('account') or '') not in _acct:
         return False
     # A loss the rule would deny that a .tt ALLOWLOSS line claims is
     # listed too: its trace says what the rule would deny and why

@@ -150,7 +150,7 @@ class TestChildErrorKeepsTheErrorLine(unittest.TestCase):
 
 # ----------------------------------------------------------- TJ-0222
 class TestPendingElectionDocument(unittest.TestCase):
-    """`tjs elect --pending --json`: an event's `summary` is its identity
+    """`tjs elections --pending --json`: an event's `summary` is its identity
     (saved manifests match on it), so a spin-off's ratio there counts
     the shares delivered; the cash-in-lieu fields carry the fraction
     paid in cash (decided 2026-10-29: documented in docs/commands.md,
@@ -166,7 +166,7 @@ class TestPendingElectionDocument(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _qt_project(root, "2024-06-14", "2024-06-18")
-            r = _cli(root, "elect", "--pending", "--json")
+            r = _cli(root, "elections", "--pending", "--json")
         self.assertEqual(r.returncode, 0, r.stderr)
         ev = json.loads(r.stdout)["accounts"]["margin"]["pending"][0]
         self.assertIn("(10.0-for-105.0,", ev["summary"])
@@ -178,7 +178,7 @@ class TestPendingElectionDocument(unittest.TestCase):
                          (12.0, "CAD", "2024-06-18"))
         self.assertEqual(ev["cash_in_lieu_parts"], [])     # paid on one day
         doc = (REPO / "docs" / "commands.md").read_text(encoding="utf-8")
-        elect = doc[doc.index("#### tjs elect"):]
+        elect = doc[doc.index("#### tjs elections"):]
         elect = elect[:elect.index("\n#### ", 1)]
         for f in self.FIELDS:
             self.assertIn(f"`{f}`", elect, f)

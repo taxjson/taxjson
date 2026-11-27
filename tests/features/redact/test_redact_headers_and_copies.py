@@ -374,8 +374,9 @@ class TestTheCopysCheckReadsAllOfIt(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             r = tjs(dst, "redact", "--check", "--no-denylist")
             self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-            self.assertIn("warning: reports/ and work/ in the copy: not "
-                          "part of it — what a run of the copy wrote "
+            # (logs/: the run's command log, its header the copy's path)
+            self.assertIn("warning: logs/, reports/ and work/ in the copy: "
+                          "not part of it — what a run of the copy wrote "
                           "(work/ holds this computer's folder paths)",
                           r.stderr)
             self.assertIn("Delete them before sharing the copy.", r.stderr)

@@ -128,12 +128,26 @@ class TestTheOtherSourcesReadAsBefore(unittest.TestCase):
     while the account is short and holds no long covers."""
 
     def test_control_no_convention_the_first_buy_covers(self):
-        for cover in ({}, {'cover_oc': 'C'}, {'cover_desc': COVER}):
+        res, _err = _run(_entry())
+        self.assertEqual(_rows(res),
+                         [('2025-02-03', 'SHORT', 0.0, -500.0, True),
+                          ('2025-05-05', 'LONG', 400.0, 300.0, False)])
+
+    @rule(R.CA_DISP_04, R.CA_ACB_11)
+    def test_no_convention_a_marked_cover_past_the_short_opens_no_long(self):
+        # February covers (no convention); March is marked a cover and
+        # finds no short: a row the broker marks CLOSE opens nothing, so
+        # it is reported by hand as the cover of a short sold before the
+        # files, and May's sale finds no long (it was a long of 400 sold
+        # for a gain of 300: backlog TJ-5349). The run says both rows.
+        for cover in ({'cover_oc': 'C'}, {'cover_desc': COVER}):
             with self.subTest(cover=cover):
-                res, _err = _run(_entry(**cover))
+                res, err = _run(_entry(**cover))
                 self.assertEqual(_rows(res),
                                  [('2025-02-03', 'SHORT', 0.0, -500.0, True),
-                                  ('2025-05-05', 'LONG', 400.0, 300.0, False)])
+                                  ('2025-03-03', 'SHORT', 0.0, -400.0, True)])
+                self.assertEqual([(s, q) for s, q, _c in _held(res)], [(SYM, -10.0)])
+                self.assertEqual(len(_said(err, 'marked cover')), 1)
 
     def test_control_ib_a_blank_code_buy_covers(self):
         # (the reviewer's I3: no long beside an open short)
@@ -177,9 +191,12 @@ class TestTheOtherSourcesReadAsBefore(unittest.TestCase):
         words, plain = _MarkedShortRouter(), _MarkedShortRouter()
         self.assertEqual([words.walk(t) for t in _entry(WORDS, cover_desc=COVER)],
                          [True, False, True, False])
-        # (no convention: February covers, and March finds no short left)
+        # (no convention: February covers, and March, marked a cover,
+        # finds no short left: it is the short pool's all the same, and
+        # books no long: CA-ACB-11)
         self.assertEqual([plain.walk(t) for t in _entry(cover_desc=COVER)],
-                         [True, True, False, False])
+                         [True, True, True, False])
+        self.assertEqual(plain.long.get((SYM, 'm'), 0.0), -10.0)
 
 
 class TestAMarkedCoverThatFindsTheShortGone(unittest.TestCase):
@@ -194,14 +211,16 @@ class TestAMarkedCoverThatFindsTheShortGone(unittest.TestCase):
     @rule(R.CA_DISP_04)
     def test_the_run_names_both_rows(self):
         res, err = _run(self._book())
-        # The .tt line covered; the marked cover found no short and is long.
-        self.assertEqual(_rows(res), [('2025-03-03', 'SHORT', -600.0, 100.0, False)])
-        self.assertEqual(_held(res), [(SYM, 10.0, 450.0)])
+        # The .tt line covered; the marked cover found no short: it is
+        # reported by hand and adds no long (it was a long of 450).
+        self.assertEqual(_rows(res), [('2025-03-03', 'SHORT', -600.0, 100.0, False),
+                                      ('2025-04-01', 'SHORT', 0.0, -450.0, True)])
+        self.assertEqual(_held(res), [])
         line, = _said(err, 'marked cover')
         for word in ('warning: ATTENTION: marked cover: SYN.TO (m): ',
                      f'the purchase of 10 on 2025-03-03 ({TT}) carries no cover mark',
                      f"the broker's marked cover of 10 on 2025-04-01 ({IB})",
-                     'found less short than it buys', 'booked as a long purchase',
+                     'found less short than it buys', 'reported by hand', 'add no long',
                      'remove the unmarked one'):
             self.assertIn(word, line)
 
@@ -210,18 +229,21 @@ class TestAMarkedCoverThatFindsTheShortGone(unittest.TestCase):
         res, err = _run([_tr('2025-02-03', -10, 600, desc=SHORT, marks=WORDS, src=Q1),
                          _tr('2025-03-03', 10, -500, src=TT),
                          _tr('2025-04-01', 10, -450, desc=COVER, marks=WORDS, src=Q1)])
-        self.assertEqual(_held(res), [(SYM, 10.0, 450.0)])
+        self.assertEqual(_held(res), [])
+        self.assertEqual(_rows(res)[-1], ('2025-04-01', 'SHORT', 0.0, -450.0, True))
         self.assertEqual(len(_said(err, 'marked cover')), 1)
 
     @rule(R.CA_DISP_04)
     def test_a_marked_cover_past_what_the_tt_line_left(self):
-        # The .tt line covered 6 of the 10: the marked 10 covers 4, 6 are long.
+        # The .tt line covered 6 of the 10: the marked 10 covers 4, and
+        # its other 6 are reported by hand (they were a long of 6).
         book = self._book()
         book[1] = _tr('2025-03-03', 6, -300, src=TT)
         res, err = _run(book)
-        self.assertEqual([r[:2] for r in _rows(res)],
-                         [('2025-03-03', 'SHORT'), ('2025-04-01', 'SHORT')])
-        self.assertEqual([(s, q) for s, q, _c in _held(res)], [(SYM, 6.0)])
+        self.assertEqual([(r[0], r[1], r[4]) for r in _rows(res)],
+                         [('2025-03-03', 'SHORT', False), ('2025-04-01', 'SHORT', False),
+                          ('2025-04-01', 'SHORT', True)])
+        self.assertEqual(_held(res), [])
         self.assertEqual(len(_said(err, 'marked cover')), 1)
 
     def test_control_the_marked_cover_alone_says_nothing(self):
@@ -241,7 +263,9 @@ class TestAMarkedCoverThatFindsTheShortGone(unittest.TestCase):
                 _tr('2025-09-03', 5, -250, desc=COVER, marks=WORDS, src=Q1)]
         res, err = _run(book)
         self.assertEqual(_said(err, 'marked cover'), [])
-        self.assertEqual(_held(res), [(SYM, 5.0, 250.0)])
+        # (the last marked cover: by hand, no long; it was a long of 5)
+        self.assertEqual(_held(res), [])
+        self.assertEqual(_rows(res)[-1], ('2025-09-03', 'SHORT', 0.0, -250.0, True))
 
 
 class TestTheHistoryCheckReadsTheSameCover(unittest.TestCase):
@@ -389,13 +413,15 @@ class TestAQuestradeProject(unittest.TestCase):
 
     @rule(R.CA_DISP_04)
     def test_a_marked_cover_after_a_plain_buy_is_said(self):
-        # RBC's words in a Questrade file: the plain buy covers as before
-        # (300), and the marked cover that finds no short is named.
+        # RBC's words in a Questrade file: the plain buy covers as before,
+        # and the marked cover that finds no short is named and reported
+        # by hand: it opens no long, so the later sale has none to sell
+        # (it was a gain of 300 on a long of 400; backlog TJ-5349).
         gain, text, _rows_, _found, _w, _held = _run_project({
             'margin/t.tt': 'OPENING 2024-12-31 SYN.TO -10 cost=unknown\n',
             'margin/q.csv': _QH + _q('2025-02-03', 10, 500)
             + _q('2025-03-03', 10, 400, desc=COVER) + _q('2025-05-05', -10, 700)})
-        self.assertAlmostEqual(gain, 300.0, places=2)
+        self.assertAlmostEqual(gain, 0.0, places=2)
         self.assertIn('Warning: Marked cover: SYN.TO (margin)', text)
 
 

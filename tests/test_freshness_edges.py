@@ -146,6 +146,13 @@ NOT_BOOK_INPUTS = (
      "account's folder, the slips and the positions snapshots) reads only the "
      "earliest date written in each, so the fetched rates reach back that far; "
      "the books take a rate by each row's own date"),
+    ("holdings/*", "lib/positions_reports.py:_decode",
+     "a broker's positions report saved in holdings/ (rbc-options' Holdings "
+     "Exports): no book figure comes from it. The run reads it to tell it is one "
+     "(lib/holdings_dir `report_kind`) and for the closing summary's accounts "
+     "with no holdings to check them against (lib/first_run `unchecked_accounts`), "
+     "which reports/run_summary.json keeps: unhashed, that field goes stale when "
+     "holdings/ changes until the next run (backlog TJ-5386)"),
 )
 
 
@@ -437,7 +444,7 @@ class TestFreshnessEdges(unittest.TestCase):
                 names = _record_names(run_root, p)
                 rel = os.path.relpath(p, root)
                 if (names & keys or p in locks
-                        or (Path(p).name == "manifest.json" and _empty_manifest(p))
+                        or (Path(p).name == "elections.json" and _empty_manifest(p))
                         or all(not_book_input(rel, r) for r in read[p])):
                     continue
                 found.append(f"{book}: {rel} (named {' or '.join(sorted(names))}; read by "

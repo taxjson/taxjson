@@ -139,36 +139,36 @@ class TestR2_ElectionsCluster(unittest.TestCase):
             ev = pend["accounts"]["margin"]["pending"][0]["event_id"]
 
             # #7: --set without an account must error, not exit 0 silently.
-            r = _run(root, "elect", "--set", f"{ev}=ignore")
+            r = _run(root, "elections", "--set", f"{ev}=ignore")
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("--set/--hint need an account", r.stderr)
 
             # #34: empty event id refused.
-            r = _run(root, "elect", "margin", "--set", "=ignore")
+            r = _run(root, "elections", "margin", "--set", "=ignore")
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("empty EVENT_ID", r.stderr)
 
             # #6: election validated against THIS event's options.
-            r = _run(root, "elect", "margin", "--set",
+            r = _run(root, "elections", "margin", "--set",
                      f"{ev}=rollover_s_86_1")
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("not valid for event", r.stderr)
 
             # #5: non-numeric hint refused at save time, not next run.
-            r = _run(root, "elect", "margin", "--set",
+            r = _run(root, "elections", "margin", "--set",
                      f"{ev}=taxable_disposition",
                      "--hint", "fmv_per_share=12,50")
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("is not a number", r.stderr)
 
             # Valid save still works.
-            r = _run(root, "elect", "margin", "--set", f"{ev}=ignore")
+            r = _run(root, "elections", "margin", "--set", f"{ev}=ignore")
             self.assertEqual(r.returncode, 0, r.stderr)
-            manifest = root / "inputs" / "margin" / "manifest.json"
+            manifest = root / "inputs" / "margin" / "elections.json"
             self.assertIn(ev, json.loads(manifest.read_text())["elections"])
 
             # #34: --reset --event '' must NOT widen to all elections.
-            r = _run(root, "elect", "margin", "--reset", "--event", "")
+            r = _run(root, "elections", "margin", "--reset", "--event", "")
             self.assertNotEqual(r.returncode, 0)
             self.assertIn(ev,
                           json.loads(manifest.read_text())["elections"])
@@ -176,7 +176,7 @@ class TestR2_ElectionsCluster(unittest.TestCase):
             # #4: --redo without a TTY refuses BEFORE wiping anything.
             r = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
-                 str(root), "elect", "margin", "--redo"],
+                 str(root), "elections", "margin", "--redo"],
                 cwd=REPO_ROOT, capture_output=True, text=True,
                 stdin=subprocess.DEVNULL)
             self.assertNotEqual(r.returncode, 0)
@@ -198,7 +198,7 @@ class TestR2_ElectionsCluster(unittest.TestCase):
             self.assertEqual(sorted(pend["accounts"]),
                              ["broker2", "margin"])
             ev = pend["accounts"]["margin"]["pending"][0]["event_id"]
-            r = _run(root, "elect", "margin", "--set", f"{ev}=ignore")
+            r = _run(root, "elections", "margin", "--set", f"{ev}=ignore")
             self.assertEqual(r.returncode, 0, r.stderr)
             r = _run(root, "run", "--no-input", "--account", "margin")
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -207,7 +207,7 @@ class TestR2_ElectionsCluster(unittest.TestCase):
             self.assertEqual(
                 sorted(json.loads(agg.read_text())["accounts"]),
                 ["broker2"])
-            r = _run(root, "elect", "--pending")
+            r = _run(root, "elections", "--pending")
             self.assertIn("broker2", r.stdout)
 
 

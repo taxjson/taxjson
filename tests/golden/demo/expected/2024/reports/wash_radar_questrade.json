@@ -1,5 +1,8 @@
 {
   "account": "questrade",
+  "account_names": [
+    "questrade"
+  ],
   "as_of_date": "<stamp>",
   "country": "canada",
   "generated_at": "<stamp>",

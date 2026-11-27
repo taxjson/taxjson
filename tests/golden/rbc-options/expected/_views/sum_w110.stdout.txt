@@ -1,0 +1,38 @@
+REALIZED-GAINS SUMMARY — CAD, tax year 2025, basis: wash-adjusted
+REALIZED = NON-OPT (shares, units, futures, crypto) + OPTION; TOTAL = REALIZED + DIVIDEND + PIL.
+
+TAXABLE ACCOUNTS
+ACCOUNT   NON-OPT  OPTION  REALIZED  DIVIDEND   PIL    FEES   TOTAL
+-------------------------------------------------------------------
+margin     284.00  428.75    712.75     47.25  0.00  356.50  760.00
+-------------------------------------------------------------------
+SUBTOTAL   284.00  428.75    712.75     47.25  0.00  356.50  760.00
+
+SHELTERED ACCOUNTS — not taxable
+ACCOUNT   NON-OPT  OPTION  REALIZED  DIVIDEND   PIL   FEES  TOTAL
+-----------------------------------------------------------------
+tfsa         0.00   21.25     21.25      0.00  0.00  15.75  21.25
+-----------------------------------------------------------------
+SUBTOTAL     0.00   21.25     21.25      0.00  0.00  15.75  21.25
+
+ALL ACCOUNTS — sheltered included
+ACCOUNT  NON-OPT  OPTION  REALIZED  DIVIDEND   PIL    FEES   TOTAL
+------------------------------------------------------------------
+margin    284.00  428.75    712.75     47.25  0.00  356.50  760.00
+tfsa        0.00   21.25     21.25      0.00  0.00   15.75   21.25
+------------------------------------------------------------------
+TOTAL     284.00  450.00    734.00     47.25  0.00  372.25  781.25
+
+FOR THE RETURN — taxable accounts (margin), CAD (Schedule 3, tax year 2025)
+GAIN = PROCEEDS − TOTAL COST; DENIED (INFO): information only — COST(ACB) is already reduced by it.
+A deferred one is added to the replacement's ACB; one denied for good is not.
+SCHEDULE 3 LINE                                  PROCEEDS  COST(ACB)  OUTLAYS  TOTAL COST    GAIN  DENIED
+                                                                                                   (INFO)
+---------------------------------------------------------------------------------------------------------
+Line 4 shares & fund units (13199/13200)         5,368.00   4,949.00   135.00    5,084.00  284.00   98.00
+Line 6 options & other properties (15199/15300)    908.00     397.50    81.75      479.25  428.75    0.00
+---------------------------------------------------------------------------------------------------------
+RETURN                                           6,276.00   5,346.50   216.75    5,563.25  712.75   98.00
+
+! FX on foreign cash (line 15300), not in the rows: reportable 0.00 — tjs fx-cash
+Not in the rows: T3/T5 slip capital gains (lines 17600, 17400). More: tjs sum --details

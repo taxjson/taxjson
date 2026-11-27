@@ -95,7 +95,7 @@ NOT_CHECKED = "not checked yet: `tjs checklist --run`"
 # run could not book.
 UNBOOKED_PREFIX = "warning: UNBOOKED:"
 # The sub-commands whose TEXT a detector reads (sanity, find-missing-
-# history, elect --pending, audit, check-filed) run with --details: the
+# history, elections --pending, audit, check-filed) run with --details: the
 # long form, whatever their default view leaves out
 # (docs/output-style.md, Essentials first).
 LONG_FORM = "--details"
@@ -119,7 +119,7 @@ STEPS: List[Tuple[str, str, str, str, str]] = [
     ("roc-entered", "Fill the gaps", "Return of capital (T3 box 42) entered before trusting any ACB",
      "ADJUST lines / [[distributions]] in taxjson.toml",
      "Some funds publish ROC factors only after year end; without them the ACB is overstated."),
-    ("inputs-committed", "Tidy the config", "Inputs, config, maps and manifests committed",
+    ("inputs-committed", "Tidy the config", "Inputs, config, maps and elections committed",
      "git status",
      "The filed books must be rebuildable years later."),
     ("run-clean", "Build the books", "Full run with zero validation errors and nothing pending",
@@ -148,7 +148,7 @@ STEPS: List[Tuple[str, str, str, str, str]] = [
      "A broker journal moves a position from one listing of a security to another; one the books do "
      "not pool leaves a long on one listing and a short on the other, and a sale's cost wrong."),
     ("elections", "Build the books", "No unresolved merger or spin-off election",
-     "tjs elect --pending",
+     "tjs elections --pending",
      "A deferred election leaves the account out of the run."),
     ("crypto-sends", "Fill the gaps", "Crypto sends classified (own wallet, gift or payment)",
      "tjs crypto-sends",
@@ -1160,7 +1160,7 @@ def d_run_clean(ctx: Ctx) -> Result:
             f"rows the run could not book are not in the books "
             f"(`run --strict` refuses them)")
     if pend:
-        problems.append("pending elections (`tjs elect --pending`)")
+        problems.append("pending elections (`tjs elections --pending`)")
     orphans = orphan_work_accounts(ctx.root, ctx.accounts)
     if orphans:
         problems.append(
@@ -1281,7 +1281,7 @@ def d_run_clean(ctx: Ctx) -> Result:
 
 
 # The record's format: 2 = taxjson.toml by the settings `run` reads, the
-# root maps of PROJECT_ROOT_MAPS, manifest.json / sends.json. A record
+# root maps of PROJECT_ROOT_MAPS, elections.json / sends.json. A record
 # without it (1) was written by an older taxjson and is compared the
 # old way until the next full run rewrites it.
 FINGERPRINT_VERSION = 2
@@ -1298,8 +1298,11 @@ _LEGACY_ROOT_INPUTS = ("taxjson.toml", "ticker.map", "distributions.map",
                        "ticker_extraction_overrides.txt")
 # Per-account files `run` reads besides the activity files: the
 # corp-action elections (A2-0124, A2-0126) and a crypto account's send
-# decisions, which regenerate crypto_sends.tt (A2-0358).
-_ACCOUNT_SIDECARS = ("manifest.json", "sends.json")
+# decisions, which regenerate crypto_sends.tt (A2-0358). (A filed year's
+# frozen copy may hold the elections as manifest.json, their name before
+# v3.0.0: _input_paths reads the one project_layout.elections_file names.)
+_ACCOUNT_SIDECARS = (_PL.ELECTIONS, "sends.json")
+_ELECTIONS_NAMES = (_PL.ELECTIONS, _PL.OLD_ELECTIONS)
 # taxjson.toml content no `tjs run` stage reads — planning tables,
 # the estimate's province, handoff's prior-year path, `sanity`'s
 # holdings files and `fetch`'s broker keys. An edit to them (or to a
@@ -1319,9 +1322,12 @@ _PLANNING_SETTINGS = ("province", "prior_year_record", "holdings_dir",
                       # that starts reading an identical shared copy
                       # (`tjs migrate`) is not stale.
                       "tobase_map",
-                      # `tjs technicals`' benchmark: a view's, read by no
-                      # stage and no figure (TJ-4975).
-                      "benchmark")
+                      # `tjs technicals`' and `tjs stress`' benchmark: a
+                      # view's, read by no stage and no figure (TJ-4975).
+                      "benchmark",
+                      # The command logs kept (lib/command_log): read by
+                      # no stage, no figure and no check (TJ-5366).
+                      "log_keep")
 _PLANNING_ACCOUNT_KEYS = ("holdings", "brokerage", "account", "query_id",
                           "broker_accounts",
                           # Read by `tjs t1135` only, not by the run.
@@ -1355,10 +1361,12 @@ def _input_paths(root: Path, cfg: Dict[str, Any]) -> List[Path]:
         folder = _PL.inputs_dir(root) / n
         if not folder.is_dir():
             continue
+        elections = _PL.elections_file(folder, root)
         files = sorted(p for p in folder.iterdir()
                        if p.is_file() and not _skipped_input(p)
                        and (p.suffix.lower() in (".csv", ".tt", ".toml")
-                            or p.name in _ACCOUNT_SIDECARS))
+                            or p.name in _ACCOUNT_SIDECARS[1:]
+                            or p == elections))
         out += files
         out += _layouts_read(root, files)
     return out
@@ -1514,7 +1522,7 @@ def input_fingerprint(root: Path, cfg: Dict[str, Any]) -> Dict[str, str]:
     if locked:
         out[LOCKED_YEARS_KEY] = locked
     for p in _input_paths(root, cfg):
-        if p.name == "manifest.json" and _empty_manifest(p):
+        if p.name in _ELECTIONS_NAMES and _empty_manifest(p):
             continue
         try:
             out[_fp_key(root, p)] = (
@@ -1597,10 +1605,11 @@ def _legacy_input_fingerprint(root: Path, cfg: Dict[str, Any]
 
 
 # The inputs a run may write itself — the elections it asks for
-# (manifest.json), the crypto send decisions (sends.json) and the
+# (elections.json), the crypto send decisions (sends.json) and the
 # crypto_sends.tt they regenerate in a frozen year: recorded as the run
 # leaves them, never as an edit made while it ran.
-_RUN_WRITTEN_NAMES = _ACCOUNT_SIDECARS + ("crypto_sends.tt",)
+_RUN_WRITTEN_NAMES = _ACCOUNT_SIDECARS + (_PL.OLD_ELECTIONS,
+                                          "crypto_sends.tt")
 
 
 def _edited_during_run(started: Dict[str, str], now: Dict[str, str]
@@ -1614,10 +1623,30 @@ def _edited_during_run(started: Dict[str, str], now: Dict[str, str]
             and _fingerprint_name(k) not in _RUN_WRITTEN_NAMES]
 
 
+def _requirement_raised_alone(root: Path, started: Dict[str, str],
+                              files: Dict[str, str],
+                              config_started: Any) -> Dict[str, str]:
+    """`started` with taxjson.toml's digest as it is now when the one key
+    that changed in it while the run read it is requires_taxjson (the
+    run's own elections writer raised it: lib/requires
+    raise_for_elections), which no stage and no figure reads;
+    `config_started` is run_config_state's part at the start."""
+    from taxjson.lib.requires import KEY
+    key = _fp_key(root, root / "taxjson.toml")
+    if started.get(key) in (None, files.get(key)) or key not in files:
+        return started
+    now = run_config_state(root / "taxjson.toml")
+    if now is None or run_config_keys_changed(
+            config_started, now[1]) != [f"settings.{KEY}"]:
+        return started
+    return {**started, key: files[key]}
+
+
 def record_input_fingerprint(root: Path, cfg: Dict[str, Any], *,
                              booked_twice: Sequence[str] = (),
                              started: Optional[Dict[str, str]] = None,
-                             code: Optional[str] = None) -> List[str]:
+                             code: Optional[str] = None,
+                             config_started: Any = None) -> List[str]:
     """Called by a successful FULL `tjs run`: what the reports were
     built from, for run-clean's staleness check. `booked_twice`: what
     the run found booked in two accounts (one export file in two
@@ -1631,12 +1660,17 @@ def record_input_fingerprint(root: Path, cfg: Dict[str, Any], *,
     calculated (backlog TJ-0929). `code`: the package fingerprint of the
     taxjson that built them (pipeline/freshness), so the filing commands
     refuse books another taxjson built (fingerprint_record `books_code`).
-    Returns those inputs' keys."""
+    `config_started`: taxjson.toml's run-read part at the start
+    (run_config_state): requires_taxjson raised alone meanwhile is no
+    edit (_requirement_raised_alone). Returns those inputs' keys."""
     work = root / "work"
     work.mkdir(parents=True, exist_ok=True)
     files = input_fingerprint(root, cfg)
     edited: List[str] = []
     if started is not None:
+        if config_started is not None:
+            started = _requirement_raised_alone(root, started, files,
+                                                config_started)
         edited = _edited_during_run(started, files)
         for k in edited:
             if k in started:
@@ -1731,11 +1765,9 @@ def inputs_changed(root: Path, cfg: Dict[str, Any], *,
     legacy = set(_canon_fingerprint(doc["files"]))
     newer = sorted(_fp_key(root, p)
                    for p in _input_paths(root, cfg)
-                   if _LEGACY_INPUT_NAMES.get(_fp_key(root, p),
-                                              _fp_key(root, p))
-                   not in legacy
+                   if _canon_key(_fp_key(root, p)) not in legacy
                    and p.name != "taxjson.toml"
-                   and not (p.name == "manifest.json" and _empty_manifest(p))
+                   and not (p.name in _ELECTIONS_NAMES and _empty_manifest(p))
                    and p.stat().st_mtime > since + 1)
     if newer:
         return "changed: " + ", ".join(newer[:3]) + (
@@ -1907,9 +1939,19 @@ def _same_tobase(before: Dict[str, str], now: Dict[str, str]
 
 def _canon_fingerprint(files: Dict[str, str]) -> Dict[str, str]:
     """A fingerprint's files with legacy names keyed by their new name
-    (phantoms.json -> missing_history.json), so a rename alone — or a
-    record an older taxjson wrote — is not a change."""
-    return {_LEGACY_INPUT_NAMES.get(k, k): v for k, v in files.items()}
+    (phantoms.json -> missing_history.json; an account's
+    <folder>/<account>/manifest.json -> elections.json, its name since
+    v3.0.0: _canon_key), so a rename alone — or a record an older taxjson
+    wrote — is not a change."""
+    return {_canon_key(k): v for k, v in files.items()}
+
+
+def _canon_key(k: str) -> str:
+    """A fingerprint key by the file's name now (_canon_fingerprint)."""
+    parts = k.split("/")
+    if len(parts) == 3 and parts[2] == _PL.OLD_ELECTIONS:
+        return f"{parts[0]}/{parts[1]}/{_PL.ELECTIONS}"
+    return _LEGACY_INPUT_NAMES.get(k, k)
 
 
 def _fingerprint_diff(before: Dict[str, str], now: Dict[str, str]) -> str:
@@ -1969,14 +2011,31 @@ def _sanity_differences(out: str) -> str:
 def d_sanity(ctx: Ctx) -> Result:
     """The step's verdict is `tjs sanity`'s own, run here (`--run`; a
     plain `tjs checklist` shows the one it stored): `tjs run` compares
-    nothing with the holdings files, and writes no verdict of its own."""
+    nothing with the holdings files, and writes no verdict of its own.
+    In a folder every year shares, the snapshots of other years the
+    year leaves out are counted on the line, as sanity's note names
+    them (lib/holdings_dir other_years_files; backlog TJ-5431)."""
+    from taxjson.lib.holdings_dir import other_years_files
+    n = len(other_years_files(ctx.root))
+    r = _sanity_verdict(ctx, n)
+    if n:
+        r.detail += (f"; {n} snapshot(s) of other years not compared — "
+                     f"`tjs sanity` names them")
+    return r
+
+
+def _sanity_verdict(ctx: Ctx, others: int) -> Result:
+    """d_sanity's verdict, `tjs sanity`'s own (`others`: the snapshots
+    of other years in the folder, which are not the year's)."""
     from taxjson.lib.holdings_dir import in_use
     from taxjson.lib.report_model import resolve_gains_files
     no_files = not in_use(ctx.root, ctx.accounts)
     if no_files:
         _hold = _PL.shown(_PL.holdings_folder(ctx.root), ctx.root)
         manual = Result("sanity", "manual",
-                        f"no positions snapshot in {_hold}/ and no "
+                        f"no positions snapshot "
+                        f"{'of this year ' if others else ''}in {_hold}/ "
+                        f"and no "
                         f"`holdings = [...]` in taxjson.toml — save the "
                         f"broker's positions in {_hold}/, or run `tjs "
                         f"sanity ACCOUNT=FILE.toml` by hand")
@@ -2112,9 +2171,9 @@ def d_missing_history(ctx: Ctx) -> Result:
     # (backlog TJ-2770). A question when it is the only finding: the
     # files cannot tell the cost, so a DONE mark (the sale is reported
     # by hand) answers the sales it saw; a later one asks again.
-    unknown = _unknown_cost_rows(ctx)
-    if unknown:
+    if (unknown := _unknown_cost_rows(ctx)):
         said.append(_unknown_cost_said(unknown, ctx.year))
+        syms = [t for t in syms if not _said_by_hand(t, unknown)]
         # A line whose units were sold at an unknown cost (the source
         # of a row) is in use: never offered for removal (a REMOVE row,
         # TJ-3237) nor for deletion (a STALE row: another account's sale
@@ -2167,6 +2226,19 @@ def d_missing_history(ctx: Ctx) -> Result:
                       f"{len(syms)} position(s) with missing basis affect "
                       f"{ctx.year}: {_shown(syms)}")
     return Result("missing-history", "done", "nothing affects the year")
+
+
+def _said_by_hand(pair: str, unknown: List[Dict[str, Any]]) -> bool:
+    """Whether find-missing-history's AFFECTS row `pair` ("SYMBOL
+    (account…)") is a row the run reports by hand because the broker
+    marks its trade closing (the stored row's `marked_close` source):
+    said with the unknown-cost rows, so not counted again as a position
+    with missing basis (backlog TJ-5374)."""
+    sym, _, rest = pair.partition(" (")
+    acct = re.split(r"[;,)]", rest, maxsplit=1)[0]
+    return any(src.get("marked_close") and src.get("symbol") == sym
+               and src.get("account") == acct
+               for r in unknown for src in r.get("sources") or [])
 
 
 def _first_run():
@@ -2266,7 +2338,7 @@ def _zero_value_elections(ctx: Ctx) -> int:
 
 
 def d_elections(ctx: Ctx) -> Result:
-    code, out, err = ctx.sub("elect", "--pending", LONG_FORM)
+    code, out, err = ctx.sub("elections", "--pending", LONG_FORM)
     # A deferred FMV is an unresolved election too: booked at $0 it
     # carries no income and a $0 cost for the new shares (R1-11).
     zero = _zero_value_elections(ctx)
@@ -2279,7 +2351,7 @@ def d_elections(ctx: Ctx) -> Result:
         return Result("elections", "attention",
                       f"{zero} spin-off/merger(s) booked at $0 — set "
                       f"fmv_per_share (or {roll}) "
-                      f"with `tjs elect` (see "
+                      f"with `tjs elections` (see "
                       f"the .sum DIAGNOSTICS)")
     if "No pending elections" in out or (code == 0 and not out.strip()):
         return Result("elections", "done", "none pending")
@@ -2454,7 +2526,7 @@ def d_audit(ctx: Ctx) -> Result:
     if pending:
         return Result("audit", "blocked",
                       f"corp-action elections pending for "
-                      f"{', '.join(pending)} — `tjs elect --pending`, "
+                      f"{', '.join(pending)} — `tjs elections --pending`, "
                       f"then `tjs run`")
     code, out, err = ctx.sub("audit", LONG_FORM)
     if not out:
@@ -2693,7 +2765,8 @@ def _us_expired_options(ctx: Ctx) -> Result:
                 continue
         found += [dict(x, account=x["account"] or name) for x in
                   expired_open(txs, ctx.year, today=ctx.today,
-                               tax_date=_tax_date_of(ctx))]
+                               tax_date=_tax_date_of(ctx),
+                               country=ctx.settings.country or None)]
     if found:
         shown = ", ".join(f"{x['symbol']} {x['quantity']:g} ({x['account']}, "
                           f"expired {x['expiry']})" for x in found[:3])
@@ -4085,7 +4158,9 @@ EXCLUDED: Dict[str, str] = {
     "unclose-year": "takes back a close made by mistake: no step of the "
                     "filing needs it",
     "technicals": "market statistics of the holdings (moving averages, RSI, "
-                  "beta): no step of the filing reads them",
+                  "ATR%, beta): no step of the filing reads them",
+    "stress": "an estimate of the holdings' change for an index move (beta, "
+              "Black-Scholes): no step of the filing reads it",
     "clean": "optional at any step: removes what `tjs run` wrote, which "
              "the next run (step one of the list again) builds anew",
 }
@@ -4166,7 +4241,7 @@ def _spec(year: int, country: Optional[str]) -> List[Item]:
              "loss in a taxable account. Crypto rows are dated in "
              "local_timezone.",
              (Cmd("tjs migrate", "an older project: moves its old map "
-                  "files into ticker.map / taxjson.toml"),
+                  "files into ticker.map / taxjson.toml, renames manifest.json"),
               Cmd(f"tjs align --from {year - 1}", "another year's "
                   "ticker.map lines and settings that differ")),
              how="One [accounts.NAME] section per account you have "
@@ -4222,9 +4297,9 @@ def _spec(year: int, country: Optional[str]) -> List[Item]:
         _check("elections",
                "An account with an open election is left out of the run; "
                "a spin-off valued at $0 books no income and a $0 cost.",
-               (Cmd("tjs elect --pending", "what is open, with ready "
+               (Cmd("tjs elections --pending", "what is open, with ready "
                     "--set lines"),
-                Cmd("tjs elect ACCOUNT --set ID=ELECTION", "record one"),
+                Cmd("tjs elections ACCOUNT --set ID=ELECTION", "record one"),
                 Cmd("tjs spinoffs", "each spin-off's election, value and "
                     "cost; `tjs splits`: splits and consolidations"))),
         # -------------------------------------------------- fill the gaps
@@ -5294,13 +5369,19 @@ def _stamp(when: Optional[datetime] = None) -> str:
 
 
 def _check_only_files(ctx: Ctx) -> List[Path]:
-    """The files only the checks read (`tjs run` reads none of
-    them, so input_fingerprint leaves them out): the positions
-    snapshots sanity compares against (holdings/ and each account's
-    `holdings = [...]`), the slips (inputs/slips/) and the filed-year
-    locks (filed/)."""
-    from taxjson.lib.holdings_dir import listed_files, snapshot_files
-    out = set(snapshot_files(_PL.holdings_folder(ctx.root)))
+    """The files the checks read that no book figure comes from, so
+    input_fingerprint leaves them out: the positions snapshots sanity
+    compares against (holdings/ and each account's `holdings =
+    [...]`), the slips (inputs/slips/) and the filed-year locks
+    (filed/). `tjs run` reads some of them too: the rates window the
+    slips' and snapshots' dates, lib/holdings_dir `report_kind` the
+    snapshots, and reports/run_summary.json's `unchecked_accounts` is
+    written from the snapshots, which a holdings change leaves stale
+    until the next run (backlog TJ-5386)."""
+    from taxjson.lib.holdings_dir import listed_files, year_files
+    # (a folder every year shares: the year's own snapshots, so another
+    # year's new one leaves this year's verdict fresh)
+    out = set(year_files(ctx.root)[0])
     out |= {p for p in listed_files(ctx.root, ctx.accounts) if p.is_file()}
     for folder in (_PL.slips_dir(ctx.root), ctx.root / "filed"):
         if folder.is_dir():
@@ -5328,8 +5409,9 @@ PLANNING_CONFIG_KEY = "taxjson.toml (planning settings)"
 
 # The [settings] keys of _PLANNING_SETTINGS that no check reads either:
 # a view's alone, so setting one leaves the kept verdicts fresh too
-# (tjs technicals' benchmark; TJ-4975).
-_VIEW_ONLY_SETTINGS = frozenset({"benchmark"})
+# (tjs technicals' and tjs stress' benchmark, TJ-4975; the command logs
+# kept, TJ-5366).
+_VIEW_ONLY_SETTINGS = frozenset({"benchmark", "log_keep"})
 
 
 def _planning_config_digest(path: Path) -> Optional[str]:
@@ -5859,7 +5941,8 @@ def once_progress() -> Callable[[str, str], None]:
 # ------------------------------------------------------------------ output
 def _project_cmds(it: Item, root: Optional[Path], year: int) -> Item:
     """Item `it` as it applies in the project at `root`. The configure
-    step's commands: `tjs migrate` only beside its old map files, `tjs
+    step's commands: `tjs migrate` only beside its old map files (or an
+    account's elections under their old name, manifest.json), `tjs
     align --from` only with another year's project beside it (from the
     latest earlier one) — a first project's step offered both, and each
     failed (backlog TJ-0034). The explore step's `tjs staking` only with
@@ -5896,8 +5979,12 @@ def _project_cmds(it: Item, root: Optional[Path], year: int) -> Item:
     earlier = [y for y in others if y < year]
     src = max(earlier) if earlier else min(others, default=None)
     cmds = []
+    _accts = _PL.read_config_soft(root).get("accounts")
+    old_elections = _PL.old_elections_problem(
+        root, list(_accts) if isinstance(_accts, dict) else [])
     for c in it.cmds:
-        if c.command == "tjs migrate" and not legacy_files(root, True):
+        if c.command == "tjs migrate" and not legacy_files(root, True) \
+                and old_elections is None:
             continue
         if c.command.startswith("tjs align --from "):
             if src is None:

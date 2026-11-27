@@ -12,9 +12,11 @@
 #
 # --prepare makes the VERSION COMMIT and lands it on main, without a tag:
 #   1. refuses on a dirty tree, off main, behind origin/main, when the
-#      tag exists, or when an earlier --prepare's version commit, not yet
+#      tag exists, when an earlier --prepare's version commit, not yet
 #      landed, has commits on top of it (it must land last: GitHub CI
-#      runs on the head of a push only);
+#      runs on the head of a push only), or when a layout feature new
+#      in lib/requires.FEATURES since the last release (a name its
+#      FEATURES did not have) names another release than this one;
 #   2. turns the CHANGELOG's "## Unreleased" into "## vX.Y.Z (date)" (or
 #      requires that heading to exist already), each "Fixed in:
 #      unreleased" in docs/troubleshooting.md into the tag, and
@@ -176,6 +178,25 @@ if [ -n "$PREPARE" ]; then
   if [ -n "$VC" ] && [ "$VC" != "$(git rev-parse HEAD)" ]; then
     echo "the version commit of $TAG (${VC:0:9}) is not the last commit on local main: $(git rev-list --count "$VC..HEAD") commit(s) follow it, so it would land in the middle of a push, and GitHub CI runs on the head of a push only (the cut would find no run on it). Take it out and prepare again, which makes it anew on top: git rebase --onto ${VC:0:9}~1 ${VC:0:9}, then scripts/release.sh $TAG --prepare"
     exit 1
+  fi
+  # A layout feature new in lib/requires.FEATURES since the last release
+  # (a name the tag's FEATURES did not have) names this release: its
+  # writers put that version in a project's requires_taxjson, which every
+  # older release refuses (a development tree runs it before its install
+  # says so: lib/requires.newest_read). A new feature naming another
+  # version would send users to one that does not exist, or let the last
+  # release run a project it cannot read. A released feature's line is
+  # not this check's (its version is a release that reads it already).
+  PREV="$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null || true)"
+  if [ -n "$PREV" ] && [ -f src/taxjson/lib/requires.py ]; then
+    FEAT_RE='s/^ *Feature\("([a-z_]+)", "([0-9.]+)".*/\1 \2/p'
+    OLDF="$(git show "$PREV:src/taxjson/lib/requires.py" 2>/dev/null | sed -nE "$FEAT_RE" | cut -d' ' -f1 | paste -sd' ' -)"
+    BADF="$(git show HEAD:src/taxjson/lib/requires.py | sed -nE "$FEAT_RE" \
+      | awk -v v="$V" -v old="$OLDF" 'BEGIN { n = split(old, o, " "); for (i = 1; i <= n; i++) had[o[i]] = 1 } !($1 in had) && $2 != v')"
+    if [ -n "$BADF" ]; then
+      echo "src/taxjson/lib/requires.py FEATURES new since $PREV: $(echo "$BADF" | sed 's/ / (/; s/$/)/' | paste -sd, - | sed 's/,/, /g') — this release, $V, is the first that reads a feature new since the last one: set its version to \"$V\" (commit that first), then prepare again"
+      exit 1
+    fi
   fi
   # A PASS of the full gate on this exact tree (the clean tree being
   # released, before the release's own edits), recorded by scripts/ci.sh.

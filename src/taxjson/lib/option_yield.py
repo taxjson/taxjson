@@ -278,7 +278,7 @@ def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
     new series before a noon-stamped split read as a new long (backlog
     TJ-0697). False: by the clock, as the US engine does."""
     from types import SimpleNamespace
-    from taxjson.lib.unbacked_close import OrderStarts, unbacked_close
+    from taxjson.lib.unbacked_close import CloseWalk
     size_of = size_of or default_size
     every = [(a, t) for a, t in rows
              if _row(t, "action", "") in ("BUYSELL", "ASSIGN", "SPLIT",
@@ -343,7 +343,7 @@ def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
     pos: Dict[Tuple[str, str], float] = {}
     open_lots: Dict[Tuple[str, str], List[Lot]] = {}
     out: List[Lot] = []
-    orders = OrderStarts()
+    closes = CloseWalk()
     for seq, (acct, t) in enumerate(opts):
         sym = str(_row(t, "symbol", "") or "").upper()
         key = (acct, sym)
@@ -434,14 +434,14 @@ def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
         # .tt OPENING cost=unknown line makes it (opened on no date of
         # the data: `opened` ""), never a new write (a sale) or a new
         # long (a buy), as option-boundary reads it (backlog TJ-0565).
+        # The one rule's reading (lib/unbacked_close, TJ-5349).
         ev = SimpleNamespace(quantity=q,
                              open_close=str(_row(t, "open_close", "") or ""),
+                             no_clock=str(_row(t, "no_clock", "") or ""), description=str(_row(t, "description", "") or ""),
                              date=d, time=str(_row(t, "time", "") or ""))
-        p_order = orders.prev(key, ev, p)
-        unbacked = 0.0
-        if (action == "BUYSELL" and opening > _EPS
-                and unbacked_close(ev, p, p_order)):
-            unbacked, opening = opening, 0.0
+        unbacked = closes.read(key, ev, p).unbacked if action == "BUYSELL" else 0.0
+        if unbacked > _EPS:
+            opening = max(opening - unbacked, 0.0)
             lot = Lot(account=acct, symbol=sym, underlying=und,
                       right=parse_option_right(sym) or "",
                       strike=strike, expiry=parse_option_expiry(sym) or "",

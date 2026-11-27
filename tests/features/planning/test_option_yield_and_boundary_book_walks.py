@@ -353,13 +353,22 @@ class OptionCloseCheckTest(unittest.TestCase):
                                         self.t(1, "15:00:00", "O")])
         self.assertEqual([(f["side"], f["date"], f["quantity"])
                           for f in found], [("sale", "2026-01-02", -1.0)])
-        # Rows with no clock (RBC), midnight stamps (Questrade) or one
-        # stamp can go either way: the day's opening still backs it.
+        # The check reads the rows in the books' order and looks no
+        # further (lib/unbacked_close, backlog TJ-5349): a close listed
+        # ahead of the day's opening at one stamp, or with no stamp, is
+        # unbacked here as it is in the engine. A source with no clock
+        # (RBC) has its parser put the day's OPEN row first.
         for close_t, open_t in (("", ""), ("00:00:00", "00:00:00"),
                                 ("09:00:00", "09:00:00"), ("", "15:00:00")):
             with self.subTest(close=close_t, opening=open_t):
-                self.assertEqual(unbacked_option_closes(
-                    [self.t(-1, close_t, "C"), self.t(1, open_t, "O")]), [])
+                self.assertEqual(
+                    [f["unbacked"] for f in unbacked_option_closes(
+                        [self.t(-1, close_t, "C"), self.t(1, open_t, "O")],
+                        "canada")], [1.0])
+                if close_t == open_t:       # (one stamp: the rows' order)
+                    self.assertEqual(unbacked_option_closes(
+                        [self.t(1, open_t, "O"), self.t(-1, close_t, "C")],
+                        "canada"), [])
 
 
 if __name__ == "__main__":

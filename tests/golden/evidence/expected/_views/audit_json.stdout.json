@@ -316,6 +316,91 @@
       "warnings": []
     },
     {
+      "account": "margin",
+      "cost": 0.0,
+      "date": "2025-03-18",
+      "date_settle": "2025-03-19",
+      "days_held": 20165,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "failures": [],
+      "fx": {
+        "book_net": 807.975,
+        "computed_net": 807.975,
+        "from": "USD",
+        "nominal_net": 598.5,
+        "priced_by_fill": false,
+        "rate": 1.35,
+        "rate_date": "2025-03-19",
+        "rate_kind": "exact",
+        "rate_source_date": "2025-03-19",
+        "ties": true,
+        "to": "CAD"
+      },
+      "gain": 807.975,
+      "grant": false,
+      "id": "5b42f8e66d084232",
+      "is_option": false,
+      "is_wash_sale": false,
+      "manual_reporting": true,
+      "mapping": "unchanged",
+      "permanently_disallowed": 0.0,
+      "proceeds": 807.975,
+      "qty": 15.0,
+      "raw_gain": 807.975,
+      "replacements": [],
+      "sources": [
+        {
+          "file": "margin_ib.json (ib_2025.csv)",
+          "row": {
+            "account": "margin",
+            "action": "BUYSELL",
+            "broker_basis": "451.00 USD",
+            "broker_lots": "2024-01-10 10 280.50;2024-06-14 5 170.50",
+            "commission": 0.0,
+            "commission_refunds": "2025-03-24 1.5",
+            "corp_election": "",
+            "corp_event_id": "",
+            "currency": "USD",
+            "date": "2025-03-18",
+            "date_settle": "2025-03-19",
+            "description": "SAMPLA",
+            "fee": 1.5,
+            "gross_amount": 600.0,
+            "id": "5b42f8e66d084232",
+            "isin": "US9990000011",
+            "net_amount": 598.5,
+            "open_close": "C",
+            "price": 40.0,
+            "proceeds": 0.0,
+            "quantity": -15.0,
+            "security_name": "SAMPLA CORP",
+            "source": "ib_2025.csv",
+            "source_account": "4a8fee2110",
+            "symbol": "SAMPLA.US",
+            "symbol_new": "",
+            "time": "10:00:00",
+            "type": ""
+          }
+        }
+      ],
+      "symbol": "SAMPLA.US",
+      "term": null,
+      "tie_out": {
+        "manual": true,
+        "mismatched": [],
+        "records": 1,
+        "ties": null
+      },
+      "trace": [
+        "# --- ACB CALCULATION TRACE: SAMPLA.US ---",
+        "# 2025-03-18 OPENING_BALANCE    15.0000 | Missing history (bought before the data) \u2014 cost UNKNOWN until the pool drains to zero",
+        "# 2025-03-18 BUYSELL   -15.0000 @ 54.0000 | Fee: 2.0250 | Proceeds:   807.9750 | Cost_Basis:     0.0000 | Gain:   807.9750 | Gain/Sh: 53.8650"
+      ],
+      "warnings": []
+    },
+    {
       "account": "rbc",
       "cost": 162.0,
       "date": "2025-11-03",
@@ -482,9 +567,9 @@
   ],
   "failed": false,
   "manual_reporting": {
-    "events": 0,
-    "proceeds": 0,
-    "qty": 0
+    "events": 1,
+    "proceeds": 807.98,
+    "qty": 15.0
   },
   "not_audited": [],
   "pool_other_rows": {

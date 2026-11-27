@@ -436,7 +436,7 @@ class TestMergeRefusesUnreadableInput(unittest.TestCase):
 
 
 class TestFilingReminderSurvivesABadManifest(unittest.TestCase):
-    """S038-23: one unreadable manifest.json silently dropped the end-
+    """S038-23: one unreadable elections.json silently dropped the end-
     of-run FILING REQUIRED reminder for every account."""
 
     def test_other_accounts_reminder_still_prints(self):
@@ -446,17 +446,17 @@ class TestFilingReminderSurvivesABadManifest(unittest.TestCase):
             (root / "inputs" / "zmargin").mkdir()
             (root / "inputs" / "zmargin" / "q.csv").write_text(
                 _MARGIN_CSV.replace("55500001", "55500003"))
-            (root / "inputs" / "margin" / "manifest.json").write_text(
+            (root / "inputs" / "margin" / "elections.json").write_text(
                 json.dumps({"elections": {"ev1": {
                     "summary": "2025-03-01 spin-off XEI.TO",
                     "election": "rollover_s_86_1",
                     "hints": {"allocated_acb_cad": 10.0}}}}))
-            (root / "inputs" / "zmargin" / "manifest.json").write_text(
+            (root / "inputs" / "zmargin" / "elections.json").write_text(
                 "<<<<<<< HEAD\n{}\n")
             r = _run_cli(root, "run", "--no-input")
         self.assertIn("FILING REQUIRED", r.stderr)
         self.assertIn("zmargin", r.stderr)
-        self.assertIn("manifest.json", r.stderr)
+        self.assertIn("elections.json", r.stderr)
 
 
 class TestSpreadsheetInSubfolderWarns(unittest.TestCase):
@@ -802,7 +802,7 @@ class TestUnblendedBooksAreNotRunClean(unittest.TestCase):
 
 
 class TestElectionHintsAreAmounts(unittest.TestCase):
-    """S039-00: `elect --hint allocated_acb=-2000` (and the interactive
+    """S039-00: `elections --hint allocated_acb=-2000` (and the interactive
     prompt) saved a negative hint — basis created from nothing, negative
     dividend income — and nan/inf failed only on the next run."""
 
@@ -811,19 +811,19 @@ class TestElectionHintsAreAmounts(unittest.TestCase):
             root = _project(tmp)
             for v in ("-2000", "nan", "inf"):
                 with self.subTest(v=v):
-                    r = _run_cli(root, "elect", "margin", "--set",
+                    r = _run_cli(root, "elections", "margin", "--set",
                                  "ev1=rollover_s_86_1", "--hint",
                                  f"allocated_acb_cad={v}")
                     self.assertNotEqual(r.returncode, 0)
                     self.assertIn("allocated_acb_cad", r.stderr)
-            self.assertFalse((root / "inputs" / "margin" / "manifest.json")
+            self.assertFalse((root / "inputs" / "margin" / "elections.json")
                              .exists() and "-2000" in (
-                root / "inputs" / "margin" / "manifest.json").read_text())
+                root / "inputs" / "margin" / "elections.json").read_text())
 
     def test_hand_edited_negative_hint_is_refused_on_load(self):
         from taxjson.lib.corp_actions import Manifest
         with tempfile.TemporaryDirectory() as tmp:
-            p = Path(tmp) / "manifest.json"
+            p = Path(tmp) / "elections.json"
             p.write_text(json.dumps({"elections": {"ev1": {
                 "summary": "x", "election": "taxable_deemed_dividend",
                 "hints": {"fmv_per_share": -3}}}}))
@@ -862,7 +862,7 @@ class TestCorpActionsFollowSecurityOverrides(unittest.TestCase):
                 pend = json.loads((root / "work" / "pending_elections.json")
                                   .read_text())
                 for ev in pend["accounts"]["margin"]["pending"]:
-                    _run_cli(root, "elect", "margin", "--set",
+                    _run_cli(root, "elections", "margin", "--set",
                              f"{ev['event_id']}=taxable_disposition")
                 r = _run_cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])

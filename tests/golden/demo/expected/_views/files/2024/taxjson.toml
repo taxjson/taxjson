@@ -21,7 +21,7 @@ local_timezone                    = "America/Toronto"
 province                          = "ON"      # ON | BC | AB
 ## The oldest taxjson this project runs on: an older one refuses it. Written by `tjs init`,
 ## `new-year` and `migrate` for the layout they make; never lower it.
-requires_taxjson                  = ">=0.27.1"
+requires_taxjson                  = ">=3.0.0"
 ## Default settle: CRA dates a sale by settlement.
 tax_date                          = "settle"  # settle | trade
 ## The tax year the pipeline reports on (required).

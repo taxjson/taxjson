@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from taxjson.lib.stage_msg import emit_line
 import re
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
 from decimal import Decimal
 
@@ -74,15 +74,28 @@ def _own_move_view(transactions: List['TaxTransaction']
     return transactions
 
 
-def _unknown_sources(pool: AcbPool, more: Iterable[Dict[str, Any]]
-                     ) -> List[Dict[str, Any]]:
+def _unknown_sources(pool: AcbPool, more: Iterable[Dict[str, Any]],
+                     own: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     """The OPENING cost=unknown rows a tainted disposition's record names
-    (`unknown_cost_from`): the pool's and `more` (an option's that
+    (`unknown_cost_from`): the pool's (`own` given: the closing account's
+    own, AcbPool.written_taint) and `more` (an option's that
     delivered the shares), each once."""
-    out = [dict(_s) for _s in pool.unknown_from]
+    out = [dict(_s) for _s in (pool.unknown_from if own is None else own)]
     out += [dict(_s) for _s in more if _s not in out]
     return out
 
+
+
+def _unknown_cost_keys(pool: AcbPool) -> Dict[str, Any]:
+    """An inventory row's keys for a pool holding units of unknown cost:
+    `unknown_cost`, and `unknown_cost_from`, the marked CLOSE rows whose
+    unbacked units left it so (lib/unbacked_close; none: an OPENING
+    cost=unknown line's units, or an own move's), so a view can say that
+    another account's close is why (backlog TJ-5376)."""
+    if not pool.tainted:
+        return {}
+    marked = [dict(s) for s in pool.unknown_from if s.get('marked_close')]
+    return {'unknown_cost': True, **({'unknown_cost_from': marked} if marked else {})}
 
 
 def _own_move_only(pool: AcbPool) -> List[str]:

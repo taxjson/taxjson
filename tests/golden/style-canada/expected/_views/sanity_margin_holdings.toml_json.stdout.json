@@ -8,8 +8,8 @@
   "complete": true,
   "cost": {
     "accounts_not_compared": [],
-    "compared": 7,
-    "matched": 6,
+    "compared": 6,
+    "matched": 5,
     "not_compared": 0,
     "rows": [
       {
@@ -45,23 +45,6 @@
         "reasons": [],
         "status": "match",
         "symbol": "NVDA.US"
-      },
-      {
-        "accounts": [
-          "margin"
-        ],
-        "basis": "native USD books (this account's own cost: no superficial-loss additions, no s.47 pooling)",
-        "books_cost": -999.0,
-        "broker_cost": -999.0,
-        "cost_currency": "USD",
-        "cost_kind": "average cost",
-        "diff": 0.0,
-        "explained": false,
-        "note": "",
-        "quantity": -50.0,
-        "reasons": [],
-        "status": "match",
-        "symbol": "OLDCO.US"
       },
       {
         "accounts": [

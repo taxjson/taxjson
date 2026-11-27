@@ -48,9 +48,16 @@ def _toml(year, country="canada", extra=""):
 
 
 def _snapshot(root):
-    """{relative path: sha256} of every file under `root`."""
+    """{relative path: sha256} of every file under `root` but the command
+    logs (the project's or a year's logs/: each command writes its own)."""
     return {str(p.relative_to(root)): hashlib.sha256(p.read_bytes())
-            .hexdigest() for p in Path(root).rglob("*") if p.is_file()}
+            .hexdigest() for p in Path(root).rglob("*") if p.is_file()
+            and not _command_log(p.relative_to(root).parts)}
+
+
+def _command_log(parts):
+    return parts[:1] == ("logs",) or (parts[1:2] == ("logs",)
+                                      and parts[0].isdigit())
 
 
 class TestMigratePlansEveryPhaseFirst(unittest.TestCase):

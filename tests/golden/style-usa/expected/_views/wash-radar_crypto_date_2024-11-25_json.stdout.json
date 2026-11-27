@@ -1,5 +1,8 @@
 {
   "account": "crypto",
+  "account_names": [
+    "crypto"
+  ],
   "as_of_date": "<stamp>",
   "country": "usa",
   "generated_at": "<stamp>",

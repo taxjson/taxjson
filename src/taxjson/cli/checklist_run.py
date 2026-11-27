@@ -21,6 +21,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from taxjson.cli.common import _double_roc_warnings, _year_keep
 from taxjson.cli.estimate import _fx_cash_status
 from taxjson.lib import out as _out
+from taxjson.lib.command_log import ask as _ask
 from taxjson.lib.checklist import RunHelpers
 from taxjson.lib.dispatch import python_module_argv
 from taxjson.pipeline.config import _country, _refuse_outside_dir_links, load_config
@@ -174,7 +175,10 @@ def _checklist_config(root: Path) -> Tuple[Dict[str, Any], str]:
     from taxjson.lib.country import CountryError, settings_country
     buf = io.StringIO()
     try:
-        with contextlib.redirect_stderr(buf):
+        # Captured unwrapped (lib/out.message, width 0): the headline is
+        # the first line and each detail a line two spaces in, so the
+        # finding below ends the headline's sentence before its details.
+        with contextlib.redirect_stderr(buf), _out.unwrapped():
             return load_config(root), ""
     except SystemExit as e:
         strict = e
@@ -200,8 +204,9 @@ def _checklist_config(root: Path) -> Tuple[Dict[str, Any], str]:
     except (OSError, UnicodeError, ValueError, TypeError, CountryError):
         ok = False
     if not ok:
-        if not isinstance(strict.code, str) and buf.getvalue():
-            sys.stderr.write(buf.getvalue())
+        # The loader's own message as a person is shown it (the capture
+        # above is unwrapped): it stops again, the same way.
+        load_config(root)
         raise strict
     # A folder taxjson writes into that is a link leaving the project
     # is refused as every command refuses it (load_config), lenient
@@ -209,9 +214,15 @@ def _checklist_config(root: Path) -> Tuple[Dict[str, Any], str]:
     # through such a work/ link (audit 2026-10-24 A17).
     _refuse_outside_dir_links(root, accounts)
     # The loader's message without its `tjs checklist: error:`
-    # headline prefix, on one line.
-    msg = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", text).split())
-    msg = re.sub(r"^(?:Error:\s*|.*?: error:\s*)", "", msg, count=1)
+    # headline prefix, on one line: the headline a sentence of its own
+    # before the details (it carries no end mark: docs/output-style.md).
+    lines = re.sub(r"\x1b\[[0-9;]*m", "", text).strip().split("\n")
+    head = re.sub(r"^(?:Error:\s*|.*?: error:\s*)", "",
+                  " ".join(lines[0].split()), count=1)
+    rest = " ".join(" ".join(lines[1:]).split())
+    if head and rest and not head.endswith((".", ":", ";", "!", "?")):
+        head += "."
+    msg = " ".join(x for x in (head, rest) if x)
     return cfg, msg or "taxjson.toml is refused by every other command"
 
 
@@ -269,7 +280,7 @@ def _checklist_walk(ctx, cl, only, quick: bool = False,
                     doc.line(ln)
             show = False
             try:
-                ans = input("  > ").strip().lower()
+                ans = _ask("  > ").strip().lower()
             except EOFError:
                 doc.blank()
                 quit_early = True
@@ -281,7 +292,7 @@ def _checklist_walk(ctx, cl, only, quick: bool = False,
                 # (re-audit A2-1394): this step is not recorded, the
                 # marks made so far are kept.
                 try:
-                    note = input("  note (optional): " if ans[0] == "d"
+                    note = _ask("  note (optional): " if ans[0] == "d"
                                  else "  reason (optional): ").strip()
                 except (EOFError, KeyboardInterrupt):
                     _walk_interrupted(sid, ctx)

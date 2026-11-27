@@ -178,7 +178,7 @@ class TestSpinOffIsNotRoc(unittest.TestCase):
         r = tj(cls.root, "run", "--no-input", check=False)
         m = re.search(r"--set (\S+?)=<", console(r))
         assert m, console(r)[-3000:]
-        tj(cls.root, "elect", "margin", "--set",
+        tj(cls.root, "elections", "margin", "--set",
            f"{m.group(1)}=rollover_s_86_1", "--hint",
            "allocated_acb_cad=300")
         tj(cls.root, "run", "--no-input")

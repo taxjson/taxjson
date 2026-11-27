@@ -224,8 +224,10 @@ class TestSumReturnBlock(unittest.TestCase):
             self.assertEqual(fe.returncode, 0, fe.stderr)
             rep = json.loads(fe.stdout)
             # sum's lines are form-export's, with TOTAL COST added
-            # (COST(ACB) + OUTLAYS, the cells as shown).
-            self.assertEqual([{k: v for k, v in ln.items() if k != "total_cost"}
+            # (COST(ACB) + OUTLAYS, the cells as shown) and DENIED
+            # (INFO)'s `denied_all` (TJ-5341).
+            self.assertEqual([{k: v for k, v in ln.items()
+                               if k not in ("total_cost", "denied_all")}
                               for ln in f["lines"]], rep["lines"])
             for ln in f["lines"]:
                 self.assertAlmostEqual(
@@ -241,7 +243,7 @@ class TestSumReturnBlock(unittest.TestCase):
             self.assertIn("Line 7 crypto-assets (15200/15301)", t.stdout)
             # The old footer claimed COST *includes* the denied loss.
             self.assertNotIn("COST includes", t.stdout)
-            self.assertIn("ACB is REDUCED", t.stdout)
+            self.assertIn("COST(ACB) is already REDUCED", " ".join(t.stdout.split()))
             self.assertIn("fx-cash", t.stdout.split("FOR THE RETURN")[1])
 
     def test_us_block_is_8949_totals(self):

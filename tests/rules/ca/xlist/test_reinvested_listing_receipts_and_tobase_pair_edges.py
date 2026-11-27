@@ -204,7 +204,7 @@ class TestSpinoffLegIgnoresTheParentsClass(unittest.TestCase):
                 'accounts']['margin']['pending'][0]['event_id']
             how = ('taxable_deemed_dividend' if country == 'canada'
                    else 'taxable_distribution_301')
-            el = cli(root, 'elect', 'margin', '--set', f'{eid}={how}',
+            el = cli(root, 'elections', 'margin', '--set', f'{eid}={how}',
                      '--hint', 'fmv_per_share=2')
             self.assertEqual(el.returncode, 0, el.stdout + el.stderr)
             r = cli(root, 'run', '--no-input')

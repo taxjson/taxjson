@@ -91,5 +91,6 @@ ESTIMATE ONLY, not filing numbers; taxable accounts only.
     credits)
   - no OAS recovery tax
   - the AMT sees only these books and other income (no stock-option deduction add-back or donated securities)
-! 2 sales with no purchase NOT in these totals, or a short — tjs find-missing-history
+! 1 sale with an unknown cost NOT in these totals: report them by hand — tjs form-export
+! 1 sale with no purchase NOT in these totals, or a short (GHOSTQ.TO) — tjs find-missing-history
 ! FX on foreign cash (line 15300): not in the rows; its estimate is NOT RELIABLE — tjs fx-cash

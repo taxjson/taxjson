@@ -276,7 +276,7 @@ class TestTJ0610CheckFiledAfterAMigratedFreeze(unittest.TestCase):
             shared = top / "inputs" / "margin" / "trades.tt"
             shared.write_text(self._TRADES.replace(
                 "-5 CAD 20.00 100.00", "-5 CAD 30.00 150.00"))
-            (top / "inputs" / "margin" / "manifest.json").write_text(
+            (top / "inputs" / "margin" / "elections.json").write_text(
                 json.dumps({"elections": {"ZZQ.TO-2024-03-01-merger": {
                     "summary": "ZZQ.TO merger 2024-03-01",
                     "election": "taxable"}}}))
@@ -286,7 +286,7 @@ class TestTJ0610CheckFiledAfterAMigratedFreeze(unittest.TestCase):
                           "changed or lost a row of 2024 or earlier since "
                           "the year was closed: ../inputs/margin/trades.tt",
                           said)
-            self.assertIn("note: filed 2024: ../inputs/margin/manifest.json "
+            self.assertIn("note: filed 2024: ../inputs/margin/elections.json "
                           "(1 entry) in the shared folder holds a decision "
                           "on 2024", said)
             # `years` marks the year as well (TJ-0210).
@@ -295,7 +295,7 @@ class TestTJ0610CheckFiledAfterAMigratedFreeze(unittest.TestCase):
             y = next(x for x in json.loads(r.stdout)["years"]
                      if x["year"] == 2024)
             self.assertEqual(sorted(y["shared_exports_changed"]),
-                             ["inputs/margin/manifest.json",
+                             ["inputs/margin/elections.json",
                               "inputs/margin/trades.tt"])
 
     def test_a_later_years_row_is_no_difference(self):
@@ -321,7 +321,7 @@ class TestTJ0602PendingElectionsNoteIsProjectRelative(unittest.TestCase):
             r = _tjs(None, "init", "--demo", str(demo))
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             # The demo's saved spin-off election gone: it is needed.
-            (demo / "inputs" / "margin" / "manifest.json").write_text(
+            (demo / "inputs" / "margin" / "elections.json").write_text(
                 '{"elections": {}}\n')
             r = _tjs(demo / "2024", "run", "--account", "margin",
                      "--no-input")

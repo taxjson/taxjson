@@ -10,7 +10,7 @@ are now read; an account of a broker with no reader that moves foreign
 cash is refused until `CASHBOOK <book> complete` says its .tt cash lines
 are all of them.
 
-Lows: `tjs elect` lists an event the sheltered default booked; a US
+Lows: `tjs elections` lists an event the sheltered default booked; a US
 project's checklist has no T5 / T3 step; a malformed v2 cash line
 says it is read only by ledger v2.
 
@@ -591,8 +591,8 @@ class TestElectListsShelteredDefault(unittest.TestCase):
             r = cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, _flat(r)[-2000:])
             eid = _event_id(root, _CA_PLAN)
-            text = _flat(cli(root, "elect"))
-            js = json.loads(cli(root, "elect", "--json").stdout)
+            text = _flat(cli(root, "elections"))
+            js = json.loads(cli(root, "elections", "--json").stdout)
         self.assertIn(f"{eid}: sheltered default ($0 cost for the "
                       f"distributed shares)", text)
         self.assertIn("spin-off SPNCO", text)

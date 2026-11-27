@@ -418,6 +418,12 @@ def settings_problems(cfg: Dict[str, Any]) -> List[str]:
                                and 1 <= lm <= 120):
         out.append(f"[settings] leaps_months must be a whole number of "
                    f"months such as 9, unquoted (got {lm!r})")
+    # The command logs kept per command (lib/command_log): 0 writes none.
+    lk = table.get("log_keep")
+    if lk is not None and not (isinstance(lk, int)
+                               and not isinstance(lk, bool) and lk >= 0):
+        out.append(f"[settings] log_keep must be a whole number of logs, "
+                   f"0 or more, unquoted (got {lk!r})")
     # `tjs technicals`' benchmark: one symbol, as the books spell it.
     bm = table.get("benchmark")
     if bm is not None:

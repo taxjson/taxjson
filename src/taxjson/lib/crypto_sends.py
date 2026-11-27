@@ -1758,15 +1758,33 @@ def cash_send_decisions(root: Path, cfg: Dict[str, Any], cache: Path,
     return out
 
 
+def wanted_accounts(want: Any) -> Optional[Tuple[str, ...]]:
+    """`want` normalized exactly as lib/account_list.names_of does it
+    (imported, it would close a cycle through config_check and the cash
+    events): None or "" every account; a string ONE name, never split;
+    a collection its names (a set sorted, else in order), repeats and
+    "" dropped; an empty collection NO account, ()."""
+    if want is None:
+        return None
+    if isinstance(want, str):
+        return (want,) if want else None
+    if isinstance(want, (set, frozenset)):
+        out = sorted(str(n) for n in want if n)
+    else:
+        out = [str(n) for n in want if n]
+    return tuple(dict.fromkeys(out))
+
+
 def build_report(root: Path, cfg: Dict[str, Any],
                  broker_files: Optional[Dict[str, List[Tuple[str, Path]]]]
                  = None,
-                 usd_price=None, want: Optional[str] = None,
+                 usd_price=None, want: Any = None,
                  with_pool: bool = True,
                  exports_only: bool = False) -> Dict[str, Any]:
     """Everything `crypto-sends` shows, per crypto account.
     `broker_files` ({acct: [(broker, csv)]}) feeds the stablecoin pool;
     None skips it (the checklist needs only the decisions).
+    `want`: the accounts shown: None (every one), a name or names.
     `exports_only`: `broker_files` lists EVERY export in inputs/, and a
     sidecar left by a removed export is ignored (re-audit A2-1026)."""
     settings = settings_of(cfg)
@@ -1810,8 +1828,9 @@ def build_report(root: Path, cfg: Dict[str, Any],
     out: Dict[str, Any] = {"base_currency": base, "country": country,
                            "accounts": {}}
     paired_in = {id(r) for _o, i in pairs for r in arrival_rows(i)}
+    wanted = wanted_accounts(want)
     for acct in accts:
-        if want and acct != want:
+        if wanted is not None and acct not in wanted:
             continue
         man_path = man_paths[acct]
         decisions = all_decisions[acct]

@@ -7,6 +7,7 @@ import io
 import tempfile
 from pathlib import Path
 
+from taxjson.characterize import characterize_rows
 from taxjson.lib.brokerages.rbc_direct import RbcBrokerage
 
 
@@ -26,9 +27,21 @@ def row(date, activity, symbol, symdesc, qty, price, value, cur, desc,
     return ','.join('"%s"' % c for c in cells) + '\n'
 
 
-def parse_files(files, header=HDR):
+def _parsed(par, p, country):
+    """One file's rows as taxjson-brokerage hands them on: parsed, then
+    characterized for `country` (None: the neutral reading, which keeps
+    a no-clock day no export proves in the file's order)."""
+    rows = par.parse_file(p)
+    characterize_rows(rows, country=country,
+                      open_close_days=getattr(par, 'open_close_days', ()),
+                      attention=lambda words: par._warn(words, attention=True))
+    return rows
+
+
+def parse_files(files, header=HDR, country=None):
     """Parse {name: body} as ONE account (the way taxjson-brokerage does:
-    shared account context, one extractor per file, files in name order).
+    shared account context, one extractor per file, files in name order,
+    each file's rows characterized).
     Returns (transactions, stderr, [parsers])."""
     with tempfile.TemporaryDirectory() as d:
         paths = []
@@ -43,7 +56,7 @@ def parse_files(files, header=HDR):
             for p in paths:
                 par = RbcBrokerage()
                 par.account_context = ctx
-                txs.extend(par.parse_file(p))
+                txs.extend(_parsed(par, p, country))
                 pars.append(par)
     return txs, err.getvalue(), pars
 
@@ -56,7 +69,7 @@ def parse_one(body, header=HDR):
         err = io.StringIO()
         par = RbcBrokerage()
         with contextlib.redirect_stderr(err):
-            txs = par.parse_file(p)
+            txs = _parsed(par, p, None)
     return txs, err.getvalue(), par
 
 

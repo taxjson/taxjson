@@ -2,6 +2,7 @@ MISSING COST BASIS — tax year 2025
 
 TRUNCATED HISTORY — positions go short (missing a buy): 1 pair(s)
 1 affect tax year 2025; 0 are in registered accounts; 0 do not.
+As the run applies it: a sale the broker marks closing (IB code C, RBC CLOSE CONTRACT) is reported by hand, out of `tjs sum`, and adds no short and no written contract.
 PeakShort: the deepest short; FirstNeg: the day it went short; InYr: this year's sales from it.
 
 AFFECTS 2025 - missing basis distorts this year's gain; fix before filing:

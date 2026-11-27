@@ -109,6 +109,16 @@ def parse_basis(country: Optional[str]) -> Dict[str, Any]:
             "plans_taxed": plans_taxed_as_ordinary(canon)}
 
 
+def marked_close_decides(country: Optional[str]) -> bool:
+    """Whether the books read a row by the broker's CLOSE mark: Canada (a
+    row marked CLOSE never opens a position, CA-OPT-12, CA-ACB-11). The
+    US books go by position (backlog TJ-5369). With no country (None or
+    blank) the neutral answer, False: no country's reading is guessed."""
+    if country is None or (isinstance(country, str) and not country.strip()):
+        return False
+    return canonical_country(country) == CANADA
+
+
 def plans_taxed_as_ordinary(country: Optional[str]) -> FrozenSet[str]:
     """The Canadian registered plans (lower case) a project of `country`
     taxes like an ordinary account; empty for Canada and when the

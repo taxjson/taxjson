@@ -94,8 +94,12 @@ contract (docs/settings.md, "`--json` outputs").
   wrapped, however long (`out.Verbatim` in a key/value block).
 - A table row is never wrapped. A table wider than the width first drops
   the columns the command marks least important (`fit_table(drop=...)`),
-  then switches to a per-record layout: one block per row, its key
-  column(s) first, the other cells as `label value` pairs under it.
+  never silently: a `! ` line names each one and where it is whole (`!
+  DAYS and QTY left out of the sales at this width — tjs gains-base
+  --json`; `fit_table(left_out=[])` hands the caller the headings it
+  dropped; the tables that do not say so yet: backlog TJ-5346), then
+  switches to a per-record layout: one block per row, its key column(s)
+  first, the other cells as `label value` pairs under it.
 
 Output **captured for a program** is never wrapped: inside
 `out.unwrapped()` `width()` is 0. `pipeline/dispatch.run_cmd` enters it (and
@@ -224,10 +228,10 @@ Retired at the start of a line a person sees: the lower-case `note:`,
 ```python
 from taxjson.lib import out
 out.warn("fmv_per_share=0 books this taxable_deemed_dividend at $0",
-         prog="tjs elect",
+         prog="tjs elections",
          details=["No income and a $0 cost for the new shares. ..."])
 out.fail("'X' matches no pending event — nothing was saved",
-         prog="tjs elect", details=["Check the id with ..."])
+         prog="tjs elections", details=["Check the id with ..."])
 ```
 
 `prog=` names the program in the captured form only. `out.fail(...,
@@ -410,7 +414,7 @@ figure; what a release keeps is upgrading.md's list, above):
   modes: `events PERIOD ACCOUNT` (re-importable `.tt` lines),
   `form-export --form txf` and `--out`/`--csv` files;
 - the files the run writes under `work/` (books, `*.diag`, the
-  pending-elections document, fingerprints) and `inputs/` (`manifest.json`,
+  pending-elections document, fingerprints) and `inputs/` (`elections.json`,
   `sends.json`, `crypto_sends.tt`, `opening_*.tt`, drafts);
 - `reports/`: `<account>.sum` / `_wash.sum` (users diff them across runs
   and years), `*_holdings.toml` (read by `sanity` and the holdings diff),
@@ -433,7 +437,7 @@ figure; what a release keeps is upgrading.md's list, above):
   `--details` and the table rows above it, the last line), `find-missing-history`
   (the `AFFECTS` / `REMOVE from ` / `STALE in ` sections and their row
   shape),
-  `elect --pending` (`No pending elections`, the last line), `audit`
+  `elections --pending` (`No pending elections`, the last line), `audit`
   (`pipeline tie-out N tied, N MISMATCHED, N not found`), `fx-cash` and
   `check-filed` (`DRIFTED`, the last line), and the last stderr line of a
   command that failed.

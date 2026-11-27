@@ -331,12 +331,12 @@ class TestSpinoffsView(unittest.TestCase):
                 '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "usa"\n'
                 'base_currency = "USD"\n[accounts.m]\ntype = "taxable"\n')
             (root / "inputs" / "m").mkdir(parents=True)
-            (root / "inputs" / "m" / "manifest.json").write_text(json.dumps(
+            (root / "inputs" / "m" / "elections.json").write_text(json.dumps(
                 {"elections": {EV: {"election": "rollover_s_86_1",
                                     "hints": {}, "summary": SUMMARY}}}))
             r = subprocess.run(
                 [PY, "-m", "taxjson.bin.taxjson_run", "-C", str(root),
-                 "elect", "--pending"], capture_output=True, text=True,
+                 "elections", "--pending"], capture_output=True, text=True,
                 env=_env(td), stdin=subprocess.DEVNULL)
         self.assertNotIn("No pending elections", r.stdout)
         self.assertIn("rollover_s_86_1", r.stdout)

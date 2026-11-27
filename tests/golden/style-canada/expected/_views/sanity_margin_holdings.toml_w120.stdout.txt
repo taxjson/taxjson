@@ -1,6 +1,6 @@
 SANITY — taxjson positions (basis: wash-adjusted) vs external holdings TOML (paired check)
 
-  accounts:  margin  (8 combined position(s))  [paired]
+  accounts:  margin  (7 combined position(s))  [paired]
   file:      holdings.toml
   result:    1 discrepancy(ies)
 
@@ -13,4 +13,4 @@ margin    SAMPA.TO  QTY_MISMATCH      100        90   +10
 
 ! 1 more in the books: a trade after your last export, or a booking problem — tjs audit SYMBOL
 
-COST: 1 of 7 differ from the broker's book value (informational) — tjs sanity --details
+COST: 1 of 6 differ from the broker's book value (informational) — tjs sanity --details

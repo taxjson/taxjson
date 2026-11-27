@@ -15,6 +15,9 @@ country                           = "canada"  # canada | ca | usa | us (required
 ## The zone crypto UTC times are dated in (an IANA name). No default: required with a crypto
 ## account.
 local_timezone                    = "America/Toronto"
+## How many logs of each command logs/ keeps (logs/<command>.log.<time>; logs/<command>.log is the
+## latest). 0: no log is written. Default 20.
+# log_keep                        = 20
 ## Last year's close-year record (`tjs handoff`). No default.
 # prior_year_record               = "../2023/filed/2023.json"
 ## The province `tjs estimate` taxes at. No default.
@@ -91,8 +94,8 @@ option_grant_timing_since         = 2024
 ## --- Corporate actions ---
 ## A spin-off or merger in a sheltered account with no saved election: "zero" (the default) books it
 ## without asking (a spin-off's new shares at $0 cost, a merger's new shares at the old shares'
-## cost; no tax depends on it); "ask": asked like a taxable account's. `tjs elect` wins either way.
-## cost; no tax depends on it); "ask": asked like a taxable account's. `tjs elect` wins either
+## cost; no tax depends on it); "ask": asked like a taxable account's. `tjs elections` wins either
+## way.
 # sheltered_elections             = "zero"  # zero | ask
 
 ## --- Views ---

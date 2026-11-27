@@ -7,8 +7,10 @@ absence), of taxjson.toml, of the package and of the output itself
 also holds what that pass read (`wash`: lib/report_model), so the views can
 say a wash-adjusted file is stale after a `run --account`. The last run's
 outputs are listed in work/.deps/run.json (pipeline/stage_table
-`commit_run`). A record of another format (an older taxjson's) reads as no
-record: its output is built again (backlog TJ-1804, TJ-4266).
+`commit_run`), with what checked each account's gains for the loss rule
+(lib/report_model `record_loss_checks`). A record of another format (an
+older taxjson's) reads as no record: its output is built again (backlog
+TJ-1804, TJ-4266).
 """
 import hashlib
 import json

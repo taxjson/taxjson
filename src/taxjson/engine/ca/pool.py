@@ -189,18 +189,41 @@ class AcbPool:
         self._qty += (units if self._qty < 0 else -units)
 
     def open_lot(self, *, tx_id: Any, seq: int, units: float, premium: Any,
-                 recognise: bool, date: str, year: Any, account: str) -> Dict[str, Any]:
+                 recognise: bool, date: str, year: Any, account: str,
+                 outlay: Any = _ZERO) -> Dict[str, Any]:
         """Append a short-option lot of `units` whose (signed, net of
         commission) premium is `premium`, the `seq`-th the run wrote;
         returns the lot (its grant records: `rec_ref`, `loss_ref`, set by
-        `_ca_open_short_option`)."""
+        `_ca_open_short_option`). `outlay`: the write's commission and fee
+        netted in that premium, which an assignment of the lot carries to
+        the shares' disposition as an outlay (`fee_per_unit`, CA-OPT-06,
+        backlog TJ-5381)."""
+        _u = M.of(units) if units > 1e-12 else None
         lot = {'tx_id': tx_id, 'seq': seq, 'units': units,
-               'per_unit': (M.of(premium) / M.of(units)) if units > 1e-12 else _ZERO,
+               'per_unit': M.of(premium) / _u if _u else _ZERO,
+               'fee_per_unit': M.of(outlay) / _u if _u else _ZERO,
                'rec': bool(recognise), 'rec_ref': None,
                'loss_ref': None, 'date': date,
                'year': year, 'account': account}
         self._grants.append(lot)
         return lot
+
+    def written_taint(self, account: str) -> Optional[List[Dict[str, Any]]]:
+        """For a short option pool whose only units of unknown cost are
+        contracts written before the files (lots an opening marked
+        `unknown`, no own move among the causes): the openings behind the
+        closing `account`'s own such lots, [] when it holds none. A written
+        contract is the obligation of the account that wrote it (CA-OPT-12),
+        so another account's unknown write is no part of this account's
+        close (backlog TJ-5377). None for any other pool: its own `tainted`
+        decides. Read before `close_lots` consumes the lots."""
+        if not self._tainted or self._moved_from or self._qty >= 0 or not self._grants \
+                or not self._unknown_from \
+                or any(float(s.get('quantity') or 0.0) >= 0 for s in self._unknown_from):
+            return None
+        if not any(g.get('unknown') and g.get('account') == account for g in self._grants or []):
+            return []
+        return [dict(s) for s in self._unknown_from if s.get('account') == account]
 
     def record_grant(self, lot: Dict[str, Any], gain: Dict[str, Any]) -> None:
         """`lot` (one of this pool's, `open_lot`) names its grant's gain
@@ -216,7 +239,7 @@ class AcbPool:
 
     def close_lots(self, closing_qty: float, is_assign: bool,
                    account: Optional[str] = None
-                   ) -> Tuple[Decimal, Decimal, float, Dict[str, Dict[str, Any]]]:
+                   ) -> Tuple[Decimal, Decimal, float, Dict[str, Dict[str, Any]], Decimal]:
         """Consume `closing_qty` units of a SHORT option pool's lots
         FIFO, the closing row's own `account`'s lots first: an
         assignment or buy-back closes the contract written in that
@@ -227,7 +250,7 @@ class AcbPool:
         (_MarkedShortRouter, CA-OPT-12, TJ-2735): a purchase in an
         account that wrote nothing is a bought contract of the
         symbol's long pool. Returns (cost_removed, recognised, grant_units_closed,
-        by_year) where cost_removed is the premium leaving the pool
+        by_year, outlay) where cost_removed is the premium leaving the pool
         (positive = premium), recognised the part already booked at
         grant, and by_year {write year: {'units', 'premium'}} the
         recognised lots this close consumed — Schedule 3 and
@@ -235,7 +258,9 @@ class AcbPool:
         with its write, but a buy-back of an earlier year's write
         is a disposition of its own (A2-0320/0650/0651), and a
         broker's close-year slip carries that earlier premium
-        (A2-0657)."""
+        (A2-0657); `outlay`, the commission and fee netted in the premium of
+        the lots it closes that no write record showed (an assignment's, every lot: the shares'
+        outlay, CA-OPT-06, TJ-5381; a close-timing lot's: the close's, CA-DISP-06, TJ-5460)."""
         lots = self._grants or []
         qabs = abs(self._qty)
         total = M.of(self._total_cost)
@@ -256,16 +281,19 @@ class AcbPool:
             plain = [l for l in lots if not l['rec']]
             _sums: Dict[Any, List[Any]] = {}
             for l in plain:
-                e = _sums.setdefault(l.get('account'), [0.0, _ZERO])
+                e = _sums.setdefault(l.get('account'), [0.0, _ZERO, _ZERO])
                 e[0] += l['units']
                 e[1] += M.of(l['units']) * l['per_unit']
-            for a, (u, m) in _sums.items():
+                e[2] += M.of(l['units']) * l['fee_per_unit']
+            for a, (u, m, _o) in _sums.items():
                 own_avg[a] = m / M.of(u) if u > 1e-12 else _ZERO
             for l in plain:
+                _e = _sums[l.get('account')]
                 l['per_unit'] = own_avg[l.get('account')]
+                l['fee_per_unit'] = _e[2] / M.of(_e[0]) if _e[0] > 1e-12 else _ZERO
             if len(own_avg) > 1:
                 residue = ((total - r_amt
-                            - sum(m for _u, m in _sums.values()))
+                            - sum(v[1] for v in _sums.values()))
                            / M.of(n_other))
             else:
                 own_avg = {}
@@ -275,8 +303,7 @@ class AcbPool:
             # pool still drains to exactly zero.
             other_avg = _ZERO
             rec_extra = (total - r_amt) / M.of(rq) if rq > 1e-9 else _ZERO
-        cost = _ZERO
-        recognised = _ZERO
+        cost = recognised = outlay = _ZERO
         g_units = 0.0
         by_year: Dict[str, Dict[str, Any]] = {}
         rem = closing_qty
@@ -293,6 +320,8 @@ class AcbPool:
                 continue
             lot['units'] -= take
             rem -= take
+            if is_assign or not lot['rec']:     # (no write record showed it, TJ-5460)
+                outlay += M.of(take) * lot['fee_per_unit']
             if not lot['rec']:
                 cost += M.of(take) * (own_avg[lot.get('account')] + residue
                                       if own_avg else other_avg)
@@ -338,7 +367,7 @@ class AcbPool:
         # a close takes the same quantity from each — so `rem` ends
         # at zero and no closed unit is left uncosted.
         self._grants = [l for l in lots if l['units'] > 1e-9]
-        return cost, recognised, g_units, by_year
+        return cost, recognised, g_units, by_year, outlay
 
     def retag_lots(self, frm: str, to: str, units: float) -> float:
         """A move of `units` written contracts from account `frm` to `to`
@@ -751,6 +780,7 @@ class AcbPool:
             for _l in self._grants:
                 _l['units'] *= ratio
                 _l['per_unit'] /= M.of(ratio)
+                _l['fee_per_unit'] /= M.of(ratio)
 
     def merge(self, other: AcbPool, symbol: str, target_symbol: str) -> None:
         """A rename's source pool `other` (under `symbol`) merged into this

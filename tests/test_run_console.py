@@ -73,7 +73,7 @@ class _Runs(unittest.TestCase):
 
 class TestEveryLine(_Runs):
     def _check(self, text, what):
-        assert_console(self, text, allow=("tjs elect ",))
+        assert_console(self, text, allow=("tjs elections ",))
 
     def test_full_run(self):
         for country in ("canada", "usa"):
@@ -133,7 +133,7 @@ class TestEveryLine(_Runs):
                     timeout=900)
                 self.assertEqual(r.returncode, 3 if pending else 0,
                                  r.stdout)
-                assert_console(self, r.stdout, allow=("tjs elect ",))
+                assert_console(self, r.stdout, allow=("tjs elections ",))
                 self.assertFalse(r.stdout.endswith("\n\n"))
 
 
@@ -193,8 +193,13 @@ class TestSteps(_Runs):
         _p, r0 = self.run_of("canada")
         tail = r0.stdout[r0.stdout.index("==> Before you trust"):]
         lines = tail.splitlines()
+        # (GHOSTQ's; OLDCO's sale, coded closing by the broker, is the
+        # next line: reported by hand at an unknown cost, TJ-5349)
         self.assertTrue(lines[1].startswith(
-            "Warning: NOT in the totals: 2 sales with no purchase"), tail)
+            "Warning: NOT in the totals: 1 sale with no purchase"), tail)
+        self.assertTrue(lines[2].startswith(
+            "Warning: NOT in the totals: 1 sale at an unknown cost: "
+            "OLDCO.US 2024-04-03 in margin"), tail)
         self.assertEqual(lines[-1], "Info: Then `tjs checklist --run` "
                                     "(the next step); each message's "
                                     "detail: `tjs run --details`")
@@ -203,7 +208,7 @@ class TestSteps(_Runs):
         tail = r.stdout[r.stdout.index("==> Before you trust"):]
         lines = tail.splitlines()
         self.assertTrue(lines[1].startswith(
-            "Warning: 2 positions sold in 2024 with no purchase"), tail)
+            "Warning: 1 position sold in 2024 with no purchase"), tail)
         self.assertEqual(lines[-1], "Info: Then run `tjs checklist --run`: "
                                     "it checks every step and names the "
                                     "next one.")

@@ -38,7 +38,7 @@ class TestDefaultedEventsExactAccount(unittest.TestCase):
     Formerly: test_fix_issues_cli.TestDefaultedEventsExactAccount"""
 
     def test_sibling_files_are_not_read(self):
-        from taxjson.cli import elect as cli_elect
+        from taxjson.cli import elections as cli_elect
         from taxjson.lib.corp_actions import SHELTERED_DEFAULT
         work = _tmp(self)
 

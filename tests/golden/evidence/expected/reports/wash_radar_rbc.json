@@ -1,5 +1,8 @@
 {
   "account": "rbc",
+  "account_names": [
+    "rbc"
+  ],
   "as_of_date": "<stamp>",
   "country": "canada",
   "generated_at": "<stamp>",

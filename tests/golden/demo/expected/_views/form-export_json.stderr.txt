@@ -1,0 +1,3 @@
+warning: 1 disposition(s) with an unknown cost (no purchase in your files) are NOT in the form rows or totals — proceeds 498.15
+  SAMPG.US 2024-03-18 (498.15).
+  Report them by hand once their cost is known (`tjs find-missing-history`); they are listed in the MANUAL REPORTING section.

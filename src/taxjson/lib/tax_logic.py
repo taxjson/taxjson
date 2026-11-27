@@ -108,6 +108,8 @@ NON_RULE_SETTINGS: Dict[str, str] = {
     "leaps_months": "the LEAPS views' cut-off; no tax figure reads it",
     "benchmark": "the symbol `tjs technicals` measures beta and alpha "
                  "against (a market statistic); no tax figure reads it",
+    "log_keep": "how many logs of each command logs/ keeps; no tax "
+                "figure reads it",
     "requires_taxjson": "the oldest taxjson that runs the project; an "
                         "older one refuses it (no tax figure reads it)",
 }
@@ -482,7 +484,7 @@ def _sheltered_corp_rule(rid: str, mode: str, plans: str, loss_rule: str,
                 "whole cost, a merger's new shares taking the old shares' "
                 "cost; one Info line per run names each, and it is never "
                 "pending. " + why + " " + units + " An election saved with "
-                "`tjs elect` wins.", keys=("sheltered_elections",))
+                "`tjs elections` wins.", keys=("sheltered_elections",))
 
 
 def _ownership(country: str) -> List[Rule]:
@@ -1866,12 +1868,23 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "its proceeds unknown: the short has its own pool, never "
                  "netted against a long of the security, the buys that "
                  "close it are listed for manual reporting and add no "
-                 "long. `--write-missing-history` drafts that line for a "
-                 "buy the broker codes as closing (IB code C, RBC COVER "
-                 "SHORT.) with no short held. Until the line or the short "
-                 "sale is added the buy stays booked as a new long, in the "
-                 "cost of later sales, and the run and the readiness record "
-                 "flag it (`unbacked-cover`).",
+                 "long. A trade the broker marks CLOSE (IB code C, RBC "
+                 "COVER SHORT.) never opens a position: the units the "
+                 "account's own position backs close it, and the rest "
+                 "closed a position opened before the files, so the run "
+                 "books them as such a line would, with no line: a marked "
+                 "sale's units past the shares held are sold at an "
+                 "unknown cost and open no short, a marked purchase's "
+                 "units past the short are the cover of a short sold "
+                 "before the data and add no long; each is listed for "
+                 "manual reporting, out of the totals, and the run says "
+                 "it (`run --strict` stops; the readiness record: "
+                 "`unknown-cost`, and `unbacked-cover` for a purchase). A "
+                 "row coded C;O whose order began with nothing to close "
+                 "is such a row whole (the broker does not say how much "
+                 "of the fill closed). The line, or the missing rows, "
+                 "leave the same books; `--write-missing-history` drafts "
+                 "the line.",
                  cont=True),
             Rule(R.CA_ACB_12,
                  "A loss within 30 days (settle dates) of such a sale, or "
@@ -1989,10 +2002,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Cash-settled options (no stock leg) realize their gain "
                  "or loss on the option itself.", cont=True),
             Rule(R.CA_DISP_06,
-                 "A written option's premium recognised at the write "
-                 "(grant timing) is shown gross as proceeds, with its "
-                 "commission as an outlay, as for a sale (the gain is the "
-                 "same)."),
+                 "A written option's premium is shown gross as proceeds, "
+                 "with the write's commission and fee as an outlay, as for a sale (the gain is the "
+                 "same), under every premium timing: at the write (grant timing), at its buy-back or expiry "
+                 "(close timing; the buy-back's cost, its own commission in it, the ACB), and in the shares' sale when a call is assigned (CA-OPT-06); a call assigned into a short of the shares stays netted in the short sale, as a short sale's opening commission."),
             Rule(R.CA_DISP_07,
                  "`form-export` gives Schedule 3's year of acquisition as "
                  "the sale's trade date less the days held, counted on "
@@ -2224,14 +2237,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "booked as a sale at that value; a gain is taxed (CRA "
                  "T4040, RC4466)."),
             Rule(R.CA_INKIND_03,
-                 "A loss on it is denied for good (s.40(2)(g)(iv): a "
-                 "disposition to an RRSP, RRIF, TFSA, FHSA or RDSP trust; "
-                 "an account whose plan is not named is taken as one): "
-                 "the loss is nil, not a superficial loss, and never added "
-                 "to any ACB; `sum` and form-export show it on its own "
-                 "(\"denied: contribution to a registered plan\"), not "
-                 "in DENIED. A contribution to an RESP or PRPP is a sale "
-                 "at fair market value whose loss is an ordinary one.",
+                 "A loss on it is denied for good (s.40(2)(g)(iv): a disposition to an "
+                 "RRSP, RRIF, TFSA, FHSA or RDSP trust; an account whose plan is not named is "
+                 "taken as one): nil, not a superficial loss, never added to any ACB; `sum "
+                 "--details` and form-export name it alone (\"denied: contribution to a "
+                 "registered plan\"); DENIED (INFO) adds it (information only). A contribution "
+                 "to an RESP or PRPP is a sale whose loss is an ordinary one, and the plan's "
+                 "acquisition is its replacement (CA-INKIND-04): superficial and lost for good when "
+                 "the plan holds the shares at day 30, allowed otherwise (CRA 2010-0352921E5).",
                  cont=True),
             Rule(R.CA_INKIND_04,
                  "The plan's acquisition is an acquisition of identical "
@@ -2275,7 +2288,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Exercise or assignment: the premium folds into the "
                  "shares' cost or proceeds (s.49(3) for a call, s.49(3.1) "
                  "for a put; the grant year is amended under s.49(4)). "
-                 "The contract assigned is one written in the assignment's own account (its earliest "
+                 "An assigned call's sale shows the premium received, gross, in its proceeds and the write's commission (and the assignment row's own) among its outlays, as a write shows them (CA-DISP-06): the gain is the same net or gross; a call assigned into a short of the shares (none held, or the part of the delivery past those held) keeps the premium net in the short sale's proceeds, as a short sale's opening commission; a put's premium lowers the shares' cost net of its commission, the same ACB as gross with the commission added. The contract assigned is one written in the assignment's own account (its earliest "
                  "first), never one still open in another account; an assignment past the account's written "
                  "contracts (an expiry, or an exercise past its bought ones, alike) closes nothing more and opens nothing: the other contracts' shares go at the strike with no premium (a Warning: more assignments than writes). Under close timing "
                  "a close takes the average premium of its own account's "
@@ -2290,7 +2303,27 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "contracts writes (a row that does both is two parts, its "
                  "money pro rata). Bought contracts of one series are one pool across "
                  "your taxable accounts, as shares are (CA-ACB-01), and the "
-                 "superficial-loss rule reads every account (CA-SL-03)."),
+                 "superficial-loss rule reads every account (CA-SL-03). A "
+                 "trade the broker marks CLOSE (IB code C, RBC CLOSE "
+                 "CONTRACT) never opens a position, in the books or in any "
+                 "view: its contracts past the account's own position "
+                 "closed one opened before the files, so a marked purchase "
+                 "past the written contracts buys no long and a marked "
+                 "sale past the bought ones writes nothing; they are "
+                 "listed for manual reporting, out of the totals, their "
+                 "premium or cost unknown, as an `OPENING <date> <SYMBOL> "
+                 "<qty> cost=unknown` line's are (CA-ACB-11; a negative "
+                 "<qty> declares contracts written before the data), "
+                 "until the write or the purchase is supplied, when the "
+                 "premium's timing follows its own date. A row coded C;O "
+                 "closes what the account held when its order began and "
+                 "opens the rest; begun with nothing to close, it is "
+                 "listed whole. On a day with no clock (RBC prints no "
+                 "time) the day's own OPEN rows of the other direction "
+                 "back a CLOSE row first: the parser puts them ahead of "
+                 "it and, where the account's exports do not hold the "
+                 "series through its expiry, says that the order rests "
+                 "on the day's own rows and names the export to add."),
             Rule(R.CA_OPT_08,
                  "Each assignment's premium goes to its own stock leg: the "
                  "same account and underlying, the delivered quantity "
@@ -2339,7 +2372,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "IB leaves a leg it cannot pair a disposal at 0 with an "
                  "ATTENTION line, RBC refuses the file.", cont=True),
         ]),
-        ("Corporate actions (elections in the account manifest)", [
+        ("Corporate actions (elections in the account's elections.json)", [
             Rule(R.CA_CORP_01,
                  "Splits and consolidations scale the quantity; the ACB "
                  "is unchanged."),
@@ -4379,10 +4412,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "opening lot first) are listed for manual reporting and "
                  "add no long. `--write-missing-history` drafts that line "
                  "for a buy the broker codes as closing (IB code C, RBC "
-                 "COVER SHORT.) with no short held. Until the line or the "
-                 "short sale is added the buy stays booked as a new long, "
-                 "in the basis of later sales, and the run and the "
-                 "readiness record flag it (`unbacked-cover`). A "
+                 "COVER SHORT.) with no short held. The US books go by "
+                 "position, not by the broker's open/close mark: until the "
+                 "line or the short sale is added such a buy is a "
+                 "purchase like any other, in the basis of later sales, "
+                 "and the run and the readiness record flag it "
+                 "(`unbacked-cover`). A "
                  "loss within 30 days "
                  "(trade dates) of such a sale, or such a sale at a loss "
                  "with a purchase in that window, is flagged for a manual "
@@ -4793,7 +4828,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "names the INKIND line to add. One warning per run lists "
                  "each move, its value and its source."),
         ]),
-        ("Corporate actions (elections in the account manifest)", [
+        ("Corporate actions (elections in the account's elections.json)", [
             Rule(R.US_CORP_01,
                  "Splits and consolidations scale the quantity; the basis "
                  "and purchase dates are unchanged."),

@@ -42,7 +42,7 @@ class TestManifest(unittest.TestCase):
     def test_directory_and_loop_are_manifest_errors(self):
         from taxjson.lib.corp_actions import ManifestError
         with tempfile.TemporaryDirectory() as td:
-            d = Path(td) / "manifest.json"
+            d = Path(td) / "elections.json"
             d.mkdir()
             with self.assertRaisesRegex(ManifestError, "cannot be read"):
                 self._load(d)
@@ -62,7 +62,7 @@ class TestManifest(unittest.TestCase):
     def test_unreadable_is_a_manifest_error(self):
         from taxjson.lib.corp_actions import ManifestError
         with tempfile.TemporaryDirectory() as td:
-            p = Path(td) / "manifest.json"
+            p = Path(td) / "elections.json"
             p.write_text('{"elections": {}}')
             p.chmod(0)
             try:
@@ -73,7 +73,7 @@ class TestManifest(unittest.TestCase):
 
     def test_bom_is_read(self):
         with tempfile.TemporaryDirectory() as td:
-            p = Path(td) / "manifest.json"
+            p = Path(td) / "elections.json"
             p.write_bytes(b'\xef\xbb\xbf{"elections": {"e1": {"election": '
                           b'"ignore"}}}')
             self.assertEqual(self._load(p).records["e1"].election, "ignore")
@@ -81,7 +81,7 @@ class TestManifest(unittest.TestCase):
     def test_non_string_summary_is_refused(self):
         from taxjson.lib.corp_actions import ManifestError
         with tempfile.TemporaryDirectory() as td:
-            p = Path(td) / "manifest.json"
+            p = Path(td) / "elections.json"
             p.write_text(json.dumps({"elections": {"e1": {
                 "election": "ignore", "summary": 7}}}))
             with self.assertRaisesRegex(ManifestError, "'summary'"):
@@ -94,7 +94,7 @@ class TestManifest(unittest.TestCase):
     def test_spinoffs_view_refuses_in_one_line(self):
         from taxjson.lib.corp_views import ViewError, _manifest
         with tempfile.TemporaryDirectory() as td:
-            p = Path(td) / "inputs" / "margin" / "manifest.json"
+            p = Path(td) / "inputs" / "margin" / "elections.json"
             p.parent.mkdir(parents=True)
             for doc in ([], {"elections": {"e1": "rollover"}},
                         {"elections": {"e1": {"election": "x",
@@ -115,7 +115,7 @@ class TestManifest(unittest.TestCase):
             d.chmod(0o500)
             try:
                 with self.assertRaises(OSError):
-                    Manifest({}).save(d / "manifest.json")
+                    Manifest({}).save(d / "elections.json")
             finally:
                 d.chmod(0o700)
 
@@ -125,7 +125,7 @@ class TestManifest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             acct = Path(td) / "inputs" / "margin"
             acct.mkdir(parents=True)
-            (acct / "manifest.json").symlink_to("manifest.json")
+            (acct / "elections.json").symlink_to("elections.json")
             with contextlib.redirect_stderr(io.StringIO()), \
                     self.assertRaises(SystemExit) as cm:
                 _resolve_manifest(acct, Path(td) / "work", "margin",

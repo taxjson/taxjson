@@ -243,7 +243,7 @@ class TestCanadaViews(unittest.TestCase):
                 self.assertIn("not audited — corp-action elections pending "
                               "for margin2 (so margin too: no cross-account "
                               "pass)", both, args)
-                self.assertIn("tjs elect --pending", both, args)
+                self.assertIn("tjs elections --pending", both, args)
                 for bad in ("MISMATCH", "stale work/", "no disposition "
                             "matches"):
                     self.assertNotIn(bad, both, args)

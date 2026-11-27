@@ -281,7 +281,7 @@ class TestSumTable(unittest.TestCase):
             self.assertIn("is lost for good, and one caused by an "
                           "affiliated person's acquisition is permanent "
                           "for this return", " ".join(t.split()))
-            self.assertIn("(200.00 of the DENIED total)", " ".join(t.split()))
+            self.assertIn("(200.00 of the DENIED (INFO) total)", " ".join(t.split()))
 
 
 class TestEstimatePins(unittest.TestCase):

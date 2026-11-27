@@ -32,8 +32,8 @@ class _Width100(unittest.TestCase):
 class TestConvertedCommands(unittest.TestCase):
     """Every command converted to the house style, both countries."""
 
-    CASES = [("wash-sales",), ("wash-sales", "--explain"), ("elect",),
-             ("elect", "margin"),
+    CASES = [("wash-sales",), ("wash-sales", "--explain"), ("elections",),
+             ("elections", "margin"),
              # group D: positions, period views, -sum roll-ups, stats,
              # crypto sends
              ("list",), ("list", "--negative"), ("list", "margin"),
@@ -85,9 +85,9 @@ class TestConvertedCommands(unittest.TestCase):
     def test_pending_election_listing(self):
         for country in ("canada", "usa"):
             with self.subTest(country=country):
-                r = project(country, pending=True).run("elect", "--pending")
+                r = project(country, pending=True).run("elections", "--pending")
                 self.assertEqual(r.returncode, 0, r.stderr)
-                assert_styled(self, r.stdout, allow=("tjs elect ",))
+                assert_styled(self, r.stdout, allow=("tjs elections ",))
                 self.assertTrue(r.stdout.splitlines()[-1].startswith(
                     "1 election pending: "))
 

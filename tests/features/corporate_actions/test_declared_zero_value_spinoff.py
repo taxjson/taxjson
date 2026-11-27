@@ -80,7 +80,7 @@ def _project(tmp, files, country="canada", year=2026, ticker_map=None):
 
 
 def _manifest(root, records):
-    p = root / "inputs" / "margin" / "manifest.json"
+    p = root / "inputs" / "margin" / "elections.json"
     p.write_text(json.dumps({"elections": records}))
     return p
 
@@ -113,7 +113,7 @@ class TestDeclaredZeroValueRun(unittest.TestCase):
             doc = json.loads((root / "work" / "pending_elections.json")
                              .read_text())
             eid = doc["accounts"]["margin"]["pending"][0]["event_id"]
-            r = _run_cli(root, "elect", "margin", "--set",
+            r = _run_cli(root, "elections", "margin", "--set",
                          f"{eid}=taxable_deemed_dividend", "--hint",
                          "fmv_per_share=0")
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
@@ -128,7 +128,7 @@ class TestDeclaredZeroValueRun(unittest.TestCase):
             self.assertNotIn("is booked at $0 —", out)
             self.assertNotIn("at a $0 cost (", out)
             self.assertIn("the $0 value you declared", out)
-            self.assertIn(f"tjs elect margin --redo --event {eid}", out)
+            self.assertIn(f"tjs elections margin --redo --event {eid}", out)
             summ = json.loads((root / "reports" / "run_summary.json")
                               .read_text())
             self.assertEqual(summ["zero_cost_held"], [])
@@ -155,7 +155,7 @@ class TestDeclaredZeroValueRun(unittest.TestCase):
 
             # The same election with no value saved (a hand-edited or
             # legacy manifest): a Warning, as before.
-            man = root / "inputs" / "margin" / "manifest.json"
+            man = root / "inputs" / "margin" / "elections.json"
             m = json.loads(man.read_text())
             m["elections"][eid]["hints"] = {}
             man.write_text(json.dumps(m))
@@ -246,7 +246,7 @@ class TestDeclaredZeroValueBothCountries(unittest.TestCase):
         text = "\n".join(FR.render(doc, width_=0))
         self.assertIn("Info: 1 position at the $0 cost you declared", text)
         self.assertIn("SPW.US (margin, event ev-1)", text)
-        self.assertIn("`tjs elect margin --redo --event ev-1`", text)
+        self.assertIn("`tjs elections margin --redo --event ev-1`", text)
         self.assertNotIn("Warning", text)
 
     def test_run_warning_split(self):

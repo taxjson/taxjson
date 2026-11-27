@@ -45,7 +45,7 @@
 ==> Writing holdings reports/hand_holdings.toml
 ==> Writing summary reports/hand.sum
 ==> Checking for missing purchase history
-  warning: ATTENTION: short: SAMPLA.US (margin): the broker codes the sale on 2025-03-18 CLOSING (IB code C, IB Basis 451.00 USD), but the data holds no position to close — it is booked as a new short until the missing purchase is supplied (`tjs find-missing-history --write-missing-history` writes its .tt OPENING cost=unknown line).
+  warning: ATTENTION: short: SAMPLA.US (margin): the broker codes the sale on 2025-03-18 CLOSING (IB code C, IB Basis 451.00 USD), but the data holds no position to close — it is reported by hand, out of the totals, and adds no short, until the missing purchase is supplied (the earlier export, or a .tt purchase line: `tjs find-missing-history --write-purchases` drafts one from the broker's own cost).
 ==> Pooling cost and checking superficial losses across taxable accounts (4 accounts)
 ==> Writing summary reports/margin_wash.sum
 ==> Writing summary reports/margin2_wash.sum
@@ -55,6 +55,5 @@
 ==> Writing fees report reports/fees.rpt
 ==> Done. Reports are in reports/
 ==> Before you trust these numbers (docs/getting-started.md, step 5)
-Warning: 1 position sold in 2025 with no purchase in your files, not in missing_history.tt: SAMPLA.US (margin). Those sales are NOT in `tjs sum`; run `tjs find-missing-history`. A short sale still open reads the same: it is in no total until it is covered.
-Info: 1 account with open positions and no holdings file to check them against: margin (1). Run `tjs sanity` with the broker's positions.
+Warning: 1 sale at an unknown cost in 2025, NOT in `tjs sum`: SAMPLA.US (margin) on 2025-03-19 (traded 2025-03-18), 15 units. The broker marks it closing and your files hold no purchase of the units: add the purchase (the earlier export or a .tt line), or their cost (`OPENING <date> <SYMBOL> <qty> <CUR> <total cost>`, or `tjs opening`); until then, report it by hand (`tjs form-export` lists it).
 Info: Then run `tjs checklist --run`: it checks every step and names the next one.

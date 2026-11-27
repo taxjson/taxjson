@@ -212,7 +212,7 @@ SURFACE = {
     # each trade row (backlog TJ-4993). The skip counters' label prefixes
     # are this module's, the base's encoding, not the base's members.
     "constants": ("CURRENCY_EXT_FALLBACK", "CURRENCY_EXT_MAP", "DEFAULT_ACCOUNT",
-                  "MINI_OPTION_MULTIPLIER", "OPTION_MULTIPLIER", "SHORT_MARKS"),
+                  "MINI_OPTION_MULTIPLIER", "NO_CLOCK", "OPTION_MULTIPLIER", "SHORT_MARKS"),
 }
 
 

@@ -101,8 +101,10 @@ class TestSumDeniedRoundingNote(unittest.TestCase):
             r = _run(p, "sum", "--details")
             j = _run(p, "sum", "--json")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("unrounded total denied is 3.01 (-0.01 on the RETURN "
-                      "row)", r.stdout)
+        # DENIED (INFO)'s figure, every kind (here the superficial losses
+        # alone), against the gains files' (TJ-5450).
+        self.assertIn("DENIED (INFO)'s unrounded total in the gains files (every loss "
+                      "denied) is 3.01 (-0.01 on the RETURN row)", r.stdout)
         f = json.loads(j.stdout)["filing"]
         self.assertEqual(f["totals"]["denied"], 3.0)
         self.assertEqual(f["engine_denied_unrounded"], 3.01)

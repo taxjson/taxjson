@@ -1,4 +1,5 @@
 {
+  "account_names": null,
   "basis": "wash-adjusted",
   "columns": [
     "proceeds",
@@ -12,6 +13,7 @@
   "form": "schedule3",
   "rows": [
     {
+      "acb": 18225.0,
       "account": "rrsp",
       "allowed": 94.57,
       "cost": 18225.0,
@@ -19,6 +21,7 @@
       "date_settle": "2024-05-10",
       "days_held": 51,
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "direction": "LONG",
       "form": "schedule3",
@@ -30,9 +33,11 @@
       "proceeds": 18326.25,
       "qty": 75.0,
       "symbol": "AAPL.US",
-      "taxable": false
+      "taxable": false,
+      "total_cost": 18231.68
     },
     {
+      "acb": 18231.68,
       "account": "qt",
       "allowed": 87.89,
       "cost": 18231.68,
@@ -40,6 +45,7 @@
       "date_settle": "2024-05-14",
       "days_held": 51,
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "direction": "LONG",
       "form": "schedule3",
@@ -51,9 +57,11 @@
       "proceeds": 18326.25,
       "qty": 75.0,
       "symbol": "AAPL.US",
-      "taxable": true
+      "taxable": true,
+      "total_cost": 18238.36
     },
     {
+      "acb": 27001.35,
       "account": "margin",
       "allowed": 132.3,
       "cost": 27001.35,
@@ -61,6 +69,7 @@
       "date_settle": "2024-06-20",
       "days_held": 127,
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "direction": "LONG",
       "form": "schedule3",
@@ -72,9 +81,11 @@
       "proceeds": 27135.0,
       "qty": 50.0,
       "symbol": "MSFT.US",
-      "taxable": true
+      "taxable": true,
+      "total_cost": 27002.7
     },
     {
+      "acb": 812.7,
       "account": "margin",
       "allowed": -410.4,
       "cost": 812.7,
@@ -82,6 +93,7 @@
       "date_settle": "2024-08-02",
       "days_held": 92,
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "direction": "LONG",
       "form": "schedule3",
@@ -93,9 +105,11 @@
       "proceeds": 405.0,
       "qty": 2.0,
       "symbol": "QZQ240920C00030000.US",
-      "taxable": true
+      "taxable": true,
+      "total_cost": 815.4
     },
     {
+      "acb": 488.07,
       "account": "crypto",
       "allowed": -150.57,
       "cost": 488.07,
@@ -103,6 +117,7 @@
       "date_settle": "2024-09-01",
       "days_held": 51,
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "direction": "LONG",
       "form": "schedule3",
@@ -114,9 +129,11 @@
       "proceeds": 337.5,
       "qty": 0.1,
       "symbol": "ETH",
-      "taxable": true
+      "taxable": true,
+      "total_cost": 488.07
     },
     {
+      "acb": 7795.58,
       "account": "margin",
       "allowed": -101.93,
       "cost": 8101.36,
@@ -124,6 +141,7 @@
       "date_settle": "2024-09-11",
       "days_held": 193,
       "denied": 305.78,
+      "denied_all": 305.78,
       "denied_contribution": 0.0,
       "direction": "LONG",
       "form": "schedule3",
@@ -135,9 +153,11 @@
       "proceeds": 7695.0,
       "qty": 200.0,
       "symbol": "QZQ.US",
-      "taxable": true
+      "taxable": true,
+      "total_cost": 7796.93
     },
     {
+      "acb": 13346.6,
       "account": "tfsa",
       "allowed": 643.45,
       "cost": 13346.6,
@@ -145,6 +165,7 @@
       "date_settle": "2024-09-12",
       "days_held": 141,
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "direction": "LONG",
       "form": "schedule3",
@@ -156,9 +177,11 @@
       "proceeds": 14000.0,
       "qty": 100.0,
       "symbol": "RY.TO",
-      "taxable": false
+      "taxable": false,
+      "total_cost": 13356.55
     },
     {
+      "acb": 0.0,
       "account": "margin",
       "allowed": 268.65,
       "cost": 0.0,
@@ -166,6 +189,7 @@
       "date_settle": "2024-10-02",
       "days_held": 0,
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "direction": "SHORT",
       "form": "schedule3",
@@ -177,9 +201,11 @@
       "proceeds": 270.0,
       "qty": 1.0,
       "symbol": "QZQ241220C00035000.US",
-      "taxable": true
+      "taxable": true,
+      "total_cost": 1.35
     },
     {
+      "acb": 3250.83,
       "account": "crypto",
       "allowed": 30.21,
       "cost": 3250.83,
@@ -187,6 +213,7 @@
       "date_settle": "2024-10-08",
       "days_held": 139,
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "direction": "LONG",
       "form": "schedule3",
@@ -198,9 +225,11 @@
       "proceeds": 3307.5,
       "qty": 0.05,
       "symbol": "BTC",
-      "taxable": true
+      "taxable": true,
+      "total_cost": 3277.29
     },
     {
+      "acb": 3490.05,
       "account": "margin",
       "allowed": 0.0,
       "cost": 4009.95,
@@ -208,6 +237,7 @@
       "date_settle": "2024-11-01",
       "days_held": 296,
       "denied": 519.9,
+      "denied_all": 519.9,
       "denied_contribution": 0.0,
       "direction": "LONG",
       "form": "schedule3",
@@ -219,9 +249,11 @@
       "proceeds": 3500.0,
       "qty": 100.0,
       "symbol": "SAMPA.TO",
-      "taxable": true
+      "taxable": true,
+      "total_cost": 3500.0
     },
     {
+      "acb": 18231.69,
       "account": "qt",
       "allowed": -3.24,
       "cost": 18231.69,
@@ -229,6 +261,7 @@
       "date_settle": "2024-11-07",
       "days_held": 230,
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "direction": "LONG",
       "form": "schedule3",
@@ -240,9 +273,11 @@
       "proceeds": 18235.13,
       "qty": 75.0,
       "symbol": "AAPL.US",
-      "taxable": true
+      "taxable": true,
+      "total_cost": 18238.37
     },
     {
+      "acb": 6501.66,
       "account": "crypto",
       "allowed": 167.47,
       "cost": 6501.66,
@@ -250,6 +285,7 @@
       "date_settle": "2024-11-08",
       "days_held": 170,
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "direction": "LONG",
       "form": "schedule3",
@@ -261,9 +297,11 @@
       "proceeds": 6682.5,
       "qty": 0.1,
       "symbol": "BTC",
-      "taxable": true
+      "taxable": true,
+      "total_cost": 6515.03
     },
     {
+      "acb": 0.0,
       "account": "margin",
       "allowed": 201.15,
       "cost": 0.0,
@@ -271,6 +309,7 @@
       "date_settle": "2024-11-18",
       "days_held": 0,
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "direction": "SHORT",
       "form": "schedule3",
@@ -282,9 +321,11 @@
       "proceeds": 202.5,
       "qty": 1.0,
       "symbol": "QZQ250117C00040000.US",
-      "taxable": true
+      "taxable": true,
+      "total_cost": 1.35
     },
     {
+      "acb": 1881.9,
       "account": "margin",
       "allowed": 0.0,
       "cost": 1999.35,
@@ -292,6 +333,7 @@
       "date_settle": "2024-11-21",
       "days_held": 133,
       "denied": 117.45,
+      "denied_all": 117.45,
       "denied_contribution": 0.0,
       "direction": "LONG",
       "form": "schedule3",
@@ -303,9 +345,11 @@
       "proceeds": 1883.25,
       "qty": 10.0,
       "symbol": "NVDA.US",
-      "taxable": true
+      "taxable": true,
+      "total_cost": 1883.25
     },
     {
+      "acb": 2440.33,
       "account": "crypto",
       "allowed": 387.3,
       "cost": 2440.33,
@@ -313,6 +357,7 @@
       "date_settle": "2024-12-03",
       "days_held": 144,
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "direction": "LONG",
       "form": "schedule3",
@@ -324,9 +369,11 @@
       "proceeds": 2835.0,
       "qty": 0.5,
       "symbol": "ETH",
-      "taxable": true
+      "taxable": true,
+      "total_cost": 2447.7
     },
     {
+      "acb": 1220.16,
       "account": "crypto",
       "allowed": 85.56,
       "cost": 1220.16,
@@ -334,6 +381,7 @@
       "date_settle": "2024-12-15",
       "days_held": 156,
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "direction": "LONG",
       "form": "schedule3",
@@ -345,9 +393,11 @@
       "proceeds": 1316.25,
       "qty": 0.25,
       "symbol": "ETH",
-      "taxable": true
+      "taxable": true,
+      "total_cost": 1230.69
     },
     {
+      "acb": 2105.66,
       "account": "rrsp",
       "allowed": 175.84,
       "cost": 2105.66,
@@ -355,6 +405,7 @@
       "date_settle": "2024-12-15",
       "days_held": 21,
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "direction": "LONG",
       "form": "schedule3",
@@ -366,76 +417,100 @@
       "proceeds": 2295.0,
       "qty": 10.0,
       "symbol": "ABCD270219C00045000.US",
-      "taxable": false
+      "taxable": false,
+      "total_cost": 2119.16
     }
   ],
   "schema_version": 1,
   "scope": "tax year 2024",
+  "text_columns": [
+    "proceeds",
+    "acb",
+    "outlays",
+    "total_cost",
+    "allowed",
+    "denied_all"
+  ],
   "totals": {
     "accounts": [
       {
+        "acb": 13901.05,
         "account": "crypto",
         "allowed": 519.97,
         "cost": 13901.05,
         "denied": 0.0,
+        "denied_all": 0.0,
         "denied_contribution": 0.0,
         "dispositions": 5,
         "gain": 519.97,
         "outlays": 57.73,
         "permanently_denied": 0.0,
         "proceeds": 14478.75,
+        "total_cost": 13958.78,
         "type": "taxable"
       },
       {
+        "acb": 40981.58,
         "account": "margin",
         "allowed": 89.77,
         "cost": 41924.71,
         "denied": 943.13,
+        "denied_all": 943.13,
         "denied_contribution": 0.0,
         "dispositions": 7,
         "gain": -853.36,
         "outlays": 19.4,
         "permanently_denied": 101.93,
         "proceeds": 41090.75,
+        "total_cost": 41000.98,
         "type": "taxable"
       },
       {
+        "acb": 36463.37,
         "account": "qt",
         "allowed": 84.65,
         "cost": 36463.37,
         "denied": 0.0,
+        "denied_all": 0.0,
         "denied_contribution": 0.0,
         "dispositions": 2,
         "gain": 84.65,
         "outlays": 13.36,
         "permanently_denied": 0.0,
         "proceeds": 36561.38,
+        "total_cost": 36476.73,
         "type": "taxable"
       },
       {
+        "acb": 20330.66,
         "account": "rrsp",
         "allowed": 270.41,
         "cost": 20330.66,
         "denied": 0.0,
+        "denied_all": 0.0,
         "denied_contribution": 0.0,
         "dispositions": 2,
         "gain": 270.41,
         "outlays": 20.18,
         "permanently_denied": 0.0,
         "proceeds": 20621.25,
+        "total_cost": 20350.84,
         "type": "sheltered"
       },
       {
+        "acb": 13346.6,
         "account": "tfsa",
         "allowed": 643.45,
         "cost": 13346.6,
         "denied": 0.0,
+        "denied_all": 0.0,
         "denied_contribution": 0.0,
         "dispositions": 1,
         "gain": 643.45,
         "outlays": 9.95,
         "permanently_denied": 0.0,
         "proceeds": 14000.0,
+        "total_cost": 13356.55,
         "type": "sheltered"
       }
     ],
@@ -448,6 +523,7 @@
         {
           "acb": 45233.03,
           "denied": 0.0,
+          "denied_all": 0.0,
           "denied_contribution": 0.0,
           "dispositions": 2,
           "gain": 220.19,
@@ -467,6 +543,7 @@
         {
           "acb": 31399.22,
           "denied": 943.13,
+          "denied_all": 943.13,
           "denied_contribution": 0.0,
           "dispositions": 4,
           "gain": -105.17,
@@ -486,6 +563,7 @@
         {
           "acb": 14713.76,
           "denied": 0.0,
+          "denied_all": 0.0,
           "denied_contribution": 0.0,
           "dispositions": 8,
           "gain": 579.36,
@@ -507,6 +585,7 @@
       "totals": {
         "acb": 91346.01,
         "denied": 943.13,
+        "denied_all": 943.13,
         "denied_contribution": 0.0,
         "gain": 694.38,
         "outlays": 90.49,
@@ -516,42 +595,53 @@
       }
     },
     "return": {
+      "acb": 91346.01,
       "allowed": 694.38,
       "cost": 92289.14,
       "denied": 943.13,
+      "denied_all": 943.13,
       "denied_contribution": 0.0,
       "gain": -248.75,
       "outlays": 90.49,
       "permanently_denied": 101.93,
-      "proceeds": 92130.88
+      "proceeds": 92130.88,
+      "total_cost": 91436.5
     },
     "rows_less_return": {
+      "acb": -0.01,
       "allowed": 0.01,
       "cost": -0.01,
-      "gain": 0.01
+      "gain": 0.01,
+      "total_cost": -0.01
     },
     "sheltered": {
+      "acb": 33677.26,
       "allowed": 913.86,
       "cost": 33677.26,
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "dispositions": 3,
       "gain": 913.86,
       "outlays": 30.13,
       "permanently_denied": 0.0,
-      "proceeds": 34621.25
+      "proceeds": 34621.25,
+      "total_cost": 33707.39
     },
     "taxable": {
+      "acb": 91346.0,
       "allowed": 694.39,
       "cost": 92289.13,
       "denied": 943.13,
+      "denied_all": 943.13,
       "denied_contribution": 0.0,
       "dispositions": 14,
       "gain": -248.74,
       "outlays": 90.49,
       "permanently_denied": 101.93,
-      "proceeds": 92130.88
+      "proceeds": 92130.88,
+      "total_cost": 91436.49
     }
   },
-  "unknown_cost_routed": 0
+  "unknown_cost_routed": 1
 }

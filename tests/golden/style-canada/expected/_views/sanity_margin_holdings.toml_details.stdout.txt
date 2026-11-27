@@ -1,6 +1,6 @@
 SANITY — taxjson positions (basis: wash-adjusted) vs external holdings TOML (paired check)
 
-  accounts:  margin  (8 combined position(s))  [paired]
+  accounts:  margin  (7 combined position(s))  [paired]
   file:      holdings.toml
   result:    1 discrepancy(ies)
 
@@ -16,7 +16,7 @@ margin    SAMPA.TO  QTY_MISMATCH      100        90   +10
 
 1 discrepancy(ies).
 
-COST — books vs the reports' cost: 7 compared, 6 within tolerance, 1 differ (informational: a broker's book value is not your ACB/basis; never changes the exit code).
+COST — books vs the reports' cost: 6 compared, 5 within tolerance, 1 differ (informational: a broker's book value is not your ACB/basis; never changes the exit code).
 
 ACCOUNTS  SYMBOL   QTY  CUR  BROKER   BOOKS    DIFF  REASON
 ----------------------------------------------------------------

@@ -1,0 +1,2 @@
+tjs gains-base: note: 1 sale(s) with unknown cost are not shown
+  Shares bought before the data (.tt OPENING cost=unknown): their basis is unknown; `tjs form-export` lists them for manual reporting.

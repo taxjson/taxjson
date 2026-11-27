@@ -2,8 +2,8 @@
 
 A headless `tjs run` must never hang on the election prompt or
 crash: unresolved events become work/pending_elections.json (options,
-descriptions, required hints), the run exits 3, `tjs elect
---pending` shows ready-to-copy --set lines, and after `elect --set`
+descriptions, required hints), the run exits 3, `tjs elections
+--pending` shows ready-to-copy --set lines, and after `elections --set`
 the re-run completes. Uses an IB-shaped ABG->ABH merger CSV (synthetic
 amounts).
 """
@@ -79,27 +79,27 @@ class TestRunNoInput(unittest.TestCase):
             r = _taxjson(root, "run", "--no-input")
             self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
             self.assertIn("elections", r.stderr)
-            self.assertIn("tjs elect margin --set", r.stderr)
+            self.assertIn("tjs elections margin --set", r.stderr)
             agg = json.loads(
                 (root / "work" / "pending_elections.json").read_text())
             pend = agg["accounts"]["margin"]["pending"]
             self.assertGreaterEqual(len(pend), 1)
             event_id = pend[0]["event_id"]
 
-            # 2. elect --pending lists ready-to-copy --set lines.
-            p = _taxjson(root, "elect", "--pending")
+            # 2. elections --pending lists ready-to-copy --set lines.
+            p = _taxjson(root, "elections", "--pending")
             self.assertEqual(p.returncode, 0, p.stderr)
             self.assertIn(event_id, p.stdout)
-            self.assertIn(f"tjs elect margin --set {event_id}=",
+            self.assertIn(f"tjs elections margin --set {event_id}=",
                           p.stdout)
-            pj = _taxjson(root, "elect", "--pending", "--json")
+            pj = _taxjson(root, "elections", "--pending", "--json")
             self.assertEqual(
                 json.loads(pj.stdout)["accounts"]["margin"]["pending"][0]
                 ["event_id"], event_id)
 
             # 3. Resolve (ignore needs no hints) and re-run: completes,
             #    pending doc cleaned up.
-            e = _taxjson(root, "elect", "margin", "--set",
+            e = _taxjson(root, "elections", "margin", "--set",
                          f"{event_id}=ignore")
             self.assertEqual(e.returncode, 0, e.stderr)
             r2 = _taxjson(root, "run", "--no-input")
@@ -125,7 +125,7 @@ class TestRunNoInput(unittest.TestCase):
                 '[settings]\nyear = 2025\ncountry = "canada"\n'
                 'base_currency = "CAD"\n'
                 '[accounts.margin]\ntype = "taxable"\n')
-            r = _taxjson(root, "elect", "--pending")
+            r = _taxjson(root, "elections", "--pending")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("No pending elections", r.stdout)
 

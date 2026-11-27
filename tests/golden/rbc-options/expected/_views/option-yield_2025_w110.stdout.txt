@@ -1,0 +1,47 @@
+OPTION YIELD — planning numbers, tax year 2025 (2025-01-01 to 2025-12-31, 365 days)
+Planning numbers, not filing. WIN% = closed at a profit; YIELD = P/L / share cost (* strike notional),
+annualized.
+CLOSED      SERIES                  ACCOUNT  CUR  SIDE          QTY  HOW          PREMIUM   CLOSE     P/L
+---------------------------------------------------------------------------------------------------------
+2025-01-17  ZZQV250117C00012500.TO  margin   CAD  written call    1  assigned       23.25    0.00   23.25
+2025-02-18  ZZQV250221C00013000.TO  margin   CAD  written call    1  bought back    17.25  -61.75  -44.50
+2025-02-18  ZZQV250221C00013000.TO  margin   CAD  written call    1  bought back    23.50  -55.50  -32.00
+2025-03-17  ZZQV250321C00013500.TO  margin   CAD  written call    2  bought back    62.75  -37.25   25.50
+2025-03-21  ZZQV250321C00013500.TO  tfsa     CAD  written call    1  expired        21.25    0.00   21.25
+2025-05-16  ZZQV250516C00013500.TO  margin   CAD  written call    1  assigned       25.25    0.00   25.25
+2025-05-16  ZZQV250516C00013500.TO  margin   CAD  written call    1  assigned       31.50    0.00   31.50
+2025-06-20  ZZRW250620P00020000.US  margin   USD  written put     1  assigned       35.00    0.00   35.00
+2025-07-18  ZZRW250718C00021500.US  margin   USD  written call    1  expired        35.00    0.00   35.00
+2025-08-15  ZZRW250815C00021500.US  margin   USD  written call    1  expired        25.00    0.00   25.00
+2025-09-15  ZZQV251017C00014500.TO  margin   CAD  bought call     2  sold          -77.25  128.75   51.50
+2025-09-19  ZZRW250919P00019000.US  margin   USD  bought put      4  expired       -25.00    0.00  -25.00
+2025-09-19  ZZRW250919C00021500.US  margin   USD  written call    1  expired        45.00    0.00   45.00
+2025-10-17  ZZRW251017C00021500.US  margin   USD  written call    1  expired        35.00    0.00   35.00
+2025-11-21  ZZRW251121C00021500.US  margin   USD  written call    1  expired        25.00    0.00   25.00
+2025-12-19  ZZRW251219C00021500.US  margin   USD  written call    1  expired        55.00    0.00   55.00
+2025-12-29  ZZRW260116P00020000.US  margin   USD  written put     2  bought back   115.00  -85.00   30.00
+
+OPEN AT 2025-12-31
+OPENED      SERIES                  ACCOUNT  CUR  SIDE          QTY  EXPIRY      DAYS  PREMIUM
+----------------------------------------------------------------------------------------------
+2025-12-22  ZZRW280121C00025000.US  margin   USD  written call    1  2028-01-21    10   105.00
+
+SUMMARY
+UNDERLYING  CUR  WRITTEN  BOUGHT  RECEIVED    PAID  REALIZED  WIN%  OPEN  SHARES  SHARE COST   YIELD  ANNUAL
+------------------------------------------------------------------------------------------------------------
+ZZQV.TO     CAD        7       2    310.25  231.75    101.75   80%     0     200    2,597.00   3.92%   3.92%
+ZZRW.US     USD       10       4    475.00  110.00    260.00   69%     1     100    2,020.00  12.87%  12.87%
+
+UNDERLYING  ACCOUNT  SIDE          OPENED  NET CASH  REALIZED  WIN%  ANNUAL  CLOSED HOW
+------------------------------------------------------------------------------------------------------
+ZZQV.TO     margin   bought call        2     51.50     51.50  100%   3.92%  2 sold
+ZZQV.TO     margin   written call       6      5.75     29.00   71%   2.21%  3 assigned, 4 bought back
+ZZQV.TO     tfsa     written call       1     21.25     21.25  100%   1.66%  1 expired
+ZZRW.US     margin   bought put         4    -25.00    -25.00    0%  -1.24%  4 expired
+ZZRW.US     margin   written call       7    325.00    220.00  100%  10.89%  6 expired
+ZZRW.US     margin   written put        3     65.00     65.00  100%   3.22%  1 assigned, 2 bought back
+
+Realized, CAD:  101.75 on 10 contract(s) closed (8 at a profit: win rate 80%); net cash 78.50
+Yield, CAD:     3.92% on the 2,597.00 cost of 200 share(s) held, 3.92% annualized
+Realized, USD:  260.00 on 13 contract(s) closed (9 at a profit: win rate 69%); net cash 365.00
+Yield, USD:     12.87% on the 2,020.00 cost of 100 share(s) held, 12.87% annualized

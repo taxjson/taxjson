@@ -96,10 +96,10 @@ cd ~/taxes/2025
 
 `init` writes one folder per account under `~/taxes/inputs/`: `margin`,
 `tfsa`, `rrsp` and `crypto` for Canada (`margin`, `roth`, `401k`,
-`crypto` for the US) — every year's exports go there — and the year's
-project, `~/taxes/2025/`: `taxjson.toml`, a `ticker.map` and an empty
-`holdings/`; in Canada also `~/taxes/tobase.map` (below), one file every
-year reads. Each account folder's
+`crypto` for the US) — every year's exports go there — `~/taxes/holdings/`
+for every year's broker positions snapshots, and the year's project,
+`~/taxes/2025/`: `taxjson.toml` and a `ticker.map`; in Canada also
+`~/taxes/tobase.map` (below), one file every year reads. Each account folder's
 `README.txt` says which export to download from each broker. Every command
 runs in the year's folder.
 
@@ -257,7 +257,7 @@ Read every line that starts with `Warning:` and every `Info:` line. A warning th
 empty is expected for an account you have no files for yet.
 
 Exit codes: `0` done, `1` failed (the message names the file or row),
-`3` a merger or spin-off needs your decision (`tjs elect --pending` shows
+`3` a merger or spin-off needs your decision (`tjs elections --pending` shows
 it).
 
 Then look at the result:
@@ -360,6 +360,10 @@ SAMPG.US  margin   CAD   -20.0000  2025-03-18          1        714.87
   301.00 USD) — add the missing purchase; it is not a short sale. `--write-purchases` drafts the
   line from IB's figure for you to review.
 ```
+
+In Canada the run already reads that mark: a sale the broker codes closing with nothing held is
+reported by hand (`tjs form-export`, MANUAL REPORTING), out of `tjs sum`, and opens no short. The
+purchase puts it back in the totals.
 
 **2. Positions you still hold.** Nothing in the books can see these, so
 compare with the broker. An IB statement or an RBC Holdings Export
@@ -919,7 +923,7 @@ Shares that arrive from a spin-off, merger or stock dividend come with no
 cash and may show a cost of `0.00`.
 
 - **Merger or spin-off.** When the run recognises one it asks you once
-  how to treat it (headless: it exits `3`, and `tjs elect --pending`
+  how to treat it (headless: it exits `3`, and `tjs elections --pending`
   lists the choices). Answer it; the cost is then split for you. In a
   sheltered account (RRSP, LIRA, TFSA ...) it is not asked: no tax there
   depends on it, so the new shares start at $0 and the run says so in one
@@ -1000,9 +1004,14 @@ quantities are.
 
 ## 6. Check against the broker
 
-Before you file, save the broker's **year-end** positions in the year's
-`holdings/` folder (a `[[holding]]` TOML per broker account, as a
-download tool writes it; `tjs sanity` finds each file's account by its
+Before you file, save the broker's **year-end** positions in
+`~/taxes/holdings/` (a single-folder project: its own `holdings/`). The
+folder is every year's: each year compares the snapshots dated from
+January 1 of the year (the oldest year: any earlier date too) through
+January 15 of the next once the next year's folder reads it too (a
+snapshot of the first half of January is both years') and names the others in one line, with the command that
+compares one. Save a `[[holding]]` TOML per broker account, as a
+download tool writes it (`tjs sanity` finds each file's account by its
 `[meta] account` or its name, `margin_holdings.toml`; to keep a second
 date of one broker account, give each of its files `[meta]
 broker_account`, the broker's account number, or sanity refuses the
@@ -1095,15 +1104,16 @@ and a complete project per tax year beside them.
 
 ```
 ~/taxes/
-  inputs/<account>/     every year's exports, .tt lines, manifest.json
+  inputs/<account>/     every year's exports, .tt lines, elections.json
+  holdings/             every year's broker positions snapshots
   exports/              the newest year's positions and wash radar
   tobase.map            Canada: the interlisted pairs every year reads
                         (`tjs update-tobase-map`)
   2024/                 the 2024 project
     taxjson.toml        year = 2024, inputs_dir = "../inputs",
+                        holdings_dir = "../holdings",
                         tobase_map = "../tobase.map" (Canada)
     ticker.map          the year's own (wins over tobase.map)
-    holdings/           2024's broker positions snapshots
     inputs/slips/       2024's slips (slips.toml, IB's report, T5008)
     filed/ work/ reports/ checklist.json
   2025/                 the 2025 project, the same shape
@@ -1112,7 +1122,8 @@ and a complete project per tax year beside them.
 - **A filed year keeps its own copy of the exports.** `tjs
   close-year` copies the files its books were built from into the
   year folder's `inputs/` (and the shared `tobase.map` beside its
-  `ticker.map`) and the year reads that copy from then on: the shared
+  `ticker.map`, and the year's positions snapshots into its own
+  `holdings/`) and the year reads that copy from then on: the shared
   `inputs/` moves on with the next year while the filed year can be
   rebuilt as filed (`tjs compare filed`). `tjs new-year` points
   the next year at the shared folders again.
@@ -1129,15 +1140,16 @@ and a complete project per tax year beside them.
   command that needs a year is refused, naming the year folders.
 - **What is shared and what is the year's own.** Shared, in
   `inputs/<account>/`: the broker exports, the `.tt` lines you write,
-  `manifest.json` (your corporate-action elections) and `sends.json`
+  `elections.json` (your corporate-action elections) and `sends.json`
   (your crypto-send decisions). A run never writes there: only a
-  decision you make — `tjs elect … --set`, `tjs crypto-sends … --set`,
+  decision you make — `tjs elections … --set`, `tjs crypto-sends … --set`,
   or an answer at the run's prompt — is saved there, and it applies to
   every year that reads the shared folder — and so do the `OPENING ...
   cost=unknown` lines of missing history (step 5). A filed year reads
   its own frozen copy, so none of these reach it (see "A filed year and
-  later downloads"). The year's own, in its folder: `taxjson.toml`,
-  `ticker.map`, `inputs/slips/`, `holdings/`,
+  later downloads"). Shared too, in `holdings/`: the positions
+  snapshots, each year comparing its own by date. The year's own, in its
+  folder: `taxjson.toml`, `ticker.map`, `inputs/slips/`,
   `checklist.json`, `work/` (where it generates its `crypto_sends.tt`
   from `sends.json` and its own map), `reports/` and `filed/`.
 - **Downloads go into `inputs/<account>/`**, all years together (file
@@ -1146,17 +1158,24 @@ and a complete project per tax year beside them.
   copy close-year froze. A folder of an account a year
   does not have (an RRSP split in 2025, seen from 2024) is not read by
   that year, with one `Info:` line.
-- **The year's positions snapshots go in its `holdings/`**: keep one taken
-  at (or just after) the year end there. `tjs sanity` finds them without
-  a setting (step 6); `tjs run` only names it in its closing list.
+- **The positions snapshots go in `holdings/`**, all years together
+  (`holdings_dir = "../holdings"`): keep one taken at (or just after)
+  the year end there. Each year compares the snapshots dated from
+  January 1 of the year (the oldest year: every earlier one too) through
+  January 15 of the next once the next year's folder reads it too (else
+  every later one), and an undated one;
+  `tjs sanity` finds them without a setting and names the others
+  in one line (step 6); `tjs run` only names it in its closing list.
+  `tjs fetch --positions` names its file for the year
+  (`margin_live_holdings_2025.toml`).
 - **A new year:** `tjs new-year 2026` in `~/taxes` (or any year folder)
   creates `2026/` from the newest earlier year: its `taxjson.toml` (year
   set, `prior_year_record` pointed at `../2025/filed/2025.json`, 2025's
   `[estimate]` and `[instalments]` commented out for reference, and each
   account's `holdings` list commented out: those are 2025's snapshots),
-  `ticker.map` copied (it keeps reading the shared `tobase.map`), and
-  an empty `holdings/` (the folder `holdings_dir` names inside the
-  year, when it names one). The
+  `ticker.map` copied (it keeps reading the shared `tobase.map` and
+  `holdings/`), and an empty `holdings/` only when the year reads one of
+  its own (the folder `holdings_dir` names inside the year). The
   missing-history lines are in the shared inputs: the same in every
   year, their quantities fixed.
 - **Keeping the years aligned:** a map line or setting added in one year
@@ -1184,11 +1203,12 @@ and a complete project per tax year beside them.
   the options open across Dec 31; a corrected sale of the filed year
   (its proceeds, or the cost of a lot it sold) shows in neither. To carry a correction into the filed
   year, put the corrected file in its `inputs/<account>/` (or run
-  `tjs elect` in its folder); `tjs run` there then names the frozen
+  `tjs elections` in its folder); `tjs run` there then names the frozen
   input that changed and warns `filed 2024 DRIFTED` when the filed
   figures moved. Amend the return (then `tjs close-year --force`), or
-  keep the books as filed. Leave the year's commented-out `inputs_dir`
-  and `tobase_map` as they are: `tjs align` never brings them over. A
+  keep the books as filed. Leave the year's commented-out `inputs_dir`,
+  `holdings_dir` and `tobase_map` as they are: `tjs align` never brings
+  them over. A
   year closed by a taxjson older than v0.31.0 has no frozen copy and
   still reads the shared folder (its `tjs run` warns DRIFTED) until
   `tjs close-year --force` freezes it; so does a year locked before it
@@ -1208,12 +1228,26 @@ and a complete project per tax year beside them.
   in one git repository (`git init` in `~/taxes`): the checklist's
   "inputs committed" step looks at the shared `inputs/` too.
 
+**Year folders made before the shared holdings/.** A project `tjs init`
+made before this release has a `holdings/` in each year folder, and it
+keeps working as it is. To share one, as the inputs are: `tjs migrate
+--shared-holdings` in `~/taxes` shows what it would do (each open year's
+snapshots moved into `~/taxes/holdings/`, a name another year's file has
+taken renamed `NAME_<year>`, taxjson's README removed, `holdings_dir =
+"../holdings"` set; a filed year keeps its own copy), and `tjs migrate
+--shared-holdings --write` does it. By hand, two steps: move the files
+from `2025/holdings/` into `~/taxes/holdings/`, then add `holdings_dir =
+"../holdings"` under `[settings]` in `2025/taxjson.toml`.
+
 **From a single-folder project.** `tjs migrate --to-years` in it (with
 `--dry-run` first) keeps `inputs/` where it is and moves the project's
 own files (`taxjson.toml`, `ticker.map`,
 `checklist.json`, `work/`, `reports/`, `filed/`, `inputs/slips/` as
-`inputs/slips/`, `holdings/`) into a folder named for its year, setting
-`inputs_dir` and `exports_dir`; a relative `holdings` or
+`inputs/slips/`) into a folder named for its year, setting
+`inputs_dir`, `exports_dir` and `holdings_dir = "../holdings"`
+(`holdings/` stays beside `inputs/`, every year's; a filed year gets
+its own copy too, and a `holdings_dir` of yours moves with the year as
+before); a relative `holdings` or
 `prior_year_record` path into a folder that moves with it
 (`holdings/margin.toml`) stays as written, any other gains a `../`. It
 first refuses an old per-purpose map (`tjs migrate` folds it in), and

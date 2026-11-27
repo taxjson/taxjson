@@ -97,7 +97,7 @@ class TestBuyCodedClosingIsMissingHistory(unittest.TestCase):
         self.assertEqual(detect_unbacked_covers(txs), [])
         got = detect_unbacked_covers(txs, include_options=True)
         self.assertEqual([(c.symbol, c.marker, c.unbacked_qty) for c in got],
-                         [("F:CLG6.US", "IB code C", 1.0)])
+                         [("F:CLG6.US", "code C", 1.0)])
 
     def test_stock_cover_then_long_round_trip(self):
         # The finding's stock case: a C-coded buy, then an O buy and a
@@ -115,14 +115,17 @@ class TestBuyCodedClosingIsMissingHistory(unittest.TestCase):
         self.assertEqual([(c.symbol, c.date, c.unbacked_qty) for c in got],
                          [("TSQ.US", "2025-03-03", 100.0)])
 
-    def test_expired_open_buy_coded_c_is_broker_closing(self):
+    def test_expired_open_buy_coded_c_holds_no_long(self):
+        # The buy closed a contract written before the data: no long is
+        # left to expire (it was a long open past its expiry, flagged
+        # `broker_closing`; lib/unbacked_close, backlog TJ-5349).
         from taxjson.lib.option_boundary import expired_open
         acct = "U5550001"  # pii-ok
         rows = [_tx("BUYSELL", "2025-03-03", "QZY250718C00045000.US", 1,
                     -100.0, account=acct, currency="USD", open_close="C",
                     settle="2025-03-04")]
         out = expired_open(rows, 2025, today=date(2026, 10, 1))
-        self.assertEqual([o["broker_closing"] for o in out], [True])
+        self.assertEqual(out, [])
         rows = [_tx("BUYSELL", "2025-03-03", "QZY250718C00045000.US", 1,
                     -100.0, account=acct, currency="USD", open_close="O",
                     settle="2025-03-04")]

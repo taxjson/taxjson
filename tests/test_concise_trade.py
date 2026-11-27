@@ -130,7 +130,9 @@ class TestList(_Base):
                     assert_concise(self, r.stdout, r.stderr,
                                    legend="COST: book cost in")
         r = project("canada").run("list", **_W)
-        self.assertIn("! 2 short position(s) with no purchase", r.stdout)
+        # (GHOSTQ's; OLDCO's sale, coded closing by the broker, opens no
+        # short: reported by hand, TJ-5349)
+        self.assertIn("! 1 short position(s) with no purchase", r.stdout)
 
     def test_details_keep_the_notes(self):
         r = self.run_both("list", "--negative", details=True)

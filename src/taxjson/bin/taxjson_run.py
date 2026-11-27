@@ -11,7 +11,7 @@ Directory layout:
       margin/             # account name = folder name
         *.csv             # broker auto-detected by CSV content
         *.tt              # optional starting-position files
-        manifest.json     # corp-actions election manifest (created by the
+        elections.json    # corp-actions election manifest (created by the
                           # pipeline on first election; COMMIT this file —
                           # elections are decisions, not rebuildable data)
       rrsp/  tfsa/  ...

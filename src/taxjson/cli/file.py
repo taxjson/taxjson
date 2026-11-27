@@ -12,7 +12,9 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from taxjson.project.accounts import AccountSettings, account_of, accounts_of, estimate_of
 from taxjson.project.settings import Settings, settings_of
+from taxjson.lib import holdings_freeze as _HF
 from taxjson.lib import project_layout as _PL
+from taxjson.lib.command_log import ask as _ask
 from taxjson.lib.cli_diag import note, tax_year as _tax_year_arg
 from taxjson.lib.pipeline import income_dating_flags, option_timing_flags
 from taxjson.lib.carry_back import SPLIT_ATTENTION
@@ -1048,7 +1050,7 @@ def _close_year_refusals(root: Path, cfg: Dict[str, Any], files: Dict[str, Path]
         if (cache / f"{n}_pending_elections.json").exists())
     _why_unblended = (
         f"The last `tjs run` deferred {', '.join(_deferred)} at "
-        f"pending elections (`tjs elect --pending`), so its "
+        f"pending elections (`tjs elections --pending`), so its "
         f"cross-account pass never ran: make the elections, run "
         f"`tjs run`, then close." if _deferred else None)
     # --force locks books with open problems, but never books it cannot:
@@ -1251,7 +1253,7 @@ def _close_year_extra(args: argparse.Namespace, root: Path, cfg: Dict[str, Any],
                                    details=_items, stream=sys.stderr),
                       sys.stderr)
             try:
-                _ans = input(f"Lock {year} anyway? [y/N] ")
+                _ans = _ask(f"Lock {year} anyway? [y/N] ")
             except EOFError:
                 _ans = ""
             if not _ans.strip().lower().startswith("y"):
@@ -1324,7 +1326,8 @@ def _close_year_report(root: Path, year: Any, _prog: str, _json: Any, path: Path
     block (the RETURN row's figures, the lock, the filed totals, what was
     frozen, the year-end positions), the carryforwards and a loss the
     books carry that the lock does not take in (cmd_close_year)."""
-    tot = _json.loads(path.read_text())["totals"]
+    from taxjson.lib.country import lock_denied_label
+    tot = (_lock := _json.loads(path.read_text()))["totals"]
     _old_tot = (_old_lock or {}).get("totals")
     if isinstance(_old_tot, dict):
         # The replaced lock was the record of the filed return: say what
@@ -1371,7 +1374,7 @@ def _close_year_report(root: Path, year: Any, _prog: str, _json: Any, path: Path
     if _inc is not None:
         _shown["income"] = _inc
     _rows = [("Realized", f"{M.shown(_shown['realized'], 2):,.2f}"),
-             ("Disallowed", f"{M.shown(_shown['disallowed'], 2):,.2f}"),
+             (lock_denied_label(_lock), f"{M.shown(_shown['disallowed'], 2):,.2f}"),
              ("Income", f"{M.shown(_shown['income'], 2):,.2f}")]
     _mw = max(len(v) for _, v in _rows)
     _kv = [(k, _out.Verbatim(f"{v:>{_mw}}")) for k, v in _rows]
@@ -1406,6 +1409,9 @@ def _close_year_report(root: Path, year: Any, _prog: str, _json: Any, path: Path
                                    f"these" if _det else "")))
     _kv.append(("Frozen", _frozen_summary(_frozen, _kept_reports,
                                           int(year), _det)))
+    _hn = _HF.listed_note(root, _frozen)
+    if _hn:
+        _kv.append(("Note", _hn))
     _gi = _gitignore_hides_filed_reports(root)
     if _gi and _kept_reports:
         # An older scaffold's unanchored rule: the reports as filed
@@ -1481,7 +1487,7 @@ def _close_year(args: argparse.Namespace, state: WriteStep) -> None:
     the report of the close."""
     from taxjson.bin import taxjson_filed
     from taxjson.lib import filed_locks
-    from taxjson.lib.report_model import (gains_basis_label,
+    from taxjson.lib.report_model import (filed_basis_label,
                                           resolve_gains_files)
     from taxjson.lib import out as _out
     _prog = "tjs close-year"
@@ -1548,7 +1554,7 @@ def _close_year(args: argparse.Namespace, state: WriteStep) -> None:
                  f"year). {_nothing}")
         _out.warn(f"locking {year} with no disposition and no income "
                   f"(--force)", prog=_prog)
-    basis = gains_basis_label(files)
+    basis = filed_basis_label(files)
     from taxjson.lib.pipeline import option_timing_from_settings
     from taxjson.lib import handoff as _handoff
     filed_csv, _old_lock, _partial_year = _close_year_checks(
@@ -1729,6 +1735,39 @@ def _user_layout_copies(root: Path, cfg) -> List[Tuple[Path, Path]]:
             if p.suffix.lower() == ".toml" and p.parent.resolve() in users]
 
 
+def _refuse(input_error: bool, msg: str, *details: str) -> None:
+    """A refusal of lib code (lib/holdings_freeze) as the command's error:
+    exit 2 for an input, else 1."""
+    (_die_input if input_error else _die)(msg, *details)
+
+
+def _frozen_config_text(root: Path, shared: bool, shared_tob: bool,
+                        shared_hold: bool) -> Tuple[str, List[str]]:
+    """The freeze's taxjson.toml: (its text with the settings of the
+    shared folders it copied commented out under close-year's notes,
+    the problems the result's [settings] has — [] when none)."""
+    text = _read_config_text(root / _PL.CONFIG)
+    try:
+        if shared:
+            text = _PL.set_key_text(
+                text, ("settings", _PL.INPUTS_KEY), None,
+                note=_FROZEN_NOTE)
+        if shared_hold:
+            text = _PL.set_key_text(
+                text, ("settings", _PL.HOLDINGS_KEY), None,
+                note=_HF.FROZEN_NOTE)
+        if shared_tob:
+            text = _PL.set_key_text(
+                text, ("settings", _PL.TOBASE_KEY), None,
+                note=_FROZEN_NOTE_2 if shared else _FROZEN_NOTE)
+        if shared and shared_tob:
+            text = _one_frozen_note(text)
+        return text, _PL.setting_problems(
+            root, _PL.parse_config_text(text).get("settings") or {})
+    except _PL.LayoutError as e:
+        return text, [str(e)]
+
+
 def _frozen_with_books(root: Path, cfg: Dict[str, Any], settings: Settings, year: int,
                        **freeze: Any) -> Dict[str, Any]:
     """The lock's `frozen` record: the freeze of the inputs
@@ -1751,8 +1790,9 @@ def _freeze_inputs(root: Path, cfg: Dict[str, Any],
     """close-year's freeze. With exports shared by every year
     (`inputs_dir`), every file the run read (lib/checklist.input_files)
     is copied into this project's own inputs/<account>/, the shared
-    tobase.map beside ticker.map, and taxjson.toml stops naming the
-    shared ones (commented out under _FROZEN_NOTE; lib/project_layout:
+    tobase.map beside ticker.map, a shared holdings folder's snapshots of
+    the year into holdings/ (lib/holdings_freeze), and taxjson.toml stops
+    naming the shared ones (commented out under _FROZEN_NOTE; lib/project_layout:
     a project with no `inputs_dir` reads its own inputs/). A project
     that already reads its own files only records them. Returns the
     lock's `frozen` record: the settings replaced (None when none),
@@ -1776,9 +1816,10 @@ def _freeze_inputs(root: Path, cfg: Dict[str, Any],
                 "inputs": frozen_files(input_fingerprint(root, cfg))}
     shared = _PL.shared_inputs(root)
     shared_tob = _PL.shared_tobase(root)
+    shared_hold = _PL.shared_holdings(root)
     # taxjson.toml is checked before the first copy (backlog TJ-0918).
     cfg_real = (_config_rewrite_target(root, nothing)
-                if shared or shared_tob else None)
+                if shared or shared_tob or shared_hold else None)
     # A year frozen before (re-closed with --force) keeps the record
     # of the shared folders it stopped naming: new-year reads it.
     previous = previous if isinstance(previous, dict) else {}
@@ -1831,6 +1872,8 @@ def _freeze_inputs(root: Path, cfg: Dict[str, Any],
         rec["inputs_dir"] = settings.inputs_dir
     copies += _user_layout_copies(root, cfg)
     rec["copied"] = len(copies)             # the exports; tobase.map apart
+    copies += _HF.freeze(root, cfg, settings.holdings_dir, shared_hold,
+                         previous, rec, nothing, _refuse)
     if shared:
         # The crypto_sends.tt this year generated in work/ goes where the
         # frozen year reads and writes it, inputs/<account>/, so the lock
@@ -1857,8 +1900,8 @@ def _freeze_inputs(root: Path, cfg: Dict[str, Any],
             except OSError as e:
                 _say("warning", f"taxjson.toml could not be put back "
                      f"as it was before close-year: {e.strerror or e}",
-                     "It no longer names the shared exports: set "
-                     "inputs_dir (and tobase_map) again by hand.",
+                     "It no longer names the shared folders: set "
+                     "inputs_dir (tobase_map, holdings_dir) again by hand.",
                      prog=f"{_PROG} close-year")
         for d in done:
             with contextlib.suppress(OSError):
@@ -1886,25 +1929,9 @@ def _freeze_inputs(root: Path, cfg: Dict[str, Any],
         _undo()
         _die_input(f"cannot copy {_PL.shown(src, root)} to "
                    f"{_PL.shown(dst, root)}: {e.strerror or e}", nothing)
-    if shared or shared_tob:
-        cfg_path = root / _PL.CONFIG
-        text = _read_config_text(cfg_path)
-        bad: List[str] = []
-        try:
-            if shared:
-                text = _PL.set_key_text(
-                    text, ("settings", _PL.INPUTS_KEY), None,
-                    note=_FROZEN_NOTE)
-            if shared_tob:
-                text = _PL.set_key_text(
-                    text, ("settings", _PL.TOBASE_KEY), None,
-                    note=_FROZEN_NOTE_2 if shared else _FROZEN_NOTE)
-            if shared and shared_tob:
-                text = _one_frozen_note(text)
-            bad = _PL.setting_problems(
-                root, _PL.parse_config_text(text).get("settings") or {})
-        except _PL.LayoutError as e:
-            bad = [str(e)]
+    if shared or shared_tob or shared_hold:
+        text, bad = _frozen_config_text(root, shared, shared_tob,
+                                        shared_hold)
         if bad:
             _undo()
             _die(f"taxjson.toml cannot be pointed at the frozen copy: "
@@ -2183,6 +2210,7 @@ def _frozen_summary(rec: Dict[str, Any], kept: int, year: int,
         what = "the project's own inputs/" + (
             f" (frozen earlier from {rec['inputs_dir']})"
             if rec.get("inputs_dir") else "")
+    what += _HF.summary(rec, year)          # (the snapshots: TJ-5367)
     if kept:
         what += f"; reports as filed: filed/{year}/reports/"
     if details:

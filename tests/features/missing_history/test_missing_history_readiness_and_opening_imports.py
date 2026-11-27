@@ -126,6 +126,20 @@ class TestExhaustedUnknownOpeningKeepsALaterSaleUnbacked(unittest.TestCase):
                                "OPENING 2024-01-01 SYNQ.TO 5 cost=unknown\n")
             doc, kinds = _readiness(root)
             self.assertFalse(doc["readiness"]["complete"])
+            # The broker codes the 2025 sale closing (C): the run reports
+            # it by hand, at an unknown cost (CA-ACB-11, TJ-5349; it was a
+            # sale with no purchase, an open short).
+            self.assertIn("unknown-cost", kinds)
+            self.assertNotIn("no-purchase", kinds)
+
+    def test_control_an_uncoded_sale_past_the_opening_has_no_purchase(self):
+        csv = (ib_fill("2024-06-03", -5, 10, "C", cur="CAD")
+               + ib_fill("2025-06-02", -10, 15, "", cur="CAD"))
+        with tempfile.TemporaryDirectory() as d:
+            root = _ca_project(d, csv,
+                               "OPENING 2024-01-01 SYNQ.TO 5 cost=unknown\n")
+            doc, kinds = _readiness(root)
+            self.assertFalse(doc["readiness"]["complete"])
             self.assertIn("no-purchase", kinds)
 
     def test_an_opening_that_covers_both_is_still_covered(self):
@@ -143,14 +157,17 @@ class TestAnEarlierCoverDoesNotCoverALaterUnbackedSale(unittest.TestCase):
     later purchase': in the totals, and form-export complete."""
 
     def test_june_sale_stays_with_no_purchase(self):
-        csv = (ib_fill("2024-12-02", -10, 10, "O", cur="CAD")
-               + ib_fill("2025-01-06", 10, 8, "C", cur="CAD")
-               + ib_fill("2025-06-02", -10, 15, "C", cur="CAD"))
-        with tempfile.TemporaryDirectory() as d:
-            root = _ca_project(d, csv)
-            doc, kinds = _readiness(root)
-            self.assertFalse(doc["readiness"]["complete"])
-            self.assertIn("no-purchase", kinds)
+        # (the June sale with no code: one the broker codes closing is
+        # reported by hand, kind unknown-cost: CA-ACB-11, TJ-5349)
+        for code, kind in (("", "no-purchase"), ("C", "unknown-cost")):
+            csv = (ib_fill("2024-12-02", -10, 10, "O", cur="CAD")
+                   + ib_fill("2025-01-06", 10, 8, "C", cur="CAD")
+                   + ib_fill("2025-06-02", -10, 15, code, cur="CAD"))
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as d:
+                root = _ca_project(d, csv)
+                doc, kinds = _readiness(root)
+                self.assertFalse(doc["readiness"]["complete"])
+                self.assertIn(kind, kinds)
 
     def test_a_later_cover_still_closes_the_sale(self):
         from taxjson.lib.first_run import BOOKED_SHORT_COVER, engine_booking
@@ -850,7 +867,7 @@ class TestTheLedgerReadsADeliveryCutUnderItsOldName(unittest.TestCase):
 
 
 class TestRedoRollbackKeepsAConcurrentElectionOfTheEvent(unittest.TestCase):
-    """TJ-0955: an interrupted `elect --redo --event ID` put its cleared
+    """TJ-0955: an interrupted `elections --redo --event ID` put its cleared
     record back over an election of the same event that another command
     saved while it waited at the prompt."""
 
@@ -859,7 +876,7 @@ class TestRedoRollbackKeepsAConcurrentElectionOfTheEvent(unittest.TestCase):
         import contextlib
         from unittest import mock
         import sys
-        from taxjson.cli import elect as cli_elect
+        from taxjson.cli import elections as cli_elect
         args = argparse.Namespace(
             dir=str(root), account="margin", redo=True, reset=False,
             event="event-a", set=None, hint=None, pending=False,
@@ -873,7 +890,7 @@ class TestRedoRollbackKeepsAConcurrentElectionOfTheEvent(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()), \
                 contextlib.redirect_stderr(io.StringIO()), \
                 self.assertRaises(SystemExit) as cm:
-            cli_elect.cmd_elect(args)
+            cli_elect.cmd_elections(args)
         return str(cm.exception.code)
 
     def _setup(self, d):
@@ -881,7 +898,7 @@ class TestRedoRollbackKeepsAConcurrentElectionOfTheEvent(unittest.TestCase):
         from taxjson.lib import corp_actions as ca
         root = _project(d)
         (root / "inputs" / "margin" / "zz_ib.csv").write_text("x\n")
-        path = root / "inputs" / "margin" / "manifest.json"
+        path = root / "inputs" / "margin" / "elections.json"
         m = ca.Manifest()
         m.set(ca.ElectionRecord(event_id="event-a", summary="A",
                                 election="taxable_deemed_dividend",
@@ -895,7 +912,7 @@ class TestRedoRollbackKeepsAConcurrentElectionOfTheEvent(unittest.TestCase):
             root, path = self._setup(d)
 
             def child(cmd, out, **kw):
-                # `elect --set event-a=ignore` from another terminal,
+                # `elections --set event-a=ignore` from another terminal,
                 # then EOF at this redo's prompt.
                 ca.Manifest.update(path, lambda mm: mm.set(
                     ca.ElectionRecord(event_id="event-a", summary="A",

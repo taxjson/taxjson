@@ -88,7 +88,7 @@
   "side_total_gain": -42.52,
   "side_total_gain_sheltered": 0.0,
   "side_total_gain_taxable": -42.52,
-  "tainted_skipped": 0,
+  "tainted_skipped": 1,
   "total_gain": 1608.24,
   "total_gain_sheltered": 913.86,
   "total_gain_taxable": 694.39

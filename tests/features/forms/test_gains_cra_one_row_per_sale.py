@@ -12,7 +12,8 @@ grant timing and bought back, a short sale opened in two parts, a
 future; the same project with more calls and puts written and bought
 back (the buy-backs' one shared note); the same project with more
 superficial losses, deferred and for good (one mark per kind of denial,
-the table's rows and total in it); the same project with its native
+the table's count and total in it, each row's own in its DENIED (INFO)
+cell); the same project with its native
 gains file and then its rates gone; and a recorded golden book's views
 (a share's Description is its ticker, never the broker's name for it).
 The rate dates and the ACCOUNT view:
@@ -37,6 +38,15 @@ CELLS = ("proceeds", "acb", "outlays", "gain")
 
 def _by_symbol(doc, symbol):
     return [r for r in doc["rows"] if r["symbol"] == symbol]
+
+
+def _denied_cells(lines, i):
+    """For the currency table headed at `lines[i]`: the slice of a row
+    that holds its DENIED (INFO) cell (after GAIN, to the end of the
+    heading's DENIED / (INFO) / (CAD), a heading on three lines)."""
+    end = lines[i + 1].index("DENIED") + len("DENIED")
+    start = lines[i + 2].index("GAIN") + len("GAIN")
+    return slice(start, end)
 
 
 class TestTheMixedProject(unittest.TestCase):
@@ -82,7 +92,7 @@ class TestTheMixedProject(unittest.TestCase):
         tot = self.sum["filing"]["totals"]
         self.assertIsNone(self.doc["scope"])
         self.assertNotIn("return_totals", self.doc)
-        for cell in CELLS + ("denied",):
+        for cell in CELLS + ("denied", "denied_all"):
             with self.subTest(cell=cell):
                 self.assertEqual(cents(self.doc["totals"][cell]), cents(tot[cell]))
         self.assertEqual(cents(self.doc["totals"]["gain"]), cents(self.fe["totals"]["gain_all"]))
@@ -195,17 +205,31 @@ class TestTheMixedProject(unittest.TestCase):
         self.assertTrue(lines[0].startswith("CAPITAL GAINS, ONE ROW PER SALE — CAD, tax year 2025"))
         self.assertLess(r.stdout.index("SALES IN CAD"), r.stdout.index("SALES IN USD"))
         self.assertIn("FOR THE RETURN", r.stdout)
-        self.assertEqual([ln for ln in lines if len(ln) > 120], [])
-        # The long Description is cut, never a money column.
-        self.assertIn("QZRX $30 call exp", r.stdout)
-        self.assertIn("…", r.stdout)
-        head = next(i for i, ln in enumerate(lines) if ln.startswith("Sale date") and "FX" in ln)
-        for word in ("Sale date", "Settle date", "Description", "Qty", "Proceeds", "FX", "ACB",
-                     "Commissions", "Gain/Loss"):
-            self.assertIn(word, lines[head])
-        self.assertEqual(lines[head + 1].split(), ["(USD)", "(CAD)", "(CAD)", "(CAD)", "(CAD)"])
-        whole = self.p.tjs("gains-cra", "--details", TAXJSON_WIDTH="120").stdout
-        self.assertIn("QZRX $30 call exp 2025-12-19 (written)", whole)
+        # Always the whole text (TJ-5337, TJ-5342): every word of the long
+        # Description, wrapped within its column, nothing cut; the table
+        # within the width, its headings on three lines.
+        i = lines.index("SALES IN USD")
+        rule = next(n for n in range(i, len(lines)) if set(lines[n]) == {"-"})
+        desc = lines[i + 3].index("DESCRIPTION")
+        rows = lines[rule + 1:next(n for n in range(rule + 1, len(lines))
+                                   if set(lines[n]) == {"-"})]
+        call = next(n for n, ln in enumerate(rows) if "QZRX $30 call" in ln)
+        words = [rows[call][desc:].split("  ")[0]]
+        for ln in rows[call + 1:]:
+            if ln[:desc].strip():
+                break                       # the next sale
+            words.append(ln.strip())
+        self.assertEqual(" ".join(words), "QZRX $30 call exp 2025-12-19 (written)")
+        self.assertNotIn("…", r.stdout)
+        self.assertEqual([ln.split() for ln in lines[i + 1:rule]],
+                         [["DENIED"],
+                          ["SALE", "SETTLE", "PROCEEDS", "PROCEEDS", "COST(ACB)", "OUTLAYS", "GAIN",
+                           "(INFO)"],
+                          ["DATE", "DATE", "DESCRIPTION", "QTY", "(USD)", "FX"] + ["(CAD)"] * 5])
+        self.assertEqual([ln for ln in lines[i:rule + len(rows) + 3] if len(ln) > 120], [])
+        # The prose and the summary tables stay within the width.
+        summary = r.stdout[r.stdout.index("ALL SALES"):].splitlines()
+        self.assertEqual([ln for ln in summary if len(ln) > 120], [])
 
     def test_the_csv(self):
         out = self.p.root / "cra.csv"
@@ -326,8 +350,8 @@ class TestTheNativeBooksMissing(unittest.TestCase):
         self.assertEqual(t["fx_missing_why"], {"no USD rate in work/to_base.csv": 1,
                                                "no USD record in work/": 4})
         head = next(ln for ln in self.text2.splitlines()
-                    if ln.startswith("Sale date") and "FX" in ln)
-        self.assertIn("FX", head.split())
+                    if ln.startswith("DATE ") and "FX" in ln.split())
+        self.assertIn("DESCRIPTION", head.split())
         self.assertIn("No row of this table has an FX (—): 1 row: no USD rate in "
                       "work/to_base.csv; 4 rows: no USD record in work/.", self.text2)
         sale = _by_symbol(self.doc2, "QZRX.US")[0]
@@ -336,26 +360,32 @@ class TestTheNativeBooksMissing(unittest.TestCase):
 
 
 class TestTheRoundingLines(unittest.TestCase):
-    """Where a line's rows add to other cents than Schedule 3's figure, by
-    how much, per column (and both figures with --details)."""
+    """Where a line's rows add to other cents than Schedule 3's figure:
+    both figures per column, by FOR THE RETURN's column names, the line by
+    the label `tjs sum` gives it."""
 
     DOC = {"lines": [
-        {"title": "Part 3, line 4 (lines 13199/13200)", "proceeds": 500.0, "acb": 300.0,
-         "outlays": 4.06, "gain": 195.94,
-         "rows_sum": {"proceeds": 500.0, "acb": 300.04, "outlays": 4.1, "gain": 195.86}},
-        {"title": "Part 3, line 6 (lines 15199/15300)", "proceeds": 10.0, "acb": 0.0,
-         "outlays": 0.0, "gain": 10.0,
-         "rows_sum": {"proceeds": 10.0, "acb": 0.0, "outlays": 0.0, "gain": 10.0}}]}
+        {"title": "Part 3, line 4 (lines 13199/13200)", "short": "shares & fund units",
+         "line": "4", "proceeds_code": "13199", "gain_code": "13200", "proceeds": 500.0,
+         "acb": 300.0, "outlays": 4.06, "total_cost": 304.06, "gain": 195.94,
+         "denied_all": 0.0,
+         "rows_sum": {"proceeds": 500.0, "acb": 300.04, "outlays": 4.1, "total_cost": 304.14,
+                      "gain": 195.86, "denied_all": 0.0}},
+        {"title": "Part 3, line 6 (lines 15199/15300)", "short": "options & other properties",
+         "line": "6", "proceeds_code": "15199", "gain_code": "15300", "proceeds": 10.0,
+         "acb": 0.0, "outlays": 0.0, "total_cost": 0.0, "gain": 10.0, "denied_all": 2.0,
+         "rows_sum": {"proceeds": 10.0, "acb": 0.0, "outlays": 0.0, "total_cost": 0.0,
+                      "gain": 10.0, "denied_all": 2.01}}]}
 
-    def test_the_difference_per_column(self):
-        self.assertEqual(GC._rounding_lines(self.DOC, "CAD", False), [
-            "Part 3, line 4 (lines 13199/13200): the rows differ from the line by ACB +0.04, "
-            "Commissions +0.04, Gain/Loss -0.08 CAD: Schedule 3 rounds each security's "
-            "total, the rows each sale."])
-        self.assertEqual(GC._rounding_lines(self.DOC, "CAD", True), [
-            "Part 3, line 4 (lines 13199/13200): the rows add to ACB 300.04 (the line "
-            "300.00), Commissions 4.10 (the line 4.06), Gain/Loss 195.86 (the line 195.94) "
-            "CAD: Schedule 3 rounds each security's total, the rows each sale."])
+    def test_both_figures_per_column(self):
+        self.assertEqual(GC._rounding_lines(self.DOC, "CAD"), [
+            "Line 4 shares & fund units (13199/13200): the rows add to COST(ACB) 300.04 (the "
+            "line 300.00), OUTLAYS 4.10 (the line 4.06), TOTAL COST 304.14 (the line 304.06), "
+            "GAIN 195.86 (the line 195.94) CAD: Schedule 3 rounds each security's total, the "
+            "rows each sale.",
+            "Line 6 options & other properties (15199/15300): the rows add to DENIED (INFO) "
+            "2.01 (the line 2.00) CAD: Schedule 3 rounds each security's total, the rows each "
+            "sale."])
 
 
 class TestTheDescriptions(unittest.TestCase):
@@ -447,20 +477,20 @@ class TestBuyBacksShareOneNote(unittest.TestCase):
         loss = _by_symbol(self.doc, "QZLS.TO")[0]
         self.assertEqual(len(rows[loss["date"]]), 1)
         self.assertTrue(notes[rows[loss["date"]][0]].startswith(
-            "superficial loss denied (1 row, 100.00 CAD): each row's ACB is reduced"))
+            "superficial loss denied (1 row, 100.00 CAD): each row's COST(ACB) is reduced"))
 
-    def test_details_shows_the_shared_note_once_without_a_row(self):
-        out = self.p.tjs("gains-cra", "--details", TAXJSON_WIDTH="0").stdout
+    def test_a_shared_note_is_once_without_a_row(self):
+        out = self.p.tjs("gains-cra", TAXJSON_WIDTH="0").stdout
         _rows, notes = _table_marks(out, "USD")
         # A shared note is no one row's: no date and description before it
-        # (a weighted rate's too: it has no figure of the row's own); a
-        # row's own (the superficial loss) keeps them.
+        # (a weighted rate's too: it has no figure of the row's own).
         self.assertEqual([t for t in notes.values() if "at the write" in t], [self.SHARED])
         self.assertTrue(any(t.startswith("FX: the rate of the opening") for t in notes.values()),
                         notes)
-        # A denial's note lists its rows' own amounts under it.
+        # A denial's note counts and adds its rows; it lists none under it
+        # (each row's amount is in its DENIED (INFO) cell).
         self.assertIn("superficial loss denied (1 row, 100.00 CAD)", out)
-        self.assertIn("\n     - 2025-05-05 QZLS: 100.00 CAD\n", out)
+        self.assertNotIn("\n     - 2025-", out)
 
     def test_the_json_keeps_each_row_s_notes(self):
         for r in self._backs("USD") + self._backs("CAD"):
@@ -492,9 +522,9 @@ class TestBuyBacksShareOneNote(unittest.TestCase):
         marks, notes = GC._marks([short, own], 6, "CAD")
         # The FX check is the row's own, 9; its shared notes 7 and 8: "[7,8,9]", not "[9,7,8]".
         self.assertEqual(marks, [" [7,8]", " [7,8,9]"])
-        self.assertEqual([(n, r is None, t, subs) for n, r, t, subs in notes],
-                         [(7, True, weighted, []), (8, True, GC._SHARED["short_sale"], []),
-                          (9, False, check, [])])
+        self.assertEqual([(n, r is None, t) for n, r, t in notes],
+                         [(7, True, weighted), (8, True, GC._SHARED["short_sale"]),
+                          (9, False, check)])
 
     def test_a_buy_back_counted_in_part_keeps_its_own_count(self):
         part = {"qty": 3.0, "units_counted_elsewhere": 2.0,
@@ -503,7 +533,7 @@ class TestBuyBacksShareOneNote(unittest.TestCase):
         whole = dict(part, qty=2.0)
         marks, notes = GC._marks([whole, part, dict(whole)], 0, "CAD")
         self.assertEqual(marks, [" [1]", " [2]", " [1]"])
-        self.assertEqual([(n, r is None, t) for n, r, t, _subs in notes],
+        self.assertEqual([(n, r is None, t) for n, r, t in notes],
                          [(1, True, self.SHARED), (2, False, part["notes"][0])])
 
 
@@ -550,14 +580,14 @@ def _note_block(text, currency):
 
 class TestDenialsShareOneMarkPerKind(unittest.TestCase):
     """Superficial losses denied: one mark per kind in a table, its line
-    once under it with the table's rows and total; a row with a deferred
-    and a permanent part both marks; each row's own amount in --details,
-    the CSV's Denied column and the JSON."""
-    DEFERRED = ("superficial loss denied ({}): each row's ACB is reduced by its denied loss, "
-                "so Gain/Loss is the allowed part; the denied loss is added to the "
+    once under it with the table's count and total; a row with a deferred
+    and a permanent part both marks; each row's own amount in its DENIED
+    (INFO) cell, the CSV's Denied column and the JSON."""
+    DEFERRED = ("superficial loss denied ({}): each row's COST(ACB) is reduced by its denied "
+                "loss, so GAIN is the allowed part; the denied loss is added to the "
                 "replacement's ACB")
     FOR_GOOD = ("superficial loss denied for good ({}; a registered-account or affiliated "
-                "buy-back): each row's ACB is reduced by it")
+                "buy-back): each row's COST(ACB) is reduced by it")
 
     @classmethod
     def setUpClass(cls):
@@ -612,24 +642,31 @@ class TestDenialsShareOneMarkPerKind(unittest.TestCase):
         for width in (100, 80):
             out = self.p.tjs("gains-cra", TAXJSON_WIDTH=str(width)).stdout
             block = out[out.index("SALES IN CAD"):out.index("SALES IN USD")].splitlines()
-            block = block[next(i for i, ln in enumerate(block) if ln.startswith("Subtotal")):]
+            block = block[next(i for i, ln in enumerate(block) if ln.startswith("SUBTOTAL")):]
             notes = [ln for ln in block if ln.startswith(("[", "     "))]
             with self.subTest(width=width):
                 self.assertTrue(notes)
                 self.assertEqual([ln for ln in notes if len(ln) > width], [])
                 self.assertTrue(any(ln.startswith("     ") for ln in notes), notes)
 
-    def test_details_lists_each_row_s_amounts(self):
-        out = self.p.tjs("gains-cra", "--details", TAXJSON_WIDTH="0").stdout
+    def test_each_row_s_amount_is_its_denied_info_cell(self):
+        out = self.p.tjs("gains-cra", TAXJSON_WIDTH="0").stdout
         notes = _note_block(out, "CAD")
-        subs = {t.split(" (", 1)[0]: s for t, s in notes.values()}
-        self.assertEqual(subs["superficial loss denied"],
-                         ["2025-03-10 QZLB: 50.00 CAD", "2025-04-01 QZLC: 50.00 CAD",
-                          "2025-05-05 QZLS: 100.00 CAD"])
-        self.assertEqual(subs["superficial loss denied for good"],
-                         ["2025-04-01 QZLC: 50.00 CAD", "2025-06-02 QZLD: 50.00 CAD"])
-        # The default view leaves the per-row lines out.
-        self.assertNotIn("     - 2025-", self.p.tjs("gains-cra", TAXJSON_WIDTH="0").stdout)
+        self.assertEqual([s for _t, s in notes.values() if s], [])
+        lines = out.splitlines()
+        i = lines.index("SALES IN CAD")
+        cell = _denied_cells(lines, i)
+        cells = {}
+        for r in self.cad:
+            ln = next(x for x in lines[i:] if x.startswith(r["date"]))
+            cells[r["symbol"]] = ln[cell].strip()
+        self.assertEqual({k: v for k, v in cells.items() if v},
+                         {"QZLB.TO": "50.00", "QZLC.TO": "100.00", "QZLS.TO": "100.00",
+                          "QZLD.TO": "50.00"})
+        self.assertEqual({k for k, v in cells.items() if not v}, {"QZNW.TO"})
+        foot = next(x for x in lines[i:] if x.startswith("SUBTOTAL"))
+        self.assertEqual(foot[cell].strip(),
+                         f"{cents(self.doc['tables'][0]['denied_all']):,.2f}")
 
     def test_the_csv_s_denied_column(self):
         out = self.p.root / "cra.csv"
@@ -641,6 +678,8 @@ class TestDenialsShareOneMarkPerKind(unittest.TestCase):
         for line, row in zip(got, self.doc["rows"]):
             with self.subTest(row=row["description"], date=row["date"]):
                 want = cents(row["denied"]) + cents(row["denied_contribution"])
+                # The text's DENIED (INFO) figure, `denied_all` (TJ-5341).
+                self.assertEqual(cents(row["denied_all"]), want)
                 if want:
                     self.assertEqual(cents(line["Denied (CAD)"]), want)
                 else:
@@ -653,7 +692,7 @@ class TestDenialsShareOneMarkPerKind(unittest.TestCase):
     def test_the_tables_add_the_denials(self):
         for t in self.doc["tables"]:
             rows = [r for r in self.doc["rows"] if r["currency"] == t["currency"]]
-            for k in ("denied", "permanently_denied", "denied_contribution"):
+            for k in ("denied", "permanently_denied", "denied_contribution", "denied_all"):
                 with self.subTest(table=t["currency"], key=k):
                     self.assertEqual(cents(t[k]), sum((cents(r[k]) for r in rows), Decimal(0)))
         cad = self.doc["tables"][0]

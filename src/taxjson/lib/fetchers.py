@@ -43,9 +43,13 @@ fetcher's brokerages), the parsed arguments, a `say` progress printer
 project's files are (lib/project_layout): `inputs` (the folder of
 inputs/<account>/ — with `[settings] inputs_dir`, the exports folder
 every year's project shares; `shared_inputs` says so) and `holdings`
-(the year's positions snapshots folder, lib/holdings_dir). A fetcher
-writes downloads under `inputs`, never root/"inputs" (an older core
-sends no `inputs`: fall back to root/"inputs" then).
+(the year's positions snapshots folder, lib/holdings_dir; with
+`holdings_year` set it is a folder every year shares, and a snapshot
+taken today is that year's: its file is named for it,
+NAME_live_holdings_YYYY.toml, so it never replaces another year's;
+`holdings_compared_by`, the year folders that compare it). A
+fetcher writes downloads under `inputs`, never root/"inputs" (an older
+core sends no `inputs`: fall back to root/"inputs" then).
 """
 from __future__ import annotations
 
@@ -108,6 +112,14 @@ class FetchRequest:
     inputs: Optional[Path] = None
     holdings: Optional[Path] = None
     shared_inputs: bool = False
+    # `holdings` is a folder every year shares (`holdings_dir =
+    # "../holdings"`): the year a snapshot taken today is of, which its
+    # file is named for (lib/holdings_dir `holdings_year`), and the year
+    # folders whose `tjs sanity` compares it (`compared_by`; [] when no
+    # folder does). None: the year's own folder (NAME_live_holdings.toml,
+    # as before).
+    holdings_year: Optional[int] = None
+    holdings_compared_by: Optional[List[int]] = None
 
 
 @dataclass

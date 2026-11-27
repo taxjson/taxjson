@@ -189,7 +189,7 @@ class TestTJ1315SpinOffRowOfBothAccounts(unittest.TestCase):
             root = _project(Path(td) / "p", 2026, {"margin": "taxable"})
             (root / "inputs/margin/ib_a.csv").write_text(a)
             (root / "inputs/margin/ib_b.csv").write_text(b)
-            tj(root, "elect", "margin", "--set",
+            tj(root, "elections", "margin", "--set",
                "20260401-parnt-spnco-94ba=taxable_deemed_dividend",
                check=False)
             r = tj(root, "run", "--no-input", check=False)

@@ -1,5 +1,17 @@
 {
-  "manual_rows": [],
+  "manual_rows": [
+    {
+      "account": "margin",
+      "currency": "CAD",
+      "date": "2024-04-01",
+      "date_settle": "2024-04-03",
+      "direction": "LONG",
+      "own_move_from": null,
+      "proceeds": 943.65,
+      "qty": 50.0,
+      "symbol": "OLDCO.US"
+    }
+  ],
   "option_fees": {
     "CAD": 8.1
   },
@@ -59,7 +71,7 @@
   },
   "schema_version": 1,
   "tainted_count": 0,
-  "tainted_routed": 0,
+  "tainted_routed": 1,
   "ticker_stats": {
     "MSFT.US": {
       "CAD": {

@@ -3,8 +3,7 @@
 ======================================================================
 warning: ATTENTION: opening: hand: the opening snapshot (2024-12-31) replaces 2 earlier row(s) of SAMPQ.US — left out of the books so the shares are not counted twice (income rows stay).
 OK: <merged>: 5 transactions validated.
-warning: ATTENTION: short: SAMPLA.US (margin): the broker codes the sale on 2025-03-18 CLOSING (IB code C, IB Basis 451.00 USD), but the data holds no position to close — it is booked as a new short until the missing purchase is supplied (`tjs find-missing-history --write-missing-history` writes its .tt OPENING cost=unknown line).
-NOTE: 1 (symbol, account) pair(s) go short in this data: SAMPLA.US/margin. 0 are in registered accounts. If any of these are sales of shares bought before your files start (no purchase in the data) rather than real short trades, open the units held before the data with .tt OPENING cost=unknown lines: `tjs find-missing-history --write-missing-history` in a project writes them (`tjs run` reads them).
+warning: ATTENTION: short: SAMPLA.US (margin): the broker codes the sale on 2025-03-18 CLOSING (IB code C, IB Basis 451.00 USD), but the data holds no position to close — it is reported by hand, out of the totals, and adds no short, until the missing purchase is supplied (the earlier export, or a .tt purchase line: `tjs find-missing-history --write-purchases` drafts one from the broker's own cost).
 ======================================================================
 
 

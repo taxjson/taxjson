@@ -3,7 +3,7 @@ for (CHANGELOG "Fixed"): interest paid shown apart, a negative futures
 price in a generic CSV, the audit over a pending election, the
 checklist's hints, init's timezone, the single-folder year hints,
 sanity with no holdings file, the headless election message, no empty
-manifest.json, compare's exit codes (tests/test_compare.py).
+elections.json, compare's exit codes (tests/test_compare.py).
 
 Formerly: test_workflow_audit_fixes"""
 import tempfile
@@ -41,7 +41,7 @@ class TestSingleFolderProject(unittest.TestCase):
 
     def test_no_empty_manifest_is_written(self):
         self.assertFalse((self.root / "inputs" / "margin"
-                          / "manifest.json").exists())
+                          / "elections.json").exists())
         self.assertEqual(self.r.returncode, 0)
 
     def test_sanity_without_holdings_names_the_unchecked(self):

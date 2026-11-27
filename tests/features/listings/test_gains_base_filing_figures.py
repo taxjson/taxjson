@@ -1,13 +1,14 @@
 """`tjs gains-base`: the window's dispositions in the base currency, the
 filing figures (each account's wash-adjusted base book), each row the
 filed form's cells for that one sale (Canada: Schedule 3's, the cells
-`tjs gains-cra` shows, with COST(ACB) and GAIN before any denial, DENIED
-and ALLOWED; US: Form 8949's (d), (e), (g), (h)), the totals per account
-(taxable and sheltered apart) and THE RETURN, `tjs sum`'s RETURN row:
-its PROCEEDS, OUTLAYS, DENIED and ALLOWED sum's, its COST(ACB) sum's
-COST(ACB) + DENIED; the engine's unrounded total said where the rounding
+`tjs gains-cra` shows, in `tjs sum`'s columns: PROCEEDS, COST(ACB) as
+filed (`acb`), OUTLAYS, TOTAL COST (`total_cost`), GAIN as filed
+(`allowed`) and DENIED (INFO); the JSON's `cost` and `gain` before any
+denial beside them; US: Form 8949's (d), (e), (g), (h)), the totals per
+account (taxable and sheltered apart) and THE RETURN, `tjs sum`'s RETURN
+row cell for cell; the engine's unrounded total said where the rounding
 moves it (src/taxjson/lib/gains_base.py, src/taxjson/cli/gains_filing.py
-`cmd_gains_base`).
+`cmd_gains_base`; backlog TJ-5336).
 
 The mixed USD/CAD project, one whose three sales each round down a
 part of a cent, one with a futures loss and a write for a net debit,
@@ -53,6 +54,8 @@ def _same_as_sum(test, base, sm):
     else:
         want = {"proceeds": cents(t["proceeds"]), "outlays": cents(t["outlays"]),
                 "denied": cents(t["denied"]), "allowed": cents(t["gain"]),
+                "acb": cents(t["acb"]), "total_cost": cents(t["total_cost"]),
+                "denied_all": cents(t["denied_all"]),
                 "cost": cents(t["acb"]) + cents(t["denied"]),
                 "gain": cents(t["gain"]) - cents(t["denied"])}
         for r in base["rows"]:
@@ -60,6 +63,14 @@ def _same_as_sum(test, base, sm):
                 test.assertEqual(cents(r["proceeds"]) - cents(r["cost"]) - cents(r["outlays"]),
                                  cents(r["gain"]))
                 test.assertEqual(cents(r["gain"]) + cents(r["denied"]), cents(r["allowed"]))
+                # The text's cells, sum's meanings: COST(ACB) as filed, TOTAL COST.
+                test.assertEqual(cents(r["acb"]), cents(r["cost"]) - cents(r["denied"]))
+                test.assertEqual(cents(r["total_cost"]), cents(r["acb"]) + cents(r["outlays"]))
+                test.assertEqual(cents(r["proceeds"]) - cents(r["total_cost"]),
+                                 cents(r["allowed"]))
+                # DENIED (INFO): every kind of denied loss (TJ-5341).
+                test.assertEqual(cents(r["denied_all"]),
+                                 cents(r["denied"]) + cents(r["denied_contribution"]))
                 test.assertGreaterEqual(min(r["proceeds"], r["cost"], r["outlays"]), 0)
     test.assertEqual({k: cents(ret[k]) for k in want}, want)
     taxable = [r for r in base["rows"] if r["taxable"]]
@@ -83,6 +94,8 @@ class TestTheMixedProject(unittest.TestCase):
         self.assertEqual((self.doc["form"], self.doc["columns"]),
                          ("schedule3", ["proceeds", "cost", "outlays", "gain", "denied",
                                         "allowed"]))
+        self.assertEqual(self.doc["text_columns"], ["proceeds", "acb", "outlays", "total_cost",
+                                                    "allowed", "denied_all"])
 
     def test_the_figure_for_the_return_is_sum_s(self):
         _same_as_sum(self, self.doc, self.sum)
@@ -100,6 +113,9 @@ class TestTheMixedProject(unittest.TestCase):
                 self.assertEqual([cents(r[k]) for k in ("proceeds", "outlays", "allowed")],
                                  [cents(c[k]) for k in ("proceeds", "outlays", "gain")])
                 self.assertEqual(cents(r["cost"]), cents(c["acb"]) + cents(c["denied"]))
+                self.assertEqual(cents(r["acb"]), cents(c["acb"]))
+                self.assertEqual(cents(r["denied"]), cents(c["denied"]))
+                self.assertEqual(cents(r["denied_all"]), cents(c["denied_all"]))
 
     def test_the_sheltered_rows_are_shown_and_kept_out(self):
         tfsa = [r for r in self.doc["rows"] if r["account"] == "tfsa"]
@@ -131,13 +147,19 @@ class TestTheMixedProject(unittest.TestCase):
             "REALIZED GAINS — CAD, tax year 2025, the filing figures (wash-adjusted)\n"))
         self.assertIn("SHELTERED (not on the return)", r.stdout)
         lines = r.stdout.splitlines()
-        self.assertEqual(lines[1], "PROCEEDS − COST(ACB) − OUTLAYS = GAIN (a loss negative), "
-                                   "before any superficial-loss denial; GAIN + DENIED = ALLOWED.")
-        self.assertIn("THE RETURN's COST(ACB) = tjs sum's COST(ACB) + DENIED.", lines[2])
+        self.assertEqual(lines[1], "Schedule 3's cells per sale: GAIN = PROCEEDS − TOTAL COST = "
+                                   "PROCEEDS − COST(ACB) − OUTLAYS (a loss negative).")
+        # Within 120 columns, DENIED (INFO)'s line in its two-line form.
+        self.assertEqual(lines[2:4], ["DENIED (INFO): information only — COST(ACB) is already "
+                                      "reduced by it.",
+                                      "A deferred one is added to the replacement's ACB; one "
+                                      "denied for good (*) is not."])
+        self.assertNotIn("ALLOWED", r.stdout)
         ret = next(ln for ln in lines if ln.startswith("THE RETURN (tjs sum)"))
         t = self.sum["filing"]["totals"]
-        self.assertTrue(ret.endswith(f"{t['gain']:,.2f}"), ret)
-        self.assertIn(f"  {t['proceeds']:,.2f}  ", ret)
+        # sum's RETURN row, cell for cell.
+        self.assertEqual(ret.split()[4:], [f"{t[k]:,.2f}" for k in (
+            "proceeds", "acb", "outlays", "total_cost", "gain", "denied_all")])
         self.assertEqual([ln for ln in lines if len(ln) > 120], [])
 
     def test_a_narrower_view_has_no_figure_for_the_return(self):
@@ -173,7 +195,7 @@ class TestEachLineRoundedToTheCent(unittest.TestCase):
         self.assertEqual(doc["totals"]["rows_less_return"], {})
         self.assertEqual([r["gain_unrounded"] for r in doc["rows"]], [1.004] * 3)
         text = p.tjs("gains-base").stdout
-        self.assertIn("the engine's unrounded total is 3.01 (-0.01 on the return's ALLOWED)",
+        self.assertIn("the engine's unrounded total is 3.01 (-0.01 on the return's GAIN)",
                       text)
         self.assertIn("unrounded total gain is 3.01 (-0.01", p.tjs("sum", "--details").stdout)
 

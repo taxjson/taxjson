@@ -66,11 +66,11 @@ class TestShelteredElection(unittest.TestCase):
 
     def test_pending_list_says_holdings_only(self):
         from taxjson.bin import taxjson_corp_actions as CA
-        doc = CA._pending_doc([self._event()], Path("manifest.json"),
+        doc = CA._pending_doc([self._event()], Path("elections.json"),
                               "canada", sheltered=True)
         self.assertTrue(doc["pending"][0]["sheltered"])
         self.assertFalse(CA._pending_doc([self._event()],
-                                         Path("manifest.json"),
+                                         Path("elections.json"),
                                          "canada")["pending"][0]["sheltered"])
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -81,7 +81,7 @@ class TestShelteredElection(unittest.TestCase):
             (root / "work" / "pending_elections.json").write_text(
                 json.dumps({"schema_version": 1,
                             "accounts": {"rrsp": doc}}))
-            r = tj(root, "elect", "--pending", check=False)
+            r = tj(root, "elections", "--pending", check=False)
             self.assertIn("Sheltered account: this election sets the "
                           "holdings' cost in the books — no tax in this "
                           "account; its holdings still count for the "

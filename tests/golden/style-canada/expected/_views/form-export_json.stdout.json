@@ -60,14 +60,55 @@
     }
   ],
   "manual_cover_cost": 0.0,
-  "manual_proceeds": 0.0,
-  "manual_reporting_required": [],
+  "manual_proceeds": 943.65,
+  "manual_reporting_required": [
+    {
+      "account": "margin",
+      "commission": 0.0,
+      "currency": "CAD",
+      "date": "2024-04-01",
+      "date_settle": "2024-04-03",
+      "days_held": null,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 1.35,
+      "grant": false,
+      "id": "41e9bd4a3d5e1884",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 943.65,
+      "qty": 50.0,
+      "raw_gain": 943.65,
+      "replacement_lot_ids": [],
+      "symbol": "OLDCO.US",
+      "term": null,
+      "unknown_cost_from": [
+        {
+          "account": "margin",
+          "date": "2024-04-01",
+          "marked_close": true,
+          "quantity": 50.0,
+          "symbol": "OLDCO.US"
+        }
+      ],
+      "wash_replacements": null
+    }
+  ],
   "readiness": {
     "complete": false,
     "issues": [
       {
-        "count": 2,
-        "detail": "2 sale(s) with no purchase in the files are in no total",
+        "count": 1,
+        "detail": "1 sale(s) with an unknown cost are not in the totals",
+        "fix": "tjs find-missing-history; report them by hand once their cost is known",
+        "kind": "unknown-cost"
+      },
+      {
+        "count": 1,
+        "detail": "1 sale(s) with no purchase in the files are in no total",
         "fix": "tjs find-missing-history",
         "kind": "no-purchase"
       }

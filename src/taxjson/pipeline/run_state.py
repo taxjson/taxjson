@@ -122,6 +122,12 @@ class RunState:
     # own build, not a record's word: emptied as each command starts
     # (`begin_command`), and by `begin_run`.
     views_built: Set[str] = field(default_factory=set)
+    # What each of those builds checked for the loss rule (pipeline/basis_label
+    # `build_check`), by resolved path: the command's label reads its own
+    # build's word here, the file's record only for a file it did not build (a
+    # record that could not be written keeps an earlier build's word for the
+    # same bytes: TJ-5473, the second verify's N1). Emptied with `views_built`.
+    view_checks: Dict[str, str] = field(default_factory=dict)
     # The broker parses and corporate-action reads this run staged, by
     # (work dir, account): their outputs, which `spellings_checked`
     # reads together (lib/symbol_case, backlog TJ-4606).
@@ -152,6 +158,7 @@ def begin_command() -> None:
     what an earlier one built for its own reads serves it no more
     (`views_built`)."""
     current.views_built.clear()
+    current.view_checks.clear()
 
 
 def config_warnings_for(root: Path) -> None:

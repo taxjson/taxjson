@@ -71,7 +71,7 @@ class TestOneLineMessages(_Runs):
                     for ln in entries:
                         self.assertLessEqual(len(ln), CONCISE_WIDTH, ln)
                     assert_console(self, text, width=CONCISE_WIDTH,
-                                   allow=("tjs elect ",))
+                                   allow=("tjs elections ",))
 
     def test_headlines_name_the_command(self):
         r = self.run_of("canada")
@@ -98,8 +98,16 @@ class TestOneLineMessages(_Runs):
                 self.assertLessEqual(len(lines), FR.CONCISE_BUDGET, tail)
                 # Every warning class, one line each, its command named.
                 flat = "\n".join(lines)
-                self.assertIn("Warning: NOT in the totals: 2 sales with "
-                                "no purchase", flat)
+                # (the sale the broker codes closing, OLDCO's: a Canadian
+                # run reports it by hand, at an unknown cost: TJ-5349)
+                for phrase in (("Warning: NOT in the totals: 1 sale with "
+                                "no purchase (GHOSTQ.TO)",
+                                "Warning: NOT in the totals: 1 sale at an "
+                                "unknown cost: OLDCO.US 2024-04-03 in margin")
+                               if country == "canada" else
+                               ("Warning: NOT in the totals: 2 sales with "
+                                "no purchase",)):
+                    self.assertIn(phrase, flat)
                 self.assertIn("transfer-in kept out with no cost (XYZQ.US) "
                               "— `tjs transfers`", flat)
                 self.assertIn("not checked against the broker's holdings "
@@ -120,8 +128,12 @@ class TestDetails(_Runs):
                 "Add the original purchase as a .tt BUYSELL line",
                 "Info: File inputs/margin/ib_demo.csv → identified as "
                 "Interactive Brokers",
-                "2 positions sold in 2024 with no purchase in your files, "
-                "not in missing_history.tt",
+                "1 position sold in 2024 with no purchase in your files, "
+                "not in missing_history.tt: GHOSTQ.TO (margin)",
+                # (the sale the broker codes closing: by hand, TJ-5349)
+                "1 sale at an unknown cost in 2024, NOT in `tjs sum`: "
+                "OLDCO.US (margin) on 2024-04-03 (traded 2024-04-01), 50 units. The broker "
+                "marks it closing and your files hold no purchase",
                 "Tighten it once: chmod -R go-rwx",
                 "Info: Then run `tjs checklist --run`: it checks every step "
                 "and names the next one."):
@@ -133,8 +145,10 @@ class TestDetails(_Runs):
         # the long closing lines, the ATTENTION marker lines whole.
         r = self.run_of("canada", width=0)
         text = r.stdout + r.stderr
-        self.assertIn("2 positions sold in 2024 with no purchase in your "
+        self.assertIn("1 position sold in 2024 with no purchase in your "
                       "files, not in missing_history.tt", text)
+        self.assertIn("1 sale at an unknown cost in 2024, NOT in `tjs sum`: "
+                      "OLDCO.US (margin)", text)
         self.assertNotIn("`tjs run --details`", text)
 
 

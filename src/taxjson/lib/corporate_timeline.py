@@ -165,8 +165,17 @@ def _trade_date(tx: Any) -> str:
     return tx.date
 
 
+def _at_its_close(tx: Any) -> bool:
+    """The opening of a CLOSE row's unbacked units (lib/unbacked_close
+    OPENING_KIND): it carries its close row's dates and time and
+    takes that row's place in every rung, so the two tie and stay in the
+    order the engine put them, the opening first (CA-OPT-12)."""
+    return (tx.action == 'OPENING_BALANCE'
+            and (getattr(tx, 'type', '') or '') == 'unbacked_close')
+
+
 def _ca_phase(tx: Any, sort_date: str) -> int:
-    if tx.action == 'OPENING_BALANCE':
+    if tx.action == 'OPENING_BALANCE' and not _at_its_close(tx):
         return Phase.PRE_EXISTING
     if tx.action == 'SPLIT':
         return Phase.SPLIT
@@ -183,12 +192,14 @@ def _ca_exec_date(tx: Any) -> str:
     a Monday 09:45 buy is not applied before the previous Friday's 15:00
     sale (A2-0067). An opening balance or a split sorts first in its
     phase ('' — they carry no execution of their own)."""
-    if tx.action in ('OPENING_BALANCE', 'SPLIT'):
+    if tx.action in ('OPENING_BALANCE', 'SPLIT') and not _at_its_close(tx):
         return ''
     return tx.date or ''
 
 
 def _ca_priority(tx: Any) -> int:
+    if _at_its_close(tx):
+        return CaPriority.TRADE
     if tx.action == 'OPENING_BALANCE':
         return CaPriority.OPENING_BALANCE
     if tx.action == 'DISALLOW':

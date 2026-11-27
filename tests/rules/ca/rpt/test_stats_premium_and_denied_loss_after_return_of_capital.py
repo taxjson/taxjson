@@ -446,7 +446,7 @@ class TestSpinOffBesideSameDayRoc(unittest.TestCase):
                 first = _cli(root, "run", "--no-input")
                 m = re.search(r"--set (\S+?)=<", first.stdout + first.stderr)
                 self.assertIsNotNone(m, first.stdout[-2000:])
-                r = _cli(root, "elect", "margin", "--set",
+                r = _cli(root, "elections", "margin", "--set",
                          m[1] + "=rollover_s_86_1",
                          "--hint", "allocated_acb_cad=60")
                 self.assertEqual(r.returncode, 0, r.stderr[-2000:])

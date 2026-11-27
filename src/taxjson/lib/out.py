@@ -501,11 +501,13 @@ def _take_owed(stream) -> bool:
 def settle(stream=None) -> None:
     """Print the blank line `stream`'s destination owes (stdout by
     default), if any — before text a program prints there by other
-    means (an exit message the interpreter prints)."""
+    means (an exit message the interpreter prints). Written through
+    `stream` itself (the debt is taken first, so no proxy adds another),
+    so a command log's tee beneath it sees it too (lib/command_log)."""
     stream = sys.stdout if stream is None else stream
     if _take_owed(stream):
         try:
-            real_stream(stream).write("\n")
+            stream.write("\n")
         except (ValueError, OSError):
             pass
 
@@ -758,7 +760,8 @@ def fit_table(headers: Sequence[str], body: Sequence[Sequence[str]], *,
               foot: Sequence[Sequence[str]] = (),
               drop: Sequence[int] = (), width_: Optional[int] = None,
               indent: str = "", gap: str = "  ",
-              per_record: bool = True, key=0) -> List[str]:
+              per_record: bool = True, key=0,
+              left_out: Optional[List[str]] = None) -> List[str]:
     """A table (report_fmt.render_table: header, `---` rule, rows, an
     optional ruled-off foot) that fits the width. Numeric columns
     right-align unless `aligns` says otherwise. Too wide: the columns in
@@ -766,7 +769,9 @@ def fit_table(headers: Sequence[str], body: Sequence[Sequence[str]], *,
     still too wide, the rows switch to the per-record layout
     (`per_record=False` keeps the over-wide table instead; `key` names
     the column(s) that head each record, as records()). Rows are
-    never wrapped mid-row. Width 0: the full table."""
+    never wrapped mid-row. Width 0: the full table. `left_out`, a list
+    given, gets the heading (one line) of each column dropped, so the
+    caller can say so (nothing left out silently)."""
     w = width(None) if width_ is None else width_
     cell = printable if w > 0 else str      # shown to a person: escaped
     body = [[("" if c is None else cell(c)) for c in r] for r in body]
@@ -790,8 +795,13 @@ def fit_table(headers: Sequence[str], body: Sequence[Sequence[str]], *,
             keep.remove(i)
             lines = _render(keep)
             if max(map(len, lines)) <= w:
+                if left_out is not None:
+                    left_out.extend(" ".join(headers[j].split())
+                                    for j in drop if j not in keep)
                 return lines
     if not per_record:
+        if left_out is not None:
+            left_out.extend(" ".join(headers[j].split()) for j in drop if j not in keep)
         return lines
     keys = (key,) if isinstance(key, int) else tuple(key)
     keep = list(range(len(headers)))   # a record shows every column
@@ -827,7 +837,7 @@ def kv_lines(pairs: Iterable[Tuple[str, str]], indent: str = "",
 
 def relpath(path, root=None) -> str:
     """`path` relative to `root` (the project) when inside it, else as
-    given — `inputs/margin/manifest.json`, not the absolute path."""
+    given — `inputs/margin/elections.json`, not the absolute path."""
     from pathlib import Path
     p = Path(path)
     if root is not None:

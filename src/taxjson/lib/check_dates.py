@@ -302,8 +302,12 @@ def _settle_day_anywhere(d: date) -> bool:
     return mc.is_settlement_day(d, "USD") or mc.is_settlement_day(d, "CAD")
 
 
+# analyze's `account`: None (every account), one name, or the names (a
+# tuple: `tjs check-dates margin,beta`, cli/explain's `_accounts`). The
+# names come split: lib/account_list, through config_check, would close
+# an import cycle with cash_events, which reads `sources` here.
 def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
-            account: Optional[str] = None) -> Dict[str, Any]:
+            account: Any = None) -> Dict[str, Any]:
     from taxjson.lib.option_symbols import is_option_symbol
     cache = Path(root) / "work"
     today = today or date.today()
@@ -336,7 +340,7 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
                        "quantity": r.get("quantity")})
 
     for acct, acfg in sorted(accounts_of(cfg).items()):
-        if account and acct != account:
+        if account is not None and acct not in ((account,) if isinstance(account, str) else account):
             continue
         crypto = bool(acfg.crypto)
         lost = _lost_sources_list(cache, acct)

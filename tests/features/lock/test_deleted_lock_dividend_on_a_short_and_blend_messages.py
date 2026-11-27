@@ -172,8 +172,9 @@ class TestTJ0220InitForceReadOnly(unittest.TestCase):
                       f"Nothing was changed.", text)
         self.assertTrue(cfg.read_text().endswith("# kept\n"))
         self.assertEqual(cfg.stat().st_mode & 0o777, 0o444)
-        self.assertEqual(sorted(p.name for p in cfg.parent.iterdir()),
-                         before)
+        # (but the refusal's own log: logs/, lib/command_log)
+        self.assertEqual(sorted(p.name for p in cfg.parent.iterdir()
+                                if p.name != "logs"), before)
         # Writable again: --force re-templates it, as before.
         cfg.chmod(0o644)
         r = _tjs("init", "--country", "canada", "--year", "2024", *init,

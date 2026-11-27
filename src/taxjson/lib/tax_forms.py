@@ -517,10 +517,13 @@ def schedule3_disposition(e: Dict[str, Any], year: Optional[int],
     """One disposition's part of its Schedule 3 row, before any rounding:
     the line it lands on (`line_key`, schedule3_line's key; `property`,
     property_class), the PROCEEDS and OUTLAYS it adds (a sale's commission
-    split back out of its net proceeds, a rebate left netted in, a grant-
-    timing write's premium gross, a write for a net debit as an outlay, a
-    short sale's proceeds the short sale's, a futures contract's settled
-    P/L as proceeds when a gain), the allowed gain, the denials, and its
+    split back out of its net proceeds, a rebate left netted in, a written
+    option's premium gross with the write's commission and fee an outlay:
+    the write's own row under grant timing, the row's `write_outlay` on a
+    close-timing write's buy-back or expiry and in an assigned call's
+    shares; a short sale's proceeds the short sale's, netted, and a call
+    assigned into a short of the shares the same; a futures contract's
+    settled P/L as proceeds when a gain), the allowed gain, the denials, and its
     units (`units`; a grant-timing write's in `grant_units`, a buy-back of
     a same-year write in `short_close_units`: grant_buyback_units). Each
     figure is 0.0 where the disposition adds nothing. build_schedule3 sums
@@ -544,6 +547,11 @@ def schedule3_disposition(e: Dict[str, Any], year: Optional[int],
     cost = float(g.cost or 0.0)
     gain = float(g.gain or 0.0)
     outlays = float(g.commission or 0.0) + float(g.fee or 0.0)
+    # A written option's commission and fee netted in the proceeds (an
+    # assigned call's shares, a close-timing write's close: the engine's
+    # `write_outlay`, never below 0): an outlay, its premium gross
+    # (CA-OPT-06, CA-DISP-06; backlog TJ-5381, TJ-5460).
+    _wo = float(g.write_outlay or 0.0)
     if outlays < 0:
         # A net REBATE (IB, Questrade: a negative commission/fee)
         # is not an outlay or expense: it stays netted in the
@@ -581,20 +589,28 @@ def schedule3_disposition(e: Dict[str, Any], year: Optional[int],
             # acquiring the cover and stays in the ACB.
             d["proceeds"] = _sold + outlays
             d["outlays"] = outlays
+        elif _wo > 0 and _sold + _wo >= 0:
+            # A close-timing write's buy-back or expiry: its premium GROSS
+            # and the write's commission an outlay, as for a grant-timing
+            # write; the cover's own commission is a cost in the ACB (the
+            # gain unchanged).
+            d["proceeds"] = _sold + _wo
+            d["outlays"] = _wo
         elif _sold >= 0:
             d["proceeds"] = _sold
         else:
-            # A write for a net DEBIT (commission above the premium):
-            # abs() turned the debit into proceeds and invented an ACB
-            # of twice it (S032-19). Nothing was received: the debit
-            # is an outlay, the ACB (the cover) is what it cost.
+            # A net DEBIT on a row with no `write_outlay` (the engine
+            # writes one for every write it costs now): abs() turned the
+            # debit into proceeds and invented an ACB of twice it
+            # (S032-19). The debit is an outlay, the ACB (the cover) is
+            # what it cost.
             d["outlays"] = -_sold
     else:
         # taxjson proceeds are net of sell-side costs; Schedule 3 wants
-        # them split back out. gain = (net + outlays) - acb - outlays
-        # stays identical.
-        d["proceeds"] = proceeds + outlays
-        d["outlays"] = outlays
+        # them split back out (an assigned call's write commission with
+        # them). gain = (net + outlays) - acb - outlays stays identical.
+        d["proceeds"] = proceeds + outlays + _wo
+        d["outlays"] = outlays + _wo
     # Grant timing books a written option twice — the WRITE and its
     # buy-back — while the contracts were disposed of once: count
     # them once (S003-04, S033-02; as reconcile-slips, R1-18). A

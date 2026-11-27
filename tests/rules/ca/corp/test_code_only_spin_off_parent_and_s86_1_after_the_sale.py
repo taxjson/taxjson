@@ -68,7 +68,7 @@ class TestTJ1025ParentOnlyABrokerCode(unittest.TestCase):
             (root / "inputs/margin/questrade_2025.csv").write_text(
                 head + "\n" + row + "\n")
             tj(root, "run", "--no-input", check=False)
-            tj(root, "elect", "margin", "--set",
+            tj(root, "elections", "margin", "--set",
                "20250825-k099999-zqnew-3dfa=taxable_deemed_dividend",
                "--hint", "fmv_per_share=2.5", check=False)
             tj(root, "run", "--no-input", check=False)
@@ -252,7 +252,7 @@ class TestTJ1026S861OriginalShares(unittest.TestCase):
                 head + "\n" + "\n".join(rows) + "\n")
             out = console(tj(root, "run", "--no-input", check=False))
             eid = re.search(r"20250825-[a-z0-9.-]+-[0-9a-f]{4}", out).group(0)
-            tj(root, "elect", "margin", "--set", f"{eid}=rollover_s_86_1",
+            tj(root, "elections", "margin", "--set", f"{eid}=rollover_s_86_1",
                "--hint", "allocated_acb_cad=500", check=False)
             tj(root, "run", "--no-input", check=False)
             t = json.loads(tj(root, "sum", "--json").stdout)[

@@ -9,3 +9,4 @@ line,proceeds_line,gain_line,property,units,symbol,acq_year,proceeds,acb,outlays
 ,15199,15300,crypto,0.15,BTC,2024,9990.0,9752.5,39.83,197.67,0.0,
 ,15199,15300,crypto,0.75,ETH,2024,4151.25,3660.49,17.9,472.86,0.0,
 ,15199,15300,option,1.0,SAMPW250117C00030000.US,2024,202.5,0.0,1.42,201.08,0.0,"includes short position(s) — PROCEEDS is the short sale or write, ACB the cover"
+MANUAL,,,,20.0,SAMPG.US,,498.15,,,,,"no purchase in your files, cost unknown (.tt OPENING cost=unknown) - report by hand"

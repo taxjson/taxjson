@@ -2,7 +2,19 @@
   "account": "margin",
   "basis": "wash-adjusted",
   "gains": {
-    "manual_rows": [],
+    "manual_rows": [
+      {
+        "account": "margin",
+        "currency": "CAD",
+        "date": "2025-03-18",
+        "date_settle": "2025-03-19",
+        "direction": "LONG",
+        "own_move_from": null,
+        "proceeds": 807.975,
+        "qty": 15.0,
+        "symbol": "SAMPLA.US"
+      }
+    ],
     "option_fees": {
       "CAD": 0.0
     },
@@ -25,7 +37,7 @@
       }
     },
     "tainted_count": 0,
-    "tainted_routed": 0,
+    "tainted_routed": 1,
     "ticker_stats": {
       "F:SAMPLMH6.US": {
         "CAD": {

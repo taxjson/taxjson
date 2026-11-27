@@ -61,7 +61,7 @@ class TestDetectors(unittest.TestCase):
             audit_ok = "  pipeline tie-out       10 tied, 0 MISMATCHED, 0 not found  ✓\n"
             ctx = _ctx(root, {"sanity": (1, "7 discrepancy(ies).", ""),
                               "find-missing-history": (0, fmh, ""),
-                              "elect": (0, "No pending elections (...)\n", ""),
+                              "elections": (0, "No pending elections (...)\n", ""),
                               "audit": (0, audit_bad, ""),
                               "option-boundary": (0, json.dumps({"rows": [
                                   {"action": "T1-ADJ 2025: remove the 399.00 premium"},
@@ -76,6 +76,12 @@ class TestDetectors(unittest.TestCase):
             r = cl.d_missing_history(ctx)
             self.assertEqual(r.status, "attention"); self.assertIn("QZW.US (margin)", r.detail); self.assertNotIn("ZZZ", r.detail)
             self.assertEqual(cl.d_elections(ctx).status, "done")
+            # The command it asks is `tjs elections --pending` (a fake of
+            # another name would pass on the empty-output branch).
+            self.assertIn(["elections", "--pending"],
+                          [c[:2] for c in ctx.run_sub.calls])
+            pending = _ctx(root, {"elections": (0, "margin: 1 pending\n", "")})
+            self.assertEqual(cl.d_elections(pending).status, "attention")
             self.assertEqual(cl.d_audit(ctx).status, "attention")
             r = cl.d_option_boundary(ctx)
             self.assertEqual(r.status, "attention"); self.assertIn("2 contract(s) require a T1-ADJ", r.detail)

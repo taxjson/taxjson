@@ -959,6 +959,13 @@ class BaseBrokerage:
     # (tax-logic CA-DISP-04); "" when the export has no such convention.
     SHORT_MARKS: str = ""
 
+    # "file" when the export prints no time of day, so a day's rows are in
+    # the file's order and not a clock's (the rows' `no_clock`, stamped by
+    # taxjson-brokerage on a trade row that carries the broker's open/close
+    # words; lib/unbacked_close, backlog TJ-5349); "" when its times are
+    # the broker's.
+    NO_CLOCK: str = ""
+
     # The project's country ("canada" | "usa"), set by taxjson-brokerage
     # from --country; None when the parser runs without one. Parsers
     # emit neutral FACTS whatever it is (partition rule: country gates

@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence,
 
 from taxjson.lib.option_symbols import is_option_symbol, parse_option_expiry
 from taxjson.lib.row_types import is_opening_row
+from taxjson.lib.unbacked_close import (OPENING_KIND, OPENINGS_KEY, Backing, OrderStarts,
+                                        close_backing, close_marks, is_unbacked_opening)
 from taxjson.lib.pool_eps import pool_qty_eps
 from taxjson.model.transaction import TaxTransaction
 from taxjson.engine.journal import _is_listing_journal
@@ -62,7 +64,8 @@ class _MarkedShortRouter:
         account is short and holds no long.
     `note` remembers a purchase read as a cover by that last reading, and
     a marked cover that then finds less short than it buys is one of
-    `late_covers`; `both_open` lists the accounts that end long and short
+    `late_covers` (its units past the short are unbacked: reported by
+    hand, no long); `both_open` lists the accounts that end long and short
     the same shares. The run says each (`_say_late_covers`,
     `_say_both_open`): never silent.
 
@@ -73,13 +76,26 @@ class _MarkedShortRouter:
     contracts writes, a purchase covers the account's own written
     contracts first, and a purchase in another account never closes
     them. Bought contracts stay the symbol's one pool across the
-    taxable accounts, as shares are (CA-ACB-01)."""
+    taxable accounts, as shares are (CA-ACB-01).
+
+    A trade the broker marks CLOSE never opens a position (CA-ACB-11,
+    CA-OPT-12; backlog TJ-5349): lib/unbacked_close's one rule reads it
+    against the account's own position (`close_read`). The units that
+    position cannot back closed one opened before the files: they are
+    booked into neither position here, and the cut gives them an opening
+    of unknown cost at the row's own moment (`_unbacked_opening`), so the
+    walk reports them by hand as a .tt `OPENING ... cost=unknown` line's
+    units are."""
 
     def __init__(self) -> None:
         from taxjson.lib.missing_history import _BROKER_SHORT_RE
         from taxjson.lib.row_types import open_close_codes
+        from taxjson.lib.futures import is_plain_future
         self._short_re = _BROKER_SHORT_RE
         self._codes = open_close_codes
+        self._plain_future = is_plain_future
+        # The position each broker order began from (a row coded C;O).
+        self._orders = OrderStarts()
         # The last unmarked purchase read as a cover, by position (`note`), and
         # each (that purchase, the marked cover that found the short gone).
         self._fallback: Dict[Tuple[str, str], TaxTransaction] = {}
@@ -141,6 +157,30 @@ class _MarkedShortRouter:
     def _is_trade(t: TaxTransaction) -> bool:
         return t.action == 'BUYSELL' and not not_a_purchase(t)
 
+    def close_read(self, t: TaxTransaction) -> Optional[Backing]:
+        """What the one rule says of a trade the broker marks CLOSE
+        (lib/unbacked_close.close_backing), read against the account's own
+        position: a purchase against its written contracts or its short (a
+        marked short and an unmarked one, the pooled long below none), a
+        sale against what it holds. None for any other row: one with no
+        CLOSE mark, a futures row (lib/futures books those), and an
+        option's assignment or exercise (an ASSIGN row: its units past the
+        account's contracts are its `excess`). An expiry row the broker
+        marks CLOSE is read like any close: its contracts past the
+        account's own expired a contract opened before the files (TJ-5378)."""
+        q = float(t.quantity or 0.0)
+        if not q or not self._is_trade(t) or self._plain_future(t.symbol) \
+                or (t.type or '') == 'futures_settlement':
+            return None
+        codes = close_marks(t)
+        if 'C' not in codes:
+            return None
+        k = (t.symbol, t.account)
+        held = self.long.get(k, 0.0)
+        prev = max(held, 0.0) if q < 0 \
+            else -(self.short.get(k, 0.0) + max(-held, 0.0))
+        return close_backing(t, prev, self._orders.prev(k, t, prev) if 'O' in codes else None)
+
     def _wants_short(self, t: TaxTransaction, q: float, k: Tuple[str, str], eps: float) -> bool:
         if q < 0:
             if self._opens_short(t):
@@ -191,7 +231,10 @@ class _MarkedShortRouter:
         pool to the other (a cover past the account's short, a C;O sale
         past its long; an option purchase past the account's written
         contracts, an option sale past its bought ones); None for a row
-        that stays in one pool."""
+        that stays in one pool. A row marked CLOSE alone never crosses:
+        its units past the position are unbacked (`close_read`)."""
+        if close_marks(t) == ('C',) and self._is_trade(t) and not self._plain_future(t.symbol):
+            return None
         if self._is_option(t):
             if t.action != 'BUYSELL' or not_a_purchase(t) or self._is_close_row(t):
                 return None             # (a close row's excess closes nothing: _walk_option)
@@ -214,7 +257,15 @@ class _MarkedShortRouter:
         return None
 
     def walk(self, t: TaxTransaction) -> bool:
-        """Book a row; True when it belongs to the short pool."""
+        """Book a row; True when it belongs to the short pool. A marked
+        CLOSE's unbacked units are booked nowhere (`close_read`): the cut
+        rows reach here with their opening ahead of them, so they are
+        backed."""
+        b = self.close_read(t)
+        if b is not None and b.unbacked > pool_qty_eps(t.symbol, t.quantity):
+            if b.backed <= pool_qty_eps(t.symbol, t.quantity):
+                return float(t.quantity) > 0    # (a cover is the short pool's)
+            t = _row_part(t, b.backed, 'C', t.id)
         if self._is_option(t):
             return self._walk_option(t)
         if not self._is_stock(t):
@@ -499,7 +550,8 @@ def _say_late_covers(pairs: Sequence[Tuple[TaxTransaction, TaxTransaction]]) -> 
         emit_line(f"warning: ATTENTION: marked cover: {marked.symbol} ({marked.account}): the purchase of "
                   f"{row(first)} carries no cover mark and was read as covering the account's short, and "
                   f"the broker's marked cover of {row(marked)} then found less short than it buys. The "
-                  f"marked purchase's units past the short are booked as a long purchase: one short is "
+                  f"marked purchase's units past the short are reported by hand, as the cover of a short "
+                  f"sold before the files, and add no long (CA-ACB-11): one short is "
                   f"covered twice, or the first purchase bought shares. If the two rows are one trade, "
                   f"remove the unmarked one; if the first bought shares, the short it was read as "
                   f"covering was not its own: correct or remove the row that opens that short.")
@@ -515,6 +567,59 @@ def _say_both_open(found: Sequence[Tuple[str, str, float, float]]) -> None:
                   f"the description; an IB buy coded C), so a purchase with no mark stays a long beside "
                   f"the short. If the broker holds both, nothing is wrong. If the short was covered, the "
                   f"export that holds the marked cover is missing: add it (`tjs list` shows both rows).")
+
+
+def _unbacked_parts(router: _MarkedShortRouter, t: TaxTransaction
+                    ) -> Optional[Tuple[TaxTransaction, ...]]:
+    """A trade the broker marks CLOSE with units the account's position
+    cannot back (`close_read`), as the walk books it (CA-ACB-11, CA-OPT-12;
+    backlog TJ-5349): the backed units first (the row's id, its money pro
+    rata), then the opening of the rest at an unknown cost and the rest
+    itself, which closes that opening. None for any other row. A row coded
+    C;O whose order began with nothing to close is unbacked whole (the
+    broker does not say how much of the fill closed); a part carries the
+    one letter that says what it does."""
+    b = router.close_read(t)
+    eps = pool_qty_eps(t.symbol, t.quantity)
+    if b is None or b.unbacked <= eps:
+        return None
+    if b.backed <= eps:
+        rest = t if close_marks(t) == ('C',) else replace(t, open_close='C')
+        return (_unbacked_opening(rest), rest)
+    first = _row_part(t, b.backed, 'C', t.id)
+    rest = _row_part(t, abs(float(t.quantity)) - b.backed, 'C', f"{t.id}#2", rest_of=first)
+    return (first, _unbacked_opening(rest), rest)
+
+
+def _unbacked_opening(close: TaxTransaction) -> TaxTransaction:
+    """The opening of a CLOSE row's unbacked units: what `close` closed,
+    held (or written, or short) before the files at a cost the files do
+    not give. An OPENING_BALANCE row as a .tt `OPENING ... cost=unknown`
+    line's, dated and timed as its close (lib/unbacked_close OPENING_KIND:
+    it sorts at that row, just before it), so the close is reported by
+    hand and no position is left."""
+    q = -float(close.quantity)
+    return TaxTransaction(
+        action='OPENING_BALANCE', type=OPENING_KIND, date=close.date, time=close.time,
+        date_settle=close.date_settle, symbol=close.symbol, quantity=q, currency=close.currency,
+        price=0.0, net_amount=0.0, account=close.account, id=f"{close.id}#open",
+        description=('UNBACKED CLOSE: the broker marks this ' + ('sale' if q > 0 else 'purchase')
+                     + ' closing, the account holds nothing it closes: '
+                     + ('bought before the files, cost unknown' if q > 0
+                        else 'written or sold short before the files, proceeds unknown')
+                     + f' (qty={q:g})'))
+
+
+def _unbacked_openings(rows: Sequence[TaxTransaction]) -> Dict[str, Any]:
+    """The gains document's record of the openings the cut gave marked
+    CLOSE rows' unbacked units (lib/unbacked_close OPENINGS_KEY: the
+    account, symbol, the close row's date and id, the opening's signed
+    units), so every view of the books' positions counts the units the
+    books did; {} when there is none."""
+    found = [{'account': str(t.account or ''), 'symbol': t.symbol, 'date': t.date,
+              'quantity': float(t.quantity), 'close': str(t.id)[:-len('#open')]}
+             for t in rows if is_unbacked_opening(t)]
+    return {OPENINGS_KEY: found} if found else {}
 
 
 def _row_part(t: TaxTransaction, units: float, code: str, part_id: Optional[str], *,
@@ -831,13 +936,13 @@ def _split_crossing_marked_rows(transactions: List['TaxTransaction'],
     (TJ-1180)."""
     router = _MarkedShortRouter()
     if not (any((t.action == 'BUYSELL'
-                 and (router._opens_short(t) or 'O' in router._codes(t)))
+                 and (router._opens_short(t) or close_marks(t)))
                 or (t.action == 'OPENING_BALANCE'
                     and float(t.quantity or 0.0) < 0)
                 for t in transactions)
             or _option_crossing_possible(transactions, moves, sort_key, move_key)):
         return transactions             # no marked short, no option trade past a position
-    parts: Dict[int, Tuple[TaxTransaction, TaxTransaction]] = {}
+    parts: Dict[int, Tuple[TaxTransaction, ...]] = {}
     pending: List[_PendingLeg] = []
     if moves:
         assert move_key is not None, "moves come with their key (CanadaTaxRules._prepare)"
@@ -850,6 +955,12 @@ def _split_crossing_marked_rows(transactions: List['TaxTransaction'],
                          float(t.quantity or 0.0))
             continue
         router.note(t)
+        cut = _unbacked_parts(router, t)
+        if cut is not None:
+            for part in cut:
+                router.walk(part)
+            parts[id(t)] = cut
+            continue
         units = router.crossing_units(t)
         if units is None:
             router.walk(t)

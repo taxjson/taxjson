@@ -1,5 +1,5 @@
 {
-  "basis": "wash-adjusted",
+  "basis": "wash-adjusted, full history",
   "currency": "USD",
   "rows": [],
   "schema_version": 1,

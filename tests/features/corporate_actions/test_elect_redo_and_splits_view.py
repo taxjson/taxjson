@@ -1,12 +1,12 @@
-"""Backlog fix round 7 (wave B) of 2026-10-29, group `elect`: corporate-
-event elections (`tjs elect`) and the rename / split reviews (`tjs
+"""Backlog fix round 7 (wave B) of 2026-10-29, group `elections`: corporate-
+event elections (`tjs elections`) and the rename / split reviews (`tjs
 renames`, `tjs splits`), and the per-account holdings of a blended pool.
 
 TJ-0849  elect re-extracts an event with the run's ticker.map: a spin-off
          whose parent is a broker code the map names keeps its id.
-TJ-0848  elect --redo / --reset --event take a saved election's legacy id
+TJ-0848  elections --redo / --reset --event take a saved election's legacy id
          or the current id it migrates to.
-TJ-0847  elect --redo --event asks and saves that event only, and an
+TJ-0847  elections --redo --event asks and saves that event only, and an
          interrupted redo saves no other event's election.
 TJ-0851  renames ACCOUNT shows that account's holding and cost only.
 TJ-0687  renames --pending lists the renames of the old symbol that has a
@@ -62,7 +62,7 @@ class TestElectExtractsWithTheTickerMap(unittest.TestCase):
     `--set ID=...` after `--reset` that it matches no event."""
 
     def test_reset_then_set_and_the_redo_preflight_find_the_event(self):
-        from taxjson.cli import elect as cli_elect
+        from taxjson.cli import elections as cli_elect
         with tempfile.TemporaryDirectory() as d:
             root = _project(
                 d, {"margin": "BUYSELL 2025-01-02 09:00:00 PARENT.TO 100 "
@@ -76,7 +76,7 @@ class TestElectExtractsWithTheTickerMap(unittest.TestCase):
                               .read_text())
             eid = pend["accounts"]["margin"]["pending"][0]["event_id"]
             self.assertIn("parent", eid)
-            s = _tjs(root, "elect", "margin", "--set",
+            s = _tjs(root, "elections", "margin", "--set",
                      f"{eid}=rollover_s_86_1", "--hint",
                      "allocated_acb_cad=200")
             self.assertEqual(s.returncode, 0, s.stderr)
@@ -85,9 +85,9 @@ class TestElectExtractsWithTheTickerMap(unittest.TestCase):
             # The pending file is gone: the event is re-extracted.
             self.assertIn(eid, cli_elect._extracted_event_ids(
                 root / "inputs" / "margin", "margin", root))
-            r = _tjs(root, "elect", "margin", "--reset", "--event", eid)
+            r = _tjs(root, "elections", "margin", "--reset", "--event", eid)
             self.assertEqual(r.returncode, 0, r.stderr)
-            again = _tjs(root, "elect", "margin", "--set",
+            again = _tjs(root, "elections", "margin", "--set",
                          f"{eid}=rollover_s_86_1", "--hint",
                          "allocated_acb_cad=200")
             self.assertEqual(again.returncode, 0, again.stderr)
@@ -95,7 +95,7 @@ class TestElectExtractsWithTheTickerMap(unittest.TestCase):
 
 
 def _redo(root, account, event=None, run_to_file=None):
-    """`elect ACCOUNT --redo [--event ID]` in-process on a 'terminal'
+    """`elections ACCOUNT --redo [--event ID]` in-process on a 'terminal'
     (stdin.isatty patched); the corp-actions child is `run_to_file`
     (default: records each command). Returns (stdout, stderr, calls)."""
     import argparse
@@ -103,7 +103,7 @@ def _redo(root, account, event=None, run_to_file=None):
     import io
     from unittest import mock
     import sys
-    from taxjson.cli import elect as cli_elect
+    from taxjson.cli import elections as cli_elect
     calls = []
     args = argparse.Namespace(
         dir=str(root), account=account, redo=True, reset=False,
@@ -113,7 +113,7 @@ def _redo(root, account, event=None, run_to_file=None):
             lambda cmd, o, **kw: calls.append(cmd))), \
             mock.patch.object(sys.stdin, "isatty", lambda: True), \
             contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        cli_elect.cmd_elect(args)
+        cli_elect.cmd_elections(args)
     return out.getvalue(), err.getvalue(), calls
 
 
@@ -121,7 +121,7 @@ class TestElectTakesALegacyIdAndItsCurrentId(unittest.TestCase):
     """TJ-0848: a year folder reading shared exports (../inputs) whose
     manifest holds an election under the pre-2026-07 hash id. The run
     applies it (the id migrated in memory: a run never rewrites the
-    shared manifest), but `elect --redo --event OLD` said the event is
+    shared manifest), but `elections --redo --event OLD` said the event is
     in none of the exports and `--event CURRENT` that there is no such
     election: neither id could redo it. TJ-0556's refusals stay."""
 
@@ -142,7 +142,7 @@ class TestElectTakesALegacyIdAndItsCurrentId(unittest.TestCase):
         ev = parse_ib_corporate_actions(csv, account="margin")[0]
         old, new = ev.legacy_event_id(), ev.event_id
         self.assertNotEqual(old, new)
-        path = shared / "manifest.json"
+        path = shared / "elections.json"
         records = {old: ("taxable_deemed_dividend", ev.summary(),
                          {"fmv_per_share": 10})}
         _save(path, records)
@@ -183,12 +183,12 @@ class TestElectTakesALegacyIdAndItsCurrentId(unittest.TestCase):
         from taxjson.lib import corp_actions as ca
         with tempfile.TemporaryDirectory() as d:
             year, path, old, new, records = self._year(d)
-            r = _tjs(year, "elect", "margin", "--reset", "--event", new)
+            r = _tjs(year, "elections", "margin", "--reset", "--event", new)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(ca.Manifest.load(path).records, {})
             # An id that is neither stays refused, nothing cleared.
             _save(path, records)
-            r = _tjs(year, "elect", "margin", "--reset", "--event",
+            r = _tjs(year, "elections", "margin", "--reset", "--event",
                      "20250602-parent-other-0000")
             self.assertEqual(r.returncode, 2, r.stderr)
             self.assertIn("no election", r.stderr)
@@ -212,7 +212,7 @@ class TestRedoOfOneEventAsksAboutItOnly(unittest.TestCase):
                        + _ib_spinoff("2025-07-02", "CHILDTWO"))
         evs = parse_ib_corporate_actions(csv, account="margin")
         self.assertEqual(len({e.event_id for e in evs}), 2)
-        path = root / "inputs" / "margin" / "manifest.json"
+        path = root / "inputs" / "margin" / "elections.json"
         _save(path, {evs[1].event_id: (
             "taxable_deemed_dividend", evs[1].summary(),
             {"fmv_per_share": 10})})
@@ -225,7 +225,7 @@ class TestRedoOfOneEventAsksAboutItOnly(unittest.TestCase):
             root, path, earlier, later, keys = self._project(d)
             n = keys.index("ignore") + 1
             rc, out, err = _on_a_terminal(
-                root, "elect", "margin", "--redo", "--event", later,
+                root, "elections", "margin", "--redo", "--event", later,
                 answers=f"{n}\n\n{n}\n\n")
             self.assertEqual(rc, 0, err[-2000:])
             self.assertNotIn(earlier, err)
@@ -246,14 +246,14 @@ class TestRedoOfOneEventAsksAboutItOnly(unittest.TestCase):
             # event, which stayed saved after "restored unchanged".
             n = keys.index("ignore") + 1
             rc, out, err = _on_a_terminal(
-                root, "elect", "margin", "--redo", "--event", later,
+                root, "elections", "margin", "--redo", "--event", later,
                 answers=f"{n}\n\n\x04")
             self.assertNotIn(earlier, ca.Manifest.load(path).records,
                              err[-2000:])
             _save(path, {later: ("taxable_deemed_dividend", "synthetic",
                                  {"fmv_per_share": 10})})
             rc, out, err = _on_a_terminal(
-                root, "elect", "margin", "--redo", "--event", later,
+                root, "elections", "margin", "--redo", "--event", later,
                 answers="\x04")
             self.assertEqual(rc, 1, err[-2000:])
             self.assertIn("--redo interrupted", err)

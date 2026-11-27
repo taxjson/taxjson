@@ -38,6 +38,7 @@ from __future__ import annotations
 from taxjson.project.accounts import accounts_of
 from taxjson.project.settings import settings_of
 from taxjson.lib.stage_msg import emit_line
+from taxjson.lib.account_list import names_of
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
@@ -280,10 +281,12 @@ def _opening_qty(book: "Book", r: Dict[str, Any]) -> float:
 
 class Book:
     """The project's transactions (every account) and the taxable
-    dispositions, as the engine saw them."""
+    dispositions, as the engine saw them. `account`: the accounts the
+    views list (None | a name | names: lib/account_list.names_of);
+    every account's rows stay in the positions and windows."""
 
     def __init__(self, root: Path, cfg: Dict[str, Any],
-                 account: Optional[str] = None):
+                 account: Any = None):
         from taxjson.lib.report_model import resolve_gains_files
         self.root = root
         self.cache = root / "work"
@@ -317,7 +320,7 @@ class Book:
         self.crypto = {n for n, a in accounts.items()
                        if a.crypto}
         self.kind = {n: a.type for n, a in accounts.items()}
-        self.only = account
+        self.only = names_of(account)       # None: every account
         self.txs: List[Dict[str, Any]] = []
         self.missing: List[str] = []
         self.missing_history_openings = 0
@@ -480,7 +483,7 @@ class Book:
         return acct
 
     def wanted(self, acct: str) -> bool:
-        return not self.only or acct == self.only
+        return self.only is None or acct in self.only
 
     def window_row(self, r: Dict[str, Any]) -> bool:
         """A row that can be a window acquisition (or, Canada, a sale
@@ -1735,7 +1738,7 @@ def calls_in_windows(book: Book) -> List[Dict[str, Any]]:
 
 
 def analyze(root: Path, cfg: Dict[str, Any], *, margin: int = 3,
-            account: Optional[str] = None) -> Dict[str, Any]:
+            account: Any = None) -> Dict[str, Any]:
     from taxjson.lib.pipeline import option_timing_from_settings
     from taxjson.model.transaction import TaxTransaction
     book = Book(root, cfg, account)
@@ -1809,7 +1812,7 @@ def analyze(root: Path, cfg: Dict[str, Any], *, margin: int = 3,
 
 
 def _renamed_late(root: Path, cfg: Dict[str, Any],
-                  account: Optional[str]) -> List[Dict[str, Any]]:
+                  account: Any) -> List[Dict[str, Any]]:
     """Trades in a ticker after the date it was renamed away
     (lib/renames): a different security unless ticker.map folds them."""
     from taxjson.lib.renames import report

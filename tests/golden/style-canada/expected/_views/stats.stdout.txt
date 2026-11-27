@@ -13,4 +13,5 @@ crypto                5     4       1     80.0%   519.97   167.64   -150.57     
 TOTAL                13     7       6     53.8%  -449.88   165.63   -268.21       387.30       -519.90           0.72
 
 Denied by the superficial-loss rule (NOT subtracted above): 943.13 CAD over 3 disposition(s).
+1 disposition(s) with an unknown cost are not counted — tjs find-missing-history
 More: tjs stats --details (how the trades are counted)

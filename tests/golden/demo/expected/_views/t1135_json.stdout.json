@@ -87,6 +87,17 @@
       "year_end_cost": 5401.35
     },
     {
+      "country": "USA",
+      "country_source": "isin",
+      "country_source_account": "margin",
+      "foreign_property": true,
+      "isin_country_code": "US",
+      "listing_country": "USA",
+      "max_cost": 0.0,
+      "symbol": "SAMPG.US",
+      "year_end_cost": 0.0
+    },
+    {
       "country": "CAN",
       "country_source": "assumed",
       "foreign_property": false,
@@ -245,6 +256,21 @@
       "country_source": "isin",
       "country_source_account": "margin",
       "futures": false,
+      "gain": 0.0,
+      "income": 0.0,
+      "isin_country_code": "US",
+      "max_cost": 0.0,
+      "symbol": "SAMPG.US",
+      "unknown_acb": true,
+      "year_end_cost": 0.0
+    },
+    {
+      "category": 2,
+      "category_from": "listing",
+      "country": "USA",
+      "country_source": "isin",
+      "country_source_account": "margin",
+      "futures": false,
       "gain": 66.15,
       "income": 0.0,
       "isin_country_code": "US",
@@ -286,6 +312,7 @@
   "tax_date_basis": "settle",
   "total_settled": false,
   "unknown_acb_symbols": [
+    "SAMPG.US",
     "USD cash"
   ],
   "unused_overrides": [],

@@ -466,9 +466,8 @@ def _holdings_files(root: Path) -> List[Path]:
             pp = pp if pp.is_absolute() else root / pp
             if pp.is_file():
                 out.append(pp)
-    from taxjson.lib.holdings_dir import snapshot_files
-    out += [q for q in snapshot_files(_PL.holdings_folder(root))
-            if q not in out]
+    from taxjson.lib.holdings_dir import year_files
+    out += [q for q in year_files(root)[0] if q not in out]
     return out
 
 

@@ -23,7 +23,7 @@ import _style  # noqa: E402
 
 COMMON = [
     ("format", ["format"]), ("migrate", ["migrate", "--dry-run"]),
-    ("elect", ["elect"]), ("elect_margin", ["elect", "margin"]),
+    ("elections", ["elections"]), ("elections_margin", ["elections", "margin"]),
     ("crypto-sends", ["crypto-sends"]),
     ("find-missing-history", ["find-missing-history"]),
     ("opening", ["opening", "margin", "holdings.toml", "--dry-run"]),
@@ -139,11 +139,11 @@ def main(argv):
                           "pending_elections.json").read_text())
         eid = agg["accounts"]["margin"]["pending"][0]["event_id"]
         for label, a in (
-                ("elect_pending", ["elect", "--pending"]),
+                ("elections_pending", ["elections", "--pending"]),
                 ("run_pending", ["run", "--no-input"]),
-                ("elect_set_bad", ["elect", "margin", "--set",
+                ("elections_set_bad", ["elections", "margin", "--set",
                                    f"{eid}=bogus"]),
-                ("elect_set", ["elect", "margin", "--set",
+                ("elections_set", ["elections", "margin", "--set",
                                f"{eid}={_style._ELECTION[country]}"])):
             codes[f"{country}/{label}"] = _save(od, label, a, pw.run(*a))
         ini = Path(str(p.root) + "_init")

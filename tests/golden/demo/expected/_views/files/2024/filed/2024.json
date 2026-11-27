@@ -52,7 +52,7 @@
       "proceeds": 1293.3,
       "realized": 267.23,
       "st_gain": 0.0,
-      "tainted": 0
+      "tainted": 1
     },
     "questrade": {
       "disallowed": 0.0,
@@ -376,13 +376,13 @@
       "inputs/crypto/kraken_demo.csv": "<sha256 ok>",
       "inputs/ib/ib_demo.csv": "<sha256 ok>",
       "inputs/lira/questrade_lira_demo.csv": "<sha256 ok>",
+      "inputs/margin/elections.json": "<sha256 ok>",
       "inputs/margin/ib_scenarios_demo.csv": "<sha256 ok>",
-      "inputs/margin/manifest.json": "<sha256 ok>",
       "inputs/questrade/questrade_demo.csv": "<sha256 ok>",
       "inputs/rrsp/ib_rrsp_demo.csv": "<sha256 ok>",
       "inputs/tfsa/rbc_direct_demo.csv": "<sha256 ok>",
       "inputs/webull/webull_demo.csv": "<sha256 ok>",
-      "taxjson.toml": "run-settings:bd5d7876667b7986867633f5c09265fad1612d6e844911562d725cb30f64b58d",
+      "taxjson.toml": "run-settings:f6c4ad61f2c590abefff5baa17bf50bc084fe325bb629fc84b13aa5bfcf30c9f",
       "ticker.map": "<sha256 ok>",
       "tobase.map": "<sha256 ok>"
     },
@@ -418,7 +418,7 @@
     "proceeds": 101531.33,
     "realized": 1418.33,
     "st_gain": 0.0,
-    "tainted": 0
+    "tainted": 1
   },
   "year": 2024,
   "year_end": {
@@ -449,11 +449,6 @@
         "acb": 5401.35,
         "deferred": 0.0,
         "qty": 100.0
-      },
-      "SAMPG.US": {
-        "acb": -498.15,
-        "deferred": 0.0,
-        "qty": -20.0
       },
       "SAMPW250117C00030000.US": {
         "acb": -201.08,

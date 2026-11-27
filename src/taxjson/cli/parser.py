@@ -3,9 +3,9 @@ import argparse
 from typing import Any, Optional, Tuple
 
 from taxjson.cli import (
-    books, elect, estimate, explain, file, gains_filing, listings,
+    books, elections, estimate, explain, file, gains_filing, listings,
     maintainer, maps, migrate, plan, positions, setup,
-    slips, summaries, technicals, tips, tools, totals, unclose,
+    slips, stress, summaries, technicals, tips, tools, totals, unclose,
 )
 
 
@@ -32,7 +32,7 @@ class _CappedHelpFormatter(argparse.HelpFormatter):
 # command table uses the same groups in the same order.
 _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Set up", ("checklist", "init", "years", "new-year", "align",
-                "format", "format-map", "migrate", "fetch", "elect",
+                "format", "format-map", "migrate", "fetch", "elections",
                 "ticker-map", "update-tobase-map")),
     ("Build the books", ("run", "compare", "snapshot", "clean",
                          "crypto-sends", "find-missing-history",
@@ -40,7 +40,7 @@ _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Summaries", ("amt", "div-estimate", "estimate", "fx-cash",
                    "instalments", "option-yield", "plot-tax", "stats",
                    "sum", "win-rates")),
-    ("Positions", ("list", "shares", "technicals")),
+    ("Positions", ("list", "shares", "technicals", "stress")),
     ("Row listings", ("cash", "dil", "divs", "events", "fees", "gains",
                       "gains-base", "leaps", "roc", "staking", "trades",
                       "transfers")),
@@ -63,6 +63,10 @@ _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
 # The group of the maintainer's release commands: listed by `help --all`
 # and on a development checkout only (they stay runnable everywhere).
 _MAINTAINER_GROUP = "Maintainer"
+# A command's old name -> its name now: the old one is no alias, it is
+# refused (exit 2) with the command line under the new name to copy
+# (cli/main `_refuse_renamed_command`).
+RENAMED_COMMANDS = {"elect": "elections"}
 
 
 def _dev_checkout_present() -> bool:
@@ -165,8 +169,8 @@ class _GroupedHelpParser(argparse.ArgumentParser):
 
 # The groups, in help-page order: an unknown command's error lists the
 # names in this order.
-_GROUPS = (setup, maps, migrate, elect, books, summaries, estimate,
-           positions, technicals, listings, totals, tips, plan, file, gains_filing, unclose,
+_GROUPS = (setup, maps, migrate, elections, books, summaries, estimate,
+           positions, technicals, stress, listings, totals, tips, plan, file, gains_filing, unclose,
            slips, explain, maintainer, tools)
 
 
@@ -207,6 +211,19 @@ def _build_parser(prog: str = "tjs"
             p.show_all = True
         if a.topic and a.topic in sub.choices:
             sub.choices[a.topic].print_help()
+        elif a.topic in RENAMED_COMMANDS:
+            # The new name, and the help line under it to copy (as
+            # the old command line itself is answered: cli/main).
+            import sys
+            from taxjson.lib import out as _out
+            new = RENAMED_COMMANDS[a.topic]
+            ready = f"tjs help {new}"
+            _out.show(_out.message(
+                "error", f"tjs {a.topic} was renamed: tjs {new}",
+                prog="tjs help", stream=sys.stderr)
+                + [ready if _out.width(sys.stderr) > 0 else f"  {ready}"],
+                sys.stderr)
+            raise SystemExit(2)
         elif a.topic:
             from taxjson.lib.out import error
             error(f"no such command {a.topic!r}", prog="tjs help")
@@ -237,9 +254,12 @@ def _build_parser(prog: str = "tjs"
         if _act.dest in _DETAILS_CMDS:
             # Essentials first (docs/output-style.md): the default view
             # is the essentials; --details prints what it leaves out.
+            # gains-cra always prints everything (TJ-5337): accepted, its
+            # own text.
             _sp.add_argument("--details", action="store_true",
-                             help="Also print the explanations, caveats "
-                                  "and notes the default view leaves out")
+                             help=_DETAILS_HELP.get(
+                                 _act.dest, "Also print the explanations, caveats "
+                                            "and notes the default view leaves out"))
     return p, sub
 
 
@@ -253,7 +273,9 @@ _DETAILS_CMDS = frozenset({
     "check-dates", "compare", "clean",
     "edge-cases", "find-missing-history", "ticker-map",
     "update-tobase-map", "years", "close-year", "unclose-year", "check-filed", "handoff",
-    "redact", "migrate", "new-year", "init", "elect", "journals",
+    "redact", "migrate", "new-year", "init", "elections", "journals",
     "renames", "opening", "transfers", "format", "crypto-sends", "stats",
     "fees-sum", "option-boundary", "spinoffs", "splits", "staking", "staking-sum",
-    "technicals", "gains-base", "gains-cra"})
+    "technicals", "stress", "gains-base", "gains-cra"})
+# A command's own --details help, where the generic one is not true.
+_DETAILS_HELP = {"gains-cra": gains_filing.GAINS_CRA_DETAILS}

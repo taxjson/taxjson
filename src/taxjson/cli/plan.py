@@ -13,10 +13,10 @@ from taxjson.lib.cli_diag import note
 from taxjson.model.result import GainRow, gain_before_denial
 
 from taxjson.cli.common import (
-    _accounts_skipped_for_no_inputs, _base_currency, _child_error,
+    _accounts, _accounts_skipped_for_no_inputs, _base_currency, _basis_label, _child_error,
     _exec_tool, _no_wash_checkable, _radar_config,
-    _refuse_us_crypto_account, _self_cmd, _sheltered_expected,
-    _taxable_equity_account_names,
+    _refuse_us_crypto_account, _require_listed, _self_cmd,
+    _sheltered_expected, _taxable_equity_account_names,
 )
 from taxjson.pipeline.config import _country, load_config, load_settings
 from taxjson.pipeline.inputs import _base, _normalize_country
@@ -113,6 +113,7 @@ def cmd_harvest(args: argparse.Namespace) -> None:
         "(`tjs run` refuses this map too)")
     cmd = _cmd("taxjson-harvest") + files + [
         "--price-cache", str(cache / ".price_cache.json"),
+        "--basis-label", _basis_label(root, [Path(f) for f in files]),
         "--country", _country(settings),
         "--base-currency", str(_base(settings)),
     ]
@@ -271,10 +272,13 @@ def _empty_radar_json(root: Path, args: argparse.Namespace):
         from taxjson.lib.wash_scope import scope_note
         country = _normalize_country(_country(
             settings_of(_radar_config(root, "tjs wash-radar"))))
+        names = _accounts(args, root)
         _json_out({"country": country,
                    "generated_at": _dt.now().isoformat(timespec="seconds"),
                    "as_of_date": args.date or _date.today().isoformat(),
                    "account": args.account,
+                   "account_names": (list(names) if names is not None
+                                     else None),
                    "include_all": bool(args.all),
                    "rows_scoped": bool(args.account),
                    "scope_note": scope_note(country),
@@ -297,32 +301,9 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
     cache = root / "work"
     _na_json = _empty_radar_json(root, args)
 
-    if args.account:
-        base = cache / f"{args.account}_base.json"
-        if not base.exists():
-            _die_input(f"no {base.name} in work/",
-                       "Run `tjs run` first, or check the account "
-                       "name.")
-        _acct_cfg = accounts_of(_radar_config(root, "tjs wash-radar"))
-        if account_of(_acct_cfg, args.account).sheltered:
-            # A usage error (the wrong account for the radar): exit 2,
-            # as an unknown account's (TJ-0157); 1 is a verdict's
-            # status (backlog TJ-0601).
-            _die_input(f"{args.account} is a sheltered account",
-                       "The radar advises on TAXABLE loss sales (sheltered "
-                       "books are its context, not its subject).")
-        _refuse_us_crypto_account(root, args.account, "tjs wash-radar",
-                                  _na_json)
-        # Every taxable book decides the statuses (the superficial-loss
-        # pool and §1091 look across all your accounts); the account
-        # only scopes the rows shown. It used to read this book alone,
-        # so a sibling account's rebuy or loss was invisible (audit
-        # 2026-10-23 #6).
-        bases = _radar_taxable_bases(root, cache, "tjs wash-radar",
-                                     empty_ok=True)
-        if base.resolve() not in {b.resolve() for b in bases}:
-            bases.append(base)
-        show = ["--show", str(base), "--account", args.account]
+    names = _accounts(args, root)
+    if names is not None:
+        bases, show = _radar_scoped_bases(root, cache, names, _na_json)
     else:
         bases = _radar_taxable_bases(root, cache, "tjs wash-radar",
                                      json_doc=_na_json)
@@ -377,6 +358,63 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
         # so it changed nothing (backlog TJ-0156).
         cmd += ["--brief"]
     _exec_tool(cmd)
+
+
+_RADAR_SUBJECT = ("The radar advises on TAXABLE loss sales (sheltered "
+                  "books are its context, not its subject).")
+
+
+def _radar_scoped_bases(root: Path, cache: Path, names: Tuple[str, ...],
+                        na_json: Any) -> Tuple[List[Path], List[str]]:
+    """`tjs wash-radar ACCOUNT[,ACCOUNT...]`: the taxable books (every
+    one decides the statuses) and the child's --show of the named
+    accounts' books, which scope the rows. Each named account needs a
+    book and must be one the radar advises on: one name keeps its words
+    and exit 2 (a US crypto account: nothing to check, exit 0); a list
+    names each one that breaks a rule, exit 1."""
+    own = [cache / f"{n}_base.json" for n in names]
+    one = len(names) == 1
+    if one and not own[0].exists():
+        _die_input(f"no {own[0].name} in work/",
+                   "Run `tjs run` first, or check the account "
+                   "name.")
+    if not one:
+        _require_listed(names, [n for n, b in zip(names, own) if b.exists()],
+                        "books",
+                        fix="Run `tjs run` first, or check the names.")
+    _acct_cfg = accounts_of(_radar_config(root, "tjs wash-radar"))
+    shel = [n for n in names if account_of(_acct_cfg, n).sheltered]
+    if one and shel:
+        # A usage error (the wrong account for the radar): exit 2,
+        # as an unknown account's (TJ-0157); 1 is a verdict's
+        # status (backlog TJ-0601).
+        _die_input(f"{shel[0]} is a sheltered account", _RADAR_SUBJECT)
+    if shel:
+        rest = ",".join(n for n in names if n not in shel)
+        _die(f"{', '.join(shel)} "
+             + ("is a sheltered account" if len(shel) == 1
+                else "are sheltered accounts"),
+             _RADAR_SUBJECT,
+             f"Leave {'it' if len(shel) == 1 else 'them'} out of the "
+             f"list: {rest!r}." if rest else
+             "Name taxable accounts.")
+    _refuse_us_crypto_account(root, names, "tjs wash-radar", na_json)
+    # Every taxable book decides the statuses (the superficial-loss
+    # pool and §1091 look across all your accounts); the accounts
+    # only scope the rows shown. It used to read this book alone,
+    # so a sibling account's rebuy or loss was invisible (audit
+    # 2026-10-23 #6).
+    bases = _radar_taxable_bases(root, cache, "tjs wash-radar",
+                                 empty_ok=True)
+    have = {b.resolve() for b in bases}
+    for b in own:
+        if b.resolve() not in have:
+            bases.append(b)
+            have.add(b.resolve())
+    show = ["--show", *[str(b) for b in own]]
+    for n in names:
+        show += ["--account", n]
+    return bases, show
 
 
 def _radar_taxable_bases(root: Path, cache: Path,
@@ -2258,7 +2296,10 @@ def _register_wash_radar(sub: argparse._SubParsersAction) -> None:
              "recomputed live as of today (also written to "
              "reports/wash_radar_<account>.rpt by `tjs run`).")
     p_wash.add_argument("account", nargs="?",
-                        help="Account (default: all taxable)")
+                        metavar="ACCOUNT[,ACCOUNT...]",
+                        help="Account, or several as one comma list "
+                             "(default: all taxable): the rows shown; "
+                             "every taxable book decides each status")
     p_wash.add_argument("--date", help="As-of date YYYY-MM-DD (default: today)")
     p_wash.add_argument("--verbose", "-v", action="store_true",
                         help="The full report, as --details: every "
@@ -2271,7 +2312,7 @@ def _register_wash_radar(sub: argparse._SubParsersAction) -> None:
     p_wash.add_argument("--json", action="store_true",
                         help="Emit the structured radar document (absolute "
                              "clears_at dates) instead of the text report")
-    p_wash.set_defaults(func=cmd_wash_radar)
+    p_wash.set_defaults(func=cmd_wash_radar, account_list=True)
 
 
 def _register_watch(sub: argparse._SubParsersAction) -> None:

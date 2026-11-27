@@ -8,11 +8,6 @@
       "account": "margin",
       "sales": 1,
       "symbol": "GHOSTQ.TO"
-    },
-    {
-      "account": "margin",
-      "sales": 1,
-      "symbol": "OLDCO.US"
     }
   ],
   "no_purchase_in_sum": [],
@@ -34,7 +29,7 @@
     },
     {
       "account": "margin",
-      "positions": 8
+      "positions": 7
     },
     {
       "account": "qt",
@@ -49,7 +44,29 @@
       "positions": 3
     }
   ],
-  "unknown_cost_sales": [],
+  "unknown_cost_sales": [
+    {
+      "account": "margin",
+      "currency": "CAD",
+      "date": "2024-04-03",
+      "direction": "LONG",
+      "kind": "sale",
+      "proceeds": 943.65,
+      "qty": 50.0,
+      "sources": [
+        {
+          "account": "margin",
+          "date": "2024-04-01",
+          "marked_close": true,
+          "quantity": 50.0,
+          "symbol": "OLDCO.US",
+          "where": null
+        }
+      ],
+      "symbol": "OLDCO.US",
+      "traded": "2024-04-01"
+    }
+  ],
   "year": 2024,
   "zero_cost_declared": [],
   "zero_cost_held": [],

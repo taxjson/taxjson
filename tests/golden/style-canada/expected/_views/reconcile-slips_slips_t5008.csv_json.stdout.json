@@ -4,7 +4,7 @@
     "ambiguous_listing": 0,
     "mismatch": 1,
     "missing_from_computed": 1,
-    "missing_from_slip": 4,
+    "missing_from_slip": 5,
     "no_slip_expected": 1,
     "ok": 2,
     "unknown_proceeds": 0
@@ -24,6 +24,11 @@
       "detail": "matches NET proceeds (slip appears net of commissions)",
       "status": "OK",
       "symbol": "NVDA"
+    },
+    {
+      "detail": "computed 1.0 disposition(s), proceeds 945.00 \u2014 no slip row (missing slip, or a non-slip disposition like a corp action)",
+      "status": "MISSING_FROM_SLIP",
+      "symbol": "OLDCO.US"
     },
     {
       "detail": "proceeds off by +5.00 (slip 7,700.00 vs computed gross 7,695.00 / net 7,693.65)",

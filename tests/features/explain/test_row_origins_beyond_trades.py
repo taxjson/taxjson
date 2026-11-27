@@ -242,7 +242,7 @@ class TestCorporateActionRows(unittest.TestCase):
             res = subprocess.run(
                 python_module_argv("taxjson.bin.taxjson_corp_actions")
                 + ["--brokerage", "rbc_direct", "--country", "canada",
-                   "--account-name", "margin", "--manifest",
+                   "--account-name", "margin", "--elections",
                    str(p / "m.json"), str(csv)],
                 capture_output=True, text=True, env=_env(),
                 stdin=subprocess.DEVNULL, timeout=120)

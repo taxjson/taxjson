@@ -241,7 +241,7 @@ class TestSpinoffCilBookedByHand(unittest.TestCase):
                 toml(year=2026).replace("[accounts.margin]",
                                         "[accounts.acct]"))
             tj(root, "run", "--no-input", check=False)
-            tj(root, "elect", "acct", "--set",
+            tj(root, "elections", "acct", "--set",
                "20260615-zzp-zzs-9ee7=rollover_s_86_1",
                "--hint", "allocated_acb_cad=210")
             r = tj(root, "run", "--no-input")

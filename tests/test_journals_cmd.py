@@ -280,8 +280,9 @@ class TestSourcesAndStates(unittest.TestCase):
         legs = [_leg("QZD.US", "2025-05-12", -300, NAME, ref="ref|x|1"),
                 _leg("QZD.TO", "2025-05-12", 300, NAME, ref="ref|x|1")]
         doc, _t = self._doc(legs)
-        self.assertEqual(set(doc), {"format", "account", "year", "map",
-                                    "journals", "counts", "pending"})
+        self.assertEqual(set(doc), {"format", "account", "account_names",
+                                    "year", "map", "journals", "counts",
+                                    "pending"})
         self.assertEqual(doc["format"], "taxjson-journals/1")
         self.assertEqual(set(doc["journals"][0]), {
             "account", "broker", "date", "from", "to", "quantity", "in",

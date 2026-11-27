@@ -12,7 +12,7 @@ Financial Instrument Information,Data,Equity and Index Options,QZQ   250117C0004
 Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
 Trades,Data,Order,Stocks,USD,PARN,"2024-02-01, 10:00:00",100,50.00,50.00,-5000.00,-1.00,5001.00,0,0,O
 Trades,Data,Order,Stocks,USD,QZQ,"2024-03-01, 10:00:00",200,30.00,30.00,-6000.00,-1.00,6001.00,0,0,O
-Trades,Data,Order,Stocks,USD,OLDCO,"2024-04-01, 10:00:00",-50,20.00,20.00,1000.00,-1.00,-600.00,399.00,0,C
+Trades,Data,Order,Stocks,USD,OLDCO,"2024-04-01, 10:00:00",-50,14.00,14.00,700.00,-1.00,-600.00,99.00,0,C
 Trades,Data,Order,Equity and Index Options,USD,QZQ 20SEP24 30 C,"2024-05-01, 10:00:00",2,3.00,3.00,-600.00,-2.00,602.00,0,0,O
 Trades,Data,Order,Equity and Index Options,USD,QZQ 20SEP24 30 C,"2024-08-01, 10:00:00",-2,1.50,1.50,300.00,-2.00,-602.00,-304.00,0,C
 Trades,Data,Order,Stocks,USD,QZQ,"2024-09-10, 10:00:00",-200,28.50,28.50,5700.00,-1.00,-6001.00,-302.00,0,C

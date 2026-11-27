@@ -19,10 +19,10 @@ from taxjson.lib import out as _out
 from taxjson.model import money as M
 
 from taxjson.cli.common import (
-    _base_currency, _gains_row_date, _ISO_DATE_RE, _load_json_or_die,
-    _refuse_books_older_than_inputs, _settle_basis, _unanswered_covers,
-    _uncovered_sales, _view_msg, _view_window, _warn_accounts_without_books,
-    _warn_artifact_year, _warn_run_state, _work_read_why,
+    _accounts, _base_currency, _basis_label, _gains_files_of, _gains_row_date, _ISO_DATE_RE,
+    _load_json_or_die, _refuse_books_older_than_inputs, _require_listed, _settle_basis,
+    _unanswered_covers, _uncovered_sales, _view_msg, _view_scope,
+    _warn_accounts_without_books, _warn_artifact_year, _warn_run_state, _work_read_why,
     _PERIOD_HELP, _add_instrument_filters,
 )
 from taxjson.cli.file import _taxable_gains_argv
@@ -35,14 +35,16 @@ from taxjson.pipeline.stages import _tax_date_basis
 
 
 def _gains_base_filing(root: Path, files: Dict[str, Path], keep: Any, sym_filter: Any,
-                       account: str, taxable_of: Dict[str, bool]
+                       names: Optional[Tuple[str, ...]], taxable_of: Dict[str, bool]
                        ) -> Tuple[Optional[Dict[str, Any]], str]:
     """`tjs sum --json`'s filing block for these books (cli/estimate
     `_return_figures`, the one computation: its `totals`, `lines` or
     `parts_8949`, `engine_gain_unrounded`, `engine_denied_unrounded`,
-    `date_basis`) and the command that prints it; or None and what
-    stands there instead, when the window is not the project's tax year,
-    an instrument filter narrows it or no account shown is taxable."""
+    `date_basis`) and the command that prints it (`tjs sum` with the
+    accounts `names`, an ACCOUNT list's comma-joined: the same figures);
+    or None and what stands there instead, when the window is not the
+    project's tax year, an instrument filter narrows it or no account
+    shown is taxable."""
     from taxjson.cli.estimate import _return_figures
     from taxjson.project.settings import settings_of
     if sym_filter is not None or not (root / "taxjson.toml").is_file():
@@ -61,7 +63,7 @@ def _gains_base_filing(root: Path, files: Dict[str, Path], keep: Any, sym_filter
     (_y, is_us, date_key, _rows, line_rows, _6781, filing_total, engine_gain, _gap,
      engine_denied, _dgap, _dl) = _return_figures(files, root, cfg, accts, taxable, {},
                                                   False, st.year)
-    return {"command": "tjs sum" + (f" {account}" if account else ""),
+    return {"command": "tjs sum" + (f" {','.join(names)}" if names else ""),
             "totals": filing_total, ("parts_8949" if is_us else "lines"): line_rows,
             "engine_gain_unrounded": engine_gain,
             "engine_denied_unrounded": engine_denied, "date_basis": date_key}, ""
@@ -74,31 +76,31 @@ def cmd_gains_base(args: argparse.Namespace) -> None:
     `_gains.json`; never the raw ones), each row the filed form's cells
     for that sale (Canada: Schedule 3's, as `tjs gains-cra`; US: Form
     8949's), the totals per account, taxable and sheltered apart, and
-    THE RETURN, `tjs sum`'s RETURN row. Books older than the inputs are
-    refused as `tjs sum` refuses them."""
+    THE RETURN, `tjs sum`'s RETURN row (with ACCOUNT, `tjs sum
+    ACCOUNT`'s: an ACCOUNT list's accounts, each with books, or exit 1).
+    Books older than the inputs are refused as `tjs sum` refuses them."""
     from taxjson.cli.estimate import _refuse_sum_books
     from taxjson.cli.common import _warn_run_state
     from taxjson.lib import gains_base as _GB
     from taxjson.lib.json_input import gains_row_kind
-    from taxjson.lib.report_model import gains_basis_label, resolve_gains_files
     from taxjson.lib.tax_forms import DIGITAL_ASSET_BOXES_FROM
     from taxjson.pipeline.stages import _tax_date_basis
     from taxjson.project.accounts import account_of
     root = Path(args.dir).resolve()
     cache = root / "work"
-    keep, scope, account = _view_window(args, root)
+    keep, scope, names = _view_scope(args, root)
     sym_filter = _instrument_filter(args)
-    files = resolve_gains_files(cache, account or None)
+    files = _gains_files_of(cache, names)
     if not files:
-        if account:
-            _die_input(f"no gains for account {account!r} in work/",
+        if names:
+            _die_input(f"no gains for account {names[0]!r} in work/",
                        "Run `tjs run` first, or check the account name.")
         _die_input("no gains files in work/ — run `tjs run` first")
     _refuse_sum_books(root)
     cfg = load_config(root, missing_ok=True)
     if cfg:
         _warn_run_state(root, cfg)
-    if not account:
+    if names is None:
         _warn_accounts_without_books(root, set(files), "gains-base", "books")
     accts = accounts_of(cfg)
     taxable_of = {n: (accts[n].taxable if n in accts else True) for n in files}
@@ -142,17 +144,19 @@ def cmd_gains_base(args: argparse.Namespace) -> None:
                   "basis is unknown; `tjs form-export` lists them for manual reporting.")
     rows.sort(key=lambda r: (r["date"], r["account"], r["symbol"], r["id"]))
     tot = _GB.totals(rows, [(n, taxable_of[n]) for n in files], us)
-    filing, why = _gains_base_filing(root, files, keep, sym_filter, account, taxable_of)
+    filing, why = _gains_base_filing(root, files, keep, sym_filter, names, taxable_of)
     currency = _base_currency(root)
-    basis = gains_basis_label(files)
+    basis = _basis_label(root, files)
     if getattr(args, "json", False):
         _json_out(_GB.json_doc(rows, tot, currency=currency, scope=scope, basis=basis,
-                               filing=filing, unknown_cost=manual, us=us),
+                               filing=filing, unknown_cost=manual, us=us,
+                               account_names=names),
                   schema="gains-base")
         return
     _out.render(_GB.render(rows, tot, currency=currency, scope=scope, basis=basis,
                            filing=filing, why=why, prefix=len(files) != 1, us=us,
-                           details=_details(args)), details=_details(args))
+                           details=_details(args), account_names=names),
+                details=_details(args))
 
 
 def _gains_cra_books(cache: Path, acct: str) -> Tuple[Dict[str, Dict[str, Any]],
@@ -243,7 +247,11 @@ def cmd_gains_cra(args: argparse.Namespace) -> None:
     Schedule 3's cells per disposition, the native proceeds and FX), then
     Schedule 3's line totals (`tjs form-export`'s, `tjs sum`'s FOR THE
     RETURN rows); Canada only (lib/country COMMAND_COUNTRY). Stale books
-    are refused as form-export refuses them."""
+    are refused as form-export refuses them. ACCOUNT (one, or an ACCOUNT
+    list: each taxable, each with books) scopes the rows, the totals
+    (`tjs sum ACCOUNT`'s) and the `! ` counts. It always prints all of it
+    (TJ-5337): --details, still accepted, changes nothing but its `Info:`
+    line on stderr (`_gains_cra_everything`)."""
     from taxjson.bin import taxjson_form_export as _FE
     from taxjson.lib import gains_cra as _GC
     from taxjson.lib import readiness as _RD
@@ -252,6 +260,7 @@ def cmd_gains_cra(args: argparse.Namespace) -> None:
     from taxjson.lib.json_input import dump_filing_json
     from taxjson.lib.tax_forms import mark_crypto
 
+    _gains_cra_everything(args)
     root = Path(args.dir).resolve()
     cache = root / "work"
     cfg = load_config(root)
@@ -259,20 +268,26 @@ def cmd_gains_cra(args: argparse.Namespace) -> None:
     year = settings.year
     base_cur = _base(settings)
     accts = accounts_of(cfg)
+    # ACCOUNT as given (the JSON's "scope" echoes it) and its names
+    # (None: every taxable account; an ACCOUNT list's, in order).
     want = getattr(args, "account", None)
-    if want and want in accts and not accts[want].taxable:
-        _die(f"{want!r} is not a taxable account",
-             "Schedule 3 reports the taxable accounts' dispositions; `tjs gains-base "
-             f"{want}` lists its rows.")
+    names = _accounts(args, root)
+    _gains_cra_taxable_only(names, accts)
     gains_argv = _taxable_gains_argv(root, cache, required=True)
     _refuse_books_older_than_inputs(root, cfg, read_upto=year)
     files = {Path(f).name.rsplit("_gains", 1)[0]: Path(f)
              for f in gains_argv[1::2]}
-    if want:
-        files = {n: p for n, p in files.items() if n == want}
-        if not files:
-            _die_input(f"no gains for account {want!r} in work/",
-                       "Run `tjs run` first, or check the account name.")
+    if names is not None:
+        if len(names) > 1:
+            # A listed account with no books: refused as sum and gains-base
+            # refuse it, the same helper and words (cli/common
+            # `_gains_files_of`: "no gains file for account ...", exit 1).
+            _gains_files_of(cache, names)
+        files = {n: p for n, p in files.items() if n in names}
+        _require_listed(names, files, "gains",
+                        fix="Run `tjs run` first, or check the account "
+                            + ("name." if len(names) == 1 else
+                               "names (an account with no inputs has no books)."))
     _warn_artifact_year(files, year)
     state_probs = _warn_run_state(root, cfg)
     date_key = "date" if _tax_date_basis(settings) == "trade" else "date_settle"
@@ -303,43 +318,84 @@ def cmd_gains_cra(args: argparse.Namespace) -> None:
                    short_sale_proceeds=None) if _FE.is_short_cover(m) else m
               for m in manual]
     doc = _GC.report(entries, natives, year=year, date_key=date_key, base=base_cur,
-                     account=want or None)
+                     account=want if names else None, account_names=names)
     _mp, _mc = _FE.manual_totals(manual)
     doc.update(manual_reporting_required=manual, manual_proceeds=M.shown(_mp, 2),
                manual_cover_cost=M.shown(_mc, 2))
     _ynote = _FE.year_not_ended_note(year)
     if _ynote:
         doc["year_not_ended"] = _ynote
-    # The sales not in the rows, of the accounts shown (ACCOUNT's alone).
-    taxable = {want} if want else {n for n, c in accts.items() if c.taxable}
+    # The sales not in the rows, of the accounts shown (ACCOUNT's alone;
+    # a list's, each of them): the names, never `names or None`.
+    taxable = (set(names) if names is not None
+               else {n for n, c in accts.items() if c.taxable})
     ik = len([m for m in in_kind_unbooked(cache, year) if m.get("taxable") in taxable])
-    np_ = len([r for r in _uncovered_sales(root, cfg, want or None)
+    np_ = len([r for r in _uncovered_sales(root, cfg, names)
                if r.get("booked") == "open"])
-    ub = len(_unanswered_covers(root, cfg, want or None))
+    ub = len(_unanswered_covers(root, cfg, names))
     if getattr(args, "csv", None):
         _gains_cra_csv(doc, Path(args.csv))
     if getattr(args, "json", False):
         paths = list(files.values())
         doc["readiness"] = _RD.build(
             run_state=state_probs or (), unknown_cost=max(tainted, len(manual)),
-            no_purchase=np_, unbacked_cover=ub,
+            no_purchase=np_, unbacked_cover=ub, covers_by_hand=True,
             conservation=_RD.conservation_lines(paths), in_kind_unbooked=ik,
             unconsumed_premium=_RD.unconsumed_premium_lines(paths),
             unsettled_compensation=_RD.unsettled_compensation_lines(paths))
         dump_filing_json(versioned(doc, "gains-cra"), sys.stdout)
         Doc(exact=True, width_=0, live=True).blank()
         return
-    details = _details(args)
     tail = _FE._not_in_rows({"not_in_rows": {"in_kind_unbooked": ik, "no_purchase": np_,
                                               "unbacked_cover": ub}})
     if _ynote:
         tail.append(_ynote[len("NOTE: "):] if _ynote.startswith("NOTE: ") else _ynote)
-    lines = _FE._manual_console(manual, base_cur, details) if manual else []
+    lines = _FE._manual_console(manual, base_cur, True) if manual else []
     while lines and not lines[-1]:
         lines.pop()
     from taxjson.lib import out as _out
-    _out.render(_GC.render(doc, details=details, width=_out.width(), tail=tail,
-                           manual=lines), details=details)
+    _out.render(_GC.render(doc, width=_out.width(), tail=tail, manual=lines), details=True)
+
+
+def _gains_cra_taxable_only(names: Optional[Tuple[str, ...]], accts: Dict[str, Any]) -> None:
+    """gains-cra's subset rule, every named account taxable (Schedule 3
+    is the taxable accounts'): one configured account that is not, the
+    refusal it always had; a list, each one that is not named, exit 1
+    (a name not in [accounts] was refused by `_accounts`)."""
+    bad = [n for n in names or () if n in accts and not accts[n].taxable]
+    if not names or not bad:
+        return
+    if len(names) == 1:
+        _die(f"{bad[0]!r} is not a taxable account",
+             "Schedule 3 reports the taxable accounts' dispositions; `tjs gains-base "
+             f"{bad[0]}` lists its rows.")
+    one = len(bad) == 1
+    rest = [n for n in names if n not in bad]
+    _die(", ".join(repr(n) for n in bad)
+         + (" is not a taxable account" if one else " are not taxable accounts"),
+         f"Schedule 3 reports the taxable accounts' dispositions; `tjs gains-base "
+         f"{','.join(bad)}` lists {'its' if one else 'their'} rows"
+         + (f"; without {'it' if one else 'them'}: `tjs gains-cra {','.join(rest)}`."
+            if rest else "."))
+
+
+# What `tjs gains-cra --details` says (TJ-5337); its -h help too (cli/parser).
+GAINS_CRA_DETAILS = "tjs gains-cra always prints everything: --details is no longer needed"
+
+
+def _gains_cra_everything(args: argparse.Namespace) -> None:
+    """`tjs gains-cra` is always the long form (TJ-5337): its messages
+    whole too, as --details had them (cli/common `_brief`, the one-line
+    switch cli/main `_brief_messages` sets), so --details changes nothing
+    but its one `Info:` line on stderr (never stdout: --json stays
+    clean)."""
+    import os
+    from taxjson.lib import stage_msg
+    from taxjson.pipeline import run_state
+    if _details(args):
+        note(_cmd_prog(), GAINS_CRA_DETAILS)
+    run_state.current_details = True
+    os.environ.pop(stage_msg.CONCISE_ENV, None)
 
 
 def _gains_cra_csv(doc: Dict[str, Any], path: Path) -> None:
@@ -374,17 +430,23 @@ def _register_gains_base(sub: argparse._SubParsersAction) -> None:
                     "consolidation and the conversion (the books `tjs sum` "
                     "and `tjs form-export` read), one row per disposition "
                     "in the filed form's cells for that sale (Canada: "
-                    "Schedule 3's, as `tjs gains-cra` shows them, with the "
-                    "gain before any superficial-loss denial, the denied "
-                    "amount and the allowed gain; US: Form 8949's), over a "
-                    "window (default: the tax year); the totals per account, "
-                    "then THE RETURN, `tjs sum`'s RETURN row.")
+                    "Schedule 3's, as `tjs gains-cra` shows them, in `tjs "
+                    "sum`'s columns: PROCEEDS, COST(ACB) and GAIN as filed, "
+                    "OUTLAYS, TOTAL COST and DENIED (INFO), every loss "
+                    "denied (a superficial loss, an in-kind contribution's): "
+                    "information only, COST(ACB) is already reduced by it; "
+                    "US: Form 8949's), "
+                    "over a window (default: the tax year); the totals per "
+                    "account, then THE RETURN, `tjs sum`'s RETURN row.")
     p.add_argument("period", nargs="?", help=_PERIOD_HELP)
-    p.add_argument("account", nargs="?", help="Account (default: all)")
+    p.add_argument("account", nargs="?",
+                   help="Account, or accounts separated by commas: "
+                        "ACCOUNT[,ACCOUNT...] (default: all)")
     _add_instrument_filters(p)
     p.add_argument("--json", action="store_true",
                    help="Emit JSON instead of text")
-    p.set_defaults(func=cmd_gains_base)
+    # ACCOUNT takes a comma list (lib/account_list; cli/common `_view_scope`).
+    p.set_defaults(func=cmd_gains_base, account_list=True)
 
 
 def _register_gains_cra(sub: argparse._SubParsersAction) -> None:
@@ -392,19 +454,27 @@ def _register_gains_cra(sub: argparse._SubParsersAction) -> None:
         "gains-cra",
         help="One row per sale in the CRA's columns",
         description="The tax year's dispositions of the taxable accounts, one "
-             "row per sale: Sale date, Settle date, Description, Qty, the "
+             "row per sale: SALE DATE, SETTLE DATE, DESCRIPTION, QTY, the "
              "proceeds in the trade's currency and the Bank of Canada rate "
-             "(FX), then Schedule 3's Proceeds, ACB, Commissions and "
-             "Gain/Loss in CAD for that one sale; a table per currency, then "
-             "the Schedule 3 line totals, the figures `tjs form-export` and "
-             "`tjs sum` show. Canada only.")
+             "(FX), then Schedule 3's PROCEEDS, COST(ACB), OUTLAYS and "
+             "GAIN in CAD for that one sale and its DENIED (INFO), every "
+             "loss denied (a superficial loss, an in-kind contribution's, as "
+             "the CSV's Denied): information only, COST(ACB) is already "
+             "reduced by it; a table per "
+             "currency, then the Schedule 3 line totals in `tjs sum`'s "
+             "columns, the figures `tjs form-export` and `tjs sum` show. "
+             "Always the whole report: every description whole, every note. "
+             "Canada only.")
     p.add_argument("account", nargs="?",
-                   help="One taxable account (default: every taxable account)")
+                   help="A taxable account, or taxable accounts separated by "
+                        "commas: ACCOUNT[,ACCOUNT...] (default: every taxable "
+                        "account)")
     p.add_argument("--csv", metavar="FILE",
                    help="Also write the rows as CSV (a currency column, raw numbers)")
     p.add_argument("--json", action="store_true",
                    help="Emit the report as JSON instead of text")
-    p.set_defaults(func=cmd_gains_cra)
+    # ACCOUNT takes a comma list (lib/account_list; cli/common `_accounts`).
+    p.set_defaults(func=cmd_gains_cra, account_list=True)
 
 
 def register(sub: argparse._SubParsersAction) -> None:

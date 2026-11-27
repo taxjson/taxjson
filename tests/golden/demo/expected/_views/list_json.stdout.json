@@ -89,18 +89,6 @@
     },
     {
       "account": "margin",
-      "cost": -498.15,
-      "cost_per_share": 24.9075,
-      "deferred_wash": 0.0,
-      "last_acq_date": "2024-03-18",
-      "missing_history_suspect": true,
-      "qty": -20.0,
-      "since": "2024-03-18",
-      "symbol": "SAMPG.US",
-      "unknown_cost": false
-    },
-    {
-      "account": "margin",
       "cost": -201.08,
       "cost_per_share": 2.0108,
       "deferred_wash": 0.0,
@@ -186,9 +174,9 @@
   ],
   "schema_version": 1,
   "totals": {
-    "book_cost": 71957.91,
+    "book_cost": 72456.06,
     "deferred_wash": 117.45,
-    "positions": 15,
+    "positions": 14,
     "unknown_cost_positions": 0
   },
   "year": "2024"

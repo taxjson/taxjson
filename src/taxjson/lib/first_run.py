@@ -52,7 +52,7 @@ from taxjson.lib.missing_history import (
     MissingHistoryRow, UnbackedCover, ZeroBasisRow, _basis_date,
     _drop_duplicate_splits, _walk_key, assess_tax_year_relevance,
     detect_corp_action_links, detect_missing_history,
-    detect_unbacked_covers, detect_zero_basis_acquisitions,
+    detect_unbacked_covers, detect_zero_basis_acquisitions, read_marked_closes,
     drop_answered_covers, is_registered_account)
 from taxjson.lib.corporate_timeline import normalize_symbol_new
 from taxjson.lib.in_kind import in_kind_unbooked
@@ -184,7 +184,10 @@ def uncovered_short_sales(txs: Sequence[TaxTransaction], year: Any, *,
     up by earlier sales, or dated after the sale) is still a sale with
     no purchase; a declared pair without one is covered as a whole
     (backlog TJ-0958)."""
-    txs = list(txs)
+    # (A Canadian book: a sale the broker marks CLOSE is at an unknown
+    # cost, with the opening the run gave it, and a marked purchase's
+    # unbacked units are no long: lib/missing_history.read_marked_closes.)
+    txs = read_marked_closes(txs, country)
     cov = {(s.upper(), a.lower()) for s, a in covered}
     # (A line an opening snapshot replaced opens nothing: it covers none.)
     cov -= replaced_openings(cache)
@@ -223,18 +226,25 @@ def unanswered_covers(txs: Sequence[TaxTransaction], year: Any, *,
                       cache: Optional[Path] = None) -> List[UnbackedCover]:
     """Buys in taxable accounts, through the tax year, that the broker
     codes as closing a short the data does not hold and no .tt short line
-    answers (TJ-0844). The books carry each as a new long, in the cost of
-    later sales, so a cover before the year still counts."""
+    answers (TJ-0844). The US books carry each as a new long, in the cost
+    of later sales, so a cover before the year still counts. A Canadian
+    run reports each by hand in its own year and adds no long (CA-ACB-11,
+    CA-OPT-12; backlog TJ-5349): the year's own covers, options too."""
     ys = str(year) if year is not None else ""
     shorts = [r for rows in logged_openings(cache).values() for r in rows
               if r.quantity < 0]
+    from taxjson.lib.country import is_canada
+    by_hand = country is not None and is_canada(country)
     return [c for c in detect_unbacked_covers(
                 drop_answered_covers(txs, shorts, country), date_basis=date_basis,
+                # (a Canadian book reports an option's too: CA-OPT-12)
+                include_options=by_hand,
                 journal_symbols=journal or set(),
                 registered_accounts=sheltered or None, country=country)
             if not is_registered_account(c.account, sheltered or None,
                                          country)
-            and (not ys or c.date[:4] <= ys)]
+            and (not ys or c.date[:4] <= ys)
+            and not (by_hand and ys and c.date[:4] < ys)]
 
 
 # How the gains engine booked the year's sales the missing-history walk
@@ -591,9 +601,11 @@ def unchecked_accounts(cache: Path, accounts: Dict[str, Any],
     root = Path(root) if root is not None else Path(cache).parent
     snapshots: Dict[str, List[str]] = {}
     try:
-        folder, _note = _HD.folder_for(root)
-        if folder is not None:
-            snapshots, _notes = _HD.discover(folder, accounts, root)
+        # (a folder every year shares: the year's own snapshots)
+        files, _note = _HD.year_files(root)
+        if files:
+            snapshots, _notes = _HD.discover(_PL.holdings_folder(root),
+                                             accounts, root, files=files)
     except Exception:                               # noqa: BLE001
         snapshots = {}
     out = []
@@ -713,7 +725,10 @@ def unknown_cost_sales(cache: Path, year: Any, *,
                     "account": key[0], "symbol": str(src.get("symbol") or ""),
                     "date": key[1],
                     "quantity": sq if isinstance(sq, (int, float)) else 0.0,
-                    "where": where.get(key)})
+                    "where": where.get(key),
+                    # the broker's own CLOSE row, no line (TJ-5349)
+                    **({"marked_close": True} if src.get("marked_close")
+                       else {})})
             direction = str(t.get("direction") or "LONG")
             kind = ("sale" if direction != "SHORT"
                     else "cover-before" if any(x["quantity"] < 0
@@ -723,6 +738,8 @@ def unknown_cost_sales(cache: Path, year: Any, *,
                 "symbol": str(t.get("symbol") or ""),
                 "account": str(t.get("account") or acct),
                 "date": d, "qty": abs(qty), "proceeds": proceeds,
+                # (the trade date, where the row is dated by settlement)
+                **({"traded": str(t["date"])[:10]} if str(t.get("date") or d)[:10] != d else {}),
                 "currency": str(t.get("currency") or ""),
                 "direction": direction, "kind": kind,
                 "sources": sources,
@@ -760,7 +777,8 @@ def collect(root: Path, cfg: Dict[str, Any], *,
                                country=country, cache=cache)
     from taxjson.lib.corp_actions import declared_zero_value_events
     from taxjson.lib.missing_history import without_no_shares
-    _zrows = _zero_cost_rows(without_no_shares(txs, cache), year, sheltered=sheltered,
+    _zrows = _zero_cost_rows(without_no_shares(read_marked_closes(txs, country), cache),
+                             year, sheltered=sheltered,
                              country=country, date_basis=basis,
                              declared=declared_zero_value_events(root))
     zero_sold = [r for r in _zrows if not r.declared and r.sold
@@ -1035,6 +1053,18 @@ def unknown_cost_phrase(items: Sequence[Dict[str, Any]]) -> str:
     return " and ".join(parts)
 
 
+def _covers_not_by_hand(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The `unbacked_covers` the books still carry as new longs: not the
+    ones a Canadian run reports by hand (a row of `unknown_cost_sales`
+    whose units a marked CLOSE opened, of that symbol and account), which
+    that list's own line says (CA-ACB-11, CA-OPT-12; backlog TJ-5349)."""
+    by_hand = {(i.get("symbol"), i.get("account"))
+               for i in doc.get("unknown_cost_sales") or []
+               if any(s.get("marked_close") for s in i.get("sources") or [])}
+    return [c for c in doc.get("unbacked_covers") or []
+            if (c.get("symbol"), c.get("account")) not in by_hand]
+
+
 def unknown_cost_row(i: Dict[str, Any]) -> str:
     """`QZQ.TO 2025-06-02 in margin`: the row, as the closing line
     names it (no parentheses: the line's width rule strips those)."""
@@ -1068,6 +1098,55 @@ def line_name(src: Dict[str, Any], parens: bool = True) -> str:
     return f"{src['where']} ({own})" if parens else f"{src['where']}: {own}"
 
 
+def _marked_advice(items: Sequence[Dict[str, Any]]) -> str:
+    """The advice for rows whose unknown units a trade the broker marks
+    CLOSE opened, with nothing held that it closes (lib/unbacked_close;
+    CA-ACB-11, CA-OPT-12): no line to name, the opening itself is what
+    the files lack. The row's own account's sale or cover, each said for
+    what it is; and a row of ANOTHER account that only shares the pool
+    with those units (CA-ACB-01: one pool across the taxable accounts),
+    said as that, naming the close behind it (backlog TJ-5376, TJ-5436)."""
+    def own(i: Dict[str, Any]) -> bool:
+        return any(s.get("account") == i.get("account") for s in i.get("sources") or [])
+    sales = [i for i in items if own(i) and i.get("kind", "sale") == "sale"]
+    covers = [i for i in items if own(i) and i.get("kind", "sale") != "sale"]
+    pooled = [i for i in items if not own(i)]
+    one = len(items) == 1
+    it = "it" if one else "them"
+
+    def these(rows: Sequence[Dict[str, Any]], noun: str) -> str:
+        if len(rows) == len(items):
+            return it
+        return f"the {noun}" if len(rows) == 1 else f"the {len(rows)} {noun}s"
+    parts = []
+    if sales:
+        parts.append(
+            f"the broker marks {these(sales, 'sale')} closing and your files hold no "
+            f"purchase of the units: add the purchase (the earlier "
+            f"export or a .tt line), or their cost (`OPENING <date> "
+            f"<SYMBOL> <qty> <CUR> <total cost>`, or `tjs opening`)")
+    if covers:
+        parts.append(
+            f"the broker marks {these(covers, 'buy')} as closing a short or a "
+            f"written contract your files do not hold: add its own "
+            f"sale (the earlier export or a .tt line)")
+    if pooled:
+        why = "; ".join(sorted({
+            f"{s['account']}'s close of {s['symbol']} on {s['date']}"
+            for i in pooled for s in i.get("sources") or []})[:3])
+        parts.append(
+            f"{these(pooled, 'other row')} shared a pool with units bought "
+            f"before your files ({why}, which the broker marks closing with "
+            f"nothing held): the cost of every unit of the security in "
+            f"your taxable accounts is unknown until the position is fully "
+            f"sold, or that purchase is added")
+    if covers and not sales and not pooled:
+        return (f"{parts[0]}, or report the {'buy' if one else 'buys'} by "
+                f"hand (`tjs form-export`)")
+    return ("; ".join(parts) + f"; until then, report {it} by hand (`tjs "
+            f"form-export` lists {it})")
+
+
 def unknown_cost_advice(items: Sequence[Dict[str, Any]]
                         ) -> Tuple[str, str, str]:
     """(kind, the one-line fix, the whole advice) for the rows at an
@@ -1079,6 +1158,8 @@ def unknown_cost_advice(items: Sequence[Dict[str, Any]]
     lines = unknown_cost_lines(items)
     one = len(items) == 1
     it = "it" if one else "them"
+    if lines and all(src.get("marked_close") for src in lines.values()):
+        return ("by-hand", "`tjs find-missing-history`", _marked_advice(items))
     if lines and all(src["quantity"] > 0 for src in lines.values()):
         if len(lines) == 1:
             (src,) = lines.values()
@@ -1148,8 +1229,10 @@ def _unknown_cost_detail(items: Sequence[Dict[str, Any]], yr: Any) -> str:
     by and the ways to settle it (unknown_cost_advice)."""
     from taxjson.lib.report_fmt import qty_text
     rows = "; ".join(
-        f"{i['symbol']} ({i['account']}) on {i['date']}, "
-        f"{qty_text(i['qty'])} units"
+        f"{i['symbol']} ({i['account']}) on {i['date']}"
+        + (f" (traded {i['traded']})" if i.get("traded") not in (None, "", i["date"])
+           and any(x.get("marked_close") for x in i.get("sources") or []) else "")
+        + f", {qty_text(i['qty'])} units"
         for i in items[:3]) + (f" +{len(items) - 3} more"
                                if len(items) > 3 else "")
     kind, _fix, advice = unknown_cost_advice(items)
@@ -1236,7 +1319,7 @@ def concise_items(doc: Dict[str, Any],
         items.append(("Warning", f"{_n(len(cov), 'sale', 'sales')} with no "
                       f"purchase booked as shorts covered later "
                       f"({_syms(cov)}) — `tjs find-missing-history`"))
-    ub = doc.get("unbacked_covers") or []
+    ub = _covers_not_by_hand(doc)
     if ub:
         items.append(("Warning", f"{_n(len(ub), 'cover', 'covers')} of a "
                       f"short opened before your files, booked as a new "
@@ -1377,7 +1460,7 @@ def render_blocks(doc: Dict[str, Any], *,
                      f"purchases in your files, so they are in `tjs "
                      f"sum`; the check reads that day's rows in another "
                      f"order: compare it with the broker's trades."))
-    ub = doc.get("unbacked_covers") or []
+    ub = _covers_not_by_hand(doc)
     if ub:
         items.append(("Warning", f"{_n(len(ub), 'buy', 'buys')} the broker "
                      f"codes as closing a short your files do not hold: "
@@ -1402,10 +1485,10 @@ def render_blocks(doc: Dict[str, Any], *,
             f"{', '.join(i.get('events') or []) or '?'})" for i in zd[:3]) \
             + (f" +{len(zd) - 3} more" if len(zd) > 3 else "")
         one = zd[0]
-        how = (f"`tjs elect {one['account']} --redo --event "
+        how = (f"`tjs elections {one['account']} --redo --event "
                f"{(one.get('events') or ['ID'])[0]}`"
                if len(zd) == 1 and len(one.get("events") or []) == 1
-               else "`tjs elect ACCOUNT --redo --event ID`")
+               else "`tjs elections ACCOUNT --redo --event ID`")
         items.append(("Info", f"{_n(len(zd), 'position', 'positions')} at "
                      f"the $0 cost you declared (fmv_per_share=0 in the "
                      f"spin-off's election): {shown}. To change it: "

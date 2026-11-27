@@ -541,7 +541,7 @@ class TestOneCountryHelpAndWarnings(unittest.TestCase):
             p = projects_both(td)
             for root in p.values():
                 (root / "inputs" / "margin").mkdir(parents=True)
-            r = cli_both(p, "elect", "margin", "--set", "abc")
+            r = cli_both(p, "elections", "margin", "--set", "abc")
         self.assertIn("reorg_368", r["usa"].stderr)
         self.assertNotIn("rollover_s_85_1_5", r["usa"].stderr)
         self.assertIn("rollover_s_85_1_5", r["canada"].stderr)

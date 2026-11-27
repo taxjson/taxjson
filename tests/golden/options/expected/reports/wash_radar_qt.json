@@ -1,5 +1,8 @@
 {
   "account": "qt",
+  "account_names": [
+    "qt"
+  ],
   "as_of_date": "<stamp>",
   "country": "canada",
   "generated_at": "<stamp>",

@@ -4,6 +4,87 @@
   "coverage_failures": [],
   "events": [
     {
+      "account": "margin",
+      "cost": 0.0,
+      "date": "2024-04-01",
+      "date_settle": "2024-04-03",
+      "days_held": 19814,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "failures": [],
+      "fx": {
+        "book_net": 943.65,
+        "computed_net": 943.65,
+        "from": "USD",
+        "nominal_net": 699.0,
+        "priced_by_fill": false,
+        "rate": 1.35,
+        "rate_date": "2024-04-03",
+        "rate_kind": "exact",
+        "rate_source_date": "2024-04-03",
+        "ties": true,
+        "to": "CAD"
+      },
+      "gain": 943.65,
+      "grant": false,
+      "id": "41e9bd4a3d5e1884",
+      "is_option": false,
+      "is_wash_sale": false,
+      "manual_reporting": true,
+      "mapping": "unchanged",
+      "permanently_disallowed": 0.0,
+      "proceeds": 943.65,
+      "qty": 50.0,
+      "raw_gain": 943.65,
+      "replacements": [],
+      "sources": [
+        {
+          "file": "margin_ib.json (ib_demo.csv, ib_extra.csv)",
+          "row": {
+            "account": "margin",
+            "action": "BUYSELL",
+            "broker_basis": "600.00 USD",
+            "commission": 0.0,
+            "corp_election": "",
+            "corp_event_id": "",
+            "currency": "USD",
+            "date": "2024-04-01",
+            "date_settle": "2024-04-03",
+            "description": "OLDCO",
+            "fee": 1.0,
+            "gross_amount": 700.0,
+            "id": "41e9bd4a3d5e1884",
+            "net_amount": 699.0,
+            "open_close": "C",
+            "price": 14.0,
+            "proceeds": 0.0,
+            "quantity": -50.0,
+            "source": "ib_extra.csv",
+            "source_account": "4a8fee2110",
+            "symbol": "OLDCO.US",
+            "symbol_new": "",
+            "time": "10:00:00",
+            "type": ""
+          }
+        }
+      ],
+      "symbol": "OLDCO.US",
+      "term": null,
+      "tie_out": {
+        "manual": true,
+        "mismatched": [],
+        "records": 1,
+        "ties": null
+      },
+      "trace": [
+        "# --- ACB CALCULATION TRACE: OLDCO.US ---",
+        "# 2024-04-01 OPENING_BALANCE    50.0000 | Missing history (bought before the data) \u2014 cost UNKNOWN until the pool drains to zero",
+        "# 2024-04-01 BUYSELL   -50.0000 @ 18.9000 | Fee: 1.3500 | Proceeds:   943.6500 | Cost_Basis:     0.0000 | Gain:   943.6500 | Gain/Sh: 18.8730"
+      ],
+      "warnings": []
+    },
+    {
       "account": "qt",
       "cost": 18231.6825,
       "date": "2024-05-10",
@@ -1239,9 +1320,9 @@
   ],
   "failed": false,
   "manual_reporting": {
-    "events": 0,
-    "proceeds": 0,
-    "qty": 0
+    "events": 1,
+    "proceeds": 943.65,
+    "qty": 50.0
   },
   "not_audited": [],
   "pool_other_rows": {

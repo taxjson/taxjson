@@ -39,7 +39,10 @@ GOLDEN = _paths.FIXTURES / "technicals" / "demo.json"
 FETCHED = "2025-01-03"           # the day the made-up cache was "fetched"
 INDEX = "^ZZQX"                  # a made-up index, the benchmark
 NO_QUOTE = "PARNT.US"            # the demo's made-up listing: no history
-SHORT = "SAMPG.US"               # the demo's other: 120 sessions, a day old
+# The holding given a short history: 120 sessions, a day old. (It was the
+# demo's SAMPG.US, held short by a sale the broker codes closing: that
+# sale is reported by hand now and opens no position, TJ-5349.)
+SHORT = "INTC.US"
 _WIDTH = CapturedWidth()
 _DEMO = {}
 
@@ -211,7 +214,7 @@ class TestTheViews(unittest.TestCase):
         head = next(ln for ln in out.splitlines() if ln.startswith("SYMBOL"))
         self.assertEqual(head.split(), ["SYMBOL", "QTY", "LAST", "DATE",
                                         "SMA20", "SMA50", "SMA200", "RSI",
-                                        "BETA", "ALPHA"])
+                                        "ATR%", "BETA", "ALPHA"])
         rows = {ln.split()[0]: ln for ln in out.splitlines()
                 if ln.split() and ln.split()[0] in _DEMO["held"]}
         self.assertEqual(set(rows), set(_DEMO["held"]))
@@ -231,14 +234,15 @@ class TestTheViews(unittest.TestCase):
             f"! DATE marked *: last close older than 2025-01-02 for 1 symbol "
             f"({SHORT}) — tjs technicals --details",
             # The index is in CAD (_cache_doc): the US listings with a beta.
-            "! 3 rows not in CAD, the benchmark's currency: BETA and ALPHA "
+            "! 2 rows not in CAD, the benchmark's currency: BETA and ALPHA "
             "include the exchange rate's moves"])
         self.assertIn("More: tjs technicals --details", out)
         self.assertNotIn("OTHER STATISTICS", out)
         assert_concise(self, out, r.stderr,
                        legend=["SMA: % from the 20/50/200-close mean",
                                "BETA: cov/var"])
-        self.assertIn("Blank: too little history, or not computable.", out)
+        self.assertIn("RSI(14), ATR(14) % of LAST: Wilder. Blank: too little "
+                      "history.\n", out)
 
     def test_details(self):
         r = _tjs(_DEMO["root"], "technicals", "--benchmark", INDEX,
@@ -254,8 +258,8 @@ class TestTheViews(unittest.TestCase):
         self.assertIn("- Left out, option contracts: ", r.stdout)
         self.assertIn("- Left out, crypto: ", r.stdout)
         self.assertIn(f"{INDEX} (benchmark)", r.stdout)
-        for name in ("LAST", "SMA20, SMA50, SMA200", "RSI", "BETA", "ALPHA",
-                     "HIGH52, LOW52", "VOL", "1M, 3M, 1Y", "MAXDD", "ATR14",
+        for name in ("LAST", "SMA20, SMA50, SMA200", "RSI", "ATR%", "BETA",
+                     "ALPHA", "HIGH52, LOW52", "VOL", "1M, 3M, 1Y", "MAXDD",
                      "AVGVOL20", "Blank"):
             self.assertIn(f"\n- {name}: ", r.stdout)
         self.assertIn("the last 253 closes (252 returns)", r.stdout)
@@ -357,7 +361,7 @@ class TestTheViews(unittest.TestCase):
         self.assertNotIn("BETA: cov/var", r.stdout)
         head = next(ln for ln in r.stdout.splitlines()
                     if ln.startswith("SYMBOL"))
-        self.assertEqual(head.split()[-1], "RSI")
+        self.assertEqual(head.split()[-2:], ["RSI", "ATR%"])
         # Offline: named with the holdings TAXJSON_OFFLINE left without.
         self.assertIn(f"! TAXJSON_OFFLINE set: {len(_DEMO['cache']) - 1} "
                       f"series cached {FETCHED}, 2 uncached ({NO_QUOTE} +1 "
@@ -421,10 +425,133 @@ class TestTheViews(unittest.TestCase):
         self.assertEqual(json.loads(out)["rows"], [])
 
 
+_MAIN_HEADS = ["SYMBOL", "QTY", "LAST", "DATE", "SMA20", "SMA50", "SMA200",
+               "RSI", "ATR%", "BETA", "ALPHA"]
+
+
+def _view(width: str):
+    """The default view with the benchmark at TAXJSON_WIDTH `width`: (its
+    stdout, the table's heading line, its rule line)."""
+    r = _tjs(_DEMO["root"], "technicals", "--benchmark", INDEX,
+             env_extra={"TAXJSON_WIDTH": width})
+    assert r.returncode == 0, r.stderr
+    lines = r.stdout.splitlines()
+    i = next((k for k, ln in enumerate(lines) if ln.startswith("SYMBOL")),
+             None)
+    return (r.stdout, "" if i is None else lines[i],
+            "" if i is None else lines[i + 1])
+
+
+class TestATRInTheDefaultTable(unittest.TestCase):
+    """ATR% (Wilder's ATR(14) as a % of LAST, lib/technicals atr_pct) is a
+    column of the default table, after RSI, at 2 places and unsigned; the
+    --details table no longer has it (it was ATR14 there); --json keeps
+    the key `atr14_pct` and its figures (backlog TJ-5362)."""
+
+    @staticmethod
+    def _cell(head: str, line: str, name: str) -> str:
+        """The right-aligned cell under the heading `name` ("" blank)."""
+        end = head.index(name) + len(name)
+        if len(line) < end or line[end - 1] == " ":
+            return ""
+        return line[:end].split()[-1]
+
+    def test_after_rsi_in_the_default_table(self):
+        out, head, _rule = _view("100")
+        self.assertEqual(head.split(), _MAIN_HEADS)
+        self.assertNotIn("ATR14", out)
+        # The legend says what ATR% is and what a blank means, within
+        # the 100 columns of the concise view.
+        legend = next(ln for ln in out.splitlines() if ln.startswith("SMA: "))
+        self.assertIn("ATR(14) % of LAST: Wilder.", legend)
+        self.assertIn("Blank: too little history.", legend)
+        self.assertLessEqual(len(legend), 100)
+        j = json.loads(_tjs(_DEMO["root"], "technicals", "--benchmark", INDEX,
+                            "--json").stdout)
+        atr = {x["symbol"]: x["stats"]["atr14_pct"] for x in j["rows"]}
+        rows = {ln.split()[0]: ln for ln in out.splitlines()
+                if ln.split() and ln.split()[0] in atr}
+        self.assertEqual(set(rows), set(atr))
+        for sym, want in atr.items():
+            with self.subTest(symbol=sym):
+                got = self._cell(head, rows[sym], "ATR%")
+                if want is None:
+                    self.assertEqual(got, "")
+                else:
+                    self.assertRegex(got, r"^\d+\.\d\d$")
+                    self.assertAlmostEqual(float(got), want,
+                                           delta=0.005 + 1e-9)
+        # The short series has the 15 sessions it needs; the row with no
+        # history has none.
+        self.assertIsNotNone(atr[SHORT])
+        self.assertIsNone(atr[NO_QUOTE])
+
+    def test_not_in_the_details_table(self):
+        r = _tjs(_DEMO["root"], "technicals", "--benchmark", INDEX,
+                 "--details")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        part = r.stdout.split("\nOTHER STATISTICS\n", 1)[1].split(
+            "\nHISTORY\n", 1)[0]
+        head = next(ln for ln in part.splitlines() if ln.startswith("SYMBOL"))
+        self.assertEqual(head.split(), ["SYMBOL", "HIGH52", "LOW52", "VOL",
+                                        "1M", "3M", "1Y", "MAXDD",
+                                        "AVGVOL20"])
+        self.assertNotIn("ATR", part)
+        self.assertNotIn("ATR14", r.stdout)
+        self.assertEqual(r.stdout.count("\n- ATR%: Wilder's average true "
+                                        "range over 14 sessions"), 1)
+        main = next(ln for ln in r.stdout.splitlines()
+                    if ln.startswith("SYMBOL"))
+        self.assertEqual(main.split(), _MAIN_HEADS)
+
+    def test_json_keeps_its_key_and_figures(self):
+        from taxjson.lib import technicals as T
+        r = _tjs(_DEMO["root"], "technicals", "--benchmark", INDEX, "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        doc = json.loads(r.stdout)
+        self.assertIsNone(_close(doc, json.loads(
+            GOLDEN.read_text(encoding="utf-8"))))
+        for row in doc["rows"]:
+            self.assertEqual(sorted(row["stats"]), sorted(T.MIN_SESSIONS))
+        self.assertIn("atr14_pct", doc["min_sessions"])
+        self.assertEqual(doc["windows"]["atr"], T.ATR_PERIOD)
+        # No text heading in the document.
+        self.assertNotIn("ATR%", r.stdout)
+        self.assertNotIn("ATR14", r.stdout)
+
+    def test_nothing_left_out_at_100_117_120(self):
+        for width in ("100", "117", "120"):
+            with self.subTest(width=width):
+                out, head, _rule = _view(width)
+                self.assertEqual(head.split(), _MAIN_HEADS)
+                self.assertNotIn("left out of the table", out)
+
+    def test_a_column_the_width_leaves_out_is_named(self):
+        """Narrower than the whole table: QTY goes first, then LAST, each
+        named in an `! ` line with --json, which has them; narrower still,
+        one record a row with every column, and no such line."""
+        _out, _head, rule = _view("0")
+        width = len(rule) - 1
+        for gone in (["QTY"], ["QTY", "LAST"]):
+            with self.subTest(gone=gone):
+                out, head, rule = _view(str(width))
+                self.assertEqual(head.split(),
+                                 [h for h in _MAIN_HEADS if h not in gone])
+                self.assertIn(f"! {' and '.join(gone)} left out of the table "
+                              f"at this width — tjs technicals --json",
+                              _acts(out))
+                width = len(rule) - 1
+        out, head, _rule = _view(str(width))
+        self.assertEqual(head, "")
+        self.assertNotIn("left out of the table", out)
+        self.assertRegex(out, r"(?m)\satr% \d+\.\d\d(\s|$)")
+        self.assertRegex(out, r"(?m)^  qty ")
+
+
 class TestBlanksTheDataDoesNotAllow(unittest.TestCase):
     def test_a_flat_series_without_high_low_or_volume(self):
         """A listing whose close never moves, with no high, low or volume:
-        RSI, ATR14 and AVGVOL20 are blank and NOTES says why; as the
+        RSI, ATR% and AVGVOL20 are blank and NOTES says why; as the
         benchmark, its returns do not vary, so every BETA is blank."""
         root = _copy()
         doc = dict(_DEMO["cache"])
@@ -434,7 +561,7 @@ class TestBlanksTheDataDoesNotAllow(unittest.TestCase):
         _write_cache(root, doc)
         r = _tjs(root, "technicals", "--benchmark", INDEX, "--details")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn(f"- {flat}: blank: RSI: no close moved; ATR14: fewer "
+        self.assertIn(f"- {flat}: blank: RSI: no close moved; ATR%: fewer "
                       f"than 15 sessions in a row with a high and a low; "
                       f"AVGVOL20: a session of the last 20 has no volume.",
                       r.stdout)

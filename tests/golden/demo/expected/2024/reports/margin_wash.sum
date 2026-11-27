@@ -3,8 +3,7 @@
 ======================================================================
 note: FX: Bank of Canada Valet for <n> dates, Yahoo fallback for 0
 OK: <merged>: 8 transactions validated.
-warning: ATTENTION: short: SAMPG.US (margin): the broker codes the sale on 2024-03-18 CLOSING (IB code C, IB Basis 301.00 USD), but the data holds no position to close — it is booked as a new short until the missing purchase is supplied (`tjs find-missing-history --write-missing-history` writes its .tt OPENING cost=unknown line).
-NOTE: 1 (symbol, account) pair(s) go short in this data: SAMPG.US/margin. 0 are in registered accounts. If any of these are sales of shares bought before your files start (no purchase in the data) rather than real short trades, open the units held before the data with .tt OPENING cost=unknown lines: `tjs find-missing-history --write-missing-history` in a project writes them (`tjs run` reads them).
+warning: ATTENTION: short: SAMPG.US (margin): the broker codes the sale on 2024-03-18 CLOSING (IB code C, IB Basis 301.00 USD), but the data holds no position to close — it is reported by hand, out of the totals, and adds no short, until the missing purchase is supplied (the earlier export, or a .tt purchase line: `tjs find-missing-history --write-purchases` drafts one from the broker's own cost).
 note: 1 merger/spin-off Corporate Action row(s) in ib_scenarios_demo.csv are booked by taxjson-corp-actions after the tax election (`tjs run` runs it), not by this parser.
 note: ib_scenarios_demo.csv: 16 recognized non-event row(s) not translated — Corporate Actions spin-off row (booked by taxjson-corp-actions after the election): 1, Statement metadata row: 2, section Account Information (not translated): 3, section Cash Report (not translated): 6, section Financial Instrument Information (not translated): 4.
   ib_scenarios_demo.csv: 6 tax objects
@@ -62,6 +61,12 @@ GRAND TOTAL (GAIN+DIV+PIL):            942.23 CAD
 TOTAL TRADING FEES PAID:                 8.17 CAD
   (OPTION TRADING FEES):                 1.42 CAD
 
+MANUAL REPORTING REQUIRED — 1 sale(s) with no purchase in your files (unknown cost, .tt OPENING cost=unknown), proceeds 498.15 CAD: NOT in the rows or totals above. Report each by hand once its cost is known (`tjs find-missing-history`).
+SYMBOL    DATE        UNITS  PROCEEDS  ACCOUNT
+----------------------------------------------
+SAMPG.US  2024-03-18     20    498.15  margin
+
+
 INCOME SUMMARY — CAD, year 2024, sorted by ticker
 
 SYMBOL                            GROSS DIV              PIL          TAX W/H       NET INCOME
@@ -79,5 +84,4 @@ TOTAL NET INCOME                                                                
 TICKER                          QTY  COST/SHARE    TOTAL COST  CUR
 ------------------------------------------------------------------
 PARNT.US                        100     54.0135       5401.35  CAD
-SAMPG.US                        -20     24.9075       -498.15  CAD
 SAMPW250117C00030000.US          -1      2.0108       -201.08  CAD

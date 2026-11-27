@@ -83,7 +83,7 @@ class TestCliMainNonInteractive(unittest.TestCase):
             result = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_corp_actions",
                  "--brokerage", "rbc_direct", "--country", "canada",
-                 "--account-name", "margin", "--manifest", str(manifest),
+                 "--account-name", "margin", "--elections", str(manifest),
                  str(csv)],
                 cwd=REPO_ROOT, capture_output=True, text=True,
                 stdin=subprocess.DEVNULL)

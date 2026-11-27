@@ -37,6 +37,7 @@ from functools import lru_cache
 from pathlib import Path
 from unittest import mock
 import _paths
+from _support.suite_history_pages import RENAMED_IN, history_releases, renamed_ok
 
 ROOT = _paths.REPO
 
@@ -420,16 +421,25 @@ class TestReferences(unittest.TestCase):
                 _code_text.cache_clear()
 
     def test_every_quoted_command_exists(self):
+        from taxjson.cli.parser import RENAMED_COMMANDS
+        self.assertEqual(set(RENAMED_IN), set(RENAMED_COMMANDS))
         cmds = _commands()
         bad = []
         for p in _referencing_files():
-            for n, line in enumerate(_read(p).splitlines(), 1):
+            lines = _read(p).splitlines()
+            fixed = history_releases(p, lines)
+            for n, line in enumerate(lines, 1):
                 # A reference's symbols are code text, not commands.
                 line = _REF.sub(lambda m: "`" + m.group(1) + "`", line)
                 for tok in _TICKS.findall(line):
                     m = re.match(r"^(?:tjs|taxjson)\s+(?:-C\s+\S+\s+)?([a-z][a-z0-9-]*)", tok)
-                    if m and m.group(1) not in cmds:
-                        bad.append(f"{p}:{n}: `{tok}` — no command {m.group(1)!r}")
+                    if not m or m.group(1) in cmds:
+                        continue
+                    if renamed_ok(m.group(1), fixed[n - 1]):
+                        continue
+                    bad.append(f"{p}:{n}: `{tok}` — no command {m.group(1)!r}"
+                               + (f" (renamed {RENAMED_COMMANDS[m.group(1)]!r})"
+                                  if m.group(1) in RENAMED_COMMANDS else ""))
         self.assertEqual(bad, [])
 
 

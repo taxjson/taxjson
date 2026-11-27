@@ -150,8 +150,8 @@ def share_exchange_message(x: Dict[str, Any]) -> Tuple[str, List[str], str]:
     head = (f"share exchange: {x['symbol']}: the {x['loss_date']} loss is not "
             f"tested against the {x['date']} exchange of {x['old']} "
             f"({x['account']})")
-    elect = (f"`tjs elect {x['account']} --set {x['event']}=ignore`"
-             if x.get("event") else f"`tjs elect {x['account']}`")
+    elect = (f"`tjs elections {x['account']} --set {x['event']}=ignore`"
+             if x.get("event") else f"`tjs elections {x['account']}`")
     why = (f"The {x['old']} shares became {x['symbol']} shares inside the "
            f"loss's 30-day window, by a share exchange booked as a cost "
            f"carry-over, which is not counted as an acquisition for the "

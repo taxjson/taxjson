@@ -255,7 +255,18 @@ class TestUnbackedCovers(unittest.TestCase):
                    currency="USD", open_close="C")]
         got = detect_unbacked_covers(txs)
         self.assertEqual([(c.symbol, c.marker) for c in got],
-                         [("XYZ.US", "IB code C")])
+                         [("XYZ.US", "code C")])
+
+    def test_rbc_buy_back_marked_with_its_own_words(self):
+        # RBC writes no code C: its row says CLOSE CONTRACT (TJ-5361).
+        from taxjson.lib.missing_history import detect_unbacked_covers
+        txs = [_tx("BUYSELL", "2025-06-06", "XYZ250620C00050000.US", 3, 0.9,
+                   -282.45, currency="USD", open_close="C",
+                   description="CALL XYZ 06/20/25 50 XYZ CORP DA CLOSE "
+                               "CONTRACT")]
+        got = detect_unbacked_covers(txs, include_options=True)
+        self.assertEqual([(c.symbol, c.marker) for c in got],
+                         [("XYZ250620C00050000.US", "CLOSE CONTRACT")])
 
     def test_plain_buy_is_not_a_cover(self):
         from taxjson.lib.missing_history import detect_unbacked_covers

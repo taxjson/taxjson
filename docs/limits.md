@@ -22,7 +22,7 @@ are in [KNOWN_ISSUES.md](../KNOWN_ISSUES.md); problems with a known fix are in
 - **Runs locally; no web UI, no cloud.** Your files stay on your computer. `tjs run` reaches the network
   only for FX rates (Bank of Canada, Yahoo Finance), missing crypto prices and crypto-send values, and
   the closing price of an in-kind move with no value of its own (Yahoo Finance), each on a cache miss; the commands that quote today's prices (`tjs harvest`, `tjs tips --online`) ask Yahoo Finance
-  too, and `tjs technicals` asks it for a year of each holding's daily closes (once a day, cached in work/). `TAXJSON_OFFLINE=1` forbids all of it. Broker download (`tjs fetch`) is the separate taxjson-fetch
+  too, and `tjs technicals` and `tjs stress` ask it for a year of each holding's daily closes (once a day, cached in work/; `stress`: an option's underlying's, never an option price). `TAXJSON_OFFLINE=1` forbids all of it. Broker download (`tjs fetch`) is the separate taxjson-fetch
   plugin (Questrade and IBKR Flex). SECURITY.md lists every network call.
 - **Only the listed brokers.** Interactive Brokers, Questrade, RBC Direct Investing, Webull, Kraken and
   Coinbase have parsers. Any other broker's CSV is read through a column mapping you write (the generic
@@ -438,10 +438,31 @@ year. taxjson keeps the pooled reading.
 
 #### RESP accounts are treated as affiliated
 
-Every `type = "sheltered"` account counts as you for the superficial-loss rule. CRA treats an RRSP or TFSA
-as affiliated with its holder; whether an RESP subscriber is affiliated is not settled. taxjson takes the
-conservative view: an RESP purchase held at the window's end denies the loss permanently.
-**Instead:** if you take the other position, adjust by hand.
+Every `type = "sheltered"` account counts as you for the superficial-loss rule. For an RESP that is the
+CRA's position: the subscriber is affiliated with the RESP trust as a majority-interest beneficiary, a
+question of fact, which given the subscriber's right to a refund of contributions and to accumulated
+income payments the CRA expects in most cases (2010-0352921E5; 2012-0453181C6). So an RESP purchase held
+at the window's end denies the loss for good, and so does a contribution in kind at a loss while the plan
+still holds the shares on day 30: the plan's own acquisition is the replacement (CA-INKIND-03,
+CA-INKIND-04). taxjson cannot tell a plan whose terms leave you no majority interest.
+**Instead:** if your plan's facts differ, an `ALLOWLOSS` line for the sale (CA-SL-18) sets the denial aside.
+
+#### An RDSP held for someone else, or a PRPP, is treated as yours
+
+taxjson has no field for who a plan's beneficiary is: an RDSP or PRPP account is treated like your own
+RRSP. Two cases probably deny too much:
+- an RDSP whose beneficiary is neither you nor your spouse (a parent's plan for a child): a contribution in
+  kind at a loss is nil, though s.40(2)(g)(iv)(A) reaches a plan "under which the taxpayer is a
+  beneficiary", and a purchase in it denies your loss, though neither the child nor, very probably,
+  the plan's trust is affiliated with you (s.251.1(1); 2012-0453181C6 names the beneficiary);
+- a PRPP: a contribution in kind at a loss is an ordinary one (s.40(2)(g)(iv) does not name a PRPP), and
+  the plan's acquisition denies it as a superficial loss, though a member of a pooled plan very probably
+  holds no majority interest in its trust and is not affiliated with it (no CRA document says either way).
+
+Both are rare: most RDSP issuers take cash only, and a PRPP is funded from pay.
+**Instead:** a superficial loss (the PRPP, a purchase in the RDSP): an `ALLOWLOSS` line for the sale
+(CA-SL-18). An RDSP contribution's nil loss has no line: adjust by hand.
+**Code:** `src/taxjson/lib/in_kind.py` — `CA_LOSS_DENIED_PLANS`, `row_type`
 
 #### Purchases by an affiliated person
 

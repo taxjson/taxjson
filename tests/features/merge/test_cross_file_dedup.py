@@ -149,7 +149,7 @@ class TestElectionIdsSurviveRename(unittest.TestCase):
             [ev] = parse_ib_corporate_actions(csv_p, account='rrsp')
             old = _old_scheme_id(ev, 'rrsp')
             self.assertNotEqual(old, ev.event_id)
-            man_p = td / "manifest.json"
+            man_p = td / "elections.json"
             man_p.write_text(json.dumps({"elections": {old: {
                 "summary": ev.summary(), "election": "rollover_s_85_1_5",
                 "notes": ""}}}))
@@ -157,7 +157,7 @@ class TestElectionIdsSurviveRename(unittest.TestCase):
             r = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_corp_actions",
                  "--brokerage", "ib", "--account-name", "retireA",
-                 "--country", "canada", "--manifest", str(man_p),
+                 "--country", "canada", "--elections", str(man_p),
                  "--no-input", "--pending-json", str(pend), str(csv_p)],
                 capture_output=True, text=True, env=_env())
             self.assertEqual(r.returncode, 0, r.stderr)

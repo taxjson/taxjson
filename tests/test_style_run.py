@@ -247,7 +247,7 @@ class TestRunStyle(unittest.TestCase):
                 r = p.run("run", "--no-input")
                 self.assertEqual(r.returncode, 3, r.stderr)
                 assert_styled(self, r.stdout)
-                assert_styled(self, r.stderr, allow=("tjs elect ",))
+                assert_styled(self, r.stderr, allow=("tjs elections ",))
 
     def test_captured_stage_text_is_unchanged(self):
         # The .diag keeps the one-line ATTENTION text the console wraps.

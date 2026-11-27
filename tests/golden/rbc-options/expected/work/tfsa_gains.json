@@ -1,0 +1,99 @@
+{
+  "by_ticker": {
+    "ZZQV250321C00013500.TO": {
+      "hold_days": [
+        0
+      ],
+      "total_cost": -21.25,
+      "total_div": 0.0,
+      "total_gain": 21.25,
+      "total_pil": 0.0,
+      "total_proceeds": 0.0,
+      "trade_count": 1
+    }
+  },
+  "grant_nil_closes": [
+    {
+      "account": "tfsa",
+      "date": "2025-03-21",
+      "date_settle": "2025-03-21",
+      "grant_closed": {
+        "2025": {
+          "premium": 21.25,
+          "units": 1.0
+        }
+      },
+      "symbol": "ZZQV250321C00013500.TO"
+    }
+  ],
+  "inventory": [
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "last_acq_date": "2025-02-03",
+      "last_acq_settle": "2025-02-04",
+      "position_start_date": "2025-02-03",
+      "qty": 100.0,
+      "symbol": "ZZQV.TO",
+      "total_cost": 1282.0
+    }
+  ],
+  "inventory_year_end": [
+    {
+      "currency": "CAD",
+      "deferred_wash": 0.0,
+      "qty": 100.0,
+      "symbol": "ZZQV.TO",
+      "total_cost": 1282.0
+    }
+  ],
+  "option_replacement_warnings": [],
+  "summary": {
+    "option_buyback_loss_superficial": false,
+    "option_grant_since": 2024,
+    "option_premium_timing": "grant",
+    "tax_date_basis": "settle",
+    "total_disallowed": 0,
+    "total_fees_by_currency": {
+      "CAD": {
+        "options": 7.75,
+        "stocks": 8.0,
+        "total": 15.75
+      }
+    },
+    "total_gain": 21.25,
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1,
+    "year": "2025"
+  },
+  "transactions": [
+    {
+      "account": "tfsa",
+      "commission": 0.0,
+      "cost": -21.25,
+      "currency": "CAD",
+      "date": "2025-02-03",
+      "date_settle": "2025-02-04",
+      "days_held": 0,
+      "deemed": false,
+      "direction": "SHORT",
+      "disallowed_amount": 0.0,
+      "fee": 7.75,
+      "gain": 21.25,
+      "grant": true,
+      "id": "71fd2cde9851e1e8",
+      "is_option": true,
+      "is_wash_sale": false,
+      "note": "WRITE \u2014 premium recognised on grant (ITA s.49(1))",
+      "permanently_disallowed": 0.0,
+      "proceeds": 0.0,
+      "qty": 1.0,
+      "raw_gain": 21.25,
+      "replacement_lot_ids": [],
+      "symbol": "ZZQV250321C00013500.TO",
+      "term": null,
+      "wash_replacements": null
+    }
+  ],
+  "wash_sales": []
+}

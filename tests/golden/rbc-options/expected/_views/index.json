@@ -1,0 +1,38 @@
+[
+ {
+  "view": "sum",
+  "cwd": ".",
+  "exit": 0,
+  "width": 110
+ },
+ {
+  "view": "sum --json",
+  "cwd": ".",
+  "exit": 0,
+  "width": 110
+ },
+ {
+  "view": "form-export",
+  "cwd": ".",
+  "exit": 0,
+  "width": 110
+ },
+ {
+  "view": "option-yield 2025",
+  "cwd": ".",
+  "exit": 0,
+  "width": 110
+ },
+ {
+  "view": "option-boundary --details",
+  "cwd": ".",
+  "exit": 0,
+  "width": 110
+ },
+ {
+  "view": "sanity",
+  "cwd": ".",
+  "exit": 0,
+  "width": 110
+ }
+]

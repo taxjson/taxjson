@@ -9,7 +9,7 @@ cli/books `cmd_clean`).
   Files of the user's in work/ and reports/ (the 2026-11-22 review's set)
   stay, named in the default output and counted nowhere.
 - A planted project of year folders (no run needed): every protected kind
-  survives (the settings, maps, inputs with their .tt, manifest.json,
+  survives (the settings, maps, inputs with their .tt, elections.json,
   sends.json and .bak files, holdings/, slips, filed/, snapshot/,
   inputs_redact/, checklist.json, an older taxjson's export/), and so does
   what work/ keeps (a lock, the slip-key salt, watch's baseline, the price
@@ -81,12 +81,17 @@ _NOT_OURS = ("work/notes.txt", "work/My Sheet.xlsx", "work/draft.tt",
 
 
 def _tree(root: Path) -> dict:
-    """Every entry under `root`: a file's bytes, a link's target, a folder."""
+    """Every entry under `root`: a file's bytes, a link's target, a folder;
+    not the command logs (a project's or a year's logs/: each command
+    writes its own)."""
     out = {}
     for dirpath, dirs, files in os.walk(root):
         for n in dirs + files:
             p = Path(dirpath) / n
             rel = p.relative_to(root).as_posix()
+            parts = rel.split("/")
+            if parts[0] == "logs" or (parts[1:2] == ["logs"] and parts[0].isdigit()):
+                continue
             if p.is_symlink():
                 out[rel] = ("link", os.readlink(p))
             elif p.is_dir():
@@ -233,7 +238,7 @@ class TestWhatStaysAndWhatGoes(unittest.TestCase):
         y = root / "2024"
         own = [
             y / "ticker.map", root / "tobase.map", y / "checklist.json",
-            root / "inputs/margin/manifest.json", root / "inputs/margin/sends.json",
+            root / "inputs/margin/elections.json", root / "inputs/margin/sends.json",
             root / "inputs/margin/trades.tt.bak", root / "inputs/margin/crypto_sends.tt",
             y / "inputs/slips/slips.toml", y / "holdings/margin.toml",
             y / "filed/2024.json", y / "filed/2024/reports/margin.sum",
@@ -246,7 +251,9 @@ class TestWhatStaysAndWhatGoes(unittest.TestCase):
             y / "work/.watch_state.json", y / "work/.close_cache.json",
             y / "work/.price_cache.json", y / "work/.history_cache.json",
             y / "work/crypto_sends/margin/crypto_sends.tt",
-            y / "work/margin_manifest.json", y / "work/compare/base/snapshot.json",
+            # (the legacy elections file of an account no longer named:
+            # a named one's stops every command until `tjs migrate`)
+            y / "work/zgone_manifest.json", y / "work/compare/base/snapshot.json",
             y / "reports/notes.txt", y / "reports/exports/mine.csv",
             root / "exports/mine.txt",
         ]
@@ -282,7 +289,7 @@ class TestWhatStaysAndWhatGoes(unittest.TestCase):
             self.assertFalse(os.path.lexists(p), p)
         # What work/ keeps is said, with why (--details).
         for name in (".slip_key_salt", ".watch_state.json", "compare/base/",
-                     "reports/notes.txt", "margin_manifest.json"):
+                     "reports/notes.txt", "zgone_manifest.json"):
             self.assertIn(name, r.stderr)
         self.assertIn("2024 is filed", r.stderr)
         self.assertIn("export/", r.stderr)

@@ -190,7 +190,7 @@
   },
   "checklist --json",
   "ticker-map --suggest --json",
-  "elect --json",
+  "elections --json",
   "div-estimate --date 2024-12-31 --json",
   "win-rates --json",
   "events all --json",

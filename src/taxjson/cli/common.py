@@ -4,11 +4,16 @@ import re
 import sys
 from datetime import date as date_cls
 from pathlib import Path
-from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple
+from typing import (Any, Callable, Dict, List, NamedTuple, Optional, Set,
+                    Tuple, Union)
 
 from taxjson.project.accounts import account_of, accounts_of, estimate_of, sheltered_by_name
 from taxjson.project.settings import Settings, settings_of
 from taxjson.lib import project_layout as _PL
+from taxjson.lib.account_list import (
+    AccountListError, is_account_list, names_of, parse_accounts,
+    refusal as account_list_refusal, unknown_accounts_text,
+)
 from taxjson.lib import out as _out
 from taxjson.lib.project_layout import _GAINS_ALL_SUFFIX
 from taxjson.lib.pipeline import income_dating_flags, option_timing_flags
@@ -24,6 +29,10 @@ from taxjson.pipeline.config import (
 )
 from taxjson.pipeline.diagnostics import _count_noun
 from taxjson.pipeline import stage_table as ST
+from taxjson.pipeline.basis_label import (
+    basis_label as _basis_label, _denials_checked, record_full_history_checks,
+    _registered_book, _sheltered_flags,
+)
 from taxjson.pipeline.inputs import _base, _loss_override_flags, _tax_date
 from taxjson.pipeline.messages import (
     _cmd_prog, _current_cmd, _die, _die_input, _out_relpath, _say,
@@ -176,22 +185,34 @@ def _shared_inputs_note(root: Path, path: Path, prog: str) -> None:
               *_frozen_years_apart(root), prog=prog)
 
 
-def _frozen_years_apart(root: Path) -> List[str]:
+def _frozen_years_apart(root: Path, elections: bool = False) -> List[str]:
     """One line naming the filed years beside `root` that close-year
     froze (lib/project_layout.frozen_project): they read their own copy
     of the exports, so a file saved in the shared folder never reaches
-    them (workflow audit 2026-10-22). [] when there is none."""
+    them (workflow audit 2026-10-22). With `elections`, the name each
+    reads its elections under: manifest.json for a year frozen before
+    v3.0.0 (lib/project_layout.elections_file), so a corrected copy is
+    never put in beside it under the other name. [] when there is none."""
     try:
-        yrs = [y for y, d in _PL.year_dirs(root.parent)
-               if _PL.frozen_project(d) and not _PL.shared_inputs(d)]
+        frozen = [(y, d) for y, d in _PL.year_dirs(root.parent)
+                  if _PL.frozen_project(d) and not _PL.shared_inputs(d)]
     except (OSError, _PL.LayoutError):
         return []
-    if not yrs:
+    if not frozen:
         return []
+    yrs = [y for y, _d in frozen]
+    old = [y for y, d in frozen if elections and _old_frozen_elections(d)]
+    name = ""
+    if old:
+        name = (f" (the elections as {_PL.OLD_ELECTIONS}"
+                + (f" in {', '.join(map(str, old))}" if len(old) < len(yrs)
+                   else "")
+                + f", the name {'it was' if len(old) == 1 else 'they were'}"
+                f" filed under)")
     return [f"Not {', '.join(map(str, yrs))} (filed, inputs frozen): "
             f"{'it reads its' if len(yrs) == 1 else 'each reads its'} own "
             f"copy — to amend a filed year, put the corrected file in "
-            f"its inputs/<account>/ and `tjs run` there."]
+            f"its inputs/<account>/{name} and `tjs run` there."]
 
 
 def _accounts_skipped_for_no_inputs(root: Path) -> set:
@@ -243,9 +264,14 @@ def _raise_requirements(root: Path, features: Tuple[str, ...] = (),
     done: Dict[str, List[str]] = {}
     for d in dirs:
         feats = tuple(f for f in features
-                      if f != "missing_history_tt"
-                      or not any(_os_lexists(d / n)
-                                 for n in MISSING_HISTORY_FILES))
+                      if (f != "missing_history_tt"
+                          or not any(_os_lexists(d / n)
+                                     for n in MISSING_HISTORY_FILES))
+                      # The project's own: only where it reads an
+                      # elections.json (never a year frozen with its
+                      # manifest.json).
+                      and (f != "elections_json"
+                           or _PL.holds_elections(d)))
         try:
             new = _REQ.raise_requirement(d, feats)
         except (OSError, ValueError) as e:
@@ -260,21 +286,56 @@ def _raise_requirements(root: Path, features: Tuple[str, ...] = (),
                      f"taxjson this layout runs on) in {', '.join(where)}")
 
 
+def _old_frozen_elections(d: Path) -> bool:
+    """`d` is a filed year with frozen inputs whose elections close-year
+    froze under the old name (inputs/<account>/manifest.json, no
+    elections.json): it reads that copy as frozen, so the rename asks
+    nothing of its taxjson.toml (lib/project_layout.elections_file)."""
+    if not _PL.frozen_project(d):
+        return False
+    acct = _PL.inputs_dir(d)
+    try:
+        names = {p.name for p in acct.glob("*/*")}
+    except OSError:
+        return False
+    return _PL.OLD_ELECTIONS in names and _PL.ELECTIONS not in names
+
+
 def _os_lexists(p: Path) -> bool:
     import os as _os
     return _os.path.lexists(p)
 
 
+def _listed_names(account: Any) -> Optional[Tuple[str, ...]]:
+    """names_of(account) for a helper only a converted command hands a
+    list (the advisories, the US-crypto rule, the leaps empty document,
+    `among=`): a string holding a comma is the raw ACCOUNT text, which
+    names_of reads as ONE name that matches nothing, so the helper would
+    answer silently for no account. A programming error: stopped."""
+    if is_account_list(account):
+        raise ValueError("internal: pass the names from _accounts, not "
+                         "the comma text")
+    return names_of(account)
+
+
 def _uncovered_sales(root: Path, cfg: Dict[str, Any],
-                     account: Optional[str] = None) -> List[Dict[str, Any]]:
+                     account: Any = None, *,
+                     missing_ok: bool = False) -> List[Dict[str, Any]]:
     """[{symbol, account, sales, proceeds, booked}] — the tax year's
     sales in taxable accounts with no purchase in the files that
     no .tt OPENING cost=unknown line covers (lib/first_run), with what the
     gains files did with them (`booked`, first_run.engine_booking:
     "open" — not in the totals —, "short_cover" or "matched"). []
-    outside a project or when the books cannot be read (advisory)."""
+    outside a project or when the books cannot be read (advisory).
+    `account`: None | a name | names (lib/account_list.names_of; ()
+    reads none); several: each named one with no book refused (exit 1)
+    unless `missing_ok`; the comma text: ValueError (_listed_names)."""
+    only = _listed_names(account)
     if not cfg:
         return []
+    if only is not None and not only:
+        return []
+    _require_named_books(root, only, missing_ok)
     try:
         from taxjson.lib import first_run as FR
         from taxjson.lib.country import settings_tax_date
@@ -302,16 +363,24 @@ def _uncovered_sales(root: Path, cfg: Dict[str, Any],
              "proceeds": r.in_year_proceeds,
              "booked": booked.get((r.candidate.symbol, r.candidate.account),
                                   FR.BOOKED_OPEN)}
-            for r in rows if not account or r.candidate.account == account]
+            for r in rows if only is None or r.candidate.account in only]
 
 
 def _unanswered_covers(root: Path, cfg: Dict[str, Any],
-                       account: Optional[str] = None) -> List[Any]:
+                       account: Any = None, *,
+                       missing_ok: bool = False) -> List[Any]:
     """The buys the broker codes as closing with no short held that no
     .tt short line answers (lib/first_run.unanswered_covers). [] outside
-    a project or when the books cannot be read (advisory)."""
+    a project or when the books cannot be read (advisory). `account`:
+    None | a name | names (lib/account_list.names_of; () reads none);
+    several: each named one with no book refused (exit 1) unless
+    `missing_ok`; the comma text: ValueError (_listed_names)."""
+    only = _listed_names(account)
     if not cfg:
         return []
+    if only is not None and not only:
+        return []
+    _require_named_books(root, only, missing_ok)
     try:
         from taxjson.lib import first_run as FR
         from taxjson.lib.country import settings_tax_date
@@ -331,7 +400,21 @@ def _unanswered_covers(root: Path, cfg: Dict[str, Any],
             country=settings.country or None, cache=root / "work")
     except Exception:                               # noqa: BLE001
         return []
-    return [c for c in covers if not account or c.account == account]
+    return [c for c in covers if only is None or c.account in only]
+
+
+def _require_named_books(root: Path, names: Optional[Tuple[str, ...]],
+                         missing_ok: bool = False) -> None:
+    """For two names or more, refuse each with no book in work/ (the
+    work/<account>_base.json first_run.load_books reads), exit 1: the
+    advisories read every book and would leave its rows out unsaid."""
+    if missing_ok or not names or len(names) < 2:
+        return
+    have = {p.name[:-len("_base.json")]
+            for p in _PL.book_files(root / "work")}
+    _require_listed(names, have, "books",
+                    fix="Run `tjs run` first (an account with no inputs "
+                        "has no books).")
 
 
 def _tx_period_cutoff(period: str):
@@ -554,17 +637,24 @@ def _capitalized_pil_shares(root: Path, accounts, usa: bool) -> Dict[Tuple[str, 
 _CAPITALIZED_LBL = "CAPITALIZED (§263(h), in the cover's cost):"
 
 
-def _require_books(root: Path, account: Optional[str] = None,
+def _require_books(root: Path, account: Any = None,
                    also: Tuple[str, ...] = ()) -> None:
     """Refuse a books view over a project with no books: never run
     (no work/), a run that died before any book was written, or an
     account with no book. spinoffs, splits, transfers, edge-cases and
     fees-sum printed an empty report ('No spin-offs', nine 'None.'
     sections) at rc 0 where their twins say 'run `tjs run` first'
-    (re-audit A2-0797, A2-1395)."""
+    (re-audit A2-0797, A2-1395). `account`: None | a name | names
+    (lib/account_list.names_of), each named one with no book refused
+    (exit 1); () names none, nothing to require. A string is one name,
+    never split: a command not converted passes its text whole, read as
+    before lists."""
     cache = root / "work"
     if not cache.is_dir():
         _die("no work/ — run `tjs run` first.")
+    asked = names_of(account)
+    if asked is not None and not asked:
+        return
     names = set(_discover_tx_accounts(cache)) | {
         p.name[:-len("_base.json")] for p in cache.glob("*_base.json")
         if not p.name.startswith(".")
@@ -574,11 +664,15 @@ def _require_books(root: Path, account: Optional[str] = None,
     # per-broker JSONs for fees-sum, transfer sidecars for transfers).
     extra = any(not p.name.startswith(".")
                 for g in also for p in cache.glob(g))
-    if account:
-        if account not in names:
-            _die(f"no books for account {account!r} in work/ — run "
+    if asked and len(asked) == 1:
+        if asked[0] not in names:
+            _die(f"no books for account {asked[0]!r} in work/ — run "
                  f"`tjs run` first (an account with no inputs has no "
                  f"books).")
+    elif asked:
+        _require_listed(asked, names, "books",
+                        fix="Run `tjs run` first (an account with no "
+                            "inputs has no books).")
     elif not names and not extra:
         _die("no books in work/ — run `tjs run` first (or the last "
              "run stopped before writing any; see its error).")
@@ -675,17 +769,21 @@ def _gains_all_file(root: Path, cache: Path, account: str,
     books hold, from the SAME consolidated base-currency book the tax
     year's gains are computed from (<account>_base.json: ticker.map's
     TOBASE pooling, per-transaction FX) through the gains engine with
-    no --year and the flags stage_account's gains stage passes, so the
-    rows inside the tax year equal the filing file's. Built for a
-    windowed view whose window reaches outside the tax year
-    (_window_gains_files), every time a command reads it: once per
-    command (`_built_this_command`), never from a record's word
+    no --year and the flags stage_account's gains stage passes, and the
+    registered accounts' book the run's pass reads (_registered_book), so
+    the rows inside the tax year equal the filing file's, denials
+    included. Built for a windowed view whose window reaches outside the
+    tax year (_window_gains_files), every time a command reads it: once
+    per command (`_built_this_command`), never from a record's word
     (TJ-4307). An account the run's cross-account
     pass blended with others is computed with them (_gains_all_blend):
     its cost pooled across them as the tax year's (TJ-0677). The
-    engine's superficial-loss / wash-sale denials are in it, across
-    those taxable accounts; a registered account's purchase is checked
-    for the tax year only. None without a base book."""
+    engine's superficial-loss / wash-sale denials are in it, as the tax
+    year's: across those taxable accounts, and a registered account's
+    purchase in every year (TJ-5347). What the build read is recorded with
+    the file (pipeline/basis_label `record_full_history_checks`): the
+    basis label's word for it.
+    None without a base book."""
     base_json = cache / f"{account}_base.json"
     if not base_json.is_file():
         return None
@@ -702,9 +800,11 @@ def _gains_all_file(root: Path, cache: Path, account: str,
         if blend is not None:
             return _gains_all_blend(root, cache, account, blend[0],
                                     blend[1], settings)
+    shel = _registered_book(cache, country, taxable=is_taxable, crypto=is_crypto)
     cmd = _cmd("taxjson-gains") + ["--country", country,
                                   "--tax-date", _tax_date(settings)]
     cmd += _wash_flags(is_taxable, is_crypto, country) + _registered_flags(is_taxable)
+    cmd += _sheltered_flags(shel)
     cmd += option_timing_flags(settings)
     cmd += income_dating_flags(settings)
     cmd += _locked_year_flags(root, settings)
@@ -718,9 +818,12 @@ def _gains_all_file(root: Path, cache: Path, account: str,
     # The stage table's gains_all row, built every time; vouched for as it is
     # built (`at_once`: a view command completes no run), as the sweep reads
     # the record of a removed account's file (`account_files`, `_vouched`).
+    # The registered book is among its inputs (`sheltered`).
     _built_now(ST.execute(_ON_DEMAND, ST.StageCtx(
         work=cache, settings=settings, account=account, crypto=is_crypto,
-        mh=mh, root_dir=root, own=cmd), "gains_all", at_once=True))
+        mh=mh, sheltered=shel, root_dir=root, own=cmd), "gains_all", at_once=True))
+    record_full_history_checks(root, cache, [account],
+                                shel if _sheltered_flags(shel) else None, country)
     return out
 
 
@@ -730,22 +833,26 @@ def _gains_all_blend(root: Path, cache: Path, account: str, tag: str,
     """work/<account>_gains_all.json for an account of the run's
     cross-account pass (report_model.wash_blend: `tag`, `members`): ONE
     gains run with no --year over the members' merged base books, with
-    the flags stage_blended_wash_pass passes (but no registered-account
-    book), split back per account. Built per account alone, an account's
-    full history lost the cost pooled with the others' purchases (ITA
-    s. 47), so `stats all` gave a sale another gain than the tax year
-    (backlog TJ-0677). None when a member has no base book."""
+    the flags stage_blended_wash_pass passes and the registered accounts'
+    book it reads (_registered_book: none for a US crypto blend, which
+    carries no rule; TJ-5347), split back per account. Built per account
+    alone, an account's full history lost the cost pooled with the
+    others' purchases (ITA s. 47), so `stats all` gave a sale another
+    gain than the tax year (backlog TJ-0677). None when a member has no
+    base book."""
     acfgs = load_config(root, missing_ok=True).get("accounts") or {}
     # taxjson.toml order, as the run's blended pass merges them
     # (CA-DATE-14 / US-DATE-13).
     names = ([n for n in acfgs if n in members]
              + [n for n in members if n not in acfgs])
+    country = _country(settings)
+    shel = _registered_book(cache, country, taxable=True, crypto=tag != "blend")
     ctx = ST.StageCtx(
         work=cache, settings=settings, tag=tag, members=names,
-        crypto_members=frozenset(names if tag != "blend" else ()), root_dir=root)
+        crypto_members=frozenset(names if tag != "blend" else ()), sheltered=shel,
+        root_dir=root)
     if not all(b.is_file() for b in ST.member_books(ST.Inst("gains_all_blend", ctx))):
         return None
-    country = _country(settings)
     _us = country in ("us", "usa")
     combined_base = cache / f".{tag}_all_base.json"
     cmd = _cmd("taxjson-gains") + ["--taxable", "--country", country,
@@ -756,6 +863,7 @@ def _gains_all_blend(root: Path, cache: Path, account: str, tag: str,
             # A US crypto blend: lots carried between the accounts, no
             # wash-sale rule (stage_blended_wash_pass no_wash).
             cmd += ["--no-wash", "--spot-crypto"]
+    cmd += _sheltered_flags(shel)
     cmd += option_timing_flags(settings)
     cmd += income_dating_flags(settings)
     cmd += _locked_year_flags(root, settings)
@@ -771,6 +879,8 @@ def _gains_all_blend(root: Path, cache: Path, account: str, tag: str,
     ctx.mh, ctx.own = mh, _AllBlend(cmd, combined_base)
     _built_now(ST.execute(_ON_DEMAND, ctx, "gains_all_blend", "gains_all_split",
                           at_once=True))
+    record_full_history_checks(root, cache, names,
+                                shel if _sheltered_flags(shel) else None, country)
     return cache / f"{account}{_GAINS_ALL_SUFFIX}"
 
 
@@ -828,20 +938,51 @@ _ON_DEMAND = ST.bound({
 })
 
 
-def _window_gains_files(root: Path, cache: Path, account: Optional[str],
-                        args: argparse.Namespace
+def _gains_files_of(cache: Path, account: Any = None, *,
+                    missing_ok: bool = False) -> Dict[str, Path]:
+    """resolve_gains_files for None (every account) | a name | names
+    (lib/account_list.names_of; () reads none): one name as it always
+    was read, several through `accounts=` ({account: path}, sorted by
+    account), each named one with no gains file refused, naming it
+    (exit 1), unless `missing_ok` (a command that unions over accounts
+    some of which may have none): then left out. A string is one name,
+    never split, as `_window_gains_files` and `_require_books` read it:
+    a command not converted passes its text whole (`tjs stats 1y,alpha
+    --all-history` is refused as before lists); a converted one passes
+    the names (`_accounts`)."""
+    from taxjson.lib.report_model import resolve_gains_files
+    names = names_of(account)
+    if names is None:
+        return resolve_gains_files(cache, None)
+    if not names:
+        return {}
+    if len(names) == 1:
+        return resolve_gains_files(cache, names[0])
+    files = resolve_gains_files(cache, None, accounts=names)
+    if not missing_ok:
+        _require_listed(names, files, "gains file",
+                        fix="Run `tjs run` first, or check the names (an "
+                            "account with no inputs has no books).")
+    return files
+
+
+def _window_gains_files(root: Path, cache: Path, account: Any,
+                        args: argparse.Namespace, *,
+                        missing_ok: bool = False
                         ) -> Tuple[Dict[str, Path], bool]:
     """The gains files a windowed view (stats, win-rates, winners,
     losers, ccd-sum, leaps, leaps-sum) reads: the tax year's filing
     files (resolve_gains_files: wash-adjusted when the cross-account
     pass ran) for a window inside the tax year; for one reaching
     outside it (`all`, `2y`, another year, --all-history) each
-    account's full-history file (_gains_all_file), said in a note.
-    Second element: whether the full-history files were read. An
+    account's full-history file (_gains_all_file), said in a note: what
+    its denials are checked against (_denials_checked). Second element:
+    whether the full-history files were read. An
     account with no base book to build from keeps its tax-year file,
-    with the old warning."""
-    from taxjson.lib.report_model import resolve_gains_files
-    resolved = resolve_gains_files(cache, account or None)
+    with the old warning. `account`: None | a name | names, and
+    `missing_ok`: _gains_files_of's (a string is one name, never
+    split)."""
+    resolved = _gains_files_of(cache, account, missing_ok=missing_ok)
     tok = _period_token(args)
     years, in_scope = _gains_artifact_scope(resolved, tok, root)
     if in_scope or not resolved:
@@ -854,56 +995,71 @@ def _window_gains_files(root: Path, cache: Path, account: Optional[str],
             _warn_gains_artifact_scope(resolved, tok, root)
             return resolved, False
         out[acct] = p
+    acfgs, country = accounts_of(load_config(root, missing_ok=True)), _country(settings)
+    books = {a: _registered_book(cache, country, taxable=account_of(acfgs, a).taxable,
+                                 crypto=bool(account_of(acfgs, a).crypto)) for a in out}
     _view_msg("note", f"the window reaches outside tax year "
               f"{', '.join(sorted(years))}: read from the full-history "
               f"books",
               "Consolidated, in the base currency and across your "
               "taxable accounts as the tax year's gains are; "
-              "superficial-loss / wash-sale denials among the taxable "
-              "accounts only (a registered account's purchase is "
-              "checked for the tax year). A view, not a filing figure.")
+              + _denials_checked(books) + " A view, not a filing figure.")
     return out, True
 
 
-def _leaps_scope_guard(root: Path, account: Optional[str],
-                       args) -> Dict[str, Path]:
+def _leaps_scope_guard(root: Path, account: Any,
+                       args, *, missing_ok: bool = False) -> Dict[str, Path]:
     """leaps/leaps-sum read the same year-scoped gains artifacts as
     ccd-sum and winners, so they resolve them the same way: the
     full-history files for a window outside the tax year (`leaps-sum
     all` labelled 'all history' while holding one year, audit
-    S048-11). The files _leaps_closed reads."""
+    S048-11). The files _leaps_closed reads. `missing_ok`:
+    _gains_files_of's."""
     files, _all_history = _window_gains_files(root, root / "work", account,
-                                              args)
+                                              args, missing_ok=missing_ok)
     return files
 
 
-def _leaps_contracts(root: Path, account: Optional[str],
-                     label: str) -> Dict[str, float]:
+def _leaps_accounts(cache: Path, account: Any, missing_ok: bool = False
+                    ) -> Tuple[Optional[Tuple[str, ...]], Optional[List[str]]]:
+    """(the names given, the accounts _leaps_contracts reads: None when
+    () is named, none), each named account of a list with no gains file
+    refused first (exit 1) unless `missing_ok`."""
+    named = names_of(account)
+    if named is not None and not named:
+        return named, None
+    if named is not None and len(named) > 1:
+        _gains_files_of(cache, named, missing_ok=missing_ok)
+    return named, (list(named) if named else _discover_tx_accounts(cache))
+
+
+def _leaps_contracts(root: Path, account: Any,
+                     label: str, *, missing_ok: bool = False
+                     ) -> Dict[str, float]:
     """{option_symbol: full-history net open qty} for contracts with at
     least one qualifying LEAPS entry buy in the native books. Membership
     (`sym in result`) identifies the contract set; the value gives the
-    TRUE still-open quantity regardless of any viewing window."""
+    TRUE still-open quantity regardless of any viewing window.
+    `account`: None | a name | names (lib/account_list.names_of; ()
+    reads none); `missing_ok`: _gains_files_of's."""
     from taxjson.lib.option_symbols import is_option_symbol, parse_option_expiry
     months = _leaps_months(root)
     cache = root / "work"
-    if account:
-        accounts = [account]
-    else:
-        accounts = _discover_tx_accounts(cache)
-    from taxjson.lib.report_model import resolve_gains_files
+    named, accounts = _leaps_accounts(cache, account, missing_ok)
+    if accounts is None:
+        return {}
     if not any(_native_tx_file(cache, a) is not None for a in accounts) \
-            and not resolve_gains_files(cache, account or None):
+            and not _gains_files_of(cache, named, missing_ok=True):
         # "No LEAPS contracts found" (exit 0) before any run read as a
-        # verdict about the books (2026-09 CLI audit B22).
-        _die_input("no gains files in work/"
-                   + (f" for account {account!r}" if account else "")
-                   + " — run `tjs run` first",
-                   "LEAPS come from the built books.")
+        # verdict about the books (2026-09 CLI audit B22); a list: exit 1.
+        (_die if named and len(named) > 1 else _die_input)(
+            "no gains files in work/" + _accounts_shown(named)
+            + " — run `tjs run` first", "LEAPS come from the built books.")
     # An account with option gains but no native book: its LEAPS
     # entries are unknowable, and the report silently left them out with rc 0
     # (audit A2-0117; S040-00 covered an unreadable book only).
     _no_native = sorted(
-        a for a, gf in resolve_gains_files(cache, account or None).items()
+        a for a, gf in _gains_files_of(cache, named, missing_ok=True).items()
         if _native_tx_file(cache, a) is None
         and any(is_option_symbol(str(t.get("symbol") or ""))
                 for t in (_load_json_or_die(gf).get("transactions")
@@ -1076,24 +1232,31 @@ def _print_scope_split(split: Dict[str, float], base_cur: str,
         d.line(ln)
 
 
-def _leaps_empty_doc(root: Path, account: Optional[str],
-                     basis: Optional[str] = None) -> Dict[str, Any]:
+def _leaps_empty_doc(root: Path, account: Any,
+                     basis: Optional[str] = None, *,
+                     files: Optional[Dict[str, Path]] = None,
+                     missing_ok: bool = False) -> Dict[str, Any]:
     """Empty-state leaps JSON with the SAME key set as the populated
     document — machine consumers keying on `basis` broke only on the
     empty case; the taxable / sheltered totals were missing from it
-    (backlog TJ-0541)."""
+    (backlog TJ-0541). `basis` None: the label of `files`, the files
+    the view's window resolved (_leaps_scope_guard: the full-history
+    ones for a window outside the tax year, TJ-5474), else of the tax
+    year's. `account`: None | a name | names (the comma text:
+    ValueError, _listed_names), and `missing_ok`: _gains_files_of's."""
+    account = _listed_names(account)
     if basis is None:
-        from taxjson.lib.report_model import (gains_basis_label,
-                                              resolve_gains_files)
-        resolved = resolve_gains_files(root / "work", account or None)
-        basis = gains_basis_label(resolved) if resolved else "pre-wash"
+        resolved = (files if files else _gains_files_of(root / "work", account,
+                                                        missing_ok=missing_ok))
+        basis = _basis_label(root, resolved) if resolved else "pre-wash"
     return {"rows": [], "total_gain": 0.0, "taxable_gain": 0.0,
             "sheltered_gain": 0.0,
             "currency": _base_currency(root), "basis": basis}
 
 
-def _leaps_closed(root: Path, account: Optional[str], leaps,
-                  keep, files: Optional[Dict[str, Path]] = None
+def _leaps_closed(root: Path, account: Any, leaps,
+                  keep, files: Optional[Dict[str, Path]] = None, *,
+                  missing_ok: bool = False
                   ) -> Tuple[list, bool, str]:
     """[(account, gains_entry)] for in-window dispositions of LEAPS
     contracts, from the wash-adjusted gains files (falling back to the
@@ -1101,17 +1264,17 @@ def _leaps_closed(root: Path, account: Optional[str], leaps,
     BASE-currency numbers a return reports. Tainted (unknown-cost)
     dispositions are excluded, mirroring every filing-facing consumer.
     Second element: whether any gains file was found at all; third the
-    resolved files' basis label ("wash-adjusted" only when the wash
-    files actually exist — the resolver silently falls back to the
-    pre-wash gains, and the printed claim must follow it)."""
-    from taxjson.lib.report_model import (gains_basis_label,
-                                          resolve_gains_files)
+    resolved files' basis label (_basis_label: "wash-adjusted" only when
+    a rule checked the sales completely — the resolver silently falls
+    back to the pre-wash gains, and the printed claim must follow it). `account`:
+    None | a name | names, and `missing_ok`: _gains_files_of's (when
+    `files` is not given)."""
     cache = root / "work"
     entries: list = []
     found = False
     resolved = (files if files is not None
-                else resolve_gains_files(cache, account or None))
-    basis = gains_basis_label(resolved)
+                else _gains_files_of(cache, account, missing_ok=missing_ok))
+    basis = _basis_label(root, resolved)
     tainted = 0
     for acct, path in resolved.items():
         data = _load_json_or_die(path)
@@ -1199,10 +1362,15 @@ def _lone_positional(root: Path, period: Optional[str],
     account name is the account even when it starts with a digit
     (`stats 123abc` was refused as an invalid period; backlog TJ-0909);
     one that is also a period (`2025`) stays the period, said once; any
-    other digit-leading non-period is a malformed period (exit 2)."""
+    other digit-leading non-period is a malformed period (exit 2). One
+    with a comma is the accounts (`winners margin,crypto`,
+    lib/account_list), unless it starts with a digit: a period, as
+    before lists (`divs 1y,margin`, a malformed one)."""
     if not period or account is not None:
         return period, account
     tok = str(period).strip()
+    if is_account_list(period) and not tok[:1].isdigit():
+        return None, period
     named = tok in (load_config(root, missing_ok=True).get("accounts") or {})
     if named and _is_period(tok):
         _warn_period_or_account(tok)
@@ -1222,18 +1390,149 @@ def _view_window(args: argparse.Namespace, root: Path):
     roll-ups) into `(keep, scope, account)`. The lone positional is read as
     an account when it isn't a period token (a digit-leading non-token is
     validated as a window so the error names the real problem); with no
-    period the scope defaults to the config tax year, else all history."""
+    period the scope defaults to the config tax year, else all history.
+    `account` is the text given (a list's comma text): a command that
+    takes a list reads `_view_scope`'s names instead."""
     period, account = _lone_positional(root, args.period, args.account)
+    keep, scope = _window_of(period, root)
+    return keep, scope, account
+
+
+def _window_of(period: Optional[str], root: Path
+               ) -> Tuple[Callable[[str], bool], str]:
+    """(keep, scope) of a PERIOD token: with none, the config tax year,
+    else all history."""
     if period:
         keep, scope = _period_keep(period, root)         # incl. `tax_year`
-    else:
-        year = load_settings(root, missing_ok=True).year
-        if year:
-            ys = str(year)
-            keep, scope = _year_keep(ys), f"tax year {year}"
-        else:
-            keep, scope = (lambda d: True), "all history"
-    return keep, scope, account
+        return keep, scope
+    year = load_settings(root, missing_ok=True).year
+    if year:
+        ys = str(year)
+        return _year_keep(ys), f"tax year {year}"
+    return (lambda d: True), "all history"
+
+
+def _view_scope(args: argparse.Namespace, root: Path
+                ) -> Tuple[Any, str, Optional[Tuple[str, ...]]]:
+    """`_view_window` for a command that takes an ACCOUNT list
+    (lib/account_list): `(keep, scope, accounts)`, `accounts` the names
+    in the order given (one name: a tuple of one) or None for every
+    account, as `_accounts` reads them. The lone positional is the
+    accounts when it has a comma and starts with no digit, or names an
+    account (`_lone_positional`)."""
+    period, account = _lone_positional(root, args.period, args.account)
+    keep, scope = _window_of(period, root)
+    return keep, scope, _accounts(args, root, text=account or "")
+
+
+def _configured_names(root: Path) -> Optional[List[str]]:
+    """The [accounts] names of the project, or None when it has none
+    (no taxjson.toml, no [accounts]: the command says what is missing)."""
+    accounts = load_config(root, missing_ok=True).get("accounts")
+    if not isinstance(accounts, dict) or not accounts:
+        return None
+    return [str(n) for n in accounts]
+
+
+def _period_comma_hint(tokens: Any) -> Tuple[str, ...]:
+    """The detail under a list's refusal whose first name is a period
+    word (`ytd,margin`): no period has a comma. () otherwise."""
+    toks = [tokens] if isinstance(tokens, str) else list(tokens or ())
+    first = str(toks[0]).split(" ")[0].split(",")[0].strip() if toks else ""
+    return ("A period never has a comma.",) if first and _is_period(first) \
+        else ()
+
+
+def _refuse_list(err: AccountListError, args: argparse.Namespace,
+                 mode: str = "") -> None:
+    """Stop on an ACCOUNT list refused (lib/account_list.refusal): exit
+    1 for a list, whatever is wrong with it."""
+    head, details, code = account_list_refusal(
+        err, _current_cmd() or str(getattr(args, "cmd", "") or ""), mode)
+    (_die_input if code == 2 else _die)(head, *details,
+                                        *_period_comma_hint(err.text))
+
+
+def _accounts(args: argparse.Namespace, root: Optional[Path] = None, *,
+              text: Any = None, dest: str = "account",
+              one: Union[None, bool, str] = None
+              ) -> Optional[Tuple[str, ...]]:
+    """The accounts a command was given (lib/account_list), in the
+    order given; None for every account, never (). Parsed on every call
+    (cli/main sets nothing). `text`: the ACCOUNT text the command
+    decided, one token or several (div-estimate, stats, list's date
+    swap, the items commands, which parse their own positionals; ""
+    for none); without it, `args.<dest>` (`account`: the ACCOUNT
+    positional or `--account`), and for `account` with none given, the
+    lone [PERIOD] as `_lone_positional` reads it (`winners
+    margin,crypto`; one starting with a digit is a period).
+
+    A list (a comma, or several tokens with one) is checked and refused
+    naming the bad name, exit 1: an empty, artifact, path or repeated
+    name, and one not in [accounts] (when the project has them). One
+    name is returned as given, unchecked: the command's own check names
+    it, with today's message and code. `one`: the mode takes one
+    account (the flag naming it, `--set`, or True for the command):
+    more than one is refused (exit 1), naming the mode."""
+    if text is None:
+        text = getattr(args, dest, None)
+        period = (getattr(args, "period", None)
+                  if dest == "account" and hasattr(args, dest) else None)
+        if text is None and period:
+            r = Path(args.dir).resolve() if root is None else root
+            text = _lone_positional(r, period, None)[1]
+    toks = ([str(t) for t in text if t] if isinstance(text, (list, tuple))
+            else [str(text)] if text else [])
+    if not toks:
+        return None
+    mode = one if isinstance(one, str) else ""
+    if not any(is_account_list(t) for t in toks):
+        names: Optional[Tuple[str, ...]] = tuple(toks)
+        if one and len(toks) > 1:
+            _refuse_list(AccountListError("one", toks, " ".join(toks),
+                                          count=len(toks)), args, mode)
+        return names
+    r = (root if root is not None
+         else Path(getattr(args, "dir", None) or ".").resolve())
+    try:
+        names = parse_accounts(toks, _configured_names(r), one=bool(one))
+    except AccountListError as e:
+        _refuse_list(e, args, mode)
+        names = None                                    # (not reached)
+    return names
+
+
+def _accounts_shown(names: Optional[Tuple[str, ...]]) -> str:
+    """' for account 'x'' / ' for accounts 'x', 'y'' ('' for None or
+    ()): the words a message about the named accounts ends with."""
+    if not names:
+        return ""
+    return (f" for account {names[0]!r}" if len(names) == 1 else
+            " for accounts " + ", ".join(repr(n) for n in names))
+
+
+def _require_listed(names: Any, have: Any, what: str, *, code: int = 2,
+                    fix: Optional[str] = None) -> None:
+    """Refuse the accounts of `names` (None | a name | a list | names:
+    the ones asked for) that `have` (the names that have `what`: a dict
+    of files, a set) lacks, naming each, in the order asked: a named
+    account with no file was left out of the report with no word
+    (resolve_gains_files leaves out a name it finds no file for). Exit
+    1 for two names or more (every refusal of a list exits 1); `code`
+    for one name (2: run first or check the name, as most single-account
+    sites say). `fix`: the remedy shown under it. None and () ask for
+    nothing."""
+    asked = names_of(names)
+    if not asked:
+        return
+    present = set(have)
+    missing = tuple(n for n in asked if n not in present)
+    if not missing:
+        return
+    (_die_input if code == 2 and len(asked) == 1 else _die)(
+        f"no {what}{_accounts_shown(missing)} in work/",
+        fix or ("Run `tjs run` first, or check the name (an account with "
+                "no inputs has no books)."))
 
 
 def _tx_fee(tx: dict) -> float:
@@ -1259,15 +1558,19 @@ def _view_income_rules(root: Path):
 
 
 def _warn_accounts_without_books(root: Path, have, label: str,
-                                 what: str) -> None:
+                                 what: str, *, among: Any = None) -> None:
     """Warn naming each configured account that has inputs but no `what`
     in work/ (its stage failed): the all-accounts views discover
     accounts from work/, so such an account was simply absent — "No
-    wash sales", "No dividends" — with rc 0 (S045-09)."""
+    wash sales", "No dividends" — with rc 0 (S045-09). `among`: only
+    these accounts (None | a name | names: an ACCOUNT list's; the comma
+    text: ValueError, _listed_names)."""
     have = set(have)
+    only = _listed_names(among)
     skipped = _accounts_skipped_for_no_inputs(root)
     missing = sorted(n for n in (load_config(root, missing_ok=True).get("accounts") or {})
                      if n not in have and n not in skipped
+                     and (only is None or n in only)
                      and _has_inputs(root, n))
     if missing:
         # Whole: a default view's one-line form cuts the words that say the
@@ -1279,7 +1582,8 @@ def _warn_accounts_without_books(root: Path, have, label: str,
 
 
 def _collect_period_txs(args: argparse.Namespace, label: str, actions,
-                        date_of=None, settle_trades: bool = False):
+                        date_of=None, settle_trades: bool = False, *,
+                        missing_ok: bool = False):
     """Read native per-account transactions over a window, for the period-aware
     summaries (`fees`/`divs-sum`/`trades-sum`). The lone positional is a period
     (30d/6w/…) when it looks like one, else an account name; with no period the
@@ -1287,19 +1591,30 @@ def _collect_period_txs(args: argparse.Namespace, label: str, actions,
     keep) — `keep(iso_date) -> bool` is the window predicate, for callers
     that must apply the SAME window to a second data source. `date_of`
     (row -> ISO date) picks the date a row is windowed on (the income
-    views pass characterize/income_dating's tax date); default: its `date`."""
+    views pass characterize/income_dating's tax date); default: its `date`.
+    An ACCOUNT list (`_view_scope`) reads each named account, one with
+    no native transaction file refused, naming each (exit 1), unless
+    `missing_ok` (then left out)."""
     root = Path(args.dir).resolve()
     cache = root / "work"
     # `X-sum margin` → the lone positional is an account, not a window
-    # (see _view_window).
-    keep, scope, account = _view_window(args, root)
+    # (see _view_window); `X-sum margin,crypto` the accounts listed.
+    keep, scope, named = _view_scope(args, root)
 
-    if account:
+    if named and len(named) == 1:
+        account = named[0]
         accounts = [account]
         if _native_tx_file(cache, account) is None:
             _die_input(f"no native transaction file for account "
                        f"{account!r} in work/ — run `tjs run` first, "
                        f"or check the name")
+    elif named is not None:
+        accounts = list(named)
+        if not missing_ok:
+            _require_listed(named, [a for a in named
+                                    if _native_tx_file(cache, a) is not None],
+                            "native transaction file",
+                            fix="Run `tjs run` first, or check the names.")
     else:
         accounts = _discover_tx_accounts(cache)
         if not accounts:
@@ -1579,13 +1894,25 @@ def _staking_rows(args: argparse.Namespace):
     settings = settings_of(cfg)
     country = _country(settings)
     currency = _base_currency(root)
-    keep, scope, selected = _view_window(args, root)
+    keep, scope, selected = _view_scope(args, root)
     _require_books(root, selected)
     configured = accounts_of(cfg)
-    if selected:
-        if selected not in configured:
-            _die_input(f"unknown account {selected!r} — check taxjson.toml")
-        accounts = [selected]
+    if selected and len(selected) == 1:
+        if selected[0] not in configured:
+            _die_input(f"unknown account {selected[0]!r} — check taxjson.toml")
+        accounts = list(selected)
+    elif selected is not None:
+        # A list (exit 1): each name not in [accounts], then each with no
+        # base-currency book, named.
+        unknown = [n for n in selected if n not in configured]
+        if unknown:
+            _die(unknown_accounts_text(unknown, configured))
+        _require_listed(selected, [
+            n for n in selected
+            if (root / "work" / f"{n}_base.json").is_file()],
+            "base-currency book", fix="Run `tjs run` first; staking totals "
+            "need their saved prices and exchange rates.")
+        accounts = list(selected)
     else:
         accounts = sorted(n for n, a in configured.items()
                           if a.crypto is True)
@@ -1943,7 +2270,7 @@ def _rebuild_first(root: Path, cfg: Dict[str, Any]) -> str:
                       if (root / "work" / f"{n}_pending_elections.json").exists())
     if deferred:
         return (f"The last `tjs run` deferred {', '.join(deferred)} at pending "
-                f"elections (`tjs elect --pending`): make the elections, then "
+                f"elections (`tjs elections --pending`): make the elections, then "
                 f"run `tjs run`.")
     return "Run `tjs run` first."
 
@@ -2444,22 +2771,39 @@ def _taxable_equity_account_names(root: Path,
             and (crypto_covered or not c.crypto)]
 
 
-def _refuse_us_crypto_account(root: Path, account: Optional[str],
+def _refuse_us_crypto_account(root: Path, account: Any,
                               prog: str, json_doc=None) -> None:
     """A US project's crypto account is outside the wash-sale rule
     (§1091 does not reach digital assets; the pipeline runs it with
     --no-wash): the explain and radar entry points said a loss the
     return allows in full was disallowed, and advised a trade to
-    'rescue' it (S046-10). `json_doc`: as _no_wash_checkable's."""
-    if not account:
+    'rescue' it (S046-10). `json_doc`: as _no_wash_checkable's.
+    `account`: None | a name | names (lib/account_list.names_of): every
+    one named a US crypto account is nothing to check (exit 0, as for
+    one); some of them, a list to give again without them (exit 1, as
+    every refusal of a list). The comma text: ValueError (_listed_names)."""
+    named = _listed_names(account)
+    if not named:
         return
     cfg = _radar_config(root, prog)
-    if (_country(settings_of(cfg)) == "usa"
-            and account_of(accounts_of(cfg), account).crypto):
-        _not_applicable(prog, f"{account} is a crypto account of a US "
-                        f"project — the wash-sale rule (§1091) does not "
-                        f"apply to it, so there is nothing to check.",
-                        json_doc)
+    if _country(settings_of(cfg)) != "usa":
+        return
+    crypto = [n for n in named if account_of(accounts_of(cfg), n).crypto]
+    if not crypto:
+        return
+    one = len(crypto) == 1
+    what = (f"{crypto[0]} is a crypto account" if one else
+            f"{', '.join(crypto)} are crypto accounts")
+    if len(crypto) == len(named):
+        _not_applicable(prog, f"{what} of a US project — the wash-sale "
+                        f"rule (§1091) does not apply to "
+                        f"{'it' if one else 'them'}, so there is nothing "
+                        f"to check.", json_doc)
+        return
+    rest = ",".join(n for n in named if n not in crypto)
+    _die(f"{what} of a US project: the wash-sale rule (§1091) does not "
+         f"apply to {'it' if one else 'them'}",
+         f"Leave {'it' if one else 'them'} out of the list: {rest!r}.")
 
 
 _NO_WASH_CHECKABLE = (
@@ -2608,8 +2952,12 @@ def _add_staking_parser(sub: argparse._SubParsersAction, name: str,
         "their source evidence. Missing commission evidence is unknown, "
         "not zero. Other crypto rewards are identified separately.")
     _staking.add_argument("period", nargs="?", help=_PERIOD_HELP)
-    _staking.add_argument("account", nargs="?", help="Account (default: crypto accounts)")
+    _staking.add_argument("account", nargs="?",
+                          help="Account or comma-separated accounts "
+                               "(default: crypto accounts)")
     _staking.add_argument("--broker", help="Exchange name, such as coinbase or kraken")
     _staking.add_argument("--symbol", help="Coin symbol as shown in the books")
     _staking.add_argument("--json", action="store_true", help="Emit the full evidence as JSON")
+    # An ACCOUNT list (lib/account_list): `_staking_rows` reads it.
+    _staking.set_defaults(account_list=True)
     _staking.set_defaults(func=handler)

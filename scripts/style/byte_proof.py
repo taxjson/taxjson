@@ -405,15 +405,15 @@ DENIED_FORMS = MappingProxyType({
 REVIEWED = frozenset((
     "align", "amt", "audit", "buy-check", "carryover", "cash", "ccd-sum", "check-dates", "check-filed",
     "check-tt", "checklist", "clean", "close-year", "compare", "crypto-sends", "dil", "dil-sum",
-    "div-estimate", "divs", "divs-sum", "edge-cases", "elect", "estimate", "events", "fees", "fees-sum",
+    "div-estimate", "divs", "divs-sum", "edge-cases", "elections", "estimate", "events", "fees", "fees-sum",
     "find-missing-history", "form-export", "format", "format-map", "fx-cash", "gains", "gains-base",
     "gains-cra", "handoff",
     "harvest", "help", "init", "instalments", "journals", "leaps", "leaps-sum", "list", "losers",
     "migrate", "new-year", "opening", "option-boundary", "option-yield", "parser-check", "plot-tax",
     "rebuy", "reconcile-slips", "redact", "renames", "roc", "roc-sum", "run", "sanity", "sell-check",
     "shares", "slip-audit", "snapshot", "spinoffs", "splits", "staking", "staking-sum", "stats", "sum",
-    "t1135", "tax-logic", "technicals", "ticker-map", "tips", "trades", "trades-sum", "transfers",
-    "unclose-year",
+    "stress", "t1135", "tax-logic", "technicals", "ticker-map", "tips", "trades", "trades-sum",
+    "transfers", "unclose-year",
     "update-tobase-map", "wash-radar", "wash-sales", "watch", "win-rates", "winners", "years"))
 TOOLS = frozenset(("taxjson-audit", "taxjson-diff", "taxjson-explain", "taxjson-fees-sum",
                    "taxjson-sum-gains"))
@@ -511,7 +511,7 @@ _UNBOOKED = " # edit: remove work/crypto_gains.json # edit: remove work/crypto_g
 # that colour a terminal (`console_scripts`: taxjson-sum-gains, -explain
 # --color, -diff, -audit; and -fees-sum), on the demo book's work files.
 # Fable's review of 1d (TJ-4579): each prompt answered yes and no on the
-# terminal (`# stdin:`: close-year's lock, an election chosen in `elect
+# terminal (`# stdin:`: close-year's lock, an election chosen in `elections
 # --redo` and in a run whose election is undecided, a crypto send decided
 # in a run, align --write's settings, the checklist's walk, close-year's
 # lock over a carry-back split that leaves a sale out), and each
@@ -527,13 +527,13 @@ _UNBOOKED = " # edit: remove work/crypto_gains.json # edit: remove work/crypto_g
 # `fetch` (a broker's servers), `channels`, `deploy` and `promote` (the
 # release channels: git remotes, an install).
 EXTRA_COMMANDS = (
-    ("demo", "elect"),
-    ("demo", "elect --pending"),
-    ("demo", "elect --pending --json"),
-    ("demo", "elect margin"),
-    ("demo", f"elect margin --set {_ELECT_EVENT}=taxable_deemed_dividend"),
-    ("demo", f"elect margin --set {_ELECT_EVENT}=taxable_deemed_dividend --hint fmv_per_share=0 # exit 2"),
-    ("demo", f"elect --set {_ELECT_EVENT}=taxable_deemed_dividend # exit 2"),
+    ("demo", "elections"),
+    ("demo", "elections --pending"),
+    ("demo", "elections --pending --json"),
+    ("demo", "elections margin"),
+    ("demo", f"elections margin --set {_ELECT_EVENT}=taxable_deemed_dividend"),
+    ("demo", f"elections margin --set {_ELECT_EVENT}=taxable_deemed_dividend --hint fmv_per_share=0 # exit 2"),
+    ("demo", f"elections --set {_ELECT_EVENT}=taxable_deemed_dividend # exit 2"),
     ("demo", "slip-audit --import-cra ."),
     ("demo", "slip-audit --import-cra . --json"),
     ("style-usa", "wash-radar crypto --date 2024-11-25"),
@@ -627,10 +627,10 @@ EXTRA_COMMANDS = (
     # TJ-4579: each prompt answered yes and no, on the terminal
     ("demo", "close-year # stdin: y"),
     ("demo", "close-year # stdin: n"),
-    ("demo", "elect margin --redo # stdin: 1\\n\\nchosen at the prompt"),
-    ("demo", "elect margin --redo # stdin: 9"),
-    ("demo", "run # stdin: 1\\n\\nchosen in the run # edit: remove ../inputs/margin/manifest.json"),
-    ("demo", "run # edit: remove ../inputs/margin/manifest.json"),
+    ("demo", "elections margin --redo # stdin: 1\\n\\nchosen at the prompt"),
+    ("demo", "elections margin --redo # stdin: 9"),
+    ("demo", "run # stdin: 1\\n\\nchosen in the run # edit: remove ../inputs/margin/elections.json"),
+    ("demo", "run # edit: remove ../inputs/margin/elections.json"),
     ("crypto", "run # stdin: s # edit: remove inputs/crypto/sends.json"),
     ("crypto", "run # stdin: k # edit: remove inputs/crypto/sends.json"),
     ("demo", "../2025: align --from 2024 --write # stdin: y\\ny\\ny\\ny\\ny\\ny\\ny\\ny"),
@@ -726,8 +726,8 @@ OPTION_LINES = (
     ("crypto", "crypto-sends --write"),
     ("demo", "div-estimate --months 6"),
     ("demo", "edge-cases --margin 5"),
-    ("demo", "elect margin --reset"),
-    ("demo", f"elect margin --reset --event {_ELECT_EVENT}"),
+    ("demo", "elections margin --reset"),
+    ("demo", f"elections margin --reset --event {_ELECT_EVENT}"),
     ("demo", "fees-sum --by-account"),
     ("demo", "fees-sum --no-by-account"),
     ("demo", "find-missing-history --include-options --year 2024"),
@@ -770,6 +770,9 @@ OPTION_LINES = (
     ("demo", "losers --top 3"),
     ("demo", "winners --top 3"),
     ("demo", "migrate --to-years # exit 2"),
+    # (the demo's year shares ../holdings already: the plan, "Nothing to
+    # do", nothing written without --write; backlog TJ-5367)
+    ("demo", "migrate --shared-holdings"),
     ("style-canada", "migrate --to-years"),
     ("style-canada", "migrate --to-years --write"),
     ("demo", f"opening margin {_DEMO_INPUT} --dry-run # exit 2"),
@@ -807,7 +810,7 @@ OPTION_LINES = (
     ("demo", "compare before --json" + _SAVED + _CHANGED),
     ("demo", "compare --delete before" + _SAVED),
     ("demo", "compare --delete before --json" + _SAVED),
-    ("demo", f"elect margin --set {_ELECT_EVENT}=rollover_s_86_1 --hint allocated_acb_cad=100"),
+    ("demo", f"elections margin --set {_ELECT_EVENT}=rollover_s_86_1 --hint allocated_acb_cad=100"),
     ("demo", "../2025: handoff --details"),
     ("demo", "../2025: handoff --prior ../2024/filed/2024.json"),
     ("demo", "opening margin pos.toml" + _POSITIONS),
@@ -841,6 +844,14 @@ REVIEWED_OPTIONS = MappingProxyType({
                                    "default form records it; a bare-word symbol refused first, exit "
                                    "2); tests/features/totals/test_technicals_command.py runs "
                                    "--benchmark on a made-up cache",
+    ("stress", "--benchmark"): "no golden book holds a history cache, and the proof runs offline: every "
+                               "form stops before a figure (no history: exit 1; no benchmark: exit 1, "
+                               "the default form records it); tests/features/totals/"
+                               "test_stress_estimates_an_index_move.py runs it on a made-up cache",
+    ("stress", "--beta"): "as --benchmark: no history offline, so every form stops before a figure; "
+                          "the test module runs --beta on a made-up cache",
+    ("stress", "--rate"): "as --benchmark: no history offline, so every form stops before a figure; "
+                          "the test module runs --rate on a made-up cache",
     ("checklist", "--skip"): "retired (`--done --force`): it always refuses, exit 2 (recorded)",
     ("find-missing-history", "--gen-phantoms"): "retired (--write-missing-history): it always refuses, "
                                                 "exit 2 (recorded)",

@@ -62,7 +62,7 @@ class TestCorpViews(unittest.TestCase):
         rules.ca.corp.test_event_copies_and_values.TestSpinoffBrokerValue.test_default_uses_broker_value).
         The view showed that value with no word about the saved 0; it
         now says why the 0 is not used. It is not a flag (nothing to
-        fix) and offers no command (`elect --set` takes no
+        fix) and offers no command (`elections --set` takes no
         fmv_per_share while the broker reports a value)."""
         from taxjson.lib import corp_views as cv
         ev = SimpleNamespace(action_type="spinoff", source_symbol="ZZQ.US",
@@ -87,7 +87,7 @@ class TestCorpViews(unittest.TestCase):
         why = "\n".join(row["why"])
         self.assertIn("the saved fmv_per_share=0 is not used", why)
         self.assertIn("100.00 USD", why)
-        self.assertNotIn("tjs elect", why)
+        self.assertNotIn("tjs elections", why)
         text = "\n".join(cv.render_spinoffs(doc))
         self.assertIn("the saved fmv_per_share=0 is not used", text)
         self.assertNotIn("HINT-UNUSED", text)

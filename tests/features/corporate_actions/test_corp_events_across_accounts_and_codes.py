@@ -187,7 +187,7 @@ def _run_86_1(rows):
         ids = set(re.findall(r"\b(\d{8}-zzp-zzs-[0-9a-f]{4})\b",
                              first.stdout + first.stderr))
         for i in ids:
-            tj(root, "elect", "margin", "--set", f"{i}=rollover_s_86_1",
+            tj(root, "elections", "margin", "--set", f"{i}=rollover_s_86_1",
                "--hint", "allocated_acb_cad=40")
         tj(root, "run", "--no-input", check=False)
         doc = json.loads((root / "work/margin_gains.json").read_text())
@@ -254,7 +254,7 @@ class TestTJ1323RatioOfBothAccounts(unittest.TestCase):
             first = tj(root, "run", "--no-input", check=False)
             text = first.stdout + first.stderr
             eid = re.search(r"\b(\d{8}-zzp-zzs-[0-9a-f]{4})\b", text).group(1)
-            tj(root, "elect", "margin", "--set", f"{eid}=rollover_s_86_1",
+            tj(root, "elections", "margin", "--set", f"{eid}=rollover_s_86_1",
                "--hint", "allocated_acb_cad=40")
             tj(root, "run", "--no-input", check=False)
             view = tj(root, "spinoffs", check=False)
@@ -335,7 +335,7 @@ def _run_exchange(tt, election="rollover_s_85_1_5"):
         first = tj(root, "run", "--no-input", check=False)
         eid = re.search(r"\b(\d{8}-old-new-[0-9a-f]{4})\b",
                         first.stdout + first.stderr).group(1)
-        tj(root, "elect", "a", "--set", f"{eid}={election}")
+        tj(root, "elections", "a", "--set", f"{eid}={election}")
         again = tj(root, "run", "--no-input", "--details", check=False)
         doc = json.loads((root / "work/a_gains.json").read_text())
         return (again.stdout + again.stderr,

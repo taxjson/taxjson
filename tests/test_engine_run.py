@@ -76,7 +76,8 @@ WALK_PART_INPUTS = {
     "_walk_trade": ["account", "internal_adj", "internal_dw", "internal_tainted",
                     "is_option_assign", "is_other_scope", "it", "pool", "qty", "run",
                     "symbol", "trace_sym", "tx",   # trace_sym: the pool's own trace (TJ-3228)
-                    "internal_sources"]}
+                    "internal_sources",
+                    "internal_outlay"]}   # an assigned call's write commission (TJ-5381)
 US_WALK_PART_INPUTS = {
     "_us_walk_lot_move": ["_book_accounts", "_moves_done", "ikey", "run", "symbol",
                           "symbol_traces", "tx"],

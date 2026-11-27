@@ -36,7 +36,7 @@
    "src/taxjson/bin/xlsx_to_csv.py": 1,
    "src/taxjson/cli/books.py": 5,
    "src/taxjson/cli/common.py": 5,
-   "src/taxjson/cli/elect.py": 1,
+   "src/taxjson/cli/elections.py": 1,
    "src/taxjson/cli/estimate.py": 1,
    "src/taxjson/cli/listings.py": 1,
    "src/taxjson/cli/main.py": 5,
@@ -50,6 +50,7 @@
    "src/taxjson/lib/channels.py": 1,
    "src/taxjson/lib/checklist.py": 24,
    "src/taxjson/lib/cli_diag.py": 1,
+   "src/taxjson/lib/command_log.py": 1,
    "src/taxjson/lib/compare.py": 2,
    "src/taxjson/lib/config_template.py": 3,
    "src/taxjson/lib/corp_actions.py": 1,
@@ -385,7 +386,7 @@
    "src/taxjson/bin/taxjson_missing_history.py": 1,
    "src/taxjson/bin/taxjson_redact.py": 2,
    "src/taxjson/cli/books.py": 1,
-   "src/taxjson/cli/elect.py": 1,
+   "src/taxjson/cli/elections.py": 1,
    "src/taxjson/cli/estimate.py": 4,
    "src/taxjson/cli/file.py": 2,
    "src/taxjson/cli/maps.py": 1,
@@ -404,7 +405,6 @@
    "src/taxjson/lib/handoff.py": 1,
    "src/taxjson/lib/journals.py": 1,
    "src/taxjson/lib/option_boundary.py": 1,
-   "src/taxjson/lib/pipeline.py": 5,
    "src/taxjson/lib/tax_logic.py": 2,
    "src/taxjson/lib/tax_plot.py": 3,
    "src/taxjson/pipeline/run.py": 5,
@@ -458,6 +458,7 @@
    "src/taxjson/lib/channels.py": 1,
    "src/taxjson/lib/checklist.py": 21,
    "src/taxjson/lib/cli_diag.py": 1,
+   "src/taxjson/lib/command_log.py": 1,
    "src/taxjson/lib/compare.py": 2,
    "src/taxjson/lib/config_template.py": 3,
    "src/taxjson/lib/crypto_sends.py": 1,
@@ -656,7 +657,7 @@
    173
   ],
   "packages/taxjson-fetch/src/taxjson_fetch/command.py::_qt_live_holdings": [
-   195
+   190
   ],
   "packages/taxjson-fetch/src/taxjson_fetch/command.py::_run_locked": [
    360
@@ -722,10 +723,10 @@
    168
   ],
   "src/taxjson/cli/file.py::_freeze_inputs": [
-   179
+   167
   ],
   "src/taxjson/cli/migrate.py::_migrate_to_years": [
-   359
+   349
   ],
   "src/taxjson/cli/plan.py::_wash_class_context": [
    260
@@ -803,7 +804,7 @@
    152
   ],
   "src/taxjson/lib/brokerages/rbc_direct.py::build_rbc_account_context": [
-   192
+   189
   ],
   "src/taxjson/lib/brokerages/rbc_direct.py::read_rbc_rows": [
    207
@@ -890,7 +891,7 @@
    186
   ],
   "src/taxjson/lib/missing_history.py::detect_missing_history": [
-   189
+   188
   ],
   "src/taxjson/lib/missing_history.py::detect_zero_basis_acquisitions": [
    229
@@ -905,7 +906,7 @@
    369
   ],
   "src/taxjson/lib/option_boundary.py::write_lots": [
-   154
+   153
   ],
   "src/taxjson/lib/option_yield.py::analyze": [
    178
@@ -923,7 +924,7 @@
    163
   ],
   "src/taxjson/lib/pipeline.py::prepare_books": [
-   212
+   190
   ],
   "src/taxjson/lib/pipeline.py::run_gains": [
    452
@@ -974,7 +975,7 @@
    279
   ],
   "src/taxjson/lib/slip_audit.py::audit": [
-   195
+   190
   ],
   "src/taxjson/lib/slip_symbols.py::load_computed": [
    222
@@ -995,10 +996,10 @@
    393
   ],
   "src/taxjson/lib/tax_logic.py::_canada": [
-   2740
+   2771
   ],
   "src/taxjson/lib/tax_logic.py::_usa": [
-   2017
+   2019
   ],
   "src/taxjson/lib/ticker_map_rules.py::_parse_map_text": [
    255
@@ -1034,7 +1035,7 @@
    211
   ],
   "src/taxjson/pipeline/run.py::_check_filed_years": [
-   449
+   445
   ],
   "src/taxjson/pipeline/run.py::_shared_inputs_moved": [
    153
@@ -1061,9 +1062,9 @@
    "src/taxjson/bin/taxjson_redact.py": 1,
    "src/taxjson/bin/taxjson_t1135.py": 1,
    "src/taxjson/bin/taxjson_wash_radar.py": 2,
-   "src/taxjson/cli/elect.py": 1,
+   "src/taxjson/cli/elections.py": 1,
    "src/taxjson/cli/estimate.py": 10,
-   "src/taxjson/cli/maps.py": 2,
+   "src/taxjson/cli/maps.py": 1,
    "src/taxjson/cli/migrate.py": 1,
    "src/taxjson/cli/slips.py": 1,
    "src/taxjson/lib/checklist.py": 1,
@@ -1099,7 +1100,7 @@
    "src/taxjson/characterize/income_dating.py": 10,
    "src/taxjson/cli/books.py": 1,
    "src/taxjson/cli/common.py": 7,
-   "src/taxjson/cli/elect.py": 1,
+   "src/taxjson/cli/elections.py": 1,
    "src/taxjson/cli/estimate.py": 15,
    "src/taxjson/cli/explain.py": 2,
    "src/taxjson/cli/file.py": 13,

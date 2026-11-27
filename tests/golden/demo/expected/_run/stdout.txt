@@ -89,7 +89,7 @@
 ==> Checking crypto for superficial losses with the sheltered accounts
 ==> Writing summary reports/crypto_wash.sum
 ==> Checking for missing purchase history
-  warning: ATTENTION: short: SAMPG.US (margin): the broker codes the sale on 2024-03-18 CLOSING (IB code C, IB Basis 301.00 USD), but the data holds no position to close — it is booked as a new short until the missing purchase is supplied (`tjs find-missing-history --write-missing-history` writes its .tt OPENING cost=unknown line).
+  warning: ATTENTION: short: SAMPG.US (margin): the broker codes the sale on 2024-03-18 CLOSING (IB code C, IB Basis 301.00 USD), but the data holds no position to close — it is reported by hand, out of the totals, and adds no short, until the missing purchase is supplied (the earlier export, or a .tt purchase line: `tjs find-missing-history --write-purchases` drafts one from the broker's own cost).
 ==> Pooling cost and checking superficial losses across taxable accounts (4 accounts)
 ==> Writing summary reports/margin_wash.sum
 ==> Writing summary reports/ib_wash.sum
@@ -100,6 +100,6 @@
   note: 20 file(s) for other tools -> ../exports/ (the newest year's)
 ==> Done. Reports are in reports/
 ==> Before you trust these numbers (docs/getting-started.md, step 5)
-Warning: 1 position sold in 2024 with no purchase in your files, not in missing_history.tt: SAMPG.US (margin). Those sales are NOT in `tjs sum`; run `tjs find-missing-history`. A short sale still open reads the same: it is in no total until it is covered.
-Info: 8 accounts with open positions and no holdings file to check them against: crypto (2), ib (1), lira (3), margin (3), questrade (1), rrsp (1) +2 more. Run `tjs sanity` with the broker's positions.
+Warning: 1 sale at an unknown cost in 2024, NOT in `tjs sum`: SAMPG.US (margin) on 2024-03-20 (traded 2024-03-18), 20 units. The broker marks it closing and your files hold no purchase of the units: add the purchase (the earlier export or a .tt line), or their cost (`OPENING <date> <SYMBOL> <qty> <CUR> <total cost>`, or `tjs opening`); until then, report it by hand (`tjs form-export` lists it).
+Info: 8 accounts with open positions and no holdings file to check them against: crypto (2), ib (1), lira (3), margin (2), questrade (1), rrsp (1) +2 more. Run `tjs sanity` with the broker's positions.
 Info: Then run `tjs checklist --run`: it checks every step and names the next one.

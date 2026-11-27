@@ -279,7 +279,7 @@ def load_computed(gains_paths: List[Path],
             view = GainRow(e)
             proceeds = float(view.proceeds or 0.0)
             cost = float((row_cost := view.cost) or 0.0)   # read once
-            outlays = float(view.commission or 0.0) + float(view.fee or 0.0)
+            outlays = float(view.commission or 0.0) + float(view.fee or 0.0) + float(view.write_outlay or 0.0)   # (an assigned call's write commission: the gross form-export shows, TJ-5462)
             short = (e.get("direction") or "LONG") == "SHORT"
             # An unknown-cost cover of a short sale made before the data
             # (form-export's is_short_cover): the cover cost is known,
@@ -313,7 +313,7 @@ def load_computed(gains_paths: List[Path],
                     # R1-40). A buy-back's fee is a cost, never proceeds.
                     proceeds = -float(row_cost or 0.0)
                 else:
-                    outlays = 0.0
+                    outlays = float(view.write_outlay or 0.0)   # (a close-timing write's: gross, TJ-5462)
             _fut_loss = 0
             if not unknown_proceeds and _future_on_slip(full, country):
                 # Booked on its settled P/L (lib/futures): form-export

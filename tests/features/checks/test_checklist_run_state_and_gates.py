@@ -106,15 +106,15 @@ class TestFingerprintCoversEveryRunInput(_Built):
 
     def test_manifest_change_is_stale(self):
         p = self.copy()
-        man = p / "inputs" / "margin" / "manifest.json"
+        man = p / "inputs" / "margin" / "elections.json"
         man.write_text(json.dumps({"elections": {"e1": {"choice": "taxable_disposition"}}}))
         r = cl.d_run_clean(ctx(p))
         self.assertEqual(r.status, "attention", r.detail)
-        self.assertIn("inputs/margin/manifest.json", r.detail)
+        self.assertIn("inputs/margin/elections.json", r.detail)
 
     def test_empty_manifest_is_not_an_input_change(self):
         p = self.copy()
-        (p / "inputs" / "margin" / "manifest.json").write_text('{"elections": {}}')
+        (p / "inputs" / "margin" / "elections.json").write_text('{"elections": {}}')
         self.assertEqual(cl.d_run_clean(ctx(p)).status, "done")
 
     def test_sends_json_and_crypto_ticker_map(self):

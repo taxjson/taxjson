@@ -273,7 +273,7 @@ class TestAFilingReminderIsNeverLostInSilence(_Shown):
         text = self._reminded(NameError("a bug"))
         self.assertIn("could not check the elections for a FILING REQUIRED", text)
         self.assertIn("NameError: a bug", text)
-        self.assertIn("tjs elect", text)
+        self.assertIn("tjs elections", text)
 
     def test_an_error_with_no_text_is_still_named(self):
         self.assertIn("AssertionError", self._reminded(AssertionError()))

@@ -69,6 +69,8 @@ UNHELD = {
     "harvest": ("today's radar and prices", "tests/test_harvest.py"),
     "technicals": ("Yahoo Finance's daily closes, or a history cache no golden book holds",
                    "tests/features/totals/test_technicals_command.py"),
+    "stress": ("Yahoo Finance's daily closes, or a history cache no golden book holds",
+               "tests/features/totals/test_stress_estimates_an_index_move.py"),
     "tax-logic": ("the spec itself, hundreds of KB a country, moved by every rule's edit",
                   "tests/test_tax_logic.py"),
     "slip-audit --import-cra": ("needs pdftotext (poppler-utils), a program taxjson does not ship",
@@ -459,7 +461,7 @@ class TestEveryOutputIsHeld(unittest.TestCase):
 
 
 class TestElectPendingFromItsFile(unittest.TestCase):
-    """`tjs elect --pending --json` beside a work/pending_elections.json
+    """`tjs elections --pending --json` beside a work/pending_elections.json
     (the golden view holds the branch without one): the file's content
     under the registry's number, whatever number the file holds for its
     own format, or none. An account's entry is the file's as it is."""
@@ -473,10 +475,10 @@ class TestElectPendingFromItsFile(unittest.TestCase):
             with self.subTest(file_schema_version=own), tempfile.TemporaryDirectory() as d:
                 pending = copy.deepcopy(self.PENDING)
                 r = _tjs(_project(d, pending=pending if own is None else {"schema_version": own, **pending}),
-                         "elect", "--pending", "--json")
+                         "elections", "--pending", "--json")
                 self.assertEqual(r.returncode, 0, r.stderr)
                 doc = json.loads(r.stdout)
-                self.assertEqual(doc.pop("schema_version"), J.SCHEMAS["elect --pending"])
+                self.assertEqual(doc.pop("schema_version"), J.SCHEMAS["elections --pending"])
                 self.assertEqual(doc, self.PENDING)
 
 

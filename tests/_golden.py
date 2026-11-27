@@ -199,8 +199,15 @@ def _make_private(root: Path) -> None:
 
 
 def _snapshot(root: Path) -> dict:
+    """Every file under `root` but the command logs (a project's or a
+    year's logs/, lib/command_log: what each command showed, with its
+    clock, not an output of the books)."""
     return {p.relative_to(root).as_posix(): p.read_bytes()
-            for p in root.rglob("*") if p.is_file()}
+            for p in root.rglob("*") if p.is_file() and not _command_log(p.relative_to(root).parts)}
+
+
+def _command_log(parts: tuple) -> bool:
+    return parts[:1] == ("logs",) or (parts[1:2] == ("logs",) and parts[0].isdigit())
 
 
 def _decoded(data: bytes) -> str:

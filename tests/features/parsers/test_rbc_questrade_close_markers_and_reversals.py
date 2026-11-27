@@ -140,17 +140,19 @@ class TestRbcOpenCloseMarker(unittest.TestCase):
         ]
         self.assertEqual(unbacked_option_close_messages(books), [])
 
-    def test_same_day_write_and_buy_back_in_either_order_is_backed(self):
-        # RBC prints no time: a day's write (O) and its buy-back (C) can
-        # sort buy first.
+    def test_same_day_write_and_buy_back_read_in_the_books_order(self):
+        # RBC prints no time: its parser puts a day's write (O) ahead of
+        # the buy-back (C) it backs (`_order_by_open_close`), and the
+        # check reads the rows in the books' order, looking no further
+        # (lib/unbacked_close, backlog TJ-5349).
         sym = "WIDG240816C00072000.US"
-        books = [
-            _tx(date="2024-08-02", symbol=sym, quantity=6, net_amount=741.0,
-                open_close="C"),
-            _tx(date="2024-08-02", symbol=sym, quantity=-6,
-                net_amount=1029.0, open_close="O"),
-        ]
-        self.assertEqual(unbacked_option_closes(books), [])
+        buy = _tx(date="2024-08-02", symbol=sym, quantity=6, net_amount=741.0,
+                  open_close="C")
+        write = _tx(date="2024-08-02", symbol=sym, quantity=-6,
+                    net_amount=1029.0, open_close="O")
+        self.assertEqual(unbacked_option_closes([write, buy], "canada"), [])
+        self.assertEqual([f["unbacked"] for f in
+                          unbacked_option_closes([buy, write], "canada")], [6.0])
 
     def test_unrelated_root_is_not_a_partner(self):
         books = [
@@ -195,7 +197,7 @@ class TestRbcCloseContractEndToEnd(unittest.TestCase):
 
     def test_wrong_root_in_tt_is_loud_and_fails_handoff(self):
         p, out = self._p25("wrong", TT_OPT)
-        self.assertIn("ATTENTION: QRL.B270618C00038000.TO", out)
+        self.assertIn("ATTENTION: unbacked close: QRL.B270618C00038000.TO", out)
         self.assertIn("GLOBAL QRL270618C00038000.TO QRL.B270618C00038000.TO",
                       out)
         h = _cli_run(p, "handoff")

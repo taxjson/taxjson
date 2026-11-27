@@ -38,6 +38,7 @@ from __future__ import annotations
 from taxjson.project.accounts import account_of, accounts_of
 from taxjson.project.settings import settings_of
 from taxjson.lib.stage_msg import emit_line
+from taxjson.lib.account_list import names_of
 from taxjson.lib.rename_decl import (KIND_ANY, LATE_FOLD, SOURCE_IB_CONID,
                                      SOURCE_MAP, SOURCE_TT, WINDOW_DAYS,
                                      DatedRename, _days)
@@ -1190,14 +1191,14 @@ def _diag_account(name: str, accounts: Iterable[str]) -> str:
 
 def rename_hints(root: Path, cfg: Dict[str, Any],
                  events: Iterable[Dict[str, Any]] = (),
-                 account: Optional[str] = None) -> List[Dict[str, Any]]:
+                 account: Any = None) -> List[Dict[str, Any]]:
     """The look-alike renames the brokers' exports show (_LOOKS_RE,
     _DATED_HINT_RE in the run's work/*.diag) that neither the books (a
     rename event of OLD to NEW) nor ticker.map (a line that joins or
     dates the two, a DISTINCT line) already answer: each with its
     account, date (the new symbol's first row: the latest date the
     change can have) and the `.tt` line `RENAME <date> OLD NEW` that
-    books it."""
+    books it. `account`: None | a name | names (lib/account_list)."""
     from taxjson.lib import ticker_map_suggest as TS
     cache = Path(root) / "work"
     if not cache.is_dir():
@@ -1209,7 +1210,7 @@ def rename_hints(root: Path, cfg: Dict[str, Any],
     seen = set()
     for p in sorted(cache.glob("*.diag")):
         acct = _diag_account(p.name, accounts)
-        if account and acct != account:
+        if (only := names_of(account)) is not None and acct not in only:
             continue
         try:
             text = p.read_text(encoding="utf-8", errors="replace")
@@ -1309,13 +1310,16 @@ def _denied_into_cost(root: Path, cfg: Dict[str, Any]
 
 
 def report(root: Path, cfg: Dict[str, Any],
-           account: Optional[str] = None, *,
+           account: Any = None, *,
            undated: bool = True, hints: bool = True) -> Dict[str, Any]:
     """`tjs renames`: every rename event with its date, source and
     the position / book cost it carried per account; every late trade
     in an old ticker with its resolution; the undated ticker.map renames
-    (with the dated form when a broker event gives the date)."""
+    (with the dated form when a broker event gives the date).
+    `account`: the accounts reported (None | a name | names:
+    lib/account_list.names_of); None for every account."""
     root = Path(root)
+    only = names_of(account)
     tmap, ren = _ticker_map(root)
     # The rename events the declarations make — .tt RENAME lines (the
     # form of record) and legacy dated ticker.map lines, merged as the
@@ -1355,7 +1359,7 @@ def report(root: Path, cfg: Dict[str, Any],
     folds = _booked_as_new(root, accounts)
     out_events = []
     for e in events:
-        if account and account not in e["accounts"]:
+        if only is not None and not set(only) & set(e["accounts"]):
             continue
         carried = []
         for r in e["rows"]:
@@ -1363,9 +1367,9 @@ def report(root: Path, cfg: Dict[str, Any],
             acct = r["_acct"]
             if not q and acct in by_contract.get((e["old"], e["new"]), ()):
                 continue
-            if account and acct != account:
-                # The account asked for only: another account's holding
-                # and cost were in its report (backlog TJ-0851).
+            if only is not None and acct not in only:
+                # The account asked for only (or those listed): another
+                # account's holding and cost were in its report (TJ-0851).
                 continue
             carried.append({
                 "account": acct,
@@ -1387,7 +1391,8 @@ def report(root: Path, cfg: Dict[str, Any],
                                         SOURCE_IB_CONID, "broker")
                             if x in ids), "broker"),
             "ticker_map_lines": lines,
-            "accounts": [account] if account else e["accounts"],
+            "accounts": (e["accounts"] if only is None
+                         else [a for a in e["accounts"] if a in only]),
             "carried": carried, "currency": base_cur,
             # Denied losses on the old symbol by the rename date that
             # the books add to a replacement's cost: not in book_cost.
@@ -1402,10 +1407,10 @@ def report(root: Path, cfg: Dict[str, Any],
                 x for x in folds
                 if x["symbol"] == e["old"] and x["booked_as"] == e["new"]
                 and x["date"] >= e["date"]
-                and (not account or x["account"] == account)]})
+                and (only is None or x["account"] in only)]})
     late = []
     for r, e in late_rows(rows, events, _project_country(cfg)):
-        if account and r["_acct"] != account:
+        if only is not None and r["_acct"] not in only:
             continue
         choice = declared_late(dated, e, ren, account=r["_acct"],
                                held=r["_acct"] in e["accounts"])
@@ -1419,7 +1424,7 @@ def report(root: Path, cfg: Dict[str, Any],
     if tmap is not None and want_undated:
         raw: List[Dict[str, Any]] = []
         for acct in sorted(accounts):
-            if account and acct != account:
+            if only is not None and acct not in only:
                 continue
             for r in _raw_rename_rows(root, acct):
                 r = dict(r)
@@ -1438,11 +1443,11 @@ def report(root: Path, cfg: Dict[str, Any],
                             "source": UNDATED_SOURCE,
                             "broker_dates": sorted(set(hint))})
     unresolved = sum(1 for x in late if x["resolution"] == "unresolved")
-    suggested = (rename_hints(root, cfg, events, account) if hints
+    suggested = (rename_hints(root, cfg, events, only) if hints
                  else [])
     unused = []
     for dr in unused_declarations(dated, events, ren):
-        if account and dr.account and dr.account != account:
+        if only is not None and dr.account and dr.account not in only:
             continue
         unused.append({"date": dr.date, "old": dr.old, "new": dr.new,
                        "late": dr.late, "source": dr.source or SOURCE_MAP,

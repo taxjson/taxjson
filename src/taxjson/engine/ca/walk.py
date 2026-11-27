@@ -892,7 +892,7 @@ def _past_position(tx: TaxTransaction, qty: float, closing_qty: float, internal_
 
 
 def _walk_trade(*, account: str, internal_adj: Decimal, internal_dw: Decimal, internal_tainted: bool, is_option_assign: bool,
-                   is_other_scope: bool, it: _CanadaIteration, pool: AcbPool, qty: float, run: _CanadaRun, symbol: str, trace_sym: str, tx: TaxTransaction, internal_sources: Sequence[Dict[str, Any]] = ()) -> Tuple[Decimal, Optional[Decimal]]:
+                   is_other_scope: bool, it: _CanadaIteration, pool: AcbPool, qty: float, run: _CanadaRun, symbol: str, trace_sym: str, tx: TaxTransaction, internal_sources: Sequence[Dict[str, Any]] = (), internal_outlay: Decimal = _ZERO) -> Tuple[Decimal, Optional[Decimal]]:
     """A trade row of the walk (a buy, a sale, a short's open or cover, an option leg's
     shares): a sheltered or affiliated account's row on its own pool, an opening on the
     taxable pool at its cost, else the closing's proceeds, cost and gain against the pool's
@@ -991,11 +991,11 @@ def _walk_trade(*, account: str, internal_adj: Decimal, internal_dw: Decimal, in
         # (the part past the position: booked below, or rounding kept here; TJ-4990)
         leftover = abs(qty) - closing_qty
         _close_share, _over_material = _past_position(tx, qty, closing_qty, internal_adj, _qeps)
-        _recognized = _ZERO
+        _recognized = _lot_out = _ZERO   # (the written lots' commission and fee: `write_outlay`)
         _grant_units_closed = 0.0
         _grant_closed = None
-        _plain_close = M.of(D(closing_qty)
-                             * avg_cost_unit_d)
+        _plain_close = M.of(D(closing_qty) * avg_cost_unit_d)
+        _own_unknown = pool.written_taint(tx.account)      # (a written pool: the account's own, TJ-5377)
         if pool.qty < 0 and pool.grants:
             # Short option lots: FIFO by write, the
             # closing account's first; recognised lots
@@ -1012,7 +1012,7 @@ def _walk_trade(*, account: str, internal_adj: Decimal, internal_dw: Decimal, in
                      or abs(sum(l['units'] for l in _lots)
                             - abs(pool.qty)) > 1e-9))
             (cost_basis, _recognized,
-             _grant_units_closed, _grant_closed) = \
+             _grant_units_closed, _grant_closed, _lot_out) = \
                 pool.close_lots(closing_qty, is_option_assign, tx.account)
             if _avg_close:
                 cost_basis = _plain_close
@@ -1108,10 +1108,10 @@ def _walk_trade(*, account: str, internal_adj: Decimal, internal_dw: Decimal, in
             # run routes it to manual_reporting_required, out of the
             # totals (lib/pipeline; CA-ACB-11), and names it with the
             # cost to add (lib/first_run.unknown_cost_sales, TJ-2770).
-            is_tainted = (pool.tainted
+            is_tainted = ((pool.tainted if _own_unknown is None else bool(_own_unknown))
                           or internal_tainted)
             # (the OPENING cost=unknown rows behind it, TJ-3209)
-            _ucf = _unknown_sources(pool, internal_sources)
+            _ucf = _unknown_sources(pool, internal_sources, _own_unknown)
             # An in-kind contribution of LONG shares
             # to a registered plan (lib/in_kind): a
             # sale at fair market value whose loss
@@ -1176,7 +1176,7 @@ def _walk_trade(*, account: str, internal_adj: Decimal, internal_dw: Decimal, in
                 'days_held': days_held, 'account': account,
                 'currency': tx.currency,
                 'commission': M.of(tx.commission or 0) * M.of(fee_share),
-                'fee': M.of(tx.fee or 0) * M.of(fee_share),
+                'fee': M.of(tx.fee or 0) * M.of(fee_share), **({'write_outlay': _w} if (_w := internal_outlay * M.of(fee_share) if pool.qty > 0 else _lot_out) > 0 else {}),   # (a written option's commission and fee: CA-OPT-06, CA-DISP-06)
                 'direction': 'LONG' if pool.qty > 0 else 'SHORT',
                 'tainted': is_tainted,
                 **({'unknown_cost_from': _ucf}
@@ -1259,9 +1259,9 @@ def _walk_trade(*, account: str, internal_adj: Decimal, internal_dw: Decimal, in
                     else _ZERO)
                 it.pending_adjustments.stage(
                     tx, underlying, -gain, _dw_opt,
-                    bool(pool.tainted),
-                    sources=pool.unknown_from)
-
+                    bool(pool.tainted if _own_unknown is None else _own_unknown),
+                    sources=pool.unknown_from if _own_unknown is None else _own_unknown,
+                    outlay=_lot_out + ((M.of(tx.commission or 0) + M.of(tx.fee or 0)) * M.of(_close_share) if pool.qty < 0 else _ZERO))
         pool.close(closing_qty, cost_basis, _qeps)
 
         if run.trace:
@@ -1699,8 +1699,7 @@ def _walk_rows(*, it: _CanadaIteration, run: _CanadaRun, fold: Optional[_WalkFol
             # Only a stock trade can be an assignment's leg (an
             # ADJUST / SPLIT / OB row on the underlying used to
             # pop — and drop — the staged premium).
-            internal_adj = _ZERO
-            internal_dw = _ZERO
+            internal_adj = internal_dw = internal_outlay = _ZERO
             internal_tainted = False
             internal_sources: List[Dict[str, Any]] = []
         else:
@@ -1708,6 +1707,7 @@ def _walk_rows(*, it: _CanadaIteration, run: _CanadaRun, fold: Optional[_WalkFol
             # is still to come away from this trade.
             _taken = it.pending_adjustments.take(tx)
             internal_adj = _taken.amount
+            internal_outlay = _taken.outlay     # (a written call's commission: the sale's outlay, TJ-5381)
             # The earlier superficial loss in that premium (an
             # exercised replacement call: backlog TJ-0061).
             internal_dw = _taken.deferred
@@ -1767,7 +1767,7 @@ def _walk_rows(*, it: _CanadaIteration, run: _CanadaRun, fold: Optional[_WalkFol
                     # Missing-history short contracts hold a FIFO place
                     # (never recognised — their write predates
                     # the data).
-                    _ca_short_lot_open(run, pool, tx, abs(qty), 0.0, False)
+                    _ca_short_lot_open(run, pool, tx, abs(qty), 0.0, False)['unknown'] = True
             if run.trace:
                 _ca_acb_trace(it, _tsym).append(f"# {tx.date} OPENING_BALANCE {qty:10.4f} | Missing history (bought before the data) — cost UNKNOWN until the pool drains to zero")
         else:
@@ -1781,7 +1781,7 @@ def _walk_rows(*, it: _CanadaIteration, run: _CanadaRun, fold: Optional[_WalkFol
                 account=account, internal_adj=internal_adj, internal_dw=internal_dw,
                 internal_tainted=internal_tainted, is_option_assign=is_option_assign,
                 is_other_scope=is_other_scope, it=it, pool=pool, qty=qty, run=run,
-                symbol=symbol, tx=tx, trace_sym=_tsym, internal_sources=internal_sources)
+                symbol=symbol, tx=tx, trace_sym=_tsym, internal_sources=internal_sources, internal_outlay=internal_outlay)
 
         if run.trace:
             fee_sh = _per_share(M.of(tx.commission) + M.of(tx.fee), abs(tx.quantity), symbol)

@@ -591,12 +591,12 @@
   "exit": 0
  },
  {
-  "view": "elect --json",
+  "view": "elections --json",
   "cwd": ".",
   "exit": 0
  },
  {
-  "view": "elect --pending --json",
+  "view": "elections --pending --json",
   "cwd": ".",
   "exit": 0
  },

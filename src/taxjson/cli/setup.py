@@ -10,6 +10,7 @@ from taxjson.project.toml_io import read_toml, parse_toml as _parse_toml
 from taxjson.project.settings import settings_of
 from taxjson.lib import out as _out
 from taxjson.lib import project_layout as _PL
+from taxjson.lib.command_log import ask as _ask_logged
 from taxjson.lib.json_contract import versioned
 from taxjson.lib.years_report import years_report
 from taxjson.lib.cli_diag import write_text_atomic, tax_year as _tax_year_arg
@@ -20,7 +21,7 @@ from taxjson.cli.checklist_run import (
     default_run_sub,
 )
 from taxjson.cli.common import (
-    _FROZEN_NOTE_PREFIX, _os_path_lexists, _year_dir_arg,
+    _accounts, _FROZEN_NOTE_PREFIX, _os_path_lexists, _year_dir_arg,
 )
 from taxjson.pipeline.config import (
     _config_shown, _country, _read_config_text, load_config,
@@ -83,6 +84,10 @@ _TEMPLATE_GITIGNORE = """\
 # them in a backup; delete these two lines to commit them too.
 /snapshot/
 /*/snapshot/
+# The output of each command (`[settings] log_keep`): your figures
+# again, as reports/ shows them.
+/logs/
+/*/logs/
 # The lock a command holds while it rewrites a file beside it
 # (inputs/<account>/.sends.json.lock): not an input.
 .*.lock
@@ -427,13 +432,16 @@ def cmd_fetch(args: argparse.Namespace) -> None:
                          f"[accounts.<name>] in taxjson.toml "
                          f"({', '.join(sorted(serves))})."]))
     accounts_cfg = cfg.get("accounts", {})
-    wanted = list(args.account) if args.account else list(declared)
+    # ACCOUNT ...: space-separated names and comma lists mean the same
+    # (`tjs fetch margin,ib` is `tjs fetch margin ib`), in the order given.
+    names = _accounts(args, root)
+    wanted = list(names) if names is not None else list(declared)
     for a in wanted:
         if a not in declared:
             _die(f"[accounts.{a}] declares no `brokerage`"
                  if a in accounts_cfg else
                  f"no [accounts.{a}] in taxjson.toml")
-    if not args.account:
+    if names is None:
         wanted = sorted(wanted)
     by_fetcher: Dict[str, List[str]] = {}
     for a in wanted:
@@ -474,13 +482,17 @@ def cmd_fetch(args: argparse.Namespace) -> None:
             continue
         # Where the downloads and the positions go (lib/project_layout):
         # the shared inputs folder of a multi-year project, the year's
-        # holdings folder.
+        # holdings folder (one every year shares: the snapshot's file
+        # named for its year, lib/holdings_dir).
+        from taxjson.lib.holdings_dir import fetch_years
+        _hy, _hby = fetch_years(root)
         req = FP.FetchRequest(root=root, work=root / "work", config=cfg,
                               accounts=accts, args=args, say=say,
                               dry_run=dry_run, json=json_mode,
                               inputs=_PL.inputs_dir(root),
                               holdings=_PL.holdings_folder(root),
-                              shared_inputs=_PL.shared_inputs(root))
+                              shared_inputs=_PL.shared_inputs(root),
+                              holdings_year=_hy, holdings_compared_by=_hby)
         out = f.impl.fetch(req) or {}
         for a, r in out.items():
             results.setdefault(a, {}).update(r or {})
@@ -650,8 +662,9 @@ def cmd_init(args: argparse.Namespace) -> None:
     # -> a sibling folder) put the account folders and READMEs there,
     # as _refuse_outside_dir_links refuses for every other command.
     _yd = f"{first_year}/" if years else ""
+    # (the year folders' holdings/ is one beside them, shared: TJ-5367)
     _init_refuse_outside_links(top, [
-        f"{_yd}{_PL.HOLDINGS}" if years else "", _PL.INPUTS,
+        *([_yd, _PL.HOLDINGS] if years else []), _PL.INPUTS,
         *(f"{_PL.INPUTS}/{a}" for a in account_names)])
     import os as _os
     # Every folder the scaffold writes into is checked BEFORE anything
@@ -662,7 +675,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     # .gitignore were written — the retry then refused, "taxjson.toml
     # already exists" (backlog TJ-0568).
     for rel in ([_PL.INPUTS] + [f"{_PL.INPUTS}/{a}" for a in account_names]
-                + ([f"{_yd}{_PL.HOLDINGS}"] if years else [])):
+                + ([_PL.HOLDINGS] if years else [])):
         q = top / rel
         if _os.path.lexists(q) and not q.is_dir():
             _die(f"cannot create {rel}/: it exists and is not a "
@@ -718,7 +731,7 @@ def cmd_init(args: argparse.Namespace) -> None:
                  + (", and [settings] local_timezone" if _systz() is None
                     else "") + ".")
         doc.line("  2. Save the broker exports in inputs/<account>/"
-                 + (f" (every year), positions snapshots in {_yrel}holdings/."
+                 + (" and positions snapshots in holdings/ (every year)."
                     if years else "."))
         # Commands to copy: their own lines, never wrapped.
         doc.line(f"  3. tjs -C {_shlex.quote(str(root))} run")
@@ -754,6 +767,8 @@ def _init_config_text(cfg: Path, country: str, args: argparse.Namespace, years: 
     # The config is (re)written — the guard above already enforces --force.
     _layout = ({_PL.INPUTS_KEY: f"../{_PL.INPUTS}",
                 _PL.EXPORTS_KEY: f"../{_PL.EXPORTS}",
+                # The positions snapshots every year shares (TJ-5367).
+                _PL.HOLDINGS_KEY: _PL.SHARED_HOLDINGS,
                 # Canada: the interlisted pairs, one file every year reads.
                 **({_PL.TOBASE_KEY: _PL.SHARED_TOBASE}
                    if country == "canada" else {})} if years else {})
@@ -883,8 +898,9 @@ def _init_scaffold(first_year: int, years: bool, top: Path, account_names: Tuple
         "# The newest year's positions and wash radar, for other tools "
         "(`tjs run`).\n/exports/\n" if years else ""))
     if years:
-        from taxjson.lib.holdings_dir import README as _HREADME
-        _stub(f"{_yrel}{_PL.HOLDINGS}/README.txt", _HREADME)
+        # One holdings/ beside inputs/, every year's (TJ-5367).
+        from taxjson.lib.holdings_dir import SHARED_README as _HREADME
+        _stub(f"{_PL.HOLDINGS}/README.txt", _HREADME)
     from taxjson.lib.config_template import input_readme as _readme
     for acct in _accts_made:
         # The README also keeps the empty input dir present under git.
@@ -975,8 +991,9 @@ def _init_next_details(_yrel: str, years: bool, root: Path, top: Path, first_yea
         for _ln in _out_wrap(
                 "2. Drop every year's broker CSV exports into "
                 "inputs/<account>/ (one folder per account, all years "
-                f"together) and the broker's positions snapshots into "
-                f"{_yrel}holdings/.", indent="  ", hang="     "):
+                "together) and the broker's positions snapshots into "
+                "holdings/ (all years together: each year compares its "
+                "own).", indent="  ", hang="     "):
             doc.line(_ln)
     else:
         doc.line("  2. Drop broker CSV exports into inputs/<account>/.")
@@ -1101,16 +1118,18 @@ def _init_demo(args: argparse.Namespace) -> None:
     doc["settings"]["province"] = DM.PROVINCE
     doc["settings"].update({_PL.INPUTS_KEY: f"../{_PL.INPUTS}",
                             _PL.EXPORTS_KEY: f"../{_PL.EXPORTS}",
+                            _PL.HOLDINGS_KEY: _PL.SHARED_HOLDINGS,
                             _PL.TOBASE_KEY: _PL.SHARED_TOBASE})
     doc["settings"][_REQ_KEY] = _init_requires(
         root / _PL.CONFIG, DM.COUNTRY, doc["settings"], own_tobase=False)
     doc["accounts"] = {n: dict(c) for n, c in DM.ACCOUNTS}
-    (root / _PL.HOLDINGS).mkdir(parents=True, exist_ok=True, mode=0o700)
+    (top / _PL.HOLDINGS).mkdir(parents=True, exist_ok=True, mode=0o700)
+    root.mkdir(parents=True, exist_ok=True)
     write_atomic(root / "taxjson.toml",
                  CT.render_document(doc, DM.COUNTRY, DM.YEAR))
     write_atomic(root / "ticker.map", init_template())
-    from taxjson.lib.holdings_dir import README as _HREADME
-    write_atomic(root / _PL.HOLDINGS / "README.txt", _HREADME)
+    from taxjson.lib.holdings_dir import SHARED_README as _HREADME
+    write_atomic(top / _PL.HOLDINGS / "README.txt", _HREADME)
     write_atomic(top / _TB.TOBASE_MAP,
                  _TB.render(_TB.load_master(), shared=True))
     write_atomic(top / ".gitignore", _TEMPLATE_GITIGNORE
@@ -1444,6 +1463,26 @@ def _years_act(text: str, cmd: str, width_: int = 100) -> str:
     return _out.act(cut.rstrip(" ,;:—-") + " ...", cmd)
 
 
+def _years_denied_head(top: Path, rep: Dict[str, Any]) -> str:
+    """The years table's heading of the locks' `disallowed`, in the words
+    of the country the figures shown were closed under (lib/country
+    LOCK_DENIED_HEAD; Canada: SUPERFICIAL, the superficial losses alone,
+    never DENIED, the name of `tjs sum`'s DENIED (INFO), which adds an
+    in-kind contribution's loss no lock records: TJ-5341). Locks of two
+    countries, or one that cannot be read: the neutral word."""
+    from taxjson.lib.country import LOCK_DENIED_HEAD, lock_country
+    from taxjson.lib.filed_locks import load_lock_json
+    seen = set()
+    for r in rep["years"]:
+        if r["totals"]:
+            try:
+                seen.add(lock_country(load_lock_json(
+                    top / r["folder"] / "filed" / f"{r['year']}.json")))
+            except (OSError, ValueError):
+                seen.add(None)
+    return LOCK_DENIED_HEAD[seen.pop() if len(seen) == 1 else None]
+
+
 def _years_table(top: Path, rep: Dict[str, Any], root: Path) -> None:
     """`tjs years`, the default view (docs/output-style.md,
     Essentials first): one table row per year, then one line per thing
@@ -1517,7 +1556,7 @@ def _years_table(top: Path, rep: Dict[str, Any], root: Path) -> None:
                  + (" *: locked before the year ended." if any(
                      r["partial_lock"] for r in rep["years"]) else ""))
     for _ln in _out.fit_table(
-            ["YEAR", "STATE", "REALIZED", "DENIED", "LAST RUN", "INPUTS",
+            ["YEAR", "STATE", "REALIZED", _years_denied_head(top, rep), "LAST RUN", "INPUTS",
              f"VS {newest}", "CHECKLIST"], body,
             aligns=["<", "<", ">", ">", "<", "<", "<", "<"],
             drop=(7, 3), key=0):
@@ -1744,14 +1783,15 @@ def _new_year_stopped(e: BaseException, year: str, written: bool,
 def _unfreeze_text(text: str) -> str:
     """taxjson.toml's text without the lines close-year's freeze
     wrote: its note (_FROZEN_NOTE) and the commented-out `inputs_dir` /
-    `tobase_map` under it (new-year sets them again)."""
+    `tobase_map` / `holdings_dir` under it (new-year sets them again)."""
     out: List[str] = []
     skip = False
     for ln in text.splitlines(keepends=True):
         if ln.strip().startswith(_FROZEN_NOTE_PREFIX):
             skip = True
             continue
-        if skip and re.match(r"#\s*(inputs_dir|tobase_map)\s*=", ln.strip()):
+        if skip and re.match(r"#\s*(inputs_dir|tobase_map|holdings_dir)\s*=",
+                             ln.strip()):
             continue
         skip = False
         out.append(ln)
@@ -1836,11 +1876,15 @@ def cmd_new_year(args: argparse.Namespace) -> None:
               and not _os_path_lexists(folder / n)]
     try:
         # The oldest taxjson the copy runs on: last year's, raised for
-        # its own layout (lib/requires) — computed here, so the copy is
-        # published complete (_new_year_publish).
+        # its own layout (lib/requires) and an elections.json its inputs
+        # folder holds (a year filed with manifest.json passes on an
+        # older one) — computed here, so the copy is published complete
+        # (_new_year_publish).
         from taxjson.lib.requires import raised_text as _req_raised
         new_text = _req_raised(
-            new_text, own_tobase=(_legacy_tobase or (
+            new_text, ("elections_json",) if _PL.holds_elections(
+                folder, new_settings) else (),
+            own_tobase=(_legacy_tobase or (
                 folder / _PL.TOBASE_MAP).is_file()))
     except (_PL.LayoutError, ValueError) as e:
         _die_input(f"{prev_year}/taxjson.toml cannot be copied: {e}",
@@ -1913,7 +1957,10 @@ def _new_year_text(prev: Path, prev_year: int, year: int, top: Path
     named again, a holdings_dir by way of the previous year's folder
     made the new year's own; a text that cannot be copied stops the
     command with nothing created. Returns the text, its settings, the
-    cutoff kept (or None) and the shared tobase.map named (or None)."""
+    cutoff kept (or None) and the shared tobase.map named (or None). A
+    frozen year's holdings_dir, when the lock records it (or a holdings/
+    is beside the year folders), is named again unless the text names
+    one: the snapshots every year shares (backlog TJ-5367)."""
     text = _read_config_text(prev / "taxjson.toml")
     kept_since = None
     # A frozen previous year (close-year copied its exports into its
@@ -1926,7 +1973,7 @@ def _new_year_text(prev: Path, prev_year: int, year: int, top: Path
         # year folders, as for a lock that recorded none — never the
         # note copied into a year that was not closed.
         _fz = {}
-    _share_inputs = _share_tobase = None
+    _share_inputs = _share_tobase = _share_hold = None
     if _fz is not None:
         # The folders its lock recorded; a year frozen as a single
         # folder (then moved by `migrate --to-years`) recorded none:
@@ -1936,6 +1983,9 @@ def _new_year_text(prev: Path, prev_year: int, year: int, top: Path
         _share_tobase = _fz.get("tobase_map") or (
             _PL.SHARED_TOBASE if (top / _PL.TOBASE_MAP).is_file()
             else None)
+        # The positions snapshots every year shares (backlog TJ-5367).
+        _share_hold = _fz.get(_PL.HOLDINGS_KEY) or (
+            _PL.SHARED_HOLDINGS if (top / _PL.HOLDINGS).is_dir() else None)
     try:
         new_text = _PL.new_year_text(text, prev_year, year)
         kept_since = _implicit_grant_since(_PL.parse_config_text(text))
@@ -1947,8 +1997,21 @@ def _new_year_text(prev: Path, prev_year: int, year: int, top: Path
             new_text = _PL.set_key_text(
                 new_text, ("settings", "option_grant_timing_since"),
                 kept_since, after="year")
-        if _share_inputs or _share_tobase:
+        if _share_inputs or _share_tobase or _share_hold:
             new_text = _unfreeze_text(new_text)
+            if _share_hold and (_PL.parse_config_text(new_text).get(
+                    "settings") or {}).get(_PL.HOLDINGS_KEY) is None:
+                new_text = _PL.set_key_text(
+                    new_text, ("settings", _PL.HOLDINGS_KEY), _share_hold,
+                    after=_PL.EXPORTS_KEY)
+                if not _fz.get(_PL.HOLDINGS_KEY):
+                    # (no lock named it: a switch, said; TJ-5405)
+                    _say("note", f"{year}/taxjson.toml: {_PL.HOLDINGS_KEY} "
+                         f"= \"{_share_hold}\" — {year} compares the "
+                         f"positions snapshots in the {_PL.HOLDINGS}/ "
+                         f"beside the year folders, every year's, not a "
+                         f"{_PL.HOLDINGS}/ of its own ({prev_year} was "
+                         f"filed with its own)", prog=f"{_PROG} new-year")
             if _share_inputs:
                 new_text = _PL.set_key_text(
                     new_text, ("settings", _PL.INPUTS_KEY),
@@ -2264,7 +2327,7 @@ def cmd_align(args: argparse.Namespace) -> None:
     def _ask(what: str) -> bool:
         if not interactive:
             return True
-        ans = input(f"{what}? [y/N/q] ").strip().lower()
+        ans = _ask_logged(f"{what}? [y/N/q] ").strip().lower()
         if ans.startswith("q"):
             raise SystemExit(0)
         return ans.startswith("y")
@@ -2406,9 +2469,14 @@ def _align_texts(root: Path, lines: List[Any], other: Path,
                 # file with exactly that key changed.)
                 text = _PL.set_key_text(text, tuple(k["path"]), k["there"])
             # A setting brought over may need a newer taxjson: raised
-            # for the layout features the keys added (never lowered).
-            text = _REQ.raised_text(text, since=_before, own_tobase=(
-                root / _PL.TOBASE_MAP).is_file())
+            # for the layout features the keys added, and for an
+            # elections.json the inputs folder it names holds (as
+            # new-year does; never lowered).
+            text = _REQ.raised_text(
+                text, ("elections_json",) if _PL.holds_elections(
+                    root, _PL.parse_config_text(text).get("settings")
+                    or {}) else (),
+                since=_before, own_tobase=(root / _PL.TOBASE_MAP).is_file())
         except (_PL.LayoutError, ValueError) as e:
             _die_input(f"{cfg.name}: {e}", "Nothing was written (neither "
                        "ticker.map nor taxjson.toml).")
@@ -2651,13 +2719,14 @@ def _register_init(sub: argparse._SubParsersAction) -> None:
         description="Scaffold one folder of exports for every year: "
                     "inputs/<account>/ (one folder per account for every "
                     "year's broker exports, each with a README saying what "
-                    "to download), a .gitignore, and the tax year's folder "
-                    "(YYYY/), a complete project of its own — its "
+                    "to download), holdings/ for every year's broker "
+                    "positions snapshots, a .gitignore, and the tax year's "
+                    "folder (YYYY/), a complete project of its own — its "
                     "taxjson.toml (country, base currency, the usual "
-                    "accounts for that country, inputs_dir = \"../inputs\" "
-                    "and exports_dir = \"../exports\"), a commented "
-                    "ticker.map and holdings/ for the broker's positions "
-                    "snapshots; in Canada also tobase.map (the interlisted "
+                    "accounts for that country, inputs_dir = \"../inputs\", "
+                    "holdings_dir = \"../holdings\" and exports_dir = "
+                    "\"../exports\") and a commented ticker.map; in "
+                    "Canada also tobase.map (the interlisted "
                     "pairs) beside the year folders, one file every year "
                     "reads. Every other command runs in the year "
                     "folder (`tjs -C DIR/YYYY run`); `tjs new-year` "
@@ -2724,7 +2793,9 @@ def _register_new_year(sub: argparse._SubParsersAction) -> None:
                     "prior_year_record pointed at its lock, its [estimate] "
                     "and [instalments] commented out) and ticker.map (the "
                     "shared tobase.map is read, not copied), and an empty "
-                    "holdings/, and print the next steps.")
+                    "holdings/ (none when the years share one: "
+                    "holdings_dir = \"../holdings\", set again after a "
+                    "filed year that froze it), and print the next steps.")
     p_ny.add_argument("year", type=int, help="The tax year (YYYY)")
     p_ny.set_defaults(func=cmd_new_year)
 
@@ -2850,8 +2921,10 @@ def _register_fetch(sub: argparse._SubParsersAction) -> None:
                     "hand-exported CSVs keep working side by side.",
         conflict_handler="resolve")
     p_fetch.add_argument("account", nargs="*",
-                         help="Accounts to fetch (default: every "
-                              "account declaring a `brokerage`)")
+                         metavar="ACCOUNT[,ACCOUNT...]",
+                         help="Accounts to fetch, space-separated or as "
+                              "a comma list (default: every account "
+                              "declaring a `brokerage`)")
     p_fetch.add_argument("--list", action="store_true",
                          help="List the installed fetchers and the "
                               "brokerages each one serves")
@@ -2875,7 +2948,7 @@ def _register_fetch(sub: argparse._SubParsersAction) -> None:
         from taxjson.lib import fetchers as _FP
         _FP.add_fetcher_arguments(p_fetch)
         p_fetch.epilog = _fetch_epilog()
-    p_fetch.set_defaults(func=cmd_fetch)
+    p_fetch.set_defaults(func=cmd_fetch, account_list=True)
 
 
 def register(sub: argparse._SubParsersAction) -> None:

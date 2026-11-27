@@ -1,5 +1,8 @@
 {
   "account": "hand",
+  "account_names": [
+    "hand"
+  ],
   "as_of_date": "<stamp>",
   "country": "canada",
   "generated_at": "<stamp>",

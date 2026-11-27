@@ -425,7 +425,7 @@ class TestUs355NoRemainingLotBeforeTheRecordDate(unittest.TestCase):
 
 
 class TestQuestrade355EndToEnd(unittest.TestCase):
-    """The items' repros from a Questrade export, `tjs elect` included."""
+    """The items' repros from a Questrade export, `tjs elections` included."""
 
     def _run(self, on, qty, alloc, *more):
         import json
@@ -449,7 +449,7 @@ class TestQuestrade355EndToEnd(unittest.TestCase):
             m = re.search(r'\b(\d{8}-[\w-]+-[0-9a-f]{4})\b',
                           first.stdout + first.stderr)
             self.assertTrue(m, (first.stdout + first.stderr)[-1500:])
-            tj(root, 'elect', 'margin', '--set',
+            tj(root, 'elections', 'margin', '--set',
                f'{m.group(1)}=tax_free_355', '--hint',
                f'allocated_acb={alloc}')
             again = tj(root, 'run', '--no-input', '--details')
@@ -521,7 +521,7 @@ class TestRbc355RecordDate(unittest.TestCase):
             m = re.search(r'\b(\d{8}-[\w-]+-[0-9a-f]{4})\b',
                           first.stdout + first.stderr)
             self.assertTrue(m, (first.stdout + first.stderr)[-1500:])
-            tj(root, 'elect', 'a', '--set', f'{m.group(1)}=tax_free_355',
+            tj(root, 'elections', 'a', '--set', f'{m.group(1)}=tax_free_355',
                '--hint', 'allocated_acb=10')
             tj(root, 'run', '--no-input')
             return json.loads((root / 'work/a_gains.json').read_text())

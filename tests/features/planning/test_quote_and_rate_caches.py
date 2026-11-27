@@ -499,21 +499,22 @@ class TestInitLeavesNoHalfProject(unittest.TestCase):
                   check=False)
 
     def test_a_file_at_holdings_is_refused_before_any_write(self):
+        # (the holdings/ beside inputs/, every year's: backlog TJ-5367)
         with tempfile.TemporaryDirectory() as td:
             top = Path(td)
-            (top / "2025").mkdir()
-            (top / "2025" / "holdings").write_text("not a folder\n")
+            (top / "holdings").write_text("not a folder\n")
             r = self._init(top)
             self.assertEqual(r.returncode, 1, r.stderr)
-            self.assertIn("cannot create 2025/holdings/: it exists and is "
+            self.assertIn("cannot create holdings/: it exists and is "
                           "not a directory", r.stderr)
             self.assertIn("Nothing was written", r.stderr)
-            self.assertEqual(_tree(top), ["2025", "2025/holdings"])
-            (top / "2025" / "holdings").unlink()
+            self.assertEqual(_tree(top), ["holdings"])
+            (top / "holdings").unlink()
             r = self._init(top)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertTrue((top / "2025" / "taxjson.toml").is_file())
-            self.assertTrue((top / "2025" / "holdings").is_dir())
+            self.assertTrue((top / "holdings").is_dir())
+            self.assertFalse((top / "2025" / "holdings").exists())
 
     @unittest.skipIf(not hasattr(os, "geteuid") or os.geteuid() == 0,
                      "a read-only folder does not stop root")

@@ -1,0 +1,163 @@
+{
+  "account_names": null,
+  "accounts": [
+    {
+      "account": "margin",
+      "dividend": 47.25,
+      "fees": 356.5,
+      "option": 428.75,
+      "pil": 0.0,
+      "realized": 712.75,
+      "stock": 284.0,
+      "total": 760.0,
+      "type": "taxable"
+    },
+    {
+      "account": "tfsa",
+      "dividend": 0.0,
+      "fees": 15.75,
+      "option": 21.25,
+      "pil": 0.0,
+      "realized": 21.25,
+      "stock": 0.0,
+      "total": 21.25,
+      "type": "sheltered"
+    }
+  ],
+  "basis": "wash-adjusted",
+  "currency": "CAD",
+  "filing": {
+    "accounts": [
+      {
+        "acb": 5346.5,
+        "account": "margin",
+        "denied": 98.0,
+        "denied_all": 98.0,
+        "denied_contribution": 0.0,
+        "dispositions": 21,
+        "gain": 712.75,
+        "outlays": 216.75,
+        "proceeds": 6276.0,
+        "total_cost": 5563.25
+      }
+    ],
+    "date_basis": "date_settle",
+    "engine_denied_unrounded": 98.0,
+    "engine_gain_unrounded": 712.75,
+    "fx_cash": {
+      "currency": "CAD",
+      "headline": "FX on foreign cash, ledger v2 (opt-in, under audit): computed for 2025 \u2014 net 0.00 CAD, reportable 0.00; review it before using it",
+      "label": "v2 (opt-in, under audit)",
+      "ledger": "v2",
+      "line": "15300",
+      "net_gain": 0.0,
+      "problems": [],
+      "reasons": [],
+      "reliable": true,
+      "reportable": 0.0,
+      "review_key": "v2|2025|0.00",
+      "rule": "ITA s.39(1.1) (capital, $200 de minimis)",
+      "status": "computed",
+      "under_audit": true,
+      "year": 2025
+    },
+    "lines": [
+      {
+        "acb": 4949.0,
+        "denied": 98.0,
+        "denied_all": 98.0,
+        "denied_contribution": 0.0,
+        "dispositions": 3,
+        "gain": 284.0,
+        "gain_code": "13200",
+        "key": "shares",
+        "label": "Publicly traded shares, mutual fund units, deferral of eligible small business corporation shares, and other shares",
+        "line": "4",
+        "outlays": 135.0,
+        "period": null,
+        "proceeds": 5368.0,
+        "proceeds_code": "13199",
+        "rows": 1,
+        "short": "shares & fund units",
+        "title": "Part 3, line 4 (lines 13199/13200)",
+        "total_cost": 5084.0
+      },
+      {
+        "acb": 397.5,
+        "denied": 0.0,
+        "denied_all": 0.0,
+        "denied_contribution": 0.0,
+        "dispositions": 18,
+        "gain": 428.75,
+        "gain_code": "15300",
+        "key": "other",
+        "label": "Bonds, debentures, promissory notes, and other similar properties (options, futures, foreign currency)",
+        "line": "6",
+        "outlays": 81.75,
+        "period": null,
+        "proceeds": 908.0,
+        "proceeds_code": "15199",
+        "rows": 13,
+        "short": "options & other properties",
+        "title": "Part 3, line 6 (lines 15199/15300)",
+        "total_cost": 479.25
+      }
+    ],
+    "totals": {
+      "acb": 5346.5,
+      "denied": 98.0,
+      "denied_all": 98.0,
+      "denied_contribution": 0.0,
+      "gain": 712.75,
+      "outlays": 216.75,
+      "permanently_denied": 0.0,
+      "proceeds": 6276.0,
+      "total_cost": 5563.25
+    }
+  },
+  "no_purchase_in_totals": [],
+  "no_purchase_uncovered": [],
+  "readiness": {
+    "complete": true,
+    "issues": []
+  },
+  "run_state_problems": [],
+  "schema_version": 1,
+  "sheltered_included": [
+    "tfsa"
+  ],
+  "subtotals": {
+    "sheltered": {
+      "dividend": 0.0,
+      "fees": 15.75,
+      "option": 21.25,
+      "pil": 0.0,
+      "realized": 21.25,
+      "stock": 0.0,
+      "total": 21.25
+    },
+    "taxable": {
+      "dividend": 47.25,
+      "fees": 356.5,
+      "option": 428.75,
+      "pil": 0.0,
+      "realized": 712.75,
+      "stock": 284.0,
+      "total": 760.0
+    }
+  },
+  "tainted_included": 0,
+  "tainted_routed": 0,
+  "totals": {
+    "dividend": 47.25,
+    "fees": 372.25,
+    "option": 450.0,
+    "pil": 0.0,
+    "realized": 734.0,
+    "stock": 284.0,
+    "total": 781.25
+  },
+  "unknown_cost_included": 0,
+  "unknown_cost_routed": 0,
+  "year": "2025"
+}

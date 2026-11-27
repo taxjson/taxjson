@@ -150,7 +150,7 @@ a purchase at fair market value.
 
 **s.86.1 rollover / taxable deemed dividend.** The two Canadian
 treatments of a foreign spin-off: split the parent's cost with no income
-(the election), or a dividend equal to the new shares' value. `tjs elect`
+(the election), or a dividend equal to the new shares' value. `tjs elections`
 asks which.
 
 ## taxjson terms
@@ -219,7 +219,7 @@ A good start, not always your ACB (it may miss a superficial loss, a
 return of capital, or the same stock in another account).
 
 **Election.** Your choice of tax treatment for a merger or spin-off,
-asked once and saved in `inputs/<account>/manifest.json`. `tjs elect`.
+asked once and saved in `inputs/<account>/elections.json`. `tjs elections`.
 
 **Wash radar.** `tjs wash-radar`: for each recent loss and each position
 you might sell, whether a sale or a purchase today would trigger (or

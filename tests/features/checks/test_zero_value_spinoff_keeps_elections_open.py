@@ -18,7 +18,7 @@ class TestZeroValueSpinoffInChecklist(unittest.TestCase):
         from pathlib import Path
         from taxjson.lib import checklist as cl
         from _support.filing_checklist_ctx import _cl_ctx, _cl_project
-        table = {"elect": (0, "No pending elections.\n", "")}
+        table = {"elections": (0, "No pending elections.\n", "")}
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             cfg = _cl_project(root)

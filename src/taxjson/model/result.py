@@ -166,6 +166,10 @@ class GainRow(Row):
     raw_gain = _money("raw_gain")
     commission = _money("commission")
     fee = _money("fee")
+    # A written option's commission and fee netted in the proceeds (an
+    # assigned call's shares, a close-timing write's close): Schedule 3
+    # shows its premium gross with it an outlay (CA-OPT-06, CA-DISP-06).
+    write_outlay = _money("write_outlay")
     disallowed_amount = _money("disallowed_amount")
     permanently_disallowed = _money("permanently_disallowed")
     deferred_loss_recovered = _money("deferred_loss_recovered")

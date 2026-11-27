@@ -1,0 +1,187 @@
+{
+  "account": "margin",
+  "basis": "wash-adjusted",
+  "gains": {
+    "manual_rows": [],
+    "option_fees": {
+      "CAD": 148.25
+    },
+    "returns_by_asset": {
+      "Options": {
+        "CAD": {
+          "days": [
+            8,
+            29,
+            29,
+            27,
+            0,
+            0,
+            0,
+            41,
+            44,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "dollars": [
+            -17.25,
+            -44.5,
+            -32.0,
+            25.5,
+            47.25,
+            33.75,
+            60.75,
+            51.5,
+            -33.75,
+            47.25,
+            33.75,
+            74.25,
+            141.75,
+            40.5
+          ],
+          "fee_shares": [
+            2.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            2.0,
+            2.0,
+            1.0,
+            1.0,
+            1.0,
+            2.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            2.0,
+            2.0
+          ],
+          "fees": [
+            9.25,
+            7.75,
+            1.5,
+            7.75,
+            1.5,
+            9.25,
+            9.25,
+            6.75,
+            6.75,
+            6.75,
+            9.25,
+            6.75,
+            6.75,
+            6.75,
+            6.75,
+            6.75,
+            6.75
+          ]
+        }
+      },
+      "Stocks": {
+        "CAD": {
+          "days": [
+            199,
+            318,
+            146
+          ],
+          "dollars": [
+            6.25,
+            277.75,
+            0.0
+          ],
+          "fee_shares": [
+            100.0,
+            200.0,
+            100.0
+          ],
+          "fees": [
+            55.0,
+            55.0,
+            8.0
+          ]
+        }
+      }
+    },
+    "tainted_count": 0,
+    "tainted_routed": 0,
+    "ticker_stats": {
+      "ZZQV.TO": {
+        "CAD": {
+          "cap": 284.0,
+          "cost": 5020.75,
+          "div": 0.0,
+          "hold_days": [
+            8,
+            199,
+            29,
+            29,
+            27,
+            318,
+            41,
+            146
+          ],
+          "opt": -16.75,
+          "pil": 0.0,
+          "proceeds": 5190.0,
+          "trade_count": 8
+        }
+      },
+      "ZZRW.US": {
+        "CAD": {
+          "cap": 0.0,
+          "cost": -560.25,
+          "div": 47.25,
+          "hold_days": [
+            0,
+            0,
+            0,
+            44,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "opt": 445.5,
+          "pil": 0.0,
+          "proceeds": -114.75,
+          "trade_count": 9
+        }
+      }
+    },
+    "total_fees": {
+      "CAD": 356.5
+    },
+    "total_year": "2025",
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 2
+  },
+  "generated_at": "<stamp>",
+  "income": {
+    "interest_paid_totals": {},
+    "interest_totals": {
+      "CAD": 4.24
+    },
+    "missing_amount": [],
+    "ticker_stats": {
+      "ZZRW.US": {
+        "CAD": {
+          "div": 47.25,
+          "pil": 0.0,
+          "tax": 6.75
+        }
+      }
+    },
+    "total_year": "2025"
+  },
+  "schema_version": 1,
+  "wash": {
+    "count": 1,
+    "total_disallowed": 98.0
+  },
+  "year": "2025"
+}

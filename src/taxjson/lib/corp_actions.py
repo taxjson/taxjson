@@ -1244,7 +1244,7 @@ def _ib_unsupported_events(odd_rows, account, acct_of, quiet: bool = False
 
 # Elections whose tax deferral is only valid if the user FILES the
 # election with their return — consumed by `tjs run`'s end-of-run
-# reminder and the `elect` listing (the option text says this at
+# reminder and the `elections` listing (the option text says this at
 # choose time, but a March election is forgotten by filing season).
 #
 # NOT the s.85.1 share-for-share rollover: it applies automatically
@@ -3087,7 +3087,7 @@ def _summary_identifies(summary: str, ev: "CorporateAction",
 
 def manifest_lock_path(path: Path) -> Path:
     """The lock file a change to the elections manifest `path` holds: a
-    hidden file beside it (`.manifest.json.lock`), so no inputs scan
+    hidden file beside it (`.elections.json.lock`), so no inputs scan
     reads or counts it (run's dot-file rule; the project's .gitignore
     leaves out `.*.lock`)."""
     path = Path(path)
@@ -3142,7 +3142,7 @@ class Manifest:
             raw = path.read_text(encoding='utf-8-sig').strip()
         except UnicodeDecodeError as exc:
             raise ManifestError(
-                f"manifest at {path} is not UTF-8 text (byte "
+                f"the elections file {path} is not UTF-8 text (byte "
                 f"{exc.start}: {exc.reason}) — re-save it as UTF-8"
             ) from None
         except OSError as exc:
@@ -3150,7 +3150,7 @@ class Manifest:
             # link: one line, never a traceback and never 'no elections'
             # (re-audit A2-0160 / A2-0463 / A2-1402).
             raise ManifestError(
-                f"manifest at {path} cannot be read "
+                f"the elections file {path} cannot be read "
                 f"({exc.strerror or exc}) — it holds this account's "
                 f"elections: restore it from git or a backup"
             ) from None
@@ -3166,7 +3166,7 @@ class Manifest:
             # so the user can fix the invocation instead of staring at a
             # raw Python traceback.
             raise ManifestError(
-                f"manifest at {path} is not valid JSON ({exc.msg} at line "
+                f"the elections file {path} is not valid JSON ({exc.msg} at line "
                 f"{exc.lineno} col {exc.colno}). It holds this account's "
                 f"elections and their hand-typed values: fix the JSON, or "
                 f"restore the file from git or a backup (`tjs "
@@ -3175,13 +3175,13 @@ class Manifest:
             ) from None
         if not isinstance(data, dict):
             raise ManifestError(
-                f"manifest at {path} must be a JSON object with an "
+                f"the elections file {path} must be a JSON object with an "
                 f"'elections' key; got top-level {type(data).__name__}"
             )
         elections = data.get('elections') or {}
         if not isinstance(elections, dict):
             raise ManifestError(
-                f"manifest at {path}: 'elections' must be a JSON object "
+                f"the elections file {path}: 'elections' must be a JSON object "
                 f"keyed by event id; got {type(elections).__name__}")
         records = {}
         for eid, rec in elections.items():
@@ -3189,7 +3189,7 @@ class Manifest:
             # deep inside the corp-actions stage (audit S072-16).
             if not isinstance(rec, dict):
                 raise ManifestError(
-                    f"manifest at {path}: election {eid} must be a JSON "
+                    f"the elections file {path}: election {eid} must be a JSON "
                     f"object like {{\"election\": \"...\"}}; got "
                     f"{type(rec).__name__} {rec!r:.40}")
             for fld in ('election', 'summary', 'notes', 'read_event_id'):
@@ -3199,16 +3199,16 @@ class Manifest:
                     val = ''
                 if not isinstance(val, str):
                     raise ManifestError(
-                        f"manifest at {path}: election {eid}: '{fld}' "
+                        f"the elections file {path}: election {eid}: '{fld}' "
                         f"must be a string; got {rec.get(fld)!r:.40}")
             if not isinstance(rec.get('hints') or {}, dict):
                 raise ManifestError(
-                    f"manifest at {path}: election {eid}: 'hints' must be "
+                    f"the elections file {path}: election {eid}: 'hints' must be "
                     f"a JSON object; got {rec.get('hints')!r:.40}")
             for hk, hv in (rec.get('hints') or {}).items():
                 prob = hint_value_problem(hk, hv)
                 if prob:
-                    raise ManifestError(f"manifest at {path}: election "
+                    raise ManifestError(f"the elections file {path}: election "
                                         f"{eid}: hint {prob}")
             records[eid] = ElectionRecord(
                 event_id=eid,
@@ -3267,10 +3267,11 @@ class Manifest:
         """Load the manifest at `path`, apply `change(manifest)` and save
         it when the change returns a true value, as ONE step under
         `manifest_lock`. Returns (the manifest as saved, the change's
-        value). Two writers (two `tjs elect --set`s, a run's prompt
+        value). Two writers (two `tjs elections --set`s, a run's prompt
         beside a --set) each loaded, changed and saved the whole file:
         the later save dropped the other's election, although both said
-        "Election saved" (backlog TJ-0544)."""
+        "Election saved" (backlog TJ-0544). The commands save through
+        lib/elections_save `update`, which raises requires_taxjson too."""
         path = Path(path)
         with manifest_lock(path):
             man = cls.load(path)
@@ -3328,9 +3329,9 @@ class Manifest:
                 f"{'; ' + rec.summary if rec.summary else ''}) was saved "
                 f"under an older id that fits more than one event of this "
                 f"run ({', '.join(e.event_id for e in cands)}) — not "
-                f"guessed. Set it again with `tjs elect <account> "
+                f"guessed. Set it again with `tjs elections <account> "
                 f"--set <event id>={rec.election}` (the hints are in the "
-                f"manifest), then delete the old entry.")
+                f"elections file), then delete the old entry.")
 
         def _adopt(eid: str, ev: "CorporateAction", note: str = '') -> None:
             nonlocal migrated
@@ -3400,7 +3401,7 @@ class Manifest:
                     + ("no saved summary" if not rec.summary else
                        f"a different action type or ratio ({rec.summary})")
                     + " — not carried over. If it is the same event, set "
-                    f"it again with `tjs elect <account> --set "
+                    f"it again with `tjs elections <account> --set "
                     f"{ev.event_id}={rec.election}`.")
                 continue
             _adopt(hits[0], ev,
@@ -3446,7 +3447,7 @@ class Manifest:
         would carry over to an event of `events`, worked out on a copy:
         this manifest is not changed. A run whose manifest is not
         rewritten (shared exports: --decisions-only) applies such a
-        record under its old id; `tjs elect --redo/--reset --event`
+        record under its old id; `tjs elections --redo/--reset --event`
         takes either id for it (backlog TJ-0848)."""
         recs = {eid: ElectionRecord(event_id=r.event_id, summary=r.summary,
                                     election=r.election, notes=r.notes,
@@ -3528,7 +3529,7 @@ class RuleSpec:
     # When set, the resolver applies this election WITHOUT prompting —
     # for event types with exactly one sane treatment (name changes).
     # A manifest record is still written (audit trail intact; `tjs
-    # elect --redo` can override it like any other election).
+    # elections --redo` can override it like any other election).
     auto_default: Optional[str] = None
 
 
@@ -3795,7 +3796,7 @@ def _emit_taxable_exchange(event: CorporateAction, hints: dict,
             f"value for the new shares ({why}) — emitting zero-valued "
             f"rows: the SELL realizes a fake loss (proceeds are only the "
             f"cash-in-lieu, if any) and the BUY enters at $0 basis. Set "
-            f"its value: tjs elect {event.account} --set "
+            f"its value: tjs elections {event.account} --set "
             f"{event.event_id}=<election> --hint fmv_per_share=<value>")
 
     # Proceeds in the source listing's currency: shares + cash-in-lieu.
@@ -4106,7 +4107,7 @@ def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
         emit_line(f"warning: boot merger {event.source_symbol}→"
             f"{event.target_symbol} on {event.date} has cash_boot=0 — "
             f"elect reorg_368 for an all-stock reorganization (`tjs "
-            f"elect --redo`).")
+            f"elections --redo`).")
     if tgt_fmv <= 0 and event.qty_received > 0:
         # Without the new shares' value the realized gain is understated
         # (boot - basis), so the §356 gain is capped too low and the
@@ -4115,7 +4116,7 @@ def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
             f"{event.target_symbol} on {event.date} has no value for the "
             f"new shares (fmv_per_share=0 and none reported) — the "
             f"realized gain counts only the cash, so the recognized gain "
-            f"and the new basis are understated. Re-run `tjs elect "
+            f"and the new basis are understated. Re-run `tjs elections "
             f"--redo` with the FMV per new share.")
 
     tgt_fmv = max(tgt_fmv, 0.0)
@@ -4492,7 +4493,7 @@ FMV_SPINOFF_ELECTIONS = ('taxable_deemed_dividend',
 def declares_zero_value(election: str, hints: Optional[dict]) -> bool:
     """Whether a saved election DECLARES the spun-off shares worth $0:
     an FMV spin-off election whose hints carry `fmv_per_share` written
-    as 0 (`tjs elect --set ID=ELECTION --hint fmv_per_share=0`, or a
+    as 0 (`tjs elections --set ID=ELECTION --hint fmv_per_share=0`, or a
     0 confirmed at the prompt) — a warrant distributed at no value. That
     is the user's answer: the $0 cost is listed as an Info, never as a
     Warning, ATTENTION or pending. A $0 the broker booked with no value
@@ -4520,21 +4521,19 @@ def declared_zero_value_ids(manifest_path: Path) -> set:
 
 def declared_zero_value_events(root: Path) -> set:
     """{(account, event id)} of the project's elections that declare a
-    $0 value: each account's manifest as `tjs elect` reads it
-    (inputs/<account>/manifest.json, else the legacy
-    work/<account>_manifest.json)."""
+    $0 value: each account's elections file as `tjs elections` reads it
+    (inputs/<account>/elections.json — a filed year's frozen
+    manifest.json: project_layout.elections_file)."""
+    from taxjson.lib import project_layout as _PL
     root = Path(root)
     found: Dict[str, Path] = {}
-    for pattern, name_of in (
-            ('work/*_manifest.json',
-             lambda p: p.name[:-len('_manifest.json')]),
-            # the canonical one wins
-            ('inputs/*/manifest.json', lambda p: p.parent.name)):
-        try:
-            for p in sorted(root.glob(pattern)):
-                found[name_of(p)] = p
-        except OSError:
-            continue
+    try:
+        for d in sorted(root.glob('inputs/*/')):
+            p = _PL.elections_file(d, root)
+            if p.is_file():
+                found[d.name] = p
+    except OSError:
+        pass
     return {(acct, eid) for acct, p in found.items()
             for eid in declared_zero_value_ids(p)}
 
@@ -4546,7 +4545,7 @@ def declared_zero_value_text(account: str, symbol: str, date: str,
     return (f"{account}: spin-off {symbol} on {date} (event {event_id}) "
             f"is booked at the $0 value you declared (fmv_per_share=0): "
             f"no dividend income and a $0 cost for the new shares. To "
-            f"change it: tjs elect {account} --redo --event "
+            f"change it: tjs elections {account} --redo --event "
             f"{event_id}")
 
 
@@ -5233,7 +5232,7 @@ HINTS_BY_ELECTION: Dict[str, List[tuple]] = {
          "date's rate)."),
         ('source_basis_total',
          "Not used any more: the engine computes the §356 gain per lot "
-         "from your own lots. Accepted from older manifests and ignored.",
+         "from your own lots. Accepted from older elections files and ignored.",
          lambda ev: False),
         ('fmv_per_share',
          "FMV per NEW share on the effective date, in the NEW shares' "
@@ -5286,7 +5285,7 @@ def apply_auto_defaults(events: List[CorporateAction], manifest: "Manifest",
     """Write auto-default elections (RuleSpec.auto_default) for any
     unresolved event whose rule declares one. Returns the events that
     were auto-elected. The manifest record is a full audit-trail entry —
-    `tjs elect --redo` overrides it like any hand-made election."""
+    `tjs elections --redo` overrides it like any hand-made election."""
     applied: List[CorporateAction] = []
     for ev in events:
         if manifest.get(ev.event_id) is not None:
@@ -5317,7 +5316,7 @@ def apply_auto_defaults(events: List[CorporateAction], manifest: "Manifest",
 # tax-logic CA-CORP-11 / US-CORP-12): a spin-off's new shares at $0
 # cost with the parent keeping its whole cost, a merger's new shares
 # taking the old shares' cost. Nothing is written to the manifest: an
-# election saved there (`tjs elect`) wins, and "ask" brings the
+# election saved there (`tjs elections`) wins, and "ask" brings the
 # question back.
 SHELTERED_DEFAULT = 'sheltered_default'      # the rows' corp_election
 SHELTERED_ELECTION_MODES = ('zero', 'ask')
@@ -5403,7 +5402,7 @@ def sheltered_default_text(account: str, action_type: str, symbol: str,
         change = "sets a fair value if you want it there"
     return (f"sheltered account {account}: {what} on {date} (event "
             f"{event_id}) {booked}; cost only affects the holdings view "
-            f"— `tjs elect` {change}")
+            f"— `tjs elections` {change}")
 
 
 # Hint keys older manifests carry that the emitters still honour.
@@ -5420,7 +5419,7 @@ def check_hints(event: CorporateAction, election_key: str,
     warn about a missing needed one. Every consumer reads `hints.get(key) or 0`, so a
     misspelled key in a hand-edited manifest silently booked a $0
     dividend, a $0-cost lot or a rollover moving no cost — while `tjs
-    elect --hint` refuses the same key (audit S072-07)."""
+    elections --hint` refuses the same key (audit S072-07)."""
     import difflib
     specs = HINTS_BY_ELECTION.get(election_key, [])
     legacy = LEGACY_HINT_KEYS.get(election_key, {})
@@ -5440,7 +5439,7 @@ def check_hints(event: CorporateAction, election_key: str,
             f"election {election_key!r} for event {event.event_id} has "
             f"unknown hint(s) {', '.join(tips)} — it takes: "
             f"{', '.join(sorted(h[0] for h in specs)) or 'none'}. Fix the "
-            f"manifest or re-elect with `tjs elect --set`.")
+            f"elections file or re-elect with `tjs elections --set`.")
     have = given | {legacy[k] for k in given if k in legacy}
     missing = [h[0] for h in specs
                if h[0] not in have and (len(h) < 3 or h[2](event))]
@@ -5449,7 +5448,7 @@ def check_hints(event: CorporateAction, election_key: str,
         # "deferred" rows, which `tjs run` keeps warning about.
         emit_line(f"warning: election {election_key!r} for event "
                   f"{event.event_id} has no {', '.join(missing)} — the rows "
-                  f"are booked at $0 until you set it: `tjs elect --set "
+                  f"are booked at $0 until you set it: `tjs elections --set "
                   f"{event.event_id}={election_key} "
                   + ' '.join(f'--hint {k}=<value>' for k in missing) + "`.")
 

@@ -2,7 +2,7 @@
 account's files (extract_events), and the renames a project's
 corporate-action map makes (project_corp_map, map_renames,
 project_corp_renames). bin/taxjson_corp_actions.py writes the events;
-the corporate-action views and `tjs elect` read them from here. The
+the corporate-action views and `tjs elections` read them from here. The
 extractor table stays in bin/taxjson_corp_actions.py (EXTRACTORS,
 extractor_for): it folds a label through the parser registry, which lib
 may not reach.
@@ -41,7 +41,7 @@ def extract_events(extractor, csv_paths: List[Path],
     `symbol_codes`: the account's internal-code record (work/<acct>
     _symbol_codes.state), for an extractor that books a chain under
     a broker's internal code (Questrade). The one extraction definition
-    for the CLI, `tjs elect` and `tjs spinoffs`, so all three
+    for the CLI, `tjs elections` and `tjs spinoffs`, so all three
     compute the same event ids and targets.
 
     The extractors read the export's cells and descriptions themselves,
@@ -117,7 +117,7 @@ def project_corp_map(root: Path) -> Optional[Path]:
     project at `root`: the run's effective map (work/ticker.map.effective:
     ticker.map plus the listings it joined and the .tt renames) when the
     last run wrote one, else ticker.map; None without either. `tjs
-    elect` extracts with it, so its event ids are the run's (backlog
+    elections` extracts with it, so its event ids are the run's (backlog
     TJ-0849)."""
     from taxjson.lib import project_layout as _PL
     from taxjson.lib.project_layout import EFFECTIVE_MAP

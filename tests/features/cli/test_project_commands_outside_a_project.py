@@ -67,7 +67,7 @@ class TestOutsideAProject(unittest.TestCase):
 
     CMDS = ("sanity", "find-missing-history", "wash-sales", "list",
             "events", "fees", "fees-sum", "fx-cash", "divs-sum", "stats",
-            "amt", "option-boundary", "run", "sum", "elect")
+            "amt", "option-boundary", "run", "sum", "elections")
 
     def test_says_no_project_and_how_to_start_one(self):
         with tempfile.TemporaryDirectory() as tmp:

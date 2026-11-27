@@ -175,7 +175,7 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
                     f"{r.get('date')} (event {eid}) is booked at $0 — no "
                     f"dividend income and a $0 cost for the new shares, "
                     f"so a later sale overstates the gain by the same "
-                    f"amount. Set its value: tjs elect {name} --set "
+                    f"amount. Set its value: tjs elections {name} --set "
                     f"{eid}={r.get('corp_election')} --hint "
                     f"fmv_per_share=<value>")
             # A taxable merger at $0 (the "0 to defer" FMV, with or
@@ -188,7 +188,7 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
                     f"{r.get('date')} (event {eid}) is booked at $0 — the "
                     f"old shares' proceeds are only any cash-in-lieu (a "
                     f"fake loss) and the new shares cost $0. Set its "
-                    f"value: tjs elect {name} --set "
+                    f"value: tjs elections {name} --set "
                     f"{eid}={r.get('corp_election')} --hint "
                     f"fmv_per_share=<value>")
             # An s.86.1 / §355 rollover allocated $0: the parent keeps
@@ -202,7 +202,7 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
                     f"{r.get('date')} (event {eid}, {el}) is booked with "
                     f"$0 allocated cost — the parent keeps all of it and "
                     f"the spin-off's sale books the gain. Set it: tjs "
-                    f"elect {name} --set {eid}={el} --hint "
+                    f"elections {name} --set {eid}={el} --hint "
                     f"{ALLOCATED_BASIS_HINT[el]}=<amount>")
     if lines or notes:
         _write_atomic(diag, "\n".join(lines + [f"note: {n}" for n in notes])
@@ -264,7 +264,7 @@ def _warn_partial_carryovers(name: str, corp_files: List[Path],
                 f"the {held - took:g} kept are booked as {new}, and the "
                 f"holdings and later gains of both are wrong. taxjson cannot "
                 f"yet limit it to the shares exchanged (docs/limits.md). "
-                f"Elect the event `ignore` (tjs elect {name} --set "
+                f"Elect the event `ignore` (tjs elections {name} --set "
                 f"{first['corp_event_id']}=ignore) and book the exchange by "
                 f"hand in a .tt file.")
     if lines:
@@ -277,7 +277,8 @@ def _warn_partial_carryovers(name: str, corp_files: List[Path],
 
 def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
                                year: Any,
-                               tax_date: Optional[str] = None) -> None:
+                               tax_date: Optional[str] = None,
+                               country: Optional[str] = None) -> None:
     """An option still open in the books after its expiry date: the
     export dropped the expiry / assignment / exercise row. For a LONG
     contract the premium paid is a capital loss of the expiry year that
@@ -330,7 +331,7 @@ def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
                 unbacked_option_closes)
             if _txs is not None:
                 _closing = {x["symbol"] for x in expired_open(
-                    _txs, int(year), tax_date=tax_date)
+                    _txs, int(year), tax_date=tax_date, country=country)
                     if x.get("broker_closing")}
                 for _f in unbacked_option_closes(_txs):
                     if len(_f["partners"]) == 1:

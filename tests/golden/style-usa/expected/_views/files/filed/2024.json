@@ -110,8 +110,8 @@
       "group": "equity",
       "income": 0.0,
       "native_currency": "USD",
-      "native_income": 0.0,
-      "native_net": 0.0,
+      "native_income": 0,
+      "native_net": 0,
       "net": 0.0,
       "quantity": 1.0,
       "symbol": "QZQ241220C00035000.US",
@@ -355,13 +355,13 @@
       "inputs/crypto/coinbase_demo.csv": "<sha256 ok>",
       "inputs/crypto/kraken_demo.csv": "<sha256 ok>",
       "inputs/crypto/kraken_ledgers_demo.csv": "<sha256 ok>",
+      "inputs/margin/elections.json": "<sha256 ok>",
       "inputs/margin/ib_demo.csv": "<sha256 ok>",
       "inputs/margin/ib_extra.csv": "<sha256 ok>",
-      "inputs/margin/manifest.json": "<sha256 ok>",
       "inputs/margin/margin_extra.tt": "<sha256 ok>",
       "inputs/qt/questrade_2024.csv": "<sha256 ok>",
       "inputs/roth/roth_extra.tt": "<sha256 ok>",
-      "taxjson.toml": "run-settings:7ef49f439c608078e0f03013d61afee4b55201018dbcaceeca59f58ff832f6c1"
+      "taxjson.toml": "run-settings:d41e410abc9cfc4c76a1f3cbf5182416b23ab434ddd49f2195e6097d1af16ef6"
     },
     "inputs_dir": null,
     "tobase_map": null

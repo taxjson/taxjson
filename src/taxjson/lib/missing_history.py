@@ -45,7 +45,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 from taxjson.model.transaction import TaxTransaction
 from taxjson.lib.row_types import is_stock_dividend, open_close_codes
 from taxjson.lib.opening import BY_LEG, BY_OTHER_ACCOUNT, unknown_opening_reading
-from taxjson.lib.unbacked_close import OrderStarts, unbacked_close
+from taxjson.lib.unbacked_close import (SHORT_WORDS_RE, OrderStarts, close_backing,
+                                        unbacked_close)
 from taxjson.lib.corporate_timeline import (SplitTimeline, event_sort_key,
                                              normalize_symbol_new)
 from taxjson.lib.privacy import mask_id
@@ -379,11 +380,18 @@ class MissingHistoryCandidate:
     # How the broker marked the short ("SHORT." / "IB code O"), for the
     # report's wording.
     short_marker: str = ''
+    # The broker's own code on the first sale it says closed a position
+    # the data never bought ("C", or "C;O": one order that closed a long
+    # and opened a short).
+    closing_code: str = ''
+    # ... and the units the account held when it sold, and the units sold.
+    closing_units: Tuple[float, float] = (0.0, 0.0)
 
 
 # The broker's short-sale marker on a sale's description: RBC writes
 # "<name> SHORT. UNSOLICITED ..." (and "COVER SHORT." on the buy back).
-_BROKER_SHORT_RE = re.compile(r'(?<![A-Z])SHORT\.(?=\s|$)')
+# lib/unbacked_close's, which reads a marked cover by it.
+_BROKER_SHORT_RE = SHORT_WORDS_RE
 
 
 def broker_short_marker(tx) -> str:
@@ -1274,10 +1282,9 @@ def detect_missing_history(
                     # The broker says this sale CLOSED a position the
                     # data never bought (audit S013-00) — even with an
                     # O beside it (C;O on a sale with no long held).
-                    s['closing'] = True
-                    s['unmarked'] = True
-                    s['basis'] = s['basis'] or str(
-                        getattr(tx, 'broker_basis', '') or '')
+                    s['closing'] = s['unmarked'] = True
+                    s.setdefault('closing_row', (';'.join(open_close_codes(tx)), max(prev, 0.0), -tx.quantity))
+                    s['basis'] = s['basis'] or str(getattr(tx, 'broker_basis', '') or '')
                 else:
                     _mk = broker_short_marker(tx)
                     if _mk:
@@ -1309,11 +1316,11 @@ def detect_missing_history(
             peak_short=s['peak_short'],
             end_position=s['running'],
             disposition_count=s['disposition_count'],
-            registered=is_registered_account(account, registered_accounts,
-                                             country),
+            registered=is_registered_account(account, registered_accounts, country),
             broker_marked_short=marked,
             broker_says_closing=closing,
             broker_basis=s.get('basis') or '',
+            closing_code=(s.get('closing_row') or ('',))[0], closing_units=(s.get('closing_row') or (0, 0.0, 0.0))[1:],
             short_marker=' / '.join(sorted(s.get('markers') or ())),
         ))
     out.sort(key=lambda c: (c.symbol, c.account))
@@ -1332,8 +1339,13 @@ class UnbackedCover:
     account: str
     date: str                 # the cover's date on the caller's basis
     unbacked_qty: float       # bought to cover beyond any short held
-    marker: str               # 'COVER SHORT.' / 'IB code C'
-    proceeds: float           # the cover's cost (|net_amount|)
+    marker: str               # 'COVER SHORT.' / 'CLOSE CONTRACT' (RBC) /
+    #                           'code C' (IB's Trades code)
+    proceeds: float           # the unbacked units' share of the cover's cost
+    # The units of the row the account's own short did back: with any, a
+    # short line for the rest would put those at unknown proceeds too
+    # (backlog TJ-5379), so none is offered.
+    backed: float = 0.0
 
 
 def _derivative_symbol(sym: str) -> bool:
@@ -1414,24 +1426,96 @@ def detect_unbacked_covers(
             marker = 'COVER SHORT.'
             unbacked = q - max(0.0, -prev, short_prev)
         elif _close_unbacked(tx, prev, order_prev, own):
-            marker = 'IB code C'
-            unbacked = q - max(0.0, -prev)
-            if 'O' in open_close_codes(tx):
-                # C;O with no short when the order began: the whole
-                # closing part is unbacked; the broker does not say
-                # how much of the fill closed — the fill is reported.
-                unbacked = q
+            # The broker's own words: RBC ends an option trade's
+            # description with CLOSE CONTRACT; IB's Trades code is C
+            # (it said "IB code C" for every broker, backlog TJ-5361).
+            marker = ('CLOSE CONTRACT' if 'CLOSE CONTRACT' in
+                      (tx.description or '').upper() else 'code C')
+            # The one rule's units (lib/unbacked_close): past the short
+            # held, or, C;O with no short when the order began, the whole
+            # fill (the broker does not say how much of it closed).
+            unbacked = close_backing(tx, prev, order_prev).unbacked
         else:
             continue
         if unbacked <= 1e-9:
             continue
+        if canada:
+            # The Canadian books open nothing for them (CA-ACB-11,
+            # CA-OPT-12; backlog TJ-5349): no long a later sale closes.
+            run[key] -= unbacked
         out.append(UnbackedCover(
             symbol=tx.symbol, account=tx.account,
             date=_basis_date(tx, date_basis),
-            unbacked_qty=unbacked, marker=marker,
-            proceeds=M.shown(abs(float(tx.net_amount or 0.0)), 2)))
+            unbacked_qty=unbacked, marker=marker, backed=q - unbacked,
+            # the unbacked units' share of the row's cost (it showed the
+            # whole row's beside a part close)
+            proceeds=M.shown(abs(float(tx.net_amount or 0.0)) * unbacked / q, 2)))
     out.sort(key=lambda c: (c.symbol, c.account, c.date))
     return out
+
+
+def read_marked_closes(transactions: Iterable[TaxTransaction],
+                       country: Optional[str] = None,
+                       partly: Optional[Set[Tuple[str, str]]] = None
+                       ) -> List[TaxTransaction]:
+    """`transactions` as a Canadian run books the trades the broker marks
+    CLOSE (lib/unbacked_close; CA-ACB-11, CA-OPT-12; backlog TJ-5349), for
+    the walks that ask what the totals lack: a marked sale's unbacked
+    units get the opening of unknown cost the run gave them (an
+    OPENING_BALANCE row on the sale's date), so the sale is no sale with
+    no purchase; a marked purchase's unbacked units leave the row, so
+    they are no long a later sale closes. Each account's own netted
+    position, its splits and renames followed; futures are left alone
+    (lib/futures books them). Any other country: the rows as they are
+    (the US engine books by position). `partly`: a set that takes the
+    (SYMBOL, account) of each such trade the account's own position
+    backs in part: the run reports its other units by hand, and an
+    OPENING cost=unknown line for them would put the documented units at
+    an unknown cost too (backlog TJ-5379)."""
+    from dataclasses import replace
+    from taxjson.lib.country import is_canada
+    from taxjson.lib.unbacked_close import CloseWalk
+    out: List[Any] = list(transactions)
+    if country is None or not is_canada(country):
+        return out
+    pos: Dict[Tuple[str, str], float] = {}
+    closes = CloseWalk()
+    added: List[TaxTransaction] = []
+    order = _walk_order(out, country=country)
+    for i in sorted(range(len(out)), key=lambda j: order(out[j])):
+        tx = out[i]
+        key = (tx.symbol, tx.account)
+        q = float(tx.quantity or 0.0)
+        if tx.action == 'SPLIT':
+            new_sym = normalize_symbol_new(tx.symbol, getattr(tx, 'symbol_new', ''))
+            if new_sym:
+                nk = (new_sym, tx.account)
+                pos[nk] = pos.get(nk, 0.0) + pos.pop(key, 0.0) * q
+            elif key in pos:
+                pos[key] *= q
+            continue
+        if tx.action not in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE', 'TRANSFER'):
+            continue
+        prev = pos.get(key, 0.0)
+        gone = 0.0
+        if tx.action == 'BUYSELL' and q \
+                and not (tx.symbol or '').startswith(FUTURES_PREFIXES):
+            backing = closes.read(key, tx, prev)
+            gone = backing.unbacked
+            if partly is not None and gone > 1e-9 and backing.backed > 1e-9:
+                partly.add((str(tx.symbol).upper(), tx.account))
+        if gone > 1e-9 and q < 0:
+            added.append(TaxTransaction(
+                action='OPENING_BALANCE', date=tx.date, date_settle=tx.date,
+                time='00:00:00', quantity=gone, net_amount=0.0,
+                symbol=tx.symbol, account=tx.account, currency=tx.currency))
+            gone = 0.0
+        elif gone > 1e-9:
+            out[i] = replace(tx, quantity=q - gone)     # (units only: the walks read no money)
+            q -= gone
+        pos[key] = prev + q
+    return [t for t in out if abs(float(t.quantity or 0.0)) > 1e-12
+            or t.action != 'BUYSELL'] + added
 
 
 def short_opening_rows(log: Iterable[Dict[str, Any]]) -> List[TaxTransaction]:
@@ -3059,7 +3143,8 @@ def openings_from_log(doc: Dict[str, Any], account: str
                       ) -> List[Dict[str, Any]]:
     """The missing-history openings a gains file's run booked for
     `account` (its `missing_history_log`; `phantom_application_log` in
-    a file an older taxjson wrote), as OPENING_BALANCE row dicts: the
+    a file an older taxjson wrote; and the openings it gave marked CLOSE
+    rows' unbacked units), as OPENING_BALANCE row dicts: the
     units the books hold that no row of work/<acct>_base.json carries.
     Every positions view adds them (lib/positions_check.book_rows)."""
     log = doc.get("missing_history_log")
@@ -3076,6 +3161,18 @@ def openings_from_log(doc: Dict[str, Any], account: str
                         "date_settle": d, "time": "00:00:00",
                         "symbol": e.get("anchor_symbol") or e.get("symbol"),
                         "quantity": float(e["opening_qty"]),
+                        "net_amount": 0.0, "account": account})
+    # The openings a Canadian run gave marked CLOSE rows' unbacked units
+    # (lib/unbacked_close OPENINGS_KEY; CA-ACB-11, CA-OPT-12).
+    from taxjson.lib.unbacked_close import OPENINGS_KEY
+    for e in doc.get(OPENINGS_KEY) or []:
+        if isinstance(e, dict) and e.get("account") == account \
+                and float(e.get("quantity") or 0.0) != 0:
+            d = str(e.get("date") or "1970-01-01")
+            out.append({"action": "OPENING_BALANCE", "date": d,
+                        "date_settle": d, "time": "00:00:00",
+                        "symbol": e.get("symbol"),
+                        "quantity": float(e["quantity"]),
                         "net_amount": 0.0, "account": account})
     return out
 

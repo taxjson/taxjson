@@ -54,7 +54,9 @@ class BrokerFetcher:
                        help="Also snapshot LIVE holdings per "
                             "Questrade account into the year's "
                             "holdings folder, holdings/<account>_"
-                            "live_holdings.toml (`tjs sanity` "
+                            "live_holdings.toml (in a folder every "
+                            "year shares, ../holdings/<account>_"
+                            "live_holdings_<year>.toml; `tjs sanity` "
                             "finds it)")
         p.add_argument("--trim-overlap", action="store_true",
                        help="Trim rows inside the fetched window "

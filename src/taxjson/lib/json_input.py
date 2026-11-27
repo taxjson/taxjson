@@ -133,7 +133,7 @@ _NUM_FIELDS = ("qty", "quantity", "proceeds", "cost", "gain", "net_amount",
                "disallowed_amount", "dividend", "pil", "raw_gain",
                "permanently_disallowed", "deferred_loss_recovered",
                "deferred_wash", "capitalized_263h", "recognised_premium",
-               "denied_contribution")
+               "denied_contribution", "write_outlay")
 
 
 def check_row_types(rows, path, key: str = "transactions", only=None,

@@ -193,7 +193,11 @@ class TestStockDividendWhileShort(unittest.TestCase):
         res, err = _run([_t('b', '2025-01-06', 100, -1000),
                          _t('s', '2025-03-03', -30, 450, open_close='O'),
                          _div(qty=13),
-                         _t('c', '2025-05-05', 33, -400, open_close='C')])
+                         # (coded as the broker codes a purchase that
+                         # closes a short and buys past it; coded C alone,
+                         # its 3 past the short would be the cover of a
+                         # short sold before the files: CA-ACB-11)
+                         _t('c', '2025-05-05', 33, -400, open_close='C;O')])
         said = ' '.join(err.split())
         self.assertIn('warning: ATTENTION: SYQ: stock dividend of 13 share(s) on '
                       '2025-04-01: m holds the security and is also short 30 of '

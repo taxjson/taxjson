@@ -227,7 +227,10 @@ class MigrateLinksThatStay(_Tmp):
 
     def _proj(self):
         p = self.top / "proj"
-        project(p)
+        # holdings/ as a folder that moves with the year: the person's
+        # own `holdings_dir` (with none it stays at the top, shared by
+        # every year: backlog TJ-5367).
+        project(p, extra='holdings_dir = "holdings"\n')
         (p / "inputs" / "margin" / "trades.tt").write_text(
             TRADE.format(y=2025))
         (p / "holdings").mkdir()

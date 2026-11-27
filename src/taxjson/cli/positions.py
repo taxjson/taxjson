@@ -1,5 +1,5 @@
 """The Positions commands: list, shares (and the inventory sum
-`tjs technicals` reads)."""
+`tjs technicals` and `tjs stress` read)."""
 import collections.abc as _cabc
 import argparse
 import sys
@@ -16,8 +16,9 @@ from taxjson.model import money as M
 from taxjson.lib.stage_msg import emit_line
 
 from taxjson.cli.common import (
-    _base_currency, _ISO_DATE_RE, _load_json_or_die, _out_act_prefix,
-    _vprint, _warn_accounts_without_books,
+    _accounts, _accounts_shown, _base_currency, _basis_label, _gains_files_of,
+    _ISO_DATE_RE, _load_json_or_die, _out_act_prefix, _vprint,
+    _warn_accounts_without_books,
 )
 from taxjson.pipeline.config import _country, load_config, load_settings
 from taxjson.pipeline.freshness import timeline_beside
@@ -34,10 +35,13 @@ def held_by_symbol(files: Dict[str, Path], *, options: bool,
                    ) -> Tuple[Dict[str, Dict[str, Any]], Any]:
     """The books' end-of-data inventory (each account's gains file in
     `files`, after ticker.map), summed per symbol: ({symbol: {"qty", "cost",
-    "accounts": {account: qty}, "unknown_cost"}}, the books' year). Option
+    "accounts": {account: qty}, "unknown_cost"}, and "sizes", the contract
+    sizes the lines declare, when one does, and "size_conflict", a line's
+    inputs declaring two}, the books' year). Option
     contracts only with `options`; futures contracts only with `futures`
     (futures options follow `options`). A symbol whose total nets to zero
-    is still in it: the caller drops it (`tjs shares`, `tjs technicals`)."""
+    is still in it: the caller drops it (`tjs shares`, `tjs technicals`,
+    `tjs stress`)."""
     from taxjson.lib.option_symbols import is_option_symbol
     from taxjson.lib.ticker_map import is_future_ticker
     by_sym: Dict[str, Dict[str, Any]] = {}
@@ -69,6 +73,15 @@ def held_by_symbol(files: Dict[str, Path], *, options: bool,
             # cost is the known part only (backlog TJ-0774).
             e["unknown_cost"] = e["unknown_cost"] or bool(
                 h.get("unknown_cost"))
+            # The contract size the rows declared (pipeline
+            # annotate_inventory_multipliers), each account's: `tjs
+            # stress` sizes an option with it when they agree, and leaves
+            # it out when they do not.
+            size = h.get("multiplier")
+            if h.get("multiplier_conflict"):
+                e["size_conflict"] = True
+            elif size:
+                e.setdefault("sizes", set()).add(float(size))
     return by_sym, year
 
 
@@ -79,7 +92,7 @@ def cmd_shares(args: argparse.Namespace) -> None:
     where built), summed per symbol with a per-account breakdown. Shorts
     net against longs (the breakdown shows them). Option contracts are
     left out unless --options; positions netting to zero are dropped."""
-    from taxjson.lib.report_model import gains_basis_label, resolve_gains_files
+    from taxjson.lib.report_model import resolve_gains_files
     from taxjson.lib.report_fmt import fmt_qty as qfmt
     root = Path(args.dir).resolve()
     cache = root / "work"
@@ -87,7 +100,7 @@ def cmd_shares(args: argparse.Namespace) -> None:
     if not files:
         _die_input("no gains files in work/ — run `tjs run` first")
     _warn_accounts_without_books(root, files, "shares", "gains file")
-    basis = gains_basis_label(files)
+    basis = _basis_label(root, files)
     want = None
     if getattr(args, "taxable", False) or getattr(args, "sheltered", False):
         want = "taxable" if args.taxable else "sheltered"
@@ -163,11 +176,12 @@ def cmd_shares(args: argparse.Namespace) -> None:
 
 
 def _list_positional_date(args: argparse.Namespace) -> None:
-    """`tjs list [ACCOUNT] [YYYY-MM-DD]`: a positional YYYY-MM-DD is
-    the date (as --date), anything else the account — `list margin
-    2026-04-28` and `list 2026-04-28` both work. Sets args.account and
-    args.date; two dates, two accounts or a date that differs from
-    --date stop with the usage."""
+    """`tjs list [ACCOUNT[,ACCOUNT...]] [YYYY-MM-DD]`: a positional
+    YYYY-MM-DD is the date (as --date), anything else the account (or
+    the accounts, a comma list) — `list margin 2026-04-28` and `list
+    2026-04-28` both work. Sets args.account (the text given) and
+    args.date; two dates, two account arguments or a date that differs
+    from --date stop with the usage."""
     given = [v for v in (getattr(args, "account", None),
                          getattr(args, "when", None)) if v]
     dates = [v for v in given if _ISO_DATE_RE.match(v)]
@@ -175,7 +189,7 @@ def _list_positional_date(args: argparse.Namespace) -> None:
     if len(dates) > 1 or len(accounts) > 1:
         _die(f"list takes one account and one date: got "
              f"{' '.join(given)}",
-             "Usage: tjs list [ACCOUNT] [YYYY-MM-DD]")
+             "Usage: tjs list [ACCOUNT[,ACCOUNT...]] [YYYY-MM-DD]")
     if dates:
         if getattr(args, "date", None) and args.date != dates[0]:
             _die(f"two dates: {dates[0]} and --date {args.date}",
@@ -264,28 +278,29 @@ def cmd_positions(args: argparse.Namespace) -> None:
     conversion, so quantities and cost basis match the canonical pipeline.
     One row per (account, symbol); a base-currency book-cost TOTAL closes
     the table."""
-    from taxjson.lib.report_model import (gains_basis_label,
-                                          resolve_gains_files)
     root = Path(args.dir).resolve()
     cache = root / "work"
     _list_positional_date(args)
+    # The accounts: the positional the date swap left (one name, or a
+    # comma list, lib/account_list), None for every account.
+    names = _accounts(args, root, text=args.account or "")
     # Canonical per-account gains (wash-adjusted where built — same basis
     # as every other query command); the raw/native derivatives keep
     # cross-listings separate and in native currency, which is the opposite
     # of what this view wants.
     as_of = getattr(args, "date", None)
     if as_of:
-        files, tmp_docs, basis = _positions_as_of(args, as_of, root, cache, resolve_gains_files,
-                                                  gains_basis_label)
+        files, tmp_docs, basis = _positions_as_of(args, as_of, root, cache, names)
     else:
-        files = resolve_gains_files(cache, args.account or None)
+        # (A listed account with no gains file: refused there, exit 1.)
+        files = _gains_files_of(cache, names)
         if not files:
-            if args.account:
-                _die_input(f"no gains for account {args.account!r} in "
+            if names:
+                _die_input(f"no gains for account {names[0]!r} in "
                            f"work/ — run `tjs run` first, or check the "
                            f"name")
             _die_input("no gains files in work/ — run `tjs run` first")
-        basis = gains_basis_label(files)
+        basis = _basis_label(root, files)
 
     money = fmt_money               # shared report-layer formatter
     from taxjson.lib.report_fmt import fmt_qty as qfmt
@@ -340,7 +355,7 @@ def cmd_positions(args: argparse.Namespace) -> None:
     # did, when it is added.
     d = _out.Doc(exact=True, width_=0, live=True)
     if n_pos == 0:
-        scope = f" for account {args.account!r}" if args.account else ""
+        scope = _accounts_shown(names)
         if negative_only:
             d.line(f"No negative positions{scope}.")
         else:
@@ -349,7 +364,9 @@ def cmd_positions(args: argparse.Namespace) -> None:
 
     base, _det, n_sus = _positions_table(root, negative_only, as_of, horizon, args, basis,
                                          total_deferred, out_rows, header, n_pos, money,
-                                         total_cost, n_unknown)
+                                         total_cost, n_unknown, closes={
+                                             (s.get("account"), s.get("date")) for r in json_rows
+                                             for s in r.get("unknown_cost_from") or []})
     if not _det:
         from taxjson.lib.out import act as _act
         if n_sus and not negative_only:
@@ -385,14 +402,14 @@ def cmd_positions(args: argparse.Namespace) -> None:
 
 
 def _positions_as_of(args: argparse.Namespace, as_of: Any, root: Path, cache: Path,
-                     resolve_gains_files: Callable[..., Dict[str, Path]],
-                     gains_basis_label: Callable[..., str]
+                     names: Optional[Tuple[str, ...]] = None
                      ) -> Tuple[Dict[str, Path], Dict[str, Dict[str, Any]], str]:
     """tjs list --date: the date checked (a real calendar date), the
     accounts and their types from taxjson.toml, each account's pools
     that day from the cost timeline its canonical gains pass wrote,
     and the basis said by trade or settlement date. Returns the
-    gains files, each account's positions that day and the basis."""
+    gains files, each account's positions that day and the basis.
+    `names`: the accounts listed (None: every account)."""
     # Positions AS OF a date: the engine's own pools that day, read
     # from the cost timeline each account's canonical gains pass (the
     # file plain `list` reads) wrote — the blended pass: Canada's s.47
@@ -417,12 +434,13 @@ def _positions_as_of(args: argparse.Namespace, as_of: Any, root: Path, cache: Pa
                     if _PL.has_config(root) else {})
     if not accounts_cfg:
         _die("--date needs taxjson.toml (account names and types).")
-    if args.account and args.account not in accounts_cfg:
-        _die(f"no [accounts.{args.account}] in taxjson.toml")
-    files = resolve_gains_files(cache, args.account or None)
+    for n in names or ():
+        if n not in accounts_cfg:
+            _die(f"no [accounts.{n}] in taxjson.toml")
+    files = _gains_files_of(cache, names)
     if not files:
-        if args.account:
-            _die_input(f"no gains for account {args.account!r} in "
+        if names:
+            _die_input(f"no gains for account {names[0]!r} in "
                        f"work/ — run `tjs run` first")
         _die_input("no gains files in work/ — run `tjs run` first")
     from taxjson.lib.country import is_usa
@@ -437,7 +455,7 @@ def _positions_as_of(args: argparse.Namespace, as_of: Any, root: Path, cache: Pa
                    else _tax_date_basis(settings))
     _asof_word = ("settlement date" if _asof_basis == "settle"
                   else "trade date")
-    basis = (f"{gains_basis_label(files)}, as of {as_of} by "
+    basis = (f"{_basis_label(root, files)}, as of {as_of} by "
              f"{_asof_word}")
     return files, tmp_docs, basis
 
@@ -499,7 +517,10 @@ def _positions_account_rows(inv: List[Any], args: argparse.Namespace,
                           "since": h.get("position_start_date"),
                           "last_acq_date": h.get("last_acq_date"),
                           "missing_history_suspect": suspect,
-                          "unknown_cost": unk})
+                          "unknown_cost": unk,
+                          # (the marked closes behind it, when the gains file names them)
+                          **({"unknown_cost_from": h["unknown_cost_from"]}
+                             if h.get("unknown_cost_from") else {})})
         total_cost += cost
         total_deferred += deferred
         n_pos += 1
@@ -509,7 +530,8 @@ def _positions_account_rows(inv: List[Any], args: argparse.Namespace,
 def _positions_table(root: Path, negative_only: Any, as_of: Any, horizon: Any,
                      args: argparse.Namespace, basis: str, total_deferred: float,
                      out_rows: List[List[str]], header: List[str], n_pos: int,
-                     money: Callable[..., str], total_cost: float, n_unknown: int
+                     money: Callable[..., str], total_cost: float, n_unknown: int,
+                     closes: Optional[Set[Tuple[Any, Any]]] = None
                      ) -> Tuple[str, bool, int]:
     """tjs list, the text report: the title and its date, the legend
     (or the --details basis), the table (with --negative, the real
@@ -584,9 +606,22 @@ def _positions_table(root: Path, negative_only: Any, as_of: Any, horizon: Any,
     if n_unknown:
         from taxjson.lib.out import act as _act_u
         d.line(_act_u(f"{n_unknown} position(s) hold units of unknown cost "
-                      f"(an opening cost=unknown): COST +? is the known "
+                      f"({_unknown_why(closes or set())}): COST +? is the known "
                       f"part only", "tjs find-missing-history"))
     return base, _det, n_sus
+
+
+def _unknown_why(closes: Set[Tuple[Any, Any]]) -> str:
+    """Why a position's cost is unknown, for the list's note: an OPENING
+    cost=unknown line, or (`closes`: the gains file's `unknown_cost_from`
+    on the row) a trade the broker marks closing with nothing held, whose
+    units, bought before the files, were in the same pool (CA-ACB-11)."""
+    if not closes:
+        return "an opening cost=unknown"
+    named = ", ".join(f"{a}'s of {d}" for a, d in sorted(closes, key=str)[:2])
+    return (f"a close the broker marks with nothing held, {named}"
+            + (" ..." if len(closes) > 2 else "")
+            + ": its units were in the same pool")
 
 
 def _books_horizon(cache: Path, accounts: List[str]) -> Optional[str]:
@@ -668,8 +703,10 @@ def _register_list(sub: argparse._SubParsersAction) -> None:
                     "end of the books or a date (`list margin 2026-04-28`, "
                     "`list 2026-04-28`, or --date).")
     p_pos.add_argument("account", nargs="?",
-                       help="Account (default: all); a YYYY-MM-DD here is "
-                            "the date (as --date)")
+                       metavar="ACCOUNT[,ACCOUNT...]",
+                       help="Account, or several as one comma list "
+                            "(default: all); a YYYY-MM-DD here is the "
+                            "date (as --date)")
     p_pos.add_argument("when", nargs="?", metavar="YYYY-MM-DD",
                        help="Positions as of this date (as --date)")
     p_pos.add_argument("--date", metavar="YYYY-MM-DD", default=None,
@@ -691,7 +728,7 @@ def _register_list(sub: argparse._SubParsersAction) -> None:
                             "plain list)")
     p_pos.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text")
-    p_pos.set_defaults(func=cmd_positions)
+    p_pos.set_defaults(func=cmd_positions, account_list=True)
 
 
 def _register_shares(sub: argparse._SubParsersAction) -> None:

@@ -3,25 +3,36 @@
   "books_not_read": [],
   "in_kind_not_booked": [],
   "income_not_held": [],
-  "no_purchase": [
-    {
-      "account": "margin",
-      "sales": 1,
-      "symbol": "SAMPLA.US"
-    }
-  ],
+  "no_purchase": [],
   "no_purchase_in_sum": [],
   "schema_version": 1,
   "transfer_in_book_value": [],
   "transfer_in_no_cost": [],
   "unbacked_covers": [],
-  "unchecked_accounts": [
+  "unchecked_accounts": [],
+  "unknown_cost_sales": [
     {
       "account": "margin",
-      "positions": 1
+      "currency": "CAD",
+      "date": "2025-03-19",
+      "direction": "LONG",
+      "kind": "sale",
+      "proceeds": 807.975,
+      "qty": 15.0,
+      "sources": [
+        {
+          "account": "margin",
+          "date": "2025-03-18",
+          "marked_close": true,
+          "quantity": 15.0,
+          "symbol": "SAMPLA.US",
+          "where": null
+        }
+      ],
+      "symbol": "SAMPLA.US",
+      "traded": "2025-03-18"
     }
   ],
-  "unknown_cost_sales": [],
   "year": 2025,
   "zero_cost_declared": [],
   "zero_cost_held": [],

@@ -306,8 +306,9 @@ class TestReadOnlyUserFile(unittest.TestCase):
             self.assertIn("`chmod u+w taxjson.toml` lets taxjson rewrite "
                           "it. Nothing was changed.", text)
             self.assertEqual(cfg.read_text(), _MINIMAL_TOML)
+            # (and the refusal's own log: logs/, lib/command_log)
             self.assertEqual(sorted(p.name for p in Path(td).iterdir()),
-                             ["taxjson.toml"])
+                             ["logs", "taxjson.toml"])
 
     def test_safe_write_user_files(self):
         from taxjson.lib.safe_write import (ReadOnlyFileError, write_atomic,

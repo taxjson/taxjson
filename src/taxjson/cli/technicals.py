@@ -42,18 +42,19 @@ def _count(n: int, words: Tuple[str, str]) -> str:
 # lib/technicals key: (header, decimals, signed).
 MAIN_STATS = (("sma20_pct", "SMA20", 1, True), ("sma50_pct", "SMA50", 1, True),
               ("sma200_pct", "SMA200", 1, True), ("rsi14", "RSI", 1, False),
+              ("atr14_pct", "ATR%", 2, False),
               ("beta", "BETA", 2, False), ("alpha_pct", "ALPHA", 1, True))
 MORE_STATS = (("from_high_pct", "HIGH52", 1, True),
               ("from_low_pct", "LOW52", 1, True),
               ("volatility_pct", "VOL", 1, False),
               ("return_1m_pct", "1M", 1, True), ("return_3m_pct", "3M", 1, True),
               ("return_1y_pct", "1Y", 1, True),
-              ("max_drawdown_pct", "MAXDD", 1, True),
-              ("atr14_pct", "ATR14", 2, False))
+              ("max_drawdown_pct", "MAXDD", 1, True))
 
-# The default view's first legend line.
-LEGEND = ("SMA: % from the 20/50/200-close mean. RSI(14), Wilder. Blank: "
-          "too little history, or not computable.")
+# The default view's first legend line, within 100 columns (ATR%: ATR(14)
+# as a % of LAST; a blank not computable is named under --details).
+LEGEND = ("SMA: % from the 20/50/200-close mean. RSI(14), ATR(14) % of LAST: "
+          "Wilder. Blank: too little history.")
 
 # One line a statistic (--details and docs/commands.md say the same).
 DEFINITIONS = (
@@ -64,6 +65,9 @@ DEFINITIONS = (
     "- 1) x 100.",
     "RSI: RSI(14), Wilder's smoothing over the whole series (seeded with the "
     "mean of the first 14 changes); 100 when no close fell.",
+    "ATR%: Wilder's average true range over 14 sessions, as a % of LAST; "
+    "true range = max(high - low, |high - previous close|, |low - previous "
+    "close|).",
     f"BETA: cov / var of the daily simple returns of the holding and the "
     f"benchmark on the dates both have, the last {T.YEAR}.",
     f"ALPHA: Jensen's alpha with a zero risk-free rate, (mean holding return "
@@ -76,15 +80,12 @@ DEFINITIONS = (
     f"sessions before - 1) x 100.",
     f"MAXDD: the deepest fall from a running peak close over the last "
     f"{T.YEAR + 1} closes ({T.YEAR} returns), in % (0 or below).",
-    "ATR14: Wilder's average true range over 14 sessions, as a % of LAST; "
-    "true range = max(high - low, |high - previous close|, |low - previous "
-    "close|).",
     "AVGVOL20: the mean volume of the last 20 sessions, in the listing's "
     "units.",
     f"Blank: too little history (each statistic needs its whole window; "
     f"BETA and ALPHA {T.YEAR} returns on dates the benchmark has too), or "
     f"not computable: RSI when no close moved, BETA and ALPHA when the "
-    f"benchmark's returns do not vary, ATR14 without {T.ATR_PERIOD + 1} "
+    f"benchmark's returns do not vary, ATR% without {T.ATR_PERIOD + 1} "
     f"sessions in a row with a high and a low, AVGVOL20 when a session of "
     f"the last {T.VOLUME_SESSIONS} has no volume. NOTES names each.",
 )
@@ -97,10 +98,19 @@ def _holdings(files: Dict[str, Path]
     kind: option and futures contracts (no daily history of their own
     here) and crypto (a market that trades every day: the windows count
     trading sessions)."""
+    held, _year = held_by_symbol(files, options=True, futures=True)
+    return _classify(held)
+
+
+def _classify(held: Dict[str, Dict[str, Any]]
+              ) -> Tuple[List[Tuple[str, Dict[str, Any]]], Dict[str, List[str]]]:
+    """`_holdings` of a held_by_symbol inventory: the listings, one row a
+    symbol (a total netting to zero dropped), and the rest by kind
+    (LEFT_OUT; an option on a future is an option). `tjs stress` reads
+    the same split (cli/stress)."""
     from taxjson.lib.option_symbols import is_option_symbol
     from taxjson.lib.price_chain import is_crypto_symbol
     from taxjson.lib.ticker_map import is_future_ticker
-    held, _year = held_by_symbol(files, options=True, futures=True)
     rows: List[Tuple[str, Dict[str, Any]]] = []
     left: Dict[str, List[str]] = {k: [] for k in LEFT_OUT}
     for sym, e in sorted(held.items()):
@@ -398,13 +408,15 @@ def _cause_act(doc, recs, f: _Fetch, bench_hist, why: str, label: str,
                             f"not in the history cache, {label}", miss, cmd))
 
 
-def _quote_acts(doc, recs, f: _Fetch, bench_hist) -> None:
+def _quote_acts(doc, recs, f: _Fetch, bench_hist,
+                details: str = DETAILS) -> None:
     """The holdings and the benchmark Yahoo had nothing for, when other
     symbols did come back (a spelling: a ticker.map QUOTE line); a
     symbol with no spelling at all; the benchmark with no series at all
     on a line of its own (no QUOTE advice for an index or after no answer
     at all; one the cache served is on the cache's line, as a holding
-    is: another spelling would lose its entry)."""
+    is: another spelling would lose its entry). `details`: the command
+    with the long form (`tjs stress` reads these lines too)."""
     from taxjson.lib import price_chain as PC
     spell = [r["symbol"] for r in recs if r["history"] == "no-spelling"
              or (r["history"] == PC.HISTORY_NONE and not f.wholesale)]
@@ -414,7 +426,7 @@ def _quote_acts(doc, recs, f: _Fetch, bench_hist) -> None:
                           f"YAHOO_SYMBOL"))
     elif spell:
         doc.line(_act_named(f"no daily history for {len(spell)} symbols",
-                            spell, "ticker.map QUOTE lines: " + DETAILS))
+                            spell, "ticker.map QUOTE lines: " + details))
     if bench_hist is not None or f.bench_reason != PC.HISTORY_NONE \
             or not f.bsym:
         return
@@ -430,20 +442,22 @@ def _quote_acts(doc, recs, f: _Fetch, bench_hist) -> None:
                           f"add a ticker.map line: QUOTE {b} YAHOO_SYMBOL"))
 
 
-def _history_acts(doc, recs, bench, bench_hist, bench_why, today) -> None:
+def _history_acts(doc, recs, bench, bench_hist, bench_why, today,
+                  details: str = DETAILS) -> None:
     """The `! ` lines about where the closes came from, one line a reason:
     TAXJSON_OFFLINE or no [fx] extra (the symbols with no history, and
     the series served from a cache entry older than OLD_CACHE_DAYS); no
     answer from Yahoo (the series served from an older entry, and when
     nothing came back at all, the symbols with none); the spellings to
-    add; the benchmark."""
+    add; the benchmark. `details`: the command with the long form (`tjs
+    stress` says these lines too)."""
     from taxjson.lib import price_chain as PC
     f = _Fetch(recs, bench, bench_hist, bench_why)
     _cause_act(doc, recs, f, bench_hist, PC.HISTORY_OFFLINE,
                "TAXJSON_OFFLINE set", "unset it to fetch", today,
                OLD_CACHE_DAYS)
     _cause_act(doc, recs, f, bench_hist, PC.HISTORY_NO_EXTRA,
-               "no [fx] extra", DETAILS, today, OLD_CACHE_DAYS)
+               "no [fx] extra", details, today, OLD_CACHE_DAYS)
     if f.wholesale:
         _cause_act(doc, recs, f, bench_hist, PC.HISTORY_NONE,
                    "Yahoo gave no answer", "network down?", today, None)
@@ -457,8 +471,8 @@ def _history_acts(doc, recs, bench, bench_hist, bench_why, today) -> None:
                 f"Yahoo gave no answer: "
                 f"{_series(len(old) + int(b_old))} from the cache of "
                 f"{_dates(days)}", [r["symbol"] for r in old]
-                + ([f.bsym] if b_old else []), DETAILS))
-    _quote_acts(doc, recs, f, bench_hist)
+                + ([f.bsym] if b_old else []), details))
+    _quote_acts(doc, recs, f, bench_hist, details)
 
 
 def _benchmark_acts(doc, recs, bench_hist, latest) -> None:
@@ -482,7 +496,9 @@ def _benchmark_acts(doc, recs, bench_hist, latest) -> None:
             f"rate's moves", other))
 
 
-def _main_table(doc, recs, latest) -> None:
+def _main_table(doc, recs, latest) -> List[str]:
+    """The default table; returns the headings the width left out (QTY,
+    then LAST), for the `! ` line that says so."""
     body = []
     for r in recs:
         st = r["stats"]
@@ -491,10 +507,12 @@ def _main_table(doc, recs, latest) -> None:
             day += "*"
         body.append([r["symbol"], _qty(r["qty"]), _price(r["last_close"]),
                      day] + [_cell(st[k], p, sg) for k, _h, p, sg in MAIN_STATS])
+    left_out: List[str] = []
     doc.table(["SYMBOL", "QTY", "LAST", "DATE"] + [h for _k, h, _p, _s
                                                    in MAIN_STATS],
               body, aligns=["<", ">", ">", "<"] + [">"] * len(MAIN_STATS),
-              drop=(1, 2))
+              drop=(1, 2), left_out=left_out)
+    return left_out
 
 
 def _qty(q: float) -> str:
@@ -506,8 +524,8 @@ def _details_part(doc, recs, left, bench, bench_hist, ratios) -> None:
     """The long form: the other statistics, the history behind each row,
     why a statistic is blank, what is left out, and the definitions."""
     doc.section("OTHER STATISTICS")
-    doc.legend("% from LAST or of it; VOL, 1M, 3M, 1Y and MAXDD in %; "
-               "AVGVOL20 in units (DEFINITIONS below).")
+    doc.legend("% from LAST; VOL, 1M, 3M, 1Y and MAXDD in %; AVGVOL20 in "
+               "units (DEFINITIONS below).")
     doc.table(["SYMBOL"] + [h for _k, h, _p, _s in MORE_STATS] + ["AVGVOL20"],
               [[r["symbol"]] + [_cell(r["stats"][k], p, sg)
                                 for k, _h, p, sg in MORE_STATS]
@@ -658,8 +676,11 @@ def _text(args, recs, left, bench, bench_hist, ratios, horizon, latest,
     if any(r["stats"]["beta"] is not None for r in recs):
         doc.legend(f"BETA: cov/var, ALPHA: Jensen's (risk-free 0, % a year), "
                    f"over {T.YEAR} daily returns against {bench[0]}.")
-    _main_table(doc, recs, latest)
+    left_out = _main_table(doc, recs, latest)
     doc.blank()
+    if left_out:
+        doc.line(_out.act(f"{' and '.join(left_out)} left out of the table "
+                          f"at this width", f"{PROG} --json"))
     _history_acts(doc, recs, bench, bench_hist, bench_why, today)
     old = [r["symbol"] for r in recs if _older(r["last_date"], latest)]
     if old:
@@ -726,14 +747,15 @@ def register(sub: argparse._SubParsersAction) -> None:
     """This module's command, for the `tjs` parser."""
     p = sub.add_parser(
         "technicals",
-        help="Each holding's moving averages, RSI, beta and alpha",
+        help="Holdings' moving averages, RSI, ATR%%, beta, alpha",
         description="Every position the books hold at their end (one row a "
                     "symbol, all accounts) with technical statistics from "
                     "about a year of daily closes adjusted for splits and "
                     "dividends: % from the 20-, 50- and 200-session moving "
-                    "averages, RSI(14), beta and alpha against a benchmark; "
-                    "--details adds the 52-week range, volatility, returns, "
-                    "drawdown, ATR and volume. The closes come from Yahoo "
+                    "averages, RSI(14), ATR(14) as a % of the last close, "
+                    "beta and alpha against a benchmark; --details adds the "
+                    "52-week range, volatility, returns, drawdown and "
+                    "volume. The closes come from Yahoo "
                     "Finance (the [fx] extra) and are cached in "
                     "work/.history_cache.json; with TAXJSON_OFFLINE set, "
                     "only the cache is read. Market statistics, not tax "

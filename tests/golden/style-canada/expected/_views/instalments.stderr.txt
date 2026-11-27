@@ -1,1 +1,2 @@
-tjs estimate: warning: 2 position(s) sold in 2024 with no purchase in your files: their gain is NOT in these totals
+tjs estimate: warning: 1 disposition(s) with an unknown cost (no purchase in your files) were routed to manual reporting — these totals EXCLUDE them
+tjs estimate: warning: 1 position(s) sold in 2024 with no purchase in your files: their gain is NOT in these totals

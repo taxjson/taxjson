@@ -2911,6 +2911,29 @@ _PROJECT_FILES = (_PL.CONFIG, _PL.TICKER_MAP)
 _PROJECT_FILES += (_PL.TOBASE_MAP,)
 
 
+def _abs(p: Path) -> str:
+    """`p` absolute, its `..` resolved without following a link."""
+    return os.path.abspath(p)
+
+
+def _other_years_snapshots(root: Path) -> set:
+    """The positions snapshots of a holdings folder every year shares
+    (`holdings_dir = "../holdings"`) that the year does not compare
+    (lib/holdings_dir `other_years_files`: one an account's `holdings`
+    names stays), as absolute paths: the copy leaves them out as the
+    year's `tjs sanity` does, and one note counts them (backlog
+    TJ-5367)."""
+    from taxjson.lib import holdings_dir as _HD
+    out = {_abs(q) for q in _HD.other_years_files(root)}
+    year = _PL._settings(root).year
+    if out and isinstance(year, int):
+        span = _HD.window_span(*_HD.window_of(root, year))
+        _diag("note", f"{_plural(len(out), 'positions snapshot')} of other "
+                      f"years left out of the copy ({year} compares those "
+                      f"dated {span})", file=sys.stdout)
+    return out
+
+
 def _project_tree(root: Path, inputs: Path
                   ) -> Tuple[List[Path], List[_TreeFile], int]:
     """(folders, files, hidden count) of a multi-year project's year as
@@ -2923,6 +2946,7 @@ def _project_tree(root: Path, inputs: Path
     hidden = 0
     seen: set = set()
     walked: set = set()
+    theirs = _other_years_snapshots(root)
     for src, prefix, inside in (
             (inputs, Path(_PL.INPUTS), bound),
             (root / _PL.INPUTS, Path(_PL.INPUTS), root / _PL.INPUTS),
@@ -2941,6 +2965,8 @@ def _project_tree(root: Path, inputs: Path
         d, f, h = _walk_inputs(src, prefix, inside)
         dirs += [x for x in d if x not in dirs]
         for tf in f:
+            if tf.src is not None and _abs(tf.src) in theirs:
+                continue
             if tf.rel in seen:
                 tf.skip = "a second file of that name (the year's own)"
             seen.add(tf.rel)

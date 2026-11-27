@@ -524,23 +524,24 @@ class TestARunAfterAnEdit(unittest.TestCase):
     def test_the_blend_cases_move_what_their_input_alone_declares(self):
         # A member's book moves the blend's merge (and the full history's),
         # a crypto member's the crypto blend's, a sheltered purchase only
-        # the blended gains and the split (the members' books unchanged),
-        # the timeline only itself.
+        # the blended gains and the split, the full history's too (it reads
+        # the registered book, TJ-5347; the members' books unchanged), the
+        # timeline only itself.
         moves = {"blend: a member's book changed": (
                      "work/margin_gains_wash.json", f"work/.blend{_GAINS_ALL_SUFFIX}"),
                  "blend: a crypto member's book changed": (
                      "work/.cryptoblend_gains_wash.json", "work/crypto2_gains_wash.json",
                      f"work/.cryptoblend{_GAINS_ALL_SUFFIX}", f"work/crypto2{_GAINS_ALL_SUFFIX}"),
                  "blend: a sheltered account's purchase makes a loss superficial": (
-                     "work/margin_gains_wash.json", f"work/tfsa{_GAINS_ALL_SUFFIX}"),
+                     "work/margin_gains_wash.json", f"work/tfsa{_GAINS_ALL_SUFFIX}",
+                     f"work/.blend{_GAINS_ALL_SUFFIX}", f"work/margin{_GAINS_ALL_SUFFIX}"),
                  "blend: the blend's cost timeline removed": (
                      "work/.blend_gains_wash.timeline.json",),
                  "blend: an ALLOWLOSS line of an account outside the blend": (
                      "work/.blend_gains_wash.json", f"work/.blend{_GAINS_ALL_SUFFIX}",
                      f"work/tfsa{_GAINS_ALL_SUFFIX}")}
         keeps = {"blend: a sheltered account's purchase makes a loss superficial": (
-                     "work/margin_gains.json", "work/qt_gains.json",
-                     f"work/margin{_GAINS_ALL_SUFFIX}"),
+                     "work/margin_gains.json", "work/qt_gains.json"),
                  "blend: an ALLOWLOSS line of an account outside the blend": (
                      "work/margin_raw_gains.json", "work/qt_raw_gains.json")}
         for name, files in moves.items():
@@ -871,8 +872,10 @@ class TestTheSweepStaysInItsFolders(unittest.TestCase):
         (out / "parse.json").write_text("{}\n", encoding="utf-8")   # (fees reads it)
         os.symlink(out / "parse.json", root / "work/ghost_webull.json")
         # Files whose names fit a row's (TJ-4273, TJ-4274): the legacy
-        # elections manifest (no export group "manifest"), notes of yours.
-        (root / "work/margin_manifest.json").write_text('{"elections": {}}\n', encoding="utf-8")
+        # elections manifest (no export group "manifest") of an account
+        # no longer in taxjson.toml (a listed one's stops every command
+        # until `tjs migrate`), notes of yours.
+        (root / "work/gone_manifest.json").write_text('{"elections": {}}\n', encoding="utf-8")
         for rel in ("reports/notes.sum", "reports/mine_holdings.toml"):
             (root / rel).write_text("mine\n", encoding="utf-8")
         (root / "reports/adir").mkdir()
@@ -882,13 +885,13 @@ class TestTheSweepStaysInItsFolders(unittest.TestCase):
         rf = root / "work/.deps/run.json"
         doc = json.loads(rf.read_text(encoding="utf-8"))
         ghost = {"row": "gains", "account": "ghost", "beside": [
-            "work/sub/target.txt", "../taxjson.toml", "inputs/margin/manifest.json",
+            "work/sub/target.txt", "../taxjson.toml", "inputs/margin/elections.json",
             "reports/adir/x.txt", "work/in/crypto/sends.json"]}
-        for k in ("work/in/margin/manifest.json", "work/in/crypto/sends.json",
+        for k in ("work/in/margin/elections.json", "work/in/crypto/sends.json",
                   "work/sub/secret.txt", "reports/link/secret2.txt", "work/linkfile",
                   "work/../taxjson.toml", str(root / "taxjson.toml"), "inputs/qt/questrade_demo.csv",
                   "taxjson.toml", "reports/mynotes.txt", "work/saved_by_me.json", "reports/adir",
-                  "reports/adir/x.txt", "work/./../inputs/margin/manifest.json",
+                  "reports/adir/x.txt", "work/./../inputs/margin/elections.json",
                   "reports/../inputs/margin/margin_extra.tt", "work\\..\\taxjson.toml",
                   "work//../taxjson.toml"):
             doc["instances"][k] = ghost
@@ -899,7 +902,7 @@ class TestTheSweepStaysInItsFolders(unittest.TestCase):
         doc["instances"]["work/ghost_webull.json"] = {"row": "parse", "account": "ghost",
                                                       "broker": "webull"}
         doc["instances"].update({
-            "work/margin_manifest.json": {"row": "parse", "account": "margin", "broker": "manifest"},
+            "work/gone_manifest.json": {"row": "parse", "account": "gone", "broker": "manifest"},
             "work/saved_by_me.json": {"row": "parse", "account": "saved", "broker": "by_me"},
             "reports/notes.sum": {"row": "sum", "account": "notes"},
             "reports/mine_holdings.toml": {"row": "holdings", "account": "mine"}})
@@ -950,7 +953,7 @@ class TestTheSweepStaysInItsFolders(unittest.TestCase):
         # where no reader of work/ or reports/ finds them: TJ-5274)
         for rel in ("reports/mynotes.txt", "reports/adir/x.txt", "work/saved_by_me.json",
                     "work/in", "work/sub", "reports/link", "work/linkfile",
-                    "work/margin_manifest.json", "work/kept/notes.sum",
+                    "work/gone_manifest.json", "work/kept/notes.sum",
                     "work/kept/mine_holdings.toml"):
             with self.subTest(file=rel):
                 self.assertTrue(os.path.lexists(self.root / rel))
@@ -975,7 +978,7 @@ class TestTheSweepStaysInItsFolders(unittest.TestCase):
             self.assertIn(f"{rel} -> work/kept/{rel.split('/')[-1]} (taxjson has no record "
                           f"of writing it)", self.swept.stdout)
             self.assertFalse(os.path.lexists(self.root / rel), rel)
-        self.assertNotIn("work/margin_manifest.json", self.swept.stdout)
+        self.assertNotIn("work/gone_manifest.json", self.swept.stdout)
 
     def test_a_book_you_edited_is_moved_aside_and_said(self):
         root, out = self.edited, self.edited_run.stdout
@@ -1075,8 +1078,8 @@ def _folder_case(tmp: Path, name: str):
         (root / "inputs/tfsa/generic.toml").mkdir()
         return _tjs(root, "run", "--no-input")
     if name == "manifest":
-        (root / "inputs/margin/manifest.json").unlink()
-        (root / "inputs/margin/manifest.json").mkdir()
+        (root / "inputs/margin/elections.json").unlink()
+        (root / "inputs/margin/elections.json").mkdir()
         return _tjs(root, "run", "--no-input", code=1)
     if name == "view":
         # The loss overrides' state, declared absent (no ALLOWLOSS line), is
@@ -1109,7 +1112,7 @@ class TestAFolderWhereAFileWasExpected(unittest.TestCase):
     def test_a_folder_at_the_manifest_keeps_its_refusal(self):
         r = self.runs["manifest"]
         self.assertNotIn("Traceback", r.stderr)
-        self.assertIn("taxjson-corp-actions: error: manifest at inputs/margin/manifest.json "
+        self.assertIn("taxjson-corp-actions: error: the elections file inputs/margin/elections.json "
                       "cannot be read (Is a directory)", r.stderr)
 
     def test_a_declared_folder_is_one_line(self):

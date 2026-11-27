@@ -51,10 +51,13 @@ return reports). Column conventions:
          note (the engine's negated fields are un-negated AND swapped).
          A net rebate (negative commission/fee) stays netted in the
          proceeds: OUTLAYS is never negative.
-         A written option's premium (grant timing) is shown GROSS, its
-         write commission in outlays; a close-timing write's commission
-         and a short sale's opening commission stay netted (the closing
-         row does not carry them).
+         A written option's premium is shown GROSS, its write commission
+         in outlays, under any premium timing: on the write's row (grant
+         timing), on its buy-back's or expiry's (close timing: the row's
+         `write_outlay`, the buy-back's own commission in the ACB), and in
+         the proceeds of the shares an assigned call delivered (CA-OPT-06,
+         CA-DISP-06). A short sale's opening commission stays netted (the
+         closing row does not carry it).
          Every row foots — proceeds − ACB − outlays = the allowed gain —
          so a denied superficial loss shows as an ACB REDUCED by the
          denial (the denied amount goes onto the replacement's ACB).
@@ -659,8 +662,9 @@ def _not_in_rows(rep: Dict[str, Any]) -> List[str]:
     n = int(miss.get("unbacked_cover") or 0)
     if n:
         out.append(act(f"{n} cover{'s' if n != 1 else ''} of a short opened "
-                       f"before your files booked as a new long, NOT in "
-                       f"these rows", "tjs find-missing-history"))
+                       f"before your files: {'its' if n == 1 else 'their'} "
+                       f"gain or loss is NOT in these rows",
+                       "tjs find-missing-history"))
     return out
 
 
@@ -895,7 +899,7 @@ def render_schedule3(rep: Dict[str, Any], year: Optional[int],
                    "are 100% amounts.")
     lines += _item("PROCEEDS re-adds sell-side commissions so OUTLAYS can "
                    "be shown separately (a commission rebate, and a short "
-                   "sale's opening commission, stay netted in PROCEEDS); "
+                   "sale's opening commission, stay netted in PROCEEDS; a written option's premium is shown gross, the write's commission an outlay); "
                    "the gain is unchanged.")
     lines += _rounding_note(rep)
     lines += _item("FX gains on foreign cash (s.39(1.1), `tjs "
@@ -1538,6 +1542,7 @@ def _export_report(args: argparse.Namespace, rep: Optional[Dict[str, Any]], tain
                 unknown_cost=max(tainted, len(manual)),
                 no_purchase=args.no_purchase,
                 unbacked_cover=args.unbacked_cover,
+                covers_by_hand=args.form == "schedule3",
                 conservation=_RD.conservation_lines(
                     list(args.files) + list(args.crypto)),
                 in_kind_unbooked=args.in_kind_unbooked,

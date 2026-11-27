@@ -416,7 +416,7 @@ def split_for_account(combined: Dict[str, Any], account: str,
     plog = [e for e in _mh_log(combined) if e.get("account") == account]
     if plog:
         out["missing_history_log"] = plog
-    out.update(_owed_part(combined, base_txs))
+    out.update(_owed_part(combined, base_txs), **_unbacked_part(combined, account))
     return out
 
 
@@ -433,6 +433,16 @@ def _owed_as_booked(book: Optional[List[dict]], combined: Dict[str, Any]
     return [dict(t, quantity=-float(t.get("quantity") or 0.0))
             if str(t.get("id")) in owed and float(t.get("quantity") or 0.0) > 0
             else t for t in book]
+
+
+def _unbacked_part(combined: Dict[str, Any], account: str) -> Dict[str, Any]:
+    """The account's part of the openings the blended pass gave marked
+    CLOSE rows' unbacked units (lib/unbacked_close OPENINGS_KEY; CA-OPT-12):
+    the units its books counted that no row of its base book carries."""
+    from taxjson.lib.unbacked_close import OPENINGS_KEY
+    mine = [e for e in combined.get(OPENINGS_KEY) or []
+            if isinstance(e, dict) and e.get("account") == account]
+    return {OPENINGS_KEY: mine} if mine else {}
 
 
 def _owed_part(combined: Dict[str, Any], base_txs: Optional[List[dict]]

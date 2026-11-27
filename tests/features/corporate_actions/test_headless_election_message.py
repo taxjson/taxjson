@@ -3,7 +3,7 @@ for (CHANGELOG "Fixed"): interest paid shown apart, a negative futures
 price in a generic CSV, the audit over a pending election, the
 checklist's hints, init's timezone, the single-folder year hints,
 sanity with no holdings file, the headless election message, no empty
-manifest.json, compare's exit codes (tests/test_compare.py).
+elections.json, compare's exit codes (tests/test_compare.py).
 
 Formerly: test_workflow_audit_fixes"""
 import subprocess
@@ -25,7 +25,7 @@ class TestHeadlessElectionMessage(unittest.TestCase):
         return subprocess.run(
             [sys.executable, "-m", "taxjson.bin.taxjson_corp_actions",
              "--country", "canada", "--brokerage", "ib",
-             "--manifest", str(Path(tmp) / "manifest.json"),
+             "--elections", str(Path(tmp) / "elections.json"),
              *flags, "--pending-json", str(pend), str(a), str(b)],
             cwd=REPO_ROOT, capture_output=True, text=True,
             stdin=subprocess.DEVNULL, timeout=120)

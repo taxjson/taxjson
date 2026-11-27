@@ -170,7 +170,7 @@ class TestTheRateDates(unittest.TestCase):
         weighted = [r for r in self.doc["rows"]
                     if r["fx_source"] == "weighted" and r["native_proceeds"]]
         self.assertEqual({r["symbol"] for r in weighted},
-                         {"QZRX251219C00030000.US", "QZSH.US"})
+                         {"QZRX251219C00030000.US", "QZSH.US", "QZND250417P00010000.US"})
         for r in weighted:
             with self.subTest(symbol=r["symbol"], date=r["date"]):
                 self.assertEqual((r["fx_date"], r["fx_rate_date"]), (None, None))
@@ -189,11 +189,16 @@ class TestTheRateDates(unittest.TestCase):
                          (Decimal("0.00"), Decimal("0.00")))
         self.assertEqual(cents(fut["acb"]), -cents(fut["gain"]))
         self.assertEqual(fut["fx_source"], "weighted")
+        # A write for a net debit (1.00 received, 1.30 paid): its premium,
+        # gross, the proceeds at the write's rate, its commission an outlay
+        # (CA-DISP-06, backlog TJ-5460); the gain the debit.
         debit = _one(self.doc, "QZND250417P00010000.US")
-        self.assertEqual((cents(debit["proceeds"]), debit["fx_rate"]), (Decimal("0.00"), None))
-        self.assertGreater(debit["outlays"], 0)
-        self.assertEqual(cents(debit["gain"]), -cents(debit["outlays"]))
-        self.assertTrue(any(n.startswith("no FX: nothing was received") for n in debit["notes"]))
+        self.assertEqual((cents(debit["native_proceeds"]), M.of(debit["fx_rate"])),
+                         (Decimal("1.00"), usd("2025-03-03")))
+        self.assertEqual(cents(debit["proceeds"]), M.present(usd("2025-03-03"), 2))
+        self.assertGreater(debit["outlays"], debit["proceeds"])
+        self.assertEqual(cents(debit["gain"]), cents(debit["proceeds"]) - cents(debit["outlays"]))
+        self.assertEqual(cents(debit["gain"]), M.present(Decimal("-0.30") * usd("2025-03-03"), 2))
 
     def test_the_totals_are_sum_s(self):
         self.assertIsNone(self.doc["scope"])
@@ -205,7 +210,9 @@ class TestTheRateDates(unittest.TestCase):
         for acct in ("qt", "m2"):
             with self.subTest(account=acct):
                 doc, sm = self.p.json("gains-cra", acct), self.p.json("sum", acct)
-                self.assertEqual(doc["scope"], {"account": acct})
+                # "account_names": the ACCOUNT list's names (one here),
+                # beside "account" kept as it was (lib/account_list).
+                self.assertEqual(doc["scope"], {"account": acct, "account_names": [acct]})
                 self.assertEqual(doc["rows"], [r for r in self.doc["rows"]
                                                if r["account"] == acct])
                 for cell in CELLS + ("denied",):
@@ -213,8 +220,9 @@ class TestTheRateDates(unittest.TestCase):
                                      cents(sm["filing"]["totals"][cell]), cell)
                 text = self.p.tjs("gains-cra", acct).stdout
                 self.assertIn(f"tax year 2025, account {acct}, Schedule 3's cells", text)
-                self.assertIn(f"FOR ACCOUNT {acct} — Schedule 3, as tjs sum {acct} shows it "
-                              f"(not the whole return)", text)
+                # The account named once (lib/gains_cra `_totals_heading`).
+                self.assertIn(f"FOR ACCOUNT {acct} — Schedule 3, as tjs sum shows it for this "
+                              f"account (not the whole return)", text)
                 self.assertNotIn("FOR THE RETURN", text)
 
     def test_one_account_counts_its_own_sales_of_no_purchase(self):

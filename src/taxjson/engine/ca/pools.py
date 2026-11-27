@@ -29,7 +29,8 @@ if TYPE_CHECKING:
 # `part`, `netted`: the year-end's, a short's part for one account...).
 _Pools: TypeAlias = "Mapping[str, AcbPool]"
 # One written option lot (_ca_short_lot_open): 'tx_id', 'seq', 'units'
-# (float), 'per_unit' (Decimal), 'rec', 'rec_ref' and 'loss_ref' (the
+# (float), 'per_unit' and 'fee_per_unit' (Decimal: the net premium and the
+# commission and fee netted in it, per unit), 'rec', 'rec_ref' and 'loss_ref' (the
 # grant's gain and loss records), 'date', 'year', 'account'.
 _Lot: TypeAlias = Dict[str, Any]
 # {id(pool): (the pool's state key, its per-account lots)} (_account_lots).

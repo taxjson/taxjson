@@ -277,7 +277,7 @@ def _tree(folder: Path) -> dict:
 class TestRunNeverWritesSharedInputs(unittest.TestCase):
     """Two years with different maps share the style project's exports
     (a spin-off election, a crypto send): a run leaves inputs/ byte for
-    byte as it was; only `elect --set` / `crypto-sends --set` write
+    byte as it was; only `elections --set` / `crypto-sends --set` write
     there, saying so."""
 
     def test_two_years_share_the_exports(self):
@@ -307,7 +307,7 @@ class TestRunNeverWritesSharedInputs(unittest.TestCase):
                           .read_text())
         for acct, doc in pend["accounts"].items():
             for ev in doc["pending"]:
-                r = tjs("-C", str(y24), "elect", acct, "--set",
+                r = tjs("-C", str(y24), "elections", acct, "--set",
                         f"{ev['event_id']}=taxable_deemed_dividend")
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertIn("every year reading these exports", r.stderr)
@@ -605,7 +605,9 @@ class TestScaffolds(unittest.TestCase):
         r = tjs("init", "--country", "usa", "--year", "2025", str(top))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue((top / "inputs" / "margin").is_dir())
-        self.assertTrue((top / "2025" / "holdings").is_dir())
+        # One holdings/ beside inputs/, every year's (backlog TJ-5367).
+        self.assertTrue((top / "holdings").is_dir())
+        self.assertFalse((top / "2025" / "holdings").exists())
         cfg = (top / "2025" / "taxjson.toml").read_text()
         self.assertRegex(cfg, r'(?m)^inputs_dir +=  *"\.\./inputs"$')
         self.assertFalse((top / "taxjson.toml").exists())
@@ -650,11 +652,12 @@ class TestScaffolds(unittest.TestCase):
         r = tjs("-C", str(s), "migrate", "--to-years")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         doc = tomllib.loads((s / "2025" / "taxjson.toml").read_text())
-        # holdings/ moves into the year folder with taxjson.toml: its
-        # paths stay as written; inputs/ stays at the top.
+        # holdings/ and inputs/ stay at the top (holdings/ shared by
+        # every year: backlog TJ-5367), so their paths gain a `../`.
         self.assertEqual(doc["accounts"]["margin"]["holdings"],
-                         ["holdings/margin.toml", "./holdings/b.toml",
+                         ["../holdings/margin.toml", ".././holdings/b.toml",
                           "../inputs/margin/pos.toml"])
+        self.assertTrue((s / "holdings" / "margin.toml").is_file())
         self.assertIn("Left at the top (no year reads them", r.stdout)
         self.assertIn("notes.txt", r.stdout)
 

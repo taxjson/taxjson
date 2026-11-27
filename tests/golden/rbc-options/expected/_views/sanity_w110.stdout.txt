@@ -1,0 +1,13 @@
+SANITY — taxjson positions (basis: wash-adjusted) vs the broker's positions (paired check)
+
+  accounts:  margin  (3 combined position(s))  [paired]
+  file:      holdings/margin_holdings.csv  (account 99***)
+  result:    OK
+
+  accounts:  tfsa  (1 combined position(s))  [paired]
+  file:      holdings/tfsa_holdings.csv  (account 99***)
+  result:    OK
+
+OK: tickers and quantities agree in every group.
+
+COST: 2 of 3 differ from the broker's book value (informational) — tjs sanity --details

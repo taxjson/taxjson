@@ -60,6 +60,514 @@ In each project you keep working in (each year folder):
 Newest first. Each says what changed and what to do. Releases not listed
 needed nothing.
 
+### v3.0.0
+
+#### A written option's premium is gross on Schedule 3, the write's commission an outlay, under every premium timing (Canada)
+
+Re-run `tjs run`. No gain and no ACB moves. One convention on the form (backlog TJ-5381,
+TJ-5460): a written option's premium is shown as received, gross, and the write's commission
+and fee among the outlays, wherever its disposition lands. One exception, as before: a call
+assigned into a short of the shares (none held, or the part of the delivery past the shares
+held) stays netted in that short sale's proceeds, as a short sale's opening commission does.
+
+**A call you wrote that was assigned.** The sale of the shares it delivered now shows the
+premium received in its proceeds and the write's commission among its outlays, as a written
+option's own row on line 15199 shows them. The sale's proceeds and outlays each rise by the
+write's commission (and by a fee the broker charged on the option's assignment row, if any), under
+every premium timing: the premium taxed when written, a write of the year before amended under
+s.49(4), or the premium deferred to the assignment. A partial assignment takes its contracts'
+share of the write's commission, several writes assigned into one sale add theirs, and a USD
+write's commission is converted at the write's rate, as its premium is (`tjs gains-cra` notes
+that a USD sale's FX check is off by the premium at the write's rate). A written put assigned
+is unchanged: its premium net of its commission lowers the shares' ACB, which is the ACB the
+gross premium gives with the commission added to the cost.
+
+**Close timing: a write bought back or expired.** Under `option_premium_timing = "close"` (and
+a transition contract under grant timing, written before `option_grant_timing_since`), the row
+on line 15199 of a written option bought back or expired now shows the premium received as its
+proceeds and the write's commission and fee as its outlays, the buy-back's cost (its own
+commission in it) as the ACB, as grant timing shows the write and its buy-back. Its proceeds
+and outlays each rise by the write's commission; a write for a net debit (a commission above
+its premium) shows its premium as proceeds and the commission as an outlay, where it showed no
+proceeds and the debit as an outlay (`tjs gains-cra` gives a USD one the write's rate, where it
+said nothing was received). Line 15199 and its outlays are the same under either timing now.
+
+The values move, no key in a `--json` view: lines 13199 and 15199's proceeds and lines 13200
+and 15300's outlays and total cost in `tjs sum`'s FOR THE RETURN rows and `tjs sum --json`
+(`filing.lines`, `filing.accounts`, `filing.totals`); `tjs form-export` and its `--json`
+(`rows[].proceeds`, `rows[].outlays`, `lines`, `totals.proceeds_13199`,
+`totals.proceeds_15199`, `totals.proceeds_all`); `tjs gains-cra` and its `--json` (the rows,
+tables and totals, a USD row's `native_proceeds`, and a note kind `assigned_premium_fx`);
+`tjs gains-base`'s proceeds, outlays and total cost; and `tjs reconcile-slips`, whose computed
+gross adds the write's commission as `tjs form-export` does (backlog TJ-5462): an assigned
+call's shares with the premium gross, and a close-timing write's premium gross, so a slip that reports them
+gross now reads OK, and one that reports the shares at the strike alone is off by the
+premium received, not by the net premium. The `tjs sum --details` and `tjs form-export
+--details` notes say a written option's premium is shown gross. The books keep every row's
+`commission` and `fee` its own, as before; `work/<account>_gains*.json` gains one key,
+`write_outlay` (the write's commission and fee, on an assigned call's share sale and on a
+close-timing write's buy-back or expiry), which Schedule 3 adds. Unchanged: the rows'
+`commission`, `fee`, `proceeds`, `cost` and `gain`, `reports/<account>.sum` (its fee
+averages too), `reports/fees.rpt` and `tjs fees` (the fees paid, from the trades), `tjs
+option-yield`, `tjs option-boundary`, `tjs stats`, `tjs win-rates`, the traces
+(`taxjson-explain`) and `tjs handoff`. A year closed before the upgrade with such a sale or
+close: `tjs check-filed` (and the year's `tjs run`) reports line 13199 or 15199 drifted by the
+writes' commissions, its gain line unchanged; the message offers the two ways to clear it:
+amend the return, or refresh the lock with `tjs close-year --force` (with `[settings].year`
+the closed year).
+
+#### A window outside the tax year sees a registered account's purchase
+
+Nothing to do: no filing figure moves. A view over a window that reaches outside the tax
+year (`tjs stats all`, `stats 2y`, another year, `--all-history`, and `win-rates`,
+`winners`, `losers`, `ccd-sum`, `leaps`, `leaps-sum` over one) now denies a loss that a
+registered account's purchase makes superficial (Canada) or a wash sale (US: an IRA's
+purchase), in any year, as the tax year's filing file does. Where a registered account
+bought a security in the 30 days before or after a sale of it at a loss, these move:
+`denied_total`, `denied_count` and the "Denied by the superficial-loss rule (NOT subtracted
+above)" line of `tjs stats` and `tjs win-rates`, and the sale's GAIN and DENIED in
+`tjs winners`, `tjs losers` and the others (and, where a taxable purchase in the same window
+took part of that denial into its cost, the cost of its later sale). On the demo,
+`tjs stats all margin --json` gives `denied_total` 394.2 and `denied_count` 1, as
+`tjs stats margin --json` does, where it gave 0.0 and 0. The note under such a view now says
+"a purchase in any of your taxable or registered accounts is checked, in every year", and
+names the accounts whose sales no rule reaches (a registered account, a US crypto account);
+a view of those alone says "no superficial-loss / wash-sale rule applies to these accounts'
+sales". The `basis` label changes with it: the next entry.
+
+#### A `--json` value (v3.0.0): `basis` says what the superficial-loss / wash-sale rule checked
+
+A script that reads the value needs the new strings. No figure moves. Run `tjs run` once
+with this taxjson: books an older taxjson built carry no record of what was checked, and
+until a run writes one a lone Canadian crypto account still reads "pre-wash" (the second
+case below). The `basis` a view names (`--json`'s `basis`, the text header's `basis:`) says
+what was checked. For the tax year's files, what the run recorded (every `tjs run` writes
+it: `work/.deps/run.json`'s `loss_checks`). For a window outside the tax year, what the
+view's own full-history build read: the views build those books each time, from whatever
+books work/ holds, so no run can speak for them. "wash-adjusted" when every account of the
+view that the rule reaches was checked completely, by the run's pass across accounts, by a
+full-history build that read all the rule needs, or by the account's own pass where that
+is the whole check; "pre-wash" otherwise: an account no pass has checked (a project never run in full, an
+account first built by `tjs run --account`, one waiting on elections, one added to
+taxjson.toml or retyped there since the run, an export put in a registered account's folder
+since), or only accounts no rule reaches (a registered account alone, a US crypto account).
+After `tjs run --account`, or an edit of taxjson.toml, an earlier full run's wash-adjusted
+file is still the one served, with the warning that it is stale, and keeps "wash-adjusted"
+until a full `tjs run`; an account's own pass keeps it while the registered and crypto
+accounts are the ones the run saw.
+
+With no record of a run (an older taxjson's books, a first run that failed, a damaged or
+deleted `work/.deps/run.json`), a tax-year file is judged by the file served: an account's
+`work/<account>_gains_wash.json` is the file a pass across accounts wrote ("wash-adjusted",
+as before), a plain `_gains.json` is "pre-wash". The first `tjs run --account` after an
+older taxjson's full run keeps "wash-adjusted" for the files that pass wrote. A run that
+stops after its passes (a `--strict` exit, a report that fails) still records what they
+checked.
+
+A full-history view is "wash-adjusted, full history" when its build read every book the
+rule needs: every taxable account of the same kind (crypto with crypto) that has inputs or
+books, computed together, and, when a registered account has inputs, the registered
+accounts' book (`work/sheltered_base.json`) holding every one of them (and, when the run
+booked an in-kind contribution to a registered plan, a book no older than that booking: a
+`tjs run --account` of the taxable account books it without marking the book). So it can say
+"wash-adjusted, full history" where the tax year's view says "pre-wash": after `tjs run
+--account margin` and `tjs run --account rrsp`, no pass across accounts has run for the tax
+year, while the full-history build reads the one taxable account with the registered book,
+which is the whole check. "pre-wash, full history" means the build read only part of what
+the rule needs (another taxable account not built or not blended yet, a registered account
+with inputs and no book): its rows may still carry the denials that part found, they are
+not the complete result (a `tjs run --account` says itself that the check across accounts
+was skipped); a full `tjs run` gives the checked figures. It also covers a view of only accounts no rule
+reaches.
+
+It moves in three cases:
+
+- A view over a window that reaches outside the tax year (`tjs winners`, `losers`, `ccd-sum`,
+  `leaps` and `leaps-sum` over `all`, `2y`, another year or `--all-history`) gave `"basis":
+  "denials among taxable accounts, full history"` for any accounts. It now gives `"basis":
+  "wash-adjusted, full history"` where the build read every book the rule needs (after a
+  full `tjs run`, every taxable account), and `"basis": "pre-wash, full history"` for
+  accounts no rule reaches or a build that read part of those books. The full-history books now check a registered account's purchase too
+  (the entry above), so a checked account's denials are the filing file's over every year;
+  the old words left that purchase out, and named denials over accounts that have none
+  (backlog TJ-5441, TJ-5471). On the demo: `tjs losers all margin --json` and `tjs losers
+  all rrsp --json`. `tjs leaps` and `tjs leaps-sum` over such a window with no LEAPS
+  contract at all gave the tax year's label; now the window's (TJ-5474).
+- A Canadian project whose one taxable crypto account has no registered account with
+  inputs beside it: that account's views said `"basis": "pre-wash"` over the losses the
+  superficial-loss rule denied in its books (its own pass is the whole check, so the run
+  writes no wash-adjusted file for it). They now say `"wash-adjusted"` (`"wash-adjusted,
+  full history"` over a window outside the tax year): `tjs sum`, `gains-base`,
+  `wash-sales`, `winners`, `losers`, `ccd-sum`, `leaps`, `leaps-sum`, `shares`, `list`,
+  `sanity` and `harvest` (TJ-5473; the symptom TJ-0452 fixed for the full-history views).
+- A US crypto account whose coins moved between accounts (its books blended with the other
+  crypto account's): `"wash-adjusted"` becomes `"pre-wash"`, as no wash-sale rule reaches
+  crypto.
+
+`tjs close-year`'s lock (`filed/<year>.json`'s `basis`) and each account's
+`work/<account>_report.json` keep the files' own label: it says which files were read.
+
+#### A trade the broker marks CLOSE never opens a position (Canada)
+
+Re-run `tjs run`. A row the broker marks as closing (IB's Trades code `C`; RBC's `… CLOSE
+CONTRACT`, and `COVER SHORT.` on a share purchase) no longer opens a position in the Canadian
+books. The units the account's own position backs close it; the rest closed a position opened
+before your files, and are reported by hand (`tjs form-export`, MANUAL REPORTING), out of
+`tjs sum`, adding no long, no short and no written contract, as the `.tt` line `OPENING <date>
+<SYMBOL> <qty> cost=unknown` books them. Every tool now reads such a row the same way.
+
+Figures move only where the last run said one of these. In an account's `reports/<account>.sum`:
+"booked as a NEW long option" or "booked as a NEW written option". On the console: "the broker
+codes the sale … CLOSING (IB code C), but the data holds no position to close", or "N buy(s)
+the broker codes as closing a short your files do not hold" ("cover of a short opened before
+your files, booked as a new long"). Or the "Marked cover" Warning. For each:
+
+- **A marked sale with nothing held** (an option sold to close, shares sold coded `C`): an
+  option's premium was a gain of the year (a write, under grant timing) and leaves `tjs sum`;
+  a share sale was an open short in no total, and a later purchase "covered" it at that
+  purchase's cost. The sale's proceeds are now listed for manual reporting, no written
+  contract or short stays in `tjs list`, and a later purchase is a purchase.
+- **A marked purchase with nothing written or short** (an option bought to close, a share
+  cover): the totals leave it out as before, and it is now listed for manual reporting. The
+  long it left goes: from `tjs list` and the holdings report, from `tjs t1135`'s cost, and
+  from the cost of every later sale of that security (shares: the average cost; options: a
+  later write of the series is a write again, where it was read as the sale of that long, and
+  the long's "still open past expiry" Warning goes).
+- **A row that closes more than the account holds**: the units held close as before; the rest
+  are reported by hand (it was a short, or a long, of the rest).
+- **A sale or purchase coded `C;O` whose order began with nothing to close** (IB): reported
+  by hand whole, where the books opened a short (or a long) of all of it.
+- **A purchase with no mark that was read as the cover, then the broker's marked cover**
+  (the "Marked cover" Warning): the marked purchase's units past the short are reported by
+  hand, where they were a long purchase; a later sale then finds no long. Remove the row
+  that is wrong, as the Warning says.
+- **An RBC same-day write and its buy-back that no export covers to the expiry**: the day is
+  now put in the broker's open/close order too (the entry below said nothing moved). The gain
+  before rounding is the same; the count of dispositions, a rounding cent and `tjs t1135`'s
+  maximum cost can move, as below. The run says a Warning naming the export to add.
+
+**Another account's sales can move too.** Shares, and contracts you bought, are one pool
+across your taxable accounts (the average cost is per security, not per account). A marked
+sale with nothing held shows units were held before your files, so they were in that pool at a
+cost the files do not give: until the position is fully sold, every sale of that security in
+any taxable account is reported by hand, and a position still held lists `+?` beside its known
+cost, as an `OPENING … cost=unknown` line leaves them. The Warning says which rows the broker
+marks and which only shared the pool, and names the close behind them. A contract you wrote
+is its own account's: another account's write and buy-back stay in the totals.
+
+**A superficial loss can move.** A marked purchase no longer adds a long, so it is no
+replacement purchase: a loss that was denied because of it is now allowed (and the other way
+for a sale that no longer opens a short).
+
+`tjs find-missing-history` names what to add; with the missing purchase, short sale or write
+in the files, the trade is back in the totals.
+
+Also:
+
+- **An expiry or assignment row past the account's written contracts** that the broker marks
+  closing: the contracts written expire as before; the rest are reported by hand at 0.00
+  (the engine set them aside with a "more assignments than writes" Warning).
+- `tjs run --strict` now stops (exit 1) on any such row of the tax year: an option either
+  way, a share cover. It already stopped on a share sale. `tjs run` exits 0 as before.
+- The run no longer offers `tjs find-missing-history --write-missing-history` for a marked
+  close, and that command writes no `OPENING … cost=unknown` line where the account's own
+  position backs a part of the close: the line would put the documented units at an unknown
+  cost too. Add the older rows, or a purchase line with its cost (`--write-purchases`).
+- `tjs stats` and `tjs win-rates` count a row reported by hand once.
+- `tjs sum --json` and `tjs form-export --json`: `readiness.complete` is false where it was
+  true for an option (kind `unknown-cost` for a sale, `unbacked-cover` for a purchase, each row in one); a share
+  cover dated before the tax year is no longer an issue of this year. The gains files gain
+  `manual_reporting_required` rows (their `unknown_cost_from` names the row's own date and
+  units, with `"marked_close": true`) and the key `unbacked_close_openings`; rows carry
+  `"no_clock": "file"` on an RBC option trade. No key is removed.
+- `tjs find-missing-history`: the same tables, exit 0. The covers table's Cost is the unbacked
+  units' share of the row (it showed the whole row beside a part close), a later documented
+  close is no longer listed as a second cover, and for a contract it names the line to add,
+  `OPENING <date> <SYMBOL> -<qty> cost=unknown`, which is now read (it was refused).
+- `tjs option-boundary`: a marked sale with nothing bought is no `broker-closing` row.
+- A project where an `OPENING … cost=unknown` line, or the missing rows, already answer the
+  close is unchanged.
+- `tjs list --json`: a row of unknown cost carries `unknown_cost_from` where a marked close is
+  behind it.
+- A US project's figures are unchanged: the US books go by position, not by the broker's
+  mark. An RBC same-day pair that no export proves keeps the file's order there (a Canadian
+  project puts it in open/close order), and a purchase the broker marks closing is still
+  booked as a new long, with the Warnings it had.
+#### Breaking (v3.0.0): the command `elect` is `tjs elections`, manifest.json is elections.json
+
+No figure moves. What the next release asks of you:
+
+- **The command:** `tjs elections` takes what the command `elect` took (an account, `--set`,
+  `--hint`, `--redo`, `--reset`, `--event`, `--pending`, `--json`, `--details`). The old name is
+  no alias: it is refused, exit 2, "tjs elect was renamed: tjs elections", with your command line
+  under the new name on the next line, ready to copy (`tjs help elect` and a chained `-- elect`
+  too). Change scripts and notes that run it.
+- **The file:** an account's elections are `inputs/<account>/elections.json` (its lock
+  `.elections.json.lock`), not `inputs/<account>/manifest.json`. Every writer writes the new
+  name, but in a year filed before the rename: `tjs elections --set` there writes its frozen
+  `manifest.json`, the name the year was filed under. A manifest.json in an open year's inputs
+  (the project's `inputs/<account>/`, or the shared `inputs_dir` folder of a year-folders
+  project), or a `work/<account>_manifest.json` (an older layout still, read until now when the
+  account had no elections file of its own), stops `tjs run` and every other command that reads
+  the project, exit 2, naming the file and `tjs migrate`; an account folder holding both names
+  is refused naming each, a filed year's too.
+- **What to run:** `tjs migrate --dry-run`, then `tjs migrate`, from any folder of the project:
+  from the folder holding the year folders or from any year folder (a filed one too) it renames
+  the shared inputs folder's file and every open year's; in a one-folder project, its own. A
+  `work/<account>_manifest.json` moves into `inputs/<account>/`. A manifest.json beside an
+  elections.json of the same bytes is renamed manifest.json.migrated; of other bytes, or with
+  one of the two unreadable, or a folder named manifest.json, migrate writes nothing and names
+  each (`--dry-run` shows the whole plan with them marked): keep the one that holds your
+  elections, delete the other, run it again. `tjs migrate --to-years` renames it first. Commit
+  the rename.
+- **The version:** `requires_taxjson = ">=3.0.0"` is written by `tjs init`, by `tjs migrate`
+  in each project holding an elections.json (renamed or there before; a tobase.map merge alone
+  keeps its own release), and by every save of an elections.json in each project reading it
+  (`tjs elections --set` / `--redo` / `--reset`, the run's prompt and auto-elections,
+  taxjson-corp-actions; a note names the taxjson.toml), and by `tjs new-year`, `tjs
+  unclose-year` and `tjs align --write` for a year whose inputs folder holds one, so an older
+  taxjson refuses the
+  project instead of reading no elections and booking a sheltered account's event by the zero
+  default. A year frozen with its manifest.json is not raised (docs/settings.md); a filed
+  year's raise is recorded in its lock (`tjs check-filed` explains it, not a changed input). A
+  raise outside a run (migrate, unclose-year) changes taxjson.toml: the next report command asks
+  for `tjs run` first.
+- **Filed years are not touched:** a filed year's frozen copy keeps the name it was frozen
+  with, and its run, `tjs check-filed` and its lock's input digests read it under that name. A
+  frozen manifest.json and the shared elections.json are one file: renaming the shared one
+  reports no changed input, no late election and no `shared_exports_changed` in `tjs years
+  --json`; an election saved later in the shared elections.json is still reported against the
+  frozen copy. To amend such a year, correct its manifest.json (check-filed and `tjs elections
+  --set` name that file); an elections.json put in beside it is refused.
+- **`tjs years`:** a year whose elections are still under the old name shows that, with "run
+  `tjs migrate`", as its problem (`--json`: `problem`), and no changed input.
+- **`--json`:** the documents' schema names follow the command: `elections` (was `elect`,
+  `schema_version` 1, unchanged) and `elections --pending` (was `elect --pending`): its key
+  `manifest` is now `elections_file`, so its `schema_version` is 2 (docs/settings.md, the --json
+  outputs). `tjs tax-logic --json` keeps its keys; the rules' titles and text say elections.json
+  and `tjs elections`.
+- **taxjson-corp-actions** (the tool `tjs run` runs): `--manifest` / `--manifest-shown` are
+  `--elections` / `--elections-shown`.
+- **Older entries** of this page and of docs/troubleshooting.md name the file manifest.json and
+  the command by its old name, elect, as they were then.
+#### Every project gets a `logs/` folder
+
+The first command you run in a project after the upgrade makes `logs/` beside its `taxjson.toml`
+(in a project with year folders, in the year's folder) and writes what the command showed there,
+your figures included ([Command logs](commands.md#command-logs-logs)). It never leaves your
+computer, but a folder you sync or back up carries it: git never commits it (it gets a
+`.gitignore` of its own). `log_keep = 0` under `[settings]` turns it off; delete `logs/` then.
+#### One `holdings/` beside `inputs/`, every year's positions snapshots
+
+No figure moves, and an existing project needs nothing: a year folder whose `holdings/` is its own
+keeps reading it, as before. The window below applies only in the years layout, to the value `tjs
+init` and `tjs migrate` write (`holdings_dir = "../holdings"` in a year folder: the holdings folder
+the year folders share). A single-folder project, and a `holdings_dir` set to any other folder (in
+the project or beside it), read every snapshot there, as before, with the same output. What is
+new:
+
+- **`tjs init`'s year folders share one `holdings/`** beside `inputs/` (`holdings_dir =
+  "../holdings"`); the year folder has none of its own. Each year compares the snapshots dated
+  from January 1 of the year once the year before's folder reads it too (else every earlier one,
+  the oldest year's opening positions), through January 15 of the next once the next year's
+  folder reads it too (else every later one), and an undated one: a snapshot of January 1-15 is
+  compared by both years. `tjs sanity` names the others in one note, with the command that compares one (`tjs
+  sanity ACCOUNT=FILE`). `tjs migrate --to-years` lays a project out the same way (a single
+  folder that compared snapshots of several years compares the window from then on).
+- **`tjs close-year` copies the snapshots the year compares** at that moment into its own `holdings/` and comments
+  `holdings_dir` out under a note of its own, as it freezes `inputs_dir`; `tjs new-year` names
+  `../holdings` again; `tjs unclose-year` takes it back.
+- **`tjs fetch --positions` into a shared folder** writes `<account>_live_holdings_<year>.toml`
+  (the year of today's snapshot), not `<account>_live_holdings.toml`.
+
+To share the snapshots of a project made before this release, in the folder holding the years:
+`tjs migrate --shared-holdings` shows the plan, writing nothing; `tjs migrate --shared-holdings
+--write` does it (each open year's `holdings/` moved into `holdings/` at the top, one copy of a
+file two years hold, the accounts' `holdings = [...]` paths pointed at the moved files,
+`holdings_dir = "../holdings"` set; a filed year keeps its own; one account's undated or same-day
+snapshots of two years, or an undated one beside a dated one with no broker account named, stop
+it, with nothing written: give each its `[meta] as_of`). By hand, the same two steps for each open year: move the files of
+`2025/holdings/` into `holdings/` beside `inputs/` (renaming one whose name another year's file
+has), then add `holdings_dir = "../holdings"` under `[settings]` in `2025/taxjson.toml` (a
+snapshot left in `2025/holdings/` is read by nothing: `tjs sanity` warns). An older taxjson
+reading such a project compares every snapshot in the shared folder.
+
+#### `tjs technicals`: ATR% in the default table
+
+The default text table gains ATR% after RSI (Wilder's ATR(14) as a % of the last close, the same
+figure), `--details` loses ATR14, and `--json` is unchanged (the key stays `atr14_pct`).
+
+#### One meaning of every money column: `tjs gains-base`, `tjs gains-cra`, `tjs sum` (Canada)
+
+No filed figure moves on a re-run. What changes, in the text:
+
+- **`tjs gains-base`'s COST(ACB) and GAIN are now the filed figures**, `tjs sum`'s: COST(ACB) has
+  a denied superficial loss taken out already and GAIN is the allowed gain. Before, COST(ACB)
+  was the cost before the denial (sum's COST(ACB) + DENIED) and GAIN the gain before it, with the
+  filed gain under ALLOWED: that view before the denial is gone from the text (`--json` keeps
+  it, below). A row or THE RETURN with a denial shows another COST(ACB) and GAIN than the last
+  release did: THE RETURN (tjs sum) is now sum's RETURN row cell for cell. TOTAL COST is added;
+  DENIED is DENIED (INFO), the last column: information only, COST(ACB) is already reduced by
+  it, nothing to add or subtract. A sale moved in kind to a registered plan at a loss is marked
+  `†` and its denied loss is in DENIED (INFO) (next item).
+- **`tjs gains-cra` always prints everything:** drop `--details` from scripts at leisure; given,
+  it changes nothing but one `Info:` line on stderr (`--json` stays clean). Its text headings
+  are in capitals and on up to three lines, a long Description wraps within its column, each
+  currency's table gains DENIED (INFO), and ALL SALES and FOR THE RETURN take `tjs sum`'s
+  columns and line labels (FOR THE RETURN's total row is RETURN, was Total); a script reading
+  the text should read `--json` or `--csv` (unchanged) instead.
+- **`tjs gains-cra`'s currency tables name their columns as its totals and `tjs sum` do**
+  (text only): COST(ACB), OUTLAYS and GAIN, where they said ACB, COMMISSIONS and GAIN/LOSS,
+  so a figure has one name in every table. The legend's first line is how every row and
+  total foots (`GAIN = PROCEEDS − COST(ACB) − OUTLAYS = PROCEEDS − TOTAL COST`, with FX), its
+  line mapping one name to the other ("The totals in tjs sum's columns: …") is gone, and the
+  denial notes under a table and `tjs gains-cra -h` say COST(ACB) and GAIN. The `--csv`
+  header (`ACB (CAD)`, `Commissions (CAD)`, `Gain/Loss (CAD)`) and the `--json` keys are
+  unchanged.
+- **`tjs sum`'s DENIED is DENIED (INFO)**, on two heading lines; its legend can take two lines.
+- **DENIED (INFO) adds every kind of denied loss**, in `tjs sum`, `tjs gains-cra` and `tjs
+  gains-base` alike: the superficial losses (deferred and for good), as DENIED did, and now an
+  in-kind contribution's loss to a registered plan (s.40(2)(g)(iv), nil for good), as `tjs
+  gains-cra --csv`'s Denied column always added it. So a sale has one DENIED (INFO) figure in
+  every report and the CSV, and gains-cra's SUBTOTALs add to sum's. On a re-run, a project with
+  such a contribution at a loss sees sum's and gains-base's DENIED (INFO) grow by that loss (a
+  contribution of 100 QZK.TO bought at 10.00 and valued 600: 400.00 more on its line, its
+  account and the RETURN row); information only, no filed figure moves. `tjs sum --details`
+  still names the contributions' part, and gains-base no longer adds a line of its own for it
+  under TOTALS. A script that reads DENIED from the text should read `--json`'s `denied_all`.
+- **A column left out for the width is said:** a `! ` line under `tjs sum` (FEES, PIL) and `tjs
+  gains-base` (DAYS, QTY) names it and `--json`, which has it.
+- **New `--json` keys, the old ones kept:** gains-base adds `acb` (the filed COST(ACB): `cost` −
+  `denied`) and `total_cost` (`acb` + `outlays`) to each row and total, `acb` and `total_cost` to
+  `rows_less_return` where a cent or more apart, and `text_columns` (the text's columns, in
+  order; a US project's too); `columns`, `cost`, `gain` and `allowed` keep their meanings
+  (`allowed` is the text's GAIN). gains-cra adds `total_cost` to each line, its `rows_sum`, each
+  table, `rows_total` and `totals`, and `short` to each line (sum's label's words). All three
+  add `denied_all`, DENIED (INFO)'s figure: `tjs sum --json` on each of `filing`'s lines and
+  accounts and its totals (and so `tjs estimate --json` and gains-base's `totals.filing`),
+  gains-base on each row and total, gains-cra on each row, table, line, `rows_sum`, `rows_total`
+  and `totals`; gains-base's `text_columns` names it for DENIED (INFO). A row's, line's or
+  account's is its `denied` + `denied_contribution`; a total's adds the lines' (or the rows')
+  `denied_all`, as every other column adds, so it can be a cent from the total's `denied` +
+  `denied_contribution`, whose contributions total is the gains files', cut to the cent once.
+  `denied` keeps its meaning (the superficial losses alone), `denied_contribution` its own,
+  `engine_denied_unrounded` its own (the superficial losses' unrounded total), and the CSV is
+  unchanged.
+- **`tjs close-year` and `tjs years` name the lock's denied losses (Canada):** the CLOSED
+  block's "Disallowed:" line is "Superficial losses:", and `tjs years`' DENIED column is
+  SUPERFICIAL: the lock records the superficial losses alone, never an in-kind contribution's
+  loss, which `tjs sum`'s DENIED (INFO) now adds, so the two figures can differ. The lock's
+  keys and values and `tjs years --json` are unchanged; a script reading the text should read
+  `--json`.
+- **`tjs sum --details`' denied notes add up:** the contributions' item gives the lines' part
+  (DENIED (INFO) less the superficial losses), so the two items add to DENIED (INFO), and the
+  rounding note compares DENIED (INFO) with the gains files' unrounded total of every kind
+  ("DENIED (INFO)'s unrounded total in the gains files (every loss denied) is …"; it was the
+  superficial losses' alone, "the gains files' unrounded total denied is …").
+
+#### Several accounts in one command (`ACCOUNT[,ACCOUNT...]`)
+
+No figure moves on a re-run, and one account name gives what it gave, its words and its exit
+code, but for the labels of the next item. A list is new: `tjs gains-base margin,crypto` (docs/
+commands.md, "Several accounts").
+
+- **One named account no longer reads as the whole return** (text only; a script reading
+  these lines should read `--json`). `tjs sum margin`: `FOR THE RETURN — taxable accounts
+  (margin), CAD (Schedule 3, tax year 2025)` is now `FOR ACCOUNT margin — CAD (Schedule 3, tax
+  year 2025; not the whole return)` (US: `(Form 8949 → Schedule D, tax year 2025; not the whole
+  return)`); with the estimate, `TAX ESTIMATE — canada/ON, rates vintage 2025` ends `, for
+  account margin only`, and `Unused capital losses`, `AMT CHECK — …` and `MINIMUM TAX CARRYOVER
+  (…)` end `for this account` (a list: `for these accounts`; US: the unused losses alike). `tjs
+  gains-base margin` (with a return row): `TOTALS — CAD` is now `TOTALS — CAD, account margin
+  (not the whole return)`, the row `THE RETURN (tjs sum)` is `tjs sum margin`, `The taxable
+  rows differ from THE RETURN by` is `… from the tjs sum margin row by`, `Each line of the
+  return is rounded to the cent, … on the return's GAIN)` is `Each Schedule 3 line is rounded to
+  the cent, … on the tjs sum margin row's GAIN)` (US: `Each Form 8949 line …`), and `More: tjs
+  gains-base --details (the return's lines)` says `(the Schedule 3 lines)`. `tjs gains-cra
+  margin`: `FOR ACCOUNT margin — Schedule 3, as tjs sum margin shows it (not the whole
+  return)` is now `… as tjs sum shows it for this account (not the whole return)`. With no
+  ACCOUNT, and `tjs estimate`, nothing changes.
+- **New `--json` keys** (no `schema_version` changes; a program that pins a key set adds them):
+  - `account_names` (the accounts named, in the order given: `["margin"]`, `["margin",
+    "beta"]`; null for every account), at the top of `tjs sum --json`, `tjs gains-base --json`,
+    `tjs cash --json`, `tjs journals --json`, `tjs stats --json`, `tjs win-rates --json` and
+    `tjs wash-radar --json`, and in the run's `reports/wash_radar_<account>.json`,
+    `wash_radar_COMBINED.json` and their `exports/` copies (the accounts whose rows are shown:
+    `["<account>"]` in an account's file, null in the combined one). `tjs estimate --json` has
+    no such key.
+  - `tjs gains-cra --json`: with an ACCOUNT, `scope` also holds `account_names` (`{"account":
+    "margin", "account_names": ["margin"]}`; a list: `{"account": "margin,beta",
+    "account_names": ["margin", "beta"]}`); `scope` is still null for every taxable account. A
+    script comparing `scope` whole reads `scope["account"]` (or `account_names`) instead.
+  - `tjs stats --json` and `tjs win-rates --json`: `sheltered_accounts`, the named accounts that
+    are sheltered (`[]` when none).
+  - Every `account` key keeps its value (the text given: one name, a list's names joined with
+    commas; for every account null, `""` in `tjs wash-radar --json`, `"COMBINED"` in the
+    combined radar file), and so do `accounts`
+    (the books read) and `sheltered` (true only when every named account is sheltered). `tjs
+    gains-base --json`'s `totals.filing.command` names a list as given (`tjs sum margin,beta`).
+- **Exit codes that moved, for inputs refused before** (any comma token was refused first,
+  "'margin,ib' is not an account name", exit 1):
+  - A list that works exits 0.
+  - A valid list beside another flag's usage error now reaches that error and exits with its
+    code, 2, as one name does: `tjs list margin,ib --date 2024-13-01`, `tjs div-estimate
+    margin,ib --months 500` (or `--date 2024-13-01`), `tjs slip-audit margin,ib --write`, `tjs
+    wash-radar margin,ib --date 2024-13-01`, `tjs find-missing-history margin,ib
+    --outside-year` (or `--write-purchases --write-missing-history`, or `--write-missing-history
+    --outside-year --all-history`).
+  - `tjs slip-audit margin,ib --template` exits 0 (the template ignores the accounts, as it
+    ignores one); a name not in `[accounts]` there still exits 1.
+  - `tjs win-rates` and `tjs option-yield`: a token with a comma read as a symbol at exit 0; it
+    is the account list now: exit 0 with those accounts' report when every name is an account,
+    exit 1 when one is not (`tjs win-rates BRK,B`: "no [accounts.BRK], [accounts.B] in
+    taxjson.toml"). A token starting with a digit (`1y,margin`) is an invalid period, exit 2, as
+    before.
+  - Every other refusal of a comma token keeps exit 1 (an empty or repeated name, a path, a
+    pipeline file's name, a name not in `[accounts]`, a listed account with no books, a list to
+    a command or mode of one account), in its own words now: `tjs list 1y,margin` says "no
+    [accounts.1y] in taxjson.toml …" and "A period never has a comma.". A bad comma item of
+    `tjs check-tt` or `tjs sanity` keeps exit 2, and so does `tjs find-missing-history
+    x.json,margin --write-missing-history` (a FILE there), as before.
+- **A list whose first name starts with a digit** (an account `2fa`): a lone token that starts
+  with a digit is a period, as before, so `tjs gains-base 2fa,margin` is "invalid time period"
+  (exit 2); give the period first: `tjs gains-base 2025 2fa,margin` (or `tax_year`). `tjs sum`
+  and `tjs gains-cra` take no period and read `2fa,margin` as given. `tjs win-rates` and `tjs
+  option-yield` have no period-first form: name another account first (`tjs win-rates ytd
+  margin,2fa`).
+- **Commands that stay one account:** `tjs run --account`, `tjs elections`, `tjs opening`, `tjs
+  check-tt --account` and the one-account modes (`tjs slip-audit --import-cra`, `tjs
+  crypto-sends --set`/`--unset`/`--write`, `tjs find-missing-history --write-purchases FILE`)
+  refuse a list, exit 1 (the code a comma had).
+- **The stand-alone tools:** `taxjson-explain`, `taxjson-audit`, `taxjson-wash-radar` and
+  `taxjson-missing-history` take `--account` once per account; one `--account X` reads as
+  before.
+
+#### RBC Direct: a same-day option write and its buy-back in the broker's open/close order
+
+Re-run `tjs run`. Where an RBC export's file order put a day's `CLOSE CONTRACT` row of one
+series before the `OPEN CONTRACT` row that backs it, the open is now read first (the run's .sum
+says "note: … rows of SERIES on DATE put in the broker's open/close order (RBC writes no
+time): …", naming the rows moved). On such a day each figure below can move, to what the rows
+in their true order give:
+
+- **The gains rows** are a write and its buy-back where the old reading had a long bought and
+  sold (and the mirror: a long bought and sold, not a write bought back), so the count of
+  dispositions can change. The gain before rounding is the same, but a Schedule 3 cell (`tjs
+  sum`, `tjs form-export`) can move by a rounding cent: one disposition rounds where two did,
+  or the other way round. The ACB and the total cost can move by a cent the same way. The
+  false ATTENTION and `tjs option-yield`'s open contract "past expiry" go.
+- **`tjs t1135`'s maximum cost** can fall or rise by that option's cost: the old reading held
+  a long the broker never held (or missed the one it did). If you file a T1135, check it.
+- **`tjs sum`'s FX on foreign cash** can gain or lose an in-year overdraft: the cash now goes
+  out and comes in in the true order (a write's premium before its buy-back is paid; a long's
+  cost before its sale comes in).
+
+Where the account's exports end before a week past the series' expiry, or leave a gap over it,
+the day is put in the same order and the run says a Warning that names the export to add
+("The order rests on that day's own rows": the entry above). Where they hold the day's rows in
+two downloads (overlapping ones with no Account column, or a day split between two), nothing
+moves: docs/troubleshooting.md says what to add.
+
 ### v2.2.0
 
 #### Carry-back splits that rest on sales with an unknown cost (Canada)

@@ -16,7 +16,7 @@ import _golden
 import _style
 
 # The books the refactor plan relies on. A book cannot quietly go missing.
-REQUIRED = {"demo", "style-canada", "style-usa", "options", "crypto", "evidence",
+REQUIRED = {"demo", "style-canada", "style-usa", "options", "rbc-options", "crypto", "evidence",
             "fuzz-conservation", "fuzz-transfer", "fuzz-straddle"}
 
 

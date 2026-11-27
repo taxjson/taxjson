@@ -370,8 +370,8 @@ def _ib_project(td, name, text, line=''):
     if line:
         (root / 'ticker.map').write_text(line + '\n')
     (root / 'inputs' / 'margin' / 'ib.csv').write_text(text)
-    shutil.copy(DEMO / 'manifest.json',
-                root / 'inputs' / 'margin' / 'manifest.json')
+    shutil.copy(DEMO / 'elections.json',
+                root / 'inputs' / 'margin' / 'elections.json')
     return root
 
 
@@ -645,7 +645,7 @@ class TestOneEventInAnySpelling(unittest.TestCase):
         self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-3000:])
         corp = json.loads((root / 'work' / 'margin_rbc_direct_corp.json')
                           .read_text())['transactions']
-        saved = json.loads((root / 'inputs' / 'margin' / 'manifest.json')
+        saved = json.loads((root / 'inputs' / 'margin' / 'elections.json')
                            .read_text())['elections']
         return root, corp, saved
 
@@ -654,7 +654,7 @@ class TestOneEventInAnySpelling(unittest.TestCase):
                   for f in ('rbc_2024.csv', 'rbc_2025.csv'))
         files = {'rbc_2024.csv': y4, 'rbc_2025.csv': y5,
                  'rbc_2025b.csv': _lower_cells(y5),
-                 'manifest.json': (EVIDENCE / 'manifest.json').read_text()}
+                 'elections.json': (EVIDENCE / 'elections.json').read_text()}
         with tempfile.TemporaryDirectory() as td:
             root, corp, saved = self._run_rbc(
                 td, 'dbl', files,
@@ -670,7 +670,7 @@ class TestOneEventInAnySpelling(unittest.TestCase):
     def test_an_election_saved_under_the_id_as_read_applies(self):
         files = {f: _lower_cells((EVIDENCE / f).read_text())
                  for f in ('rbc_2024.csv', 'rbc_2025.csv')}
-        files['manifest.json'] = (EVIDENCE / 'manifest.json').read_text(
+        files['elections.json'] = (EVIDENCE / 'elections.json').read_text(
             ).replace(MERGER_ID, MERGER_ID_AS_READ)
         with tempfile.TemporaryDirectory() as td:
             root, corp, saved = self._run_rbc(td, 'saved', files)
@@ -686,7 +686,7 @@ class TestOneEventInAnySpelling(unittest.TestCase):
         y5 = (EVIDENCE / 'rbc_2025.csv').read_text()
         files = {'rbc_2024.csv': (EVIDENCE / 'rbc_2024.csv').read_text(),
                  'rbc_2025.csv': y5, 'rbc_2025b.csv': _lower_cells(y5),
-                 'manifest.json': (EVIDENCE / 'manifest.json').read_text(
+                 'elections.json': (EVIDENCE / 'elections.json').read_text(
                      ).replace(MERGER_ID, MERGER_ID_AS_READ)}
         with tempfile.TemporaryDirectory() as td:
             root, corp, saved = self._run_rbc(td, 'first', files,
@@ -708,8 +708,8 @@ class TestOneEventInAnySpelling(unittest.TestCase):
         (root / 'taxjson.toml').write_text(_config(year=2025))
         for fname, text in files.items():
             (root / 'inputs' / 'margin' / fname).write_text(text)
-        manifest = root / 'inputs' / 'margin' / 'manifest.json'
-        manifest.write_text((EVIDENCE / 'manifest.json').read_text(
+        manifest = root / 'inputs' / 'margin' / 'elections.json'
+        manifest.write_text((EVIDENCE / 'elections.json').read_text(
             ).replace(MERGER_ID, MERGER_ID_AS_READ))
         before = manifest.read_bytes()
         r = _run(root, 'run', '--no-input')
@@ -763,7 +763,7 @@ class TestOneEventInAnySpelling(unittest.TestCase):
         (root / 'ticker.map').write_text(LINES['DISTINCT'])
         r = _run(root, 'run', '--no-input')
         pending = root / 'work' / 'margin_pending_elections.json'
-        return (r, json.loads((folder / 'manifest.json').read_text())
+        return (r, json.loads((folder / 'elections.json').read_text())
                 ['elections'],
                 [p['event_id'] for p in json.loads(pending.read_text())
                  ['pending']] if pending.exists() else [])
@@ -771,7 +771,7 @@ class TestOneEventInAnySpelling(unittest.TestCase):
     def test_a_carried_election_keeps_its_spelling(self):
         files = {f: _lower_cells((EVIDENCE / f).read_text())
                  for f in ('rbc_2024.csv', 'rbc_2025.csv')}
-        files['manifest.json'] = (EVIDENCE / 'manifest.json').read_text(
+        files['elections.json'] = (EVIDENCE / 'elections.json').read_text(
             ).replace(MERGER_ID, MERGER_ID_AS_READ)
         with tempfile.TemporaryDirectory() as td:
             root, _corp, saved = self._run_rbc(td, 'carried', files)
@@ -793,7 +793,7 @@ class TestOneEventInAnySpelling(unittest.TestCase):
                 (root / 'inputs' / 'margin' / f).write_text(
                     _lower_cells((EVIDENCE / f).read_text()))
             self.assertEqual(_run(root, 'run', '--no-input').returncode, 3)
-            r = _run(root, 'elect', 'margin', '--set',
+            r = _run(root, 'elections', 'margin', '--set',
                      f'{MERGER_ID}=taxable_disposition',
                      '--hint', 'fmv_per_share=10')
             self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-3000:])
@@ -820,7 +820,7 @@ class TestOneEventInAnySpelling(unittest.TestCase):
                 err = io.StringIO()
                 argv = ['taxjson-corp-actions', '--brokerage', 'rbc_direct',
                         '--country', 'canada', '--account-name', 'margin',
-                        '--manifest', str(folder / 'manifest.json'),
+                        '--elections', str(folder / 'elections.json'),
                         '--spellings-from', spec, str(csv)]
                 with self.subTest(spec=spec):
                     with mock.patch.object(sys, 'argv', argv), \
@@ -831,7 +831,7 @@ class TestOneEventInAnySpelling(unittest.TestCase):
                     self.assertEqual(cm.exception.code, 2)
                     self.assertIn(f'error: --spellings-from {spec}: ',
                                   err.getvalue())
-                    self.assertFalse((folder / 'manifest.json').exists())
+                    self.assertFalse((folder / 'elections.json').exists())
 
 
 if __name__ == '__main__':

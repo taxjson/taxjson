@@ -252,7 +252,7 @@ class TestCorpActionsCliDedup(unittest.TestCase):
             r = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_corp_actions",
                  "--country", "canada", "--brokerage", "ib",
-                 "--manifest", str(Path(tmp) / "manifest.json"),
+                 "--elections", str(Path(tmp) / "elections.json"),
                  "--no-input", "--pending-json", str(pend), str(a), str(b)],
                 cwd=REPO_ROOT, capture_output=True, text=True,
                 stdin=subprocess.DEVNULL, timeout=120)
@@ -411,7 +411,7 @@ class TestCorpViewsPins(unittest.TestCase):
                           for e in evs.values()], [(160.0, 80.0)])
 
     def test_a2_1538_elect_reextraction_combines_two_broker_accounts(self):
-        from taxjson.cli.elect import _reextract_pending_entry
+        from taxjson.cli.elections import _reextract_pending_entry
         from taxjson.lib import corp_views
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -419,7 +419,7 @@ class TestCorpViewsPins(unittest.TestCase):
             (eid,) = corp_views._current_events(root, "margin", extractor_for)
             ent = _reextract_pending_entry(
                 root / "inputs" / "margin", "margin", "canada",
-                root / "inputs" / "margin" / "manifest.json", eid)
+                root / "inputs" / "margin" / "elections.json", eid)
         self.assertEqual((ent["qty_disposed"], ent["qty_received"]),
                          (160.0, 80.0))
 
@@ -637,7 +637,7 @@ class TestCloseYearAccountOrder(unittest.TestCase):
             r = _run_cli(root, "close-year", "--yes")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertRegex((r.stdout + r.stderr).lower(),
-                             r"disallowed:? +300\.00")
+                             r"superficial losses:? +300\.00")
             rec = json.loads((root / "filed" / "2025.json").read_text())
         xyz = rec["year_end"]["equity"]["XYZ.TO"]
         self.assertAlmostEqual(xyz["qty"], 100.0)

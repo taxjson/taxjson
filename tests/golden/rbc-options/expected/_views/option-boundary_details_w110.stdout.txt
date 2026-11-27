@@ -1,0 +1,21 @@
+OPTION YEAR-BOUNDARY REVIEW — tax year 2025
+Premium timing: grant (contracts written from 2024).
+No filed-year locks (run `tjs close-year` after filing).
+
+ACCOUNT  SYMBOL                  WRITTEN     UNITS  PREMIUM  CLOSED      KIND         PAID
+------------------------------------------------------------------------------------------
+margin   ZZQV250117C00012500.TO  2024-12-24      1    23.25  2025-01-21  assignment      -
+margin   ZZQV250117C00013000.TO  2024-12-24      2    20.75  2025-01-02  buy-back    17.25
+margin   ZZRW280121C00025000.US  2025-12-23      1   141.75  -           open            -
+
+  1. ZZQV250117C00012500.TO (margin, written 2024-12-24): folded into the share leg in 2025 (s.49(3)); the
+     books show no 2024 gain
+     => if 2024 was filed with the 23.25 premium as a gain, amend 2024 to remove it (s.49(4)); otherwise
+        nothing
+  2. ZZQV250117C00013000.TO (margin, written 2024-12-24): premium 20.75 in 2024; buy-back loss 17.25 in 2025
+     => no amendment (IT-479R para 29)
+  3. ZZRW280121C00025000.US (margin, written 2025-12-23): premium 141.75 recognised in 2025; open
+     => if assigned in a later year after 2025 is filed: T1-ADJ 2025 to remove it (s.49(4)); if bought back:
+        loss in that year; if it expires: nothing
+
+No amended return is required by these contracts under the timing in force.

@@ -409,7 +409,7 @@ class TestDemo(_Demo):
         """TJ-0148: with margin deferred at a pending election, close-year
         said "pass --force to lock them anyway"; --force then refused on
         STALE wash gains blaming "A --account rerun" that never ran."""
-        _ok(self, _cli(self.y, "elect", "margin", "--reset"))
+        _ok(self, _cli(self.y, "elections", "margin", "--reset"))
         r = _cli(self.y, "run", "--no-input")
         self.assertEqual(r.returncode, 3, r.stdout[-1500:] + r.stderr[-1500:])
         r = _cli(self.y, "close-year", "--yes")

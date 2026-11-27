@@ -38,7 +38,7 @@ POOL_OPERATIONS = {
     'reset_negative', 'late_premium', 'add_wash_cut',
     'move_in', 'move_beyond', 'move_out', 'move_out_lots', 'move_in_from',
     'split', 'merge', 'stamp_currency',
-    'taint', 'taint_from', 'untaint', 'add_sources',
+    'taint', 'taint_from', 'untaint', 'add_sources', 'written_taint',
     'open_lot', 'close_lots', 'retag_lots', 'record_grant', 'record_grant_loss',
     'snapshot', 'part', 'netted'}
 BOOK_OPERATIONS = {'ensure', 'rename', 'is_spinoff', 'give_up_to_child', 'child_opens',

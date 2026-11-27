@@ -881,12 +881,10 @@ def parse_unknown_opening_line(line: str, source: str = ''):
             f"{where}malformed OPENING line — the quantity must be a "
             f"number of units held before the data, negative for a short "
             f"(expected `{UNKNOWN_OPENING_FORM}`): {shown!r}")
-    if q < 0 and _derivative_kind(sym):
-        raise ValueError(
-            f"{where}OPENING cost=unknown with a negative quantity is for "
-            f"a short of shares, not {_derivative_kind(sym)} ({sym}): "
-            f"`tjs find-missing-history --include-options` lists a "
-            f"contract written before the data: {shown!r}")
+    # (A negative quantity of an option series: contracts written before
+    # the data, their premium unknown, as a share short's proceeds are;
+    # the buy-back that closes them is reported by hand: CA-OPT-12,
+    # backlog TJ-5349. It was refused, and nothing could say so.)
     _not_in_future(date, 'OPENING', where, shown)
     return {'date': date, 'symbol': sym, 'quantity': q, 'reason': reason,
             'line': shown}

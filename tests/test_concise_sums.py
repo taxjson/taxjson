@@ -37,9 +37,14 @@ class TestEstimate(unittest.TestCase):
                               r.stdout)
                 self.assertIn("tjs sum", r.stdout)
                 # The summary's warnings are its `! ` lines, copied over.
-                assert_concise(self, r.stdout, r.stderr, budget=6,
+                # Canada, one line over the usual six: the sale the
+                # broker codes closing is reported by hand, a `! ` line of
+                # its own beside the sale with no purchase (TJ-5349).
+                assert_concise(self, r.stdout, r.stderr,
+                               budget=7 if c == "canada" else 6,
                                legend="ESTIMATE ONLY, not filing numbers")
-                self.assertIn("! 2 sales with no purchase", r.stdout)
+                self.assertIn("! 1 sale with no purchase" if c == "canada"
+                              else "! 2 sales with no purchase", r.stdout)
                 self.assertNotIn("Assumes:", r.stdout)
 
     def test_details_keeps_the_summary_and_the_assumptions(self):
@@ -61,7 +66,9 @@ class TestAmt(unittest.TestCase):
     def test_default_and_details(self):
         r = _run("canada", "amt", "--province", "ON")
         self.assertEqual(r.returncode, 0, r.stderr)
-        assert_concise(self, r.stdout, r.stderr, budget=6,
+        # One line over the usual six: the estimate's Warning for the
+        # sale reported by hand, beside the one with no purchase (TJ-5349).
+        assert_concise(self, r.stdout, r.stderr, budget=7,
                        legend="ESTIMATE ONLY, not filing numbers")
         self.assertIn("= Federal minimum tax", r.stdout)
         self.assertNotIn("Law: ITA", r.stdout)
@@ -125,7 +132,9 @@ class TestT1135(unittest.TestCase):
         # One line over the usual six: the count and cost of the
         # countries assumed from the listing is a `! ` line of its own
         # (TJ-4957), beside the two this book already has.
-        assert_concise(self, r.stdout, r.stderr, budget=7,
+        # Two more: the shares sold by hand were held at an unknown cost
+        # (a `! ` line), and their sale is left out (a Warning; TJ-5349).
+        assert_concise(self, r.stdout, r.stderr, budget=9,
                        legend="Amounts are cost (ACB)")
         self.assertIn("Maximum total cost in 2024: ", r.stdout)
         # The crypto account's US dollars are a cash row (tax-logic

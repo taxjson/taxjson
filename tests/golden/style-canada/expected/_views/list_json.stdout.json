@@ -53,18 +53,6 @@
     },
     {
       "account": "margin",
-      "cost": -1348.65,
-      "cost_per_share": 26.973,
-      "deferred_wash": 0.0,
-      "last_acq_date": "2024-04-01",
-      "missing_history_suspect": true,
-      "qty": -50.0,
-      "since": "2024-04-01",
-      "symbol": "OLDCO.US",
-      "unknown_cost": false
-    },
-    {
-      "account": "margin",
       "cost": 6751.35,
       "cost_per_share": 67.5135,
       "deferred_wash": 0.0,
@@ -198,9 +186,9 @@
   ],
   "schema_version": 1,
   "totals": {
-    "book_cost": 63992.57,
+    "book_cost": 65341.22,
     "deferred_wash": 841.2,
-    "positions": 16,
+    "positions": 15,
     "unknown_cost_positions": 0
   },
   "year": "2024"

@@ -11,7 +11,7 @@ ETH                     USD     4      2   5,441.75   3,061.74  37.56
 GHOSTQ.TO               CAD     0      1       0.00     590.05   9.95
 MSFT.US                 USD     1      1  20,001.00  20,099.00   2.00
 NVDA.US                 USD     2      1   2,832.00   1,394.00   3.00
-OLDCO.US                USD     0      1       0.00     999.00   1.00
+OLDCO.US                USD     0      1       0.00     699.00   1.00
 PARN.US                 USD     1      0   5,001.00       0.00   1.00
 QZQ.US                  USD     3      1   9,631.95   5,699.00   7.95
 QZQ240920C00030000.US   USD     1      1     602.00     298.00   4.00
@@ -23,5 +23,5 @@ SHOP.TO                 CAD     2      0   5,709.90       0.00   9.90
 SPNC.US                 USD     1      0     250.00       0.00   0.00
 
 TOTAL CAD: bought 44,159.65, sold 18,407.65, fees 89.50
-TOTAL USD: bought 108,961.45, sold 81,601.89, fees 164.61
-SOLD IN TAXABLE ACCOUNTS: 4,417.60 CAD, 66,341.84 USD  (the totals include the registered rrsp, tfsa)
+TOTAL USD: bought 108,961.45, sold 81,301.89, fees 164.61
+SOLD IN TAXABLE ACCOUNTS: 4,417.60 CAD, 66,041.84 USD  (the totals include the registered rrsp, tfsa)

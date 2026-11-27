@@ -70,6 +70,7 @@ from taxjson.project.accounts import accounts_of, typed_account
 from taxjson.project.toml_io import parse_toml
 from taxjson.project.settings import settings_of
 from taxjson.lib import project_layout as _PL
+from taxjson.lib.account_list import names_of
 from taxjson.lib.futures_prefixes import canonical_futures_symbol
 from taxjson.lib.json_contract import SCHEMAS
 from taxjson.model import money as M
@@ -1382,28 +1383,40 @@ def _payer_issues_t5(b_slips, b_rows, bucket, rate, interest,
     return False
 
 
+def _audit_accounts(cfg: Dict[str, Any], account: Any
+                    ) -> Tuple[Optional[Tuple[str, ...]], List[str]]:
+    """(the names `account` gives, None for every one; the accounts the
+    audit reads): each name an [accounts.*] table that gets slips, else
+    SlipsError."""
+    accts = slip_accounts(cfg)
+    names = names_of(account)
+    for one in names or ():
+        if one not in (cfg.get("accounts") or {}):
+            raise SlipsError(f"account {one!r} is not an [accounts.*] "
+                             f"table of taxjson.toml")
+        if one not in accts:
+            raise SlipsError(f"account {one!r} gets no T5 or T3: only "
+                             f"a taxable, non-crypto account does")
+    return names, ([a for a in accts if a in names] if names is not None
+                   else accts)
+
+
 def audit(root: Path, cfg: Dict[str, Any], *,
           tolerance: float = DEFAULT_TOLERANCE,
-          account: Optional[str] = None,
+          account: Any = None,
           fx_cache: Optional[dict] = None) -> Dict[str, Any]:
     """The whole audit as a JSON-ready dict (schema_version 1; the text
     report and the checklist read it). Raises SlipsError for an input
-    that cannot be used."""
+    that cannot be used. `account`: None (every account that gets
+    slips) | a name | names (lib/account_list.names_of: a comma list,
+    `tjs slip-audit margin,ib`), each one checked."""
     from taxjson.lib.cg_dividends import CgDividendMapError
     settings = settings_of(cfg)
     year = settings.year
     if year is None:
         raise SlipsError("taxjson.toml has no [settings] year")
     year = int(year)
-    accts = slip_accounts(cfg)
-    if account:
-        if account not in (cfg.get("accounts") or {}):
-            raise SlipsError(f"account {account!r} is not an [accounts.*] "
-                             f"table of taxjson.toml")
-        if account not in accts:
-            raise SlipsError(f"account {account!r} gets no T5 or T3: only "
-                             f"a taxable, non-crypto account does")
-        accts = [account]
+    names, accts = _audit_accounts(cfg, account)
     d = slips_dir(root)
     sf = d / SLIPS_FILE
     slips: List[Slip] = []
@@ -1457,7 +1470,7 @@ def audit(root: Path, cfg: Dict[str, Any], *,
                 f"{rep.account_masked} for {', '.join(rep.years) or year} "
                 f"— keep the newer download only")
         seen_reports[k] = (p, ident)
-        if account and acct != account:
+        if names is not None and acct not in names:
             continue
         # The years its income is of: a pay year, or a T3 component's
         # by its ex-date (slip_year) — a trust's December distribution
@@ -1516,9 +1529,10 @@ def audit(root: Path, cfg: Dict[str, Any], *,
                          | report_hashes | set(known_files),
                          key_salt(root), problems,
                          not_compared=not_compared)
-    if account:
-        slips = [s for s in slips if s.account == account]
-    slips = [s for s in slips if s.account in accts or s.account == account]
+    if names is not None:
+        slips = [s for s in slips if s.account in names]
+    slips = [s for s in slips
+             if s.account in accts or (names is None and s.account is None)]
     # Averages for every foreign currency in sight.
     curs = sorted({r.currency for r in books if r.currency != "CAD"}
                   | {s.currency for s in slips if s.currency != "CAD"})

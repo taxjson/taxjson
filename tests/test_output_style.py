@@ -1,5 +1,5 @@
 """The house output style (docs/output-style.md): lib/out.py, and the two
-commands converted first — `tjs elect` (its listings, --set, the
+commands converted first — `tjs elections` (its listings, --set, the
 election prompt, the run's pending block) and `tjs wash-sales` (the
 table and --explain).
 
@@ -91,10 +91,10 @@ class TestWidth(_NoWidthEnv):
 
 class TestWrapAndMessages(_NoWidthEnv):
     def test_code_spans_and_ids_never_break(self):
-        text = ("word " * 15 + "`tjs elect margin --set "
+        text = ("word " * 15 + "`tjs elections margin --set "
                 "20240603-abc-def-1234=rollover` and CA-SL-08-style ids")
         lines = out.wrap(text, 40)
-        self.assertTrue(any("`tjs elect margin --set "
+        self.assertTrue(any("`tjs elections margin --set "
                             "20240603-abc-def-1234=rollover`" in ln
                             for ln in lines), lines)
         self.assertTrue(any("CA-SL-08-style" in ln for ln in lines))
@@ -406,7 +406,7 @@ def _elect_project(tmp, manifest=None, pending=None):
     (root / "inputs" / "margin").mkdir(parents=True)
     (root / "work").mkdir()
     if manifest is not None:
-        (root / "inputs" / "margin" / "manifest.json").write_text(
+        (root / "inputs" / "margin" / "elections.json").write_text(
             json.dumps({"elections": manifest}))
     if pending is not None:
         (root / "work" / "pending_elections.json").write_text(
@@ -415,13 +415,13 @@ def _elect_project(tmp, manifest=None, pending=None):
 
 
 def _elect(root, **kw):
-    from taxjson.cli.elect import cmd_elect
+    from taxjson.cli.elections import cmd_elections
     ns = dict(dir=str(root), account=None, redo=False, reset=False,
               event=None, set=None, hint=None, pending=False, json=False)
     ns.update(kw)
     o, e = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(o), contextlib.redirect_stderr(e):
-        cmd_elect(argparse.Namespace(**ns))
+        cmd_elections(argparse.Namespace(**ns))
     return o.getvalue(), e.getvalue()
 
 
@@ -432,13 +432,13 @@ class TestElectStyle(_NoWidthEnv):
                 _EV: {"election": "taxable_deemed_dividend",
                       "summary": "2025-06-01 spinoff: PARN.US → SPNC.US " * 3,
                       "hints": {"fmv_per_share": 12.5, "x": 400.0},
-                      "notes": "set via elect --set"},
+                      "notes": "set via elections --set"},
                 "20250102-abc-xyz-0001": {"election": "taxable_dispostion"}})
             text, _ = _elect(root)
         self.assertEqual(out.lint(text), [], text)
         lines = text.splitlines()
         self.assertEqual(lines[:3], ["CORPORATE-ACTION ELECTIONS", "",
-                                     "margin — inputs/margin/manifest.json"])
+                                     "margin — inputs/margin/elections.json"])
         self.assertIn(f"- {_EV}: taxable_deemed_dividend", lines)
         self.assertIn("  hints:  fmv_per_share=12.5, x=400", lines)
         bad = [ln for ln in lines if "taxable_dispostion" in ln]
@@ -454,12 +454,12 @@ class TestElectStyle(_NoWidthEnv):
             root = _elect_project(tmp, pending=_pending_doc())
             brief, _ = _elect(root, pending=True)
             text, _ = _elect(root, pending=True, details=True)
-        self.assertEqual(out.lint(brief, allow=("tjs elect ",)), [],
+        self.assertEqual(out.lint(brief, allow=("tjs elections ",)), [],
                          brief)
         self.assertEqual(len([ln for ln in brief.splitlines()
                               if ln.lstrip().startswith("set:")]), 1)
         self.assertEqual(brief.splitlines()[-1], text.splitlines()[-1])
-        self.assertEqual(out.lint(text, allow=("tjs elect ",)), [],
+        self.assertEqual(out.lint(text, allow=("tjs elections ",)), [],
                          text)
         lines = text.splitlines()
         self.assertEqual(lines[0], "PENDING ELECTIONS — 1 event")
@@ -467,7 +467,7 @@ class TestElectStyle(_NoWidthEnv):
         self.assertIn("  2. rollover_s_86_1", lines)
         sets = [ln for ln in lines if ln.lstrip().startswith("set:")]
         self.assertEqual(len(sets), 3)
-        self.assertIn(f"tjs elect margin --set {_EV}=rollover_s_86_1 "
+        self.assertIn(f"tjs elections margin --set {_EV}=rollover_s_86_1 "
                       f"--hint allocated_acb_cad=...", sets[1])
         # The checklist's elections step shows the last line.
         self.assertTrue(lines[-1].startswith("1 election pending: "),
@@ -485,7 +485,7 @@ class TestElectStyle(_NoWidthEnv):
     def test_set_errors_are_headline_and_detail(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _elect_project(tmp, pending=_pending_doc())
-            from taxjson.cli.elect import cmd_elect
+            from taxjson.cli.elections import cmd_elections
             ns = dict(dir=str(root), account="margin", redo=False,
                       reset=False, event=None, hint=None, pending=False,
                       json=False, set=[f"{_EV}=rollover_s_86_1"])
@@ -493,7 +493,7 @@ class TestElectStyle(_NoWidthEnv):
             with self.assertRaises(SystemExit) as cm, \
                     contextlib.redirect_stdout(io.StringIO()), \
                     contextlib.redirect_stderr(e):
-                cmd_elect(argparse.Namespace(**ns))
+                cmd_elections(argparse.Namespace(**ns))
         # A usage error: exit 2, the message printed (backlog TJ-0539).
         self.assertEqual(cm.exception.code, 2)
         msg = e.getvalue().rstrip("\n")
@@ -513,9 +513,13 @@ class TestElectStyle(_NoWidthEnv):
                           hint=["allocated_acb_cad=0"])
         self.assertEqual(o.splitlines()[0],
                          f"Election saved: {_EV} = rollover_s_86_1")
-        self.assertIn("  file:   inputs/margin/manifest.json", o)
-        self.assertTrue(e.startswith("Warning: "
-                                     "allocated_acb_cad=0 moves NO cost"))
+        self.assertIn("  file:   inputs/margin/elections.json", o)
+        lines = e.splitlines()
+        # The project asks for no release: the save raises it, one note
+        # (lib/requires raise_for_elections).
+        self.assertIn('[settings] requires_taxjson = ">=3.0.0"', lines[0])
+        self.assertTrue(any(ln.startswith(
+            "Warning: allocated_acb_cad=0 moves NO cost") for ln in lines), e)
         self.assertEqual(out.lint(o), [])
         self.assertEqual(out.lint(e), [])
 

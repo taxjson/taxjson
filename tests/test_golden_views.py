@@ -13,7 +13,7 @@ from unittest import mock
 import _golden
 
 # The books with views. A book's views cannot quietly go missing.
-VIEW_BOOKS = {"crypto", "demo", "style-canada", "style-usa", "evidence"}
+VIEW_BOOKS = {"crypto", "demo", "style-canada", "style-usa", "evidence", "rbc-options"}
 
 
 def _case(book):

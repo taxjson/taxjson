@@ -88,10 +88,16 @@ def build(*, run_state: Iterable[str] = (), unknown_cost: int = 0,
           conservation: Iterable[str] = (),
           in_kind_unbooked: int = 0,
           unbacked_cover: int = 0,
+          covers_by_hand: bool = False,
           unconsumed_premium: Iterable[str] = (),
           unsettled_compensation: Iterable[str] = ()) -> Dict[str, Any]:
-    """{"complete": bool, "issues": [{"kind", "detail", "count"?}]}."""
+    """{"complete": bool, "issues": [{"kind", "detail", "count"?}]}.
+    `covers_by_hand`: the `unbacked_cover` buys are among the
+    `unknown_cost` rows (a Canadian run reports each by hand: CA-ACB-11,
+    CA-OPT-12), so they are said once, as `unbacked-cover` (TJ-5437)."""
     issues: List[Dict[str, Any]] = []
+    if covers_by_hand:
+        unknown_cost = max(int(unknown_cost) - int(unbacked_cover), 0)
     for t in run_state:
         issues.append({"kind": "run-state", "detail": str(t),
                        "fix": "tjs run, then tjs checklist --run"})
@@ -109,16 +115,17 @@ def build(*, run_state: Iterable[str] = (), unknown_cost: int = 0,
                       f"the files are in no total",
             "fix": "tjs find-missing-history"})
     if unbacked_cover:
-        # A broker-coded closing buy with no short held: the books carry
-        # it as a new long, in later costs (backlog TJ-0844).
+        # A broker-coded closing buy with no short (or written contract)
+        # held: what it closed was opened before the files, so its gain
+        # or loss is in no total (backlog TJ-0844, TJ-5349).
         issues.append({
             "kind": "unbacked-cover", "count": int(unbacked_cover),
             "detail": f"{int(unbacked_cover)} buy(s) the broker codes as "
-                      f"closing a short the files do not hold are booked "
-                      f"as new longs; each cover's gain or loss is in no "
+                      f"closing a short or a written contract the files "
+                      f"do not hold; each one's gain or loss is in no "
                       f"total",
-            "fix": "tjs find-missing-history --write-missing-history, "
-                   "then tjs run"})
+            "fix": "tjs find-missing-history; add the short sale or the "
+                   "write, then tjs run"})
     for ln in conservation:
         issues.append({"kind": "conservation", "detail": str(ln),
                        "fix": "tjs audit; check the account's rows "

@@ -396,7 +396,7 @@ def _elect_spin(root: Path, hint: str) -> None:
     pend = (root / "work" / "pending_elections.json").read_text()
     m = re.search(r'"(\d{8}-zzqq-zzkk-[0-9a-f]+)"', pend)
     assert m, r.stdout[-2000:] + r.stderr[-2000:]
-    r = _cli(root, "elect", "margin", "--set", f"{m[1]}=tax_free_355",
+    r = _cli(root, "elections", "margin", "--set", f"{m[1]}=tax_free_355",
              "--hint", hint)
     assert r.returncode == 0, r.stderr[-2000:]
     _run(root)

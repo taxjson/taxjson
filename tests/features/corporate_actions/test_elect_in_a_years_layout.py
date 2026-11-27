@@ -45,7 +45,7 @@ def _demo(tmp):
 
 
 class TestElect(unittest.TestCase):
-    """TJ-0037 and TJ-0176: `tjs elect` in the years layout.
+    """TJ-0037 and TJ-0176: `tjs elections` in the years layout.
 
     Formerly: test_fix_backlog_errors.TestElect"""
 
@@ -60,8 +60,8 @@ class TestElect(unittest.TestCase):
 
     def test_missing_hint_is_explained_in_place(self):
         # TJ-0037: an event already elected is no pending election, so
-        # `elect --pending` (the old pointer) said "No pending elections".
-        r = _tjs(self.year, "elect", "margin", "--set",
+        # `elections --pending` (the old pointer) said "No pending elections".
+        r = _tjs(self.year, "elections", "margin", "--set",
                  f"{SPIN}=rollover_s_86_1")
         # A usage error: exit 2 (backlog TJ-0539).
         self.assertEqual(r.returncode, 2, r.stderr)
@@ -72,29 +72,29 @@ class TestElect(unittest.TestCase):
         self.assertIn("Add `--hint allocated_acb_cad=<value>`. Nothing was "
                       "saved.", text)
         self.assertNotIn("--pending", text)
-        r = _tjs(self.year, "elect", "--pending")
+        r = _tjs(self.year, "elections", "--pending")
         self.assertIn("No pending elections", r.stdout + r.stderr)
 
     def test_shared_manifest_is_shown_relative(self):
         # TJ-0176: the shared manifest is ../inputs/..., not the
         # absolute path (153 columns in a temp folder).
-        r = _tjs(self.year, "elect")
+        r = _tjs(self.year, "elections")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("margin — ../inputs/margin/manifest.json", r.stdout)
+        self.assertIn("margin — ../inputs/margin/elections.json", r.stdout)
         self.assertNotIn(str(self.year.parent), r.stdout)
 
     def test_set_and_reset_name_the_manifest_relative(self):
         with tempfile.TemporaryDirectory() as d:
             year = _demo(d)
-            r = _tjs(year, "elect", "margin", "--reset", "--event", SPIN)
+            r = _tjs(year, "elections", "margin", "--reset", "--event", SPIN)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("Cleared 1 election(s) from "
-                          "../inputs/margin/manifest.json.", r.stdout)
-            r = _tjs(year, "elect", "margin", "--set",
+                          "../inputs/margin/elections.json.", r.stdout)
+            r = _tjs(year, "elections", "margin", "--set",
                      f"{SPIN}=rollover_s_86_1", "--hint",
                      "allocated_acb_cad=100")
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("../inputs/margin/manifest.json", r.stdout)
+            self.assertIn("../inputs/margin/elections.json", r.stdout)
             self.assertNotIn(str(year.parent), r.stdout)
 
 

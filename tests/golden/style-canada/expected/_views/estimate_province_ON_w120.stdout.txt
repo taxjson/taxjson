@@ -25,6 +25,7 @@ INSTALMENTS — prior-year option (Mar/Jun/Sep/Dec 15)
   => instalments behind               4,050.00  [due with the balance April 30; tjs instalments]
 
 Assumes Canadian dividends (trusts' too) eligible; no interest, FX on cash or slip gains
-! 2 sales with no purchase NOT in these totals, or a short — tjs find-missing-history
+! 1 sale with an unknown cost NOT in these totals: report them by hand — tjs form-export
+! 1 sale with no purchase NOT in these totals, or a short (GHOSTQ.TO) — tjs find-missing-history
 ! FX on foreign cash (line 15300): not in the rows; its estimate is NOT RELIABLE — tjs fx-cash
 More: tjs estimate --details (assumptions, 4 note(s)); the return's lines: tjs sum

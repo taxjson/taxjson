@@ -160,13 +160,15 @@ def _ca_grant_applies(run: _CanadaRun, tx: TaxTransaction) -> bool:
         return True
 
 def _ca_short_lot_open(run: _CanadaRun, pool: AcbPool, tx: TaxTransaction, units: float,
-                       premium: Union[Decimal, float], recognise: bool) -> _Lot:
+                       premium: Union[Decimal, float], recognise: bool,
+                       outlay: Decimal = _ZERO) -> _Lot:
     """Append a short-option lot of `units` whose (signed, net
-    of commission) premium is `premium`; returns the lot."""
+    of commission) premium is `premium`, `outlay` the commission and fee
+    netted in it; returns the lot."""
     run._lot_seq[0] += 1
     return pool.open_lot(tx_id=tx.id, seq=run._lot_seq[0], units=units, premium=premium,
                          recognise=recognise, date=tx.date,
-                         year=_ca_write_year(run, tx), account=tx.account)
+                         year=_ca_write_year(run, tx), account=tx.account, outlay=outlay)
 
 def _ca_open_short_option(run: _CanadaRun, pool: AcbPool, tx: TaxTransaction, units: float,
                           premium: Union[Decimal, float], fee_share: float, *,
@@ -178,7 +180,10 @@ def _ca_open_short_option(run: _CanadaRun, pool: AcbPool, tx: TaxTransaction, un
     this iteration's `losses`, `gains` and `traces` (the walk hands
     its own; the helper reads nothing the loop rebinds)."""
     rec = _ca_grant_applies(run, tx)
-    lot = _ca_short_lot_open(run, pool, tx, units, premium, rec)
+    # (the write's commission and fee, its share of the row's: an outlay of
+    # the shares' disposition if the lot is assigned, CA-OPT-06, TJ-5381)
+    _fees = (M.of(tx.commission or 0) + M.of(tx.fee or 0)) * M.of(fee_share)
+    lot = _ca_short_lot_open(run, pool, tx, units, premium, rec, _fees)
     if not rec or units <= 1e-9 or tx.id not in run.taxable_ids:
         return
     symbol = tx.symbol

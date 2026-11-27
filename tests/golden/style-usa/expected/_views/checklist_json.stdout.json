@@ -244,15 +244,15 @@
       "section": "Build the books",
       "title": "No unresolved merger or spin-off election",
       "check": true,
-      "command": "tjs elect --pending",
+      "command": "tjs elections --pending",
       "commands": [
         {
-          "command": "tjs elect --pending",
+          "command": "tjs elections --pending",
           "note": "what is open, with ready --set lines",
           "country": null
         },
         {
-          "command": "tjs elect ACCOUNT --set ID=ELECTION",
+          "command": "tjs elections ACCOUNT --set ID=ELECTION",
           "note": "record one",
           "country": null
         },
@@ -565,7 +565,7 @@
       "step": 20,
       "id": "inputs-committed",
       "section": "Tidy the config",
-      "title": "Inputs, config, maps and manifests committed",
+      "title": "Inputs, config, maps and elections committed",
       "check": true,
       "command": "git status",
       "commands": [

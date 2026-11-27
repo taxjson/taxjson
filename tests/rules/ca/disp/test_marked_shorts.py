@@ -144,13 +144,36 @@ class TestSaleCodedCO(unittest.TestCase):
         self.assertEqual(_gain_by_year(ctl), _gain_by_year(res))
         self.assertEqual(_held(ctl), _held(res))
 
-    @rule(R.CA_DISP_04)
-    def test_coded_co_with_no_long_of_its_own_is_all_short(self):
+    @rule(R.CA_DISP_04, R.CA_ACB_11)
+    def test_coded_co_with_no_long_of_its_own_closed_shares_bought_before_the_files(self):
+        """The broker says the order closed a position and opened one, and
+        the account held none when it began: it does not say how much of
+        the fill closed, so the whole fill is reported by hand as the sale
+        of shares bought before the files, and no short is opened; the
+        marked cover that follows then closes nothing in the files either
+        (the owner's ruling on backlog TJ-5349; it was read all short, a
+        gain of 10 in 2026). Never another account's shares: account a's
+        10 stay, in a pool whose cost is now unknown, as an OPENING
+        cost=unknown line of b's leaves them."""
         res, _ = _run([_row('a', '2024-03-01', 10, 100),
                        _row('b', '2025-12-01', -10, 150, open_close='C;O'),
                        _row('b', '2026-01-20', 10, 140, open_close='C')])
-        self.assertEqual(_gain_by_year(res), {'2026': 10.0})
-        self.assertEqual(_held(res), {('', 'SYQ.TO'): (10.0, 100.0)})
+        self.assertEqual([(r['date'], r['direction'], r['qty'], bool(r.get('tainted')))
+                          for r in res['transactions']],
+                         [('2025-12-01', 'LONG', 10, True),
+                          ('2026-01-20', 'SHORT', 10, True)])
+        self.assertEqual({k: q for k, (q, _c) in _held(res).items()},
+                         {('', 'SYQ.TO'): 10.0})
+        self.assertTrue(res['inventory'][0]['unknown_cost'])
+        # The same book with b's line: the same state.
+        line = TaxTransaction(action='OPENING_BALANCE', date='2025-11-30',
+                              date_settle='2025-11-30', time='00:00:00',
+                              symbol='SYQ.TO', quantity=10, price=0.0,
+                              net_amount=0.0, currency='CAD', account='b')
+        ctl, _ = _run([_row('a', '2024-03-01', 10, 100), line,
+                       _row('b', '2025-12-01', -10, 150, open_close='C;O')])
+        self.assertEqual(_held(ctl), _held(res))
+        self.assertEqual(ctl['transactions'][0]['gain'], res['transactions'][0]['gain'])
 
     @rule(R.CA_DISP_04)
     def test_one_account_gains_as_before(self):

@@ -69,21 +69,23 @@ class TestElect(unittest.TestCase):                  # B12 + polish
 
     def test_pending_json_when_nothing_pending(self):
         with tempfile.TemporaryDirectory() as td:
-            r = _tj(self._root(td), "elect", "--pending", "--json")
+            r = _tj(self._root(td), "elections", "--pending", "--json")
         self.assertEqual(r.returncode, 0, r.stderr)
+        # schema_version 2 since v3.0.0 (an account's `manifest` key is
+        # `elections_file`).
         self.assertEqual(json.loads(r.stdout),
-                         {"schema_version": 1, "accounts": {}})
+                         {"schema_version": 2, "accounts": {}})
 
     def test_account_listing_json(self):
         with tempfile.TemporaryDirectory() as td:
-            r = _tj(self._root(td), "elect", "margin", "--json")
+            r = _tj(self._root(td), "elections", "margin", "--json")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.loads(r.stdout),
                          {"schema_version": 1, "accounts": {}})
 
     def test_hint_without_set_is_an_error(self):
         with tempfile.TemporaryDirectory() as td:
-            r = _tj(self._root(td), "elect", "margin", "--hint", "a=1")
+            r = _tj(self._root(td), "elections", "margin", "--hint", "a=1")
         # A usage error: exit 2 (backlog TJ-0539).
         self.assertEqual(r.returncode, 2)
         self.assertIn("--hint only applies with --set", r.stderr)

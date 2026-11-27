@@ -307,7 +307,13 @@ scripts/release.sh v0.17.0             # the cut
 
 **`--prepare` makes the version commit and lands it, without a tag.** It
 refuses on a dirty tree, off `main`, behind `origin/main`, or when the tag
-exists (here or on origin). It promotes the CHANGELOG's `## Unreleased`
+exists (here or on origin), and when a feature new in the `FEATURES` of
+`src/taxjson/lib/requires.py` since the last tag (a name the tag's list
+did not have; a released feature's edited line is not checked) names a
+version other than the one being prepared (a layout change's line names
+the release that first reads it: `requires_taxjson` asks for it, and a
+development tree, which reports the last release, runs it by
+`newest_read`; set the line's version, commit, prepare again). It promotes the CHANGELOG's `## Unreleased`
 section to `## v0.17.0 (date)`, each `Fixed in: unreleased` in
 `docs/troubleshooting.md` to the tag and `docs/upgrading.md`'s
 `### Unreleased` (when a change asked something of users) to

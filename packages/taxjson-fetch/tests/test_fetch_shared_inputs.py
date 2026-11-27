@@ -155,6 +155,58 @@ class TestPositionsIntoHoldings(unittest.TestCase):
             self.assertEqual(found, {"lira": [str(out["lira"])]})
             self.assertEqual(notes, [])
 
+    def test_a_folder_every_year_shares_gets_a_file_named_for_its_year(self):
+        # (`holdings_dir = "../holdings"`: the core sends the year a
+        # snapshot of today is of, so one year's never replaces
+        # another's; backlog TJ-5367)
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.dict("os.environ", {"HOME": td}, clear=False):
+            import json
+            import os
+            os.environ.pop("QUESTRADE_TOKEN_FILE", None)
+            root = Path(td) / "2025"
+            cache = root / "work"
+            cache.mkdir(parents=True)
+            shared = Path(td) / "holdings"
+            (Path(td) / ".questrade_token").write_text("OLD\n")
+            cfg = {"settings": {"year": 2025},
+                   "accounts": {"lira": {"type": "sheltered",
+                                         "brokerage": "questrade",
+                                         "account": "99900001"}}}
+
+            def http(url):
+                if "oauth2" in url:
+                    return json.dumps(
+                        {"api_server": "https://api01.iq.questrade.com/",
+                         "access_token": "AT",
+                         "refresh_token": "NEW"}).encode()
+                return json.dumps({"positions": self._POS}).encode()
+            said = []
+            out = C._qt_live_holdings(root, cache, cfg, ["lira"], http,
+                                      said.append, holdings=shared,
+                                      year=(2026, [2026]))
+            self.assertEqual(out["lira"],
+                             shared / "lira_live_holdings_2026.toml")
+            self.assertTrue(out["lira"].is_file())
+            self.assertFalse((root / "holdings").exists())
+            self.assertTrue(any("the 2026 project's `tjs sanity` compares "
+                                "them, not 2025's" in m for m in said), said)
+
+    def test_the_note_names_only_year_folders_that_compare_it(self):
+        # (the core sends the year folders whose window holds today:
+        # never a year with no folder; backlog TJ-5400)
+        self.assertIsNone(C._live_year_note((2026, [2025, 2026]), 2025,
+                                            2026))
+        self.assertIn("no year folder compares today's positions",
+                      C._live_year_note((2026, []), 2024, 2026))
+        self.assertIn("the 2025 and 2026 projects' `tjs sanity`",
+                      C._live_year_note((2026, [2025, 2026]), 2024, 2026))
+        # (an older core sends no years: no note naming one)
+        self.assertIsNone(C._live_year_note((2026, None), 2025, 2026))
+        self.assertIsNone(C._live_year(SimpleNamespace(holdings_year=None)))
+        self.assertEqual(C._live_year(SimpleNamespace(
+            holdings_year=2026, holdings_compared_by=[2026])), (2026, [2026]))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,8 @@
 {
   "account": "margin",
+  "account_names": [
+    "margin"
+  ],
   "as_of_date": "<stamp>",
   "country": "usa",
   "generated_at": "<stamp>",

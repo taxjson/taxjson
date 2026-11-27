@@ -362,6 +362,19 @@ class _RoomGuard:
 _GUARDS: Dict[str, _RoomGuard] = {}
 
 
+def stream_refused(name: str, exc: OSError) -> bool:
+    """A full device refused what a child wrote to this process's `name`
+    ("stdout" or "stderr") through it (lib/command_log copies a logged
+    command's child there): kept as the guard's own refusal, said as its
+    own would be (_flush_stdout). False where no guard is, or for an
+    error other than no space."""
+    guard = _GUARDS.get(name)
+    if guard is None or not is_no_space(exc):
+        return False
+    guard._refused(exc)
+    return True
+
+
 @contextlib.contextmanager
 def _guarded_streams() -> Iterator[None]:
     """Within it, sys.stdout and sys.stderr are _RoomGuard proxies (once:
@@ -396,8 +409,11 @@ def _guarded_streams() -> Iterator[None]:
                 guard.flush()
             except (OSError, ValueError):
                 pass
+            # (the stream it guards read through a command log's tee:
+            # lib/out.real_stream, lib/command_log)
+            from taxjson.lib.out import real_stream
             if not (getattr(sys, name) is guard
-                    and guard._tj_inner is getattr(sys, f"__{name}__")):
+                    and real_stream(guard) is getattr(sys, f"__{name}__")):
                 setattr(sys, name, was)
         _GUARDS.clear()
         _GUARDS.update(outer)

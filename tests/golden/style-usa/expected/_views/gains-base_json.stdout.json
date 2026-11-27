@@ -1,4 +1,5 @@
 {
+  "account_names": null,
   "basis": "wash-adjusted",
   "columns": [
     "proceeds",
@@ -352,6 +353,12 @@
   ],
   "schema_version": 1,
   "scope": "tax year 2024",
+  "text_columns": [
+    "proceeds",
+    "cost",
+    "adjustment",
+    "gain"
+  ],
   "totals": {
     "accounts": [
       {

@@ -1123,6 +1123,80 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
 ATTENTION_SHORT = "warning: ATTENTION: short: "
 
 
+def _say_unbacked_covers(transactions, country, registered) -> None:
+    """The ATTENTION of each share purchase of a Canadian book that the
+    broker marks as closing a short (RBC "COVER SHORT.", IB code C) with
+    units the account's short cannot back (lib/unbacked_close; CA-ACB-11,
+    backlog TJ-5349), as the books report them: by hand, out of the
+    totals, no long added. By detect_unbacked_covers, which keeps a
+    marked short apart from the shares held. A sale's is the `short:`
+    line (prepare_books), an option's lib/option_close_check's. Any other
+    country: nothing (the US engine books by position)."""
+    from taxjson.lib.country import is_canada
+    from taxjson.lib.missing_history import detect_unbacked_covers
+    from taxjson.lib.unbacked_close import ATTENTION_UNBACKED
+    if country is None or not is_canada(country):
+        return
+    for c in detect_unbacked_covers(transactions, country=country,
+                                    registered_accounts=registered or None):
+        emit_line(
+            f"{ATTENTION_UNBACKED}{c.symbol} ({c.account}) {c.date}, "
+            f"{c.unbacked_qty:g} bought to cover: reported by hand. The "
+            f"broker marks the purchase as closing a short ({c.marker}) and "
+            f"the account is not short them: they closed a short sold before "
+            f"your files (`tjs find-missing-history`). Not in `tjs sum`: cost "
+            f"{c.proceeds:.2f}, proceeds unknown; no long is added. Add the "
+            f"short sale (the earlier export or a .tt line).")
+
+
+def _going_short(candidates, country) -> list:
+    """The pairs the closing NOTE lists as going short: in a Canadian
+    book, not one whose sale the broker marks closing (said above as
+    reported by hand; it adds no short, and the NOTE's cost=unknown line
+    is not its answer: backlog TJ-5379)."""
+    from taxjson.lib.country import is_canada
+    if country is None or not is_canada(country):
+        return candidates
+    return [c for c in candidates if not c.broker_says_closing]
+
+
+def _say_closing_sales(candidates, country) -> None:
+    """The `short:` ATTENTION of each share position the broker codes a
+    sale of CLOSING (IB code C) with nothing held: what it sold was bought
+    before the data, not a short (audit S013-00). What the books do with
+    it: a Canadian run reports it by hand and adds no short
+    (lib/unbacked_close; CA-ACB-11, backlog TJ-5349); the US engine books
+    by position."""
+    from taxjson.lib.country import is_canada
+    from taxjson.lib.option_symbols import is_option_symbol
+    by_hand = country is not None and is_canada(country)
+    # (Canada: no line is offered. The run's own reading is the line's,
+    # and a line dated before a documented purchase would put that
+    # purchase's units at an unknown cost too: TJ-5379.)
+    rest = ("reported by hand, out of the totals, and adds no short, until "
+            "the missing purchase is supplied (the earlier export, or a .tt "
+            "purchase line: `tjs find-missing-history --write-purchases` "
+            "drafts one %s)" if by_hand else
+            "booked as a new short until the missing purchase is supplied "
+            "(`tjs find-missing-history --write-missing-history` writes its "
+            ".tt OPENING cost=unknown line)")
+    for c in candidates:
+        if not c.broker_says_closing or is_option_symbol(c.symbol):
+            continue
+        code = (c.closing_code or "C") if by_hand else "C"
+        basis = f", IB Basis {c.broker_basis}" if c.broker_basis else ""
+        held, sold = c.closing_units if by_hand else (0.0, 0.0)
+        head = (f"short: {c.symbol} ({c.account}): the broker codes the sale "
+                f"on {c.first_negative_date} CLOSING (IB code {code}{basis}), "
+                + (f"but the data holds {held:g} of the {sold:g} units it sells"
+                   if held > 1e-9 else "but the data holds no position to close"))
+        it = "the rest is" if held > 1e-9 else "it is"
+        how = rest % ("from the broker's own cost" if c.broker_basis else
+                      "if the export carries the broker's cost") if by_hand else rest
+        say("attention", head, [f"{it[0].upper()}{it[1:]} {how}."],
+            legacy=f"{ATTENTION_SHORT}{head[len('short: '):]} — {it} {how}.")
+
+
 def prepare_books(transactions, sheltered_transactions=(),
                   affiliated_transactions=(), *, taxable: bool,
                   incomplete_history: Optional[Path] = None,
@@ -1240,32 +1314,10 @@ def prepare_books(transactions, sheltered_transactions=(),
             unbacked_option_close_messages)
         for _m in unbacked_option_close_messages(
                 transactions + sheltered_transactions
-                + affiliated_transactions):
+                + affiliated_transactions, country):
             emit_line(_m)
-        for c in candidates:
-            if c.broker_says_closing and not _is_opt(c.symbol):
-                # The broker coded the sale CLOSING (IB code C): what it
-                # sold was bought before the data — not a short, not a
-                # written option, whatever the books do with it until
-                # the history is supplied (audit S013-00).
-                _basis = (f", IB Basis {c.broker_basis}" if c.broker_basis
-                          else "")
-                say("attention", f"short: {c.symbol} ({c.account}): the "
-                    f"broker codes the sale on {c.first_negative_date} "
-                    f"CLOSING (IB code C{_basis}), but the data holds no "
-                    f"position to close",
-                    ["It is booked as a new short until the missing "
-                     "purchase is supplied (`tjs find-missing-history "
-                     "--write-missing-history` writes its .tt OPENING "
-                     "cost=unknown line)."],
-                    legacy=f"{ATTENTION_SHORT}{c.symbol} ({c.account}): the "
-                    f"broker codes the sale on {c.first_negative_date} "
-                    f"CLOSING (IB code C" + _basis
-                    + f"), but the data holds no position to close — "
-                      f"it is booked as a new short until the missing "
-                      f"purchase is supplied (`tjs "
-                      f"find-missing-history --write-missing-history` "
-                      f"writes its .tt OPENING cost=unknown line).")
+        _say_unbacked_covers(transactions, country, _types)
+        _say_closing_sales(candidates, country)
         # A short where none can exist (A2-0395 / A2-0137): the main
         # book's own accounts only — a context book's account says it in
         # its own stage. A listed pair that goes short only after the
@@ -1310,7 +1362,7 @@ def prepare_books(transactions, sheltered_transactions=(),
                 f"transfer or purchase rows, or `tjs "
                 f"find-missing-history --write-missing-history`, which "
                 f"writes .tt OPENING cost=unknown lines).")
-        if candidates:
+        if (candidates := _going_short(candidates, country)):
             n_reg = sum(1 for c in candidates if c.registered)
             preview = ', '.join(f"{c.symbol}/{c.account}" for c in candidates[:3])
             more = f" (+{len(candidates) - 3} more)" if len(candidates) > 3 else ""

@@ -38,8 +38,9 @@ broker credential. Parsing, the books, the superficial-loss / wash-sale
 pass and every report run on your machine. Below is every place taxjson
 reaches the network, what it sends, and how to turn it off. Every lookup
 is cached under the project's `work/`, so a repeat run sends nothing new.
-The exception is `tjs technicals`: it asks for a symbol again on a later
-day, and asks on every run for one Yahoo had nothing for.
+The exceptions are `tjs technicals` and `tjs stress`, which share one
+cache: each asks for a symbol again on a later day, and on every run for
+one Yahoo had nothing for.
 
 | When | Where | What is sent |
 | --- | --- | --- |
@@ -51,6 +52,7 @@ day, and asks on every run for one Yahoo had nothing for.
 | `tjs harvest`, `tjs watch --harvest` | first a running IB TWS / IB Gateway on this machine (127.0.0.1, the `[ibkr]` extra; it asks Interactive Brokers with your own session), then Yahoo Finance | the symbols you hold |
 | `tjs tips --online` | Yahoo Finance | the symbols it probes for a cross-listed twin |
 | `tjs technicals`: a holding or the benchmark with no series fetched today in `work/.history_cache.json` | Yahoo Finance (the `[fx]` extra, yfinance): about 400 days of daily closes: a symbol that came back is asked once a day; one with nothing back is asked again on every run | the Yahoo spelling of each holding (options, futures and crypto left out) and of the benchmark, and the date range |
+| `tjs stress`: the same, through the same cache | Yahoo Finance, as `tjs technicals` | the Yahoo spelling of each share and coin held (a coin's `<COIN>-USD`), of each option's underlying (never the option itself: no option prices are fetched) and of the benchmark, and the date range; futures left out |
 | `tjs channels`; on a development machine `promote` and `deploy` | `git fetch` against the taxjson checkout's own remote (GitHub for an installed copy) | nothing about your books |
 | `tjs fetch` (only with the taxjson-fetch plugin, below) | your broker's API | your credentials and the account and date range to download |
 | `taxjson-generate-parser` (a developer tool, opt-in) | the LLM API you choose (Anthropic or Google, with your API key) | the first `--sample-lines` lines (default 30) of the sample CSV you give it |
@@ -58,7 +60,7 @@ day, and asks on every run for one Yahoo had nothing for.
 
 **Turning it off.** Set `TAXJSON_OFFLINE=1` (or `true`/`yes`/`on`;
 `0`/`false`/`no`/`off` leave it off) to forbid every lookup in the
-first eight rows. Each then serves its cache only:
+first nine rows. Each then serves its cache only:
 
 - FX: a transaction whose date has no cached rate is a validation error
   at the conversion stage.
@@ -69,9 +71,10 @@ first eight rows. Each then serves its cache only:
 - `harvest` / `watch --harvest` serve `work/.price_cache.json` and refuse
   the lookup on a miss; `tips --online` skips its probe with a note (the
   offline checks still run).
-- `technicals` serves `work/.history_cache.json` whatever its age (an
-  `! ` line gives the fetch day when it is more than a week old); a
-  holding not in it is a blank row, and with none cached it refuses.
+- `technicals` and `stress` serve `work/.history_cache.json` whatever
+  its age (an `! ` line gives the fetch day when it is more than a week
+  old); a holding not in it is a blank row (`stress`: left out of the
+  TOTAL, named), and with none cached they refuse.
 - `tjs fetch` refuses outright (one line, before any fetcher plugin
   runs; `--list` still works); `tjs channels` skips its `git fetch`
   (as does `channels --offline`).
@@ -116,9 +119,9 @@ before `pip install --no-deps -e packages/taxjson-fetch`, so the plugin's
 
 **What Yahoo Finance learns.** Every Yahoo lookup (FX fallback, crypto
 prices, crypto-send values, in-kind move closes, `harvest` / `watch
---harvest` current prices, `tips --online`, `technicals`' daily closes
-of your holdings and the benchmark) is a plain request from your
-IP address naming a symbol and a date or date range — so Yahoo can see
+--harvest` current prices, `tips --online`, `technicals`' and `stress`'
+daily closes of your holdings and the benchmark) is a plain request from
+your IP address naming a symbol and a date or date range — so Yahoo can see
 which tickers you hold or trade and roughly when, though never
 quantities, prices paid or account numbers. Use `TAXJSON_OFFLINE=1`
 (with a populated cache) if that matters to you.

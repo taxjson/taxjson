@@ -1,4 +1,4 @@
-"""`tjs elect` and the run's election messages."""
+"""`tjs elections` and the run's election messages."""
 import argparse
 import subprocess
 import sys
@@ -20,14 +20,14 @@ from taxjson.lib.out import Doc
 
 # The print() calls (PLAN step 15): the ops of a live exact Doc,
 # `Doc(exact=True, width_=0, live=True)`, each printed when it is added
-# (`page.line(e)` is `print(e)`); cmd_elect's one line is `out.put`. The
+# (`page.line(e)` is `print(e)`); cmd_elections's one line is `out.put`. The
 # JSON's print stays: its value is not provably a str.
 
 
 def _symbol_codes_state(root: Path, name: str) -> Optional[Path]:
     """work/<name>_symbol_codes.state when the run wrote one (lib/
     symbol_codes): what the corp-action extraction books a Questrade
-    chain under an internal code as — `tjs elect` and `--redo`
+    chain under an internal code as — `tjs elections` and `--redo`
     extract exactly as the run does."""
     p = Path(root) / "work" / f"{name}{_symbol_codes_suffix()}"
     return p if p.is_file() else None
@@ -83,7 +83,7 @@ def _elections_section(doc, name: str, manifest_path: Path, root: Path,
         doc.item(f"{eid}: {_default_label(ev['kind'])}")
         doc.kv([("event", f"{ev['kind']} {ev['symbol']} on {ev['date']}"
                  .replace("spinoff", "spin-off")),
-                ("change", f"`tjs elect {name} --set {eid}=<election>`"
+                ("change", f"`tjs elections {name} --set {eid}=<election>`"
                            f" (nothing saved: the run booked it without "
                            f"asking; no tax in the account depends on it)")],
                indent="  ")
@@ -103,7 +103,7 @@ def _elections_section(doc, name: str, manifest_path: Path, root: Path,
             pairs.append(("notes", r.notes))
         if bad:
             pairs.append(("fix", f"`tjs run` refuses it; choose again "
-                                 f"with `tjs elect {name} --redo "
+                                 f"with `tjs elections {name} --redo "
                                  f"--event {eid}`"))
         doc.kv(pairs, indent="  ")
     return len(man.records) + len(dflt)
@@ -111,7 +111,7 @@ def _elections_section(doc, name: str, manifest_path: Path, root: Path,
 
 def _elections_json_out(names: List[str], inputs_dir: Path,
                         cache: Path) -> None:
-    """`tjs elect [ACCOUNT] --json`: {"accounts": {name: {event id:
+    """`tjs elections [ACCOUNT] --json`: {"accounts": {name: {event id:
     {election, summary, hints, notes[, saved: false]}}}} — each account's
     saved elections and the events the run booked by the sheltered
     default (nothing saved), one serializer for every view (backlog
@@ -147,7 +147,7 @@ def _elections_json_out(names: List[str], inputs_dir: Path,
                 "summary": f"{ev['kind']} {ev['symbol']} on {ev['date']}",
                 "hints": {}, "notes": _default_label(ev["kind"]),
                 "saved": False})
-    _json_out({"accounts": doc}, schema="elect")
+    _json_out({"accounts": doc}, schema="elections")
     if bad:
         raise SystemExit(2)
 
@@ -155,7 +155,7 @@ def _elections_json_out(names: List[str], inputs_dir: Path,
 def _print_elections(names: List[str], inputs_dir: Path, cache: Path,
                      root: Path, country: Optional[str],
                      footer: str) -> None:
-    """The saved-elections listing of `tjs elect [ACCOUNT]`."""
+    """The saved-elections listing of `tjs elections [ACCOUNT]`."""
     from taxjson.lib.out import Doc
     doc = Doc("CORPORATE-ACTION ELECTIONS")
     empty = []
@@ -232,13 +232,13 @@ def _extracted_events(acct_dir: Path, name: str,
 def _extracted_event_ids(acct_dir: Path, name: str,
                          root: Optional[Path] = None) -> set:
     """The ids of the events in the account's exports (_extracted_events):
-    what `elect --redo` can ask again about (backlog TJ-0556)."""
+    what `elections --redo` can ask again about (backlog TJ-0556)."""
     return {ev.event_id for ev in _extracted_events(acct_dir, name, root)}
 
 
 def _wrong_country_section(doc, wrong: List[Dict[str, str]],
                            country: str) -> None:
-    """`elect --pending`: the saved elections this country's rules do not
+    """`elections --pending`: the saved elections this country's rules do not
     know, each with the command that replaces it."""
     from taxjson.lib.country import display_name
     doc.section(f"NOT {display_name(country).upper()} ELECTIONS — "
@@ -248,13 +248,13 @@ def _wrong_country_section(doc, wrong: List[Dict[str, str]],
                  f"{w['election']})")
         from taxjson.lib.out import Verbatim
         doc.kv([("event", w["summary"]),
-                ("redo", Verbatim(f"tjs elect {w['account']} --redo "
+                ("redo", Verbatim(f"tjs elections {w['account']} --redo "
                                   f"--event {w['event_id']}"))],
                indent="  ")
 
 
 def _option_brief(desc: str) -> str:
-    """An election option's description cut to its first clause (`elect
+    """An election option's description cut to its first clause (`elections
     --pending`'s OPTION table; --details prints the whole text)."""
     import re as _re
     head = _re.split(r"(?<!\bs)\. |: | — |; ", (desc or "").strip(), 1)[0]
@@ -280,7 +280,7 @@ def _cil_parts(ev: Dict[str, Any]) -> List[tuple]:
 def _print_pending(root: Path, inputs_dir: Path, cache: Path,
                    agg: Dict[str, Any], wrong: List[Dict[str, str]],
                    country: str, details: bool = False) -> None:
-    """`tjs elect --pending`: each deferred event with its options —
+    """`tjs elections --pending`: each deferred event with its options —
     a table of the options (first clause of what each books, the hint it
     needs) and one `--set` line to copy; with `details`, each option's
     whole description and its own ready `--set` line — and a last line
@@ -339,7 +339,7 @@ def _print_pending(root: Path, inputs_dir: Path, cache: Path,
                        for o in opts], indent="  ", drop=(2,))
             _hinted = any(o.get("hints") for o in opts)
             doc.kv([("set", Verbatim(
-                f"tjs elect {acct} --set {eid}=OPTION"
+                f"tjs elections {acct} --set {eid}=OPTION"
                 + (" [--hint KEY=VALUE]" if _hinted else "")))],
                 indent="  ")
             continue
@@ -353,31 +353,31 @@ def _print_pending(root: Path, inputs_dir: Path, cache: Path,
                      for h in hints]
             hint_args = "".join(f" --hint {h['key']}=..." for h in hints)
             pairs.append(("set", Verbatim(
-                f"tjs elect {acct} --set {eid}={o['election']}"
+                f"tjs elections {acct} --set {eid}={o['election']}"
                 f"{hint_args}")))
             doc.kv(pairs, indent="     ")
     doc.blank()
     if open_n and not details:
         doc.line("What each option books, and its hints: "
-                 "tjs elect --pending --details")
+                 "tjs elections --pending --details")
     if open_n:
         # ONE short line: `tjs checklist` shows it as the step's
         # detail.
         doc.line(f"{open_n} election{'s' if open_n != 1 else ''} pending: "
-                 f"set each with `tjs elect ACCOUNT --set`, then "
+                 f"set each with `tjs elections ACCOUNT --set`, then "
                  f"`tjs run`.")
     elif events:
         doc.line("Every pending event has an election saved: run "
                  "`tjs run` to apply them.")
     else:
-        doc.line("Replace each of them with `tjs elect ACCOUNT --redo "
+        doc.line("Replace each of them with `tjs elections ACCOUNT --redo "
                  "--event ID`, then run `tjs run`.")
     doc.print()
 
 
 def _set_record(event_id: str, summary: str, election: str,
                 hints: Dict[str, Any], pending_entry: Optional[dict]):
-    """The election `tjs elect --set` saves, with the id the export's
+    """The election `tjs elections --set` saves, with the id the export's
     spelling gave the event when its pending entry has one (a symbol
     hashed into the id spelled with a lower-case letter): a ticker.map
     DISTINCT line that later keeps that spelling apart sends the
@@ -385,14 +385,14 @@ def _set_record(event_id: str, summary: str, election: str,
     from taxjson.lib.corp_actions import ElectionRecord
     read = (pending_entry or {}).get("read_event_id")
     return ElectionRecord(event_id=event_id, summary=summary,
-                          election=election, notes="set via elect --set",
+                          election=election, notes="set via elections --set",
                           hints=hints,
                           read_event_id=read if isinstance(read, str) else "")
 
 
 def _redo_saved_records(log: Path) -> Dict[str, List[Dict[str, Any]]]:
     """{event id: [record as a dict, ...]} of the elections an
-    interrupted `elect --redo`'s child saved (its --saved-log; backlog
+    interrupted `elections --redo`'s child saved (its --saved-log; backlog
     TJ-0955); empty when it saved none or the log cannot be read."""
     import json as _json
     out: Dict[str, List[Dict[str, Any]]] = {}
@@ -416,17 +416,25 @@ def _update_manifest(manifest_path: Path, change):
     it returns a true value; backlog TJ-0544), or one line naming it
     when its folder cannot be written (a read-only inputs/<acct>/): it
     was a PermissionError traceback on the .tmp file (re-audit
-    A2-1418). Returns (the manifest, the change's value)."""
-    from taxjson.lib.corp_actions import Manifest
+    A2-1418). Saved through lib/elections_save `update`: a
+    requires_taxjson the save raised is one note each. Returns (the
+    manifest, the change's value)."""
+    from taxjson.lib import elections_save
+    from taxjson.lib.corp_actions import ManifestError
+    from taxjson.lib.requires import raised_note
     from taxjson.lib.safe_write import LockLinkError
+    from taxjson.pipeline.messages import _say
     try:
-        return Manifest.update(manifest_path, change)
-    except LockLinkError as e:
+        man, result, raised = elections_save.update(manifest_path, change)
+    except (LockLinkError, ManifestError) as e:
         _die_input(f"{e} — nothing was saved.")
     except OSError as e:
         _die_input(f"cannot write {manifest_path}: {e.strerror or e} — "
                    f"nothing was saved; make its folder writable and "
                    f"re-run.")
+    for line in raised_note(raised, Path(manifest_path).parent.parent.parent):
+        _say("note", line, prog=f"{_PROG} elections")
+    return man, result
 
 
 def _foreign_pending_options(entry: Dict[str, Any], country: str
@@ -443,10 +451,10 @@ def _foreign_pending_options(entry: Dict[str, Any], country: str
 def _elect_pending_view(args: argparse.Namespace, fail: Callable[..., Any],
                         accounts: Dict[str, Any], root: Path, cfg: Dict[str, Any],
                         cache: Path, country: str, _out: Any, inputs_dir: Path) -> None:
-    """`tjs elect --pending`: the flags it does not take refused, the
+    """`tjs elections --pending`: the flags it does not take refused, the
     account checked, the saved elections of another country's rules and
     the pending document read, then its JSON or text listing
-    (cmd_elect)."""
+    (cmd_elections)."""
     import json as _json
     from taxjson.lib.json_contract import versioned
     # --pending lists; a --set beside it was never read, and the
@@ -459,9 +467,9 @@ def _elect_pending_view(args: argparse.Namespace, fail: Callable[..., Any],
     if _also:
         fail(f"--pending lists the pending elections: it does not "
              f"take {', '.join(_also)}",
-             "Save an election without it: `tjs elect ACCOUNT "
+             "Save an election without it: `tjs elections ACCOUNT "
              "--set EVENT_ID=ELECTION`. Nothing was saved.")
-    # `elect ACCOUNT --pending`: that account's only (it listed
+    # `elections ACCOUNT --pending`: that account's only (it listed
     # every account's; backlog TJ-0539).
     scope = args.account
     if scope and scope not in accounts:
@@ -490,7 +498,7 @@ def _elect_pending_view(args: argparse.Namespace, fail: Callable[..., Any],
                  "--no-input` to rebuild it.")
         # The file's own format number (`tjs run` writes 1; no reader
         # checks it) is not the output's: `--json` carries the
-        # registry's (lib/json_contract, `elect --pending`), whatever
+        # registry's (lib/json_contract, `elections --pending`), whatever
         # the file holds.
         doc.pop("schema_version", None)
         if scope:
@@ -503,7 +511,7 @@ def _elect_pending_view(args: argparse.Namespace, fail: Callable[..., Any],
     if getattr(args, "json", False):
         if _wrong:
             doc = dict(doc, wrong_country=_wrong)
-        print(_json.dumps(versioned(doc, "elect --pending"), indent=2,
+        print(_json.dumps(versioned(doc, "elections --pending"), indent=2,
                           sort_keys=True))
         return
     page = Doc(exact=True, width_=0, live=True)
@@ -517,12 +525,12 @@ def _elect_pending_view(args: argparse.Namespace, fail: Callable[..., Any],
                     if any(_foreign_pending_options(ev, country)
                            for ev in d.get("pending") or []))
     if _stale:
-        # `elect --set` refuses their options (backlog TJ-0540).
+        # `elections --set` refuses their options (backlog TJ-0540).
         from taxjson.lib.country import display_name
         _out.warn(f"work/pending_elections.json lists "
                   f"{', '.join(_stale)}'s events with another "
                   f"country's elections",
-                  prog=f"{_PROG} elect",
+                  prog=f"{_PROG} elections",
                   details=[f"It was written before this project's "
                            f"country became {display_name(country)}: "
                            f"re-run `tjs run --no-input` to "
@@ -535,17 +543,17 @@ def _elect_pending_view(args: argparse.Namespace, fail: Callable[..., Any],
 def _elect_all_view(args: argparse.Namespace, fail: Callable[..., Any],
                     accounts: Dict[str, Any], inputs_dir: Path, cache: Path, root: Path,
                     country: str) -> None:
-    """`tjs elect` with no account: --redo, --reset, --set and --hint
+    """`tjs elections` with no account: --redo, --reset, --set and --hint
     refused, then every account's saved elections, as JSON or text
-    (cmd_elect)."""
+    (cmd_elections)."""
     if args.redo or args.reset:
         fail("--redo/--reset need an account",
-             "For example: `tjs elect margin --redo`.")
+             "For example: `tjs elections margin --redo`.")
     if getattr(args, "set", None) or getattr(args, "hint", None):
         # Falling through to the read-only listing here looked like
         # success (exit 0) while saving NOTHING (REVIEW #7).
         fail("--set/--hint need an account",
-             "For example: `tjs elect margin --set "
+             "For example: `tjs elections margin --set "
              "EVENT_ID=ELECTION`. Nothing was saved.")
     if getattr(args, "json", False):
         # Machine listing of SAVED elections (--pending --json
@@ -554,14 +562,14 @@ def _elect_all_view(args: argparse.Namespace, fail: Callable[..., Any],
         _elections_json_out(list(accounts), inputs_dir, cache)
         return
     _print_elections(list(accounts), inputs_dir, cache, root, country,
-                     "Redo one: `tjs elect ACCOUNT --redo` (add "
+                     "Redo one: `tjs elections ACCOUNT --redo` (add "
                      "`--event ID` for just one event).")
     return
 
 
 def _elect_one_set(args: argparse.Namespace, fail: Callable[..., Any], name: str) -> None:
     """One --set per command: two refused, the one kept as a string
-    (cmd_elect)."""
+    (cmd_elections)."""
     if isinstance(getattr(args, "set", None), list):
         # A second --set used to replace the first silently (argparse
         # keeps the last) and the run still asked for the dropped event
@@ -570,7 +578,7 @@ def _elect_one_set(args: argparse.Namespace, fail: Callable[..., Any], name: str
         if len(args.set) > 1:
             fail(f"{len(args.set)} --set flags — give ONE --set per "
                  f"command",
-                 f"Its --hint flags belong to it: run `tjs elect "
+                 f"Its --hint flags belong to it: run `tjs elections "
                  f"{name} --set ...` once per event. Nothing was saved.")
         args.set = args.set[0]
 
@@ -583,7 +591,7 @@ def _elect_set_event(args: argparse.Namespace, country: str, fail: Callable[...,
     country's rules set aside) or re-extracted from the exports, the
     election checked against the event's options or the country's.
     Returns the id, the election, the event's options, summary and hints
-    by option, and its pending entry (cmd_elect)."""
+    by option, and its pending entry (cmd_elections)."""
     from taxjson.lib.corp_actions import election_keys
     if "=" not in args.set:
         # The example names a key this country accepts (a US
@@ -591,7 +599,7 @@ def _elect_set_event(args: argparse.Namespace, country: str, fail: Callable[...,
         _ex = "reorg_368" if country == "usa" else "rollover_s_85_1_5"
         fail("--set expects EVENT_ID=ELECTION",
              f"For example `--set 20250317-abg-abh-1a2b={_ex}`; "
-             f"`tjs elect --pending` lists each event's "
+             f"`tjs elections --pending` lists each event's "
              f"choices.")
     event_id, election = args.set.split("=", 1)
     event_id, election = event_id.strip(), election.strip()
@@ -599,7 +607,7 @@ def _elect_set_event(args: argparse.Namespace, country: str, fail: Callable[...,
         # A ""-keyed record could never be targeted by --event
         # afterwards (REVIEW #34).
         fail("--set: empty EVENT_ID (expected EVENT_ID=ELECTION)",
-             "`tjs elect --pending` lists the ids.")
+             "`tjs elections --pending` lists the ids.")
     # PER-EVENT validation on every --set: the country-wide set
     # accepted e.g. a spinoff election for a merger, which only
     # exploded at the NEXT run as a raw KeyError traceback (REVIEW
@@ -640,7 +648,7 @@ def _elect_set_event(args: argparse.Namespace, country: str, fail: Callable[...,
              f"another country's elections",
              f"It was written before this project's country became "
              f"{display_name(country)}. Re-run `tjs run "
-             f"--no-input` to rebuild it: `tjs elect --pending` "
+             f"--no-input` to rebuild it: `tjs elections --pending` "
              f"then lists the event's {display_name(country)} "
              f"elections. Nothing was saved.")
     if pending_entry is not None:
@@ -676,7 +684,7 @@ def _elect_set_save(args: argparse.Namespace, fail: Callable[..., Any], event_op
     the event's declared hints required and no other taken, an id that
     matches nothing refused; then the election saved under the
     manifest's lock and said, with a warning for a value of 0
-    (cmd_elect)."""
+    (cmd_elections)."""
     hints = {}
     for h in (args.hint or []):
         if "=" not in h:
@@ -714,7 +722,7 @@ def _elect_set_save(args: argparse.Namespace, fail: Callable[..., Any], event_op
         if missing:
             specs = " ".join(f"--hint {k}=<value>"
                              for k in sorted(missing))
-            # What each hint is, said here: `elect --pending` lists
+            # What each hint is, said here: `elections --pending` lists
             # only events a --no-input run deferred, so for an event
             # already elected (a re-election) it said "No pending
             # elections" (backlog TJ-0037).
@@ -733,18 +741,18 @@ def _elect_set_save(args: argparse.Namespace, fail: Callable[..., Any], event_op
     if Manifest.load(manifest_path).get(event_id) is None \
             and event_options is None:
         # Saving anyway left a junk record in the committed
-        # manifest.json that no run ever reads (2026-09 CLI audit).
+        # elections.json that no run ever reads (2026-09 CLI audit).
         fail(f"{event_id!r} matches no pending event — nothing was "
              f"saved",
              f"It is no saved election either, and no corporate "
              f"action in {name}'s inputs. Check the id with `tjs "
-             f"elect --pending` (after a `tjs run --no-input`) or "
-             f"`tjs elect {name}`.")
+             f"elections --pending` (after a `tjs run --no-input`) or "
+             f"`tjs elections {name}`.")
 
     def _set(man) -> bool:
         prior = man.get(event_id)
         # Best summary available: pending doc (the happy path —
-        # user copied the id from `elect --pending`), else the
+        # user copied the id from `elections --pending`), else the
         # prior record's.
         summary = (event_summary
                    or (prior.summary if prior else None)
@@ -769,10 +777,10 @@ def _elect_set_save(args: argparse.Namespace, fail: Callable[..., Any], event_op
         # Warning or pending.
         _out.note(f"fmv_per_share=0 books this {election} at the $0 "
                   f"value you declared",
-                  prog=f"{_PROG} elect",
+                  prog=f"{_PROG} elections",
                   details=["No income and a $0 cost for the new "
                            "shares; `tjs run` lists it as an "
-                           "Info. To change it: `tjs elect "
+                           "Info. To change it: `tjs elections "
                            f"{name} --redo --event {event_id}`."])
     elif ("fmv_per_share" in hints
             and abs(hints["fmv_per_share"]) < 1e-12
@@ -780,7 +788,7 @@ def _elect_set_save(args: argparse.Namespace, fail: Callable[..., Any], event_op
         # A merger's 0 is the documented "defer" value (R1-11): say
         # what it books.
         _out.warn(f"fmv_per_share=0 books this {election} at $0",
-                  prog=f"{_PROG} elect",
+                  prog=f"{_PROG} elections",
                   details=["No income and a $0 cost for the new "
                            "shares. Every `tjs run` and the "
                            "checklist flag it until a value is "
@@ -791,7 +799,7 @@ def _elect_set_save(args: argparse.Namespace, fail: Callable[..., Any], event_op
         # The missing hint is refused; an explicit 0 was saved with
         # no word (audits S073-21, S074-04).
         _out.warn(f"{_ak}=0 moves NO cost to the spun-off shares",
-                  prog=f"{_PROG} elect",
+                  prog=f"{_PROG} elections",
                   details=["They book at $0 and the parent keeps all "
                            "of it. Enter the allocated amount; every "
                            "`tjs run` and the checklist flag it "
@@ -801,15 +809,15 @@ def _elect_set_save(args: argparse.Namespace, fail: Callable[..., Any], event_op
 def _elect_saved(args: argparse.Namespace, fail: Callable[..., Any], name: str, Manifest: Any,
                  manifest_path: Path) -> Any:
     """--redo/--reset's start: --redo refused away from a terminal
-    (nothing cleared), then the saved elections read (cmd_elect)."""
+    (nothing cleared), then the saved elections read (cmd_elections)."""
     if args.redo and not sys.stdin.isatty():
         # The old path cleared FIRST and then crashed on the missing
         # TTY — the user's saved (non-rebuildable) elections were
         # already gone (REVIEW #4).
         fail("--redo asks again, so it needs a terminal",
-             f"Headless: `tjs elect {name} --reset [--event ID]` to "
-             f"clear, then `tjs elect {name} --set EVENT_ID=ELECTION` "
-             f"(ids and options: `tjs elect --pending` after a "
+             f"Headless: `tjs elections {name} --reset [--event ID]` to "
+             f"clear, then `tjs elections {name} --set EVENT_ID=ELECTION` "
+             f"(ids and options: `tjs elections --pending` after a "
              f"`tjs run --no-input`). Nothing was cleared.")
     # `is not None`: --event '' (e.g. an unset shell variable) must NOT
     # silently widen to ALL elections (REVIEW #34 wiped everything).
@@ -822,7 +830,7 @@ def _elect_clear(target: Optional[str], askable: Any, current_id: Callable[[str]
     """--redo/--reset's clear: the chosen elections removed under the
     manifest's lock (one of an event --redo cannot ask about again
     kept, and named), the count said. Returns the records cleared, kept
-    to put back when --redo is interrupted (cmd_elect)."""
+    to put back when --redo is interrupted (cmd_elections)."""
     cleared: Dict[str, Any] = {}
     kept: List[str] = []
 
@@ -848,9 +856,9 @@ def _elect_clear(target: Optional[str], askable: Any, current_id: Callable[[str]
     if kept:
         _out.note(f"kept {len(kept)} election(s) of events in none of "
                   f"{name}'s exports: {', '.join(sorted(kept))}",
-                  prog=f"{_PROG} elect",
+                  prog=f"{_PROG} elections",
                   details=[f"--redo cannot ask again about them. To "
-                           f"clear one: `tjs elect {name} --reset "
+                           f"clear one: `tjs elections {name} --reset "
                            f"--event ID`."])
     return cleared
 
@@ -865,7 +873,7 @@ def _elect_redo(cache: Path, cfg: Dict[str, Any], root: Path, name: str,
     folder); the elections it saves logged; an interruption or a failure
     puts the cleared elections back (one another command saved meanwhile
     kept). The scratch folder and the log's folder are made, used and
-    removed here (cmd_elect's tail)."""
+    removed here (cmd_elections's tail)."""
     # --redo: re-prompt now by re-running corp-actions interactively.
     # Any failure or Ctrl-C mid-prompt RESTORES the pre-clear manifest —
     # elections are the one non-rebuildable user artifact (REVIEW #4).
@@ -880,7 +888,7 @@ def _elect_redo(cache: Path, cfg: Dict[str, Any], root: Path, name: str,
     _base_cur = settings_of(cfg).base_currency
     if _base_cur:
         _redo_corp_flags += ["--base-currency", str(_base_cur)]
-    # The map `elect` extracted the ids with (project_corp_map: the
+    # The map `elections` extracted the ids with (project_corp_map: the
     # run's effective map when it wrote one; backlog TJ-0849).
     from taxjson.lib.corp_extract import project_corp_map
     _tmap = project_corp_map(root)
@@ -915,8 +923,8 @@ def _elect_redo(cache: Path, cfg: Dict[str, Any], root: Path, name: str,
             _sc = _symbol_codes_state(root, name)
             cmd = _cmd("taxjson-corp-actions") + [
                 "--account-name", name, "--country", country,
-                "--brokerage", broker, "--manifest", str(manifest_path),
-                "--manifest-shown", _manifest_shown(manifest_path, root),
+                "--brokerage", broker, "--elections", str(manifest_path),
+                "--elections-shown", _manifest_shown(manifest_path, root),
                 "--saved-log", str(_saved_log),
             ] + _redo_corp_flags + _redo_sheltered + _ask + (
                 ["--symbol-codes", str(_sc)]
@@ -934,7 +942,7 @@ def _elect_redo(cache: Path, cfg: Dict[str, Any], root: Path, name: str,
             # meanwhile stays (backlog TJ-0544). One saved under an older
             # id: the answer saved under its current id goes (TJ-0848).
             # An election of the same event another command saved after
-            # the clear (`elect --set`, a run's prompt) is newer than
+            # the clear (`elections --set`, a run's prompt) is newer than
             # the cleared one: it stays (backlog TJ-0955).
             from dataclasses import asdict
             for eid, rec in cleared.items():
@@ -954,7 +962,7 @@ def _elect_redo(cache: Path, cfg: Dict[str, Any], root: Path, name: str,
                  f"The previous elections for '{name}' were restored, "
                  f"except {', '.join(sorted(conflicts))}: another command "
                  f"saved an election for it after the redo cleared it, "
-                 f"and that newer one was kept (`tjs elect {name}` "
+                 f"and that newer one was kept (`tjs elections {name}` "
                  f"shows it).", code=1)
         fail("--redo interrupted",
              f"The previous elections for '{name}' were restored "
@@ -970,7 +978,7 @@ def _elect_redo(cache: Path, cfg: Dict[str, Any], root: Path, name: str,
         page.line("\nElections saved. Run `tjs run` to recompute.")
 
 
-def cmd_elect(args: argparse.Namespace) -> None:
+def cmd_elections(args: argparse.Namespace) -> None:
     """View, clear, or redo corporate-action tax elections (taxable vs
     rollover, FMV/ACB hints) that `tjs run` otherwise prompts for once
     and then reuses silently."""
@@ -980,10 +988,10 @@ def cmd_elect(args: argparse.Namespace) -> None:
     def fail(headline: str, *details: str, code: int = 2):
         # One headline naming what was refused, the why and the fix as
         # indented detail lines (docs/output-style.md). Exit 2: what
-        # elect refuses is a usage error (a flag, an account, an event
+        # elections refuses is a usage error (a flag, an account, an event
         # or an election it does not take) or an input it cannot read;
         # it exited 1, as a finding does (backlog TJ-0539).
-        _out.fail(headline, prog=f"{_PROG} elect", details=details,
+        _out.fail(headline, prog=f"{_PROG} elections", details=details,
                   code=code)
 
     root = Path(args.dir).resolve()
@@ -1000,7 +1008,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
         # --event scopes --redo/--reset; alone it was ignored and the
         # listing printed (backlog TJ-0539).
         fail("--event applies to --redo/--reset only",
-             f"For example: `tjs elect "
+             f"For example: `tjs elections "
              f"{args.account or 'ACCOUNT'} --reset --event ID`. Nothing "
              f"was changed.")
 
@@ -1022,8 +1030,8 @@ def cmd_elect(args: argparse.Namespace) -> None:
         if args.redo or args.reset or getattr(args, "set", None):
             fail("--json applies to the listings only, not to "
                  "--set/--redo/--reset",
-                 "Listings: `tjs elect [ACCOUNT] --json`, `tjs "
-                 "elect --pending --json`.")
+                 "Listings: `tjs elections [ACCOUNT] --json`, `tjs "
+                 "elections --pending --json`.")
         # One account's elections — the all-accounts listing's entry
         # for it (it printed the text listing before; it left out the
         # events the sheltered default booked: backlog TJ-0400).
@@ -1042,7 +1050,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
 
     if not (args.redo or args.reset):
         _print_elections([name], inputs_dir, cache, root, country,
-                         f"Redo all: `tjs elect {name} --redo`; one "
+                         f"Redo all: `tjs elections {name} --redo`; one "
                          f"event: add `--event ID`; just clear: "
                          f"`--reset`.")
         return
@@ -1066,7 +1074,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
         _olds = sorted(o for o, n in aliases().items() if n == args.event)
         if len(_olds) != 1:
             fail(f"no election '{args.event}' for account '{name}'",
-                 f"`tjs elect {name}` lists the event ids.")
+                 f"`tjs elections {name}` lists the event ids.")
         target = _olds[0]
     askable = None
 
@@ -1088,7 +1096,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
                  f"again from",
                  f"Its saved elections were kept: nothing was cleared. "
                  f"To clear one anyway (the next `tjs run` asks only "
-                 f"if its event is back in the exports): `tjs elect "
+                 f"if its event is back in the exports): `tjs elections "
                  f"{name} --reset --event ID`.")
         askable = _extracted_event_ids(acct_dir, name, root)
         if args.event is not None and current_id(target) not in askable:
@@ -1096,7 +1104,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
                  f"exports",
                  f"There is nothing to ask again about: its saved "
                  f"election was kept, nothing was cleared. To clear it "
-                 f"anyway: `tjs elect {name} --reset --event "
+                 f"anyway: `tjs elections {name} --reset --event "
                  f"{args.event}`.")
         if any(e not in askable for e in saved.records):
             aliases()           # read before the lock is taken
@@ -1114,7 +1122,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
 def register(sub: argparse._SubParsersAction) -> None:
     """This group's command, for the `tjs` parser."""
     p_elect = sub.add_parser(
-        "elect", help="Review or set corporate-action tax elections",
+        "elections", help="Review or set corporate-action tax elections",
         description="List the corporate-action events in the books "
                     "(mergers, spin-offs, reorganisations) with the tax "
                     "election recorded for each; redo or reset one, show "
@@ -1137,7 +1145,7 @@ def register(sub: argparse._SubParsersAction) -> None:
                               "20250317-abg-abh-1a2b=rollover_s_85_1_5 "
                               "(Canada) or =reorg_368 (USA); the "
                               "event's own choices are listed by "
-                              "`tjs elect ACCOUNT`")
+                              "`tjs elections ACCOUNT`")
     p_elect.add_argument("--hint", action="append", metavar="KEY=VALUE",
                          help="Hint for --set (repeatable), e.g. "
                               "--hint fmv_per_share=12.5")
@@ -1148,4 +1156,4 @@ def register(sub: argparse._SubParsersAction) -> None:
     p_elect.add_argument("--json", action="store_true",
                          help="With --pending: emit the raw pending "
                               "document")
-    p_elect.set_defaults(func=cmd_elect)
+    p_elect.set_defaults(func=cmd_elections)

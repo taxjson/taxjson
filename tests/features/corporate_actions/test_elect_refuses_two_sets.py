@@ -1,5 +1,5 @@
 """Re-audit 2 (crypto-04 list): fill-crypto's par list, `run --fast`
-and the crypto map, the de-peg ATTENTION echo, `elect --set` repeated,
+and the crypto map, the de-peg ATTENTION echo, `elections --set` repeated,
 the same exchange export in two crypto accounts and the shared price
 caches' save. Synthetic data only; no network.
 
@@ -21,7 +21,7 @@ class TestElectOneSetPerCommand(unittest.TestCase):
                 '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
                 'base_currency = "CAD"\n[accounts.margin]\n'
                 'type = "taxable"\n')
-            r = _cli(root, Path(td), "elect", "margin", "--set",
+            r = _cli(root, Path(td), "elections", "margin", "--set",
                      "20250303-abc-xyz-fa49=rollover_s_85_1_5", "--set",
                      "20250304-abc-xyz-d19a=rollover_s_85_1_5")
             self.assertNotEqual(r.returncode, 0)

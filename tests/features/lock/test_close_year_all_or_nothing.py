@@ -117,13 +117,13 @@ def _close(year_dir: Path, *extra: str, alarm: float = 0.0):
 
 
 def _tree(top: Path) -> dict:
-    """Every entry below `top` but the year's work/ (the run lock): its
-    kind, permission bits and bytes (a link: its text; the lock without
-    its closed_at line)."""
+    """Every entry below `top` but the year's work/ (the run lock) and
+    logs/ (the command logs): its kind, permission bits and bytes (a
+    link: its text; the lock without its closed_at line)."""
     seen = {}
     for p in sorted(top.rglob("*")):
         rel = p.relative_to(top).as_posix()
-        if rel == f"{YEAR}/work" or rel.startswith(f"{YEAR}/work/"):
+        if rel.split("/")[:2] in ([YEAR, "work"], [YEAR, "logs"]):
             continue
         mode = stat.S_IMODE(p.lstat().st_mode)
         if p.is_symlink():

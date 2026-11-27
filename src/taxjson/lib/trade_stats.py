@@ -156,6 +156,18 @@ def contract_size(r: Dict[str, Any]) -> float:
     return _f(r.get("multiplier")) or 100.0
 
 
+def _counted_in_the_book(t: Dict[str, Any]) -> bool:
+    """A row reported by hand that the option replay of the book counts
+    itself (written_option_trades' `unknown`): an option trade the broker
+    marks closing whose units closed a contract opened before the files
+    (its `unknown_cost_from` says `marked_close`, of its own account).
+    Counted there, once (it was counted here too: backlog TJ-5435)."""
+    return (is_option_symbol(str(t.get("symbol") or ""))
+            and any(isinstance(s, dict) and s.get("marked_close")
+                    and s.get("account") == t.get("account")
+                    for s in t.get("unknown_cost_from") or []))
+
+
 def written_option_trades(rows: Iterable[Dict[str, Any]],
                           date_of: Callable[[Dict[str, Any]], str],
                           in_books: Optional[Callable[[Dict[str, Any]],
@@ -204,7 +216,7 @@ def written_option_trades(rows: Iterable[Dict[str, Any]],
     nothing held to close; a close only partly of such contracts is
     unknown whole, no trade)}."""
     from taxjson.lib.corporate_timeline import dedupe_split_events
-    from taxjson.lib.unbacked_close import OrderStarts, unbacked_close
+    from taxjson.lib.unbacked_close import CloseWalk
     rows = [r for r in rows if isinstance(r, dict)]
     # The engine's own physical-versus-cash-settled test (engine/assign
     # _make_assign_underlying_resolver, as option-boundary reads it):
@@ -260,7 +272,7 @@ def written_option_trades(rows: Iterable[Dict[str, Any]],
     credits: List[Dict[str, Any]] = []
     unknown: List[Dict[str, Any]] = []
     exercises: List[Dict[str, Any]] = []
-    orders = OrderStarts()
+    closes = CloseWalk()
     for r in book:
         sym = str(r["symbol"])
         acct = str(r.get("account") or "")
@@ -344,10 +356,10 @@ def written_option_trades(rows: Iterable[Dict[str, Any]],
         prev = longs.get(key, 0.0) - sum(lot[0] for lot in
                                          shorts.get(key, ()))
         ev = SimpleNamespace(quantity=q, open_close=r.get("open_close") or "",
-                             date=str(r.get("date") or ""),
-                             time=str(r.get("time") or ""))
+                             no_clock=r.get("no_clock") or "", date=str(r.get("date") or ""),
+                             time=str(r.get("time") or ""), description=r.get("description") or "")
         unbacked = (r.get("action") == "BUYSELL"
-                    and unbacked_close(ev, prev, orders.prev(key, ev, prev)))
+                    and closes.read(key, ev, prev).unbacked > _EPS)
         if q < 0:
             held = longs.get(key, 0.0)
             close = min(held, c)
@@ -2025,7 +2037,7 @@ def closed_trades(gains_docs: Dict[str, Dict[str, Any]],
     for acct, doc in gains_docs.items():
         for n, t in enumerate(doc.get("manual_reporting_required") or []):
             if (isinstance(t, dict) and keep(date_of(t))
-                    and symbol_ok(str(t.get("symbol") or ""))):
+                    and symbol_ok(str(t.get("symbol") or "")) and not _counted_in_the_book(t)):
                 # Its own count: a row with no id here is not the
                 # transactions' row of the same index.
                 tainted_disp.add(("manual",) + disposition(acct, t, n)

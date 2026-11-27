@@ -89,7 +89,7 @@ class TestFileOrder(unittest.TestCase):
                                   'ib_b.csv': file_(13)})
             tj(root, "run", "--no-input", check=False)
             for p in _pending(root):
-                tj(root, "elect", "margin", "--set",
+                tj(root, "elections", "margin", "--set",
                    f"{p['event_id']}=taxable_disposition")
             self._check(root, root / "inputs")
 

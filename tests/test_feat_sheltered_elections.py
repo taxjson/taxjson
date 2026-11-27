@@ -9,7 +9,7 @@ rules count the account's units. So with [settings] sheltered_elections =
 shares (the parent keeps its cost) and a merger carries the old shares'
 cost, with one Info line per run — never pending, never a warning, and
 `run --strict` passes. "ask" restores the question; an election saved
-with `tjs elect` wins; a taxable account is still asked.
+with `tjs elections` wins; a taxable account is still asked.
 
 Every fixture is synthetic: invented tickers, amounts and account ids.
 """
@@ -70,7 +70,7 @@ class _Base:
             self.assertEqual(flat.count(head), 1, flat)
             self.assertIn("booked at $0 cost for the distributed shares; "
                           "cost only affects the holdings view — `tjs "
-                          "elect` sets a fair value if you want it there",
+                          "elections` sets a fair value if you want it there",
                           flat)
             self.assertNotIn("need an election", flat)
             # Info, never a warning (`note:` is its captured form).
@@ -84,12 +84,12 @@ class _Base:
                 [("BUYSELL", 25.0, 0.0, "sheltered_default")])
             # Nothing written to the manifest: an election there wins
             # (no manifest at all until an election is saved).
-            _mp = root / "inputs" / self.PLAN / "manifest.json"
+            _mp = root / "inputs" / self.PLAN / "elections.json"
             man = json.loads(_mp.read_text()) if _mp.exists() else {}
             self.assertEqual(man.get("elections") or {}, {})
             self.assertFalse((root / "work" / "pending_elections.json")
                              .exists())
-            p = cli(root, "elect", "--pending")
+            p = cli(root, "elections", "--pending")
             self.assertIn("No pending elections", p.stdout)
             s = cli(root, "run", "--no-input", "--strict")
             self.assertEqual(s.returncode, 0, _flat(s)[-3000:])
@@ -121,7 +121,7 @@ class _Base:
             root = self._project(td)
             self.assertEqual(cli(root, "run", "--no-input").returncode, 0)
             eid = self._event_id(root, self.PLAN)
-            e = cli(root, "elect", self.PLAN, "--set",
+            e = cli(root, "elections", self.PLAN, "--set",
                     f"{eid}={self.ELECTION}")
             self.assertEqual(e.returncode, 0, _flat(e))
             r = cli(root, "run", "--no-input")
@@ -162,7 +162,7 @@ class _Base:
         """margin buys 10 SPNCO at 20 and sells them at 10 a week after
         the plan received 25 SPNCO in the spin-off (still held at day
         30): a 100 loss with the plan's shares in its window. The filing
-        totals, with the plan's event defaulted or `elect`ed."""
+        totals, with the plan's event defaulted or elected."""
         root = self._project(td, margin_trades=[
             ("SPNCO", "2025-02-03", 10, 20.0),
             ("SPNCO", "2025-03-10", -10, 10.0)])
@@ -170,7 +170,7 @@ class _Base:
         self.assertEqual(r.returncode, 0, _flat(r)[-3000:])
         if elect:
             eid = self._event_id(root, self.PLAN)
-            e = cli(root, "elect", self.PLAN, "--set", f"{eid}={elect}")
+            e = cli(root, "elections", self.PLAN, "--set", f"{eid}={elect}")
             self.assertEqual(e.returncode, 0, _flat(e))
             r = cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, _flat(r)[-3000:])
@@ -334,7 +334,7 @@ class TestSettingRefused(unittest.TestCase):
                                corp=[(_SPIN, "2025-03-03", 25, 250)]))
             base = [sys.executable, "-m", "taxjson.bin.taxjson_corp_actions",
                     "--country", CANADA, "--brokerage", "ib", "--no-input",
-                    "--manifest", str(Path(td) / "m.json"), "--sheltered"]
+                    "--elections", str(Path(td) / "m.json"), "--sheltered"]
             env = dict(os.environ, PYTHONPATH=str(SRC))
             z = subprocess.run(base + [str(csv)], capture_output=True,
                                text=True, env=env, stdin=subprocess.DEVNULL)

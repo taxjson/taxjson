@@ -29,6 +29,11 @@ UNITS  SYMBOL                   ACQ. YEAR  PROCEEDS       ACB  OUTLAYS  GAIN(LOS
   Line 15199 (proceeds of disposition):  16,638.75
   Line 15300 (gain/loss):                 1,047.45
 
-! 1 sale with no purchase in your files NOT in these rows — tjs find-missing-history
+MANUAL REPORTING REQUIRED — 1 sale(s) with no purchase in your files
+! Not in the rows or totals above: report each by hand — tjs find-missing-history
+SYMBOL    DATE        UNITS  PROCEEDS  ACCOUNT
+----------------------------------------------
+SAMPG.US  2024-03-18     20    498.15  margin
+
 2 row(s) with a denied superficial loss: the ACB shown is reduced by it — tjs wash-sales
 Not in the rows: FX on cash (15300), slip capital gains (17400, 17600) — tjs form-export --details

@@ -67,7 +67,7 @@
 ==> Checking crypto for superficial losses with the sheltered accounts
 ==> Writing summary reports/crypto_wash.sum
 ==> Checking for missing purchase history
-  warning: ATTENTION: short: OLDCO.US (margin): the broker codes the sale on 2024-04-01 CLOSING (IB code C, IB Basis 600.00 USD), but the data holds no position to close — it is booked as a new short until the missing purchase is supplied (`tjs find-missing-history --write-missing-history` writes its .tt OPENING cost=unknown line).
+  warning: ATTENTION: short: OLDCO.US (margin): the broker codes the sale on 2024-04-01 CLOSING (IB code C, IB Basis 600.00 USD), but the data holds no position to close — it is reported by hand, out of the totals, and adds no short, until the missing purchase is supplied (the earlier export, or a .tt purchase line: `tjs find-missing-history --write-purchases` drafts one from the broker's own cost).
   note: 1 position(s) go short in margin's data (GHOSTQ.TO)
     Sales with no purchase in your files, unless they were real short sales. Until the purchase is supplied their gain is in no total — `tjs find-missing-history` lists them with the fixes.
 ==> Pooling cost and checking superficial losses across taxable accounts (margin, qt)
@@ -77,7 +77,8 @@
 ==> Writing fees report reports/fees.rpt
 ==> Done. Reports are in reports/
 ==> Before you trust these numbers (docs/getting-started.md, step 5)
-Warning: 2 positions sold in 2024 with no purchase in your files, not in missing_history.tt: GHOSTQ.TO (margin), OLDCO.US (margin). Those sales are NOT in `tjs sum`; run `tjs find-missing-history`. A short sale still open reads the same: it is in no total until it is covered.
+Warning: 1 position sold in 2024 with no purchase in your files, not in missing_history.tt: GHOSTQ.TO (margin). Those sales are NOT in `tjs sum`; run `tjs find-missing-history`. A short sale still open reads the same: it is in no total until it is covered.
+Warning: 1 sale at an unknown cost in 2024, NOT in `tjs sum`: OLDCO.US (margin) on 2024-04-03 (traded 2024-04-01), 50 units. The broker marks it closing and your files hold no purchase of the units: add the purchase (the earlier export or a .tt line), or their cost (`OPENING <date> <SYMBOL> <qty> <CUR> <total cost>`, or `tjs opening`); until then, report it by hand (`tjs form-export` lists it).
 Warning: 1 transfer-in from outside your books kept out with no cost: XYZQ.US (margin). Run `tjs transfers`.
-Info: 5 accounts with open positions and no holdings file to check them against: crypto (2), margin (8), qt (1), rrsp (2), tfsa (3). Run `tjs sanity` with the broker's positions.
+Info: 5 accounts with open positions and no holdings file to check them against: crypto (2), margin (7), qt (1), rrsp (2), tfsa (3). Run `tjs sanity` with the broker's positions.
 Info: Then run `tjs checklist --run`: it checks every step and names the next one.

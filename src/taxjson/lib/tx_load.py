@@ -277,7 +277,7 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
                  'symbol_new', 'corp_event_id', 'corp_election', 'id',
                  'record_date', 'ex_date', 'income_label',
                  'dealer_country', 'issuer_country', 'broker_time',
-                 'security_name', 'open_close', 'short_marks', 'broker_basis',
+                 'security_name', 'open_close', 'short_marks', 'no_clock', 'broker_basis',
                  'broker_lots', 'exercise_of', 'corp_cash', 'no_cash',
                  'cash_leg',
                  'no_share_count', 'contract_size_basis',

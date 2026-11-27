@@ -296,7 +296,7 @@ _CONCISE = [
     (re.compile(r"(?:[\w./-]+: )?note: pending elections written to "
                 r"(?P<p>.*/)?(?P<f>work/[^/]+)"),
      lambda m: f"Info: pending elections written to {m['f']} — "
-               f"`tjs elect --pending`"),
+               f"`tjs elections --pending`"),
     (re.compile(r"(?:[\w./-]+: )?note: FX (?P<p>\S+): Bank of Canada .*?"
                 r"Yahoo fallback for (?P<y>\d+).*"),
      lambda m: f"Info: FX {m['p']}: Bank of Canada rates"

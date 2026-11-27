@@ -207,8 +207,53 @@ class TestUnbackedCover(unittest.TestCase):
                           tj(root, "form-export").stdout)
 
     @rule(R.CA_ACB_11)
-    def test_canada_flagged_figures_unchanged(self):
-        self._flagged("canada", 550.0, 150.0)
+    def test_canada_the_brokers_mark_takes_the_cover_out(self):
+        """The cover is reported by hand and adds no long, with no line
+        (TJ-5349; it was a new long in the later sale's cost: 550, gain
+        150, until the user's line)."""
+        with tempfile.TemporaryDirectory() as td:
+            root = _ib_project(td, "canada", {"margin": _COVER_THEN_LONG})
+            r = tj(root, "run", "--no-input")
+            self.assertIn("NOT in the totals: 1 buy closing a short sold "
+                          "before your files", r.stdout)
+            self.assertNotIn("booked as a new long", r.stdout)
+            # The later sale's documented cost; the cover by hand; no long.
+            self.assertEqual(_sale(root), [(10.0, 600.0, 100.0)])
+            doc = _gains_doc(root)
+            self.assertEqual(
+                [(m["direction"], m["qty"], m["proceeds"],
+                  m["unknown_cost_from"])
+                 for m in doc["manual_reporting_required"]],
+                [("SHORT", 10.0, -500.0,
+                  [{"account": "margin", "symbol": "SYN.TO",
+                    "date": "2025-02-03", "quantity": -10.0,
+                    "marked_close": True}])])
+            self.assertEqual(doc.get("inventory_year_end") or [], [])
+            self.assertEqual(_issues(root), ["unbacked-cover"])      # (said once: TJ-5437)
+            issue, = [i for i in json.loads(tj(root, "sum", "--json").stdout)
+                      ["readiness"]["issues"] if i["kind"] == "unbacked-cover"]
+            self.assertNotIn("new long", issue["detail"])
+            self.assertIn("1 cover of a short opened before your files",
+                          tj(root, "form-export").stdout)
+            self.assertIn("No open positions", tj(root, "list").stdout)
+
+    @rule(R.CA_ACB_11)
+    def test_canada_the_line_and_the_mark_give_the_same_books(self):
+        """An answered project is unchanged: the .tt short line and the
+        broker's mark alone give one state (TJ-5349)."""
+        def books(line):
+            with tempfile.TemporaryDirectory() as td:
+                root = _ib_project(td, "canada", {"margin": _COVER_THEN_LONG})
+                if line:
+                    (root / "inputs/margin/missing_history.tt").write_text(line)
+                tj(root, "run", "--no-input")
+                doc = _gains_doc(root)
+                manual = [{k: v for k, v in m.items() if k != "unknown_cost_from"}
+                          for m in doc["manual_reporting_required"]]
+                return (doc["transactions"], manual, doc["inventory"],
+                        doc.get("inventory_year_end"), doc["summary"])
+        self.assertEqual(books("OPENING 2025-01-31 SYN.TO -10 cost=unknown\n"),
+                         books(""))
 
     @rule(R.US_BASIS_04)
     def test_usa_flagged_figures_unchanged(self):
@@ -283,8 +328,11 @@ class TestUnbackedCover(unittest.TestCase):
 
     def test_a_cover_of_an_earlier_year_is_flagged_a_later_one_is_not(self):
         rows = [("2024-02-05", 10, 50, "C")]
+        # (Canada: the cover is reported by hand in its own year and adds
+        # no long, so a later year carries nothing of it: TJ-5349.)
         for year, flagged, heading in (
-                (2025, True, "AFFECTS 2025 - an earlier year's cover"),
+                (2024, True, "AFFECTS 2024 - a cover's gain is missing"),
+                (2025, False, "NOT relevant to 2025 - an earlier year's cover"),
                 (2023, False, "NOT relevant to 2023 - later covers")):
             with self.subTest(year=year), tempfile.TemporaryDirectory() as td:
                 root = _ib_project(td, "canada", {"margin": rows}, year=year)
@@ -348,9 +396,7 @@ class TestUnbackedCover(unittest.TestCase):
     def test_refused_quantities(self):
         for line, want in (
                 ("OPENING 2025-01-31 SYN.TO 0 cost=unknown\n",
-                 "negative for a short"),
-                ("OPENING 2025-01-31 SYN251219C00010000.TO -1 cost=unknown\n",
-                 "a short of shares, not an option contract")):
+                 "negative for a short"),):
             with self.subTest(line=line), tempfile.TemporaryDirectory() as td:
                 root = _ib_project(td, "canada", {"margin": [
                     ("2025-02-03", 10, 50, "C")]})
@@ -358,6 +404,18 @@ class TestUnbackedCover(unittest.TestCase):
                 r = tj(root, "check-tt", check=False)
                 self.assertEqual(r.returncode, 1)
                 self.assertIn(want, r.stdout + r.stderr)
+
+    def test_a_written_contract_before_the_data_is_a_line(self):
+        """A negative quantity of an option series is read (it was
+        refused, so nothing could declare a write made before the data:
+        TJ-5349)."""
+        with tempfile.TemporaryDirectory() as td:
+            root = _ib_project(td, "canada", {"margin": [
+                ("2025-02-03", 10, 50, "C")]})
+            (root / "inputs/margin/missing_history.tt").write_text(
+                "OPENING 2025-01-31 SYN251219C00010000.TO -1 cost=unknown\n")
+            r = tj(root, "check-tt", check=False)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
 
 class TestSharedTobaseAfterTheClose(unittest.TestCase):

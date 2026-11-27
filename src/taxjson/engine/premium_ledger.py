@@ -31,8 +31,8 @@ if TYPE_CHECKING:
 # An (account, symbol): a stock line in one account, the key the ledger
 # stages an assignment's premium under (the symbol its underlying).
 _LegKey: TypeAlias = Tuple[str, str]
-# One staged premium (`stage`): src (the option row's id), amt and dw
-# (Decimal: the amount and its deferral part), tainted, sources and
+# One staged premium (`stage`): src (the option row's id), amt, dw and out
+# (Decimal: the amount, its deferral part and its outlay), tainted, sources and
 # chunks (lists of dicts), sym, und, dir (+1, -1 or None), shares (None:
 # unknown), contracts, date, legs (its paired legs' ids); took and
 # split_said once a same-day delivery shares it (_take_entry).
@@ -48,12 +48,16 @@ class Taken(NamedTuple):
     loss in the option's cost (TJ-0061); `tainted`, some of it is an
     unknown-cost option's (TJ-0947), and `sources`, the OPENING
     cost=unknown rows behind that (TJ-3209); `chunks`, the exercised
-    replacement units' chunks it carried (the US engine, TJ-2737)."""
+    replacement units' chunks it carried (the US engine, TJ-2737);
+    `outlay`, the commission and fee netted in `amount` (a written
+    option's: the shares' disposition shows the premium gross with it as
+    an outlay, CA-OPT-06, TJ-5381; 0 in the US engine)."""
     amount: Decimal
     deferred: Decimal
     tainted: bool
     sources: List[Dict[str, Any]]
     chunks: List[Dict[str, Any]]
+    outlay: Decimal = _ZERO
 
 
 def nothing_taken() -> Taken:
@@ -207,7 +211,8 @@ class _AssignPremiumLedger:
               deferred: Decimal = _ZERO,
               tainted: bool = False,
               sources: Optional[List[Dict[str, Any]]] = None,
-              chunk: Optional[Dict[str, Any]] = None) -> None:
+              chunk: Optional[Dict[str, Any]] = None,
+              outlay: Decimal = _ZERO) -> None:
         """`deferred`: the part of `amount` that is an earlier
         superficial loss added to the option's cost (its pool's
         deferred_wash share): the stock leg's pool tallies it, so the
@@ -221,7 +226,9 @@ class _AssignPremiumLedger:
         `chunk` (the US engine): the exercised units' replacement
         chunk (`_us_record_left_shares`; None: not recorded), handed
         to the stock leg that takes the amount (`Taken.chunks`), whose
-        lots it names (TJ-2737)."""
+        lots it names (TJ-2737). `outlay` (the Canadian engine): the
+        commission and fee netted in `amount`, the stock leg's outlay
+        (`Taken.outlay`; a net rebate, below 0, stays netted: TJ-5381)."""
         key = (opt_tx.account, underlying)
         if (self._in_snapshot(key, (opt_tx.date or '')[:10])
                 and not self._delivered_after_snapshot(opt_tx, key)):
@@ -230,17 +237,19 @@ class _AssignPremiumLedger:
         if self._renamed_into_snapshot(opt_tx, key):
             return
         lst = self._e.setdefault(key, [])
+        outlay = max(_ZERO, outlay)
         for e in lst:
             if e['src'] == opt_tx.id:
                 e['amt'] += amount
                 e['dw'] += deferred
+                e['out'] += outlay
                 e['tainted'] = e['tainted'] or bool(tainted)
                 e['sources'] += [s for s in (sources or [])
                                  if s not in e['sources']]
                 e['chunks'] += [chunk] if chunk is not None else []
                 return
         shares = _assign_delivery_shares(opt_tx)
-        lst.append({'src': opt_tx.id, 'amt': amount, 'dw': deferred,
+        lst.append({'src': opt_tx.id, 'amt': amount, 'dw': deferred, 'out': outlay,
                     'tainted': bool(tainted),
                     'sources': [dict(s) for s in (sources or [])],
                     'chunks': [chunk] if chunk is not None else [],
@@ -570,8 +579,8 @@ class _AssignPremiumLedger:
                     later: Sequence[object], acc: List[Any],
                     rest_today: float = 0.0) -> Tuple[Decimal, float]:
         """Take up to `need` shares of entry `e`: (amount, shares); its
-        deferral share adds to the take's (`acc`: [deferred, tainted,
-        sources, chunks]), its unknown cost taints it. `rest_today`: for an entry of unknown size, the
+        deferral and outlay shares add to the take's (`acc`: [deferred,
+        tainted, sources, chunks, outlay]), its unknown cost taints it. `rest_today`: for an entry of unknown size, the
         shares of the same-day deliveries still to come (_same_day_later):
         the amount is shared by quantity with them, never all taken by
         the first part (TJ-0954)."""
@@ -587,10 +596,13 @@ class _AssignPremiumLedger:
             frac = need / (need + rest_today)
             part = e['amt'] * M.of(frac)
             dw = e['dw'] * M.of(frac)
+            out = e['out'] * M.of(frac)
             e['amt'] -= part
             e['dw'] -= dw
+            e['out'] -= out
             e['took'] = e.get('took', 0.0) + need
             acc[0] += dw
+            acc[4] += out
             if not e.get('split_said'):
                 e['split_said'] = True
                 emit_line(
@@ -605,18 +617,23 @@ class _AssignPremiumLedger:
         if e['shares'] is None:
             lst.remove(e)
             acc[0] += e['dw']
+            acc[4] += e['out']
             return e['amt'], 0.0
         take_sh = min(need, e['shares'])
         if take_sh >= e['shares'] - 1e-9 or not later:
             lst.remove(e)
             acc[0] += e['dw']
+            acc[4] += e['out']
             return e['amt'], take_sh
         part = e['amt'] * M.of(take_sh) / M.of(e['shares'])
         dw = e['dw'] * M.of(take_sh) / M.of(e['shares'])
+        out = e['out'] * M.of(take_sh) / M.of(e['shares'])
         e['amt'] -= part
         e['dw'] -= dw
+        e['out'] -= out
         e['shares'] -= take_sh
         acc[0] += dw
+        acc[4] += out
         return part, take_sh
 
     def take(self, tx: TaxTransaction) -> Taken:
@@ -628,7 +645,7 @@ class _AssignPremiumLedger:
         lst = self._e.get(key)
         if not lst:
             return nothing_taken()
-        acc: List[Any] = [_ZERO, False, [], []]     # deferred, tainted, sources, chunks
+        acc: List[Any] = [_ZERO, False, [], [], _ZERO]   # deferred, tainted, sources, chunks, outlay
         idx = self._pos.get(id(tx), -1)
         q = float(tx.quantity or 0.0)
         need = abs(q)

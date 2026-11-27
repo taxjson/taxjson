@@ -72,7 +72,7 @@ class TestTheRunNamesTheExchange(unittest.TestCase):
         for word in ('the 2025-01-20 loss', 'the 2025-01-25 exchange of OLD.TO (a)',
                      'The OLD.TO shares became SYQ.TO shares', 'docs/limits.md',
                      'the loss in a stays allowed in full', 'Review the loss',
-                     f'`tjs elect a --set {EVENT}=ignore`',
+                     f'`tjs elections a --set {EVENT}=ignore`',
                      'a sale of the OLD.TO shares at their cost and a purchase '
                      'of the SYQ.TO shares at that cost'):
             self.assertIn(word, line)
@@ -197,7 +197,7 @@ class TestInAProject(unittest.TestCase):
             self.assertEqual(first.returncode, 3, first.stderr)
             pend = json.loads((root / 'work' / 'pending_elections.json').read_text())
             event = pend['accounts']['margin']['pending'][0]['event_id']
-            tj(root, 'elect', 'margin', '--set', f'{event}=rollover_s_85_1_5')
+            tj(root, 'elections', 'margin', '--set', f'{event}=rollover_s_85_1_5')
             tj(root, 'run', '--no-input')
             r = tj(root, 'run', '--no-input')
             text = ' '.join((r.stdout + r.stderr).split())
@@ -206,7 +206,7 @@ class TestInAProject(unittest.TestCase):
             done = text.index('Before you trust these numbers')
             self.assertIn(f'Warning: {head}', text[:done])
             self.assertIn(f'Warning: [margin] {head}', text[done:])
-            self.assertIn(f'`tjs elect margin --set {event}=ignore`', text[done:])
+            self.assertIn(f'`tjs elections margin --set {event}=ignore`', text[done:])
             # Nothing is denied: the loss is in the year's figure.
             fe = json.loads(tj(root, 'form-export', '--json').stdout)
             self.assertAlmostEqual(fe['gain_unrounded'], -5002.0, places=2)
@@ -247,7 +247,7 @@ class TestTwoAccounts(unittest.TestCase):
             if elect:
                 pend = json.loads((root / 'work' / 'pending_elections.json').read_text())
                 event = pend['accounts'][elect]['pending'][0]['event_id']
-                tj(root, 'elect', elect, '--set', f'{event}=rollover_s_85_1_5')
+                tj(root, 'elections', elect, '--set', f'{event}=rollover_s_85_1_5')
             tj(root, 'run', '--no-input')
             r = tj(root, 'run', '--no-input')
             text = ' '.join((r.stdout + r.stderr).split())

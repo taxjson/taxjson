@@ -152,29 +152,29 @@ class TestBrokerClosing(unittest.TestCase):
     def _book(self):
         return [write("2025-12-10", open_close="C", broker_basis="2.50")]
 
-    @rule(R.CA_OPT_07)
-    def test_one_attention_row_naming_the_basis(self):
-        # m841 (no regular row after it), m980 (the IB Basis), m942
-        # (paid 0), m967 (premium in cents).
-        # The fixture's premium moved a cent, to 399.015: an exact half
-        # cent, cut up since step 6h(4) to 399.02 (round() gave a cent
-        # less).
+    @rule(R.CA_OPT_07, R.CA_OPT_12)
+    def test_no_row_for_a_sale_that_closed_a_contract_bought_before_the_data(self):
+        # The sale closed a long the files do not hold: no premium of a
+        # write to place in a year, so no row (it was a `broker-closing`
+        # attention row; the run reports the sale by hand, TJ-5349).
         rows = rows_of([write("2025-12-10", net=399.015, open_close="C",
                               broker_basis="2.50")])
-        self.assertEqual(len(rows), 1)
-        r = rows[0]
-        self.assertEqual(r["close_kind"], "broker-closing")
-        self.assertIn("IB code C, IB Basis 2.50", r["where"])
-        self.assertEqual((r["paid"], r["premium"]), (0.0, 399.02))
-        self.assertTrue(r["attention"])
+        self.assertEqual(rows, [])
 
-    def test_expired_open_flags_the_unbacked_close(self):
+    def test_control_the_same_sale_with_no_code_is_a_write(self):
+        rows = rows_of([write("2025-12-10", net=399.015)])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["premium"], 399.02)
+
+    def test_expired_open_holds_nothing_for_the_unbacked_close(self):
         # m891: the position before the first row is 0, so a C-coded
-        # sale of 1 cannot be backed.
+        # sale of 1 cannot be backed: it opens no written contract.
         out = expired_open([write("2025-10-10", sym=OLD, open_close="C")],
                            2025, today=TODAY)
+        self.assertEqual(out, [])
+        out = expired_open([write("2025-10-10", sym=OLD)], 2025, today=TODAY)
         self.assertEqual([(o["symbol"], o["side"], o["broker_closing"])
-                          for o in out], [(OLD, "written", True)])
+                          for o in out], [(OLD, "written", False)])
 
 
     def test_unbacked_close_bought_back_in_the_year_is_not_listed(self):
@@ -300,12 +300,13 @@ class TestExpiredOpen(unittest.TestCase):
                            today=TODAY)
         self.assertEqual([o["expiry"] for o in out], ["2025-12-31"])
 
-    def test_split_moves_the_position_and_its_closing_flag(self):
+    def test_split_moves_the_position(self):
         # L438-L445 (no coverage before): the renamed, rescaled
-        # position is the one reported, with the broker-closing flag;
+        # position is the one reported (never `broker_closing`: a marked
+        # close opens no position, TJ-5349);
         # a fractional long after a reverse split stays "long" (m992).
         new = "Q251219C00100000.TO"
-        book = [write("2025-10-10", sym=OLD, q=-2, open_close="C"),
+        book = [write("2025-10-10", sym=OLD, q=-2),
                 T("SPLIT", date="2025-10-20", symbol=OLD, quantity=0.5,
                   net_amount=0.0, price=0.0, symbol_new=new),
                 buy("2025-10-10", sym="Q251219P00050000.TO", account="x"),
@@ -315,7 +316,7 @@ class TestExpiredOpen(unittest.TestCase):
                                                     today=TODAY)}
         self.assertEqual(set(out), {new, "Q251219P00050000.TO"})
         self.assertEqual(out[new]["quantity"], -1.0)
-        self.assertTrue(out[new]["broker_closing"])
+        self.assertFalse(out[new]["broker_closing"])
         p = out["Q251219P00050000.TO"]
         self.assertEqual((p["quantity"], p["side"], p["broker_closing"]),
                          (0.5, "long", False))

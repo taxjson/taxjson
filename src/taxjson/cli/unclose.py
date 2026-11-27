@@ -16,7 +16,10 @@ filed/<year>/reports/ only):
 - a frozen copy the same as the shared file it was copied from is removed;
   one that differs, or that the shared folder does not hold, is moved into
   the backup, never deleted, and the report says the year is now computed
-  from the shared inputs and may differ from what was filed.
+  from the shared inputs and may differ from what was filed;
+- the positions snapshots close-year copied from a holdings folder every
+  year shares (`holdings_dir`, backlog TJ-5367) go the same way (SNAPSHOT:
+  the figures never read them).
 
 Every write is a rename or an atomic write whose undo step is added before
 it; the record backup/unclosed.json is written last, the commit point.
@@ -33,7 +36,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from taxjson.cli.common import _FROZEN_NOTE_PREFIX
+from taxjson.cli.common import _FROZEN_NOTE_PREFIX, _raise_requirements
 from taxjson.cli.file import (
     _config_rewrite_target, _FROZEN_NOTE_2, _gitignore_hides_filed_reports,
 )
@@ -54,10 +57,15 @@ _REMOVED = ".removed"
 # Why a frozen copy is kept (moved into the backup), in the order shown.
 DIFFERS, ONLY_COPY, UNREADABLE, GENERATED = ("differs", "only-copy",
                                              "unreadable", "generated")
-_KEYS = (_PL.INPUTS_KEY, _PL.TOBASE_KEY)
+# A positions snapshot of the year's frozen holdings/ that is not the
+# shared folder's (another file, or none there): kept in the backup.
+SNAPSHOT = "snapshot"
+_KEYS = (_PL.INPUTS_KEY, _PL.TOBASE_KEY, _PL.HOLDINGS_KEY)
 # How a setting came back: its own line under the note un-commented, or
 # written from the lock's record (the line gone, or not the close's).
 NOTE, RECORD_GONE, RECORD_OTHER = "note", "record", "record-other-line"
+# The year's own copy of what each setting names.
+_OWN_COPY = {_PL.INPUTS_KEY: f"{_PL.INPUTS}/", _PL.HOLDINGS_KEY: f"{_PL.HOLDINGS}/"}
 
 
 @dataclasses.dataclass
@@ -151,7 +159,11 @@ def cmd_unclose_year(args: argparse.Namespace) -> None:
 def _unclose_year(args: argparse.Namespace, state: WriteStep) -> None:
     """cmd_unclose_year's steps: the plan (every refusal, nothing
     written), then with --dry-run the plan shown, else the moves and the
-    record as one step and the report."""
+    record as one step and the report. The year reopened reads the
+    shared exports again: an elections.json there raises its
+    requires_taxjson to the release that reads it (cli/common
+    `_raise_requirements`, as migrate does: an older taxjson would read
+    no elections)."""
     root = Path(args.dir).resolve()
     # (two tobase.map files of the year are this command's to take back)
     cfg = load_config(root, reopening=True)
@@ -171,6 +183,7 @@ def _unclose_year(args: argparse.Namespace, state: WriteStep) -> None:
         return
     _apply(plan, state)
     _report(plan, args, done=True)
+    _raise_requirements(root, ("elections_json",))
 
 
 # ------------------------------------------------------------------ plan
@@ -223,6 +236,8 @@ def _plan(root: Path, cfg: Dict[str, Any], year: int) -> Plan:
             _input_copies(plan, cfg, st, hashes)
         if _PL.TOBASE_KEY in frozen:
             _tobase_copy(plan, st)
+        if _PL.HOLDINGS_KEY in frozen:
+            _holdings_copies(plan, st)
         # The year's own tobase.map beside the setting is no problem when
         # it is the frozen copy this takes away (or a link to the shared
         # file); any other problem of the folder settings is a refusal.
@@ -465,7 +480,7 @@ def _later_years(plan: Plan) -> None:
 def _commented_setting(line: str) -> Optional[Tuple[str, Any]]:
     """(key, value) of a line the freeze commented out: `# ` (as the
     freeze writes it, lib/project_layout `_commented`) before a one-line
-    `inputs_dir = ...` or `tobase_map = ...`, the key bare, quoted or
+    `inputs_dir = ...`, `tobase_map = ...` or `holdings_dir = ...`, the key bare, quoted or
     dotted from its table (`settings.inputs_dir`). None for any other
     line (`#tobase_map`, prose, another key)."""
     if not line.startswith("# "):
@@ -657,6 +672,10 @@ def _input_copies(plan: Plan, cfg: Dict[str, Any], st: Dict[str, Any],
     for rel, p in sorted(cands.items()):
         s = shared / rel
         parts = rel.split("/")
+        if parts[-1] == _PL.OLD_ELECTIONS and not os.path.lexists(s):
+            # A copy frozen as manifest.json, the shared one renamed by
+            # `tjs migrate`: one file.
+            s = s.with_name(_PL.ELECTIONS)
         try:
             if p.is_symlink() or _through_link(own, p) \
                     or inside not in p.parent.resolve().parents \
@@ -693,6 +712,8 @@ def _input_copies(plan: Plan, cfg: Dict[str, Any], st: Dict[str, Any],
                         and (s.suffix.lower() in (".csv", ".tt", ".toml")
                              or s.name in _ACCOUNT_SIDECARS)
                         and rel not in cands
+                        and not (s.name == _PL.ELECTIONS
+                                 and f"{a}/{_PL.OLD_ELECTIONS}" in cands)
                         and f"{_PL.INPUTS}/{rel}" not in (hashes or {})
                         and s.name.lower() != _CS.TT_NAME):
                     plan.unread += 1
@@ -748,6 +769,43 @@ def _tobase_copy(plan: Plan, st: Dict[str, Any]) -> None:
         plan.remove.append(own)
     else:
         plan.keep.append((own, why))
+
+
+def _holdings_copies(plan: Plan, st: Dict[str, Any]) -> None:
+    """The year's own holdings/, where close-year copied the year's
+    snapshots of a folder every year shares (backlog TJ-5367): a snapshot
+    the same as the shared one of its name is removed, any other moved
+    into the backup (SNAPSHOT: never deleted; the reopened year compares
+    the shared folder's), a link or folder left; a file that is no
+    snapshot (a README, a note of yours) is not the close's and stays
+    (TJ-5405). The figures never read them, so a kept one is no
+    divergence."""
+    root = plan.root
+    own = root / _PL.HOLDINGS
+    try:
+        shared = _PL.folder_setting(root, _PL.HOLDINGS_KEY, st)
+    except _PL.LayoutError:
+        return                          # (the settings' check says why)
+    if shared is None or own.is_symlink() or not own.is_dir():
+        return
+    from taxjson.lib.holdings_dir import snapshot_files
+    snaps = set(snapshot_files(own))
+    for p in sorted(own.iterdir()):
+        if p.is_symlink() or not p.is_file():
+            plan.left.append(p)
+            continue
+        if p not in snaps:
+            continue        # (no snapshot: never a copy of the close's)
+        try:
+            why = (_against_shared(p, shared / p.name)
+                   if (shared / p.name).is_file() else ONLY_COPY)
+        except OSError as e:
+            _die_input(f"cannot read {plan.rel(p)}: {e.strerror or e}",
+                       _NOTHING)
+        if why is None:
+            plan.remove.append(p)
+        else:
+            plan.keep.append((p, SNAPSHOT))
 
 
 # ----------------------------------------------------------------- apply
@@ -884,7 +942,8 @@ def _record(plan: Plan) -> Dict[str, Any]:
         "copies_removed": [plan.rel(p) for p in plan.remove],
         "copies_kept": {w: [plan.rel(p) for p in plan.kept(w)]
                         for w in (DIFFERS, ONLY_COPY, UNREADABLE,
-                                  GENERATED)},
+                                  GENERATED, SNAPSHOT)
+                        if w != SNAPSHOT or plan.kept(w)},
         "shared_files_not_read_when_filed": plan.unread,
         "later_years_started": [y for y, _d in plan.started],
         "later_year_folders": [plan.rel(d) for _y, d in plan.started],
@@ -938,7 +997,9 @@ def _copies_row(plan: Plan, det: bool) -> Optional[str]:
     for why, text in ((DIFFERS, "not the same as the shared file"),
                       (ONLY_COPY, f"not in {plan.shared or 'the shared folder'}"),
                       (UNREADABLE, "whose shared file cannot be read"),
-                      (GENERATED, "generated by taxjson")):
+                      (GENERATED, "generated by taxjson"),
+                      (SNAPSHOT, "positions snapshot(s) not the same as "
+                                 "the shared folder's, or not in it")):
         got = plan.kept(why)
         if got:
             parts.append(f"{len(got)} {text} ({_names(got, plan, det)}): "
@@ -994,7 +1055,7 @@ def _report(plan: Plan, args: argparse.Namespace, *, done: bool) -> None:
         kv.append(("Not restored", "; ".join(
             f"`{ln.strip()}` stays commented (nothing records that "
             f"close-year wrote it): if it did, un-comment it by hand and "
-            f"move the year's own {'inputs/' if k == _PL.INPUTS_KEY else _PL.TOBASE_MAP} "
+            f"move the year's own {_OWN_COPY.get(k, _PL.TOBASE_MAP)} "
             f"away" for k, ln in plan.unsure)))
     row = _copies_row(plan, det)
     if row:
@@ -1085,7 +1146,8 @@ def register(sub: argparse._SubParsersAction) -> None:
              "nothing: the lock (filed/<year>.json) and the reports as "
              "filed move into a backup folder, "
              "filed/<year>.unclosed-<date>-<time>/, and taxjson.toml reads "
-             "the shared exports and tobase.map again. A frozen copy the "
+             "the shared exports, tobase.map and holdings folder again. "
+             "A frozen copy the "
              "same as the shared file is removed; one that differs is "
              "kept in the backup, and the year is then computed from the "
              "shared inputs. Refused while a later year is closed.")

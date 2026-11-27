@@ -5,6 +5,7 @@
   "assumed_symbols": [
     "AAPL.US",
     "NVDA.US",
+    "OLDCO.US",
     "SAMPA.TO",
     "SHOP.TO",
     "SPNC.US"
@@ -66,6 +67,15 @@
       "max_cost": 1999.35,
       "symbol": "NVDA.US",
       "year_end_cost": 1941.3
+    },
+    {
+      "country": "USA",
+      "country_source": "assumed",
+      "foreign_property": true,
+      "listing_country": "USA",
+      "max_cost": 0.0,
+      "symbol": "OLDCO.US",
+      "year_end_cost": 0.0
     },
     {
       "country": "USA",
@@ -211,6 +221,19 @@
       "category": 2,
       "category_from": "listing",
       "country": "USA",
+      "country_source": "assumed",
+      "futures": false,
+      "gain": 0.0,
+      "income": 0.0,
+      "max_cost": 0.0,
+      "symbol": "OLDCO.US",
+      "unknown_acb": true,
+      "year_end_cost": 0.0
+    },
+    {
+      "category": 2,
+      "category_from": "listing",
+      "country": "USA",
       "country_source": "isin",
       "country_source_account": "margin",
       "futures": false,
@@ -297,6 +320,7 @@
   "tax_date_basis": "settle",
   "total_settled": false,
   "unknown_acb_symbols": [
+    "OLDCO.US",
     "USD cash"
   ],
   "unused_overrides": [],

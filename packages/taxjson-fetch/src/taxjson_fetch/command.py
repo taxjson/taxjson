@@ -158,15 +158,15 @@ def _qt_auth_hint(token: str, tok_cache: Path, *,
 
 def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
                       wanted: List[str], http, say,
-                      holdings: Optional[Path] = None) -> Dict[str, Path]:
+                      holdings: Optional[Path] = None, year: Optional[Tuple[int, Any]] = None) -> Dict[str, Path]:
     """Fetch live Questrade positions for each fetch-enabled account in
     `wanted` and write <holdings>/<account>_live_holdings.toml: the
     year's holdings folder (`holdings`, default root/holdings —
-    lib/holdings_dir), where `tjs sanity` and the end of `tjs
-    run` find a [[holding]] file by its name with no setting. (It used
-    to go to work/, which sanity read only when named.) Returns
-    {account: toml_path}. Shares the rotated-token session flow with
-    the activity fetch."""
+    lib/holdings_dir; one every year shares, `year` set (_live_year): for
+    the year the snapshot is of, <account>_live_holdings_<year>.toml), where
+    `tjs sanity` and the end of `tjs run` find a [[holding]] file by its
+    name with no setting. Returns {account: toml_path}. Shares the
+    rotated-token session flow with the activity fetch."""
     from datetime import datetime as _dt
     out_dir = Path(holdings) if holdings is not None else root / "holdings"
     fetch_cfg = _fetch_sources(cfg)
@@ -289,7 +289,7 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
         except RuntimeError as e:
             _die(f"{a}: {e}")
         out_dir.mkdir(parents=True, exist_ok=True)
-        toml_path = out_dir / f"{a}_live_holdings.toml"
+        toml_path = out_dir / f"{a}_live_holdings{'' if year is None else f'_{year[0]}'}.toml"
         F.write_private(toml_path, text)
         n = sum(1 for pz in positions if F._open_qty(pz))
         say(f"  {a}: {n} live position(s) -> "
@@ -342,15 +342,51 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
                 + ": no currency is written for its cost. Run `tjs "
                   "fetch --positions` again later.")
         out[a] = toml_path
-    _year = _project_year(cfg)
-    if out and isinstance(_year, int) and _year < _dt.now().year:
-        # A year folder keeps the snapshot taken at its year end
-        # (lib/holdings_dir): today's positions belong to this year's.
-        say(f"  note: these are today's positions, in the {_year} "
-            f"project's holdings folder — keep the snapshot taken at the "
-            f"end of {_year} there, and today's in the current year's "
-            f"project.")
+    note = _live_year_note(year, _project_year(cfg), _dt.now().year)
+    if out and note:
+        say(note)
     return out
+
+
+def _live_year(request) -> Optional[Tuple[int, Any]]:
+    """(the year today's positions snapshot is named for, the year
+    folders whose `tjs sanity` compares it) when the core says the
+    holdings folder is one every year shares (FetchRequest
+    `holdings_year`, `holdings_compared_by`), else None (the year's own
+    folder, or an older core)."""
+    y = getattr(request, "holdings_year", None)
+    return None if y is None else (
+        y, getattr(request, "holdings_compared_by", None))
+
+
+def _live_year_note(year: Optional[Tuple[int, Any]], project_year: Any,
+                    now: int) -> Optional[str]:
+    """The note after a positions snapshot of today written for a project
+    of another year, else None. A year folder keeps the snapshot taken at
+    its year end (lib/holdings_dir): today's positions belong to this
+    year's project. In a folder every year shares (`year`: _live_year)
+    the note names the year folders that compare it, when this year's
+    is not one of them: never a year with no folder."""
+    if not isinstance(project_year, int):
+        return None
+    if year is not None:
+        by = year[1]
+        if not isinstance(by, list) or project_year in by:
+            return None
+        if not by:
+            return ("  note: no year folder compares today's positions: "
+                    "each year compares the snapshots dated from January "
+                    "1 of its year.")
+        whose = (f"the {by[0]} project's" if len(by) == 1 else
+                 f"the {' and '.join(str(y) for y in by)} projects'")
+        return (f"  note: these are today's positions: {whose} `tjs "
+                f"sanity` compares them, not {project_year}'s.")
+    if project_year < now:
+        return (f"  note: these are today's positions, in the "
+                f"{project_year} project's holdings folder — keep the "
+                f"snapshot taken at the end of {project_year} there, and "
+                f"today's in the current year's project.")
+    return None
 
 
 def _shown(path: Path, root: Path) -> str:
@@ -1461,7 +1497,7 @@ def _run_locked(request) -> Dict[str, Any]:
     if getattr(args, "positions", False) \
             and not getattr(args, "dry_run", False):
         live = _qt_live_holdings(root, cache, cfg, wanted, http, say,
-                                 holdings=holdings)
+                                 holdings=holdings, year=_live_year(request))
         for a, pth in live.items():
             results.setdefault(a, {})["live_holdings"] = _shown(pth, root)
         if live and not json_mode:

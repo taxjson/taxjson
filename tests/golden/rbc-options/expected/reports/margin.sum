@@ -1,0 +1,87 @@
+======================================================================
+ DIAGNOSTICS — margin  (parser/merge warnings; not part of the tax totals)
+======================================================================
+note: FX: Bank of Canada Valet for <n> dates, Yahoo fallback for 0
+OK: <merged>: 58 transactions validated.
+note: ZZQV options: the export does not state the contract size, so 100 shares per contract is ASSUMED where it matters (an exercise or assignment, replacement shares); for a mini or an adjusted series add `MULT ZZQV N` to ticker.map.
+note: ZZRW options: the export does not state the contract size, so 100 shares per contract is ASSUMED where it matters (an exercise or assignment, replacement shares); for a mini or an adjusted series add `MULT ZZRW N` to ticker.map.
+note: rbc_2025_partial.csv: 7 row(s) dated 2025-06-20..2025-08-06 are already in rbc_2025.csv (an overlapping download of the same RBC account 99***) — skipped, not booked twice
+note: the account's RBC exports that hold 2025 rows were taken by 2026-02-03; RBC posts 2025's year-end book-cost adjustments (notional distributions, a year-end return of capital — dated 2025-12-31) only in the spring of 2026, and an export starting Jan 1, 2026 never holds them. Re-export 2025 after 2026-06-30 (the account's year_end_posting; keep both files: overlapping downloads are de-duplicated) or check the ACB against the funds' 2025 T3 slips.
+note: rbc_2024.csv: 1 recognized non-event row(s) not translated — cash deposit/withdrawal/transfer: 1.
+note: rbc_2025.csv: rows of ZZRW260116P00020000.US on 2025-12-29 put in the broker's open/close order (RBC writes no time): the OPEN CONTRACT sale of 2 before the CLOSE CONTRACT purchase of 2 (the rows end 2025-12-29; taken as holding everything to its as-of date 2026-02-03: if the export was asked for a shorter range, add the rest)
+note: rbc_2025_partial.csv: 7 recognized non-event row(s) not translated — row already in the overlapping download rbc_2025.csv: 7.
+  rbc_2024.csv: 17 tax objects
+  rbc_2025.csv: 40 tax objects
+  rbc_2025_partial.csv: 0 tax objects (all of its rows are in the account's other RBC export(s) (rbc_2025.csv))
+  rbc_2026.csv: 1 tax objects
+======================================================================
+
+
+TICKER SUMMARY — CAD, year 2025, sorted by ticker
+
+SYMBOL                                 TOTAL        TOTAL_COST     TOTAL_PROCEED        TOTAL_GAIN          CAP_GAIN          OPT_GAIN          DIVIDEND               PIL   AVG_DAYS
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ZZQV.TO                               267.25          4,922.75          5,190.00            267.25            284.00            -16.75              0.00              0.00       99.6
+ZZRW.US                               492.75           -560.25           -114.75            445.50              0.00            445.50             47.25              0.00        4.9
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+TOTAL                                 760.00          4,362.50          5,075.25            712.75            284.00            428.75             47.25              0.00       49.5
+
+ASSET: Non-option | CURRENCY: CAD   | TRADES: 3 | YEAR: 2025
+
+Total Realized Gain:                284.00 CAD
+Average Holding Period:               221.0 Days
+Avg Fee Per Trade:                   39.33 CAD
+Avg Fee Per Share:                  0.2950 CAD
+----------------------------------------------------------------------------------------------------------------
+Positive Trades: 2 | Negative Trades: 0 | Win/Loss: inf | Win Rate: 100.0%
+Average Positive:            142.00 CAD | Average Negative:              0.00 CAD
+----------------------------------------------------------------------------------------------------------------
+
+ASSET: Options    | CURRENCY: CAD   | TRADES: 14 | YEAR: 2025
+
+Total Realized Gain:                428.75 CAD
+Average Holding Period:                12.7 Days
+Avg Fee Per Trade:                    6.84 CAD
+Avg Fee Per 100 Opt:                5.0543 CAD
+----------------------------------------------------------------------------------------------------------------
+Positive Trades: 10 | Negative Trades: 4 | Win/Loss: 2.50 | Win Rate: 71.4%
+Average Positive:             55.63 CAD | Average Negative:            -31.88 CAD
+----------------------------------------------------------------------------------------------------------------
+
+CONSOLIDATED TOTALS — CAD, year 2025
+
+TOTAL COST:                          4,362.50 CAD
+TOTAL PROCEEDS:                      5,075.25 CAD
+  (engine sign convention: shorts/written options negated — for Schedule 3 proceeds and ACB use `tjs form-export`)
+------------------------------------------------------
+TOTAL REALIZED NON-OPTION GAIN:        284.00 CAD
+  (shares, units, futures and crypto — Schedule 3 lines: `tjs form-export`)
+TOTAL REALIZED OPTION GAIN:            428.75 CAD
+TOTAL REALIZED GAIN:                   712.75 CAD
+------------------------------------------------------
+TOTAL DIVIDENDS / STAKING:              47.25 CAD
+------------------------------------------------------
+GRAND TOTAL (GAIN+DIV+PIL):            760.00 CAD
+------------------------------------------------------
+TOTAL TRADING FEES PAID:               356.50 CAD
+  (OPTION TRADING FEES):               148.25 CAD
+
+INCOME SUMMARY — CAD, year 2025, sorted by ticker
+
+SYMBOL                            GROSS DIV              PIL          TAX W/H       NET INCOME
+----------------------------------------------------------------------------------------------
+ZZRW.US                               47.25             0.00             6.75            40.50
+----------------------------------------------------------------------------------------------
+SUBTOTAL                              47.25             0.00             6.75            40.50
+CASH INTEREST                                                                             4.24
+----------------------------------------------------------------------------------------------
+TOTAL NET INCOME                                                                         44.74
+
+====================================================================================================
+ HOLDINGS REPORT - open positions at the end of the data (not 2025-12-31 positions; `tjs list --date` gives a date) - Sorted by: ticker
+====================================================================================================
+TICKER                         QTY  COST/SHARE    TOTAL COST  CUR
+-----------------------------------------------------------------
+ZZQV.TO                        100     14.1300       1413.00  CAD
+ZZRW.US                        100     27.2700       2727.00  CAD
+ZZRW280121C00025000.US          -1      1.4175       -141.75  CAD

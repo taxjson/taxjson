@@ -1,5 +1,6 @@
 [settings]
 country                   = "canada"
+requires_taxjson          = ">=3.0.0"
 local_timezone            = "America/Toronto"
 tax_date                  = "settle"
 year                      = 2025

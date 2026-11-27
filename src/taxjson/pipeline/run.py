@@ -2,6 +2,7 @@
 import argparse
 import atexit
 import contextlib
+import os
 import re
 import subprocess
 import sys
@@ -49,7 +50,7 @@ from taxjson.pipeline.stages import (
     _say_tobase_map, _say_tobase_until, _say_transfer_windows,
     _say_xlist_losses,
     stage_sweep, _tax_date_basis, _warn_cross_taxable_overlap,
-    _warn_shared_broker_accounts, _wash_preferred_gains, OWN_MOVES_SUFFIX,
+    _warn_shared_broker_accounts, _wash_flags, _wash_preferred_gains, OWN_MOVES_SUFFIX,
     MISSING_HISTORY_STATE, PendingElectionsError, stage_account, stage_blended_wash_pass,
     stage_cross_reports, stage_currency_rates, stage_fees,
     stage_in_kind_context, stage_own_account_moves, stage_moved_holdings,
@@ -256,7 +257,7 @@ def _filing_reminder(cfg, settings, inputs_dir, cache, root) -> None:
             _say("warning", f"could not read {_out_relpath(_mp, root)} "
                  f"({_e})",
                  "Its elections are not checked for a FILING REQUIRED "
-                 f"reminder; fix the file (`tjs elect {_name}` "
+                 f"reminder; fix the file (`tjs elections {_name}` "
                  "reads it too).", prog=_PROG)
             continue
         for _rec in _recs:
@@ -300,7 +301,7 @@ def _say_filing_reminder(cfg, settings, inputs_dir, cache, root) -> None:
             _say("warning", "could not check the elections for a FILING "
                  f"REQUIRED reminder: {type(_e).__name__}: {_e}",
                  "A s. 86.1 election needs its paperwork when the parent is a "
-                 "foreign corporation: `tjs elect` lists yours.", prog=_PROG,
+                 "foreign corporation: `tjs elections` lists yours.", prog=_PROG,
                  whole=True)
 
 
@@ -430,11 +431,11 @@ def _run_config(args: argparse.Namespace) -> Tuple[Path, Dict[str, Any],
     return root, cfg, accounts, settings
 
 
-def _run_folders(root: Path, args: argparse.Namespace,
-                 cfg: Dict[str, Any]) -> Tuple[Path, Path, Path, Optional[Dict[str, str]]]:
+def _run_folders(root: Path, args: argparse.Namespace, cfg: Dict[str, Any]
+                 ) -> Tuple[Path, Path, Path, Optional[Dict[str, str]], Any]:
     """`tjs run`'s inputs/, work/ and reports/ (an exit when work/ or
     reports/ cannot be used), the run's lock, the inputs' fingerprint as
-    the run starts, the reports kept for `tjs compare`, the last full run's
+    the run starts (and taxjson.toml's run-read part), the reports kept for `tjs compare`, the last full run's
     record set aside, the project's files that cannot be read refused, and
     the note naming a retired file (tv_exchange.map) (_cmd_run)."""
     inputs_dir = _PL.inputs_dir(root)
@@ -468,10 +469,12 @@ def _run_folders(root: Path, args: argparse.Namespace,
     # books were built from (record_input_fingerprint, backlog
     # TJ-0929).
     _fp_started: Optional[Dict[str, str]] = None
+    _cfg_started: Any = None
     if not args.account:
         try:
-            from taxjson.lib.checklist import input_fingerprint
+            from taxjson.lib.checklist import input_fingerprint, run_config_state
             _fp_started = input_fingerprint(root, cfg)
+            _cfg_started = (run_config_state(root / _PL.CONFIG) or (None, None))[1]
         except Exception:                # advisory, never a crash
             _fp_started = None
     # The reports a full run replaces become `tjs compare`'s
@@ -502,7 +505,7 @@ def _run_folders(root: Path, args: argparse.Namespace,
     if _retired:
         _say("note", *_split_msg(retired_file_note(_retired)),
              prog=_PROG)
-    return inputs_dir, cache, reports_dir, _fp_started
+    return inputs_dir, cache, reports_dir, _fp_started, _cfg_started
 
 
 def _run_maps(root: Path, accounts: Dict[str, AccountSettings],
@@ -864,7 +867,7 @@ def _run_sheltered(sheltered_items: List[Tuple[str, AccountSettings]], settings:
                  "above) — the wash pass cannot trust it",
                  "The usual cause is a malformed row from a corp-action "
                  "election; check the named account's DIAGNOSTICS in its "
-                 ".sum, fix the election (`tjs elect <account> "
+                 ".sum, fix the election (`tjs elections <account> "
                  "--redo`) or the input row, and re-run.")
     return sheltered_outputs, _skipped_no_input, sheltered_base, _sheltered_merge_inputs
 
@@ -981,6 +984,57 @@ def _run_taxable(settings: Settings, accounts: Dict[str, AccountSettings], cache
     return taxable_outputs, _blend_names, _crypto_blend_names, _crypto_blend
 
 
+def _record_loss_checks(root: Path, settings: Settings, accounts: Dict[str, AccountSettings],
+                        args: argparse.Namespace, inputs_dir: Path, built: List[str],
+                        crypto_blend: bool) -> None:
+    """What checked each account this run built for the superficial-loss /
+    wash-sale rule, recorded as the run decided it once its passes are done,
+    or once it stopped after them (_cmd_run: a `--strict` exit or a report
+    that fails leaves the passes' files in work/, so their check is
+    recorded whatever ends `_run_reports`; a pass that did not run decided
+    nothing: `wash_current` holds only the files written)
+    (lib/report_model `record_loss_checks`; the basis labels read it): no
+    rule where the account's gains run carries none (_wash_flags: a
+    registered account's own sales, a US crypto account's); the pass across
+    accounts where this run's pass wrote the account's wash-adjusted file
+    (`wash_current`: stage_blended_wash_pass, stage_wash_pass, the registered
+    accounts' book included); the account's own engine pass where that is
+    the whole check: a Canadian crypto account with no other taxable crypto
+    account to blend with (`crypto_blend`, _run_taxable's) and no configured
+    registered account with inputs (as `_run_sheltered`'s `_lost` test reads
+    them: their folders are recorded, so an input put there later undoes
+    it); else not yet (`tjs run --account` without the pass, an account
+    waiting on elections). Advisory: a failure is a warning."""
+    from taxjson.lib.report_model import (LOSS_RULE_NONE, LOSS_RULE_OWN, LOSS_RULE_PASS,
+                                          account_kinds, record_loss_checks)
+    country = _country(settings)
+    registered = [n for n, c in accounts.items() if not c.taxable]
+    with_inputs = [n for n in registered
+                   if input_files(inputs_dir / n, ".csv") or input_files(inputs_dir / n, ".tt")]
+    decided: Dict[str, Optional[str]] = {}
+    for name in built:
+        acfg = accounts[name]
+        flags = _wash_flags(acfg.taxable, bool(acfg.crypto), country)
+        if "--taxable" not in flags or "--no-wash" in flags:
+            decided[name] = LOSS_RULE_NONE
+        elif name in run_state.current.wash_current:
+            decided[name] = LOSS_RULE_PASS
+        elif acfg.crypto and not crypto_blend and not with_inputs:
+            decided[name] = LOSS_RULE_OWN
+        else:
+            decided[name] = None
+    try:
+        record_loss_checks(root, decided, kinds=account_kinds(accounts, country),
+                           full=not args.account,
+                           no_inputs_in=[os.path.relpath(inputs_dir / n, root)
+                                         for n in registered])
+    except OSError as e:
+        _say("warning", f"could not record what checked each account's gains: {e}",
+             "The basis labels read the last record written until a `tjs run` "
+             "writes it.",
+             prog=_PROG)
+
+
 def _run_reports(root: Path, settings: Settings, cache: Path, ticker_map_arg: Optional[Path],
                  mh_arg: Optional[Path], cfg: Dict[str, Any], _tmap_parsed: Any,
                  pending_accounts: List[PendingElectionsError], args: argparse.Namespace,
@@ -1082,7 +1136,7 @@ def _run_pending_elections(pending_accounts: List[PendingElectionsError], cache:
                            args: argparse.Namespace, root: Path) -> None:
     """`tjs run`'s corp-action elections: with an account deferred on
     them, work/pending_elections.json written and exit 3 with the `tjs
-    elect` lines; otherwise the file kept for the other accounts under
+    elections` lines; otherwise the file kept for the other accounts under
     --account, or removed (_cmd_run)."""
     if pending_accounts:
         # Some account(s) stopped at unresolved corp-action elections.
@@ -1123,7 +1177,7 @@ def _run_pending_elections(pending_accounts: List[PendingElectionsError], cache:
             for ev in doc.get("pending", []):
                 opts = "|".join(o["election"] for o in ev.get("options",
                                                              []))
-                _sets.append(f"  tjs elect {pe.account} --set "
+                _sets.append(f"  tjs elections {pe.account} --set "
                              f"{ev['event_id']}=<{opts}>")
         _shown = _out.width(sys.stderr) > 0
         if not _shown:
@@ -1137,10 +1191,10 @@ def _run_pending_elections(pending_accounts: List[PendingElectionsError], cache:
         # a person, flush-left like every continuation).
         _lines += [ln.strip() if _shown else ln for ln in _sets]
         _lines += _out.wrap(
-            "`tjs elect --pending` shows what each option books "
+            "`tjs elections --pending` shows what each option books "
             "and the hints it needs (also in "
             f"{_out.relpath(agg_path, root)}). Set each with `tjs "
-            "elect ACCOUNT --set` (add --hint KEY=VALUE where "
+            "elections ACCOUNT --set` (add --hint KEY=VALUE where "
             "required), or run `tjs run` at a terminal to be "
             "asked; then run again.", indent="" if _shown else "  ",
             stream=sys.stderr)
@@ -1150,7 +1204,7 @@ def _run_pending_elections(pending_accounts: List[PendingElectionsError], cache:
     if args.account and _agg_path.exists():
         # This run only proved args.account resolved — drop just its
         # entry; other accounts' pending elections are untouched
-        # (REVIEW #33: the unconditional unlink made `elect --pending`
+        # (REVIEW #33: the unconditional unlink made `elections --pending`
         # claim everything was resolved).
         import json as _json
         try:
@@ -1229,7 +1283,8 @@ def _run_finish(cache: Path, settings: Settings, rates: Path, reports_dir: Path,
                 taxable_outputs: List[Tuple[str, Dict[str, Path], bool]], root: Path,
                 accounts: Dict[str, AccountSettings], args: argparse.Namespace,
                 cfg: Dict[str, Any], _booked_twice: List[str],
-                _fp_started: Optional[Dict[str, str]], inputs_dir: Path) -> None:
+                _fp_started: Optional[Dict[str, str]], inputs_dir: Path,
+                _cfg_started: Any = None) -> None:
     """`tjs run`'s close: the fees report, the year and option-grant
     warnings, the filed years checked, the inputs' fingerprint recorded,
     the fx-cash report and the exports, the filing reminder, the late
@@ -1282,7 +1337,8 @@ def _run_finish(cache: Path, settings: Settings, rates: Path, reports_dir: Path,
             from taxjson.lib.checklist import record_input_fingerprint
             _edited = record_input_fingerprint(
                 root, cfg, booked_twice=_booked_twice,
-                started=_fp_started, code=package_fingerprint())
+                started=_fp_started, code=package_fingerprint(),
+                config_started=_cfg_started)
             if _edited:
                 _say("warning", f"{len(_edited)} input(s) changed while "
                      f"this run read them: {', '.join(_edited[:3])}"
@@ -1323,7 +1379,7 @@ def _run_finish(cache: Path, settings: Settings, rates: Path, reports_dir: Path,
 def _cmd_run(args: argparse.Namespace) -> None:
     root, cfg, accounts, settings = _run_config(args)
 
-    inputs_dir, cache, reports_dir, _fp_started = _run_folders(root, args, cfg)
+    inputs_dir, cache, reports_dir, _fp_started, _cfg_started = _run_folders(root, args, cfg)
     ticker_map_arg, _tmap_parsed, sec_overrides_arg, mh_arg = _run_maps(root, accounts, cache)
 
     _booked_twice = _run_duplicate_inputs(inputs_dir, accounts, args)
@@ -1366,10 +1422,18 @@ def _cmd_run(args: argparse.Namespace) -> None:
         if getattr(args, "strict", False):
             raise SystemExit(1)
         return
-    _run_reports(root, settings, cache, ticker_map_arg, mh_arg, cfg, _tmap_parsed,
-                 pending_accounts, args, _blend_names, reports_dir, sheltered_base,
-                 _crypto_blend_names, _crypto_blend, taxable_outputs, sheltered_outputs,
-                 accounts)
+    try:
+        _run_reports(root, settings, cache, ticker_map_arg, mh_arg, cfg, _tmap_parsed,
+                     pending_accounts, args, _blend_names, reports_dir, sheltered_base,
+                     _crypto_blend_names, _crypto_blend, taxable_outputs, sheltered_outputs,
+                     accounts)
+    finally:
+        # The passes across accounts run inside `_run_reports`, the reports
+        # and the `--strict` exits after them: whatever ends it, the files
+        # the passes wrote are the ones served (TJ-5473, the verify's V4).
+        _record_loss_checks(root, settings, accounts, args, inputs_dir,
+                            [n for n, _o, _c in taxable_outputs]
+                            + [n for n, _o in sheltered_outputs], _crypto_blend)
 
     _run_pending_elections(pending_accounts, cache, args, root)
 
@@ -1377,7 +1441,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
                                        taxable_outputs, settings, sheltered_base,
                                        ticker_map_arg, mh_arg, _booked_twice, _crypto_blend)
     _run_finish(cache, settings, rates, reports_dir, sheltered_outputs, taxable_outputs, root,
-                accounts, args, cfg, _booked_twice, _fp_started, inputs_dir)
+                accounts, args, cfg, _booked_twice, _fp_started, inputs_dir, _cfg_started)
 
     if not args.account:
         _first_run_summary(root, cfg, cache, mh_arg)
@@ -1708,7 +1772,9 @@ def _first_run_summary(root: Path, cfg: Dict[str, Any], cache: Path,
                          arrivals=transfer_arrivals(root, cache,
                                                     accounts_of(cfg)))
         # Worked out here, never written to run_summary.json: a holdings
-        # file is a check-only input, and no reports/ file follows it.
+        # file is a check-only input. The doc's `unchecked_accounts`
+        # (lib/first_run) is read from the same files and is written,
+        # though input_fingerprint hashes none of them (backlog TJ-5386).
         holdings = where_used(root, cfg.get("accounts"))
     except Exception as e:                          # noqa: BLE001
         emit_line(f"tjs: warning: the closing summary could not be built "
@@ -1736,7 +1802,7 @@ def _first_run_summary(root: Path, cfg: Dict[str, Any], cache: Path,
 
 def _manifest_path_for(acct_dir: Path, cache: Path, name: str) -> Path:
     """The corp-action elections manifest the pipeline uses for an account.
-    Delegates to _resolve_manifest (read-only mode) so `tjs elect` and
+    Delegates to _resolve_manifest (read-only mode) so `tjs elections` and
     the run pipeline can never disagree about which file is live — a
     legacy work/ manifest is migrated to inputs/ on first touch."""
     return _resolve_manifest(acct_dir, cache, name, create=False)
@@ -1748,7 +1814,7 @@ def _load_pending_agg(path: Path) -> Dict[str, Any]:
     event an object with a text `event_id` and `options` a list of
     objects with a text `election`. Anything else (truncated, not
     UTF-8, a directory, a list, a pending row that is a number) is an
-    InputFileError naming the file — elect --pending, elect --set and
+    InputFileError naming the file — elections --pending, elections --set and
     run --account read it bare and tracebacked (re-audit A2-0471,
     A2-0779, A2-1419, A2-1439, A2-1457, A2-1460)."""
     from taxjson.lib.json_input import InputFileError, read_json_doc
@@ -2391,8 +2457,10 @@ def _shared_inputs_moved(root: Path, fz: Dict[str, Any], year: int
 
 # The decisions files a frozen year copied from the shared folder, and
 # the table of entries each keeps (lib/corp_actions.Manifest,
-# lib/crypto_sends.load_decisions).
-_DECISION_FILES = {"manifest.json": "elections", "sends.json": "sends"}
+# lib/crypto_sends.load_decisions). The elections file is one file under
+# either of its names (_decision_file): a year frozen with manifest.json
+# is compared with the shared elections.json `tjs migrate` renamed it to.
+_DECISION_FILES = {_PL.ELECTIONS: "elections", "sends.json": "sends"}
 _ENTRY_DATE_RE = re.compile(r"(?<!\d)((?:19|20)\d{2})-[01]\d-[0-3]\d(?!\d)")
 
 
@@ -2482,11 +2550,12 @@ def _shared_decisions_moved(root: Path, fz: Dict[str, Any], year: int
                             ) -> List[Tuple[str, int]]:
     """[(the shared file shown from `root`, how many entries)] — each
     decisions file of the lock's frozen inputs (inputs/<account>/
-    manifest.json, sends.json) whose namesake in the shared folder the
+    elections.json — or its old name manifest.json, on either side:
+    _decision_file —, sends.json) whose namesake in the shared folder the
     freeze copied it from holds a decision on `year` or earlier that
     differs from the copy (_decisions_moved). A late election or send
     decision saved there reaches neither the filed year, which reads
-    its copy, nor its return; `elect` and `crypto-sends --set` name the
+    its copy, nor its return; `elections` and `crypto-sends --set` name the
     frozen years when they write (_note_shared_decision), a hand edit
     showed nowhere (backlog TJ-0211). A file that cannot be read is not
     judged (the run that reads it says why). The shared folder:
@@ -2503,8 +2572,8 @@ def _shared_decisions_moved(root: Path, fz: Dict[str, Any], year: int
     out = []
     for acct in accounts:
         for name, table in sorted(_DECISION_FILES.items()):
-            mine = root / _PL.INPUTS / acct / name
-            theirs = src / acct / name
+            mine = _decision_file(root / _PL.INPUTS / acct, name)
+            theirs = _decision_file(src / acct, name)
             try:
                 if not theirs.is_file() or (
                         mine.is_file()
@@ -2517,6 +2586,41 @@ def _shared_decisions_moved(root: Path, fz: Dict[str, Any], year: int
             if moved:
                 out.append((_PL.shown(theirs, root), len(moved)))
     return out
+
+
+def _amend_advice(root: Path, year: int) -> str:
+    """check-filed's advice after a late decision in the shared folder:
+    the same decision in the filed year's own copy, named as that year
+    reads it (_frozen_elections_name)."""
+    return (f"to amend, make the same decision in {year}'s folder "
+            f"(`tjs elections` / `tjs crypto-sends --set` there: they "
+            f"write its own copy, {_frozen_elections_name(root)} for the "
+            f"elections), `tjs run`, and after filing "
+            f"`tjs close-year --force`; else undo it in the shared file")
+
+
+def _frozen_elections_name(root: Path) -> str:
+    """The name the filed year `root` reads its elections under: its
+    frozen copy's (manifest.json for a year frozen before v3.0.0,
+    lib/project_layout.elections_file), elections.json otherwise."""
+    try:
+        names = {p.name for p in (root / _PL.INPUTS).glob("*/*")}
+    except OSError:
+        names = set()
+    return (_PL.OLD_ELECTIONS if _PL.OLD_ELECTIONS in names
+            and _PL.ELECTIONS not in names else _PL.ELECTIONS)
+
+
+def _decision_file(folder: Path, name: str) -> Path:
+    """The decisions file `name` of the account folder `folder`: the
+    elections file under its name before v3.0.0 (manifest.json) when that
+    is the one there, so a frozen copy and the shared file `tjs migrate`
+    renamed are compared as one file."""
+    p = folder / name
+    old = folder / _PL.OLD_ELECTIONS
+    if name == _PL.ELECTIONS and not p.is_file() and old.is_file():
+        return old
+    return p
 
 
 def _carry_in_moved(later: Any, record: Any, ry: int
@@ -2975,12 +3079,8 @@ def _check_filed_years(root: Path, cache: Path,
                       f"a decision on {year} "
                       f"or earlier that differs from the copy {year} was "
                       f"closed with — the filed year reads its copy, so "
-                      f"it reaches neither its books nor its return: to "
-                      f"amend, make the same decision in {year}'s folder "
-                      f"(`tjs elect` / `tjs crypto-sends --set` "
-                      f"there), `tjs run`, and after filing `tjs "
-                      f"close-year --force`; else undo it in the shared "
-                      f"file")
+                      f"it reaches neither its books nor its return: "
+                      + _amend_advice(root, year))
             _unread = _shared["unread"]
             if _unread:
                 # Not judged, so never passed as unchanged (backlog

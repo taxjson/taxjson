@@ -1,4 +1,5 @@
 {
+  "account_names": null,
   "accounts": [
     {
       "account": "crypto",
@@ -98,6 +99,7 @@
         "acb": 13412.99,
         "account": "crypto",
         "denied": 0.0,
+        "denied_all": 0.0,
         "denied_contribution": 0.0,
         "dispositions": 4,
         "gain": 670.53,
@@ -109,6 +111,7 @@
         "acb": 28883.25,
         "account": "ib",
         "denied": 117.45,
+        "denied_all": 117.45,
         "denied_contribution": 0.0,
         "dispositions": 2,
         "gain": 132.3,
@@ -120,6 +123,7 @@
         "acb": 1227.15,
         "account": "margin",
         "denied": 394.2,
+        "denied_all": 394.2,
         "denied_contribution": 0.0,
         "dispositions": 3,
         "gain": 267.23,
@@ -131,6 +135,7 @@
         "acb": 36456.68,
         "account": "questrade",
         "denied": 0.0,
+        "denied_all": 0.0,
         "denied_contribution": 0.0,
         "dispositions": 2,
         "gain": 81.21,
@@ -142,6 +147,7 @@
         "acb": 20334.0,
         "account": "webull",
         "denied": 0.0,
+        "denied_all": 0.0,
         "denied_contribution": 0.0,
         "dispositions": 2,
         "gain": 267.07,
@@ -185,6 +191,7 @@
       {
         "acb": 63458.03,
         "denied": 0.0,
+        "denied_all": 0.0,
         "denied_contribution": 0.0,
         "dispositions": 3,
         "gain": 314.75,
@@ -204,6 +211,7 @@
       {
         "acb": 21337.39,
         "denied": 511.65,
+        "denied_all": 511.65,
         "denied_contribution": 0.0,
         "dispositions": 4,
         "gain": 56.13,
@@ -223,6 +231,7 @@
       {
         "acb": 15518.65,
         "denied": 0.0,
+        "denied_all": 0.0,
         "denied_contribution": 0.0,
         "dispositions": 6,
         "gain": 1047.45,
@@ -243,6 +252,7 @@
     "totals": {
       "acb": 100314.07,
       "denied": 511.65,
+      "denied_all": 511.65,
       "denied_contribution": 0.0,
       "gain": 1418.33,
       "outlays": 98.1,
@@ -252,22 +262,15 @@
     }
   },
   "no_purchase_in_totals": [],
-  "no_purchase_uncovered": [
-    {
-      "account": "margin",
-      "proceeds": 498.15,
-      "sales": 1,
-      "symbol": "SAMPG.US"
-    }
-  ],
+  "no_purchase_uncovered": [],
   "readiness": {
     "complete": false,
     "issues": [
       {
         "count": 1,
-        "detail": "1 sale(s) with no purchase in the files are in no total",
-        "fix": "tjs find-missing-history",
-        "kind": "no-purchase"
+        "detail": "1 sale(s) with an unknown cost are not in the totals",
+        "fix": "tjs find-missing-history; report them by hand once their cost is known",
+        "kind": "unknown-cost"
       }
     ]
   },
@@ -299,7 +302,7 @@
     }
   },
   "tainted_included": 0,
-  "tainted_routed": 0,
+  "tainted_routed": 1,
   "totals": {
     "dividend": 1903.33,
     "fees": 285.93,
@@ -310,6 +313,6 @@
     "total": 4248.04
   },
   "unknown_cost_included": 0,
-  "unknown_cost_routed": 0,
+  "unknown_cost_routed": 1,
   "year": "2024"
 }

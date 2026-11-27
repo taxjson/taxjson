@@ -204,7 +204,7 @@ country's commands (`tjs help --all` lists them). Every command takes
 | [`tjs format-map`](docs/commands.md#tjs-format-map) | Lay out `ticker.map` in keyword groups |
 | [`tjs migrate`](docs/commands.md#tjs-migrate) | Convert an older project's files (`missing_history.json`, old maps) |
 | [`tjs fetch`](docs/commands.md#tjs-fetch) | Download Questrade / IBKR activity (taxjson-fetch plugin) |
-| [`tjs elect`](docs/commands.md#tjs-elect) | Review or set a merger or spin-off election |
+| [`tjs elections`](docs/commands.md#tjs-elections) | Review or set a merger or spin-off election |
 | [`tjs ticker-map`](docs/commands.md#tjs-ticker-map) | The ticker.map lines the last run suggested; `--write` adds them |
 | [`tjs update-tobase-map`](docs/commands.md#tjs-update-tobase-map) | Canada: update the interlisted pairs in `tobase.map` |
 
@@ -241,7 +241,8 @@ country's commands (`tjs help --all` lists them). Every command takes
 | --- | --- |
 | [`tjs list`](docs/commands.md#tjs-list) | Open positions per account, with book cost (`--date` for a past day) |
 | [`tjs shares`](docs/commands.md#tjs-shares) | Total held per symbol across all accounts |
-| [`tjs technicals`](docs/commands.md#tjs-technicals) | Each holding's distance from its moving averages, RSI, beta and alpha (daily closes from Yahoo Finance, cached) |
+| [`tjs technicals`](docs/commands.md#tjs-technicals) | Each holding's distance from its moving averages, RSI, ATR%, beta and alpha (daily closes from Yahoo Finance, cached) |
+| [`tjs stress`](docs/commands.md#tjs-stress) | A crude estimate of the holdings' change for an index move: beta for shares, Black-Scholes for options (daily closes from Yahoo Finance, cached) |
 
 #### Row listings
 

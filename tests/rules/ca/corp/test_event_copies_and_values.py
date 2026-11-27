@@ -173,7 +173,7 @@ class TestIbSpinoffElection(unittest.TestCase):
             # IB reported the value: no FMV prompt for the default.
             self.assertEqual(opts["taxable_deemed_dividend"]["hints"], [])
             eid = pend[0]["event_id"]
-            e = _run_cli(root, "elect", "margin", "--set",
+            e = _run_cli(root, "elections", "margin", "--set",
                          f"{eid}=rollover_s_86_1", "--hint",
                          "allocated_acb_cad=1000")
             self.assertEqual(e.returncode, 0, e.stderr + e.stdout)
@@ -247,10 +247,10 @@ class TestSpinoffBrokerValue(unittest.TestCase):
             r = _run_cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 3, r.stderr + r.stdout)
             eid = _pending(root)[0]["event_id"]
-            _run_cli(root, "elect", "margin", "--set",
+            _run_cli(root, "elections", "margin", "--set",
                      f"{eid}=taxable_deemed_dividend", "--hint",
                      "fmv_per_share=0")
-            man = root / "inputs" / "margin" / "manifest.json"
+            man = root / "inputs" / "margin" / "elections.json"
             m = json.loads(man.read_text())
             m["elections"][eid]["hints"] = {}
             man.write_text(json.dumps(m))
@@ -439,7 +439,7 @@ class TestEventInTwoBrokerAccounts(unittest.TestCase):
             ids = {p["event_id"] for p in _pending(root)}
             self.assertEqual(len(ids), 1)
             for eid in ids:
-                _run_cli(root, "elect", "margin", "--set",
+                _run_cli(root, "elections", "margin", "--set",
                          f"{eid}=taxable_disposition")
             r = _run_cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
@@ -478,7 +478,7 @@ class TestEventInTwoBrokerAccounts(unittest.TestCase):
                                   'ib_b.csv': file_(13)})
             r = _run_cli(root, "run", "--no-input")
             for p in _pending(root):
-                _run_cli(root, "elect", "margin", "--set",
+                _run_cli(root, "elections", "margin", "--set",
                          f"{p['event_id']}=taxable_disposition")
             r = _run_cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)

@@ -1,0 +1,6 @@
+# The CAD/USD conversion that funds the cash-secured put: RBC's activity
+# export holds no conversion row taxjson reads (lib/cash_events: a .tt line).
+# No US dollars held before it; the year-end balance from the statement.
+CASHOPEN 2025-01-01 USD 0 0 at=rbc
+FXCONV 2025-05-30 CAD 2760.75 USD 2045.00 at=rbc
+CASHBAL 2025-12-31 USD 385.00 at=rbc

@@ -53,7 +53,8 @@ from taxjson.lib.tx_load import load_transactions
 from taxjson.lib.missing_history import (
     detect_missing_history, assess_tax_year_relevance, detect_zero_basis_acquisitions,
     without_no_shares,
-    detect_corp_action_links, detect_unbacked_covers, stale_missing_history_entries,
+    detect_corp_action_links, detect_unbacked_covers, read_marked_closes,
+    stale_missing_history_entries,
     stale_entry_message, is_registered_account, DRAFT_NAME,
     DATE_PLACEHOLDER as _PH_DATE, COST_PLACEHOLDER as _PH_COST,
 )
@@ -453,7 +454,7 @@ def _print_zero_fix(country, cost) -> None:
     for item in ((["a stock dividend: its declared amount as a .tt ADJUST "
                    "line on the dividend date (or [[distributions]])"]
                   if _stk else [])
-                 + ["a merger or spin-off: its election (`tjs elect`)",
+                 + ["a merger or spin-off: its election (`tjs elections`)",
                     "shares transferred in: a .tt BUYSELL with the "
                     "original purchase date and cost"]):
         _P.para(f"- {item}", "  ", "    ")
@@ -527,7 +528,7 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
                   f"{args.missing_history}: {e}", file=sys.stderr)
     accounts = sorted({t.account for t in txs if t.account})
     if args.account:
-        accounts = [args.account]
+        accounts = list(args.account)
     # Every account's transfer rows: the pairing reads them all, and
     # the drafts are for `accounts` only (backlog TJ-0599: --account
     # dropped the other accounts' transfer-ins before pairing).
@@ -756,8 +757,10 @@ def _mh_args(argv):
     ap.add_argument("--year", type=tax_year, metavar="YYYY",
                     help="tax year to assess relevance against; omit to list "
                          "every short position with no year scope")
-    ap.add_argument("--account", metavar="NAME",
-                    help="only report this account")
+    ap.add_argument("--account", metavar="NAME", action="append",
+                    default=None,
+                    help="only report this account (repeatable: these "
+                         "accounts)")
     ap.add_argument("--unchecked-account", action="append", default=[],
                     metavar="NAME",
                     help="an account the caller could not supply a book "
@@ -843,7 +846,7 @@ def _mh_links(txs, args):
     #        an unrelated short + $0-basis buy. ---
     links = detect_corp_action_links(txs, include_options=args.include_options)
     if args.account:
-        links = [l for l in links if l.account == args.account]
+        links = [l for l in links if l.account in args.account]
     linked_old = {(l.old_symbol, l.account) for l in links}
     linked_new = {(l.new_symbol, l.account) for l in links}
     return links, linked_old, linked_new
@@ -928,6 +931,16 @@ def _mh_drop_covers(args, txs, types, country=None):
     return txs
 
 
+def _accounts_shown(args: argparse.Namespace, lead: str = "") -> str:
+    """`account margin` / `accounts margin, ib` of --account, after
+    `lead` ("" when none was given)."""
+    names = list(args.account or [])
+    if not names:
+        return ""
+    return (lead + ("account " if len(names) == 1 else "accounts ")
+            + ", ".join(names))
+
+
 def _mh_candidates(txs, args, types, journal, country=None):
     """The positions that go short (the account's only with --account),
     split into the broker-marked real shorts and the rest (main), a
@@ -937,7 +950,7 @@ def _mh_candidates(txs, args, types, journal, country=None):
                                  registered_accounts=types or None,
                                  journal_symbols=journal, country=country)
     if args.account:
-        candidates = [c for c in candidates if c.account == args.account]
+        candidates = [c for c in candidates if c.account in args.account]
     # A short the broker itself marks as a short sale (RBC "SHORT." /
     # "COVER SHORT.") is a real short, not a missing buy: reported apart
     # and never offered as missing history (audit R1-8 — a real loss
@@ -976,7 +989,7 @@ def _mh_covers_stale(txs, args, basis, journal, types, mh_name, country=None):
                   txs, include_options=args.include_options,
                   date_basis=basis, journal_symbols=journal,
                   registered_accounts=types or None, country=country)
-              if not args.account or c.account == args.account]
+              if not args.account or c.account in args.account]
 
     # --- 1c. missing-history entries today's detection would NOT propose
     #         (a broker-marked real short, a written option): applied by
@@ -994,7 +1007,7 @@ def _mh_covers_stale(txs, args, basis, journal, types, mh_name, country=None):
         stale = [e for e in stale_missing_history_entries(
                      txs, ph_pairs, file_name=mh_name, complete=True,
                      country=country)
-                 if not args.account or e.account == args.account]
+                 if not args.account or e.account in args.account]
         for e in stale:
             # (a .tt OPENING cost=unknown line is named by its place)
             _fx = _fixed.get((e.symbol.upper(), e.account))
@@ -1034,7 +1047,7 @@ def _replaced_log(txs, args):
         return {}
     return {str(e.get('source')): e for e in log
             if e.get('replaced_by_snapshot')
-            and (not args.account or e.get('account') == args.account)}
+            and (not args.account or e.get('account') in args.account)}
 
 
 def _replaced_line(e, txs, args) -> bool:
@@ -1070,7 +1083,9 @@ def _mh_zero(args, txs, basis, country, linked_new, types):
     from taxjson.lib.corp_actions import declared_zero_value_events
     _root = _project_root(args.files[0])
     zero_all = [r for r in detect_zero_basis_acquisitions(
-                    without_no_shares(txs, _root / "work" if _root is not None else None),
+                    # (a marked CLOSE's unbacked units are no $0 purchase: TJ-5378)
+                    without_no_shares(read_marked_closes(txs, country),
+                                      _root / "work" if _root is not None else None),
                     args.year, include_options=args.include_options,
                     date_basis=basis, include_held=True,
                     stock_dividends_spread=(
@@ -1080,7 +1095,7 @@ def _mh_zero(args, txs, basis, country, linked_new, types):
                                      if _root is not None else ()),
                     country=country)
                 if (r.symbol, r.account) not in linked_new
-                and (not args.account or r.account == args.account)]
+                and (not args.account or r.account in args.account)]
     zero_declared = [r for r in zero_all if r.declared
                      and (r.still_held_qty > 0
                           or (r.sold and r.affects_year))
@@ -1094,14 +1109,74 @@ def _mh_zero(args, txs, basis, country, linked_new, types):
     return zero_declared, zero_rows, zero_held
 
 
+def _mh_print_covers(args, covers, country=None):
+    """The broker-marked covers no short in the data backs, by their
+    relevance to the tax year, with what to add (_mh_print_found)."""
+    from taxjson.lib.country import is_canada
+    # A Canadian run applies the reading itself (CA-ACB-11, CA-OPT-12;
+    # backlog TJ-5349): each cover is reported by hand and adds no
+    # long. The US engine still carries the buy as a new long.
+    by_hand = country is not None and is_canada(country)
+    _P.heading("COVERS OF A SHORT OPENED BEFORE THE DATA — missing history"
+               + (", as the run applies it" if by_hand else "")
+               + f": {len(covers)}")
+    yr_c = str(args.year) if args.year else None
+    aff = [c for c in covers if yr_c is None or c.date.startswith(yr_c)]
+    # (TJ-0844: the long an earlier cover left is in this year's costs.)
+    old = [c for c in covers if yr_c is not None and c.date[:4] < yr_c]
+    oth = [c for c in covers if c not in aff and c not in old]
+    # What to add: the short sale itself; --write-missing-history
+    # drafts a line for a share short only, so an option's row names
+    # its own line (it said --write-missing-history, which drafts
+    # nothing for one).
+    # (No line for a cover the account's own short backs in part: TJ-5379.)
+    _whole = [c for c in covers if c.backed <= 1e-9]
+    _opts = any(_is_derivative(c.symbol) for c in _whole)
+    _shares = any(not _is_derivative(c.symbol) for c in _whole)
+    _add = " or ".join(
+        (["--write-missing-history"] if _shares else [])
+        + (["for a contract `OPENING <date> <SYMBOL> -<qty> cost=unknown`"
+            if _shares else
+            "`OPENING <date> <SYMBOL> -<qty> cost=unknown`"]
+           if _opts else []))
+    for title, rows in (
+            ((f"AFFECTS {yr_c} - covering the short is the disposition; "
+              f"its gain or loss is missing ("
+              + ("the run reports the buy by hand, out of the totals, "
+                 "and adds no long" if by_hand else
+                 "the books carry the buy as a new long")
+              + "). Add the short sale (or the write) that opened it "
+              "(date, proceeds) to a .tt file in this account"
+              + (f", or a line with its proceeds unknown ({_add}):" if _add else ":")
+              if DETAILS else
+              f"AFFECTS {yr_c} - a cover's gain is missing"
+              + (" (reported by hand)" if by_hand else "")
+              + "; add its short sale as a .tt line"
+              + (f", or {_add}:" if _add else ":"))
+             if yr_c else
+             "Broker-marked covers with no short in the data:", aff),
+            ((f"NOT relevant to {yr_c} - an earlier year's cover, "
+              f"reported by hand in its own year:" if by_hand else
+              f"AFFECTS {yr_c} - an earlier year's cover: the books still "
+              f"carry it as a long, in this year's costs:"), old),
+            (f"NOT relevant to {yr_c} - later covers:", oth)):
+        if not rows:
+            continue
+        _P.heading(title)
+        _table(["Symbol", "Account", "Date", "Unbacked", "Cost",
+                "Marker"],
+               [[c.symbol, c.account, c.date, f"{c.unbacked_qty:.4f}",
+                 _money(c.proceeds), c.marker] for c in rows])
+
+
 def _mh_print_found(args, broker_shorts, stale_pairs, mh_name, stale, complete, covers,
-                    zero_held, _cost, zero_declared):
+                    zero_held, _cost, zero_declared, country=None):
     """The report's heading and the findings that need no purchase: the
     broker-marked shorts, the stale and complete entries, the unbacked
     covers and the $0-cost shares held or declared (main)."""
     _P.line(f"MISSING COST BASIS — "
             + (f"tax year {args.year}" if args.year else "all history")
-            + (f", account {args.account}" if args.account else ""))
+            + _accounts_shown(args, ", "))
     _P.gap()
 
     if broker_shorts:
@@ -1171,35 +1246,7 @@ def _mh_print_found(args, broker_shorts, stale_pairs, mh_name, stale, complete, 
                 _P.para(stale_entry_message(e), "    ", "    ")
 
     if covers:
-        _P.heading(f"COVERS OF A SHORT OPENED BEFORE THE DATA — missing "
-                   f"history: {len(covers)}")
-        yr_c = str(args.year) if args.year else None
-        aff = [c for c in covers if yr_c is None or c.date.startswith(yr_c)]
-        # (TJ-0844: the long an earlier cover left is in this year's costs.)
-        old = [c for c in covers if yr_c is not None and c.date[:4] < yr_c]
-        oth = [c for c in covers if c not in aff and c not in old]
-        for title, rows in (
-                ((f"AFFECTS {yr_c} - covering the short is the disposition; "
-                  f"its gain or loss is missing (the books carry the buy "
-                  f"as a new long). Add the short sale that opened it "
-                  f"(date, proceeds) to a .tt file in this account, or let "
-                  f"--write-missing-history draft a line with its proceeds "
-                  f"unknown:"
-                  if DETAILS else
-                  f"AFFECTS {yr_c} - a cover's gain is missing; add its "
-                  f"short sale as a .tt line, or --write-missing-history:")
-                 if yr_c else
-                 "Broker-marked covers with no short in the data:", aff),
-                (f"AFFECTS {yr_c} - an earlier year's cover: the books still "
-                 f"carry it as a long, in this year's costs:", old),
-                (f"NOT relevant to {yr_c} - later covers:", oth)):
-            if not rows:
-                continue
-            _P.heading(title)
-            _table(["Symbol", "Account", "Date", "Unbacked", "Cost",
-                    "Marker"],
-                   [[c.symbol, c.account, c.date, f"{c.unbacked_qty:.4f}",
-                     _money(c.proceeds), c.marker] for c in rows])
+        _mh_print_covers(args, covers, country)
 
     if zero_held:
         _P.heading(f"$0-COST SHARES STILL HELD — their sale will overstate "
@@ -1230,7 +1277,7 @@ def _mh_print_found(args, broker_shorts, stale_pairs, mh_name, stale, complete, 
                  ", ".join(r.event_ids) or "?"] for r in zero_declared],
                [[] for _ in zero_declared])
         _one = zero_declared[0]
-        _P.para("To change it: `tjs elect "
+        _P.para("To change it: `tjs elections "
                 + (f"{_one.account} --redo --event {_one.event_ids[0]}`"
                    if len(zero_declared) == 1 and len(_one.event_ids) == 1
                    else "ACCOUNT --redo --event ID`")
@@ -1357,6 +1404,15 @@ def _mh_truncated(txs, args, yr, types, short_rows, _walked, _covered, mh_name, 
                        f"sale drawing on the missing basis; "
                        if active else "")
                     + f"{len(ignorable)} do not.")
+            from taxjson.lib.country import is_canada as _is_ca
+            if country is not None and _is_ca(country) and any(
+                    r.candidate.broker_says_closing for r in short_rows):
+                # The run applies the reading already (CA-ACB-11,
+                # CA-OPT-12; backlog TJ-5349).
+                _P.para("As the run applies it: a sale the broker marks "
+                        "closing (IB code C, RBC CLOSE CONTRACT) is "
+                        "reported by hand, out of `tjs sum`, and adds no "
+                        "short and no written contract.")
             if affects or covered or sheltered or active or ignorable:
                 # The legend, before the tables (Essentials first).
                 _P.line("PeakShort: the deepest short; FirstNeg: the day "
@@ -1601,11 +1657,15 @@ def main(argv=None):
         # An --account no row carries (a typo, the wrong case) filtered
         # every finding away and printed the all-clear (audit S035-07).
         present = sorted({t.account for t in txs if t.account})
-        if args.account not in present:
+        absent = [a for a in args.account if a not in present]
+        if absent:
+            many = "account" if len(absent) == 1 else "accounts"
             _diag(f"taxjson-missing-history: error: no row carries "
-                  f"account {args.account!r} (accounts in the books: "
-                  f"{', '.join(present) or 'none'})", file=sys.stderr)
-            return 2
+                  f"{many} {', '.join(repr(a) for a in absent)} (accounts "
+                  f"in the books: {', '.join(present) or 'none'})",
+                  file=sys.stderr)
+            # (several named: a list refused, exit 1 as `tjs` refuses one)
+            return 2 if len(args.account) == 1 else 1
     unchecked = _mh_unchecked(failed, args)
 
     def _incomplete(rc):
@@ -1652,10 +1712,10 @@ def main(argv=None):
     zero_declared, zero_rows, zero_held = _mh_zero(args, txs, basis, country, linked_new, types)
 
     _mh_print_found(args, broker_shorts, stale_pairs, mh_name, stale, complete, covers,
-                    zero_held, _cost, zero_declared)
+                    zero_held, _cost, zero_declared, country=country)
 
     if not short_rows and not zero_rows and not links:
-        scope = f" (account {args.account})" if args.account else ""
+        scope = f" ({_accounts_shown(args)})" if args.account else ""
         if zero_held and not DETAILS:
             _P.gap()
             _P.line(_act(f"Give the $0-cost shares their {_cost} before "

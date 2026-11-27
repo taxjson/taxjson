@@ -15,15 +15,17 @@ from taxjson.lib.report_fmt import align_columns, fmt_money, fmt_qty
 from taxjson.lib import out as _out
 
 from taxjson.cli.common import (
-    _accounts_skipped_for_no_inputs, _act_item, _base_currency,
+    _accounts, _accounts_shown, _accounts_skipped_for_no_inputs, _act_item,
+    _base_currency,
     _CAPITALIZED_LBL, _capitalized_pil_shares, _collect_period_txs,
     _discover_tx_accounts, _dist_adjust_rows, _gains_row_date, _ISO_DATE_RE,
     _leaps_closed, _leaps_contracts, _leaps_empty_doc, _leaps_rule,
     _leaps_scope_guard, _load_json_or_die, _print_scope_split,
-    _die_cash_ids, _real_world_legs, _refuse_cash_older_than_inputs, _require_books, _scope_split,
+    _die_cash_ids, _real_world_legs, _refuse_cash_older_than_inputs, _require_books,
+    _require_listed, _scope_split,
     _settle_basis,
     _staking_view, _TRADE_ACTIONS, _trade_total, _tx_fee,
-    _view_income_rules, _view_msg, _view_window, _vprint,
+    _view_income_rules, _view_msg, _view_scope, _view_window, _vprint,
     _warn_accounts_without_books, _warn_bad_dates, _warn_dist_double_entry,
     _PERIOD_HELP, _add_instrument_filters, _add_staking_parser,
 )
@@ -401,6 +403,25 @@ def _tx_view_text(accounts: List[str], root: Path,
     _warn_bad_dates(bad_dates)
 
 
+def _listed_tx_accounts(cache: Path, named: Tuple[str, ...]) -> List[str]:
+    """The accounts an ACCOUNT list names (lib/account_list), in the
+    order given, each with its native transaction file: one name with
+    none refused in the words and code it always was (2), several naming
+    each one without, exit 1 as every list's refusal (a row view left
+    such an account out with no word)."""
+    if len(named) == 1:
+        if _native_tx_file(cache, named[0]) is None:
+            _die_input(f"no native transaction file for account "
+                       f"{named[0]!r} in work/ — run `tjs run` first, "
+                       f"or check the name")
+    else:
+        _require_listed(named, [a for a in named
+                                if _native_tx_file(cache, a) is not None],
+                        "native transaction file", code=1,
+                        fix="Run `tjs run` first, or check the names.")
+    return list(named)
+
+
 def _run_tx_view(args: argparse.Namespace, actions, label: str,
                  symbol_filter=None) -> Optional[Dict[str, Any]]:
     """Shared engine for `transactions` / `dividends` / `buysell`: read the
@@ -410,14 +431,10 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
     command writes under its output's id (lib/json_contract)."""
     root = Path(args.dir).resolve()
     cache = root / "work"
-    keep, _scope, account = _view_window(args, root)
+    keep, _scope, named = _view_scope(args, root)
 
-    if account:
-        accounts = [account]
-        if _native_tx_file(cache, account) is None:
-            _die_input(f"no native transaction file for account "
-                       f"{account!r} in work/ — run `tjs run` first, "
-                       f"or check the name")
+    if named is not None:
+        accounts = _listed_tx_accounts(cache, named)
     else:
         accounts = _discover_tx_accounts(cache)
         if not accounts:
@@ -497,11 +514,12 @@ _BOOK_VALUE_DESC_RE = re.compile(
 
 
 def _transfer_rows(cache: Path, root: Path, cfg: Dict[str, Any],
-                   want: Optional[str]) -> List[Dict[str, Any]]:
+                   want: Optional[Tuple[str, ...]]) -> List[Dict[str, Any]]:
     """`tjs transfers`' rows: each transfer sidecar's rows (taxable
     accounts) and each account's in-book TRANSFERs but its lot moves
     (sheltered accounts with `transfers = true`), a missing or unreadable
-    file warned; the named account's only, by date (cmd_transfers_view)."""
+    file warned; the named accounts' only (`want`, an ACCOUNT list's
+    names: lib/account_list), by date (cmd_transfers_view)."""
     def _fee(t: Dict[str, Any]) -> float:
         # A custody move's fee (a crypto withdrawal's network fee) is
         # in the sidecar; the view dropped it (S039-21).
@@ -633,8 +651,8 @@ def _transfer_rows(cache: Path, root: Path, cfg: Dict[str, Any],
                          "fee_currency": _coin_fee(t)[1],
                          "currency": t.get("currency") or "",
                          "where": "book"})
-    if want:
-        rows = [r for r in rows if r["account"] == want]
+    if want is not None:
+        rows = [r for r in rows if r["account"] in want]
     rows.sort(key=lambda r: (r["date"], r["account"], r["symbol"]))
     return rows
 
@@ -722,7 +740,8 @@ def _transfer_arrivals(root: Path, cache: Path, cfg: Dict[str, Any],
 
 
 def _transfers_text(codes: List[Dict[str, Any]], args: argparse.Namespace,
-                    rows: List[Dict[str, Any]], want: Optional[str]) -> None:
+                    rows: List[Dict[str, Any]],
+                    want: Optional[Tuple[str, ...]]) -> None:
     """`tjs transfers`' text: the table, the empty state, the action items,
     the symbol codes and, with --details, what each IN_BOOKS value means
     (cmd_transfers_view's tail)."""
@@ -770,8 +789,7 @@ def _transfers_text(codes: List[Dict[str, Any]], args: argparse.Namespace,
     if not rows:
         if not _det:
             doc.blank()
-        doc.para("No transfer rows"
-                 + (f" for account {want!r}" if want else "")
+        doc.para("No transfer rows" + _accounts_shown(want)
                  + " in the books.")
         (_codes_section if _det else _brief_codes)(doc)
         doc.print()
@@ -880,7 +898,8 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
     with `transfers = true`)."""
     root = Path(args.dir).resolve()
     cache = root / "work"
-    want = (args.account or "").strip() or None
+    # The accounts named (an ACCOUNT list: lib/account_list), or None.
+    want = _accounts(args, root)
     cfg = load_config(root, missing_ok=True)
     if not cfg:
         # With no config the sheltered accounts' in-book rows were left
@@ -889,12 +908,18 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
         _die("no taxjson.toml in the project folder",
              "The accounts (and their in-book TRANSFER rows) are unknown; "
              "run from the project root.")
-    if want and cfg and want not in (cfg.get("accounts") or {}):
-        # A typo read "no transfer rows ... the broker reported none"
-        # with rc 0, as if the account existed (S039-20).
-        _die_input(f"no [accounts.{want}] in taxjson.toml — check the "
-                   f"name.")
-    _require_books(root, also=("*_transfers.json",))
+    for name in want or ():
+        if name not in (cfg.get("accounts") or {}):
+            # A typo read "no transfer rows ... the broker reported none"
+            # with rc 0, as if the account existed (S039-20). (A list's
+            # refusal exits 1; cli/main refuses its unknown names first.)
+            (_die_input if len(want or ()) == 1 else _die)(
+                f"no [accounts.{name}] in taxjson.toml — check the name.")
+    # One account with no books shows its empty state, as it always
+    # did; a list refuses each one with none (its rows would be missing
+    # from the merged view with no word).
+    _require_books(root, want if len(want or ()) > 1 else None,
+                   also=("*_transfers.json",))
 
     rows = _transfer_rows(cache, root, cfg, want)
     _transfer_arrivals(root, cache, cfg, rows)
@@ -903,7 +928,7 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
     from taxjson.lib.symbol_codes import SUFFIX as _SC_SUFFIX, read_state
     codes: List[Dict[str, Any]] = []
     for name in sorted(cfg.get("accounts") or {}):
-        if want and name != want:
+        if want is not None and name not in want:
             continue
         st = read_state(cache / f"{name}{_SC_SUFFIX}")
         for code, r in sorted((st.get("resolved") or {}).items()):
@@ -964,12 +989,14 @@ def cmd_leaps(args: argparse.Namespace) -> None:             # `leaps` view
     than [settings] leaps_months to expiry), with lot-matched
     base-currency gains."""
     root = Path(args.dir).resolve()
-    keep, scope, account = _view_window(args, root)
+    keep, scope, account = _view_scope(args, root)
+    # (a listed account with no gains file is refused there, exit 1,
+    # before any note or full-history file: _gains_files_of)
     _files = _leaps_scope_guard(root, account, args)
     leaps = _leaps_contracts(root, account, "leaps")
     if not leaps:
         if getattr(args, "json", False):
-            _json_out(_leaps_empty_doc(root, account), schema="leaps")
+            _json_out(_leaps_empty_doc(root, account, files=_files), schema="leaps")
             return
         _out.put(f"No LEAPS contracts found ({_leaps_rule(root)}).")
         return
@@ -1126,12 +1153,89 @@ def _gain_display_line(g: GainRow) -> str:
     ])
 
 
+def _native_gains_accounts(root: Path, cache: Path,
+                           named: Optional[Tuple[str, ...]],
+                           suffix: str) -> List[str]:
+    """`tjs gains`' accounts: those an ACCOUNT list names (lib/account_list),
+    in the order given, each with native gains (`<account><suffix>`) or
+    refused, naming each one without: books but no native gains (crypto
+    has none; an equity account's native books skipped) exit 1, no books
+    at all exit 2 for one name (1 for a list, as every list's refusal),
+    the words one name always had; a list naming both kinds names each
+    bad name in one refusal. Else every account with
+    native gains, each configured one with books but none said in a note
+    ([] when that is all of them: cmd_gains has nothing to show)."""
+    if named is not None:
+        no_raw = tuple(n for n in named
+                       if not (cache / f"{n}{suffix}").exists())
+        skipped = tuple(n for n in no_raw
+                        if (cache / f"{n}_base.json").exists())
+        why = ("Crypto accounts have none, and an equity account's "
+               "native books are skipped after a cross-currency "
+               "rollover rename (see the run's 'raw holdings "
+               "skipped' line) — rerunning will not create them; "
+               "its converted gains are in `tjs sum`.")
+        if skipped and skipped == no_raw:
+            _die(f"no native gains{_accounts_shown(skipped)}", why)
+        if skipped:
+            _die(f"no native gains{_accounts_shown(no_raw)}",
+                 f"{', '.join(map(repr, skipped))}: books, no native "
+                 f"gains. {why}",
+                 f"{', '.join(repr(n) for n in no_raw if n not in skipped)}"
+                 f": no books in work/ — run `tjs run` first, or check "
+                 f"the names.")
+        _require_listed(named, [n for n in named if n not in no_raw],
+                        "native gains",
+                        fix="Crypto has none; else run `tjs run`, or check "
+                            "the name.")
+        return list(named)
+    accounts = sorted(p.name[: -len(suffix)]
+                      for p in cache.glob(f"*{suffix}")
+                      if not p.name.startswith("."))
+    # A configured equity account with converted books but no native
+    # gains had its raw stage skipped (a cross-currency rollover
+    # rename): say so, or the view silently omits the whole account
+    # while `sum` counts it (2026-09 audit S037-23).
+    _noted = []
+    for _n, _c in sorted(accounts_of(load_config(root, missing_ok=True)).items()):
+        if (_c.crypto
+                and _n not in accounts
+                and (cache / f"{_n}_base.json").exists()):
+            _noted.append(_n)
+            # The all-accounts view left the crypto account out
+            # with no word while `sum` counted it (R1-274).
+            _view_msg("note", f"crypto account {_n!r} is not shown "
+                      f"(crypto has no native-currency gains)",
+                      "Its gains are in `tjs sum` / `tjs "
+                      "winners`.")
+        elif (not _c.crypto
+                and _n not in accounts
+                and (cache / f"{_n}_base.json").exists()):
+            _noted.append(_n)
+            _view_msg("note", f"account {_n!r} has no native gains",
+                      "The last run skipped its native books (see its "
+                      "'raw holdings skipped' line); its converted "
+                      "gains are in `tjs sum` / `tjs "
+                      "winners`.")
+    if not accounts and not _noted:
+        _die_input("no native gains files in work/ — run `tjs run` "
+                   "first")
+    # S045-09 twin (audit A2-1182): accounts with books are named by
+    # the notes above; one with inputs but no books at all is not.
+    _warn_accounts_without_books(
+        root, set(accounts) | {
+            n for n in (load_config(root, missing_ok=True).get("accounts") or {})
+            if (cache / f"{n}_base.json").exists()},
+        "gains", "books")
+    return accounts
+
+
 def cmd_gains(args: argparse.Namespace) -> None:
     """Realized gains in NATIVE terms (pre-TOBASE consolidation, pre-currency-
     to-base) — read from the pipeline's `<account>_raw_gains.json`."""
     root = Path(args.dir).resolve()
     cache = root / "work"
-    keep, _scope, account = _view_window(args, root)
+    keep, _scope, named = _view_scope(args, root)
     suffix = "_raw_gains.json"
 
     # Income rows carry an action; dispositions are everything else. Excluding
@@ -1141,63 +1245,12 @@ def cmd_gains(args: argparse.Namespace) -> None:
                "DISALLOW", "ADJUST"}
     sym_filter = _instrument_filter(args)
 
-    if account:
-        accounts = [account]
-        if not (cache / f"{account}{suffix}").exists():
-            if (cache / f"{account}_base.json").exists():
-                _die(f"no native gains for account {account!r}",
-                     "Crypto accounts have none, and an equity account's "
-                     "native books are skipped after a cross-currency "
-                     "rollover rename (see the run's 'raw holdings "
-                     "skipped' line) — rerunning will not create them; "
-                     "its converted gains are in `tjs sum`.")
-            _die_input(f"no native gains for account {account!r} in work/",
-                       "Crypto has none; else run `tjs run`, or check the "
-                       "name.")
-    else:
-        accounts = sorted(p.name[: -len(suffix)]
-                          for p in cache.glob(f"*{suffix}")
-                          if not p.name.startswith("."))
-        # A configured equity account with converted books but no native
-        # gains had its raw stage skipped (a cross-currency rollover
-        # rename): say so, or the view silently omits the whole account
-        # while `sum` counts it (2026-09 audit S037-23).
-        _noted = []
-        for _n, _c in sorted(accounts_of(load_config(root, missing_ok=True)).items()):
-            if (_c.crypto
-                    and _n not in accounts
-                    and (cache / f"{_n}_base.json").exists()):
-                _noted.append(_n)
-                # The all-accounts view left the crypto account out
-                # with no word while `sum` counted it (R1-274).
-                _view_msg("note", f"crypto account {_n!r} is not shown "
-                          f"(crypto has no native-currency gains)",
-                          "Its gains are in `tjs sum` / `tjs "
-                          "winners`.")
-            elif (not _c.crypto
-                    and _n not in accounts
-                    and (cache / f"{_n}_base.json").exists()):
-                _noted.append(_n)
-                _view_msg("note", f"account {_n!r} has no native gains",
-                          "The last run skipped its native books (see its "
-                          "'raw holdings skipped' line); its converted "
-                          "gains are in `tjs sum` / `tjs "
-                          "winners`.")
-        if not accounts and not _noted:
-            _die_input("no native gains files in work/ — run `tjs run` "
-                       "first")
-        # S045-09 twin (audit A2-1182): accounts with books are named by
-        # the notes above; one with inputs but no books at all is not.
-        _warn_accounts_without_books(
-            root, set(accounts) | {
-                n for n in (load_config(root, missing_ok=True).get("accounts") or {})
-                if (cache / f"{n}_base.json").exists()},
-            "gains", "books")
-        if not accounts:
-            # Every account with books was named above (crypto only, or
-            # native books skipped): nothing to show, and no run to ask
-            # for — a run cannot make them (backlog TJ-0130).
-            return
+    accounts = _native_gains_accounts(root, cache, named, suffix)
+    if not accounts:
+        # Every account with books was named (crypto only, or native
+        # books skipped): nothing to show, and no run to ask for — a
+        # run cannot make them (backlog TJ-0130).
+        return
 
     rows = []
     bad_dates = 0
@@ -1278,6 +1331,33 @@ def cmd_gains(args: argparse.Namespace) -> None:
         f"{M.shown(v, 2):,.2f} {c}" for c, v in sorted(totals.items())), hang="  ")
 
 
+def _refuse_cash_accounts(root: Path, named: Optional[Tuple[str, ...]],
+                          accounts: Dict[str, Any],
+                          taxable: List[str]) -> None:
+    """`tjs cash`'s ACCOUNT list (lib/account_list): each name one of
+    the configured `accounts`, and a `taxable` one, else refused naming
+    each that is not (exit 1, the words one name always had); in a list
+    of several, each with books (its cash events would be missing from
+    the merged view with no word; one name keeps its empty state)."""
+    if not named:
+        return
+    unknown = [n for n in named if n not in accounts]
+    if unknown:
+        _die(f"no account{'s' if len(unknown) > 1 else ''} "
+             f"{', '.join(repr(n) for n in unknown)} in taxjson.toml",
+             f"Accounts: {', '.join(sorted(accounts)) or 'none'}.")
+    other = [n for n in named if n not in taxable]
+    if other:
+        _die(f"account {other[0]!r} is not a taxable account" if len(other) == 1
+             else f"accounts {', '.join(repr(n) for n in other)} are not "
+                  f"taxable accounts",
+             "Cash events are read for the taxable accounts "
+             "(s.39(1.1) / §988 reach those alone): "
+             f"{', '.join(taxable) or 'none'}.")
+    if len(named) > 1:
+        _require_books(root, named)                  # (exit 1)
+
+
 def cmd_cash(args: argparse.Namespace) -> None:
     """`tjs cash`: the cash events of the taxable accounts over a
     window — the conversions, deposits and withdrawals the exports carry
@@ -1298,20 +1378,14 @@ def cmd_cash(args: argparse.Namespace) -> None:
     from taxjson.lib import cash_events as CE
     root = Path(args.dir).resolve()
     cache = root / "work"
-    keep, scope, account = _view_window(args, root)
+    # `given`: the ACCOUNT text, --json's "account" as before lists; the
+    # names read from it (lib/account_list), None for every account.
+    keep, scope, given = _view_window(args, root)
+    named = _accounts(args, root, text=given or "")
     cfg = load_config(root, missing_ok=True)
-    accounts = accounts_of(cfg)
-    taxable = sorted(n for n, c in accounts.items()
+    taxable = sorted(n for n, c in accounts_of(cfg).items()
                      if c.taxable)
-    if account:
-        if account not in accounts:
-            _die(f"no account {account!r} in taxjson.toml",
-                 f"Accounts: {', '.join(sorted(accounts)) or 'none'}.")
-        if account not in taxable:
-            _die(f"account {account!r} is not a taxable account",
-                 "Cash events are read for the taxable accounts "
-                 "(s.39(1.1) / §988 reach those alone): "
-                 f"{', '.join(taxable) or 'none'}.")
+    _refuse_cash_accounts(root, named, accounts_of(cfg), taxable)
     _refuse_cash_older_than_inputs(root, cfg)
     txs, _base, _year, country, _fx = _fx_cash_native(root, cache,
                                                        prog="tjs cash")
@@ -1333,7 +1407,7 @@ def cmd_cash(args: argparse.Namespace) -> None:
     # send a line and its sends.json decision declare two ways, said too
     # (the move itself is listed, as the line declares it).
     turned = [(kind, lns, text) for kind, lns, text in CE.refused_lines(cash["lines"], _base)
-              if keep(lns[0]["date"]) and (not account or lns[0].get("label") == account)]
+              if keep(lns[0]["date"]) and (named is None or lns[0].get("label") in named)]
     refused = [ln for _kind, lns, _text in turned for ln in lns]
     said = [(f"{text}: not listed or counted here, and `tjs fx-cash --ledger v2` refuses "
              f"it — {CE.parked_fix(lns[0])}" if kind == "parked" else
@@ -1341,14 +1415,14 @@ def cmd_cash(args: argparse.Namespace) -> None:
              f"figure until then)") for kind, lns, text in turned] + [
         CE.send_conflict_text(e) for e in cash["events"]
         if e.get("send_conflict") and keep(e["date"])
-        and (not account or e.get("label") == account)]
+        and (named is None or e.get("label") in named)]
     for p in list(cash["problems"]) + list(cash.get("warnings") or []) + said:
         _view_msg("warning", p)
     evs = [e for e in list(cash["events"])
            + [x for x in cash["lines"] if not x.get("matched")
               and not any(x is ln for ln in refused)]
            if e.get("date") and keep(e["date"])
-           and (not account or e.get("label") == account)]
+           and (named is None or e.get("label") in named)]
     evs.sort(key=lambda e: (e["date"], e.get("label") or "", e["kind"]))
     # Each line with the at= its copy needs to stay in its book (backlog
     # TJ-0889).
@@ -1378,7 +1452,13 @@ def cmd_cash(args: argparse.Namespace) -> None:
             d = credits if float(e["amount"]) > 0 else fees
             d[e["currency"]] = d.get(e["currency"], 0.0) + abs(e["amount"])
     if getattr(args, "json", False):
-        _json_out({"scope": scope, "account": account,
+        # "account": the text given ("" / None / the name), as before
+        # lists, a list's names joined; "account_names" the names in
+        # order (lib/account_list's JSON convention).
+        _json_out({"scope": scope,
+                   "account": (",".join(named) if named is not None and len(named) > 1
+                               else given),
+                   "account_names": None if named is None else list(named),
                    "rows": [dict({k: v for k, v in e.items()
                                   if not k.startswith("_")}, tt=ln)
                             for e, ln in rows],
@@ -1390,13 +1470,13 @@ def cmd_cash(args: argparse.Namespace) -> None:
     if not rows:
         _out.put("(no cash events in this window)")
         return
-    # One account prints the lines as they are; the merged view prefixes
-    # each with its account, as `tjs events` does. The keyword, date,
-    # currency and amount line up in columns (the amounts on their
-    # decimal points); what follows (a conversion's other side, a move's
-    # declaration) is as written, and the comments line up after the
-    # longest line.
-    prefix = not account and len(taxable) != 1
+    # One account prints the lines as they are; the merged view (every
+    # account, or a list of them) prefixes each with its account, as `tjs
+    # events` does. The keyword, date, currency and amount line up in
+    # columns (the amounts on their decimal points); what follows (a
+    # conversion's other side, a move's declaration) is as written, and
+    # the comments line up after the longest line.
+    prefix = len(taxable if named is None else named) != 1
     head_n = 5 if prefix else 4
     heads, tails = [], []
     for e, ln in rows:
@@ -1445,10 +1525,12 @@ def _register_cash(sub: argparse._SubParsersAction) -> None:
                     "listed.")
     p_cash.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_cash.add_argument("account", nargs="?",
-                        help="A taxable account (default: all, merged, "
+                        help="A taxable account, or several "
+                             "comma-separated (default: all, merged, "
                              "each line prefixed with its account)")
     p_cash.add_argument("--json", action="store_true",
                         help="Emit JSON instead of text")
+    p_cash.set_defaults(account_list=True)
     p_cash.set_defaults(func=cmd_cash)
 
 
@@ -1462,9 +1544,11 @@ def _register_events(sub: argparse._SubParsersAction) -> None:
                     "currency), oldest to latest.")
     p_tx.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_tx.add_argument("account", nargs="?",
-                      help="Account (default: all accounts, merged)")
+                      help="Account or comma-separated accounts "
+                           "(default: all accounts, merged)")
     p_tx.add_argument("--json", action="store_true",
                      help="Emit JSON instead of text")
+    p_tx.set_defaults(account_list=True)
     p_tx.set_defaults(func=cmd_transactions)
 
 
@@ -1476,9 +1560,10 @@ def _register_divs(sub: argparse._SubParsersAction) -> None:
                     "DIVIDEND_IN_LIEU rows (in their own currency, .tt "
                     "text format).")
     p_div.add_argument("period", nargs="?", help=_PERIOD_HELP)
-    p_div.add_argument("account", nargs="?", help="Account (default: all)")
+    p_div.add_argument("account", nargs="?", help="Account or comma-separated accounts (default: all)")
     p_div.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text")
+    p_div.set_defaults(account_list=True)
     p_div.set_defaults(func=cmd_dividends)
 
 
@@ -1497,9 +1582,11 @@ def _register_transfers(sub: argparse._SubParsersAction) -> None:
              "sidecar rows from taxable parses plus in-book rows from "
              "sheltered accounts.")
     p_xfer.add_argument("account", nargs="?",
-                        help="Account (default: all accounts)")
+                        help="Account or comma-separated accounts "
+                             "(default: all accounts)")
     p_xfer.add_argument("--json", action="store_true",
                         help="Emit JSON instead of text")
+    p_xfer.set_defaults(account_list=True)
     p_xfer.set_defaults(func=cmd_transfers_view)
 
 
@@ -1512,9 +1599,10 @@ def _register_dil(sub: argparse._SubParsersAction) -> None:
                     "shares were lent out or short over the ex-date (in "
                     "their own currency, .tt text format).")
     p_dil.add_argument("period", nargs="?", help=_PERIOD_HELP)
-    p_dil.add_argument("account", nargs="?", help="Account (default: all)")
+    p_dil.add_argument("account", nargs="?", help="Account or comma-separated accounts (default: all)")
     p_dil.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text")
+    p_dil.set_defaults(account_list=True)
     p_dil.set_defaults(func=cmd_dil)
 
 
@@ -1527,9 +1615,10 @@ def _register_roc(sub: argparse._SubParsersAction) -> None:
                     "broker classified them) and manual .tt "
                     "adjustments.")
     p_roc.add_argument("period", nargs="?", help=_PERIOD_HELP)
-    p_roc.add_argument("account", nargs="?", help="Account (default: all)")
+    p_roc.add_argument("account", nargs="?", help="Account or comma-separated accounts (default: all)")
     p_roc.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text")
+    p_roc.set_defaults(account_list=True)
     p_roc.set_defaults(func=cmd_roc)
 
 
@@ -1543,9 +1632,10 @@ def _register_leaps(sub: argparse._SubParsersAction) -> None:
                     "leaps_months (default 9) months to expiry, "
                     "with lot-matched base-currency gains.")
     p_leaps.add_argument("period", nargs="?", help=_PERIOD_HELP)
-    p_leaps.add_argument("account", nargs="?", help="Account (default: all)")
+    p_leaps.add_argument("account", nargs="?", help="Account or comma-separated accounts (default: all)")
     p_leaps.add_argument("--json", action="store_true",
                         help="Emit JSON instead of text")
+    p_leaps.set_defaults(account_list=True)
     p_leaps.set_defaults(func=cmd_leaps)
 
 
@@ -1556,10 +1646,11 @@ def _register_trades(sub: argparse._SubParsersAction) -> None:
         description="Like `events`, but only BUYSELL and ASSIGN rows (in "
                     "their own currency, .tt text format).")
     p_bs.add_argument("period", nargs="?", help=_PERIOD_HELP)
-    p_bs.add_argument("account", nargs="?", help="Account (default: all)")
+    p_bs.add_argument("account", nargs="?", help="Account or comma-separated accounts (default: all)")
     _add_instrument_filters(p_bs)
     p_bs.add_argument("--json", action="store_true",
                      help="Emit JSON instead of text")
+    p_bs.set_defaults(account_list=True)
     p_bs.set_defaults(func=cmd_buysell)
 
 
@@ -1572,10 +1663,11 @@ def _register_gains(sub: argparse._SubParsersAction) -> None:
                     "base currency, over a window (default: the tax "
                     "year).")
     p_g.add_argument("period", nargs="?", help=_PERIOD_HELP)
-    p_g.add_argument("account", nargs="?", help="Account (default: all)")
+    p_g.add_argument("account", nargs="?", help="Account or comma-separated accounts (default: all)")
     _add_instrument_filters(p_g)
     p_g.add_argument("--json", action="store_true",
                     help="Emit JSON instead of text")
+    p_g.set_defaults(account_list=True)
     p_g.set_defaults(func=cmd_gains)
 
 
@@ -1593,9 +1685,10 @@ def _register_fees(sub: argparse._SubParsersAction) -> None:
              "year), one row per fee-bearing trade plus a per-currency "
              "total.")
     p_fees.add_argument("period", nargs="?", help=_PERIOD_HELP)
-    p_fees.add_argument("account", nargs="?", help="Account (default: all)")
+    p_fees.add_argument("account", nargs="?", help="Account or comma-separated accounts (default: all)")
     p_fees.add_argument("--json", action="store_true",
                        help="Emit JSON instead of text")
+    p_fees.set_defaults(account_list=True)
     p_fees.set_defaults(func=cmd_fees)
 
 

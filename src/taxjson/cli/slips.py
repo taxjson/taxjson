@@ -8,7 +8,9 @@ from taxjson.project.settings import settings_of
 from taxjson.lib import project_layout as _PL
 from taxjson.lib.cli_diag import note
 
-from taxjson.cli.common import _artifact_year_mismatch, _warn_run_state
+from taxjson.cli.common import (
+    _accounts, _artifact_year_mismatch, _require_listed, _warn_run_state,
+)
 
 from taxjson.cli.file import _taxable_gains_argv
 from taxjson.pipeline.config import _country, load_config
@@ -108,7 +110,7 @@ def _slip_audit_import_cra(root: Path, cfg: Dict[str, Any],
     from taxjson.lib.ib_dividends import IBReportError, read_report
     from taxjson.lib.safe_write import OutsideLinkError, write_user_file
     year = int(settings_of(cfg).year)
-    acct = getattr(args, "account", None)
+    acct = (_accounts(args, root, one="--import-cra") or (None,))[0]
     as_json = bool(getattr(args, "json", False))
     if acct and acct not in SA.slip_accounts(cfg):
         _die_input(f"account {acct!r} gets no T5 or T3",
@@ -306,6 +308,25 @@ def _slip_audit_import_cra(root: Path, cfg: Dict[str, Any],
     d.print()
 
 
+def _refuse_slipless_listed(names: Any, slip_accounts: List[str]) -> None:
+    """A list (`tjs slip-audit margin,rrsp`) naming an account that gets
+    no T5 or T3 (registered, crypto) is refused, naming each, exit 1 (a
+    single name: lib/slip_audit.audit's words, exit 2)."""
+    if not names or len(names) < 2:
+        return
+    bad = [n for n in names if n not in slip_accounts]
+    if not bad:
+        return
+    rest = ",".join(n for n in names if n not in bad)
+    _die(("account " if len(bad) == 1 else "accounts ")
+         + ", ".join(repr(n) for n in bad)
+         + (" gets" if len(bad) == 1 else " get")
+         + " no T5 or T3: only a taxable, non-crypto account does",
+         f"Leave {'it' if len(bad) == 1 else 'them'} out of the list: "
+         f"{rest!r}." if rest else
+         "Name taxable, non-crypto [accounts.*] accounts.")
+
+
 def cmd_slip_audit(args: argparse.Namespace) -> None:
     """`tjs slip-audit [ACCOUNT]`: the T5 / T3 slips in inputs/slips/
     (slips.toml, IB's dividends reports) against the books' income, per
@@ -327,6 +348,10 @@ def cmd_slip_audit(args: argparse.Namespace) -> None:
         # slip-key salt, the BOOKS column would read 0.00 throughout)
         _die("no work/ in the project" if missing == "no work/" else missing,
              "Run `tjs run` first.")
+    # One account, or several (a comma list); --import-cra places the
+    # slips no broker matches in one account.
+    names = _accounts(args, root, one="--import-cra"
+                      if getattr(args, "import_cra", None) else None)
     if getattr(args, "template", False):
         try:
             sys.stdout.write(SA.template(root, cfg))
@@ -336,6 +361,14 @@ def cmd_slip_audit(args: argparse.Namespace) -> None:
     if getattr(args, "import_cra", None):
         _slip_audit_import_cra(root, cfg, args)
         return
+    _refuse_slipless_listed(names, SA.slip_accounts(cfg))
+    if names and len(names) > 1:
+        # A listed account with no books has no income to compare: it
+        # was left out with no word (one with inputs and unreadable
+        # books is the audit's `not_compared`).
+        _require_listed(names, [n for n in names
+                                if (root / "work" / f"{n}_base.json").exists()],
+                        "books")
     if getattr(args, "write", False):
         _die_input("--write goes with --import-cra",
                    "It writes the imported slips into inputs/slips/"
@@ -347,8 +380,7 @@ def cmd_slip_audit(args: argparse.Namespace) -> None:
     # other review of the books does (backlog TJ-0557).
     _warn_run_state(root, cfg)
     try:
-        rep = SA.audit(root, cfg, tolerance=tol,
-                       account=getattr(args, "account", None))
+        rep = SA.audit(root, cfg, tolerance=tol, account=names)
     except SA.SlipsError as e:
         _die_input(str(e))
     if args.json:
@@ -404,8 +436,10 @@ def _register_slip_audit(sub: argparse._SubParsersAction) -> None:
              "entries and ROC .tt lines that bring the books to the "
              "slips. Changes nothing. Canada only. Exit 1 on a finding.")
     p_sa.add_argument("account", nargs="?", default=None,
-                      help="Only this account (default: every taxable "
-                           "account)")
+                      metavar="ACCOUNT[,ACCOUNT...]",
+                      help="Only this account, or these (one comma list; "
+                           "default: every taxable account; one with "
+                           "--import-cra)")
     p_sa.add_argument("--tolerance", type=_nonneg_float_arg, default=None,
                       help="Allowed difference per box in CAD, a number "
                            ">= 0 (default 1.00; a box holding converted "
@@ -426,7 +460,7 @@ def _register_slip_audit(sub: argparse._SubParsersAction) -> None:
     p_sa.add_argument("--json", action="store_true",
                       help="Emit the audit as JSON instead of text (a "
                            "stable schema: docs/settings.md)")
-    p_sa.set_defaults(func=cmd_slip_audit)
+    p_sa.set_defaults(func=cmd_slip_audit, account_list=True)
 
 
 def register(sub: argparse._SubParsersAction) -> None:

@@ -53,7 +53,7 @@ def _ib_spinoff(day, child):
 
 
 def _save(path, records):
-    """manifest.json holding `records`: {id: (election, summary, hints)}."""
+    """elections.json holding `records`: {id: (election, summary, hints)}."""
     from taxjson.lib import corp_actions as ca
     m = ca.Manifest()
     for eid, (election, summary, hints) in records.items():

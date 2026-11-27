@@ -1,8 +1,21 @@
 {
   "country": "canada",
   "currency": "CAD",
+  "excluded_unknown_cost": [
+    {
+      "account": "margin",
+      "date": "2024-03-18",
+      "proceeds": 498.15,
+      "qty": 20.0,
+      "symbol": "SAMPG.US",
+      "year": 2024
+    }
+  ],
   "final_carryforward": 0.0,
   "first_transaction_year": 2024,
+  "incomplete_years": [
+    2024
+  ],
   "project_year": 2024,
   "rows": [
     {
@@ -13,6 +26,7 @@
       "claimed_applied": 0.0,
       "dispositions": 13,
       "engine_net_gain": 1418.33,
+      "incomplete": true,
       "net_gain": 1418.33,
       "net_source": "return_row",
       "prior_year": false,

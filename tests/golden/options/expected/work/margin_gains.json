@@ -238,7 +238,8 @@
       "replacement_lot_ids": [],
       "symbol": "QZQ240119C00030000.US",
       "term": null,
-      "wash_replacements": null
+      "wash_replacements": null,
+      "write_outlay": 2.835
     },
     {
       "account": "margin",
@@ -456,7 +457,8 @@
       "replacement_lot_ids": [],
       "symbol": "QZQ.US",
       "term": null,
-      "wash_replacements": null
+      "wash_replacements": null,
+      "write_outlay": 1.4175
     },
     {
       "account": "margin",

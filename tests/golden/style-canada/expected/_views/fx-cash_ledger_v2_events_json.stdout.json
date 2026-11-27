@@ -148,8 +148,8 @@
       },
       "margin/ib": {
         "USD": {
-          "cost": 10682.901,
-          "units": -7913.26
+          "cost": 11087.901,
+          "units": -8213.26
         }
       },
       "qt/questrade": {
@@ -336,7 +336,7 @@
   "opening": {},
   "per_currency": {
     "USD": {
-      "acquired": 66474.84,
+      "acquired": 66174.84,
       "debt_gain": -0.0,
       "disposed": 78931.56,
       "gain": 0.0
@@ -397,7 +397,7 @@
       "currency": "USD",
       "date": "2024-04-03",
       "gain": 0.0,
-      "units": 999.0
+      "units": 699.0
     },
     {
       "book": "qt/questrade",
@@ -438,7 +438,7 @@
       "book": "margin/ib",
       "currency": "USD",
       "date": "2024-09-11",
-      "gain": 0.0,
+      "gain": -0.0,
       "units": 5699.0
     },
     {
@@ -452,7 +452,7 @@
       "book": "margin/ib",
       "currency": "USD",
       "date": "2024-10-02",
-      "gain": 0.0,
+      "gain": -0.0,
       "units": 199.0
     },
     {
@@ -480,7 +480,7 @@
       "book": "margin/ib",
       "currency": "USD",
       "date": "2024-11-18",
-      "gain": 0.0,
+      "gain": -0.0,
       "units": 149.0
     },
     {

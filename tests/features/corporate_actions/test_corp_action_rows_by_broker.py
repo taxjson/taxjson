@@ -860,7 +860,7 @@ class TestElections(unittest.TestCase):
             r = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_corp_actions", "--country", "canada",
                  "--brokerage", "ib", "--account-name", "margin",
-                 "--manifest", str(mp), "--no-input", str(csvp)],
+                 "--elections", str(mp), "--no-input", str(csvp)],
                 cwd=REPO_ROOT, capture_output=True, text=True)
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn("fmv_per_share", r.stderr)

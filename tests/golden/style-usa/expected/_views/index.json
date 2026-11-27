@@ -520,7 +520,7 @@
   "exit": 0
  },
  {
-  "view": "elect --json",
+  "view": "elections --json",
   "cwd": ".",
   "exit": 0
  },

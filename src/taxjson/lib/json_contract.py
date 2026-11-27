@@ -32,8 +32,8 @@ SCHEMAS: Dict[str, int] = {
     "align --write": 1,
     "fetch": 1,
     "fetch --list": 1,
-    "elect": 1,
-    "elect --pending": 1,
+    "elections": 1,
+    "elections --pending": 2,
     "ticker-map --suggest": 1,
     "update-tobase-map": 1,
     # Build the books
@@ -61,6 +61,7 @@ SCHEMAS: Dict[str, int] = {
     "list": 1,
     "shares": 1,
     "technicals": 1,
+    "stress": 1,
     # Row listings
     "cash": 1,
     "dil": 1,
@@ -146,7 +147,7 @@ COUNTRIES: Dict[str, Tuple[str, ...]] = {o: ("canada",) for o in (
     "amt", "amt YEAR", "instalments", "option-boundary", "slip-audit",
     "slip-audit --import-cra", "t1135",
     "checklist --done/--undo/--reset", "years", "years --diff", "align",
-    "align --write", "elect --pending", "update-tobase-map", "compare",
+    "align --write", "elections --pending", "update-tobase-map", "compare",
     "compare --save", "compare --delete", "compare --list", "snapshot",
     "handoff", "gains-cra")}
 

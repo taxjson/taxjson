@@ -516,6 +516,13 @@ def main():
                       f"coin (no --country given); a Canadian filer "
                       f"passes --country canada (USD stablecoins are "
                       f"US-dollar cash).")
+        if args.country is None and getattr(extractor, 'open_close_days', ()):
+            emit_line(f"taxjson-brokerage: note: {shown_name(input_path)}: "
+                  f"{len(extractor.open_close_days)} day(s) of option rows "
+                  f"with no time of day kept in the file's order (no "
+                  f"--country given); a Canadian filer passes --country "
+                  f"canada (the day's OPEN row goes before the CLOSE row "
+                  f"it backs).")
         if args.country is None and args.foreign_roc is None:
             # The issuer's ISIN is in IB's description ("QZRX(US...)").
             _froc = [t for t in transactions
@@ -824,6 +831,10 @@ def _brokerage_clean_row(extractor: Any, t: Any, valid_keys: set[str], dropped_k
     # How the export marks a short account's trades (CA-DISP-04), on trade rows.
     if getattr(extractor, 'SHORT_MARKS', '') and clean.get('action') == 'BUYSELL':
         clean['short_marks'] = extractor.SHORT_MARKS
+    # A source with no time of day, on the rows that carry its open/close words (TJ-5349).
+    if getattr(extractor, 'NO_CLOCK', '') and clean.get('open_close') \
+            and clean.get('action') in ('BUYSELL', 'ASSIGN'):
+        clean['no_clock'] = extractor.NO_CLOCK
     return _row_line, t, clean
 
 
@@ -870,7 +881,9 @@ def _brokerage_parse_file(extractor_class: Any, settings: Any, shared_context: A
     # The country's reading of the parse's neutral facts (taxjson.characterize;
     # s.90(1) never the default without a country, partition INPUTS-03).
     characterize_rows(transactions, country=args.country,
-                      foreign_return_of_capital=args.foreign_roc)
+                      foreign_return_of_capital=args.foreign_roc,
+                      open_close_days=getattr(extractor, 'open_close_days', ()),
+                      attention=lambda words: extractor._warn(words, attention=True))
     return extractor, transactions
 
 

@@ -4,7 +4,7 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from taxjson.project.accounts import _transfers_accounts, accounts_of, account_of
 from taxjson.project.settings import settings_of
@@ -18,8 +18,9 @@ from taxjson.lib.report_fmt import fmt_qty
 from taxjson.lib.stage_msg import emit_line
 
 from taxjson.cli.common import (
-    _accounts_skipped_for_no_inputs, _exec_tool, _raise_requirements,
-    _relay_child_stderr, _shared_inputs_note, _unanswered_covers, _view_msg,
+    _accounts, _accounts_skipped_for_no_inputs, _exec_tool,
+    _raise_requirements, _relay_child_stderr, _require_listed,
+    _shared_inputs_note, _unanswered_covers, _view_msg,
 )
 from taxjson.pipeline.config import _country, input_files, load_config, load_settings
 from taxjson.pipeline.inputs import _home_currency, _tax_date
@@ -84,12 +85,15 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
     if not accts:
         _die("no crypto account in taxjson.toml",
              "A crypto account is an [accounts.X] with `crypto = true`.")
-    acct = (args.account or "").strip() or None
-    if acct and acct not in accts:
-        _die(f"{acct!r} is not a crypto account — crypto accounts: "
-             f"{', '.join(accts)}.")
     sets = list(getattr(args, "set", None) or [])
     unsets = list(getattr(args, "unset", None) or [])
+    # The listing takes several accounts (a comma list); a decision or
+    # --write is one account's.
+    names = _accounts(args, root, one=("--set" if sets else "--unset"
+                                       if unsets else "--write"
+                                       if args.write else None))
+    _refuse_not_crypto(names, accts)
+    acct = names[0] if names and len(names) == 1 else None
     if (sets or unsets or args.write) and not acct:
         if len(accts) != 1:
             _die("--set/--unset/--write need an account",
@@ -109,6 +113,12 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
         _die("no crypto transfer evidence in work/",
              "Run `tjs run` first (the parse keeps withdrawals/sends "
              "in work/<acct>_<exchange>_transfers.json).")
+    if names and len(names) > 1:
+        # A listed account the run built no books for: its sends are
+        # unknown, not none.
+        _require_listed(names, [n for n in names
+                                if (cache / f"{n}_base.json").exists()],
+                        "books")
     if unsets:
         # Removing a saved decision needs no current evidence (A2-1163).
         from taxjson.lib.crypto_sends import MANIFEST_NAME as _MN
@@ -155,7 +165,8 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
                          f"{acct} --write` (or just `tjs run`).")
                 return
         _price_fn = CS.yahoo_usd_price(root)
-        report = CS.build_report(root, cfg, files, _price_fn, want=acct,
+        report = CS.build_report(root, cfg, files, _price_fn,
+                                 want=acct if args.write else names,
                                  exports_only=True)
         for w in getattr(_price_fn, "attention", ()):
             _view_msg("warning", f"crypto id: {w}")
@@ -173,6 +184,24 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
         _json_out(report, schema="crypto-sends")
         return
     _print_crypto_sends(root, report, _details(args))
+
+
+def _refuse_not_crypto(names: Optional[Tuple[str, ...]],
+                       accts: List[str]) -> None:
+    """crypto-sends: each account named must be a crypto account (one
+    name: its words; a list: each one that is not named; exit 1)."""
+    bad = [n for n in names or () if n not in accts]
+    if bad and len(names or ()) == 1:
+        _die(f"{bad[0]!r} is not a crypto account — crypto accounts: "
+             f"{', '.join(accts)}.")
+    if bad:
+        rest = ",".join(n for n in names or () if n not in bad)
+        _die(", ".join(repr(n) for n in bad)
+             + (" is not a crypto account" if len(bad) == 1
+                else " are not crypto accounts")
+             + f" — crypto accounts: {', '.join(accts)}.",
+             f"Leave {'it' if len(bad) == 1 else 'them'} out of the "
+             f"list: {rest!r}." if rest else "Name crypto accounts.")
 
 
 def _crypto_sends_set(args: argparse.Namespace, root: Path, cfg: Dict[str, Any],
@@ -1252,6 +1281,43 @@ def _late_rename_trades(root: Path) -> Dict[Tuple[str, str],
     return out
 
 
+def _without_partly_backed(root: Path, files: List[Path], rows: List[Dict[str, Any]],
+                           covers: Sequence[Any], flag: str, prog: str
+                           ) -> Tuple[List[Dict[str, Any]], List[Any], bool]:
+    """`rows` and `covers` without the (SYMBOL, account) pairs that have
+    a trade the broker marks closing which the account's own position
+    backs in part, in a Canadian project
+    (lib/missing_history.read_marked_closes), and whether there was one
+    (said in a note). The run reports the rest by hand already, and a
+    line would take the documented part out of the totals too, so
+    `--write-missing-history` writes none (TJ-5379)."""
+    from taxjson.lib.missing_history import read_marked_closes
+    from taxjson.lib.tx_load import load_transactions
+    txs: List[Any] = []
+    for f in files:
+        try:
+            txs.extend(load_transactions(f))
+        except (OSError, ValueError):
+            pass
+    partly: Set[Tuple[str, str]] = set()
+    read_marked_closes(txs, _country(load_settings(root, missing_ok=True)), partly)
+
+    def other(sym: Any, acct: Any) -> bool:
+        return (str(sym or "").upper(), str(acct or "")) not in partly
+    kept = [e for e in rows if other(e.get("symbol"), e.get("account"))]
+    kept_covers = [c for c in covers if other(c.symbol, c.account)]
+    gone = len(kept) < len(rows) or len(kept_covers) < len(covers)
+    if gone:
+        _say("note", f"{flag}: not written: {len(partly)} symbol(s) with a "
+             f"trade the broker marks closing that the account holds only "
+             f"a part of", "The run reports the units past the account's "
+             "own by hand already. A line would put the documented units "
+             "at an unknown cost too and take their gain out of the "
+             "totals: add the older rows instead: "
+             + ", ".join(sorted(f"{s} / {a}" for s, a in partly)) + ".", prog=prog)
+    return kept, kept_covers, gone
+
+
 def _write_missing_history_tt(root: Path, cache: Path,
                               rows: List[Dict[str, Any]], year: Any,
                               outside: bool, files: List[Path],
@@ -1285,6 +1351,7 @@ def _write_missing_history_tt(root: Path, cache: Path,
     # (backlog TJ-0442: "the rows never go short" said of it).
     _late = _late_rename_trades(root)
     late: List[str] = []
+    rows, covers, partly = _without_partly_backed(root, files, rows, covers, flag, prog)
     for e in sorted(rows, key=lambda e: (str(e.get("account")),
                                          str(e.get("symbol")))):
         sym = str(e.get("symbol") or "").upper()
@@ -1364,7 +1431,7 @@ def _write_missing_history_tt(root: Path, cache: Path,
         _say("note", f"nothing to add: "
              + (f"{len(plan.same)} line(s) already there"
                 if plan.same else "no line to write for the pair(s) above"
-                if late or unsized or nodate or ambiguous or both
+                if late or unsized or nodate or ambiguous or both or partly
                 or plan.differ
                 else "no sale with no purchase in your files"),
              prog=prog)
@@ -1517,12 +1584,26 @@ def _is_configured_account(root: Path, name: str) -> bool:
 
 def _refuse_missing_history_file(name: str) -> None:
     """Exit 2: `--write-missing-history FILE` (the JSON candidates
-    before v0.27.0) — the flag writes .tt lines and takes no FILE."""
+    before v0.27.0) — the flag writes .tt lines and takes no FILE. A
+    comma list's FILE name: exit 2 too, the code of the whole token
+    before lists."""
     _die_input(f"--write-missing-history takes no FILE ({name}): it writes "
                f"dated .tt lines (OPENING <date> <SYMBOL> <qty> "
                f"cost=unknown) into inputs/<account>/missing_history.tt, "
                f"merged with the lines there — missing_history.json is no "
                f"longer read.")
+
+
+def _missing_history_file_of(root: Path, text: Any) -> Optional[str]:
+    """The FILE an ACCOUNT text after --write-missing-history names, or
+    None: its first name (each of a comma list) with a suffix or a `/`
+    that is no configured account (one may hold a period,
+    `[accounts."margin.old"]`: backlog TJ-0816)."""
+    for item in str(text or "").split(","):
+        if (item and (Path(item).suffix or "/" in item)
+                and not _is_configured_account(root, item)):
+            return item
+    return None
 
 
 def cmd_find_missing_history(args: argparse.Namespace) -> None:
@@ -1539,31 +1620,25 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
     # A configured account is never a FILE: an account name may hold a
     # period (`[accounts."margin.old"]`), which read as a suffix
     # (backlog TJ-0816).
+    # Each name of a comma list is checked (`margin.old,ib`).
     _file = getattr(args, "gen_phantoms", None) or (
-        args.account if args.write_missing_history and args.account
-        and (Path(args.account).suffix or "/" in args.account)
-        and not _is_configured_account(root, args.account) else None)
+        _missing_history_file_of(root, args.account)
+        if args.write_missing_history else None)
     if _file:
         _refuse_missing_history_file(_file)
     if (getattr(args, "write_purchases", None) is not None
             and args.write_missing_history is not None):
         _die_input("--write-purchases and --write-missing-history write "
                    "different files: run them one at a time.")
+    # One account, or several (a comma list); --write-purchases FILE
+    # writes one account's lines (without FILE: each account's own).
+    names = _accounts(args, root, one="--write-purchases FILE" if getattr(
+        args, "write_purchases", None) else None)
     # Per-account full-history base files only — skip the raw/native
     # derivatives and the combined sheltered file (its accounts are
     # already covered individually).
     all_files = _project_base_files(cache)
-    if args.account:
-        f = cache / f"{args.account}_base.json"
-        if not f.exists():
-            _die_input(f"no {f.name} in {cache} (run `tjs run` first, "
-                       f"or check the name).")
-        files = [f]
-    else:
-        files = all_files
-        if not files:
-            sys.exit(exit_text(f"tjs find-missing-history: no base files in {cache} "
-                               f"(run `tjs run` first)."))
+    files = _missing_history_files(cache, names, all_files)
     outside = bool(getattr(args, "outside_year", False))
     if outside and args.write_missing_history is None:
         _die_input("--outside-year goes with --write-missing-history (it "
@@ -1594,18 +1669,21 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
     # takes one base file, so we run it per account and merge them
     # (keyed by symbol+account).
     if args.write_missing_history is not None:
-        _find_missing_history_write(args, root, cache, files, all_files, year, outside)
+        _find_missing_history_write(args, root, cache, files, all_files, year, outside,
+                                    names)
         return
 
     # Every book is read (a Canadian ACB pool spans the taxable
     # accounts: lib/missing_history.year_pool); ACCOUNT narrows the
-    # report with --account.
-    cmd = _cmd("taxjson-missing-history") + [
-        str(f) for f in (all_files if args.account and files[0] in all_files
-                         else files)]
-    if (args.account and files[0] in all_files and len(all_files) > 1
+    # report with --account (one per account named).
+    pooled = names is not None and any(f in all_files for f in files)
+    read = all_files + [f for f in files if f not in all_files] if pooled \
+        else files
+    cmd = _cmd("taxjson-missing-history") + [str(f) for f in read]
+    if (pooled and len(read) > len(files)
             and getattr(args, "write_purchases", None) is None):
-        cmd += ["--account", args.account]
+        for n in names or ():
+            cmd += ["--account", n]
     if getattr(args, "write_purchases", None) is not None:
         # Drafts of purchase lines from the broker's cost evidence
         # (tax-logic CA-ACB-15 / US-BASIS-08): the tool writes them
@@ -1615,9 +1693,9 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
             cmd += ["--force"]
         if args.all_history:
             cmd += ["--all-history"]
-        if args.account:
-            cmd += ["--account", args.account]
-    if not args.account:
+        for n in names or ():
+            cmd += ["--account", n]
+    if names is None:
         # The glob above sees only books that exist: a CONFIGURED
         # account whose book was never built (a failed parse, deferred
         # elections) was skipped silently and the checklist marked the
@@ -1656,13 +1734,34 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
     _exec_tool(cmd)
 
 
+def _missing_history_files(cache: Path, names: Optional[Tuple[str, ...]],
+                           all_files: List[Path]) -> List[Path]:
+    """find-missing-history's books: each named account's base book (one
+    name with none: its words, exit 2; a list: each one missing named,
+    exit 1), else every account's (none: exit 1)."""
+    if names is None:
+        if not all_files:
+            sys.exit(exit_text(f"tjs find-missing-history: no base files in {cache} "
+                               f"(run `tjs run` first)."))
+        return all_files
+    files = [cache / f"{n}_base.json" for n in names]
+    if len(files) == 1 and not files[0].exists():
+        _die_input(f"no {files[0].name} in {cache} (run `tjs run` first, "
+                   f"or check the name).")
+    _require_listed(names, [n for n, f in zip(names, files) if f.exists()],
+                    "books")
+    return files
+
+
 def _find_missing_history_write(args: argparse.Namespace, root: Path, cache: Path,
                                  files: List[Path], all_files: List[Path], year: Any,
-                                 outside: bool) -> None:
+                                 outside: bool,
+                                 names: Optional[Tuple[str, ...]] = None) -> None:
     """find-missing-history --write-missing-history: the sales with no
     purchase in the books (each account's gains child), merged; a short
     a same-day journal leg covers left out; the covers with no short
-    held, by the year's scope; written as dated .tt lines."""
+    held, by the year's scope; written as dated .tt lines. `names`: the
+    accounts named (None: every account)."""
     _flag = ("--write-missing-history --outside-year" if outside
              else "--write-missing-history")
     if outside and not year:
@@ -1719,7 +1818,7 @@ def _find_missing_history_write(args: argparse.Namespace, root: Path, cache: Pat
     _cfg = load_config(root, missing_ok=True)
     _covers = _unanswered_covers(
         root, dict(_cfg, settings=settings_of(_cfg).replace(year=None)),
-        args.account or None)
+        names)
     if outside:
         _covers = [c for c in _covers if c.date[:4] > _ys]
     elif not args.all_history:
@@ -1747,7 +1846,7 @@ def _register_run(sub: argparse._SubParsersAction) -> None:
     p_run.add_argument("--no-input", action="store_true",
                        help="Never prompt (scripts/CI): unresolved corp-action "
                             "elections write work/pending_elections.json "
-                            "and exit 3 — resolve with `tjs elect "
+                            "and exit 3 — resolve with `tjs elections "
                             "... --set`, then re-run")
     p_run.add_argument("--strict", action="store_true",
                        help="Promote per-account validation ERRORs "
@@ -1775,7 +1874,10 @@ def _register_crypto_sends(sub: argparse._SubParsersAction) -> None:
                     "inputs/<acct>/crypto_sends.tt. Stablecoins get the "
                     "currency-gain calculation instead of a sale line.")
     p_csend.add_argument("account", nargs="?",
-                         help="Crypto account (default: all)")
+                         metavar="ACCOUNT[,ACCOUNT...]",
+                         help="Crypto account, or several as one comma "
+                              "list (default: all); one with --set, "
+                              "--unset or --write")
     p_csend.add_argument("--set", action="append", metavar="ID=DECISION",
                          help="Record a decision (self | gift | payment; "
                               "a US project refuses gift) "
@@ -1806,7 +1908,7 @@ def _register_crypto_sends(sub: argparse._SubParsersAction) -> None:
                               "from the decisions (idempotent)")
     p_csend.add_argument("--json", action="store_true",
                          help="Emit JSON instead of text")
-    p_csend.set_defaults(func=cmd_crypto_sends)
+    p_csend.set_defaults(func=cmd_crypto_sends, account_list=True)
 
 
 def _register_compare(sub: argparse._SubParsersAction) -> None:
@@ -1859,6 +1961,7 @@ def _register_clean(sub: argparse._SubParsersAction) -> None:
              "gives one; any other (and every .tt file) stays and is named. "
              "What cannot be rebuilt stays: taxjson.toml, the "
              "maps, inputs/, holdings/, filed/, snapshot/, inputs_redact/, "
+             "logs/, "
              "and in work/ the lock files, the slip-key salt, `tjs watch`'s "
              "baseline, the price caches, the generated crypto-sends .tt and "
              "the snapshots `tjs compare --save` kept. A link is never "
@@ -1883,7 +1986,10 @@ def _register_find_missing_history(sub: argparse._SubParsersAction) -> None:
              "that distort a year's gain. Pairs the project's "
              ".tt OPENING cost=unknown lines already cover are listed "
              "apart; --write-missing-history writes such lines.")
-    p_fmh.add_argument("account", nargs="?", help="Account (default: all)")
+    p_fmh.add_argument("account", nargs="?", metavar="ACCOUNT[,ACCOUNT...]",
+                       help="Account, or several as one comma list "
+                            "(default: all); one with --write-purchases "
+                            "FILE")
     p_fmh.add_argument("--year", type=_tax_year_arg,
                        help="Tax year to scope relevance (default: config year)")
     p_fmh.add_argument("--include-options", action="store_true",
@@ -1929,7 +2035,7 @@ def _register_find_missing_history(sub: argparse._SubParsersAction) -> None:
                             "(a reviewed file is otherwise refused; the "
                             "old file is kept as FILE.bak, or the next "
                             "free .bakN)")
-    p_fmh.set_defaults(func=cmd_find_missing_history)
+    p_fmh.set_defaults(func=cmd_find_missing_history, account_list=True)
 
 
 def _register_opening(sub: argparse._SubParsersAction) -> None:

@@ -217,14 +217,17 @@ class TestResolveManifest(unittest.TestCase):
             acct.mkdir(parents=True); cache.mkdir()
             with redirect_stdout(io.StringIO()):
                 p = _resolve_manifest(acct, cache, "margin", create=True)
-            self.assertEqual(p, acct / "manifest.json")
+            self.assertEqual(p, acct / "elections.json")
             # Nothing written until an election is saved (2026-10
             # workflow audit: an empty file dirtied a frozen year's
             # committed inputs/ on every run); never in work/.
             self.assertFalse(p.exists())
             self.assertFalse((cache / "margin_manifest.json").exists())
 
-    def test_migrates_legacy_work_manifest(self):
+    def test_a_legacy_work_manifest_is_never_read(self):
+        # Since v3.0.0 `tjs migrate` moves work/<account>_manifest.json
+        # (every command refuses it before: load_config); the stage
+        # never reads or copies it.
         with tempfile.TemporaryDirectory() as td:
             acct = Path(td) / "inputs" / "margin"
             cache = Path(td) / "work"
@@ -234,9 +237,9 @@ class TestResolveManifest(unittest.TestCase):
             out = io.StringIO()
             with redirect_stdout(out):
                 p = _resolve_manifest(acct, cache, "margin", create=False)
-            self.assertEqual(p, acct / "manifest.json")
-            self.assertEqual(json.loads(p.read_text()), legacy)  # content kept
-            self.assertIn("migrated", out.getvalue())
+            self.assertEqual(p, acct / "elections.json")
+            self.assertFalse(p.exists())
+            self.assertEqual(out.getvalue(), "")
 
     def test_user_manifest_wins_untouched(self):
         with tempfile.TemporaryDirectory() as td:
@@ -244,7 +247,7 @@ class TestResolveManifest(unittest.TestCase):
             cache = Path(td) / "work"
             acct.mkdir(parents=True); cache.mkdir()
             user = {"elections": {"user": {"election": "taxable"}}}
-            (acct / "manifest.json").write_text(json.dumps(user))
+            (acct / "elections.json").write_text(json.dumps(user))
             (cache / "margin_manifest.json").write_text('{"elections": {}}')
             p = _resolve_manifest(acct, cache, "margin", create=True)
             self.assertEqual(json.loads(p.read_text()), user)
@@ -255,7 +258,7 @@ class TestResolveManifest(unittest.TestCase):
             cache = Path(td) / "work"
             acct.mkdir(parents=True); cache.mkdir()
             p = _resolve_manifest(acct, cache, "margin", create=False)
-            self.assertEqual(p, acct / "manifest.json")
+            self.assertEqual(p, acct / "elections.json")
             self.assertFalse(p.exists())
 
 
@@ -379,7 +382,7 @@ class TestCorpActionsUnavailableGuard(unittest.TestCase):
         err, _out, manifest_in_inputs = self._run_stage("canada")
         self.assertNotIn("no corp-action election rules", err)
         # The corp stage ran (patched), and the manifest's canonical home
-        # is inputs/<account>/manifest.json — not the work/ cache.
+        # is inputs/<account>/elections.json — not the work/ cache.
         self.assertTrue(manifest_in_inputs)
 
 

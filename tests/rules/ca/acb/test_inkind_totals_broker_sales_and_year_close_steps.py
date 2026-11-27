@@ -275,7 +275,7 @@ class TestFormatMapRunFirst(unittest.TestCase):
 
     def test_a_folder_no_run_reads_does_not_block(self):
         for name in ("README.md", "notes.txt", "statement.pdf",
-                     "manifest.json", "sends.json", "map.toml"):
+                     "elections.json", "sends.json", "map.toml"):
             with tempfile.TemporaryDirectory() as d:
                 root = self._make(d)
                 (root / "inputs/coins" / name).write_text("{}\n")

@@ -3,7 +3,7 @@ import argparse
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from taxjson.project.accounts import account_of, accounts_of
 from taxjson.project.settings import Settings, settings_of
@@ -15,10 +15,10 @@ from taxjson.lib.out import Doc
 from taxjson.lib.report_fmt import fmt_money, fmt_qty
 
 from taxjson.cli.common import (
-    _refuse_books_older_than_inputs, _refuse_cash_older_than_inputs,
+    _basis_label, _refuse_books_older_than_inputs, _refuse_cash_older_than_inputs,
     _refuse_other_country_books, _rerun_hint,
-    _base_currency, _brief, _carry_back, CarryBack, _claims_back, _stale_opening,
-    _typed_opening,
+    _accounts, _base_currency, _brief, _carry_back, CarryBack, _claims_back,
+    _gains_files_of, _stale_opening, _typed_opening,
     LedgerUnavailable, _unanswered_covers, _uncovered_sales,
     _warn_artifact_year, _warn_run_state, _work_read_why,
     _OTHER_LOSSES_HELP, _add_deduction_flags,
@@ -127,31 +127,32 @@ def _refuse_sum_books(root: Path) -> None:
 
 
 def _sum_inputs(args: argparse.Namespace) -> Tuple[Any, ...]:
-    """`tjs sum`'s inputs, before any output: the gains files (exit 2
-    when there are none; 1 with no taxjson.toml either: not a project),
-    the estimate's inputs and the config, the province checked, the
-    books refused when a full `tjs run` did not build them (TJ-4347),
-    then the warnings about the flags, the artifacts' year and the run
-    state, in that order (stderr)."""
+    """`tjs sum`'s inputs, before any output: the accounts named (cli/
+    common `_accounts`: None for every account, or the names of an
+    ACCOUNT list, in order), their gains files (exit 2 when there are
+    none, or none for the one name given; a listed account with none,
+    exit 1; 1 with no taxjson.toml either: not a project), the
+    estimate's inputs and the config, the province checked, the books
+    refused when a full `tjs run` did not build them (TJ-4347), then
+    the warnings about the flags, the artifacts' year and the run state,
+    in that order (stderr)."""
     from taxjson.lib import out as _out
-    from taxjson.lib.report_model import (gains_basis_label,
-                                          resolve_gains_files)
     root = Path(args.dir).resolve()
     cache = root / "work"
+    names = _accounts(args, root)
     # Canonical per-account gains, wash-adjusted where the pipeline built
     # the cross-account pass — the same basis carryover/t1135/form-export
     # report, so this summary can't disagree with the filing commands.
-    files = resolve_gains_files(cache, getattr(args, "account", None)
-                                or None)
+    files = _gains_files_of(cache, names)
     if not files:
-        if getattr(args, "account", None):
-            _die_input(f"no gains for account {args.account!r} in work/",
+        if names:
+            _die_input(f"no gains for account {names[0]!r} in work/",
                        "Run `tjs run` first, or check the account "
                        "name.")
         if not _PL.has_config(root):
             _die(*_no_project_message(root, _current_cmd()))
         _die_input("no gains files in work/", "Run `tjs run` first.")
-    basis = gains_basis_label(files)
+    basis = _basis_label(root, files)
 
     # --other-income/--other-losses turn on the marginal tax estimate,
     # which needs the config (country/account types) and only counts
@@ -216,7 +217,7 @@ def _sum_inputs(args: argparse.Namespace) -> Tuple[Any, ...]:
     if cfg:
         _warn_artifact_year(files, _st.year)
         _run_state = _warn_run_state(root, cfg)
-    return (root, cache, files, basis, want_estimate, _oi, _ol, _ded, _cc, _ltl,
+    return (root, cache, names, files, basis, want_estimate, _oi, _ol, _ded, _cc, _ltl,
             _foreign_by_acct, _foreign_by_sec, cfg, _accts, _st, _amt_in, _carry_src,
             taxable_accounts, est, _prog, _run_state)
 
@@ -401,6 +402,25 @@ def _account_rows(files: Dict[str, Path], root: Path, cache: Path, cfg: Dict[str
     return acct_rows, tainted_included, tainted_routed, year
 
 
+def _denied_info(filing_rows: List[Dict[str, Any]], line_rows: List[Dict[str, Any]],
+                 total: Dict[str, Any], views: List[Any]) -> float:
+    """Canada's DENIED (INFO), `denied_all` (TJ-5341): each account and
+    Schedule 3 line adds its `denied` and `denied_contribution` cents, and
+    the RETURN row (`total`) adds the lines' figures, as its other columns
+    do, so it can be a cent from `denied` + `denied_contribution` (the
+    gains files' contributions total cut to the cent). Returns the RETURN
+    row's gap from the gains files' unrounded total of every kind (each
+    sale's `disallowed_amount` and `denied_contribution`), the rounding
+    note's figure (TJ-5450); 0.0 with no line."""
+    for r in filing_rows + line_rows:
+        r["denied_all"] = M.json_money(M.of(r["denied"])
+                                       + M.of(r.get("denied_contribution") or 0), 2)
+    total["denied_all"] = M.json_money(M.exact_sum(r["denied_all"] for r in line_rows), 2)
+    unrounded = M.json_money(M.exact_sum(x for v in views
+                                         for x in (v.disallowed_amount, v.denied_contribution)), 2)
+    return M.shown(total["denied_all"] - unrounded, 2) if line_rows else 0.0
+
+
 def _return_figures(files: Dict[str, Path], root: Path, cfg: Dict[str, Any], _accts: Any,
                     taxable_accounts: Any, est: Dict[str, float], want_estimate: bool,
                     year: Any) -> Tuple[Any, ...]:
@@ -494,7 +514,8 @@ def _return_figures(files: Dict[str, Path], root: Path, cfg: Dict[str, Any], _ac
         for v in _views_8949), 2)
     if not _is_us:
         # An in-kind contribution's loss, nil by s.40(2)(g)(iv) — its own
-        # figure, never in DENIED (CA-INKIND-03).
+        # figure, never in `denied` (CA-INKIND-03); DENIED (INFO),
+        # `denied_all` below, adds it.
         filing_total["denied_contribution"] = M.shown(sum(
             float(v.denied_contribution or 0.0)
             for v in _views_8949), 2)
@@ -507,6 +528,9 @@ def _return_figures(files: Dict[str, Path], root: Path, cfg: Dict[str, Any], _ac
         # the unrounded figures.
         for _r in filing_rows + filing_line_rows + [filing_total]:
             _r["total_cost"] = M.json_money(M.of(_r["acb"]) + M.of(_r["outlays"]), 2)
+        # DENIED (INFO), `denied_all`, every kind of denied loss, as gains-
+        # cra and gains-base show it; `denied` keeps the superficial losses.
+        _gap_all = _denied_info(filing_rows, filing_line_rows, filing_total, _views_8949)
     # The RETURN row sums the per-row cents, as filed; the gains files,
     # wash-sales and audit total the unrounded engine values — a few
     # cents apart on a large year (R1-166). Shown, not hidden. (US: the
@@ -530,9 +554,10 @@ def _return_figures(files: Dict[str, Path], root: Path, cfg: Dict[str, Any], _ac
         # Form 8949 adds back only a positive disallowance (code W).
         if not _is_us or d > 1e-9),
         2)
-    _denied_gap = (M.shown(filing_total.get(_denied_key, 0.0)
-                         - _engine_denied, 2)
-                   if filing_line_rows else 0.0)
+    # Canada's note compares DENIED (INFO), every kind (`_denied_info`,
+    # TJ-5450); `engine_denied_unrounded` stays the superficial losses'.
+    _denied_gap = (0.0 if not filing_line_rows else _gap_all if not _is_us
+                   else M.shown(filing_total.get(_denied_key, 0.0) - _engine_denied, 2))
     _denied_label = "adjustment (g)" if _is_us else "denied"
     return (_fyear, _is_us, _date_key, filing_rows, filing_line_rows, _filing_6781,
             filing_total, _engine_gain, _round_gap, _engine_denied, _denied_gap, _denied_label)
@@ -655,16 +680,17 @@ def _book_checks(files: Dict[str, Path], taxable_accounts: Any, tainted_included
     return _conservation, _unconsumed, _unsettled_comp
 
 
-def _no_purchase_checks(args: argparse.Namespace, root: Path, cfg: Dict[str, Any], cache: Path,
-                        files: Dict[str, Path], _st: Settings, _fyear: Any, base: str,
-                        _full_msgs: bool, _acts: List[str],
+def _no_purchase_checks(names: Optional[Tuple[str, ...]], root: Path, cfg: Dict[str, Any],
+                        cache: Path, files: Dict[str, Path], _st: Settings, _fyear: Any,
+                        base: str, _full_msgs: bool, _acts: List[str],
                         _prog: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]],
                                              List[Dict[str, Any]]]:
     """`tjs sum`'s sales with no purchase in the files (those booked as
     shorts covered later, those not in the totals) and the in-kind moves
-    with a registered account not booked; each an `! ` line in `_acts`,
-    or with `_full_msgs` a warning on stderr. Returns (the sales not in
-    the totals, those in them, the unbooked moves)."""
+    with a registered account not booked, of the accounts `names`
+    (`_accounts`'s: None for every account); each an `! ` line in
+    `_acts`, or with `_full_msgs` a warning on stderr. Returns (the
+    sales not in the totals, those in them, the unbooked moves)."""
     from taxjson.lib import out as _out
     # Sales with no purchase in the files that no .tt OPENING
     # cost=unknown line covers: the engine books them as an open short, so their gain is
@@ -674,8 +700,9 @@ def _no_purchase_checks(args: argparse.Namespace, root: Path, cfg: Dict[str, Any
     # (first_run.engine_booking): one the engine closed as a short sale
     # within the year, or sold from a purchase it reads first, is in
     # them.
-    _no_purchase = _uncovered_sales(root, cfg,
-                                    getattr(args, "account", None) or None)
+    # The names as `_accounts` gave them (None: every account), never
+    # the ACCOUNT text (a comma text is refused, cli/common `_listed_names`).
+    _no_purchase = _uncovered_sales(root, cfg, names)
     _uncovered = [{k: v for k, v in r.items() if k != "booked"}
                   for r in _no_purchase if r.get("booked") == "open"]
     _in_totals = [r for r in _no_purchase if r.get("booked") != "open"]
@@ -764,6 +791,7 @@ class SumModel:
     (_sum_json); the text and the estimate read it."""
     root: Path
     cache: Path
+    account_names: Optional[Tuple[str, ...]]
     files: Dict[str, Path]
     basis: str
     want_estimate: bool
@@ -820,9 +848,9 @@ def build_sum(args: argparse.Namespace) -> SumModel:
     withholding's, and `--json`'s unanswered covers come later, as
     before)."""
     from taxjson.lib import out as _out
-    (root, cache, files, basis, want_estimate, _oi, _ol, _ded, _cc, _ltl, _foreign_by_acct,
-     _foreign_by_sec, cfg, _accts, _st, _amt_in, _carry_src, taxable_accounts, est, _prog,
-     _run_state) = _sum_inputs(args)
+    (root, cache, names, files, basis, want_estimate, _oi, _ol, _ded, _cc, _ltl,
+     _foreign_by_acct, _foreign_by_sec, cfg, _accts, _st, _amt_in, _carry_src, taxable_accounts,
+     est, _prog, _run_state) = _sum_inputs(args)
     acct_rows, tainted_included, tainted_routed, year = _account_rows(
         files, root, cache, cfg, _accts, _st, taxable_accounts, est,
         _foreign_by_acct, _foreign_by_sec, want_estimate, _prog)
@@ -857,7 +885,7 @@ def build_sum(args: argparse.Namespace) -> SumModel:
     _conservation, _unconsumed, _unsettled_comp = _book_checks(
         files, taxable_accounts, tainted_included, tainted_routed, _full_msgs, _acts, _prog)
     _uncovered, _in_totals, _ik_unbooked = _no_purchase_checks(
-        args, root, cfg, cache, files, _st, _fyear, base, _full_msgs, _acts, _prog)
+        names, root, cfg, cache, files, _st, _fyear, base, _full_msgs, _acts, _prog)
     # Scope: unlike the filing commands (carryover/t1135/form-export,
     # taxable-only by law), this summary rolls up EVERY account — say so
     # when sheltered accounts contribute, or the totals look like filing
@@ -875,7 +903,8 @@ def build_sum(args: argparse.Namespace) -> SumModel:
         _LO.gather(files), year,
         "trade" if _date_key == "date" else "settle")
     return SumModel(
-        root=root, cache=cache, files=files, basis=basis, want_estimate=want_estimate,
+        root=root, cache=cache, account_names=names, files=files, basis=basis,
+        want_estimate=want_estimate,
         other_income=_oi, other_losses=_ol, deductions=_ded, carrying_charges=_cc,
         lt_losses=_ltl, foreign_by_account=_foreign_by_acct,
         foreign_by_security=_foreign_by_sec, cfg=cfg, settings=_st, amt_carryover=_amt_in,
@@ -948,14 +977,19 @@ def _sum_json(args: argparse.Namespace, m: SumModel) -> None:
         "readiness": _RD.build(
             run_state=_run_state or (), unknown_cost=tainted_routed,
             no_purchase=len(_uncovered),
-            unbacked_cover=len(_unanswered_covers(
-                root, cfg, getattr(args, "account", None) or None)),
-            conservation=_conservation,
+            unbacked_cover=len(_unanswered_covers(root, cfg, m.account_names)),
+            covers_by_hand=not _is_us, conservation=_conservation,
             in_kind_unbooked=len(_ik_unbooked),
             unconsumed_premium=_unconsumed,
             unsettled_compensation=_unsettled_comp),
         "subtotals": {g.lower(): _sum_rows(rows)
                       for g, rows in group_defs}}
+    if not getattr(args, "estimate", False):
+        # The ACCOUNT's names in the order given (lib/account_list), null
+        # for every account: what tells a script a partial report (`tjs
+        # estimate` takes no ACCOUNT: not in its document).
+        doc["account_names"] = (None if m.account_names is None
+                                else [str(n) for n in m.account_names])
     if _positions:
         # The user's filing positions against the loss rule (.tt
         # ALLOWLOSS): in the totals above, listed so they are never
@@ -1023,23 +1057,34 @@ def _sum_tables(d: Doc,
                 _table_lines: Callable[[List[Dict[str, Any]], str], List[str]],
                 sheltered_included: List[str], acct_rows: List[Dict[str, Any]],
                 _stk: List[Dict[str, Any]], _det: bool, _para: Callable[..., None],
-                money: Callable[[Any], str]) -> None:
+                money: Callable[[Any], str], _acts: List[str]) -> None:
     """`tjs sum`'s account tables: one per account type when there is more
     than one (each with its SUBTOTAL), then every account with the TOTAL;
-    with --details, the crypto rows' staking note (cmd_summary)."""
+    with --details, the crypto rows' staking note (cmd_summary). A
+    column the width drops is said (`! ` line in `_acts`; a note under
+    the tables with --details, which prints no `! ` lines)."""
+    from taxjson.lib import out as _out
     _tdrop = (6, 5)           # FEES, then PIL, when the width is short
+    _left_out: List[str] = []
     if grouped:
         for gname, rows in group_defs:
             d.line(f"{gname} ACCOUNTS"
                    + (" — not taxable" if gname == "SHELTERED" else ""))
             _print_report_table(_table_lines(rows, "SUBTOTAL"),
                                 rule_before_last=True, fit=True,
-                                drop=_tdrop)
+                                drop=_tdrop, left_out=_left_out)
             d.blank()
         d.line("ALL ACCOUNTS"
                + (" — sheltered included" if sheltered_included else ""))
     _print_report_table(_table_lines(acct_rows, "TOTAL"),
-                        rule_before_last=True, fit=True, drop=_tdrop)
+                        rule_before_last=True, fit=True, drop=_tdrop, left_out=_left_out)
+    _dropped = list(dict.fromkeys(_left_out))
+    if _dropped:
+        _what = f"{' and '.join(_dropped)} left out of the account tables at this width"
+        if _det:
+            _para(f"{_what}: each account's is in tjs sum --json.")
+        else:
+            _acts.append(_out.act(_what, "tjs sum --json"))
     if _stk and _det:
         _para("DIVIDEND for crypto account(s) "
               + ", ".join(f"{r['account']} ({money(r['dividend'])})"
@@ -1048,19 +1093,19 @@ def _sum_tables(d: Doc,
 
 
 def _sum_return_us(d: Doc,
-                   _para: Callable[..., None], base: str, _names: str, _fyear: Any,
+                   _para: Callable[..., None], base: str, _heading: str, _fyear: Any,
                    _ynote: str, _det: bool, _rounding_legend: Callable[[], None],
                    money: Callable[[Any], str], filing_line_rows: List[Dict[str, Any]],
                    filing_total: Dict[str, float], _filing_6781: Optional[Dict[str, Any]],
                    _acts: List[str], _item: Callable[[str], None], _round_gap: float,
                    _engine_gain: float, _denied_gap: float, _denied_label: str,
                    _engine_denied: float, _tail: List[str]) -> None:
-    """FOR THE RETURN in the US (cmd_summary): Form 8949's lines and the
-    RETURN row, a §1256 `! ` line (`_acts`), the notes with --details,
-    and the pointer `_tail` ends with."""
+    """FOR THE RETURN in the US (cmd_summary), under `_heading`
+    (`_sum_return_heading`): Form 8949's lines and the RETURN row, a
+    §1256 `! ` line (`_acts`), the notes with --details, and the pointer
+    `_tail` ends with."""
     from taxjson.lib import out as _out
-    _para(f"FOR THE RETURN — taxable accounts ({_names}), {base} "
-          f"(Form 8949 → Schedule D, tax year {_fyear})")
+    _para(_heading)
     if _ynote:
         _para(_ynote if _det else
               f"Tax year {_fyear} has not ended: these are "
@@ -1120,116 +1165,36 @@ def _sum_return_us(d: Doc,
                  "tjs form-export")
 
 
-# FOR THE RETURN's Canadian table (`_s3_block`): its columns, every money
-# one always shown but DENIED, and Schedule 3's line names shortened in
-# turn when the table is too wide (`_s3_label`).
-_S3_HEADS = ("SCHEDULE 3 LINE", "PROCEEDS", "COST(ACB)", "OUTLAYS", "TOTAL COST", "GAIN",
-             "DENIED")
-_S3_CELLS = ("proceeds", "acb", "outlays", "total_cost", "gain", "denied")
-_S3_SHORT = {"shares & fund units": "shares & units",
-             "options & other properties": "options & other",
-             "options, crypto & other properties": "options, crypto & other",
-             "crypto-assets": "crypto"}
-_S3_LEGEND = "GAIN = PROCEEDS − COST(ACB) − OUTLAYS = PROCEEDS − TOTAL COST"
-
-
-def _s3_label(r: Dict[str, Any], limit: Optional[int] = None) -> str:
-    """A Schedule 3 line's label: its line number, words, period mark and
-    line codes ("shares & fund units (P2) (13199/13200)"). With `limit`,
-    the longest form within it: the words, the short words (`_S3_SHORT`),
-    the short words cut after a whole word with an ellipsis ("options,
-    crypto…"), then the period mark and the codes alone ("(P2)
-    13199/13200", `limit` 0), returned even over the limit: the codes are
-    what a filer types, always whole."""
-    short = str(r["short"])
-    words, pmark = short, ""
-    if short.endswith(")") and " (P" in short:
-        words, pmark = short.rsplit(" (P", 1)[0], " (P" + short.rsplit(" (P", 1)[1]
-    pre = f"Line {r['line']} " if r["line"] else ""
-    codes = f"{r['proceeds_code']}/{r['gain_code']}"
-    tail = f"{pmark} ({codes})"
-    sw = _S3_SHORT.get(words, words).split(" ")
-    forms = [words, " ".join(sw)] + [" ".join(sw[:k]).rstrip(" ,&") + "…"
-                                     for k in range(len(sw) - 1, 0, -1)]
-    for form in forms:
-        if limit is None or len(pre) + len(form) + len(tail) <= limit:
-            return f"{pre}{form}{tail}"
-    return f"{pmark.strip()} {codes}".strip()
-
-
-def _s3_block(line_rows: List[Dict[str, Any]], total: Dict[str, Any],
-              money: Callable[[Any], str], w: int, keep_denied: bool
-              ) -> Tuple[List[str], str]:
-    """FOR THE RETURN's table at width `w` (0: unwrapped) and its layout:
-    "table" every column; "no-denied" DENIED left out (the caller says
-    so in a `! ` line); "records" one record per line, every column.
-    PROCEEDS, COST(ACB), OUTLAYS, TOTAL COST and GAIN are never dropped:
-    too wide, the line labels shorten first (`_s3_label`), then DENIED
-    goes (never with `keep_denied`, --details), then the records."""
-    from taxjson.lib import out as _out
-    nums = [[money(r[k]) for k in _S3_CELLS] for r in line_rows]
-    foot = ["RETURN"] + [money(total[k]) for k in _S3_CELLS]
-
-    def render(labels: List[str], cols: List[int]) -> List[str]:
-        body = [[lab] + n for lab, n in zip(labels, nums)]
-        return _out.fit_table([_S3_HEADS[i] for i in cols],
-                              [[r[i] for i in cols] for r in body],
-                              aligns=["<" if i == 0 else ">" for i in cols],
-                              foot=[[foot[i] for i in cols]], width_=0)
-
-    def widest(lines: List[str]) -> int:
-        return max(map(len, lines), default=0)
-
-    every = list(range(len(_S3_HEADS)))
-    lines = render([_s3_label(r) for r in line_rows], every)
-    if w <= 0 or widest(lines) <= w:
-        return lines, "table"
-    # The labels shorten, all to the codes alone once one is; DENIED goes
-    # only after that, the labels kept at the codes.
-    rest = widest(render([""] * len(line_rows), every)) - len(_S3_HEADS[0])
-    labels = [_s3_label(r, w - rest) for r in line_rows]
-    codes = [_s3_label(r, 0) for r in line_rows]
-    if set(labels) & set(codes):
-        labels = codes
-    for cols, labs in ([(every, labels)] if keep_denied
-                       else [(every, labels), (every[:-1], codes)]):
-        lines = render(labs, cols)
-        if widest(lines) <= w:
-            return lines, ("table" if cols == every else "no-denied")
-    body = [[_s3_label(r, w)] + n for r, n in zip(line_rows, nums)]
-    return _out.records(list(_S3_HEADS), body + [foot], w), "records"
-
-
 def _sum_return_ca(d: Doc,
-                   _para: Callable[..., None], base: str, _names: str, _fyear: Any,
+                   _para: Callable[..., None], base: str, _heading: str, _fyear: Any,
                    _ynote: str, _det: bool, money: Callable[[Any], str],
                    filing_line_rows: List[Dict[str, Any]], filing_total: Dict[str, float],
                    _rounding_legend: Callable[[], None], _fx_note: Optional[Dict[str, Any]],
                    _acts: List[str], _item: Callable[[str], None], _round_gap: float,
                    _engine_gain: float, _denied_gap: float, _denied_label: str,
                    _engine_denied: float, _tail: List[str]) -> None:
-    """FOR THE RETURN in Canada (cmd_summary): Schedule 3's lines and the
-    RETURN row, the line-15300 FX `! ` line (`_acts`), the notes with
-    --details, and the pointer `_tail` ends with."""
+    """FOR THE RETURN in Canada (cmd_summary), under `_heading`
+    (`_sum_return_heading`): Schedule 3's lines and the RETURN row, the
+    line-15300 FX `! ` line (`_acts`), the notes with --details, and the
+    pointer `_tail` ends with."""
     from taxjson.lib import out as _out
-    _para(f"FOR THE RETURN — taxable accounts ({_names}), {base} "
-          f"(Schedule 3, tax year {_fyear})")
+    _para(_heading)
     if _ynote:
         _para(_ynote if _det else
               f"Tax year {_fyear} has not ended: these are "
               f"YEAR-TO-DATE figures.")
+    from taxjson.lib import gain_columns as _GCOL
     _w = _out.width()
-    _s3, _layout = _s3_block(filing_line_rows, filing_total, money, _w, keep_denied=_det)
+    # The shared columns and layout (lib/gain_columns): gains-cra's and
+    # gains-base's summary tables put each money column where this does.
+    _s3, _layout = _GCOL.return_table(filing_line_rows, filing_total, width=_w,
+                                      keep_denied=_det)
     if _layout == "no-denied":
-        _legend = _S3_LEGEND + ", the allowed gain."
-        _acts.append(_out.act(f"DENIED left out at this width (superficial losses "
-                              f"denied: {money(filing_total['denied'])})",
+        _acts.append(_out.act(f"DENIED (INFO) left out at this width (losses denied: "
+                              f"{money(filing_total['denied_all'])})",
                               "tjs sum --details"))
-    else:
-        _legend = _S3_LEGEND + ", the allowed gain; DENIED = superficial losses denied."
-        if 0 < _w < len(_legend):
-            _legend = _S3_LEGEND + ", after DENIED (superficial losses)."
-    _para(_legend)
+    for _text in _GCOL.sum_legend(_w, denied=_layout != "no-denied"):
+        _para(_text)
     _rounding_legend()
     for _ln in _s3:
         print(_ln)
@@ -1261,37 +1226,47 @@ def _sum_return_ca(d: Doc,
         _item("PROCEEDS − COST(ACB) − OUTLAYS = GAIN, the allowed "
               "gain. A short sale shows what it brought in, net "
               "of its opening commission, as PROCEEDS and the "
-              "cover as ACB; the commissions of other sales are "
+              "cover as ACB (a written option: its premium gross, the write's commission an outlay); the commissions of other sales are "
               "outlays, as on the form.")
-        _item(f"Where a superficial loss was DENIED "
-              f"({money(filing_total['denied'])} in all) the ACB "
-              f"is REDUCED by it, so the gain stays the allowed "
-              f"one; a deferred denial is added to the ACB of the "
+        _item(f"DENIED (INFO) is information only: where a "
+              f"superficial loss was denied "
+              f"({money(filing_total['denied'])} in all) COST(ACB) "
+              f"is already REDUCED by it, so the gain stays the "
+              f"allowed one; a deferred denial is added to the ACB of the "
               f"replacement property, but one caused by a "
               f"registered-account acquisition is lost for good, "
               f"and one caused by an affiliated person's "
               f"acquisition is permanent for this return (that "
               f"person adds it to their own ACB, s.53(1)(f)) — no "
               f"ACB addition here"
-              + (f" ({money(_permd)} of the DENIED total)"
+              + (f" ({money(_permd)} of the DENIED (INFO) total)"
                  if _permd > 0.005 else "") + ".")
-        _dcon = filing_total.get("denied_contribution") or 0.0
+        # The lines' part, so this and the item above add to DENIED (INFO);
+        # `denied_contribution`, the gains files' total cut to the cent, can
+        # be a cent apart: the rounding note below says so (TJ-5450).
+        _dcon = M.shown(filing_total["denied_all"] - filing_total["denied"], 2)
         if _dcon > 0.005:
+            # In DENIED (INFO) with the superficial losses: one figure per
+            # sale in every report and the gains-cra CSV (TJ-5341).
             _item(f"Denied: contribution to a registered plan — "
                   f"{money(_dcon)} of losses on in-kind "
                   f"contributions to an RRSP/TFSA/... are nil "
-                  f"(s.40(2)(g)(iv)): the ACB shown is reduced by "
+                  f"(s.40(2)(g)(iv)): COST(ACB) is already reduced by "
                   f"them, they are lost for good (no ACB addition "
-                  f"anywhere) and they are not in DENIED.")
+                  f"anywhere) and DENIED (INFO) adds them to the "
+                  f"superficial losses ({money(filing_total['denied_all'])} "
+                  f"in all).")
         if abs(_round_gap) >= 0.005:
             _item(f"Rows are rounded to the cent, as filed: the "
                   f"gains files' unrounded total gain is "
                   f"{money(_engine_gain)} ({M.shown(_round_gap, 2):+,.2f} on "
                   f"the RETURN row).")
         if abs(_denied_gap) >= 0.005:
-            _item(f"Rows are rounded to the cent, as filed: the "
-                  f"gains files' unrounded total {_denied_label} "
-                  f"is {money(_engine_denied)} "
+            # The gains files' total of every kind: the RETURN row's
+            # DENIED (INFO) less its gap (`_denied_info`, TJ-5450).
+            _item(f"Rows are rounded to the cent, as filed: DENIED (INFO)'s "
+                  f"unrounded total in the gains files (every loss denied) is "
+                  f"{money(M.shown(filing_total['denied_all'] - _denied_gap, 2))} "
                   f"({M.shown(_denied_gap, 2):+,.2f} on the RETURN row).")
         if _fx_note is not None:
             _item(_fx_sum_item(_fx_note, money))
@@ -1458,24 +1433,26 @@ def cmd_summary(args: argparse.Namespace) -> None:
               f"{_filing} exclude them.")
     d.blank()
     _sum_tables(d, grouped, group_defs, _table_lines, sheltered_included, acct_rows, _stk, _det,
-                _para, money)
+                _para, money, _acts)
 
     # After the data: the one-line act-on and must-not-miss lines
     # (`_acts`, `_tail`); --details adds the notes they leave out.
     _tail: List[str] = []
     if filing_rows:
-        _names = ", ".join(r["account"] for r in filing_rows)
+        _heading = _sum_return_heading([str(r["account"]) for r in filing_rows],
+                                       m.account_names, base, _fyear, _is_us)
         _ynote = year_not_ended_text(_fyear)
         d.blank()
         if _is_us:
-            _sum_return_us(d, _para, base, _names, _fyear, _ynote, _det, _rounding_legend, money,
-                           filing_line_rows, filing_total, _filing_6781, _acts, _item,
+            _sum_return_us(d, _para, base, _heading, _fyear, _ynote, _det, _rounding_legend,
+                           money, filing_line_rows, filing_total, _filing_6781, _acts, _item,
                            _round_gap, _engine_gain, _denied_gap, _denied_label,
                            _engine_denied, _tail)
         else:
-            _sum_return_ca(d, _para, base, _names, _fyear, _ynote, _det, money, filing_line_rows,
-                           filing_total, _rounding_legend, _fx_note, _acts, _item, _round_gap,
-                           _engine_gain, _denied_gap, _denied_label, _engine_denied, _tail)
+            _sum_return_ca(d, _para, base, _heading, _fyear, _ynote, _det, money,
+                           filing_line_rows, filing_total, _rounding_legend, _fx_note, _acts,
+                           _item, _round_gap, _engine_gain, _denied_gap, _denied_label,
+                           _engine_denied, _tail)
 
     _sum_filing_positions(d, _positions, _is_us, _acts, _det, _para, _item, money)
     if not _det and (_acts or _tail):
@@ -1496,7 +1473,55 @@ def cmd_summary(args: argparse.Namespace) -> None:
                 year or _st.year,
                 _foreign_by_acct, _foreign_by_sec),
             root=root,
-            year=year or _st.year)
+            year=year or _st.year,
+            accounts=_estimate_accounts(m.account_names, taxable_accounts))
+
+
+def _sum_return_heading(read: List[str], names: Optional[Tuple[str, ...]], base: str,
+                        fyear: Any, is_us: bool) -> str:
+    """FOR THE RETURN's heading over the taxable accounts `read`; with
+    ACCOUNT (`names`, `_accounts`'s), never read as the whole return: the
+    taxable ones named, in the order given, and "not the whole return"
+    ("FOR ACCOUNTS margin, beta — CAD (Schedule 3, tax year 2025; not the
+    whole return)"), as `tjs gains-cra` heads the same figures (lib/
+    gains_cra `_totals_heading`)."""
+    form = "Form 8949 → Schedule D" if is_us else "Schedule 3"
+    if names is None:
+        return (f"FOR THE RETURN — taxable accounts ({', '.join(read)}), {base} "
+                f"({form}, tax year {fyear})")
+    shown = [n for n in names if n in read] or read
+    return (f"FOR {'ACCOUNT' if len(shown) == 1 else 'ACCOUNTS'} {', '.join(shown)} — {base} "
+            f"({form}, tax year {fyear}; not the whole return)")
+
+
+def _estimate_accounts(names: Optional[Tuple[str, ...]],
+                       taxable: Any) -> Optional[List[str]]:
+    """The accounts an ACCOUNT's estimate covers, for its lines to name
+    (`_print_tax_estimate` `accounts`): the taxable ones given, in order
+    (else the names given); None for every account."""
+    if names is None:
+        return None
+    return [n for n in names if n in taxable] or list(names)
+
+
+def _estimate_scope(accounts: Optional[Sequence[str]]) -> str:
+    """What an ACCOUNT's estimate line computed on its accounts adds: " for
+    this account" (one name), " for these accounts" (two or more); "" for
+    every account."""
+    if not accounts:
+        return ""
+    return " for this account" if len(accounts) == 1 else " for these accounts"
+
+
+def _estimate_title(title: str, accounts: Optional[Sequence[str]]) -> List[str]:
+    """The estimate's first line: `title`; with ACCOUNT, the accounts it
+    covers alone after it ("..., for accounts margin, beta only"),
+    wrapped to the width (a long list)."""
+    from taxjson.lib import out as _out
+    if not accounts:
+        return [title]
+    return _out.wrap(f"{title}, for {'account' if len(accounts) == 1 else 'accounts'} "
+                     f"{', '.join(accounts)} only", None)
 
 
 def cmd_estimate(args: argparse.Namespace) -> None:
@@ -1682,17 +1707,18 @@ def _estimate_tail(r: Dict[str, Any], year: Any, details: bool, short: str,
 
 
 def _ca_rows(r: Dict[str, Any], est: Dict[str, float], other_income: float, details: bool,
-             RATE_VINTAGE: Any) -> Tuple[List[str], str, str]:
-    """Canada: the title and the legend, then the figure rows (the
-    income, the gains, the dividends and their foreign tax credit,
-    the deductions). With them, the 15% and the credit's basis the
-    --verbose trace names."""
+             RATE_VINTAGE: Any, accounts: Optional[Sequence[str]] = None
+             ) -> Tuple[List[str], str, str]:
+    """Canada: the title (with ACCOUNT, the `accounts` it covers alone)
+    and the legend, then the figure rows (the income, the gains, the
+    dividends and their foreign tax credit, the deductions). With them,
+    the 15% and the credit's basis the --verbose trace names."""
     from taxjson.lib import tax_estimate as _TE
     money = fmt_money
     lines: List[str] = []
     _push = lines.append
-    _push(f"TAX ESTIMATE — canada/{r['province']}, rates vintage "
-          f"{RATE_VINTAGE}")
+    lines += _estimate_title(f"TAX ESTIMATE — canada/{r['province']}, rates vintage "
+                             f"{RATE_VINTAGE}", accounts)
     if not details:
         # The legend, directly above the rows it explains.
         _push("ESTIMATE ONLY, not filing numbers: taxable accounts "
@@ -1816,16 +1842,19 @@ def _ca_tax_lines(r: Dict[str, Any], base_cur: str, details: bool) -> List[str]:
 
 
 def _ca_losses_lines(r: Dict[str, Any], root: Optional[Path], cfg: Dict[str, Any], year: Any,
-                     other_losses: float, _g: str) -> List[str]:
-    """Canada: the unused losses and the net capital losses carried in
-    (the carry-back read first: it may warn)."""
+                     other_losses: float, _g: str, scope: str = "") -> List[str]:
+    """Canada: the unused losses (`scope`, `_estimate_scope`: " for this
+    account" / " for these accounts" with ACCOUNT, computed on them) and
+    the net capital losses carried in (a
+    lock's or the one entered: the person's, never scoped) (the
+    carry-back read first: it may warn)."""
     money = fmt_money
     lines: List[str] = []
     _push = lines.append
     # The part of the year's loss [carryover] claimed carries back
     # (T1A) does not carry forward: close-year's lock and
     # `tjs carryover` take it out (backlog TJ-0084).
-    _line = _unused_losses_line(root, cfg, year, r, money, _g)
+    _line = _unused_losses_line(root, cfg, year, r, money, _g, scope)
     if _line:
         _push(_line)
     _ls = (r.get("carry_sources") or {}).get("other_losses")
@@ -1842,9 +1871,11 @@ def _ca_losses_lines(r: Dict[str, Any], root: Optional[Path], cfg: Dict[str, Any
     return lines
 
 
-def _ca_amt_lines(r: Dict[str, Any], base_cur: str, details: bool, _h: str) -> List[str]:
+def _ca_amt_lines(r: Dict[str, Any], base_cur: str, details: bool, _h: str,
+                  scope: str = "") -> List[str]:
     """Canada: the AMT check and the minimum tax carryover (none without
-    an AMT result)."""
+    an AMT result), each heading ending `scope` (", for this account" /
+    ", for these accounts" with ACCOUNT: computed on them)."""
     from taxjson.lib import tax_estimate as _TE
     money = fmt_money
     lines: List[str] = []
@@ -1854,7 +1885,7 @@ def _ca_amt_lines(r: Dict[str, Any], base_cur: str, details: bool, _h: str) -> L
         _push("")
         _push(f"{_h}AMT CHECK — post-2024 minimum tax "
               f"({amt['rate'] * 100:.1f}% over "
-              f"{money(amt['exemption'])} exemption)")
+              f"{money(amt['exemption'])} exemption){scope}")
         _push(f"  {'Adjusted taxable income':<30}"
               f"{money(amt['adjusted_income']):>14}")
         _push(f"  {'Federal minimum tax':<30}"
@@ -1926,7 +1957,7 @@ def _ca_amt_lines(r: Dict[str, Any], base_cur: str, details: bool, _h: str) -> L
         if _cy.get("entered") or _cy.get("created", 0.0) > 0.005:
             _push(f"{_h}MINIMUM TAX CARRYOVER (s.120.2; line 40427)"
                   + (f" — from {_cy['source']}"
-                     if _cy.get("source") else ""))
+                     if _cy.get("source") else "") + scope)
             if _cy.get("entered"):
                 _push(f"  {'Available from prior years':<30}"
                       f"{money(_cy.get('available', 0.0)):>14}")
@@ -2105,16 +2136,19 @@ def _instalment_lines(root: Path, r: Dict[str, Any], year: Any, _h: str) -> List
 
 def _us_lines(r: Dict[str, Any], est: Dict[str, float], other_income: float,
               other_losses: float, lt_losses: float, year: Any, base_cur: str, details: bool,
-              _g: str, RATE_VINTAGE: Any) -> List[str]:
-    """US: the title and the legend, the figure rows, the tax lines and
-    the capital loss carryovers."""
+              _g: str, RATE_VINTAGE: Any, accounts: Optional[Sequence[str]] = None
+              ) -> List[str]:
+    """US: the title (with ACCOUNT, the `accounts` it covers alone) and
+    the legend, the figure rows, the tax lines and the capital loss
+    carryovers (the unused losses "for this account" / "for these
+    accounts" with ACCOUNT, `_estimate_scope`)."""
     from taxjson.lib import tax_estimate as _TE
     money = fmt_money
     lines: List[str] = []
     _push = lines.append
     st_in, lt_in = r["st_input"], r["lt_input"]
-    _push(f"TAX ESTIMATE — usa (single, standard deduction), rates "
-          f"vintage {RATE_VINTAGE}")
+    lines += _estimate_title(f"TAX ESTIMATE — usa (single, standard deduction), rates "
+                             f"vintage {RATE_VINTAGE}", accounts)
     if not details:
         _push("ESTIMATE ONLY, not filing numbers: taxable accounts "
               "only; [ ] says how an amount was built.")
@@ -2163,7 +2197,8 @@ def _us_lines(r: Dict[str, Any], est: Dict[str, float], other_income: float,
               f"{money(r['ordinary_offset'])}{_g}(max "
               f"{M.shown(_TE.US_ORDINARY_LOSS_CAP, 0):,.0f})")
     if r["losses_unused"]:
-        _push(f"  Unused capital losses:{_g}{money(r['losses_unused'])}"
+        _push(f"  Unused capital losses{_estimate_scope(accounts)}:"
+              f"{_g}{money(r['losses_unused'])}"
               f"{_g}(carry forward"
               + (f"; {money(r['offset_used_for_carryover'])} deducted: "
                  f"[carryover] claimed {year}"
@@ -2265,7 +2300,8 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                         carry_sources: Optional[Dict[str, Any]] = None,
                         withheld_assumed: float = 0.0,
                         foreign_div_noncash: float = 0.0,
-                        withholding_by_security=None
+                        withholding_by_security=None,
+                        accounts: Optional[Sequence[str]] = None
                         ) -> None:
     """Marginal tax-estimate block under `tjs sum` — TAXABLE
     accounts only, incremental on top of --other-income. Assumptions
@@ -2276,6 +2312,10 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
     ones tax-logic states), never a literal. Each part returns its
     lines and is printed as soon as it is built: the carry-back's
     warning and an [instalments] refusal follow the lines before them.
+    `accounts` (an ACCOUNT's, `_estimate_accounts`): the title names
+    them, and the lines computed on them (the unused losses, the AMT)
+    say "for this account" / "for these accounts" (`_estimate_scope`);
+    None for every account.
     """
     r = _tax_estimate_result(cfg, est, other_income=other_income,
                              other_losses=other_losses, province=province,
@@ -2307,11 +2347,14 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
 
     print()
     if r["country"] == "canada":
-        lines, _pct15, _basis = _ca_rows(r, est, other_income, details, RATE_VINTAGE)
+        lines, _pct15, _basis = _ca_rows(r, est, other_income, details, RATE_VINTAGE,
+                                         accounts)
         _put(lines)
         _put(_ca_tax_lines(r, base_cur, details))
-        _put(_ca_losses_lines(r, root, cfg, year, other_losses, _g))
-        _put(_ca_amt_lines(r, base_cur, details, _h))
+        _put(_ca_losses_lines(r, root, cfg, year, other_losses, _g,
+                              _estimate_scope(accounts)))
+        _put(_ca_amt_lines(r, base_cur, details, _h,
+                           "," + _estimate_scope(accounts) if accounts else ""))
         if verbose:
             _put(_ca_trace(r, est, other_income, _pct15, _basis))
         if root is not None:
@@ -2322,7 +2365,7 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                             "eligible; no interest, FX on cash or slip gains"))
         return
     _put(_us_lines(r, est, other_income, other_losses, lt_losses, year, base_cur, details, _g,
-                   RATE_VINTAGE))
+                   RATE_VINTAGE, accounts))
     if verbose:
         _put(_us_trace(r, other_income))
     _put(_estimate_tail(r, year, details, "Assumes single filer, standard deduction, "
@@ -2424,8 +2467,10 @@ def _filed_lock_line(root: Optional[Path], cfg: Dict[str, Any], year: Any,
 
 def _unused_losses_line(root: Optional[Path], cfg: Dict[str, Any], year: Any,
                         est: Dict[str, Any], money: Any,
-                        gap: str) -> Optional[str]:
-    """The estimate's "Unused capital losses" line, None with no loss.
+                        gap: str, scope: str = "") -> Optional[str]:
+    """The estimate's "Unused capital losses" line (its label ending
+    `scope`: " for this account" / " for these accounts" with ACCOUNT),
+    None with no loss.
     It never calls the whole loss carry-forward without knowing: a pipe
     keeps this and not the warning (backlog TJ-1423, TJ-1436). The reason
     goes on a line of its own, for the width (backlog TJ-1466)."""
@@ -2433,7 +2478,7 @@ def _unused_losses_line(root: Optional[Path], cfg: Dict[str, Any], year: Any,
     unused = est["losses_unused"]
     cb = _carry_back_or_warn(root, cfg, year, est)
     if cb.unknown:
-        return (f"  Unused capital losses:{gap}{money(unused)}{gap}(before "
+        return (f"  Unused capital losses{scope}:{gap}{money(unused)}{gap}(before "
                 f"any carry-back; the carry-forward is unknown)\n"
                 + ("    The lock the loss carried in came from is stale: "
                    "`tjs carryover`" if "was not closed again" in cb.unknown
@@ -2446,11 +2491,11 @@ def _unused_losses_line(root: Optional[Path], cfg: Dict[str, Any], year: Any,
     if filed:
         left_out += f"\n{filed}"
     if cb.amount > 0.005:
-        return (f"  Unused capital losses:{gap}{money(unused - cb.amount)}"
+        return (f"  Unused capital losses{scope}:{gap}{money(unused - cb.amount)}"
                 f"{gap}(carry forward; {money(cb.amount)} carried back: "
                 f"[carryover] claimed, T1A){_by_year_line(cb)}{left_out}")
     if unused:
-        return (f"  Unused capital losses:{gap}{money(unused)}{gap}"
+        return (f"  Unused capital losses{scope}:{gap}{money(unused)}{gap}"
                 f"(carry forward){left_out}")
     return filed or None    # no loss in the books, one in the return (TJ-1496)
 
@@ -2589,7 +2634,9 @@ def _register_sum(sub: argparse._SubParsersAction) -> None:
     for _p in (p_sum,):
         _add_deduction_flags(_p)
     p_sum.add_argument("account", nargs="?",
-                       help="Account (default: all accounts). No "
+                       help="Account, or accounts separated by commas: "
+                            "ACCOUNT[,ACCOUNT...] (default: all "
+                            "accounts). No "
                             "PERIOD here by design: sum reports the "
                             "tax year's filing basis from the built "
                             "artifacts — windowed views are "
@@ -2603,7 +2650,8 @@ def _register_sum(sub: argparse._SubParsersAction) -> None:
                             "surtax tier, base vs with-investments")
     p_sum.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text")
-    p_sum.set_defaults(func=cmd_summary)
+    # ACCOUNT takes a comma list (lib/account_list; cli/common `_accounts`).
+    p_sum.set_defaults(func=cmd_summary, account_list=True)
 
 
 def _register_estimate(sub: argparse._SubParsersAction) -> None:

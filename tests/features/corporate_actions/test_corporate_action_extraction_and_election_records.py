@@ -186,7 +186,7 @@ class TestS861UsdParent(unittest.TestCase):
             pend = json.loads((root / "work" / "pending_elections.json")
                               .read_text())
             eid = pend["accounts"]["margin"]["pending"][0]["event_id"]
-            r = _run_cli(root, "elect", "margin", "--set",
+            r = _run_cli(root, "elections", "margin", "--set",
                          f"{eid}=rollover_s_86_1", "--hint",
                          "allocated_acb_cad=1400")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
@@ -812,7 +812,7 @@ class TestElectionWording(unittest.TestCase):
                         hints={'fmv_per_share': 0.0})
         self.assertIn('fmv_per_share=0)', err)
         self.assertNotIn('no fmv_per_share hint was given', err)
-        self.assertIn(f'tjs elect margin --set {ev.event_id}=', err)
+        self.assertIn(f'tjs elections margin --set {ev.event_id}=', err)
         _, err = _quiet(resolve_event, ev, 'taxable_disposition', hints={})
         self.assertIn('no fmv_per_share hint was given', err)
 

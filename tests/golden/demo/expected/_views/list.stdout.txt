@@ -1,24 +1,22 @@
 OPEN POSITIONS — CAD, as of the latest data in the books (2024-12-20)
 COST: book cost in CAD after ticker.map, basis: wash-adjusted; DEFERRED: denied losses in it.
-ACCOUNT    SYMBOL                      QTY       COST    COST/SH  DEFERRED  SINCE       NOTE
---------------------------------------------------------------------------------------------------------
-crypto     BTC                        0.05   3,250.83  65,016.68         -  2024-01-18  -
-crypto     ETH                      0.7552   3,685.87   4,880.66         -  2024-03-05  -
-ib         NVDA.US                      10   1,941.30     194.13    117.45  2024-12-05  -
-lira       BCE.TO                      150   7,054.95      47.03         -  2024-10-15  -
-lira       XIU.TO                      200   6,400.00      32.00         -  2024-01-09  -
-lira       ZAG.TO                      200   2,760.00      13.80         -  2024-12-17  -
-margin     PARNT.US                    100   5,401.35      54.01         -  2024-02-05  -
-margin     SAMPG.US                    -20    -498.15      24.91         -  2024-03-18  missing history?
-margin     SAMPW250117C00030000.US      -1    -201.08       2.01         -  2024-11-04  -
-questrade  SHOP.TO                      30   2,854.95      95.16         -  2024-12-10  -
-rrsp       INTC.US                      20     541.35      27.07         -  2024-08-19  -
-tfsa       ENB.TO                      200  11,009.95      55.05         -  2024-11-05  -
-tfsa       RY.TO                        50   6,673.30     133.47         -  2024-01-12  -
-webull     AAPL.US                      75  18,228.34     243.04         -  2024-01-10  -
-webull     SHOP.TO                      30   2,854.95      95.16         -  2024-12-11  -
+ACCOUNT    SYMBOL                      QTY       COST    COST/SH  DEFERRED  SINCE
+--------------------------------------------------------------------------------------
+crypto     BTC                        0.05   3,250.83  65,016.68         -  2024-01-18
+crypto     ETH                      0.7552   3,685.87   4,880.66         -  2024-03-05
+ib         NVDA.US                      10   1,941.30     194.13    117.45  2024-12-05
+lira       BCE.TO                      150   7,054.95      47.03         -  2024-10-15
+lira       XIU.TO                      200   6,400.00      32.00         -  2024-01-09
+lira       ZAG.TO                      200   2,760.00      13.80         -  2024-12-17
+margin     PARNT.US                    100   5,401.35      54.01         -  2024-02-05
+margin     SAMPW250117C00030000.US      -1    -201.08       2.01         -  2024-11-04
+questrade  SHOP.TO                      30   2,854.95      95.16         -  2024-12-10
+rrsp       INTC.US                      20     541.35      27.07         -  2024-08-19
+tfsa       ENB.TO                      200  11,009.95      55.05         -  2024-11-05
+tfsa       RY.TO                        50   6,673.30     133.47         -  2024-01-12
+webull     AAPL.US                      75  18,228.34     243.04         -  2024-01-10
+webull     SHOP.TO                      30   2,854.95      95.16         -  2024-12-11
 
-15 position(s), total book cost 71,957.91 CAD
-! 1 short position(s) with no purchase in your files (missing history?) — tjs list --negative
+14 position(s), total book cost 72,456.06 CAD
 DEFERRED in the cost:  117.45 CAD of denied superficial losses (s.54)
 More: tjs list --details (notes)

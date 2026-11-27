@@ -1,0 +1,15 @@
+[settings]
+country                           = "canada"
+local_timezone                    = "America/Toronto"
+tax_date                          = "settle"
+year                              = 2025
+base_currency                     = "CAD"
+source_currencies                 = ["USD"]
+option_grant_timing_since         = 2024
+fx_cash_ledger                    = "v2"
+
+[accounts.margin]
+type = "taxable"
+
+[accounts.tfsa]
+type = "sheltered"

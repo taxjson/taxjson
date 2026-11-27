@@ -82,14 +82,13 @@ class TestOptionBoundaryReadsTheCode(unittest.TestCase):
     def test_closing_sale_is_not_a_write(self):
         from taxjson.lib.option_boundary import straddling, expired_open
         book = _book(_parsed(OPTION_ROWS))
+        # The sale coded C closed a call bought before the data: it is no
+        # write lot and leaves no written contract open (lib/unbacked_close,
+        # backlog TJ-5349; it was a `broker-closing` lot and a position
+        # open past its expiry).
         rows = straddling(book, 2025, 'grant', 2025, today=date(2026, 3, 1))
-        r, = rows
-        self.assertEqual(r['close_kind'], 'broker-closing')
-        self.assertIn('broker says closing (IB code C', r['where'])
-        self.assertNotIn('expiry', r['action'])
-        self.assertTrue(r['attention'])
-        x, = expired_open(book, 2025, today=date(2026, 3, 1))
-        self.assertTrue(x['broker_closing'])
+        self.assertEqual(rows, [])
+        self.assertEqual(expired_open(book, 2025, today=date(2026, 3, 1)), [])
 
     def test_genuine_write_unchanged(self):
         from taxjson.lib.option_boundary import straddling

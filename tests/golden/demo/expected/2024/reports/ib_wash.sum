@@ -3,8 +3,7 @@
 ======================================================================
 note: FX: Bank of Canada Valet for <n> dates, Yahoo fallback for 0
 OK: <merged>: 9 transactions validated.
-warning: ATTENTION: short: SAMPG.US (margin): the broker codes the sale on 2024-03-18 CLOSING (IB code C, IB Basis 301.00 USD), but the data holds no position to close — it is booked as a new short until the missing purchase is supplied (`tjs find-missing-history --write-missing-history` writes its .tt OPENING cost=unknown line).
-NOTE: 1 (symbol, account) pair(s) go short in this data: SAMPG.US/margin. 0 are in registered accounts. If any of these are sales of shares bought before your files start (no purchase in the data) rather than real short trades, open the units held before the data with .tt OPENING cost=unknown lines: `tjs find-missing-history --write-missing-history` in a project writes them (`tjs run` reads them).
+warning: ATTENTION: short: SAMPG.US (margin): the broker codes the sale on 2024-03-18 CLOSING (IB code C, IB Basis 301.00 USD), but the data holds no position to close — it is reported by hand, out of the totals, and adds no short, until the missing purchase is supplied (the earlier export, or a .tt purchase line: `tjs find-missing-history --write-purchases` drafts one from the broker's own cost).
 note: ib_demo.csv: 12 recognized non-event row(s) not translated — Dividends subtotal row: 1, Statement metadata row: 2, section Account Information (not translated): 2, section Cash Report (not translated): 7.
   ib_demo.csv: 9 tax objects
 ======================================================================

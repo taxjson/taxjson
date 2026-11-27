@@ -1,11 +1,23 @@
 """`tjs gains-cra`: the tax year's dispositions one row per sale, in the
-CRA's column layout: Sale date, Settle date, Description, Qty, Proceeds in
-the trade's currency, FX, then Proceeds, ACB, Commissions and Gain/Loss in
-the base currency (CAD).
+CRA's column layout: SALE DATE, SETTLE DATE, DESCRIPTION, QTY, PROCEEDS in
+the trade's currency, FX, then PROCEEDS, COST(ACB), OUTLAYS and GAIN in
+the base currency (CAD), named as `tjs sum` names them (one name for
+one figure in every table: TJ-5341's P3-10), and DENIED (INFO): every
+loss denied (the superficial loss, deferred or for good, and an in-kind
+contribution's, as the CSV's Denied column adds them: `denied_all`,
+TJ-5341), information only, COST(ACB) already reduced by it
+(lib/gain_columns, one meaning in every report). The CSV keeps its own
+header (CSV_COLUMNS). The text is always the whole of it (TJ-5337):
+every column and every word, each row's own note with its date and
+description, the rounding with both figures; a currency's table stacks
+its headings and wraps a long description within its column to fit the
+width (TJ-5342, `_table_lines`). The totals, ALL SALES and FOR THE
+RETURN, are in `tjs sum`'s columns and layout (lib/gain_columns `table`,
+TJ-5336), and line up with each other.
 
 A row's four CAD cells are Schedule 3's cells for that one disposition:
 lib/tax_forms `schedule3_disposition` (the part of `build_schedule3` each
-disposition adds: the sale commission split out, a grant-timing write's
+disposition adds: the sale commission split out, a written option's
 premium gross, a short sale's proceeds, a futures contract's settled P/L, a
 rebate kept netted, the allowed gain) footed alone by `_foot_cells`. The
 line totals and the grand total are build_schedule3's own, the rows `tjs
@@ -35,6 +47,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
+from taxjson.lib import gain_columns as GCOL
 from taxjson.lib import out as _out
 from taxjson.lib import tax_forms as TF
 from taxjson.lib.futures import is_plain_future
@@ -53,11 +66,11 @@ RATE_PLACES = 4
 CSV_COLUMNS = ("Sale date", "Settle date", "Description", "Symbol", "Qty", "Currency",
                "Proceeds (native)", "FX", "Proceeds (CAD)", "ACB (CAD)",
                "Commissions (CAD)", "Gain/Loss (CAD)", "Denied (CAD)", "Account", "Notes")
-_MIN_DESC = len("Description")
 _CELLS = ("proceeds", "acb", "outlays", "gain")
 # A row's denied losses (`denied` holds `permanently_denied`; an in-kind
-# contribution's apart), added per table and for every row in --json.
-_DENIED = ("denied", "permanently_denied", "denied_contribution")
+# contribution's apart; `denied_all` every kind added, DENIED (INFO)'s
+# figure), added per table and for every row in --json.
+_DENIED = ("denied", "permanently_denied", "denied_contribution", "denied_all")
 _NONE = "—"
 # The tolerances of the native × FX check: a rate-table row's product is
 # the conversion's own (one cent for the cell's rounding); a weighted rate
@@ -198,12 +211,15 @@ _SHARED = {
     "future": "a future: its settled P/L (a gain as proceeds, a loss as ACB), not the "
               "notional",
     "short_sale": "a short sale: Proceeds is what it brought in, ACB what covering it cost",
+    "assigned_premium_fx": "FX: the shares' at the sale's rate; the premium of the call "
+                           "assigned, in these proceeds, at its write's rate (CA-OPT-06)",
 }
 _SHARED_AS_IS = frozenset(("weighted_fx", "futures_fx"))
 _UNSHOWN = frozenset(("nothing_received",))
-# A denial: one mark per kind in a table, its sentence naming the table's
-# rows and total (`_denial_sentence`); each row's own amount is in
-# --details under it, the CSV's Denied column and the JSON.
+# A denial: one mark per kind in a table, its sentence counting the
+# table's rows and adding their amounts (`_denial_sentence`); each row's
+# own amount, every kind added, is in its DENIED (INFO) cell, as in the
+# CSV's Denied column (TJ-5341), each kind apart in the JSON.
 _DENIAL_KINDS = ("denied", "denied_permanent", "denied_contribution")
 
 
@@ -266,6 +282,12 @@ def _fx_cells(e: Dict[str, Any], d: Dict[str, Any], nat: Native, proceeds: float
             notes.append(("fx_check", f"{fmt_money(native)} {cur} × {_rate_text(rate)} = "
                          f"{fmt_money(M.present(exact, 2))}, not the Proceeds ({base}) "
                          f"{fmt_money(proceeds)}"))
+            if how == "rate_table" and GainRow(e).write_outlay:
+                # An assigned call's shares: the premium folded into the
+                # proceeds was converted at the write's rate (its
+                # commission, `write_outlay`, with it), the rest at the
+                # sale's, as a bought-back write's FX is the write's.
+                notes.append(("assigned_premium_fx", _SHARED["assigned_premium_fx"]))
     return native, rate, how if rate is not None else "", notes, why
 
 
@@ -315,6 +337,8 @@ def _row(e: Dict[str, Any], nat: Native, base: str, year: Optional[int],
         "proceeds": proceeds, "acb": c["acb"], "outlays": c["outlays"], "gain": c["gain"],
         "denied": c["denied"], "permanently_denied": c["perm_denied"],
         "denied_contribution": c["denied_contrib"],
+        # DENIED (INFO): every kind added (the CSV's Denied, `denied_total`).
+        "denied_all": M.json_money(M.exact_sum((c["denied"], c["denied_contrib"])), 2),
         "notes": [t for _k, t in notes], "note_kinds": [k for k, _t in notes],
         "_fx_why": fx_why,
     }
@@ -343,8 +367,29 @@ def _note_units(rows: List[Dict[str, Any]]) -> None:
 
 
 def _sum_cells(rows: Sequence[Dict[str, Any]], keys: Sequence[str]) -> Dict[str, float]:
-    """The cells added exactly (each is cents already), as JSON floats."""
-    return {k: M.json_money(M.exact_sum(r[k] for r in rows), 2) for k in keys}
+    """The cells added exactly (each is cents already), as JSON floats,
+    with TOTAL COST (`total_cost`: COST(ACB) + OUTLAYS, the added cells)."""
+    out = {k: M.json_money(M.exact_sum(r[k] for r in rows), 2) for k in keys}
+    return _with_total_cost(out)
+
+
+def _with_total_cost(t: Dict[str, Any]) -> Dict[str, Any]:
+    """`t` with `total_cost` after its `outlays`: `acb` + `outlays` as
+    shown, as `tjs sum` adds it (cli/estimate `_return_figures`)."""
+    out: Dict[str, Any] = {}
+    for k, v in t.items():
+        out[k] = v
+        if k == "outlays":
+            out["total_cost"] = M.json_money(M.of(t["acb"]) + M.of(v), 2)
+    return out
+
+
+def _line_denied_all(ln: Dict[str, Any]) -> float:
+    """A Schedule 3 line's DENIED (INFO), `denied_all`: its superficial
+    losses denied and its in-kind contributions' (build_schedule3's
+    `denied` and `denied_contribution`) added, as `tjs sum` adds them
+    (cli/estimate `_return_figures`)."""
+    return M.json_money(M.exact_sum((ln["denied"], ln.get("denied_contribution") or 0)), 2)
 
 
 def _distinct_tickers(rows: List[Dict[str, Any]]) -> None:
@@ -367,9 +412,12 @@ def _distinct_tickers(rows: List[Dict[str, Any]]) -> None:
 
 
 def report(entries: List[Dict[str, Any]], natives: List[Native], *, year: Optional[int],
-           date_key: str, base: str, account: Optional[str] = None) -> Dict[str, Any]:
+           date_key: str, base: str, account: Optional[str] = None,
+           account_names: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     """The `--json` document (before its readiness record): `scope`
-    ({"account": ACCOUNT}, or None for every taxable account), `rows` (one
+    ({"account": ACCOUNT, the text given, "account_names": its names in
+    the order given, lib/account_list; `account_names` defaults to
+    [ACCOUNT]}, or None for every taxable account), `rows` (one
     per disposition, sorted by sale date, account, symbol), `tables` (one
     per native currency: its rows' cells and denied losses added, the base
     currency's first; a foreign one's native total, the rows it leaves out
@@ -377,8 +425,12 @@ def report(entries: List[Dict[str, Any]], natives: List[Native], *, year: Option
     denied losses added), and Schedule 3's own `lines` (build_schedule3
     over the same entries: the
     figures `tjs form-export` and `tjs sum` show, each with what its rows
-    add to) with `totals` the lines added as `tjs sum`'s RETURN row adds
-    them (with an ACCOUNT, `tjs sum ACCOUNT`'s)."""
+    add to, and its `short` words, sum's label's) with `totals` the lines
+    added as `tjs sum`'s RETURN row adds them (with an ACCOUNT, `tjs sum
+    ACCOUNT`'s). Every total and line has `total_cost` (`acb` +
+    `outlays`, TOTAL COST), and every row, table, line (its `rows_sum`
+    too) and total `denied_all`, DENIED (INFO): every kind of denied
+    loss added (TJ-5341), beside `denied`, the superficial losses."""
     rows = [_row(e, n, base, year, date_key) for e, n in zip(entries, natives)]
     rows.sort(key=lambda r: (r["date"], r["account"], r["symbol"], r["id"]))
     _note_units(rows)
@@ -405,16 +457,22 @@ def report(entries: List[Dict[str, Any]], natives: List[Native], *, year: Option
     lines = []
     for ln in rep["lines"]:
         lrows = [r for r in rows if r["line_key"] == ln["key"]]
-        sums = _sum_cells(lrows, _CELLS + ("denied",))
+        sums = _sum_cells(lrows, _CELLS + ("denied", "denied_all"))
         units = M.units(sum(r["qty"] - r["units_counted_elsewhere"] for r in lrows), 8)
-        lines.append({**{k: ln[k] for k in ("key", "line", "title", "proceeds_code",
+        lines.append({**{k: ln[k] for k in ("key", "line", "title", "short", "proceeds_code",
                                             "gain_code", "period", "dispositions")},
-                      **{k: ln[k] for k in _CELLS + ("denied",)},
+                      **_with_total_cost({k: ln[k] for k in _CELLS + ("denied",)}),
+                      "denied_all": _line_denied_all(ln),
                       "units": units, "rows_sum": sums})
-    totals = {k: M.shown(sum(ln[k] for ln in rep["lines"]), 2) + 0.0
-              for k in _CELLS + ("denied",)}
+    totals = _with_total_cost({k: M.shown(sum(ln[k] for ln in rep["lines"]), 2) + 0.0
+                               for k in _CELLS + ("denied",)})
+    # The lines' DENIED (INFO) added, as `tjs sum`'s RETURN row adds them.
+    totals["denied_all"] = M.json_money(M.exact_sum(ln["denied_all"] for ln in lines), 2)
+    scope = ({"account": account,
+              "account_names": [str(n) for n in (account_names or (account,))]}
+             if account else None)
     return {"form": "schedule3", "year": year, "currency": base, "date_basis": date_key,
-            "scope": {"account": account} if account else None,
+            "scope": scope,
             "rows": rows, "tables": tables,
             "rows_total": {"rows": len(rows), **_sum_cells(rows, _CELLS + _DENIED)},
             "lines": lines, "totals": totals}
@@ -433,7 +491,8 @@ def _denied_amount(r: Dict[str, Any], kind: str) -> Decimal:
 
 
 def denied_total(r: Dict[str, Any]) -> Decimal:
-    """A row's denied losses, every kind added (the CSV's Denied)."""
+    """A row's denied losses, every kind added (the CSV's Denied; its
+    DENIED (INFO) cell and `denied_all`, the same figure)."""
     return M.exact_sum((r["denied"], r["denied_contribution"]))
 
 
@@ -443,14 +502,14 @@ def _denial_sentence(kind: str, rows: List[Dict[str, Any]], base: str) -> str:
     count = (f"1 row, {total} {base}" if len(rows) == 1
              else f"{len(rows)} rows, {total} {base} in all")
     if kind == "denied":
-        return (f"superficial loss denied ({count}): each row's ACB is reduced by its "
-                f"denied loss, so Gain/Loss is the allowed part; the denied loss is added "
+        return (f"superficial loss denied ({count}): each row's COST(ACB) is reduced by its "
+                f"denied loss, so GAIN is the allowed part; the denied loss is added "
                 f"to the replacement's ACB")
     if kind == "denied_permanent":
         return (f"superficial loss denied for good ({count}; a registered-account or "
-                f"affiliated buy-back): each row's ACB is reduced by it")
+                f"affiliated buy-back): each row's COST(ACB) is reduced by it")
     return (f"loss on an in-kind contribution to a registered plan, denied for good "
-            f"({count}): each row's ACB is reduced by it")
+            f"({count}; s.40(2)(g)(iv)): each row's COST(ACB) is reduced by it")
 
 
 def _shown_note(r: Dict[str, Any], kind: str, text: str,
@@ -470,9 +529,8 @@ def _shown_note(r: Dict[str, Any], kind: str, text: str,
     return text, kind in _SHARED_AS_IS
 
 
-# A note under a table: its mark, its row (None: shared), its text, and
-# the lines --details lists under it (a denial's rows and amounts).
-NoteLine = Tuple[int, Optional[Dict[str, Any]], str, List[str]]
+# A note under a table: its mark, its row (None: shared) and its text.
+NoteLine = Tuple[int, Optional[Dict[str, Any]], str]
 
 
 def _marks(rows: List[Dict[str, Any]], start: int, base: str
@@ -480,8 +538,7 @@ def _marks(rows: List[Dict[str, Any]], start: int, base: str
     """Each row's footnote marks ("[1,2]", in order) and the notes they
     number: a row's own note its own number; a shared one (`_shown_note`)
     the number it got at its first row in this table, its note once (no
-    row); a denial's with its rows' own amounts ("2025-05-05 QZLS: 100.00
-    CAD") for --details."""
+    row): a denial's one per kind, its rows counted and added."""
     marks: List[str] = []
     notes: List[NoteLine] = []
     shared: Dict[str, int] = {}
@@ -499,11 +556,7 @@ def _marks(rows: List[Dict[str, Any]], start: int, base: str
             else:
                 n += 1
                 mark = n
-                subs = ([f"{x['date']} {x['description']}: "
-                         f"{fmt_money(_denied_amount(x, kind))} {base}"
-                         for x in rows if kind in x["note_kinds"]]
-                        if kind in denials else [])
-                notes.append((n, None if is_shared else r, shown, subs))
+                notes.append((n, None if is_shared else r, shown))
                 if is_shared:
                     shared[shown] = n
             if str(mark) not in ids:
@@ -512,75 +565,110 @@ def _marks(rows: List[Dict[str, Any]], start: int, base: str
     return marks, notes
 
 
-def _desc_cells(descs: List[str], marks: List[str], room: Optional[int]) -> List[str]:
-    """The Description cells: each with its marks, cut with an ellipsis
-    to `room` columns (None: whole)."""
-    out = []
-    for d, m in zip(descs, marks):
-        if room is not None and len(d) + len(m) > room:
-            keep = max(1, room - len(m) - 1)
-            d = d[:keep].rstrip() + "…"
-        out.append(d + m)
+# A currency table's columns (TJ-5342): each heading on up to three lines,
+# bottom-aligned, and its one-line name (a record's label). The money
+# columns in `tjs sum`'s names (lib/gain_columns HEADS, TOTAL COST aside):
+# one name for one figure in every table (TJ-5341's P3-10).
+def _heads(cur: str, base: str, foreign: bool) -> Tuple[List[str], List[str]]:
+    stacked: List[Tuple[str, ...]] = [("SALE", "DATE"), ("SETTLE", "DATE"), ("DESCRIPTION",),
+                                      ("QTY",)]
+    if foreign:
+        stacked += [("PROCEEDS", f"({cur})"), ("FX",)]
+    stacked += [("PROCEEDS", f"({base})"), ("COST(ACB)", f"({base})"),
+                ("OUTLAYS", f"({base})"), ("GAIN", f"({base})"),
+                ("DENIED", "(INFO)", f"({base})")]
+    depth = max(map(len, stacked))
+    heads = ["\n".join(("",) * (depth - len(h)) + h) for h in stacked]
+    names = [" ".join(h) for h in stacked]
+    return heads, names
+
+
+_DESC = 2                     # the DESCRIPTION column
+_DESC_MIN = len("DESCRIPTION")
+
+
+def _wrapped(text: str, mark: str, room: Optional[int]) -> List[str]:
+    """A Description's lines within `room` (None: one line), at word
+    boundaries, the marks on the first line beside the figures; a word
+    longer than the room stays whole."""
+    if room is None or len(text) + len(mark) <= room:
+        return [text + mark]
+    out: List[str] = []
+    cur, limit = "", room - len(mark)
+    for word in text.split():
+        if cur and len(cur) + 1 + len(word) > limit:
+            out.append(cur)
+            cur, limit = word, room
+        else:
+            cur = f"{cur} {word}" if cur else word
+    out.append(cur)
+    out[0] += mark
     return out
 
 
 def _table_lines(rows: List[Dict[str, Any]], table: Dict[str, Any], base: str,
                  marks: List[str], width: int) -> List[str]:
-    """One currency's table, its Description cut to fit `width` (0: whole):
-    a money column is never dropped."""
+    """One currency's table, every column and every word at any width
+    (TJ-5342): the headings on up to three lines; too wide, each
+    Description wraps at word boundaries within its column (never under
+    its heading's width), its continuation lines holding it alone, its
+    marks on the first line; narrower still, one record per row. Width 0:
+    whole and unwrapped. DENIED (INFO) is a row's losses denied, every
+    kind added (`denied_all`, lib/gain_columns: the CSV's Denied, TJ-5341),
+    empty when it has none; the subtotal always shows its figure. The
+    money columns in `tjs sum`'s names (`_heads`), the CRA's columns only:
+    no TOTAL COST."""
     foreign = table["currency"] != base
     cur = table["currency"]
-    heads = ["Sale date", "Settle date", "Description", "Qty"]
-    if foreign:
-        heads += [f"Proceeds\n({cur})", "FX"]
-    heads += [f"Proceeds\n({base})", f"ACB\n({base})", f"Commissions\n({base})",
-              f"Gain/Loss\n({base})"]
-    aligns = ["<", "<", "<", ">"] + ([">", ">"] if foreign else []) + [">"] * 4
-
-    def body(descs: List[str]) -> List[List[str]]:
-        out = []
-        for r, desc in zip(rows, descs):
-            cells = [r["date"], r["date_settle"], desc, fmt_qty(r["qty"])]
-            if foreign:
-                cells += [_NONE if r["native_proceeds"] is None
-                          else _money_text(r["native_proceeds"]),
-                          _NONE if r["fx_rate"] is None else _rate_text(M.of(r["fx_rate"]))]
-            cells += [_money_text(r[k]) for k in _CELLS]
-            out.append(cells)
-        return out
-
-    left_out = table.get("native_missing") or 0
-    # The native total adds the rows that have one: how many it leaves out.
-    foot = [["Subtotal", "",
-             f"({cur}: {len(rows) - left_out} of {len(rows)} rows)" if left_out else "", ""]
-            + ([_money_text(table["native_proceeds"]), ""] if foreign else [])
-            + [_money_text(table[k]) for k in _CELLS]]
+    heads, names = _heads(cur, base, foreign)
+    aligns = ["<", "<", "<", ">"] + ([">", ">"] if foreign else []) + [">"] * 5
     # A broker's name, shown to a person: its control characters escaped
     # (fit_table escapes nothing at width 0).
-    descs = [_out.printable(r["description"]) for r in rows]
-    whole = _out.fit_table(heads, body(_desc_cells(descs, marks, None)), aligns=aligns,
-                           foot=foot, width_=0)
-    over = max(map(len, whole), default=0) - width
-    if width <= 0 or over <= 0:
-        return whole
-    desc_w = max(len(c) for c in _desc_cells(descs, marks, None))
-    room = max(_MIN_DESC, desc_w - over)
-    return _out.fit_table(heads, body(_desc_cells(descs, marks, room)), aligns=aligns,
-                          foot=foot, width_=0)
+    lead = []
+    for r, mark in zip(rows, marks):
+        cells = [r["date"], r["date_settle"], _out.printable(r["description"]), fmt_qty(r["qty"])]
+        if foreign:
+            cells += [_NONE if r["native_proceeds"] is None
+                      else _money_text(r["native_proceeds"]),
+                      _NONE if r["fx_rate"] is None else _rate_text(M.of(r["fx_rate"]))]
+        cells += [_money_text(r[k]) for k in _CELLS]
+        cells.append(_money_text(r["denied_all"]) if M.of(r["denied_all"]) else "")
+        lead.append((cells, mark))
+    left_out = table.get("native_missing") or 0
+    # The native total adds the rows that have one: how many it leaves out.
+    foot = (["SUBTOTAL", "",
+             f"({cur}: {len(rows) - left_out} of {len(rows)} rows)" if left_out else "", ""]
+            + ([_money_text(table["native_proceeds"]), ""] if foreign else [])
+            + [_money_text(table[k]) for k in _CELLS + ("denied_all",)])
+
+    def lines(room: Optional[int]) -> List[str]:
+        def rows_of(cells: List[str], mark: str) -> List[List[str]]:
+            parts = _wrapped(cells[_DESC], mark, room)
+            first = cells[:_DESC] + [parts[0]] + cells[_DESC + 1:]
+            return [first] + [["", "", p] + [""] * (len(cells) - 3) for p in parts[1:]]
+        body = [ln for cells, mark in lead for ln in rows_of(cells, mark)]
+        return _out.fit_table(heads, body, aligns=aligns, foot=rows_of(foot, ""), width_=0)
+
+    full = lines(None)
+    wide = max(map(len, full))
+    if width <= 0 or wide <= width:
+        return full
+    desc = max([_DESC_MIN, len(foot[_DESC])] + [len(c[_DESC] + m) for c, m in lead])
+    fitted = lines(max(_DESC_MIN, width - (wide - desc)))
+    if max(map(len, fitted)) <= width:
+        return fitted
+    return _out.records(names, [c[:_DESC] + [c[_DESC] + m] + c[_DESC + 1:] for c, m in lead]
+                        + [foot], width, key=(0, _DESC))
 
 
-def _note_lines(notes: List[NoteLine], details: bool, width: int) -> List[str]:
+def _note_lines(notes: List[NoteLine], width: int) -> List[str]:
     """The notes under a table, by mark, each wrapped to `width` under its
-    text (`details`: a row's own with its date and description, and a
-    denial's rows with their amounts, a `- ` item each)."""
+    text, a row's own with its date and description."""
     out: List[str] = []
-    for n, r, text, subs in notes:
+    for n, r, text in notes:
         mark = f"[{n}]  "
-        hang = " " * len(mark)
-        out += _out.wrap((f"{r['date']} {r['description']}: " if details and r else "")
-                         + text, width, indent=mark, hang=hang)
-        for sub in subs if details else []:
-            out += _out.wrap(sub, width, indent=hang + "- ", hang=hang + "  ")
+        out += _out.wrap((f"{r['date']} {_out.printable(r['description'])}: " if r else "")
+                         + text, width, indent=mark, hang=" " * len(mark))
     return out
 
 
@@ -594,85 +682,137 @@ def _fx_missing_line(table: Dict[str, Any]) -> str:
             + "; ".join(f"{n} {'row' if n == 1 else 'rows'}: {w}" for w, n in why.items()) + ".")
 
 
-def _lines_table(doc: Dict[str, Any], base: str) -> List[str]:
-    body = [[ln["title"], _money_text(ln["proceeds"]), _money_text(ln["acb"]),
-             _money_text(ln["outlays"]), _money_text(ln["gain"])] for ln in doc["lines"]]
-    rt = doc["totals"]
-    foot = [["Total", *(_money_text(rt[k]) for k in _CELLS)]]
-    return _out.fit_table(["SCHEDULE 3 LINE", f"Proceeds\n({base})", f"ACB\n({base})",
-                           f"Commissions\n({base})", f"Gain/Loss\n({base})"], body,
-                          aligns=["<", ">", ">", ">", ">"], foot=foot)
+_ALL_HEADS = ("TABLE", "ROWS")
 
 
-_NAMES = {"proceeds": "Proceeds", "acb": "ACB", "outlays": "Commissions", "gain": "Gain/Loss"}
+def _all_cells(doc: Dict[str, Any]) -> Tuple[List[List[str]], List[List[str]]]:
+    """ALL SALES' left cells: a row per currency's table, then TOTAL."""
+    return ([[f"Sales in {t['currency']}", str(t["rows"])] for t in doc["tables"]],
+            [["TOTAL", str(doc["rows_total"]["rows"])]])
 
 
-def _rounding_lines(doc: Dict[str, Any], base: str, details: bool) -> List[str]:
+def _all_sales(doc: Dict[str, Any], width: int) -> List[str]:
+    """ALL SALES: each currency's table added, then every row's, in `tjs
+    sum`'s columns and layout (lib/gain_columns `table`), every column;
+    FOR THE RETURN's figures among its references, as its among FOR THE
+    RETURN's (`render`), so the two line up."""
+    rt = doc["rows_total"]
+    lines, _layout = GCOL.table(
+        list(_ALL_HEADS), lambda _labels: [_all_cells(doc)],
+        doc["tables"], [rt], width=width, lines=doc["lines"], total=doc["totals"],
+        keep_denied=True, aligns=["<", ">"])
+    return lines
+
+
+# A line's columns by FOR THE RETURN's names (lib/gain_columns HEADS).
+_NAMES = dict(zip(GCOL.KEYS, GCOL.HEADS))
+
+
+def _rounding_lines(doc: Dict[str, Any], base: str) -> List[str]:
     """Each line whose rows add to other cents than Schedule 3's figure
-    (it rounds each security's total; the rows round each sale): by how
-    much, per column (`details`: both figures)."""
+    (it rounds each security's total; the rows round each sale): both
+    figures, per column (FOR THE RETURN's: TOTAL COST and DENIED (INFO)
+    too), the line by `tjs sum`'s label."""
     out = []
     for ln in doc["lines"]:
         rs = ln["rows_sum"]
-        ks = [k for k in _CELLS if M.cents_apart(ln[k], rs[k])]
+        ks = [k for k in GCOL.KEYS if M.cents_apart(ln[k], rs[k])]
         if not ks:
             continue
-        if details:
-            what = "add to " + ", ".join(f"{_NAMES[k]} {_money_text(rs[k])} (the line "
-                                         f"{_money_text(ln[k])})" for k in ks)
-        else:
-            what = "differ from the line by " + ", ".join(
-                f"{_NAMES[k]} {M.present(M.of(rs[k]) - M.of(ln[k]), 2):+,.2f}" for k in ks)
-        out.append(f"{ln['title']}: the rows {what} {base}: Schedule 3 rounds each "
-                   f"security's total, the rows each sale.")
+        what = ", ".join(f"{_NAMES[k]} {_money_text(rs[k])} (the line {_money_text(ln[k])})"
+                         for k in ks)
+        out.append(f"{GCOL.label(ln)}: the rows add to {what} {base}: Schedule 3 rounds "
+                   f"each security's total, the rows each sale.")
     return out
 
-def render(doc: Dict[str, Any], *, details: bool, width: int,
-           tail: Sequence[str] = (), manual: Sequence[str] = ()) -> "_out.Doc":
-    """The text report: a table per currency (the base currency's first),
-    its notes under it, the tables' total, Schedule 3's lines and their
-    total, the unknown-cost sales (`manual`: form-export's block), then
-    `tail` (the `! ` lines) and the pointer to the long form."""
+
+def _scope_names(scope: Optional[Dict[str, Any]]) -> List[str]:
+    """The accounts the report is scoped to, in the order given ([]: every
+    taxable account): `account_names`, else the one `account`."""
+    if not scope:
+        return []
+    names = scope.get("account_names")
+    if names:
+        return [str(n) for n in names]
+    return [str(scope["account"])] if scope.get("account") else []
+
+
+def _scope_shown(scope: Optional[Dict[str, Any]]) -> str:
+    """"account margin", "accounts margin, beta", or "" for every
+    taxable account: the title's and the empty report's words."""
+    names = _scope_names(scope)
+    if not names:
+        return ""
+    return f"{'account' if len(names) == 1 else 'accounts'} {', '.join(names)}"
+
+
+def _totals_heading(scope: Optional[Dict[str, Any]]) -> str:
+    """The Schedule 3 totals' heading: FOR THE RETURN for every taxable
+    account; with ACCOUNT, the accounts named once and said not to be the
+    whole return ("FOR ACCOUNTS margin, beta — Schedule 3, as tjs sum
+    shows it for these accounts (not the whole return)"), as `tjs sum`
+    heads the same figures (cli/estimate `_sum_return_heading`)."""
+    names = _scope_names(scope)
+    if not names:
+        return "FOR THE RETURN — Schedule 3, as tjs form-export and tjs sum show it"
+    one = len(names) == 1
+    return (f"FOR {'ACCOUNT' if one else 'ACCOUNTS'} {', '.join(names)} — Schedule 3, as "
+            f"tjs sum shows it for {'this account' if one else 'these accounts'} "
+            f"(not the whole return)")
+
+
+def render(doc: Dict[str, Any], *, width: int, tail: Sequence[str] = (),
+           manual: Sequence[str] = ()) -> "_out.Doc":
+    """The text report, all of it at every width (TJ-5337): a table per
+    currency (the base currency's first), its notes under it, the tables'
+    total (ALL SALES), Schedule 3's lines and their total (FOR THE RETURN,
+    as `tjs sum` lays it out), the unknown-cost sales (`manual`:
+    form-export's block), then `tail` (the `! ` lines)."""
     base, year = doc["currency"], doc["year"]
-    acct = (doc.get("scope") or {}).get("account")
+    shown = _scope_shown(doc.get("scope"))
     d = _out.Doc(f"CAPITAL GAINS, ONE ROW PER SALE — {base}, tax year {year}"
-                 + (f", account {acct}" if acct else "")
+                 + (f", {shown}" if shown else "")
                  + ", Schedule 3's cells per disposition")
     if not doc["rows"]:
-        d.line(f"No dispositions in {f'account {acct}' if acct else 'the taxable accounts'} "
+        d.line(f"No dispositions in {shown or 'the taxable accounts'} "
                f"in tax year {year}.")
     else:
-        d.legend("Proceeds − ACB − Commissions = Gain/Loss on each row; FX: the Bank "
-                 "of Canada rate that converted the proceeds.")
+        for forms in _LEGEND:
+            GCOL.legend(d, forms, width)
     start = 0
     for t in doc["tables"]:
         rows = [r for r in doc["rows"] if r["currency"] == t["currency"]]
         marks, notes = _marks(rows, start, base)
         start += len(notes)
         d.section(f"SALES IN {t['currency']}")
-        d.rows(_table_lines(rows, t, base, marks, 0 if details else width))
+        d.rows(_table_lines(rows, t, base, marks, width))
         if _fx_missing_line(t):
             d.blank()
             d.para(_fx_missing_line(t))
         if notes:
             d.blank()
-            d.rows(_note_lines(notes, details, width))
+            d.rows(_note_lines(notes, width))
+    refs: List[Dict[str, Any]] = []
+    left_min = 0
     if len(doc["tables"]) > 1:
         d.section(f"ALL SALES — {base}")
-        body = [[f"Sales in {t['currency']}", str(t["rows"]),
-                 *(_money_text(t[k]) for k in _CELLS)] for t in doc["tables"]]
-        rt = doc["rows_total"]
-        d.rows(_out.fit_table(["TABLE", "ROWS", f"Proceeds\n({base})", f"ACB\n({base})",
-                               f"Commissions\n({base})", f"Gain/Loss\n({base})"], body,
-                              aligns=["<", ">", ">", ">", ">", ">"],
-                              foot=[["Total", str(rt["rows"]),
-                                     *(_money_text(rt[k]) for k in _CELLS)]]))
+        d.rows(_all_sales(doc, width))
+        # FOR THE RETURN lines up with ALL SALES: its cells and its left
+        # block among FOR THE RETURN's references (TJ-5336 review).
+        refs = [*doc["tables"], doc["rows_total"]]
+        body, foot = _all_cells(doc)
+        left_min = GCOL.block_width(_ALL_HEADS, body + foot)
     if doc["lines"]:
-        d.section(f"FOR ACCOUNT {acct} — Schedule 3, as tjs sum {acct} shows it (not the "
-                  f"whole return)" if acct else
-                  "FOR THE RETURN — Schedule 3, as tjs form-export and tjs sum show it")
-        d.rows(_lines_table(doc, base))
-        for ln in _rounding_lines(doc, base, details):
+        head = _totals_heading(doc.get("scope"))
+        if 0 < d.w < len(head):
+            # A long ACCOUNT list: wrapped to the width, as a paragraph.
+            d.blank()
+            d.para(head)
+        else:
+            d.section(head)
+        d.rows(GCOL.return_table(doc["lines"], doc["totals"], width=width,
+                                 keep_denied=True, refs=refs, left_min=left_min)[0])
+        for ln in _rounding_lines(doc, base):
             d.para(ln)
     if manual:
         d.blank()
@@ -680,9 +820,17 @@ def render(doc: Dict[str, Any], *, details: bool, width: int,
     if tail:
         d.blank()
         d.rows(list(tail))
-    if not details and doc["rows"]:
-        d.hint("tjs gains-cra --details", "whole descriptions, the rounding")
     return d
+
+
+# The legend, each line in forms by width (lib/gain_columns `fit_legend`):
+# how every row and total foots, in `tjs sum`'s names, with what FX is,
+# and what DENIED (INFO) is. The tables and the totals name a figure
+# alike (TJ-5341's P3-10), so no line maps one name to another.
+_LEGEND: Tuple["GCOL.Forms", ...] = (
+    tuple((f"{GCOL.IDENTITY}; FX: the Bank of Canada rate{tail}.",)
+          for tail in (" that converted the proceeds", " of the proceeds", "")),
+    GCOL.denied_forms())
 
 
 def csv_rows(doc: Dict[str, Any]) -> List[List[Any]]:

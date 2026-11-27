@@ -2,7 +2,7 @@ T1135 — Foreign Income Verification Statement helper, tax year 2024, CAD
 
 FILING REQUIREMENT — total-cost test, ITA 233.3
 Maximum total cost in 2024: 117,465.80 CAD on 2024-04-22
-=> T1135 FILING REQUIRED (over 100,000.00 CAD): Part A or Part B open (some cash's cost is unknown)
+=> T1135 FILING REQUIRED (over 100,000.00 CAD): Part A or Part B open (some cash's cost is unknown; the cost of SAMPG.US is unknown)
 
 PER PROPERTY — taxable accounts only
 Amounts are cost (ACB), not market value; MAX COST IN YR: the most held at once; FROM: what decided the country.
@@ -17,6 +17,7 @@ INTC.US                 USA      assumed  2            946.35            0.00   
 MSFT.US                 USA      ISIN     2         27,001.35            0.00  101.25      132.30
 NVDA.US                 USA      assumed  2          1,999.35        1,941.30    0.00        0.00
 PARNT.US                USA      ISIN     2          5,401.35        5,401.35  675.00        0.00
+SAMPG.US                USA      ISIN     2              0.00            0.00    0.00        0.00
 SPNCO.US                USA      ISIN     2            675.00            0.00    0.00       66.15
 USD cash (crypto)       CRYPTO   account  1              0.00            0.00    0.00        0.00
 
@@ -29,5 +30,6 @@ USA          111,042.43       25,570.99  800.55      546.72
 ! USD cash (crypto): cost unknown (fx-cash v2 refuses) — tjs fx-cash --ledger v2
 ! SAMPW250117C00030000.US: held only short: an obligation, not a row — tjs t1135 --details
 ! BTC, ETH, USD cash (crypto): crypto, check where held — tjs t1135 --details
+! SAMPG.US: unknown ACB, cost understated — tjs t1135 --details
 ! 4 countries assumed from the listing (no ISIN): cost 81,568.97 CAD — tjs t1135 --details
 Not counted: foreign property outside these books (a foreign bank account, cash held elsewhere) — tjs t1135 --details

@@ -1,5 +1,5 @@
 ══════════════════════════════════════════════════════════════════════════════════════
-EVENT 1/6   SELL 150 SAMPQ.US   2025-02-10   hand   #637030f3f0b0
+EVENT 1/7   SELL 150 SAMPQ.US   2025-02-10   hand   #637030f3f0b0
 ──────────────────────────────────────────────────────────────────────────────────────
   SOURCE       hand_tt_book.json (book.tt)
                2025-02-10 SELL 150 SAMPQ.US @ 6.00 — net 900.00 CAD  [line 9]
@@ -19,7 +19,7 @@ EVENT 1/6   SELL 150 SAMPQ.US   2025-02-10   hand   #637030f3f0b0
     2025-02-10  BUYSELL  -150.0000  6.0000  0.0000  -775.0000         -         -       -
 
 ══════════════════════════════════════════════════════════════════════════════════════
-EVENT 2/6   SELL 1 F:SAMPLMH6.US   2025-03-03   margin   #3d9ef0e047f4
+EVENT 2/7   SELL 1 F:SAMPLMH6.US   2025-03-03   margin   #3d9ef0e047f4
 ──────────────────────────────────────────────────────────────────────────────────────
   SOURCE       margin_ib.json (ib_2025.csv)
                2025-03-03 SELL 1 F:SAMPLMH6.US @ 26.00 — net 129.00 USD, fee 1.00
@@ -40,7 +40,7 @@ EVENT 2/6   SELL 1 F:SAMPLMH6.US   2025-03-03   margin   #3d9ef0e047f4
     2025-03-03  BUYSELL  -1.0000  35.1000  1.3500  -0.0000         -         -       -
 
 ══════════════════════════════════════════════════════════════════════════════════════
-EVENT 3/6   SELL 1 F:SAMPLMH6.US   2025-03-10   margin2   #3cad8d6d3369
+EVENT 3/7   SELL 1 F:SAMPLMH6.US   2025-03-10   margin2   #3cad8d6d3369
 ──────────────────────────────────────────────────────────────────────────────────────
   SOURCE       margin2_ib.json (ib_2025.csv)
                2025-03-10 SELL 1 F:SAMPLMH6.US @ 25.00 — net 124.00 USD, fee 1.00
@@ -62,7 +62,7 @@ EVENT 3/6   SELL 1 F:SAMPLMH6.US   2025-03-10   margin2   #3cad8d6d3369
     2025-03-10  BUYSELL  -1.0000  33.7500  1.3500  -0.0000         -         -       -
 
 ══════════════════════════════════════════════════════════════════════════════════════
-EVENT 4/6   SELL 12 SAMPR.US   2025-03-17   rbc   #e47751d4d9ef
+EVENT 4/7   SELL 12 SAMPR.US   2025-03-17   rbc   #e47751d4d9ef
 ──────────────────────────────────────────────────────────────────────────────────────
   SOURCE       rbc_rbc_direct_corp.json (corporate actions from rbc_2024.csv, rbc_2025.csv)
                2025-03-17 SELL 12 SAMPR.US @ 10.50 — net 126.00 USD  [corp event 20250317-sampr-sampt-1b4d]
@@ -81,7 +81,25 @@ EVENT 4/6   SELL 12 SAMPR.US   2025-03-17   rbc   #e47751d4d9ef
     2025-03-17  BUYSELL  -12.0000  14.1750  0.0000  -162.0000         -         -        -
 
 ══════════════════════════════════════════════════════════════════════════════════════
-EVENT 5/6   SELL 12 SAMPT.US   2025-11-03 (settle 2025-11-04)   rbc   #79b8675ee408
+EVENT 5/7   SELL 15 SAMPLA.US   2025-03-18 (settle 2025-03-19)   margin   #5b42f8e66d08
+──────────────────────────────────────────────────────────────────────────────────────
+  SOURCE       margin_ib.json (ib_2025.csv)
+               2025-03-18 SELL 15 SAMPLA.US @ 40.00 — net 598.50 USD, fee 1.50
+  FX           USD→CAD @ 1.35000  (exact rate for 2025-03-19)
+               598.50 USD × 1.35000 = 807.98 CAD  =  base book ✓
+  DISPOSITION  ACB pool — ITA s.47, blended across taxable accounts
+               proceeds                 807.98   (15 sh @ 53.8650)
+               cost basis                 0.00   (15 sh @ 0.0000)
+               gain                     807.98
+  MANUAL       no purchase in your files (cost unknown) — the gain above is not computed on the return; report this sale by hand
+  TIE-OUT      saved gains file: listed under MANUAL REPORTING REQUIRED  ✓
+
+  Pool history (ACB trace)
+    2025-03-18 OPENING_BALANCE    15.0000   | Missing history (bought before the data) — cost UNKNOWN until the pool drains to zero
+    2025-03-18 BUYSELL   -15.0000 @ 54.0000 | Fee: 2.0250                                                                           | Proceeds:   807.9750 | Cost_Basis:     0.0000 | Gain:   807.9750 | Gain/Sh: 53.8650
+
+══════════════════════════════════════════════════════════════════════════════════════
+EVENT 6/7   SELL 12 SAMPT.US   2025-11-03 (settle 2025-11-04)   rbc   #79b8675ee408
 ──────────────────────────────────────────────────────────────────────────────────────
   SOURCE       rbc_rbc_direct.json (rbc_2024.csv, rbc_2025.csv)
                2025-11-03 SELL 12 SAMPT.US @ 11.00 — net 132.00 USD
@@ -100,7 +118,7 @@ EVENT 5/6   SELL 12 SAMPT.US   2025-11-03 (settle 2025-11-04)   rbc   #79b8675ee
     2025-11-03  BUYSELL  -12.0000  14.8500  0.0000  -162.0000         -         -        -
 
 ══════════════════════════════════════════════════════════════════════════════════════
-EVENT 6/6   SELL 10 SAMPLD.US   2025-11-14 (settle 2025-11-17)   margin2   #f7ffbe1f68f3
+EVENT 7/7   SELL 10 SAMPLD.US   2025-11-14 (settle 2025-11-17)   margin2   #f7ffbe1f68f3
 ──────────────────────────────────────────────────────────────────────────────────────
   SOURCE       margin2_ib.json (ib_2025.csv)
                2025-11-14 SELL 10 SAMPLD.US @ 21.00 — net 209.00 USD, fee 1.00
@@ -122,14 +140,15 @@ EVENT 6/6   SELL 10 SAMPLD.US   2025-11-14 (settle 2025-11-17)   margin2   #f7ff
 ══════════════════════════════════════════════════════════════════════════════════════
 RECONCILIATION   margin, margin2, rbc, hand
 ──────────────────────────────────────────────────────────────────────────────────────
-  events audited                  6
+  events audited                  7
   total gain                 206.00  (unrounded engine sum)
   total disallowed             0.00
-  source rows              6/6 traced to a parsed broker row  ✓
-  sale amounts             6 tied, 0 mismatched (5 converted)  ✓
+  source rows              7/7 traced to a parsed broker row  ✓
+  sale amounts             7 tied, 0 mismatched (6 converted)  ✓
   pool trades              7 tied, 0 mismatched, 0 with no parsed row  ✓
   other pool rows          2 tied, 0 mismatched, 0 with no parsed row  ✓
   pipeline tie-out         6 tied, 0 MISMATCHED, 0 not found  ✓
+                     1 unknown-cost disposition(s) tied to MANUAL REPORTING REQUIRED — reported by hand, not in the total
   not traced         rows with no parsed row (what made each: --details) and a sheltered account's rows: re-run only
 ══════════════════════════════════════════════════════════════════════════════════════
 More: tjs audit --details (what the tie-out compares, and why the totals can differ from the return's rows by cents)

@@ -16,20 +16,29 @@ differently and refuse different shapes, so there is no neutral row set
 to fold. The parse takes it as an input, chosen by rules/country
 `parse_basis`; past it the country only words the messages (the second
 slice; tests/test_characterize.py `TestStablecoinBasis`)."""
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from taxjson.characterize.foreign_roc import (NoteRule, characterize_foreign_roc,
                                               foreign_roc_treatment)
+from taxjson.characterize.no_clock_order import characterize_no_clock_order
 
-__all__ = ["characterize_rows", "characterize_foreign_roc", "foreign_roc_treatment"]
+__all__ = ["characterize_rows", "characterize_foreign_roc", "foreign_roc_treatment",
+           "characterize_no_clock_order"]
 
 
 def characterize_rows(rows: List[Dict[str, Any]], *, country: Optional[str],
                       foreign_return_of_capital: Optional[str] = None,
-                      note_rule: Optional[NoteRule] = None) -> None:
+                      note_rule: Optional[NoteRule] = None,
+                      open_close_days: Sequence[str] = (),
+                      attention: Optional[Callable[[str], None]] = None) -> None:
     """Apply each characterisation to `rows` in place: the parse's
     neutral facts become the rows the country's rules book. `note_rule`
-    hears each row a characterisation booked and the rule it applied."""
+    hears each row a characterisation booked and the rule it applied.
+    `open_close_days`: the parser's words for each no-clock day it left
+    in file order, said through `attention` where the country reorders
+    it (`no_clock_order`)."""
+    characterize_no_clock_order(rows, country=country, days=open_close_days,
+                                attention=attention)
     characterize_foreign_roc(
         rows, treatment=foreign_roc_treatment(country, foreign_return_of_capital),
         country=country, note_rule=note_rule)

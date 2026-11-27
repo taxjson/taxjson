@@ -4,7 +4,7 @@
 Usage:
     taxjson-corp-actions --brokerage ib IB.csv --country canada > corp.json
     taxjson-corp-actions --brokerage ib stmt_q1.csv stmt_q2.csv \\
-        --country canada --manifest elections.json > corp.json
+        --country canada --elections elections.json > corp.json
 
 All events from all years are surfaced — even old ones — because corp
 actions shape inventory across years. An unresolved 2024 spinoff would
@@ -19,14 +19,14 @@ an unresolved event errors out instead of silently picking a default —
 the wrong tax treatment is much worse than a hung pipeline.
 
 Multiple input files: pass several CSV paths and the extractor runs
-once per file; events concatenate. The default hidden-manifest path
-only makes sense for a single file, so `--manifest` is required when
+once per file; events concatenate. The default hidden elections file
+only makes sense for a single file, so `--elections` is required when
 more than one input is given.
 
 Every event prompt also offers an `ignore` option for IB noise rows
 (cross-listing journals, sub-account moves, etc.) that look like corp
 actions but aren't economically taxable events. Ignored events still
-go into the manifest, so future runs skip them silently.
+go into the elections file, so future runs skip them silently.
 """
 from __future__ import annotations
 
@@ -325,14 +325,24 @@ def _load_manifest_or_die(path: Path) -> Manifest:
 
 
 def _update_or_die(path: Path, change):
-    """Manifest.update (load, change, save as one locked step; backlog
-    TJ-0544), its refusals one error line, exit 2, as a load's."""
+    """lib/elections_save `update` (Manifest.update: load, change, save
+    as one locked step, backlog TJ-0544; requires_taxjson raised), its
+    refusals one error line, exit 2, as a load's; a requires_taxjson the
+    save raised one note line each."""
+    from taxjson.lib import elections_save
+    from taxjson.lib.requires import raised_note
     from taxjson.lib.safe_write import LockLinkError
     try:
-        return Manifest.update(path, change)
+        # (the run's prompt and auto-elections, or the tool run alone:
+        # a filed year's lock records the edit as taxjson's)
+        man, result, raised = elections_save.update(path, change,
+                                                    by="taxjson")
     except (ValueError, LockLinkError) as e:
         emit_line(f"taxjson-corp-actions: error: {e}", file=sys.stderr)
         raise SystemExit(2)
+    for line in raised_note(raised, Path(path).parent.parent.parent):
+        emit_line(f"note: {line}.", file=sys.stderr)
+    return man, result
 
 
 def _log_saved(log: Optional[str], records) -> None:
@@ -421,7 +431,7 @@ EXIT_ELECTIONS_REQUIRED = 3
 def _pending_doc(missing: List[CorporateAction], manifest_path: Path,
                  country: str, sheltered: bool = False) -> dict:
     """Machine-readable pending-elections document — everything a GUI
-    (or `tjs elect --set`) needs to resolve each event without a
+    (or `tjs elections --set`) needs to resolve each event without a
     TTY: the event's identity/quantities/source rows, every available
     election with its description, and the numeric hints that election
     would prompt for (hint `needed` predicates evaluated against THIS
@@ -456,7 +466,7 @@ def _pending_doc(missing: List[CorporateAction], manifest_path: Path,
             "ratio_old": ev.ratio_old,
             "source_rows": list(ev.raw_descriptions or []),
             # A spin-off's fraction paid in cash: the holding was
-            # entitled to it too (`tjs elect --pending` says so; the
+            # entitled to it too (`tjs elections --pending` says so; the
             # s.86.1 allocation covers it, CA-CORP-05; backlog TJ-0166).
             "cash_in_lieu": float(ev.cash_in_lieu or 0.0),
             "cash_in_lieu_currency": ev.cash_in_lieu_currency or "",
@@ -471,12 +481,12 @@ def _pending_doc(missing: List[CorporateAction], manifest_path: Path,
             # account depends on it (sheltered_note).
             "sheltered": bool(sheltered),
             # The id the export's spelling gave it, kept with an
-            # election `tjs elect --set` saves (backlog TJ-4616).
+            # election `tjs elections --set` saves (backlog TJ-4616).
             **({"read_event_id": ev.read_event_id}
                if ev.read_event_id else {}),
         })
     return {"schema_version": 1, "country": country,
-            "manifest": str(manifest_path), "pending": pending}
+            "elections_file": str(manifest_path), "pending": pending}
 
 
 def main():
@@ -508,14 +518,14 @@ def main():
     manifest = _load_manifest_or_die(manifest_path)
     # The manifest as the messages name it: the run's own form, never
     # the absolute path it passes (backlog TJ-0216).
-    shown = args.manifest_shown or str(manifest_path)
+    shown = args.elections_shown or str(manifest_path)
 
     # Rekey elections saved under the pre-2026-07 opaque hash ids to
     # the human-legible scheme — silently, before anything consults
     # the manifest, so an id-scheme change never re-prompts for (or
     # orphans) decisions the user already made. Each save is a locked
     # load-change-save of the file as it is then (Manifest.update): an
-    # election `tjs elect --set` saved meanwhile is kept (backlog
+    # election `tjs elections --set` saved meanwhile is kept (backlog
     # TJ-0544).
     if manifest.migrate_legacy(events) and not args.decisions_only:
         manifest, _n = _update_or_die(
@@ -525,7 +535,7 @@ def main():
 
     # Auto-defaults first: event types with exactly one sane treatment
     # (name changes) are elected without prompting — the manifest record
-    # is still written, so the audit trail is intact and `tjs elect
+    # is still written, so the audit trail is intact and `tjs elections
     # --redo` can override like any hand-made election.
     # --ask-event: that event only — another event's election is never
     # saved by a redo of one (backlog TJ-0847).
@@ -541,7 +551,7 @@ def main():
                     if ev.event_id in manifest.records])
         for ev in auto_applied:
             emit_line(f"note: auto-elected {ev.event_id} ({ev.summary()}) — "
-                      f"no decision required; `tjs elect --redo` to "
+                      f"no decision required; `tjs elections --redo` to "
                       f"override.", file=sys.stderr)
 
     missing = _unresolved(events, manifest)
@@ -594,7 +604,7 @@ def main():
                 # only (backlog TJ-1118).
                 manifest.migrate_legacy(events)
                 apply_auto_defaults(in_scope, manifest, args.country)
-        _out.put(f"\nManifest saved to {shown}\n", file=sys.stderr)
+        _out.put(f"\nElections saved to {shown}\n", file=sys.stderr)
 
     fx = _corp_actions_rates(args)
     if not_asked:
@@ -611,8 +621,8 @@ def main():
         # key, a misspelled or missing hint): refuse by name instead of
         # a traceback — or, worse, silently $0 rows (audit S072-07).
         msg = e.args[0] if e.args else str(e)
-        emit_line(f"taxjson-corp-actions: error: {msg} (manifest "
-                  f"{shown})", file=sys.stderr)
+        emit_line(f"taxjson-corp-actions: error: {msg} (the elections "
+                  f"file {shown})", file=sys.stderr)
         raise SystemExit(2)
     # The statements the events were read from, by their shown names:
     # `tjs audit` names them beside a corporate-action row, as a
@@ -625,11 +635,11 @@ def main():
 
 def _corp_actions_parser() -> argparse.ArgumentParser:
     """corp-actions: the parser, with its brokerage, input, country,
-    manifest, account, rates, currency and decisions-only options."""
+    elections file, account, rates, currency and decisions-only options."""
     parser = argparse.ArgumentParser(
         description=(
             "Resolve broker corporate-action events into taxjson rows. "
-            "Manages an elections manifest automatically so re-runs are "
+            "Manages an elections file automatically so re-runs are "
             "deterministic; prompts only when new events appear and a TTY "
             "is available."
         )
@@ -647,7 +657,7 @@ def _corp_actions_parser() -> argparse.ArgumentParser:
         metavar='input',
         help=(
             "Broker statement CSV(s). Multiple files are extracted in "
-            "order and their events concatenated. Use --manifest when "
+            "order and their events concatenated. Use --elections when "
             "passing more than one file."
         ),
     )
@@ -655,19 +665,20 @@ def _corp_actions_parser() -> argparse.ArgumentParser:
         parser, help="Tax jurisdiction whose election rules to apply "
                      "(required): canada | usa")
     parser.add_argument(
-        '--manifest',
+        '--elections',
         help=(
-            "Path to elections manifest. Defaults to `.<csv>.elections` "
+            "Path to the elections file (a project's "
+            "inputs/<account>/elections.json). Defaults to `.<csv>.elections` "
             "next to the input CSV — hidden by leading dot so it doesn't "
             "clutter listings."
         ),
     )
     parser.add_argument(
-        '--manifest-shown', metavar='TEXT', default=None,
-        help="How the messages name the manifest (`tjs run` passes "
-             "it as `tjs elect` shows it: relative to the project, "
-             "../inputs/<account>/manifest.json for shared exports); "
-             "default: --manifest as given.",
+        '--elections-shown', metavar='TEXT', default=None,
+        help="How the messages name the elections file (`tjs run` "
+             "passes it as `tjs elections` shows it: relative to the "
+             "project, ../inputs/<account>/elections.json for shared "
+             "exports); default: --elections as given.",
     )
     parser.add_argument(
         '--account-name',
@@ -698,10 +709,10 @@ def _corp_actions_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         '--decisions-only', action='store_true',
-        help='Save to the manifest only the elections answered at the '
-             'prompt: never a rekey of old ids or an automatic election '
-             '(a manifest shared by every year, written by no run as a '
-             'side effect)')
+        help='Save to the elections file only the elections answered at '
+             'the prompt: never a rekey of old ids or an automatic '
+             'election (a file shared by every year, written by no run as '
+             'a side effect)')
     return parser
 
 
@@ -751,7 +762,7 @@ def _corp_actions_options(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         '--ask-event', metavar='ID', default=None,
-        help="Ask only about this event (`tjs elect --redo --event "
+        help="Ask only about this event (`tjs elections --redo --event "
              "ID`): no other event is asked about or elected, and the "
              "rows of an event that has no election are left out of the "
              "output (`tjs run` asks about it).",
@@ -759,7 +770,7 @@ def _corp_actions_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         '--saved-log', metavar='FILE', default=None,
         help="Append each election this run saves (one JSON line: the "
-             "record) to FILE: `tjs elect --redo` reads it to tell "
+             "record) to FILE: `tjs elections --redo` reads it to tell "
              "its own answers from an election another command saved "
              "meanwhile when it puts the cleared ones back (backlog "
              "TJ-0955).",
@@ -777,7 +788,7 @@ def _corp_actions_options(parser: argparse.ArgumentParser) -> None:
         '--pending-json', metavar='FILE', default=None,
         help="When elections are required and prompting isn't possible, "
              "write the pending events (with their options and hints) "
-             "as JSON to FILE for a GUI or `tjs elect --set` to "
+             "as JSON to FILE for a GUI or `tjs elections --set` to "
              "resolve.",
     )
     parser.add_argument(
@@ -791,7 +802,7 @@ def _corp_actions_options(parser: argparse.ArgumentParser) -> None:
 def _corp_actions_check_args(args: argparse.Namespace) -> Tuple[List[Path], Path]:
     """corp-actions: the base currency (the country's home currency
     unless given), the inputs and the ticker.map checked, and the
-    manifest's path (required when more than one input is given)."""
+    elections file's path (required when more than one input is given)."""
     if not args.base_currency:
         # Country-blind CAD used to be the default (re-audit A2-1363).
         from taxjson.lib.country import home_currency
@@ -811,16 +822,16 @@ def _corp_actions_check_args(args: argparse.Namespace) -> Tuple[List[Path], Path
                   f"{args.ticker_map}", file=sys.stderr)
         raise SystemExit(2)
 
-    if args.manifest:
-        manifest_path = Path(args.manifest)
+    if args.elections:
+        manifest_path = Path(args.elections)
     elif len(csv_paths) == 1:
         manifest_path = _default_manifest_path(csv_paths[0])
     else:
         # The hidden `.<csv>.elections` default would silently bind to
         # one of N files; we'd rather force an explicit choice than guess.
         emit_line(
-            "taxjson-corp-actions: error: --manifest is required when multiple input files are given "
-            "(the default hidden manifest is per-file and can't safely cover "
+            "taxjson-corp-actions: error: --elections is required when multiple input files are given "
+            "(the default hidden elections file is per-file and can't safely cover "
             "multiple CSVs).",
             file=sys.stderr,
         )
@@ -842,7 +853,7 @@ def _corp_actions_refuse(args: argparse.Namespace, missing: List[CorporateAction
             details=[f"- {ev.event_id}: {ev.summary()}"
                      for ev in missing]
             + [f"Answer at a terminal (`tjs run`), or set each "
-               f"with `tjs elect ACCOUNT --set EVENT_ID=ELECTION`; "
+               f"with `tjs elections ACCOUNT --set EVENT_ID=ELECTION`; "
                f"the elections are saved in {shown}."])
         if args.pending_json:
             doc = _pending_doc(missing, manifest_path, args.country,

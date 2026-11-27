@@ -1,4 +1,4 @@
-"""`tjs elect` — view / clear corporate-action elections."""
+"""`tjs elections` — view / clear corporate-action elections."""
 import argparse
 import io
 import json
@@ -7,7 +7,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-from taxjson.cli.elect import cmd_elect
+from taxjson.cli.elections import cmd_elections
 
 _CONFIG = """\
 [settings]
@@ -33,9 +33,9 @@ _MANIFEST = {
 def _project(tmp):
     root = Path(tmp)
     (root / "taxjson.toml").write_text(_CONFIG)
-    cache = root / "work"
-    cache.mkdir()
-    (cache / "margin_manifest.json").write_text(json.dumps(_MANIFEST))
+    acct = root / "inputs" / "margin"
+    acct.mkdir(parents=True)
+    (acct / "elections.json").write_text(json.dumps(_MANIFEST))
     return root
 
 
@@ -44,7 +44,7 @@ def _elect(root, account=None, redo=False, reset=False, event=None):
                               reset=reset, event=event)
     out = io.StringIO()
     with redirect_stdout(out):
-        cmd_elect(args)
+        cmd_elections(args)
     return out.getvalue()
 
 
@@ -63,31 +63,47 @@ class TestElect(unittest.TestCase):
             self.assertIn("163ae89a851c", out)
 
     def test_reset_clears_the_manifest(self):
-        # A legacy work/ manifest is migrated to inputs/<account>/ on first
-        # touch (elections are user decisions — the one non-rebuildable
-        # artifact — so they must not live in the disposable cache). The
-        # reset lands in the migrated copy.
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp)
             _elect(root, account="margin", reset=True)
-            migrated = root / "inputs" / "margin" / "manifest.json"
-            self.assertTrue(migrated.exists())
-            data = json.loads(migrated.read_text())
+            saved = root / "inputs" / "margin" / "elections.json"
+            data = json.loads(saved.read_text())
             self.assertEqual(data["elections"], {})
+
+    def test_a_work_copy_of_an_older_layout_is_refused(self):
+        # work/<account>_manifest.json (elections kept in the disposable
+        # cache, a layout older still) is read by no command: every one
+        # refuses it, naming `tjs migrate`, which moves it into
+        # inputs/<account>/ (elections are user decisions, the one
+        # artifact not rebuildable).
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "taxjson.toml").write_text(_CONFIG)
+            (root / "work").mkdir()
+            (root / "work" / "margin_manifest.json").write_text(
+                json.dumps(_MANIFEST))
+            err = io.StringIO()
+            with self.assertRaises(SystemExit) as cm, redirect_stderr(err):
+                _elect(root, account="margin")
+            self.assertEqual(cm.exception.code, 2)
+            self.assertIn("work/margin_manifest.json: the elections file "
+                          "is now named elections.json", err.getvalue())
+            self.assertIn("`tjs migrate`", err.getvalue())
+            self.assertFalse((root / "inputs").exists())
 
     def test_reset_one_event_keeps_others(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "taxjson.toml").write_text(_CONFIG)
-            cache = root / "work"
-            cache.mkdir()
-            (cache / "margin_manifest.json").write_text(json.dumps({"elections": {
+            acct = root / "inputs" / "margin"
+            acct.mkdir(parents=True)
+            (acct / "elections.json").write_text(json.dumps({"elections": {
                 "aaa": {"summary": "A", "election": "taxable_disposition"},
                 "bbb": {"summary": "B", "election": "rollover_s_85_1_5"},
             }}))
             _elect(root, account="margin", reset=True, event="aaa")
             data = json.loads(
-                (root / "inputs" / "margin" / "manifest.json").read_text())
+                (root / "inputs" / "margin" / "elections.json").read_text())
             self.assertNotIn("aaa", data["elections"])
             self.assertIn("bbb", data["elections"])
 
@@ -109,7 +125,7 @@ class TestElect(unittest.TestCase):
 
 
 class TestElectSet(unittest.TestCase):
-    """`tjs elect ACCOUNT --set EVENT_ID=ELECTION [--hint K=V]` —
+    """`tjs elections ACCOUNT --set EVENT_ID=ELECTION [--hint K=V]` —
     non-interactive election writing for headless/CI bootstrap."""
 
     def _elect_set(self, root, setarg, hints=None):
@@ -117,9 +133,9 @@ class TestElectSet(unittest.TestCase):
                                   redo=False, reset=False, event=None,
                                   set=setarg, hint=hints or [])
         out = io.StringIO()
-        from taxjson.cli.elect import cmd_elect
+        from taxjson.cli.elections import cmd_elections
         with redirect_stdout(out):
-            cmd_elect(args)
+            cmd_elections(args)
         return out.getvalue()
 
     def test_set_writes_election_with_hints(self):
@@ -130,11 +146,11 @@ class TestElectSet(unittest.TestCase):
                 self._elect_set(root, "163ae89a851c=taxable_disposition",
                                 hints=["fmv_per_share=12.5"])
             data = json.loads(
-                (root / "inputs" / "margin" / "manifest.json").read_text())
+                (root / "inputs" / "margin" / "elections.json").read_text())
             rec = data["elections"]["163ae89a851c"]
             self.assertEqual(rec["election"], "taxable_disposition")
             self.assertEqual(rec["hints"]["fmv_per_share"], 12.5)
-            self.assertIn("elect --set", rec["notes"])
+            self.assertIn("elections --set", rec["notes"])
             # Prior summary is preserved (the record existed).
             self.assertIn("merger", rec["summary"])
 
@@ -199,7 +215,7 @@ class TestElectSetWithoutPendingDoc(unittest.TestCase):
         out, err = io.StringIO(), (err if err is not None
                                    else io.StringIO())
         with redirect_stdout(out), contextlib.redirect_stderr(err):
-            cmd_elect(args)
+            cmd_elections(args)
         return out.getvalue(), err.getvalue()
 
     def test_wrong_action_type_election_refused(self):
@@ -213,7 +229,7 @@ class TestElectSetWithoutPendingDoc(unittest.TestCase):
             self.assertEqual(cm.exception.code, 2)
             self.assertIn("not valid for event", err.getvalue())
             self.assertFalse(
-                (root / "inputs" / "margin" / "manifest.json").exists(),
+                (root / "inputs" / "margin" / "elections.json").exists(),
                 "a refused election must not be saved")
 
     def test_hint_predicates_evaluated_against_extracted_event(self):
@@ -236,7 +252,7 @@ class TestElectSetWithoutPendingDoc(unittest.TestCase):
             self.assertIn("Election saved", out)
             self.assertNotIn("matches no pending event", err)
             rec = json.loads((root / "inputs" / "margin" /
-                              "manifest.json").read_text())["elections"][eid]
+                              "elections.json").read_text())["elections"][eid]
             self.assertEqual(rec["election"], "rollover_s_85_1_5")
             self.assertIn("merger: ABG.TO", rec["summary"])
 

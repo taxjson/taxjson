@@ -1,2 +1,4 @@
 tjs gains: note: crypto account 'crypto' is not shown (crypto has no native-currency gains)
   Its gains are in `tjs sum` / `tjs winners`.
+tjs gains: note: 1 sale(s) with unknown cost are not shown
+  Shares bought before the data (.tt OPENING cost=unknown): their basis is unknown; `tjs form-export` lists them for manual reporting.

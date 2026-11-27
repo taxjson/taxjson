@@ -12,6 +12,7 @@
 
 ## --- Project ---
 country                           = "canada"  # canada | ca | usa | us (required)
+requires_taxjson                  = ">=3.0.0"
 ## The zone crypto UTC times are dated in (an IANA name). No default: required with a crypto
 ## account.
 local_timezone                    = "America/Toronto"

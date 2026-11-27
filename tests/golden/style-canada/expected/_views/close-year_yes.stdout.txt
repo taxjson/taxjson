@@ -2,11 +2,11 @@
 
 CLOSED 2024 — wash-adjusted, 3 taxable account(s)
   Realized:            694.38
-  Disallowed:          943.13
+  Superficial losses:  943.13
   Income:              590.61
   Lock:                filed/2024.json — commit it with your records
   Frozen:              the project's own inputs/; reports as filed: filed/2024/reports/
-  Year-end positions:  equity 9, crypto 2; trades settling in 2025: 0
+  Year-end positions:  equity 8, crypto 2; trades settling in 2025: 0
 
 CARRIED INTO 2025
   Net capital loss:  applied 0.00, created 0.00, carried into 2025: 0.00 (100% amounts)

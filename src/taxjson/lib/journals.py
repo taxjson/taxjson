@@ -51,6 +51,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from taxjson.project.accounts import accounts_of
 from taxjson.project.settings import settings_of
 from taxjson.lib import project_layout as _PL
+from taxjson.lib.account_list import names_of
 from taxjson.model import money as M
 
 FORMAT = "taxjson-journals/1"
@@ -384,12 +385,17 @@ def _classify(j: Dict[str, Any], m: _Map) -> None:
                      + "` if they are not")
 
 
-def report(root: Path, cfg: Dict[str, Any], account: Optional[str] = None,
+def report(root: Path, cfg: Dict[str, Any], account: Any = None,
            year: Optional[int] = None) -> Dict[str, Any]:
     """The journals of the project's last run (module docstring), as the
-    `--json` document. Raises JournalsError without a completed run."""
+    `--json` document. Raises JournalsError without a completed run.
+    `account`: the accounts kept (None | a name | names:
+    lib/account_list.names_of), a journal kept when either leg is in
+    one; the document's `account` is them as given (`margin,beta`),
+    `account_names` the names in order (both null for every account)."""
     from taxjson.lib import cross_listings as XL
     root = Path(root)
+    names = names_of(account)
     cache = root / "work"
     state_path = cache / XL.STATE
     if not cache.is_dir():
@@ -439,7 +445,8 @@ def report(root: Path, cfg: Dict[str, Any], account: Optional[str] = None,
     m = _Map(root)
     out = []
     for j in found:
-        if account and account not in (j["account"], j["in"]["account"]):
+        if (names is not None
+                and not {j["account"], j["in"]["account"]} & set(names)):
             continue
         if year and not str(j["date"]).startswith(f"{int(year):04d}-"):
             continue
@@ -453,7 +460,9 @@ def report(root: Path, cfg: Dict[str, Any], account: Optional[str] = None,
     # pending).
     counts["decided"] = sum(1 for j in out
                             if j["decided_by"] == "ticker.map")
-    return {"format": FORMAT, "account": account,
+    return {"format": FORMAT,
+            "account": ",".join(names) if names else None,
+            "account_names": list(names) if names is not None else None,
             "year": int(year) if year else None,
             "map": (None if m.path is None else
                     ("work/" + m.path.name if m.path.parent == cache
@@ -496,8 +505,11 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
         scope.append(f"tax year {doc['year']}")
     else:
         scope.append("every year")
-    if doc.get("account"):
-        scope.append(f"account {doc['account']}")
+    shown = doc.get("account_names") or (
+        [doc["account"]] if doc.get("account") else [])
+    if shown:
+        scope.append(("account " if len(shown) == 1 else "accounts ")
+                     + ", ".join(shown))
     what = "pending journals" if pending else "journals"
     d = Doc(f"JOURNALS — {', '.join(scope)}: {len(js)} {what} between two "
             f"listings", width_=width_)

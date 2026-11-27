@@ -24,23 +24,26 @@ class TestSumConcise(unittest.TestCase):
     def test_canada_default_view(self):
         r = self._sum("canada")
         # The FOR THE RETURN rounding legend, when shown, is outside
-        # the budget (docs/output-style.md; backlog TJ-0209).
+        # the budget (docs/output-style.md; backlog TJ-0209). One line
+        # more: the sale the broker codes closing is reported by hand, a
+        # `! ` line of its own beside the sale with no purchase (TJ-5349).
         assert_concise(self, r.stdout, r.stderr,
-                       budget=6 + ("RETURN each sale's cents"
+                       budget=7 + ("RETURN each sale's cents"
                                    in r.stdout),
                        legend=["REALIZED = NON-OPT",
-                               "GAIN = PROCEEDS − COST(ACB) − OUTLAYS"])
+                               "PROCEEDS − TOTAL COST"])
         acts = [ln for ln in r.stdout.splitlines() if ln.startswith("! ")]
-        self.assertEqual(len(acts), 2, r.stdout)
-        self.assertIn("with no purchase NOT in these totals", acts[0])
-        self.assertIn("tjs find-missing-history", acts[0])
-        self.assertIn("FX on foreign cash (line 15300)", acts[1])
+        self.assertEqual(len(acts), 3, r.stdout)
+        self.assertIn("with an unknown cost NOT in these totals", acts[0])
+        self.assertIn("with no purchase NOT in these totals", acts[1])
+        self.assertIn("tjs find-missing-history", acts[1])
+        self.assertIn("FX on foreign cash (line 15300)", acts[2])
         self.assertIn("More: tjs sum --details", r.stdout)
         # The warnings are the `! ` lines now, nothing on stderr.
         self.assertEqual(r.stderr.strip(), "")
         # The filed figures stay: the RETURN row with every money column,
-        # TOTAL COST and DENIED too (at width 100 the line labels shorten
-        # instead: backlog TJ-5333).
+        # TOTAL COST and DENIED (INFO) too (at width 100 the line labels
+        # shorten instead: backlog TJ-5333).
         ret = _return_row(r.stdout)
         for cell in ("9,242.85", "90,748.40", "1,645.13"):
             self.assertIn(cell, ret)

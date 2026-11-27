@@ -93,15 +93,22 @@ def run_cmd(cmd: List[str], *,
         env = (dict(os.environ, TAXJSON_WIDTH="0")
                if (capture_output or stdout is not None) and not interactive
                else None)
+        # A stream the child inherits (shown to the person) is copied
+        # into the command's log, the child seeing a terminal where there
+        # is one (lib/command_log; nothing changes with no log open).
+        from taxjson.lib.command_log import child_streams
         if stdout is not None:
-            return subprocess.run(cmd, stdout=stdout,
-                                  stderr=(None if interactive
-                                          else subprocess.PIPE),
-                                  stdin=(None if interactive
-                                         else subprocess.DEVNULL),
-                                  cwd=cwd, text=not interactive, env=env)
-        return subprocess.run(cmd, capture_output=capture_output,
-                              text=True, cwd=cwd, env=env)
+            with child_streams(stderr=interactive) as fds:
+                return subprocess.run(
+                    cmd, stdout=stdout,
+                    stderr=fds.get("stderr", (None if interactive
+                                              else subprocess.PIPE)),
+                    stdin=(None if interactive else subprocess.DEVNULL),
+                    cwd=cwd, text=not interactive, env=env)
+        with child_streams(stdout=not capture_output,
+                           stderr=not capture_output) as fds:
+            return subprocess.run(cmd, capture_output=capture_output,
+                                  text=True, cwd=cwd, env=env, **fds)
 
     module_name, argv = spec
     out_buf = io.StringIO() if capture_output else None

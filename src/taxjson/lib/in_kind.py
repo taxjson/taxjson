@@ -32,9 +32,11 @@ changes. `tjs run` finds them and books them:
   Canada rate of the date like any row;
 * Canada: a contribution is a sale at fair market value on the transfer
   date (IN_KIND_CONTRIBUTION_TYPE: a loss is denied for good, s.40(2)
-  (g)(iv)); the plan's acquisition is a purchase for s.54 (the run marks
-  its row in the loss-rule context, mark_sheltered). A withdrawal is a
-  purchase at fair market value (IN_KIND_WITHDRAWAL_TYPE);
+  (g)(iv); to an RESP or PRPP, IN_KIND_DISPOSITION_TYPE, an ordinary
+  loss); the plan's acquisition is a purchase for s.54 (the run marks
+  its row in the loss-rule context, mark_sheltered), so an RESP's loss
+  is superficial while the plan holds the shares on day 30. A
+  withdrawal is a purchase at fair market value (IN_KIND_WITHDRAWAL_TYPE);
 * USA: an IRA, Roth, 401(k) or HSA takes contributions in cash only — a
   pair from a taxable account into one is a likely error: warned, not
   booked. A distribution in kind is a purchase at fair market value.
@@ -82,9 +84,13 @@ _PARTS_STEPS = 1 << 16
 # trust governed by an RRSP (a LIRA is one), RRIF (a LIF / LRIF is one),
 # TFSA, FHSA, RDSP (or a DPSP) is nil. "sheltered" (an account whose plan
 # the project does not name) is taken as one of them, and the warning
-# says so. An RESP or a PRPP is not named: the loss is an ordinary one.
+# says so. An RESP or a PRPP is not named: the loss is an ordinary one,
+# which the plan's own acquisition makes superficial (s.54) when the
+# plan still holds the shares on day 30 (CA-INKIND-03, backlog TJ-5452).
 CA_LOSS_DENIED_PLANS = frozenset({"rrsp", "rrif", "tfsa", "fhsa", "rdsp",
                                   "lira", "lif", "lrif", "sheltered"})
+# How the in-kind warning names a plan s.40(2)(g)(iv) does not name.
+_ORDINARY_PLAN_NAMES = {"resp": "an RESP", "prpp": "a PRPP"}
 
 # What a withdrawal's value is on a slip (shown, never booked: the books
 # hold capital property only).
@@ -1052,16 +1058,70 @@ def _money(x: float) -> str:
     return f"{M.shown(x, 2):,.2f}"
 
 
+def _contribution_tail(r: Optional[Dict[str, float]], base: str,
+                       cost: str) -> str:
+    """What the books did with one contribution's sale (`message`'s
+    `results` entry `r`): its gain; its loss nil under s.40(2)(g)(iv);
+    or the loss of a sale to a plan that section does not name (an
+    RESP, a PRPP): allowed, or superficial (s.54: the plan's own
+    acquisition is a replacement, CA-INKIND-04) and denied for good
+    while a registered account holds the shares on day 30. Such a loss
+    read "gain 0.00" (backlog TJ-5452)."""
+    if r is None:
+        return "a sale at that value"
+    if r.get("denied", 0.0) > 0.005:
+        return (f"loss {_money(r['denied'])} {base} DENIED for good "
+                f"(s.40(2)(g)(iv)) — no {cost} addition")
+    gain, dis = r.get("gain", 0.0), r.get("disallowed", 0.0)
+    if dis <= 0.005:
+        return (f"gain {_money(gain)} {base}" if gain >= 0
+                else f"loss {_money(-gain)} {base} allowed")
+    loss = dis - gain                   # the gain is after the denial
+    perm = min(r.get("permanent", 0.0), dis)
+    parts = [(a, t) for a, t in (
+        (perm, "DENIED for good (a registered account holds the shares "
+               "on day 30)"),
+        (dis - perm, f"denied (added to the replacement's {cost})"),
+        (loss - dis, "allowed")) if a > 0.005]
+    if len(parts) == 1:
+        return f"loss {_money(loss)} {base} superficial (s.54): {parts[0][1]}"
+    return (f"loss {_money(loss)} {base} superficial in part (s.54): "
+            + "; ".join(f"{_money(a)} {t}" for a, t in parts))
+
+
+def _contribution_rule(booked: Sequence[Move], country: str,
+                       cost: str) -> str:
+    """The closing paragraph's first sentence (Canada): a contribution's
+    gain and loss, for the plans of the moves booked (backlog TJ-5452:
+    it gave s.40(2)(g)(iv) alone, a move to an RESP booked or not)."""
+    ordinary = sorted({m.plan for m in booked if m.kind == CONTRIBUTION
+                       and row_type(m, country) == IN_KIND_DISPOSITION_TYPE})
+    text = "A contribution in kind is a sale at fair market value: a gain is taxed"
+    if not ordinary or any(m.kind == CONTRIBUTION and row_type(m, country)
+                           == IN_KIND_CONTRIBUTION_TYPE for m in booked):
+        text += ("; to an RRSP, RRIF, TFSA, FHSA or RDSP a loss is nil for "
+                 "good (s.40(2)(g)(iv); not a superficial loss, never "
+                 "added to an ACB)")
+    if ordinary:
+        names = " or ".join(_ORDINARY_PLAN_NAMES.get(p, f"a {p.upper()}")
+                            for p in ordinary)
+        text += (f"; to {names} a loss is an ordinary one, superficial "
+                 f"(s.54) and lost for good when the plan still holds the "
+                 f"shares on day 30 (the {cost} addition is the plan's)")
+    return text + "; the plan's purchase counts for the superficial-loss rule."
+
+
 def message(moves: Sequence[Move], problems: Sequence[str],
             results: Dict[Tuple[str, str, str], Dict[str, float]],
             country: str, base: str, inputs: str = "inputs"
             ) -> Optional[Tuple[str, List[str]]]:
     """(headline, details) of the run's ONE in-kind warning, or None.
     `results`: (taxable account, security key, date) -> {"gain",
-    "denied"} of a contribution's sale in the books (base currency).
-    `inputs`: the exports folder as the project names it (`../inputs`
-    when every year shares one), where the INKIND line goes (backlog
-    TJ-0827)."""
+    "denied", "disallowed", "permanent"} of a contribution's sale in the
+    books (base currency; `contribution_results(..., superficial=True)`;
+    a key left out reads 0). `inputs`: the exports folder as the project
+    names it (`../inputs` when every year shares one), where the INKIND
+    line goes (backlog TJ-0827)."""
     from taxjson.lib.country import COST_TERM, is_canada
     cost = COST_TERM.get(country, "cost")
     if not moves and not problems:
@@ -1085,16 +1145,9 @@ def message(moves: Sequence[Move], problems: Sequence[str],
         if m.booked:
             val = (f"at {_money(m.fmv)} {m.currency} ({m.source_text})")
             if m.kind == CONTRIBUTION:
-                r = results.get((m.taxable.account, m.key, m.date))
-                if r is None:
-                    tail = "a sale at that value"
-                elif r.get("denied", 0.0) > 0.005:
-                    tail = (f"loss {_money(r['denied'])} {base} DENIED for "
-                            f"good (s.40(2)(g)(iv)) — no {cost} addition")
-                elif r.get("gain", 0.0) >= 0:
-                    tail = f"gain {_money(r['gain'])} {base}"
-                else:
-                    tail = f"loss {_money(-r['gain'])} {base}"
+                tail = _contribution_tail(
+                    results.get((m.taxable.account, m.key, m.date)), base,
+                    cost)
                 if (is_canada(country) and m.plan == "sheltered"):
                     tail += (" (the plan is not named: taken as an RRSP/"
                              "TFSA-like plan, s.40(2)(g)(iv) — set "
@@ -1157,11 +1210,8 @@ def message(moves: Sequence[Move], problems: Sequence[str],
     if booked:
         if is_canada(country):
             details.append(
-                "A contribution in kind is a sale at fair market value: a "
-                "gain is taxed, a loss is denied for good (s.40(2)(g)(iv); "
-                "not a superficial loss, never added to an ACB); the "
-                "plan's purchase counts for the superficial-loss rule. A "
-                "withdrawal in kind is a purchase at fair market value.")
+                _contribution_rule(booked, country, cost) + " A withdrawal "
+                "in kind is a purchase at fair market value.")
         else:
             details.append(
                 "A distribution in kind is a purchase at fair market value "
@@ -1211,15 +1261,20 @@ def parts_message(found: Sequence[Tuple[Leg, List[Leg]]],
 
 
 def contribution_results(gains_docs: Iterable[Dict[str, Any]], *,
-                         key: Optional[Callable[[str], str]] = None
+                         key: Optional[Callable[[str], str]] = None,
+                         superficial: bool = False
                          ) -> Dict[Tuple[str, str, str], Dict[str, float]]:
     """(account, security key, date) -> {"gain", "denied"} summed over
     the in-kind contribution sales of the given gains documents, their
-    figures read through views (step 6c(6c3), backlog TJ-2984). The
-    caller checks the rows' fields the views read first: pipeline/stages
-    `_checked_gains_docs` checks `_IN_KIND_FIELDS` (date, gain,
-    denied_contribution), so a view of another field here needs it
-    there too (TJ-3059)."""
+    figures read through views (step 6c(6c3), backlog TJ-2984);
+    `superficial`: also "disallowed" and "permanent", the s.54 denial of
+    the sale (a plan s.40(2)(g)(iv) does not name: the plan's own
+    acquisition replaces it) and its part denied for good, which the
+    warning says (backlog TJ-5452). The caller checks the rows' fields
+    the views read first: pipeline/stages `_checked_gains_docs` checks
+    `_IN_KIND_FIELDS` (date, gain, denied_contribution,
+    disallowed_amount, permanently_disallowed), so a view of another
+    field here needs it there too (TJ-3059)."""
     keyf = key or (lambda s: str(s or "").upper())
     out: Dict[Tuple[str, str, str], Dict[str, float]] = {}
     for doc in gains_docs:
@@ -1234,6 +1289,11 @@ def contribution_results(gains_docs: Iterable[Dict[str, Any]], *,
             v = GainRow(e)
             r["gain"] += float(v.gain or 0.0)
             r["denied"] += float(v.denied_contribution or 0.0)
+            if superficial:
+                r["disallowed"] = M.exact_total((r.get("disallowed"),
+                                                 v.disallowed_amount))
+                r["permanent"] = M.exact_total((r.get("permanent"),
+                                                v.permanently_disallowed))
     return out
 
 

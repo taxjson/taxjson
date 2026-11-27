@@ -39,7 +39,7 @@ class TestEventsTrailingTokens(unittest.TestCase):
             m = re.search(r"20250203-zzqq-zzkk-[0-9a-f]+",
                           first.stdout + first.stderr)
             self.assertIsNotNone(m, first.stderr[-1500:])
-            _tjs(root, "elect", "margin", "--set",
+            _tjs(root, "elections", "margin", "--set",
                  f"{m.group(0)}=tax_free_355",
                  "--hint", "allocated_acb=90")
             _tjs(root, "run", "--no-input")

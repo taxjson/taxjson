@@ -20,10 +20,16 @@ from tax_rules import rule
 from taxjson.rules import ids as R
 
 
-def _row(d, sym, q, amount, action="BUYSELL"):
+def _row(d, sym, q, amount, action="BUYSELL", code=None):
+    """`code`: the broker's open/close code of the row (the delivery of an
+    assignment's shares is coded for what it does to the share position:
+    C;O past a short, O with none, C within one; a purchase coded C alone
+    past the short would be the cover of a short sold before the files,
+    reported by hand: CA-ACB-11)."""
     return dict(date=d, date_settle=d, action=action, symbol=sym,
                 quantity=q, net_amount=amount, currency="CAD",
-                account="margin", open_close="O" if d < "2025-01-03" else "C")
+                account="margin",
+                open_close=code or ("O" if d < "2025-01-03" else "C"))
 
 
 _PUT = "ZZQ250117P00010000.US"
@@ -69,7 +75,7 @@ class TestD02AssignmentCoveringAShort(unittest.TestCase):
         rows = [_row("2025-01-01", "ZZQ.US", -50, 500),
                 _row("2025-01-02", _PUT, -1, 100),
                 _row("2025-01-03", _PUT, 1, 0, "ASSIGN"),
-                _row("2025-01-03", "ZZQ.US", 100, 1000)]
+                _row("2025-01-03", "ZZQ.US", 100, 1000, code="C;O")]
         props, inventory = _t1135_vs_engine(rows)
         (held,) = [i for i in inventory if i["symbol"] == "ZZQ.US"]
         self.assertEqual(held["qty"], 50)
@@ -81,7 +87,7 @@ class TestD02AssignmentCoveringAShort(unittest.TestCase):
         # as before the change (the staged amount lands with the buy).
         rows = [_row("2025-01-02", _PUT, -1, 100),
                 _row("2025-01-03", _PUT, 1, 0, "ASSIGN"),
-                _row("2025-01-03", "ZZQ.US", 100, 1000)]
+                _row("2025-01-03", "ZZQ.US", 100, 1000, code="O")]
         props, inventory = _t1135_vs_engine(rows)
         (held,) = [i for i in inventory if i["symbol"] == "ZZQ.US"]
         self.assertAlmostEqual(held["total_cost"], 900.0, places=2)

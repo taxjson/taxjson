@@ -14,6 +14,7 @@ BTC                    CRYPTO   -        6         13,003.34        3,250.83    
 ETH                    CRYPTO   -        6          7,346.36        3,197.81   23.56      322.29
 MSFT.US                USA      ISIN     2         27,001.35            0.00  101.25      132.30
 NVDA.US                USA      assumed  2          1,999.35        1,941.30    0.00        0.00
+OLDCO.US               USA      assumed  2              0.00            0.00    0.00        0.00
 PARN.US                USA      ISIN     2          6,751.35        6,751.35  337.50        0.00
 QZQ.US                 USA      ISIN     2          8,101.35        3,445.20   54.00     -101.93
 QZQ240920C00030000.US  USA      listing  6            812.70            0.00    0.00     -410.40
@@ -28,5 +29,6 @@ USA           81,466.97       12,475.35  517.05     -295.38
 
 ! QZQ241220C00035000.US +1 more: held only short: an obligation, not a row — tjs t1135 --details
 ! BTC, ETH, USD cash (crypto): crypto, check where held — tjs t1135 --details
-! 5 countries assumed from the listing (no ISIN): cost 45,665.12 CAD — tjs t1135 --details
+! OLDCO.US: unknown ACB, cost understated — tjs t1135 --details
+! 6 countries assumed from the listing (no ISIN): cost 45,665.12 CAD — tjs t1135 --details
 Not counted: foreign property outside these books (a foreign bank account, cash held elsewhere) — tjs t1135 --details

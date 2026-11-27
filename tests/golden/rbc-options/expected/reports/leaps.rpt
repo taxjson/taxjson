@@ -1,0 +1,25 @@
+LONG OPTIONS — ZZQV.TO
+
+DATE         SYMBOL                            QTY CUR          COST/QTY        PROC/QTY        GAIN/QTY            COST        PROCEEDS            GAIN   DAYS
+---------------------------------------------------------------------------------------------------------------------------------------------------------------
+2025-09-15   ZZQV251017C00014500.TO         2.0000 CAD           38.6250         64.3750         25.7500           77.25          128.75           51.50     41
+
+TOTAL ZZQV.TO LONG OPTION GAIN: 51.50
+
+LONG OPTIONS — ZZRW.US
+
+DATE         SYMBOL                            QTY CUR          COST/QTY        PROC/QTY        GAIN/QTY            COST        PROCEEDS            GAIN   DAYS
+---------------------------------------------------------------------------------------------------------------------------------------------------------------
+2025-09-19   ZZRW250919P00019000.US         4.0000 CAD            8.4375          0.0000         -8.4375           33.75            0.00          -33.75     44
+
+TOTAL ZZRW.US LONG OPTION GAIN: -33.75
+
+LONG OPTIONS SUMMARY (every long option close, any tenor; `tjs leaps-sum` is the LEAPS-only view)
+
+SYMBOL                 LONG_OPT_GAIN
+------------------------------------
+ZZQV.TO                        51.50
+ZZRW.US                       -33.75
+------------------------------------
+TOTAL                          17.75
+(amounts in CAD)

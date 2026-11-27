@@ -11,11 +11,6 @@ quantity = 10
 currency = "USD"
 total_cost = 1351.00
 [[holding]]
-symbol = "OLDCO.US"
-quantity = -50
-currency = "USD"
-total_cost = -999.00
-[[holding]]
 symbol = "PARN.US"
 quantity = 100
 currency = "USD"

@@ -21,7 +21,7 @@ prior_year_record                 = "../2024/filed/2024.json"
 province                          = "ON"      # ON | BC | AB
 ## The oldest taxjson this project runs on: an older one refuses it. Written by `tjs init`,
 ## `new-year` and `migrate` for the layout they make; never lower it.
-requires_taxjson                  = ">=0.27.1"
+requires_taxjson                  = ">=3.0.0"
 ## Default settle: CRA dates a sale by settlement.
 tax_date                          = "settle"  # settle | trade
 ## The tax year the pipeline reports on (required).
@@ -91,8 +91,15 @@ option_grant_timing_since         = 2024
 ## --- Corporate actions ---
 ## A spin-off or merger in a sheltered account with no saved election: "zero" (the default) books it
 ## without asking (a spin-off's new shares at $0 cost, a merger's new shares at the old shares'
-## cost; no tax depends on it); "ask": asked like a taxable account's. `tjs elect` wins either way.
+## cost; no tax depends on it); "ask": asked like a taxable account's. `tjs elections` wins either
+## way.
 # sheltered_elections             = "zero"  # zero | ask
+
+## --- Views ---
+## The symbol `tjs technicals` measures each holding's beta and alpha against, spelled as the books
+## spell it (a ticker.map QUOTE line maps it) or as Yahoo spells an index. A view only: no tax
+## figure reads it. No default (beta and alpha blank).
+# benchmark                       = "XYZQ.TO"
 
 ## One [accounts.NAME] table per folder under inputs/ (the folder name is the account name). Every
 ## key, with its default:

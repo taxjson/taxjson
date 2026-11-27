@@ -150,11 +150,18 @@ class TestGrantTimedWrites(unittest.TestCase):
                     + opt("2024-09-03, 10:00:00", -1, 4, -281, "C"))})
             r = _cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
-            self.assertNotIn("NOT in the totals", r.stdout + r.stderr)
+            # The 09:00 sale the broker codes closing, with nothing bought:
+            # no write booked at grant (it was, and "a short closed by a
+            # later purchase", TJ-0017). It closed a contract bought before
+            # the files: reported by hand, and the documented pair that
+            # follows is a purchase and its sale (TJ-5349).
             d = json.loads(_cli(root, "sum", "--json").stdout)
             self.assertEqual(d["no_purchase_uncovered"], [])
-            self.assertEqual([x["booked"] for x in d["no_purchase_in_totals"]],
-                             ["short_cover"])
+            self.assertEqual(d["no_purchase_in_totals"], [])
+            self.assertEqual(d["unknown_cost_routed"], 1)
+            self.assertEqual([i["kind"] for i in d["readiness"]["issues"]],
+                             ["unknown-cost"])
+            self.assertIn("1 sale at an unknown cost", r.stdout + r.stderr)
 
 
 # ----------------------------------------------------- the closing list

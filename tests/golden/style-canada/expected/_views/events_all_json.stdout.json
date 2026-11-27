@@ -398,11 +398,11 @@
       "date_settle": "2024-04-03",
       "description": "OLDCO",
       "fee": 1.0,
-      "gross_amount": 1000.0,
-      "id": "6ea95d433d0170f6",
-      "net_amount": 999.0,
+      "gross_amount": 700.0,
+      "id": "41e9bd4a3d5e1884",
+      "net_amount": 699.0,
       "open_close": "C",
-      "price": 20.0,
+      "price": 14.0,
       "proceeds": 0.0,
       "quantity": -50.0,
       "source": "ib_extra.csv",
@@ -1620,7 +1620,7 @@
     },
     "sell": {
       "CAD": 18407.65,
-      "USD": 81601.89
+      "USD": 81301.89
     },
     "staking": {
       "USD": 17.45

@@ -12,8 +12,8 @@ from typing import Any, Dict
 
 from taxjson.lib.project_layout import (
     INPUTS_KEY, TOBASE_KEY, TOBASE_MAP, LayoutError, _resolved, compare, filed_check,
-    frozen_year, lock_missing_frozen, lock_missing_text, read_config, shared_inputs, shown,
-    tobase_setting, year_dirs)
+    frozen_year, lock_missing_frozen, lock_missing_text, old_elections_problem, read_config,
+    shared_inputs, shown, tobase_setting, year_dirs)
 from taxjson.lib.fingerprint_record import FINGERPRINT_FILE
 from taxjson.project.settings import settings_of
 
@@ -119,7 +119,16 @@ def years_report(folder: Path) -> Dict[str, Any]:
                     pass                # no country here to judge it by
                 if rec["problem"]:
                     rec["totals"] = None    # the other country's figures
-            if rec["last_run"] is not None:
+            # The elections under an old name (lib/project_layout): every
+            # command of the year stops until `tjs migrate` renames them,
+            # and its inputs compared now would name a file that never
+            # was there (removed: inputs/<account>/elections.json).
+            _old = old_elections_problem(d, list(
+                (cfg.get("accounts") or {}) if isinstance(cfg, dict) else ()))
+            if _old is not None:
+                rec["problem"] = "; ".join(x for x in (
+                    rec["problem"], f"{_old[0]} — run `tjs migrate`") if x)
+            elif rec["last_run"] is not None:
                 why = CL.inputs_changed(d, cfg)
                 rec["stale"] = bool(why) if why is not None else None
                 rec["changed"] = why or None

@@ -1,0 +1,12 @@
+{
+ "kind": "project",
+ "source": "written for the golden ledgers (owner's request of 2026-11-26, TJ-5365): an RBC Direct Investing options account in RBC's activity-export layout (quoted cells, long dates, the Account column, one Value column, an Activity Export as-of line and no Date Range line, as RBC writes none), Canada, tax year 2025 with 2024's history, two made-up underlyings (ZZQV.TO in CAD, ZZRW.US in USD); covered calls written monthly, a December write assigned in January (s.49(4)), a buy-back settling across the year end, two rolls listed both ways, partial fills, calls and a put assigned, a long call bought and sold, a long put expiring worthless, a superficial share loss, a same-day write and buy-back of one series listed OPEN above CLOSE in an export whose as-of date covers the expiry (TJ-5348), a LEAPS call open at the end, a summer download overlapping the 2025 export (the parser's overlap path), cash rows (a deposit, a TFSA contribution, interest, a US dividend with tax withheld) and a .tt CAD/USD conversion for ledger v2, Holdings Exports for sanity, and a small TFSA; no money half cent: every CAD amount a quarter, every USD one a multiple of 5.00 (a quarter at 1.35), so each Schedule 3 row foots on its exact gain (TJ-5056's half-cent case is pinned by its own repro); project/README.md says what each group of rows tests, tests/features/gains_run/test_rbc_covered_call_account_figures.py pins the hand-computed figures; gains kept under 1,000 (the push gate reads a trace's # lines as comments); the views at width 110 (the owner's terminal)",
+ "views": [
+  {"argv": "sum", "width": 110},
+  {"argv": "sum --json", "width": 110},
+  {"argv": "form-export", "width": 110},
+  {"argv": "option-yield 2025", "width": 110},
+  {"argv": "option-boundary --details", "width": 110},
+  {"argv": "sanity", "width": 110}
+ ]
+}

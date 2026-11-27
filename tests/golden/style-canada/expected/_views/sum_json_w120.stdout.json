@@ -1,4 +1,5 @@
 {
+  "account_names": null,
   "accounts": [
     {
       "account": "crypto",
@@ -65,6 +66,7 @@
         "acb": 13901.06,
         "account": "crypto",
         "denied": 0.0,
+        "denied_all": 0.0,
         "denied_contribution": 0.0,
         "dispositions": 5,
         "gain": 519.96,
@@ -76,6 +78,7 @@
         "acb": 40981.58,
         "account": "margin",
         "denied": 943.13,
+        "denied_all": 943.13,
         "denied_contribution": 0.0,
         "dispositions": 7,
         "gain": 89.77,
@@ -87,6 +90,7 @@
         "acb": 36463.37,
         "account": "qt",
         "denied": 0.0,
+        "denied_all": 0.0,
         "denied_contribution": 0.0,
         "dispositions": 2,
         "gain": 84.65,
@@ -130,6 +134,7 @@
       {
         "acb": 45233.03,
         "denied": 0.0,
+        "denied_all": 0.0,
         "denied_contribution": 0.0,
         "dispositions": 2,
         "gain": 220.19,
@@ -149,6 +154,7 @@
       {
         "acb": 31399.22,
         "denied": 943.13,
+        "denied_all": 943.13,
         "denied_contribution": 0.0,
         "dispositions": 4,
         "gain": -105.17,
@@ -168,6 +174,7 @@
       {
         "acb": 14713.76,
         "denied": 0.0,
+        "denied_all": 0.0,
         "denied_contribution": 0.0,
         "dispositions": 8,
         "gain": 579.36,
@@ -188,6 +195,7 @@
     "totals": {
       "acb": 91346.01,
       "denied": 943.13,
+      "denied_all": 943.13,
       "denied_contribution": 0.0,
       "gain": 694.38,
       "outlays": 90.49,
@@ -203,20 +211,20 @@
       "proceeds": 590.05,
       "sales": 1,
       "symbol": "GHOSTQ.TO"
-    },
-    {
-      "account": "margin",
-      "proceeds": 1348.65,
-      "sales": 1,
-      "symbol": "OLDCO.US"
     }
   ],
   "readiness": {
     "complete": false,
     "issues": [
       {
-        "count": 2,
-        "detail": "2 sale(s) with no purchase in the files are in no total",
+        "count": 1,
+        "detail": "1 sale(s) with an unknown cost are not in the totals",
+        "fix": "tjs find-missing-history; report them by hand once their cost is known",
+        "kind": "unknown-cost"
+      },
+      {
+        "count": 1,
+        "detail": "1 sale(s) with no purchase in the files are in no total",
         "fix": "tjs find-missing-history",
         "kind": "no-purchase"
       }
@@ -249,7 +257,7 @@
     }
   },
   "tainted_included": 0,
-  "tainted_routed": 0,
+  "tainted_routed": 1,
   "totals": {
     "dividend": 1118.61,
     "fees": 311.73,
@@ -260,6 +268,6 @@
     "total": 2726.87
   },
   "unknown_cost_included": 0,
-  "unknown_cost_routed": 0,
+  "unknown_cost_routed": 1,
   "year": "2024"
 }

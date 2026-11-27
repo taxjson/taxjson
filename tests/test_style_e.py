@@ -87,7 +87,9 @@ class TestStyledNonZeroExits(unittest.TestCase):
         i = next(k for k, ln in enumerate(lines)
                  if "missing-history" in ln and "[!]" in ln)
         col = lines[i].index("No position")
-        self.assertTrue(lines[i + 1].startswith(" " * col + "2 position"))
+        # (the sale the broker codes closing first: by hand, TJ-5349)
+        self.assertTrue(lines[i + 1].startswith(" " * col + "OLDCO.US 2024-04-03 "),
+                        lines[i + 1])
 
     def test_redact_check(self):
         root = _paths.REPO
@@ -118,13 +120,20 @@ class TestChecklistReadsTheNewLayout(unittest.TestCase):
                                   "--json")
         step = json.loads(r.stdout)["steps"][0]
         self.assertEqual(step["status"], "attention")
-        self.assertEqual(step["detail"],
-                         "2 position(s) with missing basis affect 2024: "
-                         "GHOSTQ.TO (margin), OLDCO.US (margin)")
+        # OLDCO's sale is coded closing by the broker: the run reports
+        # it by hand (TJ-5349), and the step names it first; the history
+        # check counts the other position only (TJ-5374).
+        self.assertTrue(step["detail"].startswith(
+            "OLDCO.US 2024-04-03 (margin): 1 sale at an unknown cost, out of "
+            "2024's totals — the broker marks it closing"), step["detail"])
+        self.assertTrue(step["detail"].endswith(
+            "; 1 position(s) with missing basis affect 2024"), step["detail"])
         r = project("canada").run("checklist", "--run", "--only", "audit", "--json")
         step = json.loads(r.stdout)["steps"][0]
         self.assertEqual((step["status"], step["detail"]),
-                         ("done", "14 disposition(s) tied"))
+                         ("done", "14 disposition(s) tied; 1 sale(s) with "
+                          "unknown cost (no purchase in your files) routed "
+                          "to manual reporting (see the form-export step)"))
 
     def test_tie_out_line_stays_whole_when_captured(self):
         r = project("usa").run("audit", TAXJSON_WIDTH="0")

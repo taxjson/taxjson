@@ -6,6 +6,7 @@
     {
       "acb": 45233.03,
       "denied": 0.0,
+      "denied_all": 0.0,
       "dispositions": 2,
       "gain": 220.19,
       "gain_code": "10690",
@@ -18,16 +19,21 @@
       "rows_sum": {
         "acb": 45233.03,
         "denied": 0.0,
+        "denied_all": 0.0,
         "gain": 220.19,
         "outlays": 8.03,
-        "proceeds": 45461.25
+        "proceeds": 45461.25,
+        "total_cost": 45241.06
       },
+      "short": "shares & fund units (P1)",
       "title": "Period 1 (January 1 to June 24, 2024), lines 10689/10690",
+      "total_cost": 45241.06,
       "units": 125.0
     },
     {
       "acb": 31399.22,
       "denied": 943.13,
+      "denied_all": 943.13,
       "dispositions": 4,
       "gain": -105.17,
       "gain_code": "13200",
@@ -40,16 +46,21 @@
       "rows_sum": {
         "acb": 31399.22,
         "denied": 943.13,
+        "denied_all": 943.13,
         "gain": -105.17,
         "outlays": 19.33,
-        "proceeds": 31313.38
+        "proceeds": 31313.38,
+        "total_cost": 31418.55
       },
+      "short": "shares & fund units (P2)",
       "title": "Period 2 (June 25 to December 31, 2024), lines 13199/13200",
+      "total_cost": 31418.55,
       "units": 385.0
     },
     {
       "acb": 14713.76,
       "denied": 0.0,
+      "denied_all": 0.0,
       "dispositions": 8,
       "gain": 579.36,
       "gain_code": "15300",
@@ -62,23 +73,68 @@
       "rows_sum": {
         "acb": 14713.75,
         "denied": 0.0,
+        "denied_all": 0.0,
         "gain": 579.37,
         "outlays": 63.13,
-        "proceeds": 15356.25
+        "proceeds": 15356.25,
+        "total_cost": 14776.88
       },
+      "short": "options, crypto & other properties (P2)",
       "title": "Period 2 (June 25 to December 31, 2024), lines 15199/15300",
+      "total_cost": 14776.89,
       "units": 5.0
     }
   ],
   "manual_cover_cost": 0.0,
-  "manual_proceeds": 0.0,
-  "manual_reporting_required": [],
+  "manual_proceeds": 943.65,
+  "manual_reporting_required": [
+    {
+      "account": "margin",
+      "commission": 0.0,
+      "currency": "CAD",
+      "date": "2024-04-01",
+      "date_settle": "2024-04-03",
+      "days_held": null,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 1.35,
+      "grant": false,
+      "id": "41e9bd4a3d5e1884",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 943.65,
+      "qty": 50.0,
+      "raw_gain": 943.65,
+      "replacement_lot_ids": [],
+      "symbol": "OLDCO.US",
+      "term": null,
+      "unknown_cost_from": [
+        {
+          "account": "margin",
+          "date": "2024-04-01",
+          "marked_close": true,
+          "quantity": 50.0,
+          "symbol": "OLDCO.US"
+        }
+      ],
+      "wash_replacements": null
+    }
+  ],
   "readiness": {
     "complete": false,
     "issues": [
       {
-        "count": 2,
-        "detail": "2 sale(s) with no purchase in the files are in no total",
+        "count": 1,
+        "detail": "1 sale(s) with an unknown cost are not in the totals",
+        "fix": "tjs find-missing-history; report them by hand once their cost is known",
+        "kind": "unknown-cost"
+      },
+      {
+        "count": 1,
+        "detail": "1 sale(s) with no purchase in the files are in no total",
         "fix": "tjs find-missing-history",
         "kind": "no-purchase"
       }
@@ -92,6 +148,7 @@
       "date": "2024-05-10",
       "date_settle": "2024-05-14",
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "description": "AAPL",
       "fx_date": "2024-05-14",
@@ -124,6 +181,7 @@
       "date": "2024-06-18",
       "date_settle": "2024-06-20",
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "description": "MSFT",
       "fx_date": "2024-06-20",
@@ -156,6 +214,7 @@
       "date": "2024-08-01",
       "date_settle": "2024-08-02",
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "description": "QZQ $30 call exp 2024-09-20",
       "fx_date": "2024-08-02",
@@ -188,6 +247,7 @@
       "date": "2024-09-01",
       "date_settle": "2024-09-01",
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "description": "ETH (crypto)",
       "fx_date": null,
@@ -220,6 +280,7 @@
       "date": "2024-09-10",
       "date_settle": "2024-09-11",
       "denied": 305.78,
+      "denied_all": 305.78,
       "denied_contribution": 0.0,
       "description": "QZQ",
       "fx_date": "2024-09-11",
@@ -258,6 +319,7 @@
       "date": "2024-10-01",
       "date_settle": "2024-10-02",
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "description": "QZQ $35 call exp 2024-12-20 (written)",
       "fx_date": "2024-10-02",
@@ -290,6 +352,7 @@
       "date": "2024-10-08",
       "date_settle": "2024-10-08",
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "description": "BTC (crypto)",
       "fx_date": "2024-10-08",
@@ -322,6 +385,7 @@
       "date": "2024-11-01",
       "date_settle": "2024-11-01",
       "denied": 519.9,
+      "denied_all": 519.9,
       "denied_contribution": 0.0,
       "description": "SAMPA",
       "fx_date": null,
@@ -358,6 +422,7 @@
       "date": "2024-11-05",
       "date_settle": "2024-11-07",
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "description": "AAPL",
       "fx_date": "2024-11-07",
@@ -390,6 +455,7 @@
       "date": "2024-11-08",
       "date_settle": "2024-11-08",
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "description": "BTC (crypto)",
       "fx_date": "2024-11-08",
@@ -422,6 +488,7 @@
       "date": "2024-11-15",
       "date_settle": "2024-11-18",
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "description": "QZQ $40 call exp 2025-01-17 (written)",
       "fx_date": "2024-11-18",
@@ -454,6 +521,7 @@
       "date": "2024-11-20",
       "date_settle": "2024-11-21",
       "denied": 117.45,
+      "denied_all": 117.45,
       "denied_contribution": 0.0,
       "description": "NVDA",
       "fx_date": "2024-11-21",
@@ -490,6 +558,7 @@
       "date": "2024-12-03",
       "date_settle": "2024-12-03",
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "description": "ETH (crypto)",
       "fx_date": "2024-12-03",
@@ -522,6 +591,7 @@
       "date": "2024-12-15",
       "date_settle": "2024-12-15",
       "denied": 0.0,
+      "denied_all": 0.0,
       "denied_contribution": 0.0,
       "description": "ETH (crypto)",
       "fx_date": "2024-12-13",
@@ -551,12 +621,14 @@
   "rows_total": {
     "acb": 91346.0,
     "denied": 943.13,
+    "denied_all": 943.13,
     "denied_contribution": 0.0,
     "gain": 694.39,
     "outlays": 90.49,
     "permanently_denied": 101.93,
     "proceeds": 92130.88,
-    "rows": 14
+    "rows": 14,
+    "total_cost": 91436.49
   },
   "schema_version": 1,
   "scope": null,
@@ -565,17 +637,20 @@
       "acb": 3978.12,
       "currency": "CAD",
       "denied": 519.9,
+      "denied_all": 519.9,
       "denied_contribution": 0.0,
       "gain": -150.57,
       "outlays": 9.95,
       "permanently_denied": 0.0,
       "proceeds": 3837.5,
-      "rows": 2
+      "rows": 2,
+      "total_cost": 3988.07
     },
     {
       "acb": 87367.88,
       "currency": "USD",
       "denied": 423.23,
+      "denied_all": 423.23,
       "denied_contribution": 0.0,
       "fx_missing": 0,
       "fx_missing_why": {},
@@ -585,15 +660,18 @@
       "outlays": 80.54,
       "permanently_denied": 101.93,
       "proceeds": 88293.38,
-      "rows": 12
+      "rows": 12,
+      "total_cost": 87448.42
     }
   ],
   "totals": {
     "acb": 91346.01,
     "denied": 943.13,
+    "denied_all": 943.13,
     "gain": 694.38,
     "outlays": 90.49,
-    "proceeds": 92130.88
+    "proceeds": 92130.88,
+    "total_cost": 91436.5
   },
   "year": 2024
 }

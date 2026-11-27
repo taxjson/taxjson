@@ -12,7 +12,7 @@ and one more IB statement with the getting-started scenarios:
   * missing history: a sale of SAMPG with no purchase in the files
     (`tjs find-missing-history`, getting-started step 5);
   * an election: PARNT spins off SPNCO; the election is saved in the
-    account's manifest.json (`tjs spinoffs`);
+    account's elections.json (`tjs spinoffs`);
   * a superficial loss: NVDA sold at a loss and bought back within 30
     days (account ib, `tjs wash-sales`);
   * a written option: a SAMPW call sold to open in November and still

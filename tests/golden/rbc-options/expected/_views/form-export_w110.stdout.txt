@@ -1,0 +1,31 @@
+SCHEDULE 3 — Capital Gains (or Losses), tax year 2025, CAD
+GAIN(LOSS) = PROCEEDS − ACB − OUTLAYS, the allowed amount; 100% amounts (the form applies the rate).
+
+PART 3, LINE 4 (LINES 13199/13200)
+UNITS  SYMBOL   ACQ. YEAR  PROCEEDS       ACB  OUTLAYS  GAIN(LOSS)
+------------------------------------------------------------------
+  400  ZZQV.TO  2024       5,368.00  4,949.00   135.00      284.00
+  Line 13199 (proceeds of disposition):  5,368.00
+  Line 13200 (gain/loss):                  284.00
+
+PART 3, LINE 6 (LINES 15199/15300)
+UNITS  SYMBOL                  ACQ. YEAR  PROCEEDS     ACB  OUTLAYS  GAIN(LOSS)
+-------------------------------------------------------------------------------
+    2  ZZQV250117C00013000.TO  2024           0.00   17.25     0.00      -17.25
+    2  ZZQV250221C00013000.TO  2025          50.00  117.25     9.25      -76.50
+    2  ZZQV250321C00013500.TO  2025          72.00   37.25     9.25       25.50
+    2  ZZQV251017C00014500.TO  2025         138.00   77.25     9.25       51.50
+    1  ZZRW250718C00021500.US  2025          54.00    0.00     6.75       47.25
+    1  ZZRW250815C00021500.US  2025          40.50    0.00     6.75       33.75
+    1  ZZRW250919C00021500.US  2025          67.50    0.00     6.75       60.75
+    4  ZZRW250919P00019000.US  2025           0.00   33.75     0.00      -33.75
+    1  ZZRW251017C00021500.US  2025          54.00    0.00     6.75       47.25
+    1  ZZRW251121C00021500.US  2025          40.50    0.00     6.75       33.75
+    1  ZZRW251219C00021500.US  2025          81.00    0.00     6.75       74.25
+    2  ZZRW260116P00020000.US  2025         162.00  114.75     6.75       40.50
+    1  ZZRW280121C00025000.US  2025         148.50    0.00     6.75      141.75
+  Line 15199 (proceeds of disposition):  908.00
+  Line 15300 (gain/loss):                428.75
+
+1 row(s) with a denied superficial loss: the ACB shown is reduced by it — tjs wash-sales
+Not in the rows: FX on cash (15300), slip capital gains (17400, 17600) — tjs form-export --details

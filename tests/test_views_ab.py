@@ -122,11 +122,15 @@ def plant_idle(root: Path) -> Path:
 def plant_timeline(root: Path) -> Path:
     """A copy of the round() base (plant_round: what the fx_a dump runs)
     whose cost timelines write their cost at 6 places (the second review's
-    case): no output the goldens record moves, only the hidden
-    work/.*.timeline.json files (TJ-3366)."""
+    case), a nil cost as -0.0: no output the goldens record moves, only the
+    hidden work/.*.timeline.json files (TJ-3366). The nil cost's sign is what
+    moves the evidence book's bytes: its one cost of more than 4 places at the
+    fx4 rates was a short the books no longer open (a sale the broker codes
+    closing, reported by hand: TJ-5349), and its timeline's costs are all nil."""
     src = plant_round(root)
     timeline = src / "taxjson" / "lib" / "cost_timeline.py"
-    text, n = re.subn(r"round_half_up\(cost, 4\)", "round_half_up(cost, 6)", timeline.read_text(encoding="utf-8"))
+    text, n = re.subn(r"round_half_up\(cost, 4\)", "(round_half_up(cost, 6) or -0.0)",
+                      timeline.read_text(encoding="utf-8"))
     assert n == 1, "the timeline's cost not found"
     timeline.write_text(text, encoding="utf-8")
     return src

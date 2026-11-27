@@ -224,11 +224,11 @@ class TestRunInputs(_Built):
         """A2-1400: the user's elections are not overwritten."""
         root = self.copy()
         (root / "elsewhere").mkdir()
-        target = root / "elsewhere" / "manifest.json"
-        (root / "inputs" / "m" / "manifest.json").unlink(missing_ok=True)
-        (root / "inputs" / "m" / "manifest.json").symlink_to(target)
+        target = root / "elsewhere" / "elections.json"
+        (root / "inputs" / "m" / "elections.json").unlink(missing_ok=True)
+        (root / "inputs" / "m" / "elections.json").symlink_to(target)
         r = self.cli(root, "run", "--no-input")
-        self.assertOneLine(r, 2, "manifest.json is a symlink")
+        self.assertOneLine(r, 2, "elections.json is a symlink")
         self.assertFalse(target.exists())
 
     def test_second_run_is_refused_while_one_holds_the_lock(self):
@@ -257,8 +257,8 @@ class TestPendingElections(_Built):
         for body in self.BODIES:
             with self.subTest(body=body):
                 p.write_bytes(body)
-                for a in (["elect", "--pending"],
-                          ["elect", "--pending", "--json"]):
+                for a in (["elections", "--pending"],
+                          ["elections", "--pending", "--json"]):
                     self.assertOneLine(self.cli(root, *a), 2,
                                        "pending_elections.json")
 
@@ -276,7 +276,7 @@ class TestPendingElections(_Built):
     def test_elect_set_falls_back_on_a_damaged_aggregate(self):
         root = self.copy()
         (root / "work" / "pending_elections.json").write_bytes(b"[]")
-        r = self.cli(root, "elect", "m", "--set", "nope-1=ignore")
+        r = self.cli(root, "elections", "m", "--set", "nope-1=ignore")
         self.assertNotIn("Traceback", r.stderr)
         self.assertIn("nope-1", r.stderr)
 
@@ -423,10 +423,10 @@ class TestViews(_Built):
         """A2-1418 (elect), A2-1416 (crypto-sends: covered in lib)."""
         root = self.copy()
         d = root / "inputs" / "m"
-        (d / "manifest.json").write_text('{"elections": {}}\n')
+        (d / "elections.json").write_text('{"elections": {}}\n')
         os.chmod(d, 0o500)
         try:
-            r = self.cli(root, "elect", "m", "--reset")
+            r = self.cli(root, "elections", "m", "--reset")
         finally:
             os.chmod(d, 0o700)
         self.assertOneLine(r, 2, "cannot write")

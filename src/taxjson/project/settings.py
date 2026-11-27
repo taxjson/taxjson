@@ -164,6 +164,7 @@ class Settings(TypedTable):
     transfers_as_acquisitions: Optional[bool] = None
     sheltered_elections: Optional[str] = None        # "zero" | "ask"
     benchmark: Optional[str] = None                  # a symbol (technicals)
+    log_keep: Optional[int] = None                   # logs/ (lib/command_log)
     province: Optional[str] = None
     option_premium_timing: Optional[str] = None
     option_grant_timing_since: Optional[int] = None

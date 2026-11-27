@@ -108,14 +108,15 @@ def _unclose(year_dir: Path, *extra: str):
 
 def _tree(top: Path, *, filed: bool = True) -> dict:
     """Every entry below `top` but each year's work/ (the run lock, the
-    kept checklist verdicts): its kind, permission bits and bytes (a
-    link: its text; a lock without its closed_at line). `filed` False:
-    2024/filed/ left out too (the backup)."""
+    kept checklist verdicts) and logs/ (the command logs): its kind,
+    permission bits and bytes (a link: its text; a lock without its
+    closed_at line). `filed` False: 2024/filed/ left out too (the
+    backup)."""
     seen = {}
     for p in sorted(top.rglob("*")):
         rel = p.relative_to(top).as_posix()
         parts = rel.split("/")
-        if len(parts) > 1 and parts[1] == "work":
+        if len(parts) > 1 and parts[1] in ("work", "logs"):
             continue
         if not filed and parts[:2] == [YEAR, "filed"]:
             continue
@@ -351,8 +352,10 @@ class UncloseYearRoundTrip(_Projects):
         self.assertEqual(res[2], "")
         self.assertFalse((top / YEAR / "work" / lib_checklist.RESULTS_FILE).exists())
         rec = json.loads((b / "unclosed.json").read_text())
+        # (the demo's year shares the holdings folder too: TJ-5367)
         self.assertEqual(rec["settings_restored"],
-                         {"inputs_dir": "../inputs", "tobase_map": "../tobase.map"})
+                         {"inputs_dir": "../inputs", "tobase_map": "../tobase.map",
+                          "holdings_dir": "../holdings"})
         self.assertEqual(len(rec["copies_removed"]), 11)
         self.assertEqual(rec["copies_kept"],
                          {"differs": [], "only-copy": [], "unreadable": [],
@@ -1215,7 +1218,11 @@ class UncloseYearOnlyTheClosesLinesEndToEnd(_Projects):
             return "\n".join(lines)
         top, before = self._closed_from(edit)
         y = top / YEAR
-        self.assertEqual((y / "taxjson.toml").read_text().count(NOTE), 1)
+        # One note over the two adjacent keys (holdings_dir has its own:
+        # TJ-5367).
+        text = (y / "taxjson.toml").read_text()
+        self.assertEqual(text.count(NOTE_1), 1)
+        self.assertNotIn(NOTE_2, text)
         code, out, err, escaped = _unclose(y)
         self.assertEqual((code, escaped), (0, None), err)
         self.assertEqual(_changed(_tree(top, filed=False), before), [])
@@ -1302,7 +1309,8 @@ class UncloseYearSingleFolder(unittest.TestCase):
         cfg = cls.solo / "taxjson.toml"
         cfg.write_text("\n".join(
             ln for ln in cfg.read_text().split("\n")
-            if not ln.startswith(("inputs_dir", "tobase_map", "exports_dir"))))
+            if not ln.startswith(("inputs_dir", "tobase_map", "exports_dir",
+                                  "holdings_dir"))))
         r = _cli(cls.solo, "run", "--no-input")
         assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
         cls.before = _tree(tmp)

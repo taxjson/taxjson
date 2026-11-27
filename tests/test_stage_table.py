@@ -366,7 +366,7 @@ class TestTheExecutor(_Project):
         secrets = [outside / n for n in ("secret.txt", "target.txt", "wash_radar_old.rpt")]
         for p in secrets:
             p.write_text("keep\n", encoding="utf-8")
-        inputs = [self.write(r) for r in ("inputs/margin/manifest.json", "inputs/crypto/sends.json")]
+        inputs = [self.write(r) for r in ("inputs/margin/elections.json", "inputs/crypto/sends.json")]
         os.symlink(self.root / "inputs", self.work / "in")
         os.symlink(outside, self.work / "sub")
         (self.root / "reports").mkdir()
@@ -384,9 +384,9 @@ class TestTheExecutor(_Project):
             "work/m_tt_x_pending_elections.json")]
         (self.work / "m_rbc_direct.out").mkdir()
         ghost = {"row": "gains", "account": "ghost", "beside": ["work/sub/target.txt",
-                                                                "inputs/margin/manifest.json"]}
+                                                                "inputs/margin/elections.json"]}
         self._listed({
-            "work/in/margin/manifest.json": ghost, "work/in/crypto/sends.json": ghost,
+            "work/in/margin/elections.json": ghost, "work/in/crypto/sends.json": ghost,
             "work/sub/secret.txt": ghost, "reports/link/secret.txt": ghost,
             "reports/mynotes.txt": {"row": "sum", "account": "mynotes"},
             "reports/adir/x.txt": ghost, "work/saved_by_me.json": ghost,

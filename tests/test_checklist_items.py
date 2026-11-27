@@ -47,9 +47,11 @@ def _grouped():
 
 
 def _snapshot(root: Path):
+    """Every file under `root` but the command logs (logs/: each command
+    writes its own, lib/command_log)."""
     out = {}
     for p in sorted(root.rglob("*")):
-        if p.is_file():
+        if p.is_file() and p.relative_to(root).parts[0] != "logs":
             st = p.stat()
             out[str(p.relative_to(root))] = (
                 st.st_size, st.st_mtime_ns,

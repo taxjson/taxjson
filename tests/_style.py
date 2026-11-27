@@ -14,10 +14,10 @@ would (width 120, lib/out.WIDTH; TAXJSON_OFFLINE=1, stdin /dev/null).
             r = project("canada").run("harvest", "--no-ibkr")
             self.assertEqual(r.returncode, 0, r.stderr)
             assert_styled(self, r.stdout)                  # stdout
-            assert_styled(self, r.stderr, allow=("tjs elect ",))
+            assert_styled(self, r.stderr, allow=("tjs elections ",))
 
 `project("canada", pending=True)` is a copy stopped at the pending
-spin-off election (for `elect --pending`, the run's exit 3). Every
+spin-off election (for `elections --pending`, the run's exit 3). Every
 fixture is synthetic, amounts under 1,000 where a document shows them.
 """
 import atexit
@@ -177,9 +177,9 @@ def _build(country: str, pending: bool) -> Project:
     agg = json.loads((root / "work" / "pending_elections.json").read_text())
     for acct, doc in sorted(agg["accounts"].items()):
         for ev in doc["pending"]:
-            _check(p.run("elect", acct, "--set",
+            _check(p.run("elections", acct, "--set",
                          f"{ev['event_id']}={_ELECTION[country]}"),
-                   "elect --set")
+                   "elections --set")
     if country == "canada":
         # Decide the crypto send (the US project keeps it pending).
         sends = json.loads(p.run("crypto-sends", "--json").stdout or "{}")

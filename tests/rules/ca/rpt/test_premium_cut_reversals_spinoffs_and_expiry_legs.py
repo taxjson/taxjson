@@ -124,7 +124,7 @@ def _spin_stats(rows, alloc):
         tj(root, "run", "--no-input", check=False)
         pend = (root / "work" / "pending_elections.json").read_text()
         ev = re.search(r'"(\d{8}-zzq-zzk-[0-9a-f]+)"', pend)[1]
-        tj(root, "elect", "m", "--set", f"{ev}=rollover_s_86_1", "--hint",
+        tj(root, "elections", "m", "--set", f"{ev}=rollover_s_86_1", "--hint",
            f"allocated_acb_cad={alloc}")
         tj(root, "run", "--no-input")
         return json.loads(tj(root, "stats", "2025", "--json").stdout)

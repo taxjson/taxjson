@@ -55,18 +55,6 @@
       "blended_pool": true,
       "currency": "CAD",
       "deferred_wash": 0.0,
-      "last_acq_date": "2024-04-01",
-      "last_acq_settle": "2024-04-03",
-      "position_start_date": "2024-04-01",
-      "qty": -50.0,
-      "symbol": "OLDCO.US",
-      "total_cost": -1348.65
-    },
-    {
-      "account": "margin",
-      "blended_pool": true,
-      "currency": "CAD",
-      "deferred_wash": 0.0,
       "last_acq_date": "2024-04-15",
       "last_acq_settle": "2024-04-15",
       "position_start_date": "2024-04-15",
@@ -146,15 +134,6 @@
       "blended_pool": true,
       "currency": "CAD",
       "deferred_wash": 0.0,
-      "qty": -50.0,
-      "symbol": "OLDCO.US",
-      "total_cost": -1348.65
-    },
-    {
-      "account": "margin",
-      "blended_pool": true,
-      "currency": "CAD",
-      "deferred_wash": 0.0,
       "qty": -40.0,
       "symbol": "GHOSTQ.TO",
       "total_cost": -590.05
@@ -187,7 +166,42 @@
       "total_cost": -201.15
     }
   ],
-  "manual_reporting_required": [],
+  "manual_reporting_required": [
+    {
+      "account": "margin",
+      "commission": 0.0,
+      "currency": "CAD",
+      "date": "2024-04-01",
+      "date_settle": "2024-04-03",
+      "days_held": null,
+      "deemed": false,
+      "direction": "LONG",
+      "disallowed_amount": 0.0,
+      "fee": 1.35,
+      "grant": false,
+      "id": "41e9bd4a3d5e1884",
+      "is_option": false,
+      "is_wash_sale": false,
+      "note": "",
+      "permanently_disallowed": 0.0,
+      "proceeds": 943.65,
+      "qty": 50.0,
+      "raw_gain": 943.65,
+      "replacement_lot_ids": [],
+      "symbol": "OLDCO.US",
+      "term": null,
+      "unknown_cost_from": [
+        {
+          "account": "margin",
+          "date": "2024-04-01",
+          "marked_close": true,
+          "quantity": 50.0,
+          "symbol": "OLDCO.US"
+        }
+      ],
+      "wash_replacements": null
+    }
+  ],
   "metadata": {
     "account": "margin",
     "blended": true,
@@ -686,6 +700,15 @@
       "qty": 200.0,
       "symbol": "QZQ.US",
       "time": "09:30:00"
+    }
+  ],
+  "unbacked_close_openings": [
+    {
+      "account": "margin",
+      "close": "41e9bd4a3d5e1884",
+      "date": "2024-04-01",
+      "quantity": 50.0,
+      "symbol": "OLDCO.US"
     }
   ],
   "wash_sales": [

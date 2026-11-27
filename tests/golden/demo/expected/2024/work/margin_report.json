@@ -2,7 +2,19 @@
   "account": "margin",
   "basis": "wash-adjusted",
   "gains": {
-    "manual_rows": [],
+    "manual_rows": [
+      {
+        "account": "margin",
+        "currency": "CAD",
+        "date": "2024-03-18",
+        "date_settle": "2024-03-20",
+        "direction": "LONG",
+        "own_move_from": null,
+        "proceeds": 498.15,
+        "qty": 20.0,
+        "symbol": "SAMPG.US"
+      }
+    ],
     "option_fees": {
       "CAD": 1.4175
     },
@@ -45,7 +57,7 @@
       }
     },
     "tainted_count": 0,
-    "tainted_routed": 0,
+    "tainted_routed": 1,
     "ticker_stats": {
       "INTC.US": {
         "CAD": {

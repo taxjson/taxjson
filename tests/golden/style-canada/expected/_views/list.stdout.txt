@@ -6,7 +6,6 @@ crypto   BTC                      0.05   3,250.83  65,016.68         -  2024-01-
 crypto   ETH                    0.6552   3,197.81   4,880.66         -  2024-03-05  -
 margin   GHOSTQ.TO                 -40    -590.05      14.75         -  2024-04-15  missing history?
 margin   NVDA.US                    10   1,941.30     194.13    117.45  2024-12-05  -
-margin   OLDCO.US                  -50  -1,348.65      26.97         -  2024-04-01  missing history?
 margin   PARN.US                   100   6,751.35      67.51         -  2024-02-01  -
 margin   QZQ.US                    100   3,445.20      34.45    203.85  2024-09-20  -
 margin   QZQ250117C00040000.US      -1    -201.15       2.01         -  2024-11-15  -
@@ -19,7 +18,7 @@ tfsa     ENB.TO                    200  11,009.95      55.05         -  2024-11-
 tfsa     QZQ.US                     50   1,660.43      33.21         -  2024-09-25  -
 tfsa     RY.TO                      50   6,673.30     133.47         -  2024-01-12  -
 
-16 position(s), total book cost 63,992.57 CAD
-! 2 short position(s) with no purchase in your files (missing history?) — tjs list --negative
+15 position(s), total book cost 65,341.22 CAD
+! 1 short position(s) with no purchase in your files (missing history?) — tjs list --negative
 DEFERRED in the cost:  841.20 CAD of denied superficial losses (s.54)
 More: tjs list --details (notes)

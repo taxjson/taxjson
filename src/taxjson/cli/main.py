@@ -9,8 +9,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.project.settings import settings_of
 from taxjson.project.toml_io import read_toml
-from taxjson.lib import once
+from taxjson.lib import command_log, once
 from taxjson.lib import project_layout as _PL
+from taxjson.lib.account_list import (
+    ACCOUNT_NAME_RE, AccountListError, artifact_suffix, is_account_list,
+    not_an_account, not_an_account_name, parse_accounts,
+    refusal as _list_refusal, unknown_accounts_text,
+)
 from taxjson.lib.out import exit_text, show as _show
 from taxjson.lib.stage_msg import emit_line
 
@@ -19,7 +24,8 @@ from taxjson.cli.books import (
 )
 from taxjson.cli.common import (
     _accounts_skipped_for_no_inputs, _frozen_years_apart, _is_period,
-    _os_path_lexists, _refuse_cash_older_than_inputs, _warn_run_state,
+    _os_path_lexists, _period_comma_hint, _refuse_cash_older_than_inputs,
+    _warn_run_state,
 )
 from taxjson.cli.explain import _tt_path_item
 from taxjson.cli.file import _filed_year_folders
@@ -171,6 +177,47 @@ def _no_command(argv: List[str], commands,
     return True
 
 
+def _refuse_renamed_command(parser: argparse.ArgumentParser,
+                            argv: List[str], commands: set,
+                            at: Optional[int] = None) -> None:
+    """Exit 2 when the command is one renamed (cli/parser
+    RENAMED_COMMANDS: `tjs elect` is `tjs elections`): the new name, then
+    the command line as typed under it, on its own line to copy (never
+    wrapped). `at`: where in `argv` a chained command starts, the whole
+    chain kept on that line. No alias: nothing runs."""
+    import shlex
+    from taxjson.cli.parser import RENAMED_COMMANDS
+    from taxjson.lib import out as _out
+    i = (_command_index(parser, argv, commands | set(RENAMED_COMMANDS))
+         if at is None else at)
+    old = argv[i] if i < len(argv) else None
+    if old not in RENAMED_COMMANDS:
+        return
+    new = RENAMED_COMMANDS[old]
+    ready = shlex.join([_PROG, *argv[:i], new, *argv[i + 1:]])
+    shown = _out.width(sys.stderr) > 0
+    lines = _out.message("error", f"{_PROG} {old} was renamed: {_PROG} {new}",
+                         prog=_PROG, stream=sys.stderr)
+    _out.show(lines + [ready if shown else f"  {ready}"], sys.stderr)
+    raise SystemExit(2)
+
+
+def _segment_starts(argv: List[str], segments: List[List[str]],
+                    prefix: int) -> List[int]:
+    """Where in `argv` each chained segment's command starts
+    (_split_command_segments: `prefix` global tokens, then the
+    command), after the `--` that ended the one before."""
+    out: List[int] = []
+    pos = prefix
+    for seg in segments:
+        body = seg[prefix:]
+        if argv[pos:pos + len(body)] != body and argv[pos:pos + 1] == ["--"]:
+            pos += 1
+        out.append(pos)
+        pos += len(body)
+    return out
+
+
 def _check_tt_files_only(args: argparse.Namespace) -> bool:
     """`check-tt FILE.tt ...` needs no project: the files are named."""
     items = getattr(args, "items", None) or []
@@ -211,8 +258,10 @@ def main() -> None:
         once.forget_all()
     run_state.in_main = True
     try:
+        # (the top of the process: its commands' logs; a nested one is in
+        # the outer's: lib/command_log)
         with (run_state.nested_command() if nested
-              else contextlib.nullcontext()):
+              else contextlib.nullcontext()), command_log.console(nested):
             run_top_level(lambda: (f"{_PROG} {run_state.current_cmd}"
                                    if run_state.current_cmd else _PROG),
                           _main, interrupt_note=_interrupt_note, nested=nested)
@@ -276,6 +325,7 @@ def _main() -> None:
         p.print_help()
         return
     commands = set(sub.choices)
+    _refuse_renamed_command(p, argv, commands)
     segments = _split_command_segments(p, argv, commands)
     if "fetch" in argv:
         # `tjs fetch` with no fetcher plugin installed: one line
@@ -297,10 +347,14 @@ def _main() -> None:
         # bad later segment (`tjs events -- 30d`: '30d' is not a
         # command) previously half-ran the chain, executing `events`
         # and then dying rc 2.
-        for seg in segments:
+        pre = _command_index(p, argv, commands)
+        for seg, at in zip(segments, _segment_starts(argv, segments, pre)):
+            # A renamed command (`-- elect`, the rest of the chain then
+            # its arguments): the whole chain, ready.
+            _refuse_renamed_command(p, argv, commands, at)
             first = _command_of(p, seg, commands)
             if first is None or not _parses_ok(p, seg):
-                bad = " ".join(seg)
+                bad = " ".join(seg[pre:])       # as typed
                 _die(f"{bad!r} is not a valid command in "
                          f"this chain — nothing was executed. (A "
                          f"literal `--` separates chained commands; "
@@ -317,6 +371,7 @@ def _main() -> None:
         run_state.current_cmd = args.cmd or ""
         run_state.current_details = _details(args)
         run_state.begin_command()
+        command_log.begin(args.cmd, args.dir, sub.choices)
         run_state.config_warnings_for(Path(args.dir))
         if args.cmd == "run":
             # The run's console: whole lines in order whatever reads
@@ -351,6 +406,7 @@ def _main() -> None:
         _enforce_command_country(args)
         _refuse_artifact_account(args)
         _refuse_path_account(args)
+        _refuse_account_list(args)
         _refuse_unknown_account(args)
         _refuse_no_input_books(args)
         # Every command of a project reads its ticker.map, the soft-reading
@@ -378,7 +434,7 @@ def _main() -> None:
             # A hand-edited elections manifest that does not load: one
             # line naming the file, never a traceback (audit S072-05);
             # exit 2, an input that cannot be read (docs/commands.md;
-            # backlog TJ-0406: `elect --json` said 0, the text 1).
+            # backlog TJ-0406: `elections --json` said 0, the text 1).
             _show([exit_text(f"tjs {args.cmd}: error: {e}")], sys.stderr)
             sys.exit(2)
         except subprocess.CalledProcessError as e:
@@ -512,7 +568,55 @@ def _guarded_func(args: argparse.Namespace) -> None:
         raise SystemExit(2)
 
 
-_ACCOUNT_NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
+def _digit_led(tok: object) -> bool:
+    """A token starting with a digit: in the PERIOD slot (or list's
+    date slot) a period or a date, comma or not, as before lists; its
+    command reads it (`tjs divs 1y,margin` is a malformed period)."""
+    return isinstance(tok, str) and tok.strip()[:1].isdigit()
+
+
+def _lone_list(args: argparse.Namespace) -> bool:
+    """The PERIOD slot holds the accounts: no ACCOUNT given, and the
+    lone positional has a comma, which no period has (`tjs winners
+    margin,crypto`), and does not start with a digit (_digit_led)."""
+    period = getattr(args, "period", None)
+    return (hasattr(args, "account") and args.account is None
+            and is_account_list(period) and not _digit_led(period))
+
+
+def _list_texts(args: argparse.Namespace) -> List[Any]:
+    """The ACCOUNT lists given, each a token or, for fetch's several
+    ACCOUNT tokens, the list of them (read together): the ACCOUNT slot
+    (the positional or `--account`) when a token there has a comma; the
+    lone PERIOD with a comma (_lone_list); list's second positional
+    (`when`) with a comma, unless it starts with a digit (a date)."""
+    texts: List[Any] = []
+    acct = getattr(args, "account", None)
+    toks = acct if isinstance(acct, list) else [acct]
+    if any(is_account_list(v) for v in toks):
+        texts.append([v for v in toks if isinstance(v, str) and v]
+                     if isinstance(acct, list) else acct)
+    if _lone_list(args):
+        texts.append(args.period)
+    when = getattr(args, "when", None)
+    if is_account_list(when) and not _digit_led(when):
+        texts.append(when)
+    return texts
+
+
+def _single_tokens(args: argparse.Namespace) -> List[str]:
+    """The ACCOUNT and PERIOD tokens the single-name checks read, as
+    before lists: every value but an ACCOUNT list's (_list_texts:
+    _refuse_account_list checks each of its names)."""
+    vals: List[Any] = []
+    acct = getattr(args, "account", None)
+    toks = acct if isinstance(acct, list) else [acct]
+    if not any(is_account_list(v) for v in toks):
+        vals += toks
+    if not _lone_list(args):
+        period = getattr(args, "period", None)
+        vals += period if isinstance(period, list) else [period]
+    return [v for v in vals if isinstance(v, str)]
 
 
 def _refuse_path_account(args: argparse.Namespace) -> None:
@@ -521,31 +625,73 @@ def _refuse_path_account(args: argparse.Namespace) -> None:
     '../../other/work/margin' was joined into work/ paths — another
     project's books were read and printed, `sum ./margin` was a
     traceback — and fees-sum used the name as a glob ('*' summed every
-    account, '/' tracebacked) (re-audit A2-1398, A2-0798)."""
+    account, '/' tracebacked) (re-audit A2-1398, A2-0798). A list's
+    names: _refuse_account_list. `--write-missing-history FILE` is
+    refused for each name of the ACCOUNT text that reads as a file (a
+    suffix or a `/`) and is no configured account: `margin.old,ib` is
+    two accounts when both are; exit 2, as for the whole token before
+    lists. A list in the PERIOD slot beside a period (`tjs stats
+    margin,ib 2024`) is refused as before, naming the period-first
+    form."""
     _acct = getattr(args, "account", None)
     if (getattr(args, "write_missing_history", None)
-            and isinstance(_acct, str) and _acct
-            and (Path(_acct).suffix or "/" in _acct)
-            and not _is_configured_account(
-                Path(getattr(args, "dir", None) or ".").resolve(), _acct)):
-        # (A configured account named with a period, `margin.old`, is
-        # the account: backlog TJ-0816.)
-        _refuse_missing_history_file(_acct)
-    vals = []
-    for attr in ("account", "period"):
-        v = getattr(args, attr, None)
-        vals += v if isinstance(v, list) else [v]
-    for v in vals:
-        if not isinstance(v, str) or not v:
+            and isinstance(_acct, str) and _acct):
+        _root = Path(getattr(args, "dir", None) or ".").resolve()
+        for _item in _acct.split(","):
+            # (A configured account named with a period, `margin.old`,
+            # is the account: backlog TJ-0816.)
+            if (_item and (Path(_item).suffix or "/" in _item)
+                    and not _is_configured_account(_root, _item)):
+                _refuse_missing_history_file(_item)
+    for v in _single_tokens(args):
+        if not v:
             continue
         if v is getattr(args, "period", None) and (
-                _is_period(v) or v.strip()[:1].isdigit()):
+                _is_period(v) or _digit_led(v)):
             continue                # a PERIOD, judged by its command
-        if not _ACCOUNT_NAME_RE.fullmatch(v):
-            from taxjson.lib.config_check import ACCOUNT_NAME_RULE
-            _die(f"{v!r} is not an account name — give the name of an "
-                 f"[accounts.<name>] section in taxjson.toml "
-                 f"({ACCOUNT_NAME_RULE}), not a path or a pattern.")
+        if not ACCOUNT_NAME_RE.fullmatch(v):
+            _die(not_an_account_name(v), *_period_first(args, v))
+
+
+def _period_first(args: argparse.Namespace, tok: str) -> List[str]:
+    """The remedy line for a list in the PERIOD slot with a period after
+    it (`tjs stats margin,ib 2024`), to a command that takes a list: the
+    period goes first. [] otherwise."""
+    acct = getattr(args, "account", None)
+    if (getattr(args, "account_list", False) and isinstance(acct, str)
+            and tok is getattr(args, "period", None)
+            and is_account_list(tok) and _is_period(acct)):
+        return [f"The period goes first: `tjs {args.cmd} {acct} {tok}`."]
+    return []
+
+
+def _refuse_account_list(args: argparse.Namespace) -> None:
+    """An ACCOUNT list (`margin,crypto`, lib/account_list), before the
+    command, refused for its shape: an artifact name, a path or pattern
+    (each name, the single-name words), then a list to a command whose
+    registration does not take one (`p.set_defaults(account_list=True)`:
+    "`tjs elections` takes one account"), an empty name, a name twice. Exit
+    1, the code a comma token had before lists. A name not in [accounts]
+    is the command's (cli/common `_accounts`, exit 1 for a list). Sets
+    nothing: the command parses the names (`_accounts`, `_view_scope`)."""
+    marked = bool(getattr(args, "account_list", False))
+    for text in _list_texts(args):
+        toks = text if isinstance(text, list) else [text]
+        hint = _period_comma_hint(toks)
+        for name in (n for t in toks for n in t.split(",") if n):
+            suf = artifact_suffix(name)
+            if suf:
+                _die(not_an_account(name, suf), *hint)
+            if not ACCOUNT_NAME_RE.fullmatch(name):
+                _die(not_an_account_name(name), *hint)
+        try:
+            # (Not marked: two names or more are "takes one account", one
+            # name with an empty one, `margin,`, is the empty name.)
+            parse_accounts(toks, None, one=not marked)
+        except AccountListError as e:
+            head, details, _code = _list_refusal(e, args.cmd,
+                                                 takes_list=marked)
+            _die(head, *details, *hint)
 
 
 def _refuse_artifact_account(args: argparse.Namespace) -> None:
@@ -554,25 +700,13 @@ def _refuse_artifact_account(args: argparse.Namespace) -> None:
     refuses those names — yet sum, list, winners, wash-sales and their
     twins read work/<name>_gains.json and printed the native-currency
     books under a base-currency header (re-audit A2-0394). Refused once,
-    for every command."""
-    from taxjson.lib.config_check import RESERVED_NAME_SUFFIXES
+    for every command; a list's names: _refuse_account_list."""
     # `period` too: `winners [PERIOD] [ACCOUNT]` takes a lone name in
     # the first slot as the account.
-    vals = []
-    for attr in ("account", "period"):
-        v = getattr(args, attr, None)
-        vals += v if isinstance(v, list) else [v]
-    for v in vals:
-        if not isinstance(v, str):
-            continue
-        low = v.lower()
-        suf = next((x for x in RESERVED_NAME_SUFFIXES if low.endswith(x)),
-                   None)
+    for v in _single_tokens(args):
+        suf = artifact_suffix(v)
         if suf:
-            _die(f"{v!r} is not an account: names ending in {suf!r} are "
-                 f"pipeline work files (an account's native or "
-                 f"intermediate books), never accounts — use an account "
-                 f"name from [accounts] in taxjson.toml.")
+            _die(not_an_account(v, suf))
 
 
 # Commands that run in the folder holding a multi-year project's year
@@ -592,13 +726,13 @@ _YEARS_ROOT_CMDS = frozenset({
 # The commands (and the flags that make them write) that save a decision
 # into an account's folder: with exports shared by every year, said.
 _DECISION_WRITERS: Dict[str, Tuple[str, ...]] = {
-    "elect": ("set", "redo", "reset"),
+    "elections": ("set", "redo", "reset"),
     "crypto-sends": ("set", "unset", "write"),
 }
 
 
 def _note_shared_decision(args: argparse.Namespace) -> None:
-    """After `elect --set` / `crypto-sends --set` in a project whose
+    """After `elections --set` / `crypto-sends --set` in a project whose
     exports are shared (lib/project_layout): the decision is saved in
     the shared folder, so every year reading it applies it."""
     flags = _DECISION_WRITERS.get(args.cmd)
@@ -609,9 +743,9 @@ def _note_shared_decision(args: argparse.Namespace) -> None:
     if not _PL.shared_inputs(root):
         return
     _say("note", f"saved in {_PL.shown(_PL.inputs_dir(root), root)}/"
-         f"<account>/ (manifest.json, sends.json): every year reading "
+         f"<account>/ (elections.json, sends.json): every year reading "
          f"these exports applies it on its next run",
-         *_frozen_years_apart(root))
+         *_frozen_years_apart(root, elections=args.cmd == "elections"))
 
 
 # Commands that run with no project, or say themselves what is missing:
@@ -654,7 +788,7 @@ def _refuse_outside_links(args: argparse.Namespace) -> None:
         return
     accounts = cfg.get("accounts")
     names = {str(n): a for n, a in accounts.items()
-             if re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", str(n))
+             if ACCOUNT_NAME_RE.fullmatch(str(n))
              } if isinstance(accounts, dict) else {}
     _refuse_outside_dir_links(root, names)
 
@@ -729,7 +863,7 @@ _RUN_STATE_BANNER_CMDS = frozenset({
     "events", "wash-radar", "sell-check", "buy-check", "rebuy",
     "div-estimate", "harvest", "watch", "edge-cases", "option-boundary", "spinoffs", "splits",
     "check-dates", "stats", "option-yield", "win-rates", "compare",
-    "technicals",
+    "technicals", "stress",
     # The step-5 detectors read the books too (backlog TJ-0077).
     "find-missing-history", "sanity", "transfers",
     # The review commands over the saved books: audit's tie-out passed
@@ -821,7 +955,7 @@ def _refuse_no_input_books(args: argparse.Namespace) -> None:
 # one line here.
 _ACCOUNT_ARG_CMDS = frozenset({
     "edge-cases", "spinoffs", "splits", "check-dates", "winners", "losers",
-    "leaps", "leaps-sum", "stats", "wash-radar",
+    "leaps", "leaps-sum", "stats", "wash-radar", "stress",
 })
 
 
@@ -830,6 +964,8 @@ def _refuse_unknown_account(args: argparse.Namespace) -> None:
         return
     account = getattr(args, "account", None)
     period = getattr(args, "period", None)
+    if is_account_list(account) or _lone_list(args):
+        return                         # a list: _refuse_account_list's
     if account is None and period and not _is_period(period):
         if period.strip()[:1].isdigit():
             return                     # the command names the bad window
@@ -842,8 +978,7 @@ def _refuse_unknown_account(args: argparse.Namespace) -> None:
     accounts = load_config(root, missing_ok=True).get("accounts") or {}
     if not isinstance(accounts, dict) or not accounts or account in accounts:
         return
-    _die_input(f"no [accounts.{account}] in taxjson.toml — check the name "
-               f"(configured: {', '.join(sorted(accounts))}).")
+    _die_input(unknown_accounts_text([account], accounts))
 
 
 def _enforce_command_country(args: argparse.Namespace) -> None:
@@ -1054,7 +1189,10 @@ def _split_command_segments(parser: argparse.ArgumentParser,
     when the project has an account named sum, `init sum` (the folder)
     or `audit sum` (a symbol) — a valid single command is never split
     (#52). `events sum` with no such account is `events`, then `sum`.
+    A renamed command's old name (cli/parser RENAMED_COMMANDS) splits as
+    a command does, so the chain check names its new one.
     """
+    from taxjson.cli.parser import RENAMED_COMMANDS
     start = _command_index(parser, argv, commands)
     if start == len(argv):              # no command at all — let
         return [argv]                   # argparse print its usual error
@@ -1074,7 +1212,7 @@ def _split_command_segments(parser: argparse.ArgumentParser,
         elif tok == "--" and cur and _parses_ok(parser, prefix + cur):
             segments.append(cur)
             cur = []
-        elif (tok in commands
+        elif ((tok in commands or tok in RENAMED_COMMANDS)
                 and cur                 # empty right after a `--`
                 and cur[0] != "help"):  # `tjs help divs` — help's
                                         # argument IS a command name

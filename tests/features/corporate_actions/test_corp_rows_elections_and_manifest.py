@@ -208,7 +208,7 @@ class TestManifestErrors(unittest.TestCase):
     def test_s072_05_elect_on_a_broken_manifest_is_one_line(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp)
-            man = root / "inputs" / "margin" / "manifest.json"
+            man = root / "inputs" / "margin" / "elections.json"
             for content in (b"{not json", b'{"elections": {"x": 1}}\xe9',
                             b"[]", b'{"elections": [1]}',
                             b'{"elections": {"E1": "rollover_s_85_1_5"}}',
@@ -216,11 +216,11 @@ class TestManifestErrors(unittest.TestCase):
                             b'{"elections": {"E1": {"election": "ignore",'
                             b' "hints": [1]}}}'):
                 man.write_bytes(content)
-                for args in (("elect",), ("elect", "margin")):
+                for args in (("elections",), ("elections", "margin")):
                     r = _run_cli(root, *args)
                     self.assertNotIn("Traceback", r.stderr, content)
                     self.assertNotEqual(r.returncode, 0, content)
-                    self.assertIn("tjs elect: error: manifest at",
+                    self.assertIn("tjs elections: error: the elections file",
                                   r.stderr, content)
 
     def test_s072_16_bad_record_refused_by_load(self):
@@ -236,13 +236,13 @@ class TestManifestErrors(unittest.TestCase):
     def test_s072_16_typo_election_flagged_by_elect(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp)
-            (root / "inputs" / "margin" / "manifest.json").write_text(
+            (root / "inputs" / "margin" / "elections.json").write_text(
                 json.dumps({"elections": {
                     "20250101-abc-xyz-0000": {
                         "election": "taxable_dispostion"},
                     "20250102-abc-xyz-0001": {
                         "election": "taxable_disposition"}}}))
-            r = _run_cli(root, "elect", "margin")
+            r = _run_cli(root, "elections", "margin")
         self.assertEqual(r.returncode, 0, r.stderr)
         lines = r.stdout.splitlines()
         bad = [ln for ln in lines if "taxable_dispostion" in ln]
@@ -327,7 +327,7 @@ class TestRbcLow(unittest.TestCase):
             r = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_corp_actions",
                  "--country", "canada", "--brokerage", "rbc", "--list",
-                 "--manifest", str(Path(tmp) / "m.json"),
+                 "--elections", str(Path(tmp) / "m.json"),
                  "--ticker-map", str(tm), str(p)],
                 cwd=REPO_ROOT, capture_output=True, text=True,
                 stdin=subprocess.DEVNULL)

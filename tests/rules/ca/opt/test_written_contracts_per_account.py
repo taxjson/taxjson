@@ -1387,11 +1387,24 @@ class TestABuyBackInAnotherAccountNeverReplaces(unittest.TestCase):
                            _tx('b', '2025-02-20', 100, 1100, sym=S, description='COVER SHORT.')])
         self.assertEqual(_gains(res), [('2025-02-03', 'a', 100.0, -300.0, 0.0),
                                        ('2025-02-20', 'b', 100.0, 200.0, 0.0)])
+        # A purchase with no cover mark past the short (a source with no
+        # convention): it covers the short and buys 50, which replace.
         res = _run(loss + [_tx('b', '2025-02-05', -100, 1300, sym=S, description='SELL SHORT.'),
-                           _tx('b', '2025-02-20', 150, 1650, sym=S, description='COVER SHORT.')])
+                           _tx('b', '2025-02-20', 150, 1650, sym=S)])
         self.assertEqual(_gains(res), [('2025-02-03', 'a', 100.0, -150.0, 150.0),
                                        ('2025-02-20', 'b', 100.0, 200.0, 0.0)])
         self.assertEqual(_inv(res), [(S, '', 50.0, 700.0)])
+        # The same purchase marked COVER SHORT.: a row the broker marks
+        # CLOSE opens no position, so its 50 past the short closed a short
+        # sold before the files (reported by hand) and replace nothing
+        # (CA-ACB-11; the owner's ruling on backlog TJ-5349).
+        res = _run(loss + [_tx('b', '2025-02-05', -100, 1300, sym=S, description='SELL SHORT.'),
+                           _tx('b', '2025-02-20', 150, 1650, sym=S, description='COVER SHORT.')])
+        self.assertEqual(_gains(res), [('2025-02-03', 'a', 100.0, -300.0, 0.0),
+                                       ('2025-02-20', 'b', 100.0, 200.0, 0.0),
+                                       ('2025-02-20', 'b', 50.0, -550.0, 0.0)])
+        self.assertTrue(res['transactions'][-1].get('tainted'))
+        self.assertEqual(_inv(res), [])
 
 
 if __name__ == '__main__':

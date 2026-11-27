@@ -18,15 +18,17 @@ from taxjson.lib.stage_msg import emit_line
 from taxjson.cli.common import (
     _refuse_cash_older_than_inputs, _rerun_hint, _side_doc_or_die,
     _account_group_of, _base_currency, _box18_fractions, _child_error,
-    _relay_child_stderr, _discover_tx_accounts, _gains_all_file,
-    _gains_row_date, _is_period, _ISO_DATE_RE, _load_json_or_die,
-    _option_openings, _out_act_prefix, _self_cmd, _settle_basis,
+    _accounts, _relay_child_stderr, _discover_tx_accounts, _gains_all_file,
+    _gains_row_date, _is_period, _ISO_DATE_RE,
+    _load_json_or_die, _option_openings, _out_act_prefix,
+    _require_listed, _self_cmd, _settle_basis,
     _split_pool_of, _tt_openings, _tx_period_cutoff, _view_income_rules,
-    _view_msg, _view_window, _warn_accounts_without_books,
+    _view_msg, _view_scope, _warn_accounts_without_books, _window_of,
     _warn_artifact_year, _warn_period_or_account, _warn_run_state,
     _window_gains_files, _work_read_why, _year_keep, _OTHER_LOSSES_HELP,
     _PERIOD_HELP, _add_deduction_flags,
 )
+from taxjson.lib.account_list import is_account_list, unknown_accounts_text
 from taxjson.pipeline import run_state
 from taxjson.pipeline.config import (
     load_settings,
@@ -232,18 +234,21 @@ def cmd_stats(args: argparse.Namespace) -> None:
     filing number."""
     from taxjson.lib import trade_stats
     root = Path(args.dir).resolve()
+    whole = False
     if args.all_history:
         if args.period and _is_period(args.period):
             _die_input("give a YEAR or --all-history, not both")
         if args.period and args.account is None:
+            # The lone positional is then the account: one starting
+            # with a digit is read whole, as before lists.
+            whole = args.period[:1].isdigit()
             args.account, args.period = args.period, None
         args.period = "all"
     settings = load_settings(root, missing_ok=True)
     country = _country(settings)
     usa = country == "usa"
-    inp = _closed_trade_inputs(args, root, "stats")
-    keep, scope, account = inp["keep"], inp["scope"], inp["account"]
-    groups, resolved = inp["groups"], inp["resolved"]
+    inp = _closed_trade_inputs(args, root, "stats", whole=whole)
+    keep, scope, resolved = inp["keep"], inp["scope"], inp["resolved"]
     res = trade_stats.compute(inp["gains"], inp["books"], keep,
                               inp["date_of"], inp["crypto"],
                               inp["in_books"], pools=inp["pools"],
@@ -255,12 +260,12 @@ def cmd_stats(args: argparse.Namespace) -> None:
                               history_docs=inp["history_docs"],
                               cover_history_docs=inp["cover_history_docs"])
     base = _base_currency(root)
-    sheltered = bool(account) and groups.get(account) == "sheltered"
+    who, sheltered, shel = _closed_trade_who(inp, usa)
     rule = "wash-sale" if usa else "superficial-loss"
     if getattr(args, "json", False):
         _json_out(dict(res, scope=scope, currency=base,
                        accounts=sorted(resolved),
-                       sheltered=sheltered,
+                       sheltered=sheltered, **_closed_trade_names(inp, shel),
                        basis=f"economic P/L before any {rule} denial",
                        option_premium_timing=(
                            None if usa else
@@ -281,10 +286,6 @@ def cmd_stats(args: argparse.Namespace) -> None:
                 str(st["losses"]), wr, money(st["net_pl"]),
                 _m(st["avg_win"]), _m(st["avg_loss"]),
                 _m(st["largest_win"]), _m(st["largest_loss"]), pf]
-    kind = ("retirement (IRA)" if usa else "registered")
-    who = (f"account {account}" + (f" — {kind}, not taxable events"
-                                   if sheltered else "")
-           if account else _accounts_phrase(sorted(resolved)))
     from taxjson.lib.out import Doc
     doc = Doc(f"CLOSED-TRADE STATISTICS — {scope} ({base}; {who})")
     _det = _details(args)
@@ -369,13 +370,18 @@ def _view_positionals(items, accounts_cfg, *,
     a dot is a listing (`1234.HK`: refused as an invalid period, backlog
     TJ-0785), unless a number stands after the dot (`1.5y`, `2.5m`: read
     as a symbol, the window fell back to the tax year: backlog TJ-1085);
-    any other digit-leading non-period is a malformed period."""
+    any other digit-leading non-period is a malformed period. Any other
+    token with a comma is the accounts (`margin,crypto`, lib/
+    account_list), never a symbol: it was read as the symbol
+    MARGIN,CRYPTO and the report covered every account at exit 0; a
+    list beside an account name, or two lists, is refused (exit 1)."""
     # A symbol's future `/` or `\` prefix is `F:`, as the books spell it
     # (lib/futures_prefixes, backlog TJ-5150).
     from taxjson.lib.futures_prefixes import canonical_futures_symbol
     period = account = None
     rest: List[str] = []
     both: List[str] = []
+    lists: List[str] = []
     for tok in (items or []):
         t = str(tok or "").strip()
         if not t:
@@ -390,8 +396,19 @@ def _view_positionals(items, accounts_cfg, *,
         elif (t[:1].isdigit() and not is_p
               and ("." not in t or re.fullmatch(r"\d+\.\d+[A-Za-z]*", t))):
             _tx_period_cutoff(t)                # sys.exits: invalid period
+        elif is_account_list(t):
+            lists.append(t)
         else:
             rest.append(canonical_futures_symbol(t.upper()))
+    if lists:
+        given = ([account] if account else []) + lists
+        if len(given) > 1:
+            one = ",".join(dict.fromkeys(n for g in given
+                                         for n in g.split(",") if n))
+            _die(f"more than one account argument: "
+                 f"{', '.join(repr(g) for g in given)}",
+                 f"Give the accounts as one comma list: {one!r}.")
+        account = lists[0]
     for i, t in enumerate(both):
         if account is None and (period is not None or all_history):
             account = t
@@ -406,23 +423,12 @@ def _view_positionals(items, accounts_cfg, *,
     return period, account, rest
 
 
-def cmd_div_estimate(args: argparse.Namespace) -> None:
-    """`tjs div-estimate [PERIOD] [ACCOUNT] [--months N] [--date D]`:
-    upcoming dividends projected from each held position's own dividend
-    history in the books (lib/div_estimate; CA-PLAN-06 / US-PLAN-07).
-    The history is the native books (work/<acct>_raw.json, what
-    divs-sum reads), the shares held now each account's native
-    holdings (work/<acct>_raw_gains.json inventory, one row per
-    listing), the base-currency rate the books' latest (work/
-    to_base.csv). Crypto accounts are left out (staking is not a
-    dividend). Planning numbers only."""
-    from taxjson.lib import div_estimate as DE
-    from taxjson.lib.option_symbols import is_option_symbol
-    from taxjson.lib.price_chain import latest_rate, load_fx_history
-    root = Path(args.dir).resolve()
-    cache = root / "work"
-    settings = load_settings(root, missing_ok=True)
-    rules = _view_income_rules(root)        # refuses a project w/o country
+def _div_estimate_window(args: argparse.Namespace, DE: Any
+                         ) -> Tuple[Optional[str], int]:
+    """div-estimate's positionals: (the account text, the forward window
+    in months). A lone positional no forward window reads is the
+    account (or the accounts, a comma list); the window is PERIOD or
+    --months (not both), 12 months by default, 1 to 120."""
     period, account = args.period, args.account
     if period and account is None and DE.parse_window(period) is None:
         account, period = period, None
@@ -448,6 +454,27 @@ def cmd_div_estimate(args: argparse.Namespace) -> None:
         if args.months < 1 or args.months > 120:
             _die_input("--months must be between 1 and 120")
         months = args.months
+    return account, months
+
+
+def cmd_div_estimate(args: argparse.Namespace) -> None:
+    """`tjs div-estimate [PERIOD] [ACCOUNT] [--months N] [--date D]`:
+    upcoming dividends projected from each held position's own dividend
+    history in the books (lib/div_estimate; CA-PLAN-06 / US-PLAN-07).
+    The history is the native books (work/<acct>_raw.json, what
+    divs-sum reads), the shares held now each account's native
+    holdings (work/<acct>_raw_gains.json inventory, one row per
+    listing), the base-currency rate the books' latest (work/
+    to_base.csv). Crypto accounts are left out (staking is not a
+    dividend). Planning numbers only."""
+    from taxjson.lib import div_estimate as DE
+    from taxjson.lib.option_symbols import is_option_symbol
+    from taxjson.lib.price_chain import latest_rate, load_fx_history
+    root = Path(args.dir).resolve()
+    cache = root / "work"
+    settings = load_settings(root, missing_ok=True)
+    rules = _view_income_rules(root)        # refuses a project w/o country
+    account, months = _div_estimate_window(args, DE)
     if args.date:
         from taxjson.lib.dates import as_of_date_problem
         _bad = as_of_date_problem(args.date)
@@ -455,13 +482,31 @@ def cmd_div_estimate(args: argparse.Namespace) -> None:
             _die_input(_bad)
     as_of = args.date or date_cls.today().isoformat()
     accounts_cfg = accounts_of(load_config(root, missing_ok=True))
-    if account and account not in accounts_cfg:
-        _die_input(f"no [accounts.{account}] in taxjson.toml",
+    # The accounts: the text the window parser left (one name, or a
+    # comma list, lib/account_list), None for every account.
+    # (A lone token starting with a digit is a period, comma or not, as
+    # before lists: read whole, the unknown name's words, exit 2.)
+    names: Optional[Tuple[str, ...]]
+    if account is not None and args.account is None \
+            and account[:1].isdigit():
+        names = (account,)
+    else:
+        names = _accounts(args, root, text=account or "")
+    unknown = [n for n in names or () if n not in accounts_cfg]
+    if unknown and len(unknown) == len(names or ()) == 1:
+        _die_input(f"no [accounts.{unknown[0]}] in taxjson.toml",
                    "Check the name.")
+    if unknown:                     # (a list: [accounts] empty)
+        _die(unknown_accounts_text(unknown, accounts_cfg))
     from taxjson.lib.clean import no_books
     missing = no_books(cache)
     if missing:
         _die(f"{missing} — run `tjs run` first.")
+    if names and len(names) > 1:
+        _require_listed(names, [n for n in names if accounts_cfg[n].crypto
+                                or (_native_tx_file(cache, n) is not None
+                                    and (cache / f"{n}_raw_gains.json").exists())],
+                        "native books")
     groups = _account_group_of(root)
     rows: List[Tuple[str, Dict[str, Any]]] = []
     held: List[Dict[str, Any]] = []
@@ -487,7 +532,8 @@ def cmd_div_estimate(args: argparse.Namespace) -> None:
             rows += [(n, t) for t in _tt_openings(root, ntx, native=True)
                      if str(t.get("account") or n) == n]
         if native is None or not inv.exists():
-            if _has_inputs(root, n) and not (account and n != account):
+            if _has_inputs(root, n) and not (names is not None
+                                             and n not in names):
                 missing.append(n)
             continue
         for h in (_load_json_or_die(inv).get("inventory") or []):
@@ -498,7 +544,7 @@ def cmd_div_estimate(args: argparse.Namespace) -> None:
                 continue
             held.append({"account": n, "group": groups.get(n, ""),
                          "symbol": sym, "qty": qty})
-    positions = [p for p in held if not account or p["account"] == account]
+    positions = [p for p in held if names is None or p["account"] in names]
     if missing:
         _view_msg("warning", f"no native books for {', '.join(missing)} "
                   f"(work/<account>_raw.json, _raw_gains.json): not "
@@ -562,20 +608,61 @@ def _accounts_phrase(names: List[str]) -> str:
     return f"{len(names)} taxable accounts"
 
 
+def _closed_trade_who(inp: Dict[str, Any], usa: bool
+                      ) -> Tuple[str, bool, List[str]]:
+    """The accounts a `stats` / `win-rates` view covers as its title
+    names them, whether every one named is sheltered (the --json
+    `sheltered`) and the sheltered ones named (`sheltered_accounts`).
+    One: `account rrsp — registered, not taxable events`; a list:
+    `accounts margin, rrsp — rrsp registered, not taxable events` (all
+    sheltered: `accounts rrsp, tfsa — registered, not taxable events`);
+    none named: the taxable accounts read."""
+    names = inp["names"]
+    if names is None:
+        return _accounts_phrase(sorted(inp["resolved"])), False, []
+    kind = "retirement (IRA)" if usa else "registered"
+    shel = [n for n in names if inp["groups"].get(n) == "sheltered"]
+    every = len(shel) == len(names)
+    if len(names) == 1:
+        return (f"account {names[0]}"
+                + (f" — {kind}, not taxable events" if every else ""),
+                every, shel)
+    mark = ("" if not shel else f" — {kind}, not taxable events" if every
+            else f" — {', '.join(shel)} {kind}, not taxable events")
+    return f"accounts {', '.join(names)}{mark}", every, shel
+
+
+def _closed_trade_names(inp: Dict[str, Any], shel: List[str]
+                        ) -> Dict[str, Any]:
+    """The --json keys of the accounts named (lib/account_list):
+    `account_names` (in the order given, null for every account) and
+    `sheltered_accounts` (the sheltered ones among them)."""
+    names = inp["names"]
+    return {"account_names": list(names) if names is not None else None,
+            "sheltered_accounts": shel}
+
+
 def _closed_trade_inputs(args: argparse.Namespace, root: Path,
-                         label: str) -> Dict[str, Any]:
+                         label: str, *, whole: bool = False
+                         ) -> Dict[str, Any]:
     """What `stats` and `win-rates` read (lib/trade_stats): the window
-    and account of the positionals, each account's gains document and
-    base-currency book (taxable accounts by default; a sheltered one
-    only when named), the row-dating closure and the span the written
-    options keep to (a year project's gains files hold one tax year)."""
+    and accounts of the positionals (one, a comma list, or None), each
+    account's gains document and base-currency book (taxable accounts
+    by default; a sheltered one only when named, in a list too), the
+    row-dating closure and the span the written options keep to (a year
+    project's gains files hold one tax year). `whole`: the account text
+    is one name (stats' lone positional starting with a digit)."""
     from taxjson.lib.crypto_sends import crypto_accounts
     cache = root / "work"
-    keep, scope, account = _view_window(args, root)
+    if whole:
+        keep, scope = _window_of(args.period, root)
+        names: Optional[Tuple[str, ...]] = (args.account,)
+    else:
+        keep, scope, names = _view_scope(args, root)
     groups = _account_group_of(root)
-    resolved, all_history = _window_gains_files(root, cache, account,
-                                                args)
-    if not account:
+    # (A listed account with no gains file: refused there, exit 1.)
+    resolved, all_history = _window_gains_files(root, cache, names, args)
+    if names is None:
         # Taxable accounts by default; a sheltered one only when named.
         resolved = {a: f for a, f in resolved.items()
                     if groups.get(a) != "sheltered"}
@@ -585,7 +672,7 @@ def _closed_trade_inputs(args: argparse.Namespace, root: Path,
                                         if g == "sheltered"],
                 label, "gains file")
     if not resolved:
-        what = (f"account {account!r}" if account else "a taxable account")
+        what = (f"account {names[0]!r}" if names else "a taxable account")
         _die(f"no books for {what} in work/ — run `tjs run` first")
     books: Dict[str, list] = {}
     base_rows: Dict[str, list] = {}
@@ -626,7 +713,7 @@ def _closed_trade_inputs(args: argparse.Namespace, root: Path,
     _use_project_ticker_map(root)
     from taxjson.lib.country import engine_sort_profile
     country = _country(load_settings(root, missing_ok=True))
-    return {"keep": keep, "scope": scope, "account": account,
+    return {"keep": keep, "scope": scope, "names": names,
             "groups": groups, "resolved": resolved, "gains": gains,
             "books": books, "settle": settle, "in_books": in_books,
             "date_of": lambda r: _gains_row_date(r, keep, settle),
@@ -958,11 +1045,12 @@ def cmd_win_rates(args: argparse.Namespace) -> None:
                 unmatched.append(w)
     g = trade_stats.group(trades, args.by)
     base = _base_currency(root)
-    scope, account = inp["scope"], inp["account"]
-    sheltered = bool(account) and inp["groups"].get(account) == "sheltered"
+    scope = inp["scope"]
+    who, sheltered, shel = _closed_trade_who(inp, usa)
     rule = "wash-sale" if usa else "superficial-loss"
     doc = dict(g, scope=scope, currency=base,
                accounts=sorted(inp["resolved"]), sheltered=sheltered,
+               **_closed_trade_names(inp, shel),
                symbols=syms, unmatched_symbols=unmatched,
                basis=f"economic P/L before any {rule} denial",
                denied_total=res["denied_total"],
@@ -991,10 +1079,6 @@ def cmd_win_rates(args: argparse.Namespace) -> None:
             row.append(", ".join(f"{k} {n}" for k, n in
                                  (classes or {}).items()) or "-")
         return row
-    kind = ("retirement (IRA)" if usa else "registered")
-    who = (f"account {account}" + (f" — {kind}, not taxable events"
-                                   if sheltered else "")
-           if account else _accounts_phrase(sorted(inp["resolved"])))
     head = {"symbol": "TICKER", "account": "ACCOUNT", "month": "MONTH",
             "class": "CLASS"}[args.by]
     from taxjson.lib.out import Doc, act, details_hint
@@ -1082,18 +1166,8 @@ def cmd_option_yield(args: argparse.Namespace) -> None:
     # underlyings (`option-yield QQQ 1y margin`), in any order.
     period, account, unds = _view_positionals(args.items, accounts_cfg)
     args.period, args.account = period, account
-    keep, scope, account = _view_window(args, root)
-    if not cache.is_dir():
-        _die("no work/ — run `tjs run` first.")
-    accounts = ([account] if account else _discover_tx_accounts(cache))
-    if account and _native_tx_file(cache, account) is None:
-        _die_input(f"no native transaction file for account {account!r} "
-                   f"in work/ — run `tjs run` first, or check the name")
-    if not accounts:
-        _die("no transaction files in work/ — run `tjs run` first")
-    if not account:
-        _warn_accounts_without_books(root, accounts, "option-yield",
-                                     "transaction file")
+    keep, scope, names = _view_scope(args, root)
+    _option_yield_books(root, cache, names)
     rows: List[Tuple[str, Dict[str, Any]]] = []
     first = ""
     # Every account's rows: the contracts are matched per account, and
@@ -1188,7 +1262,7 @@ def cmd_option_yield(args: argparse.Namespace) -> None:
         + [k[1] for k in shares])
     doc = OY.analyze(lots, start=start, end=end, scope=scope,
                      underlyings=unds,
-                     accounts=([account] if account else None),
+                     accounts=(list(names) if names is not None else None),
                      groups=_account_group_of(root), shares=shares,
                      unknown_shares=unknown_shares, aliases=aliases)
     if getattr(args, "json", False):
@@ -1198,6 +1272,30 @@ def cmd_option_yield(args: argparse.Namespace) -> None:
     # settling_streams. An unconditional one here was an empty stderr
     # line before every report — workflow audit 2026-10.)
     OY.render(doc).print()
+
+
+def _option_yield_books(root: Path, cache: Path,
+                        names: Optional[Tuple[str, ...]]) -> None:
+    """option-yield's books: work/ built and a native transaction file
+    for each account named (one: its own words, exit 2; a list: each one
+    missing named, exit 1), else for some account, with a warning naming
+    a configured account that has inputs and none."""
+    if not cache.is_dir():
+        _die("no work/ — run `tjs run` first.")
+    if names and len(names) == 1 and _native_tx_file(cache, names[0]) is None:
+        _die_input(f"no native transaction file for account {names[0]!r} "
+                   f"in work/ — run `tjs run` first, or check the name")
+    if names is not None:
+        _require_listed(names, [n for n in names
+                                if _native_tx_file(cache, n) is not None],
+                        "native transaction file",
+                        fix="Run `tjs run` first, or check the names.")
+        return
+    accounts = _discover_tx_accounts(cache)
+    if not accounts:
+        _die("no transaction files in work/ — run `tjs run` first")
+    _warn_accounts_without_books(root, accounts, "option-yield",
+                                 "transaction file")
 
 
 def _issuer_facts(cache: Path, acct: str) -> Dict[str, Any]:
@@ -2659,14 +2757,16 @@ def _register_div_estimate(sub: argparse._SubParsersAction) -> None:
                           help="Forward window: Nd, Nw, Nm or Ny "
                                "(default 12m)")
     p_divest.add_argument("account", nargs="?",
-                          help="Account (default: all)")
+                          metavar="ACCOUNT[,ACCOUNT...]",
+                          help="Account, or several as one comma list "
+                               "(default: all)")
     p_divest.add_argument("--months", type=int, default=None, metavar="N",
                           help="Forward window in months (default 12)")
     p_divest.add_argument("--date", metavar="YYYY-MM-DD", default=None,
                           help="As of this date (default: today)")
     p_divest.add_argument("--json", action="store_true",
                           help="Emit JSON instead of text")
-    p_divest.set_defaults(func=cmd_div_estimate)
+    p_divest.set_defaults(func=cmd_div_estimate, account_list=True)
 
 
 def _register_option_yield(sub: argparse._SubParsersAction) -> None:
@@ -2686,10 +2786,11 @@ def _register_option_yield(sub: argparse._SubParsersAction) -> None:
     p_oy.add_argument("items", nargs="*", metavar="UNDERLYING|PERIOD|ACCOUNT",
                       help="Underlyings (QQQ, QQQ.US; default: all), a "
                            "window (" + _PERIOD_HELP + ") and an account "
-                           "(default: all), in any order")
+                           "or several as one comma list (default: all), "
+                           "in any order")
     p_oy.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text")
-    p_oy.set_defaults(func=cmd_option_yield)
+    p_oy.set_defaults(func=cmd_option_yield, account_list=True)
 
 
 def _register_stats(sub: argparse._SubParsersAction) -> None:
@@ -2708,15 +2809,16 @@ def _register_stats(sub: argparse._SubParsersAction) -> None:
                               "any window token works too (30d, ytd, "
                               "all ...)")
     p_stats.add_argument("account", nargs="?",
-                         help="One account (default: every taxable "
-                              "account); a sheltered account is shown "
-                              "only when named")
+                         metavar="ACCOUNT[,ACCOUNT...]",
+                         help="One account, or several as one comma list "
+                              "(default: every taxable account); a "
+                              "sheltered account is shown only when named")
     p_stats.add_argument("--all-history", action="store_true",
                          help="Every closed trade the books hold, not "
                               "one year")
     p_stats.add_argument("--json", action="store_true",
                          help="Emit JSON instead of text")
-    p_stats.set_defaults(func=cmd_stats)
+    p_stats.set_defaults(func=cmd_stats, account_list=True)
 
 
 def _register_win_rates(sub: argparse._SubParsersAction) -> None:
@@ -2736,9 +2838,9 @@ def _register_win_rates(sub: argparse._SubParsersAction) -> None:
                       help="Symbols (QQQ, QQQ.US; default: all), a "
                            "window (30d, 6m, 1y, mtd, ytd, all, a tax "
                            "year; default: the tax year) and an account "
-                           "(default: every taxable account; a sheltered "
-                           "account is shown only when named), in any "
-                           "order")
+                           "or several as one comma list (default: every "
+                           "taxable account; a sheltered account is shown "
+                           "only when named), in any order")
     p_wr.add_argument("--by", default="symbol",
                       choices=("symbol", "account", "month", "class"),
                       help="Group the trades per symbol (default), "
@@ -2748,7 +2850,7 @@ def _register_win_rates(sub: argparse._SubParsersAction) -> None:
                            "year")
     p_wr.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text")
-    p_wr.set_defaults(func=cmd_win_rates)
+    p_wr.set_defaults(func=cmd_win_rates, account_list=True)
 
 
 def _register_fx_cash(sub: argparse._SubParsersAction) -> None:

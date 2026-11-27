@@ -14,6 +14,7 @@ from decimal import Decimal
 from taxjson.lib.numeric import D
 from taxjson.model import money as M
 from taxjson.lib.row_types import LISTING_JOURNAL_TYPE
+from taxjson.lib.unbacked_close import is_unbacked_opening
 
 if TYPE_CHECKING:
     from taxjson.model.transaction import TaxTransaction
@@ -29,11 +30,17 @@ def _opening_source(tx: TaxTransaction, symbol: str) -> Dict[str, Any]:
     disposition drawing on its units (the record's `unknown_cost_from`)
     carry them, so the run names the line without re-joining sale and
     line by symbol and account (lib/first_run.unknown_cost_sales;
-    backlog TJ-3209). Units, never money."""
-    return {'account': str(tx.account or ''),
-            'symbol': str(symbol or tx.symbol or ''),
-            'date': str(tx.date or '')[:10],
-            'quantity': float(tx.quantity or 0.0)}
+    backlog TJ-3209). Units, never money. The opening of a marked CLOSE
+    row's unbacked units (lib/unbacked_close OPENING_KIND; no line holds
+    it) names that row's own date and units, and says so
+    (`marked_close`: CA-OPT-12, backlog TJ-5349)."""
+    src = {'account': str(tx.account or ''),
+           'symbol': str(symbol or tx.symbol or ''),
+           'date': str(tx.date or '')[:10],
+           'quantity': float(tx.quantity or 0.0)}
+    if is_unbacked_opening(tx):
+        src['marked_close'] = True
+    return src
 
 
 def _is_listing_journal(t: TaxTransaction) -> bool:

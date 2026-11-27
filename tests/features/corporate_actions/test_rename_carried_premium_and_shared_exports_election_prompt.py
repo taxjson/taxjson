@@ -119,7 +119,7 @@ class TestSharedExportsPromptKeepsTheMigration(unittest.TestCase):
                                                      account="margin")
             old = one.legacy_event_id()
             self.assertNotEqual(old, one.event_id)
-            path = shared / "manifest.json"
+            path = shared / "elections.json"
             _save(path, {old: ("taxable_deemed_dividend", one.summary(),
                                {"fmv_per_share": 10})})
             keys = [k for k, _ in ca.options_for("canada", "spinoff")]

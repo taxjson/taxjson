@@ -29,6 +29,22 @@ list names `tjs sanity` while the project has such files, in_use):
 
 Keep a snapshot taken at (or just after) the year end in each year's
 folder: a later year's snapshot belongs in the later year's.
+
+The folder every year shares (`holdings_dir = "../holdings"` in a year
+folder, beside the year folders: `tjs init`'s layout, project_layout
+`shared_holdings`) holds every year's snapshots, and each year compares
+its own (`year_files`): those dated from January 1 of the year (when
+the year before's folder reads it too; else with no start: the oldest
+year compares every earlier one, its opening positions), through
+January 15 of the next when the next year's folder reads it too (else with
+no end: the newest year compares every later one), and every undated
+one (`year_window`; a January 1-15 snapshot is compared by both years:
+an open year's books run on, so they agree). The others are named in
+one note, with how to compare one anyway, never dropped in silence.
+`tjs close-year` copies the year's into the year's own holdings/, which
+the filed year reads from then on. Any other `holdings_dir`, and a
+single-folder project, compares every snapshot as above (backlog
+TJ-5367, TJ-5400, TJ-5404).
 """
 from __future__ import annotations
 
@@ -61,6 +77,42 @@ The broker's own report is read here too: an RBC Holdings Export or an
 IB Activity Statement with Open Positions (.csv), named for its account
 (margin_holdings.csv). Any other file here is named as not read.
 """
+
+# The README of the folder every year shares (`tjs init`'s layout,
+# `holdings_dir = "../holdings"`).
+SHARED_README = """\
+The broker's positions snapshots of every year, one [[holding]] TOML
+per broker account and date (a download tool writes them; `tjs fetch
+--positions` writes NAME_live_holdings_YYYY.toml, YYYY the year whose
+closing positions it is nearest). Each year folder reads this folder
+(holdings_dir = "../holdings"), and its `tjs sanity` compares the
+snapshots dated from January 1 of its year (the oldest year: every
+earlier one too), through January 15 of the next when the next year's
+folder reads it too (else every later one), and every undated one. It names the ones it leaves out, and `tjs sanity
+ACCOUNT=../holdings/FILE` compares one anyway. Give each snapshot its
+date ([meta] as_of = "YYYY-MM-DD"): an undated one is compared with the
+latest books by every year, and one broker account's undated and dated
+snapshots side by side are refused. `tjs close-year` copies the year's
+snapshots into the year's own holdings/, which the filed year reads
+from then on.
+
+A file belongs to the account whose broker account id is its [meta]
+broker_account (or [meta] account) ([accounts.NAME] account or
+broker_accounts in taxjson.toml), else the account its name starts with
+(margin_holdings_2025.toml, margin_ib_holdings.toml). To keep two dates
+of one broker account in a year, give each file its [meta]
+broker_account.
+
+The broker's own report is read here too: an RBC Holdings Export or an
+IB Activity Statement with Open Positions (.csv), named for its account
+(margin_holdings_2025.csv). Any other file here is named as not read.
+"""
+
+# The last day of January a snapshot is still the year-end one of the
+# year before (year_window, snapshot_year): the year's last trades
+# settle and post in the first days of January, and a positions download
+# taken then is the year's closing positions.
+YEAR_END_THROUGH = 15
 
 
 def _norm(x: Any) -> str:
@@ -165,32 +217,267 @@ def unread_notes(folder: Path, accounts_cfg: Dict[str, Any],
     `holdings = [...]` names is that setting's (`root`: the project
     its paths are relative to; default the folder's parent)."""
     folder = Path(folder)
-    listed = listed_files(Path(root) if root is not None
-                          else folder.parent, accounts_cfg)
+    base = Path(root) if root is not None else folder.parent
+    listed = listed_files(base, accounts_cfg)
+    # (the folder as the project names it, ../holdings/: TJ-5407)
+    at = _folder_shown(base, folder) if root is not None \
+        else f"{folder.name}/"
     notes = []
     for p in unread_files(folder):
         if _resolved(p) in listed:
             continue
         if p.is_dir():
-            notes.append(f"{folder.name}/{mask(p.name)}/ is not read: "
-                         f"only the files directly in {folder.name}/ "
+            notes.append(f"{at}{mask(p.name)}/ is not read: "
+                         f"only the files directly in {at} "
                          f"are — move its snapshots up a level")
         else:
-            notes.append(f"{folder.name}/{mask(p.name)} is not read: it "
+            notes.append(f"{at}{mask(p.name)} is not read: it "
                          f"is not a holdings TOML ([[holding]] tables), "
                          f"an RBC Holdings Export or an IB Activity "
                          f"Statement with Open Positions — save the "
                          f"broker's positions as one of these, or move it "
-                         f"out of {folder.name}/")
+                         f"out of {at}")
     return notes
+
+
+def stray_snapshots(root: Path) -> Optional[str]:
+    """The warning when the project reads the holdings folder every year
+    shares (project_layout `shared_holdings`) while its own holdings/
+    still holds snapshots, which nothing reads (the move to the shared
+    folder made by hand halfway: backlog TJ-5406); else None."""
+    root = Path(root)
+    own = snapshot_files(root / HOLDINGS_DIR)
+    if not own or not _PL.shared_holdings(root):
+        return None
+    shown = _folder_shown(root, _PL.holdings_folder(root))
+    return (f"{HOLDINGS_DIR}/ holds {len(own)} positions snapshot(s) this "
+            f"year does not read ({_names(own)}): holdings_dir = "
+            f"\"{_PL.SHARED_HOLDINGS}\" names {shown} — move them there "
+            f"(rename one whose name is taken)")
+
+
+def year_window(year: int, later: bool, earlier: bool = True
+                ) -> Tuple[Optional[str], Optional[str]]:
+    """(first, last) day of the snapshots tax year `year` compares in a
+    folder every year shares: from January 1 of the year (a snapshot of
+    the first days of January is the year before's closing positions and
+    this year's opening ones: both compare it, and an open year's books
+    run on past its end, so the two agree) when the year before's folder
+    reads the same shared folder (`earlier`, earlier_year_folder), else
+    with no start (None): the oldest sharing year compares every earlier
+    snapshot, its opening positions; through YEAR_END_THROUGH January of
+    the next year when the next year's folder reads the same shared
+    folder (`later`, later_year_folder: that year compares the snapshots
+    after it), else with no end (None): the newest sharing year compares
+    every later snapshot, as a folder of the year's own does. So none is
+    compared by no year (backlog TJ-5400, TJ-5430, TJ-5432)."""
+    return (f"{year:04d}-01-01" if earlier else None,
+            f"{year + 1:04d}-01-{YEAR_END_THROUGH:02d}" if later else None)
+
+
+def window_of(root: Path, year: int) -> Tuple[Optional[str], Optional[str]]:
+    """The window of the year `year` of the project `root`, by the year
+    folders beside it (year_window)."""
+    return year_window(year, later_year_folder(root, year),
+                       earlier_year_folder(root, year))
+
+
+def window_span(first: Optional[str], last: Optional[str]) -> str:
+    """A window as the notes say it: `FIRST to LAST`, `from FIRST`,
+    `through LAST`, or `of any date`."""
+    return (f"{first} to {last}" if first and last else
+            f"from {first}" if first else
+            f"through {last}" if last else "of any date")
+
+
+def _in_window(day: str, first: Optional[str], last: Optional[str]) -> bool:
+    return (first is None or first <= day) and (last is None or day <= last)
+
+
+def window_holds(day: str, year: int, later: bool,
+                 earlier: bool = True) -> bool:
+    """Tax year `year` compares a snapshot dated `day` in the folder
+    every year shares (year_window; `later`, `earlier`: the next year's,
+    the year before's folder reads it too)."""
+    return _in_window(day, *year_window(year, later, earlier))
+
+
+def later_year_folder(root: Path, year: int) -> bool:
+    """A year folder of `year + 1` beside the project that reads the same
+    folder every year shares (project_layout `shared_holdings`: the
+    `holdings/` beside the year folders), which cuts the year's window
+    (year_window). One reading a `holdings/` of its own, or filed with
+    its copy, compares none of the shared snapshots: it cuts nothing
+    (backlog TJ-5430)."""
+    return _sharing_year(root, year + 1)
+
+
+def earlier_year_folder(root: Path, year: int) -> bool:
+    """A year folder of `year - 1` beside the project that reads the same
+    folder every year shares, which starts the year's window at January
+    1 (year_window; else the oldest sharing year compares every earlier
+    snapshot: backlog TJ-5432)."""
+    return _sharing_year(root, year - 1)
+
+
+def _sharing_year(root: Path, year: int) -> bool:
+    return any(y == year and _PL.shared_holdings(d)
+               for y, d in _PL.year_dirs(_resolved(Path(root)).parent))
+
+
+def compared_by(root: Path, day: str) -> List[int]:
+    """The years of the year folders beside the project (its own too)
+    that read the holdings folder every year shares (project_layout
+    `shared_holdings`) and compare a snapshot dated `day` (year_window),
+    oldest first: what `tjs fetch --positions` says of today's
+    snapshot, never a year with no folder."""
+    dirs = _PL.year_dirs(_resolved(Path(root)).parent)
+    sharing = {y for y, d in dirs if _PL.shared_holdings(d)}
+    return [y for y in sorted(sharing)
+            if window_holds(day, y, y + 1 in sharing, y - 1 in sharing)]
+
+
+def snapshot_year(day: str) -> int:
+    """The year a snapshot dated `day` (YYYY-MM-DD) is named for (`tjs
+    fetch --positions`' NAME_live_holdings_YYYY.toml): from January 1 to
+    YEAR_END_THROUGH it is the year before's closing positions, later
+    its own year's, so a year-end download never replaces the next
+    year's file."""
+    y = int(day[:4])
+    return y - 1 if day[5:] <= f"01-{YEAR_END_THROUGH:02d}" else y
+
+
+def holdings_year(root: Path, today: Optional[str] = None) -> Optional[int]:
+    """The year a positions snapshot taken `today` (default: today) is of
+    when the project reads a folder every year shares (its
+    `tjs fetch --positions` file is named for it:
+    NAME_live_holdings_YYYY.toml, so one year's never replaces
+    another's); None for a folder of the project's own."""
+    if not _PL.shared_holdings(Path(root)):
+        return None
+    import datetime as _dt
+    return snapshot_year(today or _dt.date.today().isoformat())
+
+
+def fetch_years(root: Path) -> Tuple[Optional[int], Optional[List[int]]]:
+    """What `tjs fetch --positions` is told of a snapshot taken today
+    (lib/fetchers FetchRequest): (the year its file is named for,
+    holdings_year; the year folders that compare it, compared_by) in a
+    project reading the folder every year shares, else (None, None)."""
+    import datetime as _dt
+    year = holdings_year(root)
+    if year is None:
+        return None, None
+    return year, compared_by(root, _dt.date.today().isoformat())
+
+
+def snapshot_id(path: Path) -> Tuple[str, str]:
+    """(the broker account a snapshot names, normalised, else ""; its
+    day, snapshot_day): two snapshots of one account with the same are
+    added up by `tjs sanity`, one date at a time."""
+    p = Path(path)
+    broker = _norm(_meta(p).get("broker_account")) \
+        if p.suffix.lower() == ".toml" else ""
+    return broker, snapshot_day(p)
+
+
+def snapshot_day(path: Path) -> str:
+    """The day a snapshot is of, as `tjs sanity` dates it: a holdings
+    TOML's [meta] as_of, else the day of its generated_at; a broker's
+    report its own date. "" when it states none, or cannot be read (the
+    compare then reads it and says why: never left out for that)."""
+    import csv
+    from taxjson.lib.positions_reports import read_positions, toml_as_of
+    p = Path(path)
+    try:
+        if p.suffix.lower() == ".toml":
+            return toml_as_of(_meta(p), p.name) or ""
+        return read_positions(p).as_of or ""
+    except (OSError, ValueError, LookupError, csv.Error):
+        return ""                   # (PositionsReportError: a ValueError)
+
+
+def year_files(root: Path, year: Optional[int] = None
+               ) -> Tuple[List[Path], Optional[str]]:
+    """(the snapshots of the project's holdings folder its `tjs sanity`
+    compares, the note on the ones it leaves out, or None). A folder of
+    the project's own, or one a `holdings_dir` of the person's names:
+    all of them. The folder every year shares (project_layout
+    `shared_holdings`): those dated in the year's window (year_window;
+    `year` default the project's), and an undated one (compared with the
+    latest books, by every year); the others are named, earlier and
+    later, in one note that says how to compare one anyway."""
+    root = Path(root)
+    year, kept, early, late = _split_by_year(root, year)
+    if not (early or late):
+        return kept, None
+    first, last = window_of(root, year)
+    shown = _folder_shown(root, _PL.holdings_folder(root))
+    parts = ([f"{len(early)} dated before {first}: {_names(early)}"]
+             if early else []) + (
+        [f"{len(late)} after {last}, {year + 1}'s: {_names(late)}"]
+        if late else [])
+    return kept, (f"{shown}: {len(early) + len(late)} snapshot(s) of other "
+                  f"years not compared ({'; '.join(parts)}) — {year} "
+                  f"compares those dated {window_span(first, last)}; to "
+                  f"compare one anyway, "
+                  f"name it: `tjs sanity ACCOUNT="
+                  f"{shown}{mask((early + late)[0].name)}`")
+
+
+def _names(files: List[Path]) -> str:
+    """The first three files' names, then a count."""
+    out = ", ".join(mask(p.name) for p in files[:3])
+    return out + (f" +{len(files) - 3} more" if len(files) > 3 else "")
+
+
+def other_years_files(root: Path) -> List[Path]:
+    """The snapshots of a folder every year shares that the year leaves
+    out (year_files' note names them); none in a folder of its own."""
+    _year, _kept, early, late = _split_by_year(Path(root), None)
+    return early + late
+
+
+def _split_by_year(root: Path, year: Optional[int]
+                   ) -> Tuple[int, List[Path], List[Path], List[Path]]:
+    """(the year, the snapshots it compares, the others dated before its
+    window, those after: year_files). A snapshot an account's own
+    `holdings = [...]` names is never one of the others: that setting
+    reads it, whatever its date."""
+    files = snapshot_files(_PL.holdings_folder(root))
+    if not files or not _PL.shared_holdings(root):
+        return 0, files, [], []
+    if year is None:
+        year = _PL._settings(root).year
+    if not isinstance(year, int) or isinstance(year, bool):
+        return 0, files, [], []
+    first, last = window_of(root, year)
+    kept: List[Path] = []
+    early: List[Path] = []
+    late: List[Path] = []
+    listed: Optional[set] = None
+    for p in files:
+        day = snapshot_day(p)
+        if not day or _in_window(day, first, last):
+            kept.append(p)
+            continue
+        if listed is None:
+            accounts = _PL.read_config_soft(root).get("accounts")
+            listed = listed_files(root, accounts if isinstance(
+                accounts, dict) else {})
+        if _resolved(p) not in listed:
+            (early if first is not None and day < first
+             else late).append(p)
+    return year, kept, early, late
 
 
 def folder_for(root: Path, year: Optional[int] = None
                ) -> Tuple[Optional[Path], Optional[str]]:
-    """(the year's holdings folder when it holds a snapshot, else None;
-    a note — none today)."""
-    d = _PL.holdings_folder(Path(root))
-    return (d if snapshot_files(d) else None), None
+    """(the year's holdings folder when it holds a snapshot the year
+    compares, else None; the note on the snapshots of other years it
+    leaves out, or None: year_files)."""
+    files, note = year_files(Path(root), year)
+    return (_PL.holdings_folder(Path(root)) if files else None), note
 
 
 def where_used(root: Path, accounts_cfg: Any) -> List[str]:
@@ -258,9 +545,12 @@ def listed_files(root: Path, accounts_cfg: Dict[str, Any]) -> set:
 
 def discover(folder: Path, accounts_cfg: Dict[str, Any],
              root: Optional[Path] = None,
-             info: Optional[List[str]] = None
+             info: Optional[List[str]] = None,
+             files: Optional[List[Path]] = None
              ) -> Tuple[Dict[str, List[str]], List[str]]:
-    """({account: [file paths]}, notes) for the folder's snapshots. An
+    """({account: [file paths]}, notes) for the folder's snapshots
+    (`files`, when given: the ones of them the year compares,
+    year_files). An
     account with its own `holdings = [...]` is left out (its setting
     wins), and so is a file such a setting names (`root`: the project
     the paths are relative to; default the folder's parent); a file no
@@ -280,7 +570,7 @@ def discover(folder: Path, accounts_cfg: Dict[str, Any],
     files_of: Dict[str, List[str]] = {}
     notes: List[str] = []
     by_len = sorted(accts, key=lambda n: (-len(n), n))
-    for p in snapshot_files(folder):
+    for p in (snapshot_files(folder) if files is None else files):
         if _resolved(p) in listed:
             continue                # an account's holdings = [...] has it
         who = None

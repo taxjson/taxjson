@@ -218,6 +218,9 @@ SETTINGS_SPEC: Tuple[Key, ...] = (
         "The oldest taxjson this project runs on: an older one refuses it. "
         "Written by `tjs init`, `new-year` and `migrate` for the "
         "layout they make; never lower it."),
+    Key("log_keep", "20",
+        "How many logs of each command logs/ keeps (logs/<command>.log.<time>; "
+        "logs/<command>.log is the latest). 0: no log is written. Default 20."),
     Key("inputs_dir", '"../inputs"',
         "The folder of the broker exports (inputs/<account>/), when the "
         "years share one beside the year folders. Default: inputs/ here."),
@@ -300,7 +303,7 @@ SETTINGS_SPEC: Tuple[Key, ...] = (
         "election: \"zero\" (the default) books it without asking (a "
         "spin-off's new shares at $0 cost, a merger's new shares at the "
         "old shares' cost; no tax depends on it); \"ask\": asked like a "
-        "taxable account's. `tjs elect` wins either way.",
+        "taxable account's. `tjs elections` wins either way.",
         inline="zero | ask"),
     Key("benchmark", '"XYZQ.TO"',
         "The symbol `tjs technicals` measures each holding's beta and "
@@ -356,7 +359,7 @@ ACCOUNT_SPEC: Tuple[Key, ...] = (
 SETTINGS_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Project", ("year", "country", "province", "tax_date",
                  "local_timezone", "prior_year_record",
-                 "requires_taxjson")),
+                 "requires_taxjson", "log_keep")),
     ("Folders", ("inputs_dir", "holdings_dir", "exports_dir",
                  "tobase_map")),
     ("Currencies", ("base_currency", "source_currencies", "fx_cash_gains",
@@ -729,6 +732,10 @@ _LEGACY_TEMPLATE_HASHES |= frozenset("""
 9ffcd1e73817807c ba81b85aaf20a345 c594a154f4026375 dfc890790ee488e5
 e4d2072628822dc0 ee83e0f17e2fe758 f9e307b1bd85020a f9e5646a07e6763c
 ff6d3db1d7d38e54
+""".split())
+# The template's text before `tjs elect` became `tjs elections` (v3.0.0).
+_LEGACY_TEMPLATE_HASHES |= frozenset("""
+d3eab8d43bed6f3e
 """.split())
 
 _LEGACY_TEMPLATE_HASHES_BY_COUNTRY = {

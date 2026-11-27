@@ -49,7 +49,7 @@ def _run(root, *args, env=None):
 class TestSpinoffInTwoBrokerAccounts(unittest.TestCase):
     """S029-11 twins: a spin-off held in two IB broker accounts of one
     taxjson account is ONE event (combine_broker_copies) at the elect
-    re-extract (_reextract_pending_entry, an `elect --set` typed before
+    re-extract (_reextract_pending_entry, an `elections --set` typed before
     any run) and in corp_views._current_events (`spinoffs`): FMV 900 +
     450, not one copy's 900 or 450.
 
@@ -75,11 +75,11 @@ class TestSpinoffInTwoBrokerAccounts(unittest.TestCase):
             eid = parse_ib_corporate_actions(
                 root / "inputs" / "margin" / "ib_u1.csv",
                 "margin")[0].event_id
-            e = _run(root, "elect", "margin", "--set",
+            e = _run(root, "elections", "margin", "--set",
                      f"{eid}=taxable_deemed_dividend")
             self.assertEqual(e.returncode, 0, e.stderr[-2000:])
             man = json.loads((root / "inputs" / "margin" /
-                              "manifest.json").read_text())
+                              "elections.json").read_text())
             self.assertIn("FMV 1350.00 CAD",
                           man["elections"][eid]["summary"])
             r = _run(root, "run", "--no-input")

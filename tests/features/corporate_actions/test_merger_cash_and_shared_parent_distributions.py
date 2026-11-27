@@ -524,7 +524,7 @@ class EndToEnd(unittest.TestCase):
                 'margin/rbc_b.csv': self._text(
                     99900002, [m_buy(24)] + m_legs(24) + [m_cil(20)])})
             evs = parse_all(sorted((root / 'inputs' / 'margin').iterdir()))
-            tj(root, 'elect', 'margin', '--set',
+            tj(root, 'elections', 'margin', '--set',
                f'{evs[0].event_id}=rollover_s_85_1_5')
             tj(root, 'run')
             sold = [t for t in gains(root) if t.get('symbol') == 'BETA.TO']
@@ -559,7 +559,7 @@ class EndToEnd(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = self._project(tmp, {'margin/rbc.csv': s.getvalue()})
             evs = parse_all(sorted((root / 'inputs' / 'margin').iterdir()))
-            tj(root, 'elect', 'margin', '--set',
+            tj(root, 'elections', 'margin', '--set',
                f'{evs[0].event_id}=taxable_disposition',
                '--hint', 'fmv_per_share=10')
             r = tj(root, 'run', check=False)

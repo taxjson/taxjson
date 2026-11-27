@@ -1,5 +1,8 @@
 {
   "account": "webull",
+  "account_names": [
+    "webull"
+  ],
   "as_of_date": "<stamp>",
   "country": "canada",
   "generated_at": "<stamp>",

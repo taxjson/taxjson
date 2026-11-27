@@ -150,6 +150,7 @@ def load_config(root: Path, *, missing_ok: bool = False,
         _refuse_outside_dir_links(root, cfg.get("accounts") or {})
     _normalize_settings(cfg)
     _refuse_folder_settings(root, cfg, reopening=reopening)
+    _refuse_old_elections(root, cfg)
     if not missing_ok:
         _use_project_ticker_map(root)
         import os as _os
@@ -200,6 +201,23 @@ def _refuse_folder_settings(root: Path, cfg: Dict[str, Any], *,
     if probs:
         _die(probs[0] if len(probs) == 1 else
              "taxjson.toml:\n  " + "\n  ".join(probs))
+
+
+def _refuse_old_elections(root: Path, cfg: Dict[str, Any]) -> None:
+    """Exit 2 while the project holds an account's elections under an
+    old name — an open year's inputs/<account>/manifest.json (the name
+    before v3.0.0), or work/<account>_manifest.json (a layout older
+    still) — naming the file and `tjs migrate`; or an account folder
+    holding both names, a filed year's too, naming each
+    (lib/project_layout.old_elections_problem), as an old per-purpose
+    file stops every command. `tjs migrate`, which renames them, runs
+    past it; a filed year's frozen copy is read under its own name."""
+    accounts = cfg.get("accounts")
+    if not isinstance(accounts, dict) or _current_cmd() == "migrate":
+        return
+    why = _PL.old_elections_problem(root, list(accounts))
+    if why is not None:
+        _die_input(*why)
 
 
 def _read_config_text(path: Path) -> str:

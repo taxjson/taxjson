@@ -228,7 +228,7 @@ def _elect_all(root: Path, accts, hint: str) -> None:
         pend = (root / "work" / "pending_elections.json").read_text()
         for cid in sorted(set(re.findall(
                 r'"(\d{8}-zz[a-z]+-zz[a-z]+-[0-9a-f]+)"', pend))):
-            r = _cli(root, "elect", acct, "--set", f"{cid}=tax_free_355",
+            r = _cli(root, "elections", acct, "--set", f"{cid}=tax_free_355",
                      "--hint", hint)
             assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-1500:]
     _run(root)

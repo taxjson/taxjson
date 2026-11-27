@@ -929,7 +929,9 @@ def main(argv: Optional[List[str]] = None,
     sheltered = load_inventory_agg([Path(f) for f in args.sheltered],
                                    "SH_QTY/SH_ADD", include_sold=is_usa)
     show_sheltered = bool(args.sheltered)
-    basis = gains_basis_label(files)
+    # `tjs harvest` gives the label of what the run's record says is
+    # checked (cli/common._basis_label); alone, the file names.
+    basis = args.basis_label or gains_basis_label(files, checks=None)
 
     tickers = sorted({r["symbol"] for r in positions
                       if not r.get("is_option")})
@@ -1764,6 +1766,10 @@ def _harvest_parser() -> argparse.ArgumentParser:
                         "to shares, so this changes nothing")
     p.add_argument("--json", action="store_true",
                    help="Emit the report as JSON instead of text")
+    p.add_argument("--basis-label", default=None, metavar="LABEL",
+                   help="The gains files' basis label to print (`tjs harvest` "
+                        "gives the one the run's record says is checked; "
+                        "default: from the file names)")
     p.add_argument("--verbose", "-v", action="store_true",
                    help="Show per-tier price-chain diagnostics")
     p.add_argument("--brief", action="store_true",

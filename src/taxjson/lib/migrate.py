@@ -31,6 +31,10 @@ before anything is replaced.
 While any old file (other than a retired one) is present every other
 `taxjson` command stops with a message naming it
 (lib/migrate.legacy_message) — no silent fallback.
+
+An account's elections file, inputs/<account>/manifest.json before
+v3.0.0, is renamed elections.json in every open year's inputs folder
+(plan_elections_migration); a filed year's frozen copy keeps its name.
 """
 from __future__ import annotations
 
@@ -828,3 +832,216 @@ def apply(pl: Plan) -> None:
         _write(root / "taxjson.toml", pl.toml_text)
     for a, b in pl.moves:
         os.replace(root / a, root / b)
+
+
+# ------------------------------------------------- the elections file
+# An account's elections are inputs/<account>/elections.json since
+# v3.0.0; manifest.json was the name before (lib/project_layout
+# ELECTIONS, OLD_ELECTIONS). `tjs migrate` renames it in every open
+# year's inputs folder (the shared one too); a filed year's frozen copy
+# keeps the name it was frozen with.
+
+class ElectionsMigration:
+    """`tjs migrate`'s plan for the elections file: `renames` [(old,
+    new)], `same` [(old, its .migrated name)] for a manifest.json beside
+    an elections.json of the same bytes, and `legacy` [(work/<account>_
+    manifest.json, where it goes)] — into the account's inputs folder, or
+    beside itself as .migrated when the account already has an elections
+    file there (the run read that one). `refused` [(the file, why)]: two
+    names of other contents, one that cannot be read, a folder at the
+    old name, an older work/ copy for a filed year with no copy of its
+    own — any of them, and nothing is written. `frozen`: the filed years
+    whose frozen copy keeps the old name."""
+
+    def __init__(self) -> None:
+        self.renames: List[Tuple[Path, Path]] = []
+        self.same: List[Tuple[Path, Path]] = []
+        self.legacy: List[Tuple[Path, Path]] = []
+        self.refused: List[Tuple[Path, str]] = []
+        self.frozen: List[int] = []
+
+    @property
+    def work(self) -> bool:
+        return bool(self.renames or self.same or self.legacy
+                    or self.refused)
+
+
+def _elections_projects(root: Path) -> List[Path]:
+    """The projects `tjs migrate` in `root` covers: `root`, and in a
+    multi-year project every year folder and the shared inputs/ beside
+    them (a folder, no project)."""
+    from taxjson.lib import project_layout as PL
+    projects = [root] if PL.has_config(root) else []
+    top = PL.multi_root(root)
+    if top is not None:
+        projects += [d for _y, d in PL.year_dirs(top) if d.resolve() != root]
+        if (top / PL.INPUTS).is_dir() and not (top / PL.INPUTS).is_symlink():
+            projects.append(top / PL.INPUTS)
+    return projects
+
+
+def _elections_folders(projects: List[Path]
+                       ) -> Tuple[List[Tuple[Path, Path]], List[int]]:
+    """([(an open inputs folder the elections file is renamed in, the
+    folder its links must stay inside)], the filed years with frozen
+    inputs that hold one under the old name): each project's inputs
+    folder (inputs_dir: the shared one) and the shared inputs/."""
+    from taxjson.lib import project_layout as PL
+    folders: List[Tuple[Path, Path]] = []
+    frozen: List[int] = []
+    for d in projects:
+        if d.name == PL.INPUTS and not PL.has_config(d):
+            folder, bound = d, d.parent
+        elif PL.frozen_project(d):
+            year = (PL.read_config_soft(d).get("settings") or {}).get("year")
+            if isinstance(year, int) and any(
+                    os.path.lexists(a / PL.OLD_ELECTIONS)
+                    for a in _account_folders(d / PL.INPUTS, d)):
+                frozen.append(year)
+            continue
+        else:
+            folder, bound = PL.inputs_dir(d), PL.write_boundary(d)
+        if folder.resolve() not in [f.resolve() for f, _b in folders]:
+            folders.append((folder, bound))
+    return folders, sorted(frozen)
+
+
+def _account_folders(folder: Path, bound: Path) -> List[Path]:
+    """The account folders of an inputs folder: a link to a folder
+    inside `bound` too, as load_config allows (one leaving it is
+    refused there), each real folder once."""
+    from taxjson.lib.safe_write import link_outside
+    out: List[Path] = []
+    seen = set()
+    try:
+        cands = sorted(folder.iterdir())
+    except OSError:
+        return []
+    for p in cands:
+        try:
+            if not p.is_dir() or (p.is_symlink()
+                                  and link_outside(p, bound) is not None):
+                continue
+            real = p.resolve()
+        except OSError:
+            continue
+        if real not in seen:
+            seen.add(real)
+            out.append(p)
+    return out
+
+
+def _kind(p: Path) -> str:
+    """'file' (a file, or a link to one), else what it is instead: a
+    link to nothing, a folder, or why it cannot be read."""
+    if p.is_symlink() and not p.exists():
+        return "a link to nothing"
+    if p.is_dir():
+        return "a folder"
+    try:
+        with open(p, "rb"):
+            return "file"
+    except OSError as e:
+        return f"cannot be read ({e.strerror or e})"
+
+
+def _plan_account(plan: ElectionsMigration, acct: Path) -> None:
+    """The account folder `acct`'s part of the plan: its manifest.json
+    renamed, or refused (a folder at the name; both names, one of them
+    no readable file, or of other contents)."""
+    from taxjson.lib import project_layout as PL
+    old, new = acct / PL.OLD_ELECTIONS, acct / PL.ELECTIONS
+    if not os.path.lexists(old):
+        return
+    k_old = _kind(old)
+    if k_old == "a folder":
+        plan.refused.append((old, "a folder, not an elections file: move "
+                                  "what it holds out, then remove it"))
+        return
+    if not os.path.lexists(new):
+        # A link is renamed as a link; one to nothing, or a file that
+        # cannot be read, the next command names under its new name.
+        plan.renames.append((old, new))
+        return
+    bad = [(p, k) for p, k in ((old, k_old), (new, _kind(new)))
+           if k != "file"]
+    for p, k in bad:
+        plan.refused.append((p, f"{k}, with the other name beside it: "
+                                f"keep the one that holds your "
+                                f"elections, delete the other"))
+    if bad:
+        return
+    if old.read_bytes() == new.read_bytes():
+        plan.same.append((old, acct / _migrated_name(acct, PL.OLD_ELECTIONS)))
+    else:
+        plan.refused.append((old, f"{PL.ELECTIONS} of other contents "
+                                  f"beside it: keep the one that holds "
+                                  f"your elections, delete the other"))
+
+
+def _plan_legacy(plan: ElectionsMigration, d: Path) -> None:
+    """work/<account>_manifest.json of the project `d` (the elections of
+    a layout older still, read by no command now): into the account's
+    inputs folder, or kept beside itself as .migrated when the account
+    has an elections file there already."""
+    from taxjson.lib import project_layout as PL
+    if not PL.has_config(d):
+        return
+    for acct in sorted(PL.read_config_soft(d).get("accounts") or {}):
+        w = d / PL.WORK / f"{acct}{PL.LEGACY_WORK_ELECTIONS}"
+        if not os.path.lexists(w):
+            continue
+        a_dir = PL.inputs_dir(d) / str(acct)
+        have = [a_dir / n for n in (PL.ELECTIONS, PL.OLD_ELECTIONS)
+                if os.path.lexists(a_dir / n)]
+        if have:
+            plan.legacy.append((w, w.with_name(_migrated_name(
+                w.parent, w.name))))
+        elif PL.frozen_project(d):
+            plan.refused.append((w, "a filed year's elections, kept in "
+                                    "work/ by a layout older still: copy "
+                                    f"it to inputs/{acct}/{PL.OLD_ELECTIONS}"
+                                    " (the name it was filed under)"))
+        elif _kind(w) != "file":
+            plan.refused.append((w, f"{_kind(w)}: restore it, or delete "
+                                    f"it to start with no elections"))
+        else:
+            plan.legacy.append((w, a_dir / PL.ELECTIONS))
+
+
+def plan_elections_migration(root) -> ElectionsMigration:
+    """What `tjs migrate` does with the elections file in `root` (a
+    project, or the folder holding the year folders)."""
+    plan = ElectionsMigration()
+    projects = _elections_projects(Path(root).resolve())
+    folders, plan.frozen = _elections_folders(projects)
+    for folder, bound in folders:
+        for acct in _account_folders(folder, bound):
+            _plan_account(plan, acct)
+    for d in projects:
+        _plan_legacy(plan, d)
+    return plan
+
+
+def apply_elections_migration(plan: ElectionsMigration) -> None:
+    """Rename each old elections file (an identical one beside the new
+    name to <name>.migrated) and drop its lock file (.manifest.json.lock:
+    lib/corp_actions.manifest_lock_path, taxjson's own, empty); move each
+    work/ copy into place. Refused (MigrateError, nothing written) while
+    plan.refused names a file. OSError from the rename."""
+    if plan.refused:
+        raise MigrateError("an elections file cannot be renamed: "
+                           + "; ".join(f"{p} ({why})"
+                                       for p, why in plan.refused))
+    for old, new in plan.renames + plan.same + plan.legacy:
+        if os.path.lexists(new):
+            raise MigrateError(f"{new} appeared meanwhile — nothing more "
+                               f"renamed")
+        new.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.rename(old, new)
+        lock = old.with_name(f".{old.name}.lock")
+        if lock.is_file() and not lock.is_symlink():
+            try:
+                lock.unlink()
+            except OSError:
+                pass

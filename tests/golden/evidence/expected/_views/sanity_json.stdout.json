@@ -3,7 +3,7 @@
   "accounts_not_checked": [],
   "basis": "wash-adjusted",
   "clean": true,
-  "complete": false,
+  "complete": true,
   "cost": {
     "accounts_not_compared": [],
     "compared": 0,
@@ -19,7 +19,5 @@
   "income_share_mismatches": [],
   "notes": [],
   "schema_version": 1,
-  "uncovered_accounts": [
-    "margin"
-  ]
+  "uncovered_accounts": []
 }

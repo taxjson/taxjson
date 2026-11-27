@@ -8,11 +8,12 @@ projects of every year:
 
     taxes/
       inputs/<account>/        every year's exports, .tt and manifests
+      holdings/                every year's broker positions snapshots
       exports/                 the newest year's positions and radar
       2024/                    a complete project for 2024
-        taxjson.toml           year = 2024, inputs_dir = "../inputs"
+        taxjson.toml           year = 2024, inputs_dir = "../inputs",
+                               holdings_dir = "../holdings"
         ticker.map             its own map (always wins over tobase.map)
-        holdings/              2024's broker positions snapshots
         inputs/slips/          2024's slips (its own inputs/ holds only them)
         filed/ work/ reports/ checklist.json
       2025/ ...
@@ -30,8 +31,11 @@ A year folder that names a shared tobase.map and still holds a
 tobase.map of its own is refused, naming both (`tjs migrate` at the
 top makes the per-year copies one shared file). `holdings_dir`
 (default holdings/) holds the year's positions snapshots
-(lib/holdings_dir). A year folder (named YYYY) of a shared-exports
-project must hold that year's project.
+(lib/holdings_dir); `tjs init`'s year folders share one beside them
+(`"../holdings"`: each year compares the snapshots of its own dates,
+and close-year copies those into the year's holdings/, as it copies
+the exports). A year folder (named YYYY) of a shared-exports project
+must hold that year's project.
 
 Every path to an input goes through here (`inputs_dir`,
 `ticker_map_path`, `tobase_map_path`, `data_file`, `slips_dir`,
@@ -70,6 +74,9 @@ FOLDER_KEYS = (INPUTS_KEY, HOLDINGS_KEY, EXPORTS_KEY)
 # file at the folder holding the year folders.
 TOBASE_KEY = "tobase_map"
 SHARED_TOBASE = f"../{TOBASE_MAP}"
+# The positions snapshots every year shares, beside the year folders
+# (`tjs init`'s shared layout; lib/holdings_dir).
+SHARED_HOLDINGS = f"../{HOLDINGS}"
 _KEY_EXAMPLE = {INPUTS_KEY: INPUTS, HOLDINGS_KEY: HOLDINGS,
                 EXPORTS_KEY: EXPORTS}
 YEAR_DIR_RE = re.compile(r"^\d{4}$")
@@ -335,6 +342,116 @@ def project_path(root, rel: str) -> Path:
     return Path(root) / rel
 
 
+# An account's corporate-action elections (lib/corp_actions.Manifest):
+# inputs/<account>/elections.json. OLD_ELECTIONS is its name before
+# v3.0.0: read only from a filed year's frozen copy, which keeps the name
+# close-year copied it under (a filed year is never touched); in an open
+# year it stops every command until `tjs migrate` renames it.
+ELECTIONS = "elections.json"
+OLD_ELECTIONS = "manifest.json"
+# work/<account>_manifest.json: the elections of a layout older still,
+# read by no command now (`tjs migrate` moves it into inputs/<account>/).
+WORK = "work"
+LEGACY_WORK_ELECTIONS = "_manifest.json"
+
+
+def elections_file(acct_dir, root=None) -> Path:
+    """The elections file of the account folder `acct_dir`: its
+    elections.json, or its manifest.json when there is no elections.json
+    and the project `root` is a filed year with frozen inputs
+    (frozen_project): the copy close-year froze under the old name."""
+    new = Path(acct_dir) / ELECTIONS
+    old = new.with_name(OLD_ELECTIONS)
+    if (root is not None and not os.path.lexists(new)
+            and os.path.lexists(old) and frozen_project(root)):
+        return old
+    return new
+
+
+def holds_elections(root, settings: Any = None) -> bool:
+    """The project `root` reads an elections.json: an account folder of
+    its inputs folder (inputs_dir: the shared one too) holds one (what
+    lib/requires' `elections_json` asks for) — with `settings`, the
+    [settings] of a taxjson.toml not written yet (new-year's copy).
+    False for a year frozen with its elections under the old name, and
+    when the folder cannot be read."""
+    try:
+        folder = (inputs_dir(root) if settings is None else
+                  folder_setting(root, INPUTS_KEY, settings)
+                  or Path(root) / INPUTS)
+        return any(os.path.lexists(d / ELECTIONS) for d in folder.iterdir())
+    except (OSError, LayoutError):
+        return False
+
+
+def old_elections_problem(root, accounts: Sequence[str]
+                          ) -> Optional[Tuple[str, str]]:
+    """(headline, detail) of the refusal while the project reads an
+    account's elections under an old name: inputs/<account>/manifest.json
+    of an open year's inputs folder (inputs_dir: the shared one too), an
+    account folder holding both names (a filed year too: it never picks
+    one without a word), or work/<account>_manifest.json (a layout older
+    still). A folder at the old name is no elections file: what it holds
+    goes out, the folder goes (`tjs migrate` refuses it). None when there
+    is none, or the project is a filed year with frozen inputs reading its
+    copy under the name it was frozen with."""
+    folder = inputs_dir(root)
+    old = [folder / str(a) / OLD_ELECTIONS for a in accounts
+           if os.path.lexists(folder / str(a) / OLD_ELECTIONS)]
+    work = [Path(root) / WORK / f"{a}{LEGACY_WORK_ELECTIONS}"
+            for a in accounts
+            if os.path.lexists(Path(root) / WORK
+                               / f"{a}{LEGACY_WORK_ELECTIONS}")]
+    if not old and not work:
+        return None             # (every command's read: no lock opened)
+    frozen = frozen_project(root)
+    dirs = [p for p in old if p.is_dir()]
+    old = [p for p in old if p not in dirs]
+    both = [p for p in old if os.path.lexists(p.with_name(ELECTIONS))]
+    names = ", ".join(shown(p, root) for p in both)
+    folders = ", ".join(shown(p, root) for p in dirs)
+    move = (f"move what {'it' if len(dirs) == 1 else 'each'} holds out "
+            f"(elections go in {ELECTIONS}), then remove "
+            f"{'it' if len(dirs) == 1 else 'them'}")
+    gone = (f" {folders}: {'a folder' if len(dirs) == 1 else 'folders'} "
+            f"at the old name, no elections file: {move}." if dirs else "")
+    if dirs and not both and not work and (frozen or not old):
+        return (f"{folders}: {'a folder' if len(dirs) == 1 else 'folders'} "
+                f"at the elections file's old name",
+                f"{ELECTIONS} is the file taxjson reads ({OLD_ELECTIONS} is "
+                f"its name before v3.0.0): {move}. Nothing was run.")
+    if both and frozen:
+        return (f"{names} and {ELECTIONS} beside "
+                f"{'it' if len(both) == 1 else 'each'}: a filed year's "
+                f"elections under two names",
+                "This year reads the copy close-year froze, under the "
+                "name it was frozen with: keep the one that holds this "
+                "year's elections (a correction you put in goes in under "
+                f"that name) and delete the other.{gone} Nothing was run.")
+    if both:
+        rest = [shown(p, root) for p in old + work if p not in both]
+        return (f"{names} and {ELECTIONS} beside "
+                f"{'it' if len(both) == 1 else 'each'}: elections under "
+                f"two names",
+                f"{ELECTIONS} is the file taxjson reads ({OLD_ELECTIONS} is "
+                f"its name before v3.0.0): keep the one that holds your "
+                f"elections and delete the other (`tjs migrate` renames "
+                f"{OLD_ELECTIONS} {OLD_ELECTIONS}.migrated when the two are "
+                f"the same"
+                + (f", and moves {', '.join(rest)} too" if rest else "")
+                + f").{gone} Nothing was run.")
+    old = [] if frozen else old
+    if not old and not work:
+        return None
+    return (f"{', '.join(shown(p, root) for p in old + work)}: the "
+            f"elections file is now named {ELECTIONS}",
+            "Run `tjs migrate` to rename it ("
+            + ("a work/ copy moves into inputs/<account>/; " if work
+               else "")
+            + "`tjs migrate --dry-run` shows the plan; a filed year's "
+            f"frozen copy is left as it is).{gone} Nothing was run.")
+
+
 def years_layout(root) -> bool:
     """The project is a year folder of a multi-year project: it reads
     shared exports, or (a closed year has its own copy and names no
@@ -410,6 +527,23 @@ def holdings_folder(root) -> Path:
     """The year's broker positions snapshots: holdings/, or the folder
     `holdings_dir` names (lib/holdings_dir)."""
     return _folder(root, HOLDINGS_KEY, HOLDINGS)
+
+
+def shared_holdings(root) -> bool:
+    """The project is a year folder (years_layout) reading the holdings/
+    beside the year folders (`holdings_dir = "../holdings"`, as `tjs
+    init` and `tjs migrate` write it): one every year shares, each year
+    comparing the snapshots of its own dates (lib/holdings_dir
+    `year_files`). Any other `holdings_dir` (inside the project, or
+    another folder beside it) and a single-folder project read every
+    snapshot there, as before (backlog TJ-5367, TJ-5404)."""
+    try:
+        p = folder_setting(root, HOLDINGS_KEY)
+    except LayoutError:
+        return False
+    if p is None or not years_layout(root):
+        return False
+    return _resolved(p) == _resolved(_resolved(root).parent / HOLDINGS)
 
 
 def exports_folder(root) -> Optional[Path]:
@@ -847,8 +981,10 @@ _PER_YEAR_KEYS = (("settings", "year"), ("settings", "prior_year_record"))
 # The shared folders a filed year stops naming when close-year freezes
 # its inputs (frozen_project): its own, never compared with another
 # year's or brought over (`align` re-pointed a filed year at the shared
-# exports; workflow audit 2026-10-22).
-_FROZEN_KEYS = (("settings", INPUTS_KEY), ("settings", TOBASE_KEY))
+# exports; workflow audit 2026-10-22), the shared holdings folder among
+# them (backlog TJ-5367).
+_FROZEN_KEYS = (("settings", INPUTS_KEY), ("settings", TOBASE_KEY),
+                ("settings", HOLDINGS_KEY))
 # Account keys never compared or brought over: the year's own positions
 # snapshots (`holdings`), and the broker's account ids and query id
 # (an id is the user's, never shown in a list of differences).
@@ -897,8 +1033,8 @@ def compare(here: Path, other: Path) -> Dict[str, Any]:
     `accounts_only_there`: listed whole, their keys never compared),
     keys set differently (`year`, prior_year_record, the
     year's own tables and the accounts' holdings and broker ids left
-    out: _compared; a frozen filed year's inputs_dir and tobase_map
-    too: _FROZEN_KEYS; arrays of tables compared whole), and the order of
+    out: _compared; a frozen filed year's inputs_dir, tobase_map and
+    holdings_dir too: _FROZEN_KEYS; arrays of tables compared whole), and the order of
     the accounts both have when it differs (one more key,
     ACCOUNT_ORDER_KEY, with `"order": true` and the names in each
     order). Each key is given by its path (`path`, a name with a dot

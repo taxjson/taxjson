@@ -2235,12 +2235,18 @@ def parse_args(argv=None):
     p.add_argument("--id", dest="gain_id", help="Filter: tx id prefix.")
     p.add_argument("--date", help="Filter: disposition date — matches "
                                   "the trade date OR the settlement date.")
-    p.add_argument("--account", help="Filter: account name.")
+    p.add_argument("--account", action="append",
+                   help="Filter: account name (repeatable).")
     p.add_argument("--summary", action="store_true",
                    help="One line per event instead of full blocks.")
     # Wrapper plumbing (`tjs audit` runs one invocation per book and
     # decides itself whether "nothing matched" is an error overall).
     p.add_argument("--no-match-rc", type=int, default=1,
+                   help=argparse.SUPPRESS)
+    # The accounts whose dispositions the filters kept, written to PATH
+    # one name a line (`tjs audit --account A,B` names a listed account
+    # no computation matched).
+    p.add_argument("--matched-accounts", metavar="PATH", default=None,
                    help=argparse.SUPPRESS)
     p.add_argument("--no-trace", action="store_true",
                    help="Omit the engine pool traces.")
@@ -2336,11 +2342,16 @@ def main(argv=None) -> int:
         if args.gain_id and not (g.get("id") or "").startswith(
                 args.gain_id):
             return False
-        if args.account and (g.get("account") or "") != args.account:
+        if args.account and (g.get("account") or "") not in args.account:
             return False
         return True
 
     gains = [g for g in results["transactions"] if in_scope(g)]
+    if args.matched_accounts:
+        from taxjson.lib.safe_write import write_atomic
+        write_atomic(args.matched_accounts, "".join(
+            f"{a}\n" for a in sorted({str(g.get("account") or "")
+                                      for g in gains})))
 
     # US FIFO: one sell id can produce several lot records. The audit
     # block is per taxable EVENT (the sell); aggregate the lots and
@@ -2714,7 +2725,8 @@ def _audit_output(events: List[Dict[str, Any]], reconciliation_failures: List[st
 
     _filters = [f"{k} {v}" for k, v in (
         ("symbol", " ".join(args.symbol or [])), ("--id", args.gain_id),
-        ("--date", args.date), ("--account", args.account)) if v]
+        ("--date", args.date),
+        ("--account", ",".join(args.account or ()))) if v]
     if _filters and not events and not reconciliation_failures:
         # An empty "0/0 ✓" reconciliation block read as a clean audit of
         # a typo (2026-09 CLI audit B15). A saved record the filter

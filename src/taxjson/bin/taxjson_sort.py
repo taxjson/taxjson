@@ -511,7 +511,7 @@ def _rename_remedy(acct: str, srcs: List[str], maps: List[str], mapped: str) -> 
     the rows were written under symbols the map joined (`_map_lines`: both
     can be right), and deleting or correcting the false row."""
     fix = (f"the file named (a hand-kept .tt line: delete it; a corporate "
-           f"action's row: `tjs elect {acct} --set <event id>=ignore`)")
+           f"action's row: `tjs elections {acct} --set <event id>=ignore`)")
     if not maps:
         return (f"A rename moves the whole holding to one symbol, so only one "
                 f"of them can be right: refused.{mapped} Keep the right one: "

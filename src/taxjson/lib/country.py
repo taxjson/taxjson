@@ -86,7 +86,7 @@ from taxjson.project.settings import as_settings, settings_of
 from taxjson.rules.country import (
     CANADA, USA, COUNTRIES, ALIASES, DISPLAY_NAME, ENGINE_GUARD_ENV, CountryError, _SPELLINGS,
     canonical_country, PLANS_TAXED_AS_ORDINARY, stablecoin_model, NEUTRAL_BASIS, parse_basis,
-    plans_taxed_as_ordinary, check_engine_allowed, foreign_roc_choice,
+    plans_taxed_as_ordinary, check_engine_allowed, foreign_roc_choice, marked_close_decides,
 )
 
 # The leaf's names, re-exported (PLAN step 10: what moved from here, and B7's foreign_roc_choice).
@@ -94,7 +94,7 @@ __all__ = [
     "CANADA", "USA", "COUNTRIES", "ALIASES", "DISPLAY_NAME", "ENGINE_GUARD_ENV", "CountryError",
     "_SPELLINGS", "canonical_country", "PLANS_TAXED_AS_ORDINARY", "stablecoin_model",
     "NEUTRAL_BASIS", "parse_basis", "plans_taxed_as_ordinary", "check_engine_allowed",
-    "foreign_roc_choice",
+    "foreign_roc_choice", "marked_close_decides",
 ]
 
 BOTH = "both"
@@ -111,6 +111,29 @@ GAINS_FORM = {CANADA: "Schedule 3", USA: "Form 8949",
 COST_TERM = {CANADA: "ACB", USA: "basis", None: "cost"}
 LOSS_RULE = {CANADA: "superficial-loss", USA: "wash-sale",
              None: "loss-denial"}
+# A lock's `disallowed` (close-year's CLOSED block, `tjs years`), named for
+# what it holds: in Canada the superficial losses alone, never DENIED, the
+# name `tjs sum`'s DENIED (INFO) gives every loss denied, an in-kind
+# contribution's added, which no lock records (TJ-5341).
+LOCK_DENIED_HEAD = {CANADA: "SUPERFICIAL", USA: "DENIED", None: "DENIED"}
+LOCK_DENIED_LABEL = {CANADA: "Superficial losses", USA: "Disallowed",
+                     None: "Disallowed"}
+
+
+def lock_country(lock: Any) -> Optional[str]:
+    """The canonical country a lock document was closed under, None when
+    it names none (the neutral words of the tables above)."""
+    try:
+        return canonical_country(lock.get("country") if isinstance(lock, dict) else None)
+    except CountryError:
+        return None
+
+
+def lock_denied_label(lock: Any) -> str:
+    """close-year's name for a lock's `disallowed` (LOCK_DENIED_LABEL):
+    in Canada "Superficial losses", never sum's DENIED (INFO), which adds
+    an in-kind contribution's loss (TJ-5341)."""
+    return LOCK_DENIED_LABEL[lock_country(lock)]
 
 
 def settings_country(settings: Optional[Mapping[str, Any]], *,
@@ -338,6 +361,7 @@ SETTING_COUNTRY: Dict[str, str] = {
     # CA-CORP-11 / US-CORP-12).
     "sheltered_elections": BOTH,
     "benchmark": BOTH,              # `tjs technicals`' beta and alpha (no tax effect)
+    "log_keep": BOTH,               # the command logs kept (lib/command_log; no tax effect)
     "province": CANADA,
     "option_premium_timing": CANADA,
     "option_grant_timing_since": CANADA,

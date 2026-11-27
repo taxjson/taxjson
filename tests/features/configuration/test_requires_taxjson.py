@@ -13,6 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import _paths
 from _tmpfiles import private_dir
 from tax_rules.dual import cli
 
@@ -20,7 +21,13 @@ from taxjson.lib import requires as REQ
 
 INSTALLED = REQ.running_version() or "0.0.0"
 HAVE = REQ.version_tuple(INSTALLED) or (0, 0, 0)
-NEWER = f"{HAVE[0]}.{HAVE[1]}.{HAVE[2] + 1}"
+# What this code runs: its install's version, or the newest feature it
+# reads when that is newer (a development tree between releases).
+TOP = max(HAVE, REQ.newest_read())
+CURRENT = REQ.shown(TOP)
+NEWER = f"{TOP[0]}.{TOP[1]}.{TOP[2] + 1}"
+# What init and migrate write now: the newest layout feature's release.
+LAYOUT = REQ.spec(REQ.newest_read())
 UPGRADE = "upgrade: `tjs deploy` or re-run the installer"
 
 
@@ -70,20 +77,91 @@ class TestModule(unittest.TestCase):
                 REQ.parse_spec(bad)
 
     def test_older_refused_equal_and_newer_run(self):
+        # A release of its day: the features up to 0.27.0.
+        old = tuple(f for f in REQ.FEATURES
+                    if REQ.version_tuple(f.version) <= (0, 27, 0))
         st = {"requires_taxjson": ">=0.27.1"}
-        with mock.patch.object(REQ, "running_version",
-                               return_value="0.27.0"):
+        with mock.patch.object(REQ, "FEATURES", old), \
+                mock.patch.object(REQ, "running_version",
+                                  return_value="0.27.0"):
             why = REQ.problem(st)
         self.assertEqual(why, "this project needs taxjson 0.27.1 or newer "
                               "(installed: 0.27.0) — " + UPGRADE)
         for have in ("0.27.1", "0.28.0", "1.0.0", "0.27.1.dev3+gabc"):
-            with mock.patch.object(REQ, "running_version",
-                                   return_value=have):
+            with mock.patch.object(REQ, "FEATURES", old), \
+                    mock.patch.object(REQ, "running_version",
+                                      return_value=have):
                 self.assertIsNone(REQ.problem(st), have)
         # No key, or a version that cannot be read: runs.
         self.assertIsNone(REQ.problem({}))
         with mock.patch.object(REQ, "running_version", return_value=None):
             self.assertIsNone(REQ.problem(st))
+
+    def test_the_development_tree_runs_the_elections_layout(self):
+        # Between releases the install reports the last release (the
+        # version commit is made at the release): this tree reads
+        # elections.json, so it runs a project asking for 3.0.0; v2.2.0,
+        # which reads none of it, refuses that project.
+        self.assertEqual(REQ._BY_NAME["elections_json"].version, "3.0.0")
+        st = {"requires_taxjson": ">=3.0.0"}
+        with mock.patch.object(REQ, "running_version",
+                               return_value="2.2.0"):
+            self.assertIsNone(REQ.problem(st))
+            v220 = tuple(f for f in REQ.FEATURES
+                         if f.name != "elections_json")
+            with mock.patch.object(REQ, "FEATURES", v220):
+                self.assertEqual(
+                    REQ.problem(st), "this project needs taxjson 3.0.0 or "
+                    "newer (installed: 2.2.0) — " + UPGRADE)
+        # Released, the version decides: 3.0.0 runs it, 3.0.1 asked for
+        # is refused.
+        with mock.patch.object(REQ, "running_version",
+                               return_value="3.0.0"):
+            self.assertIsNone(REQ.problem(st))
+            self.assertIn("needs taxjson 3.0.1 or newer", REQ.problem(
+                {"requires_taxjson": ">=3.0.1"}))
+
+    def test_release_script_reads_every_feature_line(self):
+        # scripts/release.sh --prepare reads the FEATURES lines a release
+        # adds with this pattern (one line each: name, version).
+        src = Path(REQ.__file__).read_text(encoding="utf-8")
+        read = re.findall(r'^ *Feature\("([a-z_]+)", "([0-9.]+)"', src, re.M)
+        self.assertEqual(read, [(f.name, f.version) for f in REQ.FEATURES])
+        script = (_paths.REPO / "scripts" / "release.sh").read_text(
+            encoding="utf-8")
+        self.assertIn(r"""FEAT_RE='s/^ *Feature\("([a-z_]+)", "([0-9.]+)".*/""",
+                      script)
+
+    def test_release_script_flags_only_a_feature_new_since_the_tag(self):
+        # --prepare compares the names of the tag's FEATURES with HEAD's:
+        # a new one naming another release than the one prepared is
+        # flagged; a released feature's line, edited, is not.
+        import shutil
+        import subprocess
+        if not (shutil.which("sed") and shutil.which("awk")):
+            self.skipTest("no sed / awk")
+        script = (_paths.REPO / "scripts" / "release.sh").read_text(
+            encoding="utf-8")
+        pat = re.search(r"FEAT_RE='([^']*)'", script)[1]
+        prog = re.search(r"awk -v v=\"\$V\" -v old=\"\$OLDF\" '([^']*)'",
+                         script)[1]
+
+        def feats(text):
+            return subprocess.run(["sed", "-nE", pat], input=text, text=True,
+                                  capture_output=True, check=True).stdout
+
+        def flagged(tag, head, v):
+            old = " ".join(ln.split()[0] for ln in feats(tag).splitlines())
+            return subprocess.run(["awk", "-v", f"v={v}", "-v", f"old={old}",
+                                   prog], input=feats(head), text=True,
+                                  capture_output=True, check=True).stdout
+        tag = ('    Feature("shared_exports", "0.26.0"),\n'
+               '    Feature("tobase_map", "0.27.1"),\n')
+        head = tag.replace('"0.27.1"', '"0.27.2"') + (
+            '    Feature("new_one", "9.0.0"),\n')
+        self.assertEqual(flagged(tag, head, "9.0.0"), "")
+        self.assertEqual(flagged(tag, head, "8.1.0"), "new_one 9.0.0\n")
+        self.assertEqual(flagged(tag, tag, "8.1.0"), "")
 
     def test_malformed_is_named(self):
         why = REQ.problem({"requires_taxjson": "0.27.1"})
@@ -182,10 +260,10 @@ class TestWriters(unittest.TestCase):
     def test_init_writes_the_layout_minimum(self):
         base = Path(private_dir())
         for args, rel, want in (
-                (("--country", "canada"), "ca/2025", ">=0.27.1"),
-                (("--country", "usa"), "us/2025", ">=0.27.0"),
-                (("--country", "canada", "--single"), "cas", ">=0.27.0"),
-                (("--country", "usa", "--single"), "uss", ">=0.27.0")):
+                (("--country", "canada"), "ca/2025", LAYOUT),
+                (("--country", "usa"), "us/2025", LAYOUT),
+                (("--country", "canada", "--single"), "cas", LAYOUT),
+                (("--country", "usa", "--single"), "uss", LAYOUT)):
             top = base / rel.split("/")[0]
             r = cli(base, "init", *args, "--year", "2025", str(top))
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -198,11 +276,11 @@ class TestWriters(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         cfg = root / "taxjson.toml"
         cfg.write_text(cfg.read_text().replace(
-            '">=0.27.0"', f'">={INSTALLED}"'))
+            f'"{LAYOUT}"', f'">={CURRENT}"'))
         r = cli(root.parent, "init", "--country", "usa", "--single",
                 "--year", "2025", "--force", str(root))
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(_key(cfg), f">={INSTALLED}")
+        self.assertEqual(_key(cfg), f">={CURRENT}")
 
     def test_new_year_copies_and_raises(self):
         top = _years(extra={2025: 'requires_taxjson = ">=0.26.0"\n'
@@ -219,7 +297,8 @@ class TestWriters(unittest.TestCase):
                          f">={INSTALLED}")
 
     def test_migrate_sets_the_layout_it_migrated_to(self):
-        # Per-year tobase.map copies -> one shared file: 0.27.1 each.
+        # Per-year tobase.map copies -> one shared file: 0.27.1 each (no
+        # elections.json: not 3.0.0, each feature its own release).
         top = _years(tobase="")
         r = cli(top, "migrate")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -228,21 +307,29 @@ class TestWriters(unittest.TestCase):
                              ">=0.27.1", y)
         self.assertIn('requires_taxjson = ">=0.27.1"', r.stdout)
         # Nothing else to migrate: a single folder is in the .tt
-        # missing-history form (0.27.0).
+        # missing-history form (0.27.0); one holding an elections.json
+        # asks for the release that reads it.
         root = _single(country="usa")
         r = cli(root, "migrate")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(_key(root / "taxjson.toml"), ">=0.27.0")
+        root = _single(country="usa")
+        (root / "inputs" / "margin").mkdir(parents=True, exist_ok=True)
+        (root / "inputs" / "margin" / "elections.json").write_text(
+            '{"elections": {}}\n')
+        r = cli(root, "migrate")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(_key(root / "taxjson.toml"), LAYOUT)
         # A dry run writes nothing.
         root = _single(country="usa")
         cli(root, "migrate", "--dry-run")
         self.assertIsNone(_key(root / "taxjson.toml"))
 
     def test_migrate_never_lowers(self):
-        root = _single(f'requires_taxjson = ">={INSTALLED}"\n')
+        root = _single(f'requires_taxjson = ">={CURRENT}"\n')
         r = cli(root, "migrate")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(_key(root / "taxjson.toml"), f">={INSTALLED}")
+        self.assertEqual(_key(root / "taxjson.toml"), f">={CURRENT}")
 
     def test_update_tobase_map_write_raises(self):
         root = _single()

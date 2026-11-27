@@ -1,3 +1,2 @@
-tjs sum: warning: 1 position(s) sold in 2024 with no purchase in your files: their gain is NOT in these totals
-  No .tt OPENING cost=unknown line: SAMPG.US (margin).
-  `tjs find-missing-history` lists them and the fixes (docs/getting-started.md, step 5).
+tjs sum: warning: 1 disposition(s) with an unknown cost (no purchase in your files) were routed to manual reporting — these totals EXCLUDE them
+  `tjs form-export` lists them in its MANUAL REPORTING section; report them by hand.

@@ -129,7 +129,8 @@ class StageCtx:
     members: Sequence[str] = ()
     crypto_members: FrozenSet[str] = frozenset()
     tag: str = ""
-    sheltered: Optional[Path] = None        # the registered books a blend reads
+    # the registered books a blend's, a wash pass's or a full-history run reads
+    sheltered: Optional[Path] = None
     root_dir: Optional[Path] = None         # the project, when not work/'s parent
     # the rates: their source currencies, the window the inputs need and
     # the one the file was built from (stages.RATES_START_STAMP)
@@ -966,8 +967,10 @@ def commit_run(work: Path, *, full: bool) -> List[Path]:
     run's in place of the last run's (what vanished since swept first:
     `sweep_vanished`; what it cannot vouch for left where it is, unsaid: a
     run's own sweeps, `stage_sweep`, moved each such file aside and said
-    so), a partial run's added to them. Returns the files that could not be
-    written (the next run writes them again)."""
+    so), a partial run's added to them; the run's record of what checked
+    each account's gains (lib/report_model `record_loss_checks`) kept.
+    Returns the files that could not be written (the next run writes them
+    again)."""
     work = Path(os.path.abspath(work))
     unwritten = commit_records()
     last = last_run(work)
@@ -986,11 +989,17 @@ def commit_run(work: Path, *, full: bool) -> List[Path]:
     listed = now if full else {**last, **now}
     if not listed and not last:
         return unwritten
+    from taxjson.lib.report_model import LOSS_CHECKS_FIELD
+    try:
+        kept = json.loads(_run_file(work).read_text(encoding="utf-8")).get(LOSS_CHECKS_FIELD)
+    except (OSError, UnicodeDecodeError, ValueError, AttributeError):
+        kept = None
+    doc: Dict[str, Any] = {"format": _R.RECORD_FORMAT, "instances": listed}
+    if kept is not None:
+        doc[LOSS_CHECKS_FIELD] = kept
     try:
         _run_file(work).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        write_changed(_run_file(work), json.dumps(
-            {"format": _R.RECORD_FORMAT, "instances": listed}, indent=1,
-            sort_keys=True) + "\n")
+        write_changed(_run_file(work), json.dumps(doc, indent=1, sort_keys=True) + "\n")
     except OSError:
         unwritten.append(_run_file(work))
     return unwritten
@@ -1443,11 +1452,13 @@ ROWS: Tuple[Stage, ...] = (
     # output: an account the run blended with others is split from their
     # full history, any other is its own (`_gains_all_file`). Bound in
     # cli/common._ON_DEMAND; vouched for as each is built (`at_once`: a view
-    # command completes no run), for the sweep's `_vouched`.
+    # command completes no run), for the sweep's `_vouched`. Each reads the
+    # registered accounts' book its pass across accounts reads (`@sheltered`,
+    # declared present or absent: pipeline/basis_label._registered_book, TJ-5347).
     Stage("gains_all", ACCOUNT, "{work}/{a}" + _GAINS_ALL_SUFFIX,
-          BOOK + (File("{root}/taxjson.toml"),) + GAINS_READS),
+          BOOK + (File("{root}/taxjson.toml"),) + GAINS_READS + (File("@sheltered"),)),
     Stage("gains_all_blend", BLEND, "{work}/.{tag}" + _GAINS_ALL_SUFFIX,
-          BOOK + (File("{root}/taxjson.toml"),) + GAINS_READS),
+          BOOK + (File("{root}/taxjson.toml"),) + GAINS_READS + (File("@sheltered"),)),
     Stage("gains_all_split", ACCOUNT, "{work}/{a}" + _GAINS_ALL_SUFFIX,
           (Out("gains_all_blend"),) + BOOK),
 )

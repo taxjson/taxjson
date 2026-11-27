@@ -1,0 +1,39 @@
+==> Checking the project
+==> Loading currency rates
+==> Loading cached USD → CAD rates
+==> margin  (taxable, first pass: transfers between your accounts)
+  inputs/margin/rbc_2024.csv → RBC Direct Investing (content: activity header Date,Activity,Symbol,Symbol Description…)
+  inputs/margin/rbc_2025.csv → RBC Direct Investing (content: activity header Date,Activity,Symbol,Symbol Description…)
+  inputs/margin/rbc_2025_partial.csv → RBC Direct Investing (content: activity header Date,Activity,Symbol,Symbol Description…)
+  inputs/margin/rbc_2026.csv → RBC Direct Investing (content: activity header Date,Activity,Symbol,Symbol Description…)
+==> Reading 4 files
+  rbc_2024.csv: 17 tax objects
+  rbc_2025.csv: 40 tax objects
+  rbc_2025_partial.csv: 0 tax objects (all of its rows are in the account's other RBC export(s) (rbc_2025.csv))
+  rbc_2026.csv: 1 tax objects
+==> tfsa  (sheltered, first pass: transfers between your accounts)
+  inputs/tfsa/rbc_tfsa_2025.csv → RBC Direct Investing (content: activity header Date,Activity,Symbol,Symbol Description…)
+==> Reading 1 file
+  rbc_tfsa_2025.csv: 3 tax objects
+==> tfsa  (sheltered)
+==> Processing corporate actions
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/tfsa_holdings.toml
+==> Writing summary reports/tfsa.sum
+==> Combining sheltered accounts
+==> margin  (taxable)
+==> Processing corporate actions
+==> Reading fx.tt
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/margin_holdings.toml
+==> Writing summary reports/margin.sum
+==> Pooling cost and checking superficial losses across taxable accounts (margin)
+==> Writing summary reports/margin_wash.sum
+==> Writing cross-account reports to reports/
+==> Writing fees report reports/fees.rpt
+==> Done. Reports are in reports/
+==> Before you trust these numbers (docs/getting-started.md, step 6)
+Info: positions not yet compared with the broker's holdings files (holdings/): `tjs run` does not compare them. Run `tjs sanity`: it compares the quantities, and the costs of the taxable accounts.
+Info: Then run `tjs checklist --run`: it checks every step and names the next one.

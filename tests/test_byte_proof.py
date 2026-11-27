@@ -1141,7 +1141,7 @@ class TestTheByteProof(_Project):
                   "demo -C../.. years", "demo years -C/etc", "demo sum -o/etc/x", "demo redact --out=/etc/x",
                   "demo sum @/etc/passwd", "demo sum --csv=a,/etc/x", "demo sum inputs:/etc",
                   "demo years --dir=../../../..", "demo compare --save ../../../x",
-                  "demo form-export --out file:///etc/x", "demo elect margin --hint x=/etc/y",
+                  "demo form-export --out file:///etc/x", "demo elections margin --hint x=/etc/y",
                   "demo sum # edit: append /etc/x y", "demo sum # edit: remove ../../x",
                   "demo sum # edit: touch ~/x"]
         self.assertGreater(len(lines), 80)
@@ -1227,7 +1227,7 @@ class TestTheByteProof(_Project):
         self.assertEqual(BP.options_reached({"demo": ["sum --json # exit 2"]}), set())
         self.assertEqual(BP.options_reached({"demo": ["sum --json # exit 1"]}), {("sum", "--json")})
         for key in (("compare", "--details"), ("compare", "--json"), ("compare", "--delete"), ("handoff", "--details"),
-                    ("handoff", "--prior"), ("elect", "--hint"), ("opening", "--dry-run"), ("ticker-map", "--write")):
+                    ("handoff", "--prior"), ("elections", "--hint"), ("opening", "--dry-run"), ("ticker-map", "--write")):
             self.assertIn(key, got)
         with mock.patch.dict(BP.registry(), {"sum": {**BP.registry()["sum"], "--made-up": ("--made-up",)}}):
             self.assertEqual(BP.options_unreviewed(commands), ([("sum", "--made-up")], []))
@@ -1351,7 +1351,7 @@ class TestTheByteProof(_Project):
         self.assertEqual(BP.subcommand("-C ../2025 --dir=x handoff --json"), "handoff")
         # every prompt, answered both ways, and the stale-books refusals (TJ-4579)
         extra = [c for _b, c in BP.EXTRA_COMMANDS]
-        for cmd in ("close-year", "elect", "run", "align", "checklist"):
+        for cmd in ("close-year", "elections", "run", "align", "checklist"):
             self.assertGreaterEqual(sum(BP.split_command(c)[1].split()[0] == cmd and "# stdin:" in c
                                         for c in extra), 2, cmd)
         for cmd in ("t1135", "sum", "close-year", "check-filed", "form-export"):

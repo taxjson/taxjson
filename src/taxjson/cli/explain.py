@@ -7,6 +7,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from taxjson.project.accounts import account_of, accounts_of
 from taxjson.project.settings import Settings, settings_of
 from taxjson.lib import project_layout as _PL
+from taxjson.lib.account_list import (
+    AccountListError, is_account_list, parse_accounts,
+    refusal as account_list_refusal,
+)
 from taxjson.lib.project_layout import _audit_source_files
 from taxjson.lib.out import exit_text
 from taxjson.lib import out as _out
@@ -17,10 +21,11 @@ from taxjson.lib.report_fmt import fmt_money
 from taxjson.lib.stage_msg import emit_line
 
 from taxjson.cli.common import (
-    _accounts_skipped_for_no_inputs, _act_item, _base_currency,
-    _check_books_before_merge, _child_error, _discover_tx_accounts,
-    _load_json_or_die, _no_wash_checkable, _os_path_lexists,
-    _real_world_legs, _refuse_us_crypto_account, _require_books,
+    _accounts, _accounts_shown, _accounts_skipped_for_no_inputs, _act_item,
+    _base_currency, _basis_label, _check_books_before_merge, _child_error,
+    _discover_tx_accounts, _gains_files_of, _load_json_or_die,
+    _no_wash_checkable, _not_applicable, _os_path_lexists, _real_world_legs,
+    _refuse_us_crypto_account, _require_books, _require_listed,
     _sheltered_expected, _taxable_equity_account_names,
     _warn_accounts_without_books, _warn_artifact_year,
 )
@@ -93,9 +98,10 @@ def cmd_spinoffs(args: argparse.Namespace) -> None:
     from taxjson.lib.corp_views import ViewError, render_spinoffs, spinoffs
     root = Path(args.dir).resolve()
     cfg = load_config(root)
-    _require_books(root, args.account)
+    names = _accounts(args, root)               # ACCOUNT[,ACCOUNT...]
+    _require_books(root, names)
     try:
-        doc = spinoffs(root, cfg, args.account, extractor_for=extractor_for)
+        doc = spinoffs(root, cfg, names, extractor_for=extractor_for)
     except ViewError as e:
         _die(str(e))
     page = _out.Doc(exact=True, width_=0, live=True)
@@ -118,9 +124,10 @@ def cmd_splits(args: argparse.Namespace) -> None:
     from taxjson.lib.corp_views import ViewError, render_splits, splits
     root = Path(args.dir).resolve()
     cfg = load_config(root)
-    _require_books(root, args.account)
+    names = _accounts(args, root)               # ACCOUNT[,ACCOUNT...]
+    _require_books(root, names)
     try:
-        items = splits(root, cfg, args.account)
+        items = splits(root, cfg, names)
     except ViewError as e:
         _die(str(e))
     page = _out.Doc(exact=True, width_=0, live=True)
@@ -145,15 +152,22 @@ def cmd_journals(args: argparse.Namespace) -> None:
     from taxjson.lib.journals import JournalsError, render, report
     root = Path(args.dir).resolve()
     cfg = load_config(root)
-    want = (args.account or "").strip() or None
-    if want and want not in (cfg.get("accounts") or {}):
-        _die_input(f"no [accounts.{want}] in taxjson.toml — check the "
+    # `--account NAME[,NAME...]`: a list's names checked before the
+    # command (cli/main), one name here, as before lists.
+    names = _accounts(args, root)
+    if (names is not None and len(names) == 1
+            and names[0] not in (cfg.get("accounts") or {})):
+        _die_input(f"no [accounts.{names[0]}] in taxjson.toml — check the "
                    f"name.")
     try:
-        doc = report(root, cfg, want, args.year)
+        doc = report(root, cfg, names, args.year)
     except JournalsError as e:
         _die(f"{e} — run `tjs run` first",
              "The journals are read from the last run's work/ folder.")
+    if names is not None and len(names) > 1:
+        # A listed account with no books has no journal of the run's:
+        # named, never an empty table for it (exit 1, a list's refusal).
+        _require_books(root, names)
     if args.pending:
         doc = dict(doc, journals=[j for j in doc["journals"]
                                   if j["pending"]])
@@ -182,14 +196,15 @@ def cmd_renames(args: argparse.Namespace) -> None:
     cfg = load_config(root)
     # No books is no check, as `splits` and `spinoffs` say: it read "no
     # renames, nothing pending" at exit 0 (backlog TJ-0319).
-    _require_books(root, args.account)
-    if not args.account:
+    names = _accounts(args, root)               # ACCOUNT[,ACCOUNT...]
+    _require_books(root, names)
+    if names is None:
         _warn_accounts_without_books(
             root, [n for n in (cfg.get("accounts") or {})
                    if (root / "work" / f"{n}_base.json").is_file()],
             "renames", "books")
     try:
-        doc = report(root, cfg, args.account)
+        doc = report(root, cfg, names)
     except ValueError as e:
         _die(str(e))
     pending = getattr(args, "pending", False)
@@ -222,14 +237,23 @@ def cmd_check_dates(args: argparse.Namespace) -> None:
     cfg = load_config(root)
     if not (root / "work").is_dir():
         _die("no work/ — run `tjs run` first")
+    names = _accounts(args, root)               # ACCOUNT[,ACCOUNT...]
     try:
-        doc = analyze(root, cfg, account=args.account)
+        doc = analyze(root, cfg, account=names)
     except ValueError as e:
         # [settings] futures_settle refused as `run` refuses it (A2-0697).
         _die(str(e))
+    if names is not None and len(names) > 1:
+        # A listed account with no parsed source was not checked: named
+        # (its key in `sources` is "<account>: <source>"), exit 1, before
+        # the no-sources line, which would name none of them.
+        _require_listed(names, {k.split(": ", 1)[0] for k in doc["sources"]},
+                        "parsed sources",
+                        fix="Run `tjs run` first (an account with no "
+                            "inputs has no books).")
     if not doc["sources"]:
         _die("no parsed sources in work/ — run `tjs run` first")
-    if not args.account:
+    if names is None:
         _warn_accounts_without_books(root, _discover_tx_accounts(root / "work"),
                                      "check-dates", "parsed source")
     page = _out.Doc(exact=True, width_=0, live=True)
@@ -273,6 +297,29 @@ def _tt_file(root: Path, item: str) -> Optional[Path]:
     return None
 
 
+def _tt_account_names(items: List[str]) -> List[str]:
+    """check-tt's ACCOUNT items, each comma list split into its names
+    (`margin,beta`: lib/account_list), in the order given. A FILE item
+    never is one (a file name may hold a comma: _tt_path_item decides
+    first). A list's empty, repeated, artifact or path name is refused in
+    parse_accounts' words with exit 2, the code check-tt gave such an
+    item before lists (`_accounts(text=)` would exit 1; 1 is check-tt's
+    verdict); its names are checked with the other items' (an unknown
+    one in check-tt's own words). A comma item gives its names or is
+    refused: never none."""
+    out: List[str] = []
+    for item in items:
+        if not is_account_list(item):
+            out.append(item)
+            continue
+        try:
+            out.extend(parse_accounts(item) or ())
+        except AccountListError as e:
+            head, details, _code = account_list_refusal(e, "check-tt")
+            _die_input(head, *details)
+    return out
+
+
 def cmd_check_tt(args: argparse.Namespace) -> None:
     """`tjs check-tt [ACCOUNT | FILE.tt ...]`: every line of the .tt
     files read with the run's own parsers, every problem named with its
@@ -284,7 +331,7 @@ def cmd_check_tt(args: argparse.Namespace) -> None:
     root = Path(args.dir).resolve()
     items = list(args.items or [])
     paths = [i for i in items if _tt_path_item(i)]
-    names = [i for i in items if i not in paths]
+    names = _tt_account_names([i for i in items if i not in paths])
     files = []
     for i in paths:
         f = _tt_file(root, i)
@@ -305,7 +352,9 @@ def cmd_check_tt(args: argparse.Namespace) -> None:
             _die_input(f"no account {unknown[0]!r} in taxjson.toml",
                        "The accounts: " + ", ".join(sorted(accounts))
                        + ". A file is named by its path (ending in .tt).")
-        doc = CT.check_project(root, accounts, only=names or None)
+        # `names` is empty only when no ACCOUNT item was given (a comma
+        # item gives its names or is refused): every account's files.
+        doc = CT.check_project(root, accounts, only=names if names else None)
     else:
         doc = {"files": [], "problems": [], "lines": 0, "rows": 0,
                "events": 0, "errors": 0, "warnings": 0}
@@ -351,9 +400,10 @@ def cmd_edge_cases(args: argparse.Namespace) -> None:
     cfg = load_config(root)
     if not (root / "work").is_dir():
         _die("no work/ directory — run `tjs run` first")
-    _require_books(root, args.account)
+    names = _accounts(args, root)               # ACCOUNT[,ACCOUNT...]
+    _require_books(root, names)
     try:
-        doc = analyze(root, cfg, margin=args.margin, account=args.account)
+        doc = analyze(root, cfg, margin=args.margin, account=names)
     except ValueError as e:
         # An unreadable work file, a damaged row (lib/json_input's row
         # funnel, A2-0330) or an invalid futures_settle: named, never a
@@ -435,7 +485,7 @@ def _wash_sales_embedded(files: List[Tuple[str, Path]]) -> float:
 def _wash_sales_table(rows: List[Any], views: List[GainRow], denied_by_row: List[float],
                       qfmt: Callable[..., str], money: Callable[..., str],
                       _cents: Callable[..., float], perm_by_row: List[float], root: Path,
-                      Doc: Any, _usa: bool, year: Any, gains_basis_label: Callable[..., str],
+                      Doc: Any, _usa: bool, year: Any,
                       resolved: Dict[str, Path], _det: bool, header: List[str],
                       embedded: float, _flags_section: Callable[[Any], None],
                       _out_details_hint: Callable[..., str], _ws_cmd: str) -> None:
@@ -460,7 +510,7 @@ def _wash_sales_table(rows: List[Any], views: List[GainRow], denied_by_row: List
 
     base = _base_currency(root)
     doc = Doc(f"{'WASH SALES' if _usa else 'SUPERFICIAL LOSSES'} — {base}, "
-              f"tax year {year}, basis: {gains_basis_label(resolved)}")
+              f"tax year {year}, basis: {_basis_label(root, resolved)}")
     if _det:
         doc.para("Losses denied under "
                  + ("the wash-sale rule, §1091." if _usa
@@ -528,6 +578,7 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
     the table."""
     root = Path(args.dir).resolve()
     cache = root / "work"
+    names = _accounts(args, root)               # ACCOUNT[,ACCOUNT...]
 
     if args.explain:
         if getattr(args, "json", False):
@@ -536,20 +587,21 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
             sys.exit(exit_text("tjs wash-sales: --explain has no JSON form; "
                                "drop --json (or drop --explain for the "
                                "machine-readable table)."))
-        _explain_wash_sales(root, cache, args.account)
+        _explain_wash_sales(root, cache, _explain_scope(root, cache, names))
         return                                          # (raises SystemExit)
 
-    from taxjson.lib.report_model import (gains_basis_label,
-                                          resolve_gains_files)
-    resolved = resolve_gains_files(cache, args.account or None)
-    if not resolved:
+    resolved = _gains_files_of(cache, names)
+    if not resolved and (names is None or len(names) == 1):
         # work/ named from the project, and exit 2 for the input
         # missing, as sanity says it (backlog TJ-0642, TJ-0631).
-        if args.account:
-            _die_input(f"no gains for account {args.account!r} in work/ "
+        if names:
+            _die_input(f"no gains for account {names[0]!r} in work/ "
                        f"— run `tjs run` first, or check the name.")
         _die_input("no gains files in work/ — run `tjs run` first.")
-    if not args.account:
+    # A list (each listed account's file there, _gains_files_of): the
+    # accounts the rule reaches, as --explain traces them (Info: lines).
+    names, resolved = _wash_table_scope(root, names, resolved)
+    if names is None:
         _warn_accounts_without_books(root, resolved, "wash-sales",
                                      "gains file")
     # The filing views' banners: per-account books after `run --account`
@@ -637,7 +689,7 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
                               "permanently_denied": _cents(perm_by_row),
                               "embedded_in_open": M.shown(embedded, 2)},
                    "year": year, "currency": _base_currency(root),
-                   "basis": gains_basis_label(resolved),
+                   "basis": _basis_label(root, resolved),
                    "manual_check_flags": sorted(flags),
                    **({"filing_positions": _positions}
                       if _positions else {})}, schema="wash-sales")
@@ -646,7 +698,7 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
     # The rule's own name: never "wash sale" in a Canadian project
     # (audit A2-0748, A2-1249, A2-1326, A2-1352, A2-1371, A2-1372).
     if not rows:
-        scope = f" for account {args.account!r}" if args.account else ""
+        scope = _accounts_shown(names)
         # Each country's own term (A2-1366): a Canadian project has
         # superficial losses, not wash sales.
         doc = Doc(f"No {'wash sales' if _usa else 'superficial losses'}"
@@ -656,25 +708,109 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
         return
 
     _wash_sales_table(rows, views, denied_by_row, qfmt, money, _cents, perm_by_row, root, Doc,
-                      _usa, year, gains_basis_label, resolved, _det, header, embedded,
+                      _usa, year, resolved, _det, header, embedded,
                       _flags_section, _out_details_hint, _ws_cmd)
 
 
+def _wash_rule_scope(root: Path, names: Optional[Tuple[str, ...]]
+                     ) -> Tuple[Optional[Tuple[str, ...]], List[str], bool]:
+    """`tjs wash-sales A,B`, its table and --explain alike: (the listed
+    accounts the rule reaches, the ones left out, a US project). A
+    sheltered account's own sale is never a superficial loss / a wash
+    sale (CA-ACB-05; its purchases stay in the computation, denying a
+    taxable account's loss), and §1091 does not reach a US project's
+    crypto account: left out of a list, one Info: line naming each kind.
+    A list of only such accounts, one name, or none: `names` whole (each
+    mode then says what it says for one) and nothing left out."""
+    if names is None or len(names) < 2:
+        return names, [], False
+    acfg = accounts_of(load_config(root, missing_ok=True))
+    usa = _country(load_settings(root, missing_ok=True)) in ("us", "usa")
+    shel = [n for n in names if account_of(acfg, n).type == "sheltered"]
+    coins = [n for n in names if usa and n not in shel
+             and account_of(acfg, n).crypto]
+    keep = tuple(n for n in names if n not in shel and n not in coins)
+    if not keep:
+        return names, [], usa
+    if shel:
+        _out.note(f"{', '.join(shel)} left out: "
+                  f"{'wash sales' if usa else 'superficial losses'} don't "
+                  f"apply in a sheltered account.", prog="tjs wash-sales",
+                  details=[f"{'Its' if len(shel) == 1 else 'Their'} "
+                           f"purchases still count against the other "
+                           f"accounts' losses."])
+    if coins:
+        _out.note(f"{', '.join(coins)} left out: wash sales don't apply "
+                  f"to a US project's crypto account (§1091).",
+                  prog="tjs wash-sales")
+    return keep, shel + coins, usa
+
+
+def _wash_table_scope(root: Path, names: Optional[Tuple[str, ...]],
+                      resolved: Dict[str, Path]
+                      ) -> Tuple[Optional[Tuple[str, ...]], Dict[str, Path]]:
+    """The wash-sales table's accounts and gains files for a list: those
+    _wash_rule_scope keeps (a sheltered or a US crypto account left out,
+    its Info: line said); as given otherwise."""
+    keep, left, _usa = _wash_rule_scope(root, names)
+    if not left:
+        return names, resolved
+    return keep, {a: p for a, p in resolved.items() if a not in left}
+
+
+def _explain_scope(root: Path, cache: Path,
+                   names: Optional[Tuple[str, ...]]
+                   ) -> Optional[Tuple[str, ...]]:
+    """`tjs wash-sales A,B --explain`: the accounts listed, a list's
+    refusal exit 1: a base book in work/ for each, the ones missing
+    named. Then the accounts the rule reaches, as the table shows them
+    (_wash_rule_scope: a sheltered or a US crypto account left out, an
+    Info: line). A list of only sheltered accounts is nothing to trace
+    (exit 0, as for one: CA-ACB-05); of only US crypto accounts,
+    _refuse_us_crypto_account's (in _explain_wash_sales: exit 0, as for
+    one); of both kinds only, nothing to check (exit 0). One name, or
+    none, is _explain_wash_sales' own to check. Returns the names."""
+    if names is None or len(names) < 2:
+        return names
+    _require_listed(names, [n for n in names
+                            if (cache / f"{n}_base.json").exists()],
+                    "base book",
+                    fix="Run `tjs run` first, or check the names.")
+    keep, left, _usa = _wash_rule_scope(root, names)
+    acfg = accounts_of(load_config(root, missing_ok=True))
+    shel = [n for n in names if account_of(acfg, n).type == "sheltered"]
+    if left or not shel:
+        return keep
+    if len(shel) < len(names):
+        _not_applicable("tjs wash-sales", f"{', '.join(names)}: sheltered "
+                        f"accounts and a US project's crypto accounts are "
+                        f"outside the wash-sale rule (§1091), so there is "
+                        f"nothing to check.")
+    from taxjson.lib.out import Doc
+    Doc(f"No {'wash sales' if _usa else 'superficial losses'}"
+        f"{_accounts_shown(names)} — they are sheltered accounts."
+        ).para("Their own sales are kept out of the filing totals, so none "
+               "is denied. Their purchases can deny a taxable account's "
+               "loss: `tjs wash-sales --explain` traces those.").print()
+    raise SystemExit(0)
+
+
 def _explain_wash_sales(root: Path, cache: Path,
-                        account: Optional[str]) -> None:
+                        account: Optional[Tuple[str, ...]]) -> None:
     """`tjs wash-sales --explain`: print the full ACB / superficial-loss
     calculation trace for each wash sale, via `taxjson-explain --wash-sales`
-    (plain text — `taxjson-explain` is color-off by default). Resolves the
-    account base file(s) and the country / tax-date / sheltered context from the
-    project. Raises SystemExit with the tool's return code."""
+    (plain text, color off), over the base books of `account` (the names,
+    a list checked by _explain_scope; None: every account) in the project's
+    country / tax-date / sheltered context. Raises SystemExit with its code."""
     if account:
-        base = cache / f"{account}_base.json"
+        bases = [cache / f"{n}_base.json" for n in account]
+        base = bases[0]
         if not base.exists():
             # (work/ named from the project: backlog TJ-0642)
             _die_input(f"no {base.name} in work/ — run `tjs run` "
                        f"first, or check the name.")
         if account_of(accounts_of(load_config(root, missing_ok=True)),
-                      account).type == "sheltered":
+                      account[0]).type == "sheltered":
             # A registered account's own sale is no superficial loss
             # (CA-ACB-05; an IRA's, no wash sale): the table says none,
             # and the trace replayed the registered book as taxable,
@@ -682,14 +818,13 @@ def _explain_wash_sales(root: Path, cache: Path,
             _usa = _country(load_settings(root, missing_ok=True)) in ("us", "usa")
             from taxjson.lib.out import Doc
             Doc(f"No {'wash sales' if _usa else 'superficial losses'} "
-                f"for account {account!r} — it is a sheltered account."
+                f"for account {account[0]!r} — it is a sheltered account."
                 ).para("Its own sales are kept out of the filing totals, "
                        "so none is denied. Its purchases can deny a "
                        "taxable account's loss: `tjs wash-sales "
                        "--explain` traces those.").print()
             raise SystemExit(0)
         _refuse_us_crypto_account(root, account, "tjs wash-sales")
-        bases = [base]
     else:
         names = _taxable_equity_account_names(root)
         if names is not None and not names:
@@ -744,11 +879,11 @@ def _explain_wash_sales(root: Path, cache: Path,
     common += option_timing_flags(settings)
     common += income_dating_flags(settings)
     common += _loss_override_flags(cache)
-    if account:
-        # The table lists this account's denials only; the merged book
-        # below keeps the other accounts as context, so the trace shows
-        # only this account's dispositions too (backlog TJ-0413).
-        common += ["--account", account]
+    # The table lists the named accounts' denials only; the merged book
+    # below keeps the other accounts as context, so the trace shows
+    # only their dispositions too (backlog TJ-0413): one repeatable
+    # --account per name.
+    common += [x for n in account or () for x in ("--account", n)]
 
     # Trace the computation the table comes from: the pipeline BLENDS
     # the taxable equity books (s.47 ACB / cross-account §1091), and
@@ -760,10 +895,10 @@ def _explain_wash_sales(root: Path, cache: Path,
     _crypto_blend = _country(settings) \
         not in ("us", "usa")
     _by_name = {p.name[:-len("_base.json")]: p for p in bases}
-    if account and account in _acfg:
-        _is_c = bool(_acfg[account].crypto)
+    for _a in [a for a in account or () if a in _acfg]:
+        _is_c = bool(_acfg[_a].crypto)
         for n in _taxable_equity_account_names(root) or []:
-            if (n != account and bool(account_of(_acfg, n).crypto)
+            if (n not in (account or ()) and bool(account_of(_acfg, n).crypto)
                     == _is_c and (cache / f"{n}_base.json").exists()):
                 _by_name[n] = cache / f"{n}_base.json"
     # Merged in taxjson.toml order, as the pipeline's blend: rows of
@@ -955,8 +1090,8 @@ def _audit_flags(settings: Settings, year: Any, root: Path, tax_date: str, count
             fl += ["--id", args.gain_id]
         if getattr(args, "date", None):
             fl += ["--date", args.date]
-        if getattr(args, "account", None):
-            fl += ["--account", args.account]
+        for _n in _accounts(args, root) or ():
+            fl += ["--account", _n]             # repeatable: one per name
         if getattr(args, "summary", False):
             fl.append("--summary")
         if getattr(args, "no_trace", False):
@@ -1121,13 +1256,16 @@ def _audit_invocations(crypto: List[str], crypto_group: List[str], root: Path,
 def _audit_report(_held_back: List[str], _pending: List[str],
                   invocations: List[Tuple[List[str], Optional[Path], List[str]]],
                   args: argparse.Namespace, _acct: Optional[str], year: Any,
-                  _uncovered: List[str], base_currency: str, country: str) -> None:
+                  _uncovered: List[str], base_currency: str, country: str,
+                  listed: Optional[Tuple[str, ...]] = None) -> None:
     """`tjs audit`'s run and report: a refusal when nothing can be
     audited; each computation through taxjson-audit, as text or JSON,
     until one stops at an input, its merged book removed; a filter that
-    matched nothing refused; what was not audited, and why, in the JSON
-    and as warnings; the exit status (cmd_audit)."""
+    matched nothing refused, and a `listed` account (--account A,B) that
+    matched nothing said (Info:); what was not audited, and why, in the
+    JSON and as warnings; the exit status (cmd_audit)."""
     import json as _json
+    import tempfile
     from taxjson.pipeline.dispatch import run_cmd as _run
     _also = sorted(set(_held_back))
     _pending_head = (f"not audited — corp-action elections pending for "
@@ -1136,7 +1274,7 @@ def _audit_report(_held_back: List[str], _pending: List[str],
                         f"pass)" if _also else ""))
     if not invocations and _pending:
         _die(_pending_head,
-             "Decide them (`tjs elect --pending`), then `tjs run`.")
+             "Decide them (`tjs elections --pending`), then `tjs run`.")
     if not invocations:
         _die("no computed books in work/ — run `tjs run` first.")
 
@@ -1146,9 +1284,13 @@ def _audit_report(_held_back: List[str], _pending: List[str],
     json_docs: List[Dict[str, Any]] = []
     _stop: Optional[int] = None         # the book whose audit stopped (exit 2)
     page = _out.Doc(exact=True, width_=0, live=True)
+    _mdir = Path(tempfile.mkdtemp(prefix="tjs-audit-")) if listed else None
+    matched: List[str] = []
     try:
         for _i, (fl, _cl, _ns) in enumerate(invocations):
-            cmd = _cmd("taxjson-audit") + fl
+            cmd = _cmd("taxjson-audit") + fl + (
+                [] if _mdir is None
+                else ["--matched-accounts", str(_mdir / f"{_i}.txt")])
             if getattr(args, "json", False):
                 res = _run(cmd + ["--json"], capture_output=True)
                 if res.stderr:
@@ -1185,10 +1327,11 @@ def _audit_report(_held_back: List[str], _pending: List[str],
     finally:
         for _cl in [c for _f, c, _n in invocations if c is not None]:
             _cl.unlink(missing_ok=True)
+        matched = _audit_matched(_mdir)
     if no_match and no_match == len(invocations) and _also:
         # The filter's dispositions may be in an account held back.
         _die(_pending_head,
-             "Decide them (`tjs elect --pending`), then `tjs run`.")
+             "Decide them (`tjs elections --pending`), then `tjs run`.")
     if no_match and no_match == len(invocations):
         _filt = [f"{k} {v}" for k, v in (
             ("symbol", " ".join(getattr(args, "symbol", None) or [])),
@@ -1200,6 +1343,11 @@ def _audit_report(_held_back: List[str], _pending: List[str],
              + " — check the filter (`tjs audit --summary` lists "
                "every event; --date matches the trade or settlement "
                "date).")
+    _none = [n for n in listed or () if n not in matched]
+    if _none and _stop is None:
+        _out.note(f"no disposition matches --account {', '.join(_none)}"
+                  + (f" in {year}" if year else "") + ": the other listed "
+                  "accounts' dispositions are audited.", prog="tjs audit")
 
     # What the audit could not cover, decided BEFORE anything is shown:
     # the --json document's `failed` and the exit status say the same
@@ -1220,7 +1368,7 @@ def _audit_report(_held_back: List[str], _pending: List[str],
         not_audited += [{"account": n, "reason": "no_cross_account_pass"}
                         for n in _also]
         coverage_failures.append(
-            f"{_pending_head}; decide them (`tjs elect --pending`), "
+            f"{_pending_head}; decide them (`tjs elections --pending`), "
             f"then `tjs run`.")
     if coverage_failures:
         rc = max(rc, 1)
@@ -1244,6 +1392,23 @@ def _audit_report(_held_back: List[str], _pending: List[str],
             _warn(_cf, prog="tjs audit")
     if rc:
         raise SystemExit(rc)
+
+
+def _audit_matched(mdir: Optional[Path]) -> List[str]:
+    """The accounts taxjson-audit's --matched-accounts files in `mdir`
+    name, one a line (each computation's dispositions the filters
+    kept), the folder removed; [] for none (no list given)."""
+    if mdir is None:
+        return []
+    import shutil
+    out: List[str] = []
+    for f in sorted(mdir.glob("*.txt")):
+        try:
+            out += f.read_text(encoding="utf-8").splitlines()
+        except (OSError, ValueError):
+            continue        # (that computation's accounts: said as unmatched)
+    shutil.rmtree(mdir, ignore_errors=True)
+    return out
 
 
 def cmd_audit(args: argparse.Namespace) -> None:
@@ -1303,23 +1468,10 @@ def cmd_audit(args: argparse.Namespace) -> None:
     else:
         crypto_group = []
     _acct = getattr(args, "account", None)
-    if _acct:
-        if _acct not in taxable:
-            _die(f"--account {_acct!r} is not a taxable account in "
-                 f"taxjson.toml (audit covers: "
-                 f"{', '.join(sorted(taxable))}).")
-        # Only the computation that holds the account: the blended
-        # equity pass (still over ALL equity books — display filter
-        # only) or the crypto pass that holds it — the crypto blend over
-        # all its books (narrowing it to one book re-ran that book's own
-        # cost and failed the tie-out, #79), else that account's own
-        # books. The others would print empty 0/0 blocks.
-        if _acct in crypto:
-            equity = []
-            crypto = (list(crypto_group) if _acct in crypto_group
-                      else [_acct])
-        else:
-            crypto = []
+    names = _accounts(args, root)          # --account NAME[,NAME...]
+    if names:
+        equity, crypto = _audit_scope(names, taxable, equity, crypto,
+                                      crypto_group, cache)
 
     sheltered_base = cache / "sheltered_base.json"
     mh_file = _missing_history_arg(root)
@@ -1333,7 +1485,45 @@ def cmd_audit(args: argparse.Namespace) -> None:
         crypto, crypto_group, root, acfgs, cache, common_flags, country, sheltered_base, equity)
 
     _audit_report(_held_back, _pending, invocations, args, _acct, year, _uncovered,
-                  base_currency, country)
+                  base_currency, country,
+                  listed=names if names and len(names) > 1 else None)
+
+
+def _audit_scope(names: Tuple[str, ...], taxable: Dict[str, Any],
+                 equity: List[str], crypto: List[str],
+                 crypto_group: List[str], cache: Path
+                 ) -> Tuple[List[str], List[str]]:
+    """`tjs audit --account A[,B...]`: (equity, crypto), the computations
+    that hold the named accounts, their union for a list. Each name must
+    be a taxable account (exit 1, naming each one that is not, the single
+    name's words for one); a list's account with no books is refused too
+    (exit 1: its dispositions would be missing with no word)."""
+    bad = [n for n in names if n not in taxable]
+    if bad:
+        _die((f"--account {bad[0]!r} is not a taxable account"
+              if len(bad) == 1 else
+              f"--account {', '.join(repr(n) for n in bad)} are not "
+              f"taxable accounts")
+             + f" in taxjson.toml (audit covers: "
+               f"{', '.join(sorted(taxable))}).")
+    if len(names) > 1:
+        _require_listed(names, [n for n in names
+                                if (cache / f"{n}_base.json").exists()],
+                        "books",
+                        fix="Run `tjs run` first (an account with no "
+                            "inputs has no books).")
+    # Only the computations that hold the accounts: the blended equity
+    # pass (still over ALL equity books — display filter only) and the
+    # crypto pass that holds each — the crypto blend over all its books
+    # (narrowing it to one book re-ran that book's own cost and failed
+    # the tie-out, #79), else that account's own books. The others
+    # would print empty 0/0 blocks.
+    held = set()
+    for n in names:
+        if n in crypto:
+            held |= set(crypto_group) if n in crypto_group else {n}
+    return ([] if all(n in crypto for n in names) else equity,
+            [n for n in crypto if n in held])
 
 
 def _stopped_at(invocations: List[Tuple[List[str], Optional[Path], List[str]]],
@@ -1416,6 +1606,11 @@ def _merge_audit_json(docs: List[Dict[str, Any]], base_currency: str,
     return out
 
 
+# An ACCOUNT positional that takes a comma list (lib/account_list).
+_ACCOUNTS = "ACCOUNT[,ACCOUNT...]"
+_ACCOUNTS_HELP = "Account, or a comma list of accounts: a,b (default: all)"
+
+
 def _register_edge_cases(sub: argparse._SubParsersAction) -> None:
     p_edge = sub.add_parser(
         "edge-cases",
@@ -1425,14 +1620,14 @@ def _register_edge_cases(sub: argparse._SubParsersAction) -> None:
              "income around Dec 31, crypto near midnight, renames, and "
              "acquisitions/sales near day 30 of a loss's window — "
              "where each lands and why.")
-    p_edge.add_argument("account", nargs="?",
-                        help="Account (default: all)")
+    p_edge.add_argument("account", nargs="?", metavar=_ACCOUNTS,
+                        help=_ACCOUNTS_HELP)
     p_edge.add_argument("--margin", type=int, default=3, metavar="DAYS",
                         help="How close to day 30 counts as an edge "
                              "(default 3: days 27-33)")
     p_edge.add_argument("--json", action="store_true",
                         help="Emit JSON instead of text")
-    p_edge.set_defaults(func=cmd_edge_cases)
+    p_edge.set_defaults(func=cmd_edge_cases, account_list=True)
 
 
 def _register_check_dates(sub: argparse._SubParsersAction) -> None:
@@ -1443,12 +1638,13 @@ def _register_check_dates(sub: argparse._SubParsersAction) -> None:
              "market's calendar (crypto 24/7, futures 23/5, stocks "
              "incl. overnight, options and Canadian listings on "
              "exchange days); exit 1 on an impossible date.")
-    p_cd.add_argument("account", nargs="?", help="Account (default: all)")
+    p_cd.add_argument("account", nargs="?", metavar=_ACCOUNTS,
+                      help=_ACCOUNTS_HELP)
     p_cd.add_argument("--all", action="store_true",
                       help="List every row, not the first 10 per kind")
     p_cd.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text")
-    p_cd.set_defaults(func=cmd_check_dates)
+    p_cd.set_defaults(func=cmd_check_dates, account_list=True)
 
 
 def _register_check_tt(sub: argparse._SubParsersAction) -> None:
@@ -1465,8 +1661,8 @@ def _register_check_tt(sub: argparse._SubParsersAction) -> None:
              "path ending in .tt, that file. Nothing is written; "
              "exit 1 on a line the run would refuse.")
     p_ctt.add_argument("items", nargs="*", metavar="ACCOUNT|FILE.tt",
-                       help="Account names and/or .tt files (default: "
-                            "every account's)")
+                       help="Account names (a comma list too: a,b) "
+                            "and/or .tt files (default: every account's)")
     p_ctt.add_argument("--account", metavar="NAME",
                        help="The account a FILE.tt is read as (default: "
                             "the name of the folder it sits in)")
@@ -1489,10 +1685,11 @@ def _register_spinoffs(sub: argparse._SubParsersAction) -> None:
         description="Every spin-off: the election, the value per share "
                     "used, the income and new-share cost booked; flags a "
                     "zero value or a missing election.")
-    p_spin.add_argument("account", nargs="?", help="Account (default: all)")
+    p_spin.add_argument("account", nargs="?", metavar=_ACCOUNTS,
+                        help=_ACCOUNTS_HELP)
     p_spin.add_argument("--json", action="store_true",
                         help="Emit JSON instead of text")
-    p_spin.set_defaults(func=cmd_spinoffs)
+    p_spin.set_defaults(func=cmd_spinoffs, account_list=True)
 
 
 def _register_splits(sub: argparse._SubParsersAction) -> None:
@@ -1503,10 +1700,11 @@ def _register_splits(sub: argparse._SubParsersAction) -> None:
                     "holdings before and after; flags a split applied "
                     "twice or a fractional result. Exit 1 on a likely "
                     "double application.")
-    p_split.add_argument("account", nargs="?", help="Account (default: all)")
+    p_split.add_argument("account", nargs="?", metavar=_ACCOUNTS,
+                         help=_ACCOUNTS_HELP)
     p_split.add_argument("--json", action="store_true",
                          help="Emit JSON instead of text")
-    p_split.set_defaults(func=cmd_splits)
+    p_split.set_defaults(func=cmd_splits, account_list=True)
 
 
 def _register_journals(sub: argparse._SubParsersAction) -> None:
@@ -1523,8 +1721,9 @@ def _register_journals(sub: argparse._SubParsersAction) -> None:
              "FROM TO QTY` or ticker.map line that settles it) or "
              "refused (the reason, and the undo). Read from the last "
              "`tjs run`; no network.")
-    p_jn.add_argument("--account", metavar="NAME",
-                      help="Only this account's journals")
+    p_jn.add_argument("--account", metavar="NAME[,NAME...]",
+                      help="Only this account's journals (a comma list: "
+                           "these accounts')")
     p_jn.add_argument("--year", type=int, metavar="YYYY",
                       help="Only the journals dated in this year "
                            "(default: every year)")
@@ -1535,7 +1734,7 @@ def _register_journals(sub: argparse._SubParsersAction) -> None:
     p_jn.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text (a stable schema: "
                            "docs/settings.md)")
-    p_jn.set_defaults(func=cmd_journals)
+    p_jn.set_defaults(func=cmd_journals, account_list=True)
 
 
 def _register_renames(sub: argparse._SubParsersAction) -> None:
@@ -1553,14 +1752,15 @@ def _register_renames(sub: argparse._SubParsersAction) -> None:
              "the Questrade, RBC and Webull exports show are listed as "
              "suggested, with the `.tt` line `RENAME <date> OLD NEW` "
              "that books each.")
-    p_ren.add_argument("account", nargs="?", help="Account (default: all)")
+    p_ren.add_argument("account", nargs="?", metavar=_ACCOUNTS,
+                       help=_ACCOUNTS_HELP)
     p_ren.add_argument("--json", action="store_true",
                        help="Emit JSON instead of text")
     p_ren.add_argument("--pending", action="store_true",
                        help="Only the undeclared late trades, the "
                             "suggested renames and the declared renames "
                             "that book nothing; exit 1 when there is one")
-    p_ren.set_defaults(func=cmd_renames)
+    p_ren.set_defaults(func=cmd_renames, account_list=True)
 
 
 def _register_tax_logic(sub: argparse._SubParsersAction) -> None:
@@ -1602,7 +1802,8 @@ def _register_sanity(sub: argparse._SubParsersAction) -> None:
              "difference.")
     p_san.add_argument("items", nargs="*",
                        metavar="ACCOUNT|FILE|ACCOUNT[+ACCOUNT]=FILE[+FILE]",
-                       help="Bare account names and holdings .toml files "
+                       help="Bare account names (a comma list too: a,b) "
+                            "and holdings .toml files "
                             "form one aggregate group (combined positions "
                             "vs combined holdings); ACCOUNT=FILE items "
                             "pair specific accounts with specific files "
@@ -1645,9 +1846,10 @@ def _register_audit(sub: argparse._SubParsersAction) -> None:
                          help="Filter: transaction id prefix")
     p_audit.add_argument("--date", help="Filter: disposition date "
                                         "(YYYY-MM-DD)")
-    p_audit.add_argument("--account", help="Filter: account name "
-                                           "(display only — the "
-                                           "computation stays blended)")
+    p_audit.add_argument("--account", metavar="NAME[,NAME...]",
+                         help="Filter: account name, or a comma list "
+                              "(display only — the computation stays "
+                              "blended)")
     # One plausible-year check for every --year (S047-14): 2204 or -5
     # audited nothing and printed an all-checkmark reconciliation.
     p_audit.add_argument("--year", type=_tax_year_arg,
@@ -1664,7 +1866,7 @@ def _register_audit(sub: argparse._SubParsersAction) -> None:
                          help="Omit the engine pool traces")
     p_audit.add_argument("--json", action="store_true",
                          help="Emit the full audit as JSON")
-    p_audit.set_defaults(func=cmd_audit)
+    p_audit.set_defaults(func=cmd_audit, account_list=True)
 
 
 def _register_wash_sales(sub: argparse._SubParsersAction) -> None:
@@ -1675,14 +1877,15 @@ def _register_wash_sales(sub: argparse._SubParsersAction) -> None:
              "year and the loss denied — what <account>.sum shows only "
              "in totals — plus the warn-only flags (warrants, adjusted "
              "series, futures options) that need a manual check.")
-    p_ws.add_argument("account", nargs="?", help="Account (default: all)")
+    p_ws.add_argument("account", nargs="?", metavar=_ACCOUNTS,
+                      help=_ACCOUNTS_HELP)
     p_ws.add_argument("--explain", action="store_true",
                       help="Print the full ACB / superficial-loss calculation "
                            "trace for each wash sale instead of the summary "
                            "table")
     p_ws.add_argument("--json", action="store_true",
                      help="Emit JSON instead of text")
-    p_ws.set_defaults(func=cmd_wash_sales)
+    p_ws.set_defaults(func=cmd_wash_sales, account_list=True)
 
 
 def register(sub: argparse._SubParsersAction) -> None:

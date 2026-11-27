@@ -34,7 +34,7 @@ readers of the years around them.
   --account`, and the comparison says when reports/ are partial;
 - TJ-0211 a late election or send decision on a filed year saved in
   the shared folder is named by check-filed and marked by `years`
-  (a per-entry comparison of manifest.json / sends.json);
+  (a per-entry comparison of elections.json / sends.json);
 
 Synthetic data only (made-up tickers and accounts, amounts under a
 thousand).
@@ -783,16 +783,16 @@ class TestSharedDecisionOnAFiledYear(_ClosedPerYear):
 
     def test_a_late_2024_election_is_named(self):
         top = self.copy_top()
-        self._write(top, "manifest.json",
+        self._write(top, "elections.json",
                     {"elections": {"ZZQ-split-1": self._ELECT}})
-        self.assertIn("filed 2024: ../inputs/margin/manifest.json (1 "
+        self.assertIn("filed 2024: ../inputs/margin/elections.json (1 "
                       "entry) in the shared folder holds a decision on 2024 "
                       "or earlier that differs from the copy 2024 was "
                       "closed with", self._note(top))
         doc = json.loads(_cli(top, "years", "--json").stdout)
         by = {y["year"]: y for y in doc["years"]}
         self.assertEqual(by[2024]["shared_exports_changed"],
-                         ["inputs/margin/manifest.json"])
+                         ["inputs/margin/elections.json"])
 
     def test_a_later_years_decision_is_no_difference(self):
         top = self.copy_top()
@@ -807,7 +807,7 @@ class TestSharedDecisionOnAFiledYear(_ClosedPerYear):
                      "2024-05-01 10:00:00 1 ZZC"},
             "cd34": {"decision": "gift", "summary": "Kraken withdrawal "
                      "2025-02-01 10:00:00 1 ZZC"}}})
-        self._write(top, "manifest.json", {"elections": {
+        self._write(top, "elections.json", {"elections": {
             "ZZQ-split-2": dict(self._ELECT, summary=self._ELECT[
                 "summary"].replace("2024-03-01", "2025-03-03"))}})
         self.assertNotIn("in the shared folder hold a decision",

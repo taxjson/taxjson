@@ -193,7 +193,7 @@ def _project_run(td, fname, text, election='rollover_s_86_1',
     res = _cli(root, 'run', '--no-input')
     pend = json.loads((root / 'work' / 'pending_elections.json').read_text())
     eid = pend['accounts']['margin']['pending'][0]['event_id']
-    res = _cli(root, 'elect', 'margin', '--set', f'{eid}={election}',
+    res = _cli(root, 'elections', 'margin', '--set', f'{eid}={election}',
                '--hint', hint)
     assert res.returncode == 0, res.stderr[-2000:]
     res = _cli(root, 'run', '--no-input')

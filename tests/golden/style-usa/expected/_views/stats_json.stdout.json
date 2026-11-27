@@ -1,4 +1,5 @@
 {
+  "account_names": null,
   "accounts": [
     "crypto",
     "margin",
@@ -110,6 +111,7 @@
   "schema_version": 1,
   "scope": "tax year 2024",
   "sheltered": false,
+  "sheltered_accounts": [],
   "tainted_skipped": 0,
   "total": {
     "avg_loss": -224.26,

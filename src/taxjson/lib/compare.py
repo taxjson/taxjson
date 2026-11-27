@@ -46,6 +46,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from taxjson.project.accounts import accounts_of, account_of
 from taxjson.project.settings import settings_of
 from taxjson.model import money as M
+from taxjson.lib.command_log import LOGS
 
 SNAP_ROOT = "compare"           # under work/
 PREV = "prev"
@@ -360,18 +361,19 @@ def _publish(stage: Path, dest: Path) -> None:
 _FULL_LEFT_OUT = (".git", "__pycache__", "inputs_redact")
 
 
-def _copy_tree(src: Path, dst: Path, store: Path) -> None:
+def _copy_tree(src: Path, dst: Path, store: Path, logs: Path) -> None:
     """`src` copied to `dst`, its files' times and modes kept and its links
     kept as links, so the copy is what was there and nothing outside the
     project is read through a planted one. work/compare/ (the smaller
-    snapshots) and the snapshots folder itself stay out."""
+    snapshots), the snapshots folder itself and the project's command
+    logs (`logs`: lib/command_log, never read back) stay out."""
     def left_out(folder: str, names: List[str]) -> List[str]:
         here = Path(folder)
         return [n for n in names
                 if n in _FULL_LEFT_OUT
                 or (n.startswith(".") and n.endswith(".lock"))
                 or (n == SNAP_ROOT and here.name == "work")
-                or (here / n).absolute() == store]
+                or (here / n).absolute() in (store, logs)]
     shutil.copytree(src, dst, symlinks=True, ignore=left_out,
                     dirs_exist_ok=True)
 
@@ -466,7 +468,7 @@ def take_full(root: Path, cfg: Dict[str, Any],
         for src, rel in _full_sources(root):
             dst = stage / rel
             if src.is_dir():
-                _copy_tree(src, dst, store)
+                _copy_tree(src, dst, store, (root / LOGS).absolute())
             else:
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dst)

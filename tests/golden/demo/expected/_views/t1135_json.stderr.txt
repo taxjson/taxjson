@@ -1,0 +1,2 @@
+warning: 1 disposition(s) with an unknown cost (no purchase in your files) (SAMPG.US) EXCLUDED from the T1135 gain(loss) column
+  Resolve the missing history and re-run (matches form-export and carryover).

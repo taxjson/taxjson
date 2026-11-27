@@ -360,8 +360,9 @@ class TestSetKeyText(unittest.TestCase):
         r = tjs("-C", str(root), "migrate", "--to-years")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         doc = tomllib.loads((root / "2024" / "taxjson.toml").read_text())
+        # (holdings/ stays at the top, every year's: backlog TJ-5367)
         self.assertEqual(doc["accounts"]["margin"]["holdings"],
-                         ["../inputs/margin/x.toml", "holdings/demo.toml"])
+                         ["../inputs/margin/x.toml", "../holdings/demo.toml"])
 
 
 class TestNewYearHeaders(unittest.TestCase):

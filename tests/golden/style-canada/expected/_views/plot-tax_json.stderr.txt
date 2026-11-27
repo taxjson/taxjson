@@ -1,0 +1,2 @@
+tjs plot-tax: warning: 1 disposition(s) with an unknown cost (no purchase in your files) were routed to manual reporting — these figures EXCLUDE them
+  `tjs form-export` lists them in its MANUAL REPORTING section; report them by hand.

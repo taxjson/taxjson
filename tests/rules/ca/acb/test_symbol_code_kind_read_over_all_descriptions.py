@@ -338,7 +338,7 @@ class _RunBase:
         eid = cls.pending[0]['event_id']
         how = ('taxable_deemed_dividend' if cls.COUNTRY == 'canada'
                else 'taxable_distribution_301')
-        el = _run(root, 'elect', 'lira', '--set', f'{eid}={how}', '--hint',
+        el = _run(root, 'elections', 'lira', '--set', f'{eid}={how}', '--hint',
                   'fmv_per_share=2')
         assert el.returncode == 0, el.stdout + el.stderr
         cls.r = _run(root, 'run', '--no-input')

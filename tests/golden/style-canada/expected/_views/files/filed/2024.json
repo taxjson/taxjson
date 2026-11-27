@@ -36,7 +36,7 @@
       "proceeds": 40601.55,
       "realized": 89.78,
       "st_gain": 0.0,
-      "tainted": 0
+      "tainted": 1
     },
     "qt": {
       "disallowed": 0.0,
@@ -127,8 +127,8 @@
       "group": "equity",
       "income": 0.0,
       "native_currency": "USD",
-      "native_income": 0.0,
-      "native_net": 0.0,
+      "native_income": 0,
+      "native_net": 0,
       "net": 0.0,
       "quantity": 1.0,
       "symbol": "QZQ241220C00035000.US",
@@ -349,15 +349,15 @@
       "inputs/crypto/crypto_sends.tt": "<sha256 ok>",
       "inputs/crypto/kraken_demo.csv": "<sha256 ok>",
       "inputs/crypto/sends.json": "<sha256 ok>",
+      "inputs/margin/elections.json": "<sha256 ok>",
       "inputs/margin/ib_demo.csv": "<sha256 ok>",
       "inputs/margin/ib_extra.csv": "<sha256 ok>",
-      "inputs/margin/manifest.json": "<sha256 ok>",
       "inputs/margin/margin_extra.tt": "<sha256 ok>",
       "inputs/qt/questrade_demo.csv": "<sha256 ok>",
       "inputs/rrsp/webull_demo.csv": "<sha256 ok>",
       "inputs/tfsa/rbc_direct_demo.csv": "<sha256 ok>",
       "inputs/tfsa/tfsa_extra.tt": "<sha256 ok>",
-      "taxjson.toml": "run-settings:9e236d0fcfea7a877c8665306871f0ebee37c451af009ff9a598bf80db761c8c"
+      "taxjson.toml": "run-settings:2cc857a2ef6bc6d0d5f169f15a90ec3c87c2526a20b9c901c5eede7b395bb020"
     },
     "inputs_dir": null,
     "tobase_map": null
@@ -391,7 +391,7 @@
     "proceeds": 91570.58,
     "realized": 694.39,
     "st_gain": 0.0,
-    "tainted": 0
+    "tainted": 1
   },
   "year": 2024,
   "year_end": {
@@ -417,11 +417,6 @@
         "acb": 1941.3,
         "deferred": 117.45,
         "qty": 10.0
-      },
-      "OLDCO.US": {
-        "acb": -1348.65,
-        "deferred": 0.0,
-        "qty": -50.0
       },
       "PARN.US": {
         "acb": 6751.35,

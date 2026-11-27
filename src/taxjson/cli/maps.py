@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from taxjson.project.toml_io import read_toml
 from taxjson.lib import out as _o
 from taxjson.lib import project_layout as _PL
+from taxjson.lib.command_log import ask as _ask_logged
 
 from taxjson.cli.common import _raise_requirements, _shared_inputs_note
 from taxjson.pipeline.config import _config_shown, load_config, load_settings
@@ -77,10 +78,8 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
         print(text, file=out)
 
     def ask(prompt: str) -> str:
-        if as_json:
-            print(prompt, end="", file=sys.stderr, flush=True)
-            return input()
-        return input(prompt)
+        # (the question in the command's log: lib/command_log)
+        return _ask_logged(prompt, sys.stderr if as_json else None)
 
     if as_json:
         # `suggestions`: the lines the run's evidence names, safe to

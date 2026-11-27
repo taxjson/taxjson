@@ -37,9 +37,10 @@ from taxjson.engine.ca.pools import (
 )
 from taxjson.engine.ca.run_helpers import _futures_names, _ca_split_targets, _ca_sort_date
 from taxjson.engine.ca.indexes import WashPlace, _WashAdjustIndex
-from taxjson.engine.ca.own_moves import _is_lot_move, _own_move_view
+from taxjson.engine.ca.own_moves import _is_lot_move, _own_move_view, _unknown_cost_keys
 from taxjson.engine.ca.router import (
     MarkedPositions, _router_move_key, _place_own_move_legs, _split_crossing_marked_rows,
+    _unbacked_openings,
 )
 from taxjson.engine.ca.holders import _SLIndexes, _CanadaRun
 
@@ -144,6 +145,7 @@ class CanadaTaxRules(TaxRules):
         _stock_dividend_lines(_run, transactions, _gone)
         if _owed:       # (the gains document keeps it: the views read these rows as the engine did, TJ-5281)
             res[STOCK_DIVIDENDS_OWED] = _owed
+        res.update(_unbacked_openings(_run.transactions))
         if _gone:       # (a key of the gains files: every reader of the rows leaves these out)
             res[STOCK_DIVIDENDS_AFTER_COVER] = sorted(_gone, key=str)
         return res
@@ -625,7 +627,7 @@ class CanadaTaxRules(TaxRules):
                 # a note naming the provision; consumers show it verbatim.
                 'note': g.get('note', ''),
                 'grant': bool(g.get('grant', False)),
-                'deemed': bool(g.get('deemed', False)),
+                'deemed': bool(g.get('deemed', False)), **({'write_outlay': g['write_outlay']} if g.get('write_outlay') else {}),   # (the write's commission: CA-DISP-06)
             }
             if g.get('own_move_from'):
                 # Units moved in from another of your accounts, their
@@ -923,7 +925,7 @@ class CanadaTaxRules(TaxRules):
                     # your accounts, CA-ACB-OWN-MOVE): total_cost leaves
                     # them out, and the holdings export says so (backlog
                     # TJ-0598).
-                    **({'unknown_cost': True} if p.tainted else {}),
+                    **_unknown_cost_keys(p),
                 }
                 for s, p, _ac in _pool_rows(books.final_global_pools,
                                             books.final_short_units)

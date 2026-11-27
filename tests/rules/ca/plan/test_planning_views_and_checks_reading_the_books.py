@@ -402,13 +402,21 @@ class TestEdgeCasesPoolAndMarkedShort(unittest.TestCase):
         return it
 
     def test_tj1281_marked_short_opening_is_a_short_sale(self):
-        for code in ("O", "C;O"):
-            with self.subTest(code=code):
-                it = self._straddle(("open_close", code))
-                self.assertIn("so it is a 2026 short sale", it["why"])
-                self.assertNotIn("disposition", it["why"])
-                self.assertIn("opens a short position", it["why"])
-                self.assertIsNone(it["gain"])
+        it = self._straddle(("open_close", "O"))
+        self.assertIn("so it is a 2026 short sale", it["why"])
+        self.assertNotIn("disposition", it["why"])
+        self.assertIn("opens a short position", it["why"])
+        self.assertIsNone(it["gain"])
+
+    def test_a_close_and_open_order_begun_with_nothing_opens_no_short(self):
+        # C;O with no long of the account's own when the order began: the
+        # broker does not say how much of the fill closed, so it is the
+        # sale of shares bought before the files, reported by hand, and
+        # no short (lib/unbacked_close, backlog TJ-5349; it read as a
+        # short sale, TJ-1281).
+        it = self._straddle(("open_close", "C;O"))
+        self.assertIn("so it is a 2026 sale", it["why"])
+        self.assertNotIn("opens a short position", it["why"])
 
     def test_tj1281_control_an_unmarked_sale_of_the_pool_stays_a_sale(self):
         # TJ-0690: the pool's units, whichever account holds them.

@@ -1,0 +1,24 @@
+TRADING FEES BY BROKERAGE — tax year 2025, by TRADE date; all amounts in CAD
+
+BROKERAGE   CUR  TRADES   TOTAL   MEAN  MEDIAN  %NOTNL  $/UNIT  $/CONTR
+-----------------------------------------------------------------------
+rbc_direct  CAD      29  363.00  12.52    7.75  2.719%  0.2703   4.7339
+-----------------------------------------------------------------------
+TOTAL       CAD      29  363.00  12.52    7.75  2.719%  0.2703   4.7339
+
+Non-option vs option fees
+BROKERAGE   NON-OPTION  OPTIONS
+-------------------------------
+rbc_direct      216.25   146.75
+
+Native fees folded into the CAD totals
+rbc_direct:  214.50 CAD, 110.00 USD
+
+Generated:  <stamp>
+Read:       3 file(s), 29 fee row(s), 0 duplicate(s) collapsed
+
+Definitions
+- TRADES: BUYSELL/ASSIGN rows with a non-zero fee (rebates included).
+- MEAN / MEDIAN: the fee per trade.
+- %NOTNL: fees as a percent of gross trade value (rows with notional > 0).
+- $/UNIT: the non-option fee per share or coin (a future's fee is in TOTAL and NON-OPTION, not per unit); $/CONTR: the option fee per contract.

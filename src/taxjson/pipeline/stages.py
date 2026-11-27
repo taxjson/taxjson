@@ -38,7 +38,7 @@ from taxjson.pipeline.config import (
     CORP_ACTION_BROKERS, input_files, RATE_READING_BROKERS,
 )
 from taxjson.pipeline.diagnostics import (
-    _attention_short_lines, _count_noun, _diag_lines, _echo_tt_bare_symbols,
+    _attention_short_lines, _attention_unbacked_lines, _count_noun, _diag_lines, _echo_tt_bare_symbols,
     _echo_tt_totals, _split_msg, _wrote, _ZERO_TX_RE, attention_lines,
     ATTENTION_PREFIX, collect_diagnostics, echo_attention_lines,
     echo_parse_stats, run_capture, unbooked_lines, UNBOOKED_PREFIX,
@@ -310,11 +310,18 @@ def _rates_inputs(root: Path, inputs_dir: Path,
                   accounts: Mapping[str, Any]) -> List[Path]:
     """The files whose dates bound the FX window (lib/rates_window):
     every account's exports and .tt files, the year's slips and its
-    positions snapshots. Read-only; a folder that cannot be listed
-    gives nothing (the run's own checks name it)."""
+    positions snapshots (of the folder every year shares, only the ones
+    the year compares, lib/holdings_dir `year_files`: an older year's
+    snapshot took the window back to its date; backlog TJ-5408).
+    Read-only; a folder that cannot be listed gives nothing (the run's
+    own checks name it)."""
+    from taxjson.lib import holdings_dir as _HD
     folders = [inputs_dir / n for n in sorted(accounts or {})]
-    folders += [_PL.slips_dir(root), _PL.holdings_folder(root)]
-    out: List[Path] = []
+    folders.append(_PL.slips_dir(root))
+    shared = _PL.shared_holdings(root)
+    out: List[Path] = _HD.year_files(root)[0] if shared else []
+    if not shared:
+        folders.append(_PL.holdings_folder(root))
     for d in folders:
         try:
             out += [p for p in sorted(d.iterdir())
@@ -449,12 +456,11 @@ def _write_source_stamps(name: str, acct_dir: Path, cache: Path,
         + _layout_files(cache.parent)
         + [_PL.project_map_path(cache.parent, _m)
            for _m in _PROJECT_ROOT_INPUTS]
-        # The elections manifest (and its legacy work/ copy), a crypto
-        # account's sends.json and taxjson.toml itself change the books
-        # too: restored with an older mtime they kept the previous
-        # election / setting under --fast (A2-0224, A2-0985, A2-1229).
-        + [_m for _m in (acct_dir / "manifest.json",
-                         cache / f"{name}_manifest.json")
+        # The elections file, a crypto account's sends.json and
+        # taxjson.toml itself change the books too: restored with an
+        # older mtime they kept the previous election / setting under
+        # --fast (A2-0224, A2-0985, A2-1229).
+        + [_m for _m in (_PL.elections_file(acct_dir, cache.parent),)
            if not _is_empty_manifest(_m)]
         + [acct_dir / "sends.json"]
         + ([run_state.config_path] if run_state.config_path is not None else []))
@@ -465,7 +471,7 @@ def _write_source_stamps(name: str, acct_dir: Path, cache: Path,
 def _not_folders(paths: Iterable[Path]) -> List[Path]:
     """The `paths` that are not folders, to declare: a folder at a file's
     name is not that file (its tool reads none there, or refuses it in its own words:
-    an account's manifest.json), and a declared folder stops the run
+    an account's elections.json), and a declared folder stops the run
     (freshness.FolderInputError; backlog TJ-4133, TJ-4134)."""
     return [p for p in paths if not Path(p).is_dir()]
 
@@ -514,19 +520,18 @@ def _account_tt_files(acct_dir: Path, cache: Path, name: str
 
 def _resolve_manifest(acct_dir: Path, cache: Path, name: str,
                       create: bool = False) -> Path:
-    """The corp-action elections manifest for an account. Canonical home is
-    `inputs/<account>/manifest.json` — elections and hand-typed FMV/ACB
-    hints are user DECISIONS, the one thing that is NOT rebuildable from
-    inputs, so they must not live in the disposable (gitignored,
-    documented-as-safe-to-delete) work/ cache. A legacy
-    `work/<account>_manifest.json` is migrated on first touch; `create`
-    is kept for callers (nothing is written for a project with no
-    elections yet)."""
-    user_manifest = acct_dir / "manifest.json"
-    legacy = cache / f"{name}_manifest.json"
-    if user_manifest.exists():
-        return user_manifest
-    if user_manifest.is_symlink():
+    """The corp-action elections file for an account:
+    `inputs/<account>/elections.json` (a filed year's frozen copy may keep
+    its name before v3.0.0, manifest.json: lib/project_layout.
+    elections_file) — elections and hand-typed FMV/ACB hints are user
+    DECISIONS, the one thing that is NOT rebuildable from inputs, so they
+    must not live in the disposable (gitignored, documented-as-safe-to-
+    delete) work/ cache. A work/<account>_manifest.json of a layout older
+    still is refused by every command (load_config) until `tjs migrate`
+    moves it; `name` and `create` are kept for callers (nothing is
+    written for a project with no elections yet)."""
+    user_manifest = _PL.elections_file(acct_dir, cache.parent)
+    if user_manifest.is_symlink() and not user_manifest.exists():
         # A dangling link is not "no manifest": writing through it put
         # an empty {"elections": {}} at the link target (or crashed),
         # and the saved elections were silently gone (re-audit
@@ -539,26 +544,9 @@ def _resolve_manifest(acct_dir: Path, cache: Path, name: str,
         _die_input(f"{user_manifest} is a symlink to {_tgt}, which does "
                    f"not exist (or loops) — it should hold your "
                    f"corporate-action elections. Fix the link (or remove "
-                   f"it to start a new manifest).")
-    if legacy.exists() and _PL.shared_inputs(cache.parent):
-        # Exports shared by every year: a run never writes them; the
-        # year's legacy copy is read where it is (`tjs elect`
-        # saves into the shared folder).
-        return legacy
-    if legacy.exists():
-        acct_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        # Atomic (tmp + replace, as Manifest.save writes): a failed write
-        # left a truncated canonical manifest that then won over the
-        # intact legacy copy on every later run (A2-0218).
-        from taxjson.lib.safe_write import write_atomic
-        write_atomic(user_manifest, legacy.read_text(encoding="utf-8"))
-        _say("note", f"migrated the elections manifest to "
-             f"{user_manifest}",
-             "Version-control this file; the work/ copy is no longer "
-             "read once it exists.", file=sys.stdout)
-        return user_manifest
-    # No manifest yet: the canonical path, not written — Manifest.load
-    # treats a missing file as empty, and `tjs elect` writes it when
+                   f"it to start a new elections file).")
+    # No file yet: the canonical path, not written — Manifest.load
+    # treats a missing file as empty, and `tjs elections` writes it when
     # the first election is saved. An empty {"elections": {}} used to
     # be written on every first run of a project reading its own
     # inputs/, which dirtied a frozen year's committed copy (2026-10
@@ -998,7 +986,7 @@ def _apply_override_log(corp_json: Path, log: Path, account: str) -> None:
                      f"{sym} rows (to {', '.join(targets)}) and not "
                      f"others — two securities share that spelling, so "
                      f"the event cannot be assigned. Record it with a "
-                     f".tt file (and `tjs elect {account} --set "
+                     f".tt file (and `tjs elections {account} --set "
                      f"<event>=ignore`).")
             t[fld] = targets[0]
             changed = True
@@ -1305,7 +1293,7 @@ def stage_account(name: str, acfg: Mapping[str, Any], settings: Settings,
     _ctx.tt_files = _account_tt_files(acct_dir, cache, name)
 
     # 2. corp-actions per equity broker. taxjson-corp-actions requires
-    # --manifest when multiple CSVs are passed, so always provide one.
+    # --elections when multiple CSVs are passed, so always provide one.
     corp_files: List[Path] = []
     corp_brokers = sorted(b for b in grouped if b in CORP_ACTION_BROKERS)
     if not is_crypto and corp_brokers and not _country_has_corp_rules(country):
@@ -1852,11 +1840,11 @@ def _corp_build(i: ST.Inst, _r: ST.Ready) -> None:
         "--account-name", name,
         "--country", a.country,
         "--brokerage", broker,
-        "--manifest", str(manifest_path),
-        # Named as `tjs elect` names it (../inputs/...
+        "--elections", str(manifest_path),
+        # Named as `tjs elections` names it (../inputs/...
         # for shared exports), never by its absolute path
         # (backlog TJ-0216).
-        "--manifest-shown",
+        "--elections-shown",
         _manifest_shown(manifest_path, cache.parent),
     ] + [
         # The outputs the run checked, its spellings checked against
@@ -1887,7 +1875,7 @@ def _corp_build(i: ST.Inst, _r: ST.Ready) -> None:
     # election (taxable vs rollover) on stderr and reads the
     # answer from stdin. Without a TTY (or with --no-input) it
     # writes the pending elections as JSON and exits 3 — the
-    # GUI/headless path: resolve via `tjs elect --set`,
+    # GUI/headless path: resolve via `tjs elections --set`,
     # re-run.
     non_interactive = a.no_input or not sys.stdin.isatty()
     pending_path = cache / f"{name}_pending_elections.json"
@@ -2306,7 +2294,8 @@ def _gains_every_run(i: ST.Inst, _r: ST.Ready) -> None:
     # that go short: the run lists those once, after every account's
     # books, the ones that bear on the tax year one by one and the rest
     # in one line (_report_short_positions).
-    echo_attention_lines(gains_json, exclude="short: ", once=True)
+    echo_attention_lines(gains_json, exclude="short: ", once=True,
+                         unless=lambda ln: _unbacked_before(ln, a.year))
     run_state.current.short_sources.append(
         (name, c.work / f"{name}_base.json", gains_json,
          c.taxable and not c.crypto))
@@ -2321,9 +2310,33 @@ def _gains_every_run(i: ST.Inst, _r: ST.Ready) -> None:
              "A registered account, spot crypto, or a sale the broker "
              "codes closing: see the Short position warnings above. Spot "
              "crypto and registered accounts cannot be short.")
+    # A trade the broker marks CLOSE with nothing held that it closes: it
+    # is reported by hand, out of the totals (CA-ACB-11, CA-OPT-12;
+    # backlog TJ-5349), so the figures are not whole: --strict refuses,
+    # a purchase and a sale, shares and options alike.
+    _unbacked = [ln for ln in _attention_unbacked_lines(gains_json)
+                 if not _unbacked_before(ln, a.year)]
+    if _unbacked and a.strict:
+        _die(f"--strict: {name}: {len(_unbacked)} trade(s) the broker marks "
+             f"closing closed a position opened before the files",
+             "Each is reported by hand and is in no total: see the "
+             "`unbacked close` warnings above, and `tjs find-missing-history`.")
     if c.taxable:
         _warn_expired_open_options(name, gains_json, c.work, a.year,
-                                   tax_date=_tax_date_basis(c.settings))
+                                   tax_date=_tax_date_basis(c.settings), country=a.country)
+
+
+def _unbacked_before(line: str, year: Any) -> bool:
+    """Whether a captured line is an `unbacked close:` ATTENTION dated
+    before the tax year `year`: reported by hand in its own year, with
+    nothing of it in this year's figures, so the console leaves it to the
+    .sum DIAGNOSTICS and `tjs find-missing-history` (as it leaves a
+    position that went short years ago: _report_short_positions)."""
+    from taxjson.lib.unbacked_close import ATTENTION_UNBACKED
+    if not year or not line.startswith(ATTENTION_UNBACKED):
+        return False
+    m = re.search(r"\) (\d{4})-\d\d-\d\d, ", line)
+    return bool(m) and int(m.group(1)) < int(year)
 
 
 def _raw_build(i: ST.Inst, _r: ST.Ready) -> None:
@@ -4647,7 +4660,7 @@ def _say_in_kind(root: Path, cache: Path, settings: Settings, *,
         return
     key = _transfer_key(root)
     docs, refused = _checked_gains_docs(cache)
-    res = IK.contribution_results(docs, key=key)
+    res = IK.contribution_results(docs, key=key, superficial=True)
     msg = IK.message(st.moves, st.problems, res,
                      _normalize_country(settings.country),
                      str(settings.base_currency or "").upper(),
@@ -5524,16 +5537,18 @@ def _missing_history_deps(incomplete_history: Optional[Path]) -> List[Path]:
 
 
 def _manifest_shown(manifest_path: Path, root: Path) -> str:
-    """An account's manifest.json as `elect` shows it: relative to the
-    project, the shared exports' as ../inputs/<account>/manifest.json
+    """An account's elections.json as `elections` shows it: relative to
+    the project, the shared exports' as ../inputs/<account>/elections.json
     (out.relpath gave the absolute path, over the width: backlog
     TJ-0176)."""
     return _PL.shown(Path(manifest_path).resolve(), Path(root).resolve())
 
 
 # The fields in_kind contribution_results reads (its key's date, its
-# views' figures): what _checked_gains_docs checks (backlog TJ-3044).
-_IN_KIND_FIELDS = ("date", "gain", "denied_contribution")
+# views' figures): what _checked_gains_docs checks (backlog TJ-3044);
+# the s.54 ones, an RESP's superficial loss (TJ-5452).
+_IN_KIND_FIELDS = ("date", "gain", "denied_contribution", "disallowed_amount",
+                   "permanently_disallowed")
 
 
 def _checked_gains_docs(cache: Path) -> Tuple[List[Dict[str, Any]], List[str]]:

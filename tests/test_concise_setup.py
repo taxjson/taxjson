@@ -80,7 +80,12 @@ class TestInitAndNewYear(unittest.TestCase):
             r = _tjs("-C", str(top), "new-year", "2025", cwd=td)
             self.assertEqual(r.returncode, 0, r.stderr)
             assert_concise(self, r.stdout, r.stderr)
-            self.assertIn("2025/holdings/", r.stdout)
+            # The year folders share one holdings/ beside inputs/
+            # (`holdings_dir = "../holdings"`, backlog TJ-5367): named as
+            # the shared inputs are, from the folder holding the years.
+            self.assertIn("inputs/<account>/ (shared), positions snapshots "
+                          "in holdings/ (shared).", r.stdout)
+            self.assertNotIn("2025/holdings/", r.stdout)
             self.assertIn("tjs align --from 2024", r.stdout)
             self.assertIn("2024 is not locked yet", r.stderr)
             shutil.rmtree(top / "2025")
@@ -99,7 +104,7 @@ class TestElect(unittest.TestCase):
         for country in ("canada", "usa"):
             with self.subTest(country=country):
                 p = project(country, pending=True)
-                r = p.run("elect", "--pending", **W)
+                r = p.run("elections", "--pending", **W)
                 self.assertEqual(r.returncode, 0, r.stderr)
                 assert_concise(self, r.stdout, r.stderr)
                 out = r.stdout.splitlines()
@@ -109,15 +114,15 @@ class TestElect(unittest.TestCase):
                 self.assertIn("WHAT IT BOOKS", r.stdout)
                 self.assertIn("ignore", r.stdout)
                 self.assertIn("=OPTION [--hint KEY=VALUE]", r.stdout)
-                d = p.run("elect", "--pending", "--details", **W)
+                d = p.run("elections", "--pending", "--details", **W)
                 self.assertEqual(d.returncode, 0, d.stderr)
                 self.assertIn("ONLY for broker noise", _flat(d.stdout))
-                self.assertIn("set:  tjs elect margin --set ",
+                self.assertIn("set:  tjs elections margin --set ",
                               d.stdout)
                 self.assertEqual(d.stdout.splitlines()[-1], out[-1])
 
     def test_listing(self):
-        for args in (("elect",), ("elect", "margin")):
+        for args in (("elections",), ("elections", "margin")):
             with self.subTest(args=args):
                 r = project("canada").run(*args, **W)
                 self.assertEqual(r.returncode, 0, r.stderr)

@@ -3,13 +3,7 @@
   "books_not_read": [],
   "in_kind_not_booked": [],
   "income_not_held": [],
-  "no_purchase": [
-    {
-      "account": "margin",
-      "sales": 1,
-      "symbol": "SAMPG.US"
-    }
-  ],
+  "no_purchase": [],
   "no_purchase_in_sum": [],
   "schema_version": 1,
   "transfer_in_book_value": [],
@@ -30,7 +24,7 @@
     },
     {
       "account": "margin",
-      "positions": 3
+      "positions": 2
     },
     {
       "account": "questrade",
@@ -49,7 +43,29 @@
       "positions": 2
     }
   ],
-  "unknown_cost_sales": [],
+  "unknown_cost_sales": [
+    {
+      "account": "margin",
+      "currency": "CAD",
+      "date": "2024-03-20",
+      "direction": "LONG",
+      "kind": "sale",
+      "proceeds": 498.15,
+      "qty": 20.0,
+      "sources": [
+        {
+          "account": "margin",
+          "date": "2024-03-18",
+          "marked_close": true,
+          "quantity": 20.0,
+          "symbol": "SAMPG.US",
+          "where": null
+        }
+      ],
+      "symbol": "SAMPG.US",
+      "traded": "2024-03-18"
+    }
+  ],
   "year": 2024,
   "zero_cost_declared": [],
   "zero_cost_held": [],

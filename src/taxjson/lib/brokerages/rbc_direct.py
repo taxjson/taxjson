@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, NamedTuple
+from typing import Any, Dict, List, Optional, Set, Tuple, NamedTuple
 
 from taxjson.lib.row_types import STOCK_DIVIDEND
 # The description helpers Questrade read through RBC's privates until
@@ -209,11 +209,18 @@ class RbcExport:
     settle_fmt: str
     newest_first: Optional[bool]
     notes: List[str] = field(default_factory=list)
+    # What the parse says as an ATTENTION (a day put in the broker's
+    # open/close order on the day's own rows alone, backlog TJ-5363).
+    attentions: List[str] = field(default_factory=list)
     # The export's own timestamp ("Activity Export as of Jan 5, 2026 at
     # 8:59:00 am ET"), ISO; '' when the preamble has none. RBC does not
     # write the date range chosen in the UI, so this is an upper bound
     # on what the file can contain (audit S063-22).
     as_of: str = ''
+    # The demo layout's "Date Range: January 1, 2025 - June 15, 2025"
+    # line (the dates the export was asked for), ISO; ('', '') when the
+    # preamble has none (backlog TJ-5348: an option series' coverage).
+    date_range: Tuple[str, str] = ('', '')
 
 
 def _err(path: Path, line: int, msg: str) -> RbcFormatError:
@@ -274,6 +281,19 @@ _RBC_AS_OF_RE = re.compile(
     r'([A-Za-z]{3,9})\.?\s+(\d{1,2}),\s*(\d{4})', re.I)
 
 
+def _month_date(month: str, day: str, year: str) -> str:
+    """'Jan' / 'January', '5', '2026' -> '2026-01-05'; '' when it is no
+    date."""
+    for fmt in ('%b %d %Y', '%B %d %Y'):
+        try:
+            return datetime.strptime(
+                f"{month[:3] if fmt == '%b %d %Y' else month}"
+                f" {day} {year}", fmt).strftime('%Y-%m-%d')
+        except ValueError:
+            continue
+    return ''
+
+
 def _export_as_of(records, hpos: int) -> str:
     """The ISO date of the "Activity Export as of <date>" preamble above
     the header row, or '' when there is none (or it does not parse)."""
@@ -281,14 +301,32 @@ def _export_as_of(records, hpos: int) -> str:
         m = _RBC_AS_OF_RE.search(' '.join(c for c in cells if c))
         if not m:
             continue
-        for fmt in ('%b %d %Y', '%B %d %Y'):
-            try:
-                return datetime.strptime(
-                    f"{m.group(1)[:3] if fmt == '%b %d %Y' else m.group(1)}"
-                    f" {m.group(2)} {m.group(3)}", fmt).strftime('%Y-%m-%d')
-            except ValueError:
-                continue
+        got = _month_date(m.group(1), m.group(2), m.group(3))
+        if got:
+            return got
     return ''
+
+
+# The demo layout's preamble line: "Date Range: January 1, 2025 - June
+# 15, 2025" (unquoted, its commas split it into cells: joined again).
+_RBC_DATE_RANGE_RE = re.compile(
+    r'\bDate\s+Range\s*:?\s*([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s*(\d{4})'
+    r'\s*(?:-|\u2013|to)\s*([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s*(\d{4})', re.I)
+
+
+def _export_date_range(records: List[Tuple[int, List[str]]],
+                       hpos: int) -> Tuple[str, str]:
+    """(first, last) ISO dates of the "Date Range:" preamble line above
+    the header row, or ('', '') when there is none (or it does not
+    parse, or runs backwards)."""
+    for _line, cells in records[:hpos]:
+        m = _RBC_DATE_RANGE_RE.search(' '.join(c for c in cells if c))
+        if not m:
+            continue
+        lo, hi = _month_date(*m.group(1, 2, 3)), _month_date(*m.group(4, 5, 6))
+        if lo and hi and lo <= hi:
+            return lo, hi
+    return '', ''
 
 
 def rbc_export_as_of(path) -> str:
@@ -653,10 +691,10 @@ def read_rbc_rows(path: Path) -> RbcExport:
                 k0 = min(r.k for r in grp)
                 for r in grp:
                     r.k = k0
-    return RbcExport(path=path, rows=rows, n_footers=n_footers,
-                     columns=[c for c in canon if c], date_fmt=date_fmt,
-                     settle_fmt=settle_fmt, newest_first=newest_first,
-                     notes=notes, as_of=_export_as_of(records, hpos))
+    return RbcExport(path=path, rows=rows, n_footers=n_footers, notes=notes, date_fmt=date_fmt,
+                     columns=[c for c in canon if c], settle_fmt=settle_fmt,
+                     newest_first=newest_first, as_of=_export_as_of(records, hpos),
+                     date_range=_export_date_range(records, hpos))
 
 
 # The tax words in the parser's notes, by the project's country
@@ -1071,6 +1109,15 @@ def rbc_trade_side(r) -> str:
     return ''
 
 
+def _contract_code(desc: str) -> str:
+    """'O' / 'C': the OPEN / CLOSE CONTRACT words RBC ends an option
+    trade's Description with; '' when it has neither."""
+    m = _RBC_OPEN_CLOSE_RE.search(desc or '')
+    if not m:
+        return ''
+    return 'O' if m.group(1).upper() == 'OPEN' else 'C'
+
+
 def _signed_qty(r) -> float:
     q = r.qty
     if rbc_trade_side(r) == 'sell' or r.cls == 'retraction':
@@ -1149,6 +1196,13 @@ class RbcAccountContext:
     names: Dict[str, List[Tuple[str, bool, str]]]      # key → (date, reorg?, sym)
     listings: Dict[str, Dict[str, _Listing]]           # symbol → cur → line
     messages: List[str] = field(default_factory=list)
+    # The days `_order_by_open_close` could not prove, each (date, series,
+    # file index, the day's rows, their open/close order, the words for
+    # it): left in the file's order; the parse states each row's time in
+    # the open/close order as a fact (`open_close_time`) and the country's
+    # reading of it is characterize/no_clock_order's.
+    unproven: List[Tuple[str, str, int, List['RbcRow'], List['RbcRow'], str]] = \
+        field(default_factory=list)
     emitted: bool = False
     # file → ids of its reorganization legs that belong to an event
     # booked from ANOTHER file of the account (the removal's file)
@@ -1330,11 +1384,8 @@ def build_rbc_account_context(paths, *, helper=None) -> RbcAccountContext:
         # order across files so a later file's close finds it.
         adjusts += [ev for ev in ctx.pairings[k].events
                     if ev.kind == 'option_adjust']
-    for ev in sorted(adjusts, key=lambda e: (e.removal.date, e.removal.k)):
-        rem, rc = ev.removal, ev.receipt
-        old = ctx.occ_by_code.get(rem.symbol) or helper._row_occ(rem)
-        if old and rc.symbol not in ctx.occ_own:
-            ctx.occ_by_code[rc.symbol] = old
+    _inherit_adjusted_codes(ctx, helper, adjusts)
+    _order_by_open_close(ctx, helper, live)     # the series now named
 
     # Security name → ticker, with dates (temporary-code resolution).
     # The name is `rbc_row_company`'s: with no Symbol Description column
@@ -1424,6 +1475,378 @@ def _plan_reinvest_reversals(ctx: RbcAccountContext, chrono) -> None:
             opened[key].remove(hit)
             ctx.rei_drop.add(id(hit))
             ctx.rei_paired.add(id(r))
+
+
+# RBC posts an option's expiry row the next business day: exports that
+# reach a week past a contract's expiry would hold it.
+_EXPIRY_POSTED_DAYS = 7
+
+
+def _inherit_adjusted_codes(ctx: RbcAccountContext, helper: Any,
+                            adjusts: List[Any]) -> None:
+    """An option adjustment's new code inherits the old contract unless
+    its own trade rows describe another, in date order across files."""
+    for ev in sorted(adjusts, key=lambda e: (e.removal.date, e.removal.k)):
+        rem, rc = ev.removal, ev.receipt
+        old = ctx.occ_by_code.get(rem.symbol) or helper._row_occ(rem)
+        if old and rc.symbol not in ctx.occ_own:
+            ctx.occ_by_code[rc.symbol] = old
+
+
+def _option_row_symbol(ctx: RbcAccountContext, helper: Any,
+                       r: RbcRow) -> Optional[str]:
+    """The option series a row books, named as `_build_trade` names it
+    (the account's code map, else the row's own text); None for a row
+    that is no option's."""
+    occ = ctx.occ_by_code.get(r.symbol) if rbc_is_option_code(r.symbol) \
+        else None
+    occ = occ or helper._row_occ(r)
+    return helper.apply_currency_suffix(occ, r.currency) if occ else None
+
+
+def _option_series(ctx: RbcAccountContext, helper: Any,
+                   live: List[Tuple[int, RbcRow]]
+                   ) -> Tuple[Dict[Tuple[str, str], List[Tuple[int, RbcRow]]],
+                              Set[int]]:
+    """The account's option rows by (broker account, series), and the
+    rows the run books only once although two exports hold them: with no
+    Account column `_plan_overlaps` matches nothing, and the run's
+    cross-file dedup drops a row whose id a row of another export has
+    (an RBC row's id is its content and its intra-day time, `k`)."""
+    series: Dict[Tuple[str, str], List[Tuple[int, RbcRow]]] = {}
+    blank: Dict[Tuple[int, Tuple[Any, ...], int], List[RbcRow]] = {}
+    for fi, r in live:
+        sym = _option_row_symbol(ctx, helper, r)
+        if not sym:
+            continue
+        series.setdefault((_norm_account(r.account), sym), []).append(
+            (fi, r))
+        if not _norm_account(r.account):
+            blank.setdefault((fi, _row_content_key(r), r.k), []).append(r)
+    seen: Dict[Tuple[Tuple[Any, ...], int], int] = {}
+    copies: Set[int] = set()
+    for (_fi, key, k), rs in sorted(blank.items(), key=lambda x: x[0][0]):
+        have = seen.get((key, k), 0)
+        copies.update(id(r) for r in rs[:have])
+        seen[(key, k)] = max(have, len(rs))
+    return series, copies
+
+
+def _export_span(exp: RbcExport, dates: List[str]) -> Tuple[str, str]:
+    """The days one export holds (`dates`: its rows' of the broker
+    account): its "Date Range:" line, the end capped by its "Activity
+    Export as of" date (a range asked for need not have passed); else its
+    first row to its as-of date; else its first row to its last. An as-of
+    date says only that nothing later is in the file."""
+    lo, hi = exp.date_range
+    if lo and hi:
+        return lo, min(hi, exp.as_of) if exp.as_of else hi
+    return min(dates), max(max(dates), exp.as_of)
+
+
+def _stated_end(ctx: RbcAccountContext, acct: str, end: str
+                ) -> Optional[Tuple[str, str]]:
+    """When no row of the broker account at or after `end`, in an export
+    whose span holds `end`, proves that the exports reach it: (that
+    export, the note's words for the stated date it is taken to hold
+    everything to). An export asked for a shorter range and downloaded
+    later, or a range asked for ahead of the download, holds less than
+    it says (backlog TJ-5363). None when a row proves it."""
+    best: Optional[Tuple[str, str, str]] = None
+    for name in ctx.files:
+        exp = ctx.exports[name]
+        dates = [r.date for r in exp.rows if _norm_account(r.account) == acct]
+        if not dates:
+            continue
+        lo, hi = _export_span(exp, dates)
+        if not lo <= end <= hi:
+            continue
+        if max(dates) >= end:
+            return None
+        if best is not None and hi <= best[1]:
+            continue
+        if exp.date_range[0] and hi == exp.date_range[1]:
+            what = f"Date Range end {hi}" + (
+                '' if exp.as_of else
+                ': if the export was taken before then, add the rest')
+        else:
+            what = f"as-of date {hi}" + (
+                '' if exp.date_range[0] else
+                ': if the export was asked for a shorter range, add the rest')
+        best = (name, hi, f"the rows end {max(dates)}; taken as holding "
+                          f"everything to %s {what}")
+    return (best[0], best[2]) if best else None
+
+
+def _stated_words(stated: Optional[Tuple[str, str]], name: str) -> str:
+    """The note's clause for `_stated_end`'s finding, said from export
+    `name` ('its', or the other export's file name); '' when a row
+    proves the end."""
+    if not stated:
+        return ''
+    src, words = stated
+    whose = 'its' if src == name else f"{Path(src).name}'s"
+    return f" ({words % whose})"
+
+
+def _next_session(iso: str) -> str:
+    """The first day after `iso` that the TSX or the NYSE trades."""
+    from taxjson.lib.market_calendar import is_trading_day
+    d = datetime.strptime(iso, '%Y-%m-%d').date() + timedelta(days=1)
+    while not (is_trading_day(d, 'CAD') or is_trading_day(d, 'USD')):
+        d += timedelta(days=1)
+    return d.isoformat()
+
+
+def _covered(ctx: RbcAccountContext, acct: str, start: str,
+             end: str) -> bool:
+    """The account's exports hold every day from `start` to `end`: one
+    export, or exports that overlap or follow on (one begins by the next
+    trading session after another ends: Dec 31 then Jan 1 or Jan 2), each
+    an export holding rows of the broker account, over `_export_span`.
+    A session between two exports that neither holds is a gap: rows the
+    data lacks may sit there."""
+    spans = []
+    for name in ctx.files:
+        exp = ctx.exports[name]
+        dates = [r.date for r in exp.rows if _norm_account(r.account) == acct]
+        if dates:
+            spans.append(_export_span(exp, dates))
+    reach = ''
+    for lo, hi in sorted(spans):
+        if lo <= (max(_next_session(reach), start) if reach else start):
+            reach = max(reach, hi)
+    return reach >= end
+
+
+def _order_by_open_close(ctx: RbcAccountContext, helper: Any,
+                         live: List[Tuple[int, RbcRow]]) -> None:
+    """RBC writes no time: `read_rbc_rows` numbers a day's rows from the
+    bottom of the export, taking it as newest first. An option's own
+    OPEN / CLOSE CONTRACT words can say otherwise: a CLOSE buy-back read
+    before the same day's OPEN write it closes was the close of nothing
+    held (backlog TJ-5348). Per broker account and series, on a day whose
+    rows of it are Buy / Sell rows of one export, an OPEN row of the
+    other direction goes just before a CLOSE row that the position
+    before it cannot back, as many as the close needs
+    (`_open_close_moves`); otherwise the file order stays. Every reader
+    then sees one order (lib/unbacked_close: on a day with no clock the
+    day's own OPEN rows back a CLOSE first; backlog TJ-5349).
+
+    What was held before the data is unknown, so the order is proven only
+    where the data holds the series' life from the first day moved to its
+    end (`_order_proven`): its rows net to nothing, the exports cover that
+    day through the series' expiry row or a week past its expiry, and a
+    replay from nothing held backs every CLOSE. Proven, a day reordered
+    is the export's note, naming the rows moved, and the stated date the
+    end rests on when no row proves it (`_stated_end`). Not proven, the
+    day is reordered all the same and the words are an ATTENTION: the
+    order rests on the day's own rows, and it names the export to add
+    (backlog TJ-5363). If the CLOSE did close a contract opened before
+    the files, the day's OPEN is still open and its own close is then
+    the one the position cannot back."""
+    from taxjson.lib.option_symbols import parse_option_expiry
+    series, copies = _option_series(ctx, helper, live)
+    notes: List[Tuple[str, str, int, str, bool]] = []
+    for (acct, sym), rows in sorted(series.items()):
+        plans = _series_plans(rows, copies)
+        if not plans:
+            continue
+        booked = [(fi, r) for fi, r in rows if id(r) not in copies]
+        expired = [r.date for _fi, r in booked if r.cls == 'expiry']
+        expiry = parse_option_expiry(sym) or ''
+        end = min(expired) if expired else expiry and (
+            datetime.strptime(expiry, '%Y-%m-%d')
+            + timedelta(days=_EXPIRY_POSTED_DAYS)).strftime('%Y-%m-%d')
+        proven = _order_proven(ctx, acct, booked, plans, end)
+        stated = _stated_end(ctx, acct, end) if proven else None
+        for d, (fi, day, order, moves) in sorted(plans.items()):
+            words = '; '.join(_moved_words(c, t) for c, t in moves)
+            if not proven:
+                ctx.unproven.append((d, sym, fi, day, order, words + _unproven_words(
+                    sym, expiry, end, order, moves)))
+                continue
+            _renumber(day, order)
+            notes.append((d, sym, fi, words + _stated_words(stated, ctx.files[fi])))
+    for d, sym, fi, words in sorted(notes):
+        ctx.exports[ctx.files[fi]].notes.append(_ORDER_SAID % (sym, d, words))
+
+
+_ORDER_SAID = ("rows of %s on %s put in the broker's open/close order "
+               "(RBC writes no time): %s")
+
+
+def _unproven_of(ctx: RbcAccountContext, key: str) -> Tuple[Dict[int, int], List[str]]:
+    """Of the export `key`, the days whose open/close order no export
+    proves (`ctx.unproven`): each row's intra-day number in that order
+    (by id; the rows keep the file's) and the words for each day. Neutral
+    facts: which books read the day in that order is the country's
+    (characterize/no_clock_order; backlog TJ-5438)."""
+    slots: Dict[int, int] = {}
+    said: List[str] = []
+    for d, sym, fi, day, order, words in sorted(ctx.unproven, key=lambda x: x[:3]):
+        if ctx.files[fi] == key:
+            slots.update(_slots(day, order))
+            said.append(_ORDER_SAID % (sym, d, words))
+    return slots, said
+
+
+def _order_proven(ctx: RbcAccountContext, acct: str,
+                  booked: List[Tuple[int, RbcRow]], plans: Dict[str, Any],
+                  end: str) -> bool:
+    """The data holds the series' life from the first day moved to its end
+    (backlog TJ-5348): its booked rows net to nothing, the account's
+    exports cover that day through `end` (`_covered`), and replayed from
+    nothing held in the new order every CLOSE finds what it closes
+    (`_backed_from_zero`)."""
+    return (abs(sum(_signed_qty(r) for _fi, r in booked)) <= 1e-9
+            and bool(end) and _covered(ctx, acct, min(plans), end)
+            and _backed_from_zero(booked, plans))
+
+
+def _unproven_words(sym: str, expiry: str, end: str, order: List[RbcRow],
+                    moves: List[Tuple[RbcRow, List[RbcRow]]]) -> str:
+    """The ATTENTION's second sentence for a day reordered on its own rows
+    alone: what the order rests on and the export to add. A day with more
+    CLOSE rows of one direction than its OPEN rows back: which of them
+    the OPEN rows back is the file's order, said too, when the day holds
+    several such CLOSE rows (the others are read as closing a contract
+    opened before the files)."""
+    upto = (f"through {end} (a week past its {expiry} expiry, or its "
+            f"expiry row)" if expiry and end else "through its expiry")
+    several = any(
+        sum(1 for r in order if _contract_code(r.desc) == 'C'
+            and _signed_qty(r) * _signed_qty(c) > 0) > 1
+        and sum(abs(_signed_qty(r)) for r in order if _contract_code(r.desc) == 'C'
+                and _signed_qty(r) * _signed_qty(c) > 0)
+        > sum(abs(_signed_qty(o)) for o in order if _contract_code(o.desc) == 'O'
+              and _signed_qty(o) * _signed_qty(c) < 0) + 1e-9
+        for c, _t in moves)
+    return ((". The day's OPEN rows back fewer contracts than its CLOSE "
+             "rows close: which CLOSE row they back is the file's order, "
+             "and the rest is read as closing a contract opened before "
+             "your files" if several else "")
+            + f". The order rests on that day's own rows: the account's "
+            f"exports do not hold {sym} from that day {upto} with nothing "
+            f"left open, so a contract opened before your files could be "
+            f"what the CLOSE row closed. Add the export covering those "
+            f"dates; until then the books read the day's OPEN row as what "
+            f"it closed (the close of any contract still open is then "
+            f"reported by hand).")
+
+
+def _series_plans(rows: List[Tuple[int, RbcRow]], copies: Set[int]
+                  ) -> Dict[str, Tuple[int, List[RbcRow], List[RbcRow],
+                                       List[Tuple[RbcRow, List[RbcRow]]]]]:
+    """{date: (its export, the day's rows in the readers' order, their
+    new order, the moves)} for each day of one series whose rows are Buy
+    / Sell rows of one export and are put in the open/close order, from
+    the position the rows before the day hold."""
+    days: Dict[str, List[Tuple[int, RbcRow]]] = {}
+    for fi, r in rows:
+        days.setdefault(r.date, []).append((fi, r))
+    plans = {}
+    held = 0.0                          # the position before the day
+    for d in sorted(days):
+        day = days[d]
+        if len({fi for fi, _r in day}) == 1 and all(
+                r.cls == 'trade' and rbc_trade_side(r) in ('buy', 'sell')
+                for _fi, r in day):
+            plan = _open_close_moves([r for _fi, r in day], held)
+            if plan:
+                plans[d] = (day[0][0],) + plan
+        held += sum(_signed_qty(r) for _fi, r in day if id(r) not in copies)
+    return plans
+
+
+def _open_close_moves(rows: List[RbcRow], held: float
+                      ) -> Optional[Tuple[List[RbcRow], List[RbcRow],
+                                          List[Tuple[RbcRow, List[RbcRow]]]]]:
+    """One day's rows of one series (one export, Buy / Sell rows), from
+    the position `held` before the day: walked in the readers' order (the
+    intra-day number, a tie the file's), each CLOSE row the position
+    cannot back takes the OPEN rows of the other direction after it, in
+    their order, until they back it (a row larger than the rest of the
+    close moves whole), and they go just before it; nothing else moves.
+    (the rows in the readers' order, the new order, [(the CLOSE row, the
+    OPEN rows put before it)]), or None when nothing moves."""
+    rows = sorted(rows, key=lambda r: (r.k, r.order))
+    order = list(rows)
+    moves: List[Tuple[RbcRow, List[RbcRow]]] = []
+    pos, i = held, 0
+    while i < len(order):
+        r = order[i]
+        q = _signed_qty(r)
+        if _contract_code(r.desc) == 'C':
+            need = abs(q) - max(-pos if q > 0 else pos, 0.0)
+            take: List[RbcRow] = []
+            for o in order[i + 1:]:
+                if need <= 1e-9:
+                    break
+                if _contract_code(o.desc) == 'O' and _signed_qty(o) * q < 0:
+                    take.append(o)
+                    need -= abs(_signed_qty(o))
+            if take:
+                moves.append((r, take))
+                moved = {id(o) for o in take}
+                order = order[:i] + take + [o for o in order[i:]
+                                            if id(o) not in moved]
+                continue                # walk the moved rows from here
+        pos += q
+        i += 1
+    return (rows, order, moves) if moves else None
+
+
+def _backed_from_zero(booked: List[Tuple[int, RbcRow]],
+                      plans: Dict[str, Tuple[int, List[RbcRow],
+                                             List[RbcRow], Any]]) -> bool:
+    """The series replayed from nothing held, the planned days in their
+    new order: True when every CLOSE row (an expiry or an assignment
+    closes too) finds the position it closes."""
+    rank = {id(r): i for _fi, _day, order, _m in plans.values()
+            for i, r in enumerate(order)}
+    pos = 0.0
+    for _fi, r in sorted(booked, key=lambda x: (
+            x[1].date, rank.get(id(x[1]), x[1].k), x[0], x[1].order)):
+        q = _signed_qty(r)
+        if (_contract_code(r.desc) == 'C'
+                or r.cls in ('expiry', 'assignment')) \
+                and (-pos if q > 0 else pos) < abs(q) - 1e-9:
+            return False
+        pos += q
+    return True
+
+
+def _slots(rows: List[RbcRow], order: List[RbcRow]) -> Dict[int, int]:
+    """The day's intra-day numbers in the new order, by row id: its own
+    slots, strictly rising (a day of one common time gets its own, k 0,
+    1, ...)."""
+    out: Dict[int, int] = {}
+    slots = [r.k for r in rows]
+    k = slots[0] - 1
+    for s, r in zip(slots, order):
+        k = max(s, k + 1)
+        out[id(r)] = k
+    return out
+
+
+def _renumber(rows: List[RbcRow], order: List[RbcRow]) -> None:
+    """The day's rows given those numbers (`_slots`)."""
+    by_id = _slots(rows, order)
+    for r in order:
+        r.k = by_id[id(r)]
+
+
+def _moved_words(close: RbcRow, taken: List[RbcRow]) -> str:
+    """'the OPEN CONTRACT sale of 3 before the CLOSE CONTRACT purchase of
+    3' (the note's words for one move)."""
+    def side(r: RbcRow) -> str:
+        return 'sale' if _signed_qty(r) < 0 else 'purchase'
+    qty = [f"{abs(o.qty):g}" for o in taken]
+    opens = (f"{side(taken[0])} of {qty[0]}" if len(qty) == 1 else
+             f"{side(taken[0])}s of {', '.join(qty[:-1])} and {qty[-1]}")
+    return (f"the OPEN CONTRACT {opens} before the CLOSE CONTRACT "
+            f"{side(close)} of {abs(close.qty):g}")
 
 
 def _plan_overlaps(ctx: RbcAccountContext, name_of: Dict[str, str]) -> None:
@@ -1573,6 +1996,7 @@ class _RbcParse(NamedTuple):
 class RbcBrokerage(BaseBrokerage):
     DEFAULT_ACCOUNT = "RBC"
     SHORT_MARKS = "description"         # "… SHORT. …" / "… COVER SHORT. …"
+    NO_CLOCK = "file"                   # no time column: a day's order is the file's
 
     def _option_description_patterns(self):
         return _RBC_OPTION_PATTERNS
@@ -1664,8 +2088,12 @@ class RbcBrokerage(BaseBrokerage):
         rows = ctx.rows(key)
         self._rbc_accounts = {r.account.strip() for r in rows
                               if r.account.strip()}
+        # (the days no export proves: facts for characterize/no_clock_order)
+        self._open_close_k, self.open_close_days = _unproven_of(ctx, key)
         for n in exp.notes:
             self._note(n)
+        for n in exp.attentions:
+            self._warn(n, attention=True)
         # The rows this read saw and the loop will not (the template adds
         # every row it iterates): the footers, the duplicates another
         # download holds; each counted as a non-event here.
@@ -1794,6 +2222,8 @@ class RbcBrokerage(BaseBrokerage):
             return out
         tag = self._extra_tag.get(r.order)
         for tx in out:
+            if id(r) in self._open_close_k:
+                tx['open_close_time'] = rbc_time(self._open_close_k[id(r)])
             # The row's broker account (the Account column): cross-
             # file dedup never collapses two accounts' identical
             # rows (audit A2-0008, A2-0296).
@@ -2449,9 +2879,9 @@ class RbcBrokerage(BaseBrokerage):
         with the code, the gains run's broker-closing check names it."""
         if not is_option:
             return ''
-        m = _RBC_OPEN_CLOSE_RE.search(r.desc or '')
-        if m:
-            return 'O' if m.group(1).upper() == 'OPEN' else 'C'
+        code = _contract_code(r.desc)
+        if code:
+            return code
         if r.cls in ('expiry', 'assignment') or r.code in ('EXP', 'ASN'):
             return 'C'
         return ''

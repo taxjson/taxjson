@@ -52,7 +52,7 @@ detectors.
       `[[distributions]]` in taxjson.toml) before trusting any ACB — some funds publish
       the factors only after year end.
 - [ ] Commit `inputs/`, `taxjson.toml`, `ticker.map`, every
-      `inputs/<account>/manifest.json` and any `.tt` files, so the filed
+      `inputs/<account>/elections.json` and any `.tt` files, so the filed
       books can be rebuilt later.
 
 ## 2. Build and clean
@@ -82,7 +82,7 @@ detectors.
       listings of one security is joined, settled with the `.tt` or
       ticker.map line it names, or kept apart by a line of your
       ticker.map (`DISTINCT`).
-- [ ] `tjs elect --pending` — no unresolved merger or spin-off
+- [ ] `tjs elections --pending` — no unresolved merger or spin-off
       election.
 - [ ] `tjs crypto-sends` — every crypto send that did not arrive in
       another of your crypto accounts is decided: `self` (your own wallet),
@@ -218,14 +218,20 @@ Canada; a US return: [A US return](#a-us-return).
       it reported with `--filed-dispositions CSV`: the net capital loss
       carried forward is then the filed one. And it freezes the inputs: the exports
       the filed books were built from are copied into the year's own
-      `inputs/`, which the year reads from then on, and `reports/` is
+      `inputs/`, which the year reads from then on, the positions
+      snapshots it compares from the shared `holdings/` (dated from
+      January 1 of the year, or any earlier date in the oldest year
+      reading the folder, through January 15 of the next once the
+      next year's folder reads it too, and the undated ones) into
+      its own `holdings/`, and `reports/` is
       kept as `filed/<year>/reports/` (`tjs compare filed` shows
       whether a later run still reproduces them). A lock taken before
       the year ended (`--force`) is a snapshot and freezes nothing: the
-      year keeps reading the shared exports, so its later trades show
+      year keeps reading the shared exports and `holdings/`, so its later trades show
       as drift, and the close after filing freezes the whole year.
-- [ ] Commit the `filed/<year>.json` lock, the frozen `inputs/` copy and
-      `filed/<year>/reports/`; tag the data repo with the filing date.
+- [ ] Commit the `filed/<year>.json` lock, the frozen `inputs/` and
+      `holdings/` copies and `filed/<year>/reports/`; tag the data repo
+      with the filing date.
       A `.gitignore` written by an earlier `tjs init` has an
       unanchored `reports/` line that also hides `filed/<year>/reports/`
       (`close-year` says so): change it to `/reports/`.
@@ -252,7 +258,7 @@ Canada; a US return: [A US return](#a-us-return).
       against the filed books) and `tjs option-boundary` show what
       moves the year-end; a corrected sale (its proceeds, or the cost of
       a lot sold that year) shows in neither. To amend, put the corrected file in the filed
-      year's own `inputs/<account>/` (or `tjs elect` in its folder)
+      year's own `inputs/<account>/` (or `tjs elections` in its folder)
       and `tjs run` there: it names the frozen input that changed
       and warns `DRIFTED` when the filed figures moved. Then file the
       T1-ADJ and `tjs close-year --force`. When the amendment moves
@@ -267,7 +273,8 @@ Canada; a US return: [A US return](#a-us-return).
       books): `tjs unclose-year` in its folder takes the close back
       (`--dry-run` shows what would change). The lock and the reports as
       filed move into `filed/<year>.unclosed-<date>-<time>/`,
-      `taxjson.toml` reads the shared `inputs/` and `tobase.map` again,
+      `taxjson.toml` reads the shared `inputs/`, `holdings/` and
+      `tobase.map` again,
       and a frozen copy that differs from the shared file is kept in
       that backup, never deleted: the year is then computed from the
       shared inputs, and the output says when they are not what it was

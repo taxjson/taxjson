@@ -1,0 +1,66 @@
+{
+  "account": "tfsa",
+  "basis": "pre-wash",
+  "gains": {
+    "manual_rows": [],
+    "option_fees": {
+      "CAD": 7.75
+    },
+    "returns_by_asset": {
+      "Options": {
+        "CAD": {
+          "days": [
+            0
+          ],
+          "dollars": [
+            21.25
+          ],
+          "fee_shares": [
+            1.0
+          ],
+          "fees": [
+            7.75
+          ]
+        }
+      }
+    },
+    "tainted_count": 0,
+    "tainted_routed": 0,
+    "ticker_stats": {
+      "ZZQV.TO": {
+        "CAD": {
+          "cap": 0.0,
+          "cost": -21.25,
+          "div": 0.0,
+          "hold_days": [
+            0
+          ],
+          "opt": 21.25,
+          "pil": 0.0,
+          "proceeds": 0.0,
+          "trade_count": 1
+        }
+      }
+    },
+    "total_fees": {
+      "CAD": 15.75
+    },
+    "total_year": "2025",
+    "wash_solver_converged": true,
+    "wash_solver_iterations": 1
+  },
+  "generated_at": "<stamp>",
+  "income": {
+    "interest_paid_totals": {},
+    "interest_totals": {},
+    "missing_amount": [],
+    "ticker_stats": {},
+    "total_year": "2025"
+  },
+  "schema_version": 1,
+  "wash": {
+    "count": 0,
+    "total_disallowed": 0
+  },
+  "year": "2025"
+}

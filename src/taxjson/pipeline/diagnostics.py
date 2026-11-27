@@ -396,10 +396,12 @@ ATTENTION_PREFIX = "warning: ATTENTION:"
 
 def echo_attention_lines(out_path: Path, prefix: Union[str, Tuple[str, ...]] = "",
                          exclude: Optional[str] = None,
-                         once: bool = False) -> None:
+                         once: bool = False,
+                         unless: Optional[Callable[[str], bool]] = None) -> None:
     """Print the ATTENTION lines of a stage's persisted .diag (only
     those whose text starts with `prefix`, or with one of several, none
-    starting with `exclude`) on the console. `once`: an engine pass's
+    starting with `exclude`, none `unless` says to leave out) on the
+    console. `once`: an engine pass's
     line — shown once per run whichever pass says it (_echo_captured)."""
     starts = tuple(ATTENTION_PREFIX + " " + p
                    for p in ((prefix,) if isinstance(prefix, str) else prefix))
@@ -415,7 +417,8 @@ def echo_attention_lines(out_path: Path, prefix: Union[str, Tuple[str, ...]] = "
             continue
         echoing = (line.startswith(starts)
                    and not (exclude and line.startswith(
-                       ATTENTION_PREFIX + " " + exclude)))
+                       ATTENTION_PREFIX + " " + exclude))
+                   and not (unless is not None and unless(line)))
         if echoing:
             _echo_captured(line, once=once)
 
@@ -439,6 +442,16 @@ def _attention_short_lines(out_path: Path) -> List[str]:
     except OSError:
         return []
     return [ln for ln in lines if ln.startswith(ATTENTION_SHORT)]
+
+
+def _attention_unbacked_lines(out_path: Path) -> List[str]:
+    """The `ATTENTION: unbacked close:` lines of a gains stage's
+    persisted .diag (lib/unbacked_close.ATTENTION_UNBACKED): a trade the
+    broker marks CLOSE with units the account's position cannot back,
+    reported by hand (CA-ACB-11, CA-OPT-12)."""
+    from taxjson.lib.unbacked_close import ATTENTION_UNBACKED
+    return [ln for ln in _diag_lines(out_path)
+            if ln.startswith(ATTENTION_UNBACKED)]
 
 
 def unbooked_lines(out_path: Path) -> List[str]:

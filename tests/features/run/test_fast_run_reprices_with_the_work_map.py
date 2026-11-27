@@ -1,5 +1,5 @@
 """Re-audit 2 (crypto-04 list): fill-crypto's par list, `run --fast`
-and the crypto map, the de-peg ATTENTION echo, `elect --set` repeated,
+and the crypto map, the de-peg ATTENTION echo, `elections --set` repeated,
 the same exchange export in two crypto accounts and the shared price
 caches' save. Synthetic data only; no network.
 

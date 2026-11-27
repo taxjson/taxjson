@@ -29,6 +29,7 @@ from taxjson.lib.corp_actions import (ALLOCATED_BASIS_HINT, SHELTERED_DEFAULT,
 from taxjson.lib.country import (CANADA, USA, display_name, home_currency,
                                  settings_country)
 from taxjson.lib import project_layout as _PL
+from taxjson.lib.account_list import names_of
 from taxjson.model import money as M
 
 _FMV_RE = re.compile(r"FMV\s+([\d,]+(?:\.\d+)?)\s+([A-Z]{3})")
@@ -119,14 +120,14 @@ def _rows(path: Path) -> List[Dict[str, Any]]:
 
 
 def _manifest(root: Path, acct: str) -> Dict[str, Any]:
-    """The account's saved elections, read the way `tjs elect` reads
-    them (Manifest.load, canonical inputs/<acct>/manifest.json first,
-    else the legacy work/ copy). A malformed or unreadable manifest is
-    refused with elect's one-line error (A2-0968): it crashed on a
-    wrong-shape file and read an unreadable one as 'no elections'."""
+    """The account's saved elections, read the way `tjs elections` reads
+    them (Manifest.load, inputs/<acct>/elections.json — a filed year's
+    frozen manifest.json: project_layout.elections_file). A malformed or
+    unreadable file is refused with `tjs elections`' one-line error
+    (A2-0968): it crashed on a wrong-shape file and read an unreadable
+    one as 'no elections'."""
     from taxjson.lib.corp_actions import Manifest, ManifestError
-    for p in (_PL.inputs_dir(Path(root)) / acct / "manifest.json",
-              Path(root) / "work" / f"{acct}_manifest.json"):
+    for p in (_PL.elections_file(_PL.inputs_dir(Path(root)) / acct, root),):
         if not p.exists() and not p.is_symlink():
             continue
         try:
@@ -134,7 +135,7 @@ def _manifest(root: Path, acct: str) -> Dict[str, Any]:
         except ManifestError as e:
             raise ViewError(str(e)) from None
         except OSError as e:
-            raise ViewError(f"cannot read the elections manifest {p} "
+            raise ViewError(f"cannot read the elections file {p} "
                             f"({e.strerror or e})") from None
         return {eid: {"election": r.election, "hints": dict(r.hints or {}),
                       "summary": r.summary}
@@ -257,7 +258,7 @@ def _current_events(root: Path, acct: str,
     return out
 
 
-def spinoffs(root: Path, cfg: Dict[str, Any], account: Optional[str] = None, *,
+def spinoffs(root: Path, cfg: Dict[str, Any], account: Any = None, *,
              extractor_for: Callable[[str], Any]) -> Dict[str, Any]:
     root = Path(root)
     cache = root / "work"
@@ -274,7 +275,7 @@ def spinoffs(root: Path, cfg: Dict[str, Any], account: Optional[str] = None, *,
     out: List[Dict[str, Any]] = []
     stale: List[Dict[str, Any]] = []
     for acct, acfg in sorted(accounts_of(cfg).items()):
-        if account and acct != account:
+        if (only := names_of(account)) is not None and acct not in only:
             continue
         if acfg.crypto:
             continue
@@ -365,7 +366,7 @@ def spinoffs(root: Path, cfg: Dict[str, Any], account: Optional[str] = None, *,
             if election == SHELTERED_DEFAULT:
                 why.append("booked without asking: the new shares at $0 "
                            "cost, the parent keeps its cost (the holdings "
-                           "view only). Set a value with `tjs elect "
+                           "view only). Set a value with `tjs elections "
                            f"{acct} --set {eid}=<"
                            f"{'|'.join(spin_options)}>`.")
             elif election != "(none)" and election not in own_keys:
@@ -376,7 +377,7 @@ def spinoffs(root: Path, cfg: Dict[str, Any], account: Optional[str] = None, *,
                 flags.append("WRONG-COUNTRY")
                 why.append(f"{election} is not an election of a "
                            f"{display_name(country)} project — `tjs "
-                           f"run` refuses it. Choose one: `tjs elect "
+                           f"run` refuses it. Choose one: `tjs elections "
                            f"{acct} --set {eid}="
                            f"<{'|'.join(spin_options)}>`.")
             elif election in _FMV_ELECTIONS:
@@ -388,7 +389,7 @@ def spinoffs(root: Path, cfg: Dict[str, Any], account: Optional[str] = None, *,
                     # user enters when they do not know the value, so
                     # this is the intended booking, not a flag; the
                     # line says why the 0 is not the value used (audit
-                    # 2026-10-24 B16). `elect --set` takes no
+                    # 2026-10-24 B16). `elections --set` takes no
                     # fmv_per_share for such an event, so no command is
                     # offered.
                     why.append("the saved fmv_per_share=0 is not used: "
@@ -402,7 +403,7 @@ def spinoffs(root: Path, cfg: Dict[str, Any], account: Optional[str] = None, *,
                     why.append("booked at the $0 value you declared "
                                "(fmv_per_share=0): no dividend income and "
                                "a $0 cost for the new shares. To change "
-                               f"it: `tjs elect {acct} --redo --event "
+                               f"it: `tjs elections {acct} --redo --event "
                                f"{eid}`.")
                 elif not fmv_ps and not sheltered:
                     flags.append("ZERO-VALUE")
@@ -412,7 +413,7 @@ def spinoffs(root: Path, cfg: Dict[str, Any], account: Optional[str] = None, *,
                     if broker_fmv:
                         msg += (f"; the broker reported {M.shown(broker_fmv, 2):,.2f} "
                                 f"{broker_cur}")
-                    why.append(msg + ". Set it with `tjs elect "
+                    why.append(msg + ". Set it with `tjs elections "
                                f"{acct} --set {eid}={election} "
                                "--hint fmv_per_share=<value>`.")
                 elif not fmv_ps:
@@ -431,7 +432,7 @@ def spinoffs(root: Path, cfg: Dict[str, Any], account: Optional[str] = None, *,
                     why.append("no cost allocated to the new shares "
                                f"({hint}): the parent keeps its whole "
                                "cost and the spin-off's sale books the "
-                               "gain. Set it with `tjs elect "
+                               "gain. Set it with `tjs elections "
                                f"{acct} --set {eid}={election} --hint "
                                f"{hint}=<amount>`.")
             elif election == "ignore":
@@ -440,7 +441,7 @@ def spinoffs(root: Path, cfg: Dict[str, Any], account: Optional[str] = None, *,
                            "broker noise")
             elif election == "(none)":
                 flags.append("PENDING")
-                why.append("no election yet: `tjs elect --pending`")
+                why.append("no election yet: `tjs elections --pending`")
             out.append({
                 "account": acct, "sheltered": sheltered, "event_id": eid,
                 "date": date, "parent": parent, "child": child,
@@ -464,7 +465,7 @@ def wrong_country_elections(root: Path, cfg: Dict[str, Any]
                             ) -> List[Dict[str, str]]:
     """Saved elections (any corporate action) the project's country does
     not know — e.g. a Canadian rollover_s_86_1 left in a project switched
-    to usa. `tjs run` stops on each; `tjs elect --pending` lists
+    to usa. `tjs run` stops on each; `tjs elections --pending` lists
     them so 'No pending elections' never hides one (re-audit A2-0725)."""
     from taxjson.lib.corp_actions import election_keys
     country = settings_country(settings_of(cfg))
@@ -515,13 +516,14 @@ def _cil_booked(rows: List[Dict[str, Any]], symbols: Iterable[str],
 
 
 def splits(root: Path, cfg: Dict[str, Any],
-           account: Optional[str] = None,
+           account: Any = None,
            window_days: int = 10) -> List[Dict[str, Any]]:
     root = Path(root)
     cache = root / "work"
     out = []
+    only = names_of(account)            # None: every account
     for acct, acfg in sorted(accounts_of(cfg).items()):
-        if account and acct != account:
+        if only is not None and acct not in only:
             continue
         rows = _rows(cache / f"{acct}_base.json")
         sp = [r for r in rows if r.get("action") == "SPLIT"]
@@ -675,7 +677,7 @@ def render_spinoffs(doc: Dict[str, Any],
         for st in stale:
             d.item(f"{st['account']}: {st['event_id']}  "
                    f"({st['summary']})", "  ")
-            d.kv([("remove", Verbatim(f"tjs elect {st['account']} "
+            d.kv([("remove", Verbatim(f"tjs elections {st['account']} "
                                       f"--reset --event "
                                       f"{st['event_id']}"))], "    ")
     d.blank()

@@ -53,7 +53,7 @@ def _run_355(files, alloc=40):
         ids = sorted(set(re.findall(r'\b(\d{8}-zzp-zzs-[0-9a-f]{4})\b',
                                     first.stdout + first.stderr)))
         for i in ids:
-            tj(root, 'elect', 'margin', '--set', f'{i}=tax_free_355', '--hint',
+            tj(root, 'elections', 'margin', '--set', f'{i}=tax_free_355', '--hint',
                f'allocated_acb={alloc}')
         again = tj(root, 'run', '--no-input', '--details', check=False)
         doc = json.loads((root / 'work/margin_gains.json').read_text())

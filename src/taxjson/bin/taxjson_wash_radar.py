@@ -506,8 +506,11 @@ def _parser() -> argparse.ArgumentParser:
                              ".rpt text is unchanged; readers such as "
                              "harvest --radar compute countdowns at their "
                              "own time from the absolute clears_at dates)")
-    parser.add_argument("--account", default="",
-                        help="Account label stamped into --json-out")
+    parser.add_argument("--account", action="append", default=None,
+                        metavar="NAME",
+                        help="Account label stamped into --json-out "
+                             "(repeatable: the accounts of --show, `tjs "
+                             "wash-radar margin,ib`)")
     parser.add_argument("--show", nargs='+', action='extend', default=[],
                         metavar="FILE",
                         help="Show only the rows of these taxable books "
@@ -933,6 +936,10 @@ def _payload(args: argparse.Namespace, report: RadarReport, today_dt: datetime,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "as_of_date": today_dt.strftime("%Y-%m-%d"),
         "account": args.account,
+        # The accounts whose rows are shown (--show), in the order
+        # given; null when the rows are every account's.
+        "account_names": (_shown_names(args) or None) if _show_paths
+        else None,
         "include_all": bool(args.all),
         # True when the rows are one account's listings (--show);
         # the statuses still pool every book.
@@ -3312,16 +3319,22 @@ def _radar_rows(radar: _Radar, args: argparse.Namespace, us_mode: bool,
     return rows
 
 
+def _shown_names(args: argparse.Namespace) -> list[str]:
+    """The accounts of the rows --show scopes: the --account names given
+    (in order), else each --show book's name (sorted)."""
+    return list(getattr(args, "account_names", None) or []) or sorted(
+        Path(f).name[:-len("_base.json")]
+        if Path(f).name.endswith("_base.json") else Path(f).stem
+        for f in args.show)
+
+
 def _output(args: argparse.Namespace, radar: _Radar, rows: list[_RadarRow],
             today_dt: datetime, _show_paths: set[Any], orig_stdout: Any) -> None:
     """The report: the text (or the brief table) printed, the --json-out
     document written, and with --json only the document printed."""
     _shown_for = ""
     if _show_paths:
-        _shown_for = args.account or ", ".join(sorted(
-            Path(f).name[:-len("_base.json")]
-            if Path(f).name.endswith("_base.json") else Path(f).stem
-            for f in args.show))
+        _shown_for = ", ".join(_shown_names(args))
     radar_report = RadarReport(
         args.country, radar._today_iso, bool(args.all), _shown_for, rows,
         [[s.strip().upper() for s in g.split()] for g in args.similar if g.strip()])
@@ -3367,6 +3380,10 @@ def main():
     parser = _parser()
 
     args = parser.parse_args()
+    # --account NAME, repeatable: the label is the names joined by
+    # commas ("" when none), as one --account always stamped it.
+    args.account_names = list(args.account or [])
+    args.account = ",".join(args.account_names)
     us_mode = args.country == "usa"
 
     radar = _Radar(us_mode)

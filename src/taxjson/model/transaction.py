@@ -135,6 +135,14 @@ class TaxTransaction:
     # known (IB, Questrade, a .tt line, the generic importer). NOT part of compute_id,
     # omitted from to_dict() when empty.
     short_marks: str = ''
+    # The row's source prints no time of day, so its place in its day is
+    # the file's and not a clock's: "file", stamped by taxjson-brokerage
+    # from the parser (BaseBrokerage.NO_CLOCK: RBC) on a trade row that
+    # carries the broker's open/close words. A reader of those words then
+    # knows the day's order rests on them (lib/unbacked_close; backlog
+    # TJ-5349). Empty: the row's time is the broker's. NOT part of
+    # compute_id, omitted from to_dict() when empty.
+    no_clock: str = ''
     # The lots that closing trade closed, when the export lists them
     # (IB ClosedLot rows): "<open date> <qty> <cost>" per lot, joined by
     # ";", in broker_basis's currency ("invalid" when a lot row did not
@@ -384,7 +392,7 @@ INCOME_FACT_FIELDS = ('record_date', 'ex_date', 'income_label',
 EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
                    'broker_basis', 'broker_lots', 'multiplier',
                    'commission_refunds', 'contract_size_basis',
-                   'source', 'source_key', 'short_marks',
+                   'source', 'source_key', 'short_marks', 'no_clock',
                    'source_account', 'exercise_of', 'corp_cash', 'no_cash',
                    'cash_leg',
                    'no_share_count', 'corp_parent_qty', 'lot_date', 'opening_cut_legs',

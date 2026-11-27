@@ -6,8 +6,8 @@
   "ledger": "v1",
   "open_pools": {
     "USD": {
-      "acb": 72650.4,
-      "units": 53815.11
+      "acb": 72245.4,
+      "units": 53515.11
     }
   },
   "overdrafts": {
@@ -21,15 +21,15 @@
   },
   "per_currency": {
     "USD": {
-      "acquired": 66474.84,
+      "acquired": 66174.84,
       "disposed": 78931.56,
       "gain": 0.0
     }
   },
   "pools_year_end": {
     "USD": {
-      "acb": 72650.4,
-      "units": 53815.11
+      "acb": 72245.4,
+      "units": 53515.11
     }
   },
   "reasons": [

@@ -87,7 +87,7 @@
       "currency": "USD",
       "fees": 1.0,
       "sells": 1,
-      "sold": 999.0,
+      "sold": 699.0,
       "symbol": "OLDCO.US"
     },
     {
@@ -180,7 +180,7 @@
   ],
   "sold_taxable": {
     "CAD": 4417.6,
-    "USD": 66341.84
+    "USD": 66041.84
   },
   "totals": {
     "CAD": {
@@ -191,7 +191,7 @@
     "USD": {
       "bought": 108961.45,
       "fees": 164.61,
-      "sold": 81601.89
+      "sold": 81301.89
     }
   }
 }

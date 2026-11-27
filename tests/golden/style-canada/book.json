@@ -1,6 +1,6 @@
 {
  "kind": "project",
- "source": "tests/fixtures/style/canada with its elections saved, frozen at v0.41.0; an NVDA and a QZQ sale price changed from the fixture's, and prices lowered so no amount in a trace's # lines reaches 1,000 (the push gate reads them as comments); for its views (tests/_golden.py), an [estimate] other_income and an [instalments] table (the second prior year's tax above the prior year's, so the prior-year schedule is the one whose interest is charged), province BC (the --json estimate and amt views read it; the text ones pass --province ON) and a slips.toml added; and the qt AAPL sale of 2024-11-05 raised 0.10, its views' totals having met a figure the PII gate holds; and (PLAN step 15) its holdings.toml lists the margin account's positions as the books hold them but for SAMPA.TO's quantity and SPNC.US's cost, for the sanity views, and the views end with the reports step 15 renders, at width 0 and 120 (buy-check and sell-check left out: they answer for today, with no --date); and (TJ-4920, the --json contract) more --json views, last (two of them taxjson-sum-gains' and taxjson-sum-income's own documents), with a made-up T5008 slip CSV in slips/ (not inputs/: no figure of the run moves) for reconcile-slips",
+ "source": "tests/fixtures/style/canada with its elections saved, frozen at v0.41.0; an NVDA and a QZQ sale price changed from the fixture's, and prices lowered so no amount in a trace's # lines reaches 1,000 (the push gate reads them as comments; OLDCO's sale, 14.00 a share, since the run reports it by hand and its trace names the proceeds: TJ-5349, when the positions report's OLDCO.US short of 50 went too, a short the books no longer open); for its views (tests/_golden.py), an [estimate] other_income and an [instalments] table (the second prior year's tax above the prior year's, so the prior-year schedule is the one whose interest is charged), province BC (the --json estimate and amt views read it; the text ones pass --province ON) and a slips.toml added; and the qt AAPL sale of 2024-11-05 raised 0.10, its views' totals having met a figure the PII gate holds; and (PLAN step 15) its holdings.toml lists the margin account's positions as the books hold them but for SAMPA.TO's quantity and SPNC.US's cost, for the sanity views, and the views end with the reports step 15 renders, at width 0 and 120 (buy-check and sell-check left out: they answer for today, with no --date); and (TJ-4920, the --json contract) more --json views, last (two of them taxjson-sum-gains' and taxjson-sum-income's own documents), with a made-up T5008 slip CSV in slips/ (not inputs/: no figure of the run moves) for reconcile-slips",
  "views": [
   "sum",
   "sum --json",
@@ -207,8 +207,8 @@
   "checklist --reset --json",
   "update-tobase-map --json",
   "ticker-map --suggest --json",
-  "elect --json",
-  "elect --pending --json",
+  "elections --json",
+  "elections --pending --json",
   "compare --save base --json",
   "compare base --json",
   "compare --list --json",

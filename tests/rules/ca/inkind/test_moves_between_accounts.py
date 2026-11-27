@@ -275,7 +275,7 @@ class TestS861ReminderForeignParentOnly(unittest.TestCase):
         from _support.qt_margin_run import _project, _run_cli
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp)
-            (root / "inputs" / "margin" / "manifest.json").write_text(
+            (root / "inputs" / "margin" / "elections.json").write_text(
                 json.dumps({"elections": {"ev1": {
                     "summary": "2025-03-01 spin-off XEI.TO",
                     "election": "rollover_s_86_1",

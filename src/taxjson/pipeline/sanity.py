@@ -2,13 +2,17 @@
 import argparse
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 from taxjson.project.accounts import account_of, accounts_of, typed_account, typed_accounts
 from taxjson.project.toml_io import read_toml
 from taxjson.project.settings import settings_of
 from taxjson.lib import out as _out
 from taxjson.lib import project_layout as _PL
+from taxjson.lib.account_list import (
+    ACCOUNT_NAME_RE, AccountListError, is_account_list, parse_accounts,
+    refusal as account_list_refusal,
+)
 from taxjson.lib.futures_prefixes import FUTURES_PREFIX_GROUP, canonical_futures_symbol
 from taxjson.lib.json_contract import versioned
 from taxjson.lib.report_model import format_report_table
@@ -73,7 +77,9 @@ def _sanity_items_from_config(accounts_cfg: Dict[str, Any],
     names its files; backlog TJ-0020), also in notes; "snapshots" — the
     holdings/ snapshots no account (or two) claims (TJ-0256); "unread" —
     what holdings/ holds that is not read, a file that is no positions
-    file or a sub-folder (TJ-0424)."""
+    file or a sub-folder (TJ-0424); "other_years" — the one note on the
+    snapshots of other years a folder every year shares holds, not
+    compared (lib/holdings_dir `year_files`; in "info" too: TJ-5367)."""
     notes: List[str] = []
     _unchecked: List[str] = []
     files_of: Dict[str, List[str]] = {}
@@ -105,17 +111,18 @@ def _sanity_items_from_config(accounts_cfg: Dict[str, Any],
         if paths:
             files_of[name] = paths
     from taxjson.lib import holdings_dir as _HD
-    _hfolder, _hnote = _HD.folder_for(root, year)
-    if _hnote:
-        notes.append(_hnote)
-    _info: List[str] = []
+    # (a folder every year shares: the year's own snapshots, the others
+    # counted in one note that leaves nothing of this year unchecked)
+    _hfiles, _hnote = _HD.year_files(root, year)
+    _info: List[str] = [_hnote] if _hnote else []
     _hnotes: List[str] = []
-    if _hfolder is not None:
-        _found, _hnotes = _HD.discover(_hfolder, accounts_cfg, root,
-                                       info=_info)
-        notes += _hnotes + _info
+    if _hfiles:
+        _found, _hnotes = _HD.discover(_PL.holdings_folder(root),
+                                       accounts_cfg, root, info=_info,
+                                       files=_hfiles)
         for name, paths in _found.items():
             files_of.setdefault(name, []).extend(paths)
+    notes += _hnotes + _info
     # A file in holdings/ that is not read is named, never skipped with
     # "no holdings file" said beside it (backlog TJ-0424).
     _unread = _HD.unread_notes(_PL.holdings_folder(root), accounts_cfg,
@@ -153,6 +160,7 @@ def _sanity_items_from_config(accounts_cfg: Dict[str, Any],
         kinds["info"] = _info
         kinds["snapshots"] = list(_hnotes)
         kinds["unread"] = list(_unread)
+        kinds["other_years"] = [_hnote] if _hnote else []
     return items, notes
 
 
@@ -877,6 +885,12 @@ def _config_groups(root: Path, resolved: Dict[str, Path], unreadable: Dict[str, 
     config_groups, config_notes = _sanity_items_from_config(
         _accts_cfg, root, settings_of(_scfg).year,
         kinds=config_kinds)
+    from taxjson.lib.holdings_dir import stray_snapshots
+    _stray = stray_snapshots(root)
+    if _stray:
+        # (snapshots left in the year's own holdings/ beside the shared
+        # folder are read by nothing: backlog TJ-5406)
+        _out.warn(_stray, prog="tjs sanity")
     return config_groups, config_notes, _accts_cfg
 
 
@@ -892,7 +906,10 @@ def _no_groups_refusal(pl: "_Placement", root: Path, config_notes: List[str],
     _unread = list(config_kinds.get("unread") or ())
     for n in config_notes:
         _sanity_note(n)
-    if [n for n in config_notes if n not in _unread]:
+    # (the snapshots of other years in a folder every year shares: a
+    # note that leaves nothing of this year unchecked, no refusal)
+    _other = list(config_kinds.get("other_years") or ())
+    if [n for n in config_notes if n not in _unread and n not in _other]:
         # What the notes are about: an account's `holdings` paths
         # (fix the paths), or holdings/ snapshots no account
         # claims (claim them: no path is wrong; backlog TJ-0256).
@@ -921,6 +938,32 @@ def _no_groups_refusal(pl: "_Placement", root: Path, config_notes: List[str],
                       "paths, and claim each snapshot for its "
                       "account."))
     return _unread
+
+
+def _bare_list_names(item: str, resolved: Callable[[str], Optional[Path]]
+                     ) -> Optional[Tuple[str, ...]]:
+    """The account names of a bare `tjs sanity` item that is a comma
+    list (`margin,beta`: lib/account_list), in the order given; None
+    when it is none, the item then refused as a FILE that is not there,
+    in the words of before lists (a file name may hold a comma): no
+    comma, a part that is no account name (a path), a part ending in
+    .toml or naming an existing file (`resolved`: _Placement._resolved;
+    `margin,h.toml` is an account and a file run together). An empty,
+    repeated or artifact name is refused in parse_accounts' words with
+    exit 2, the code sanity gave such an item before lists (1 is its
+    verdict; `_accounts(text=)` would exit 1)."""
+    parts = [n for n in item.split(",") if n]
+    if (not is_account_list(item)
+            or not all(ACCOUNT_NAME_RE.fullmatch(n) for n in parts)
+            or any(n.lower().endswith(".toml") or resolved(n) is not None
+                   for n in parts)):
+        return None
+    try:
+        return parse_accounts(item)
+    except AccountListError as e:
+        head, details, _code = account_list_refusal(e, "sanity")
+        _die_input(head, *details)
+    return None                                         # (not reached)
 
 
 def _group_items(pl: "_Placement", config_groups: List[Tuple[List[str], List[str]]],
@@ -965,6 +1008,14 @@ def _group_items(pl: "_Placement", config_groups: List[Tuple[List[str], List[str
         p2 = pl._resolved(a)
         if p2 is not None:
             pl._place(bare, "the aggregate group", None, p2)
+            continue
+        listed = _bare_list_names(a, pl._resolved)
+        if listed:
+            # A comma list of accounts that is no file: each name a
+            # bare ACCOUNT item, checked as one (_account names it).
+            for n in listed:
+                pl._place(bare, "the aggregate group", pl._account(n, a),
+                          None)
             continue
         _die_input(f"{_mask_ids_in_path(a)!r} is neither "
                    f"an account "
@@ -1384,13 +1435,27 @@ def _cost_notes(fl: "_Files", cost_skipped: List[str]) -> None:
                      f"are).")
 
 
+def loss_check_kinds(root: Path) -> Dict[str, Dict[str, Any]]:
+    """The accounts configured now, as the record of what checked each
+    account's gains reads them (lib/report_model `account_kinds`,
+    `loss_checks`): taxjson.toml's accounts and country (one it cannot
+    resolve: "", which no run recorded)."""
+    from taxjson.lib.country import CountryError, settings_country
+    from taxjson.lib.report_model import account_kinds
+    cfg = load_config(root, missing_ok=True)
+    try:
+        country = settings_country(settings_of(cfg))
+    except CountryError:
+        country = ""
+    return account_kinds(accounts_of(cfg), country)
+
+
 def _sanity_books(args: argparse.Namespace) -> Tuple[Path, Path, float, float, Dict[str, Path],
                                                      str, Dict[str, Dict[str, float]],
                                                      Dict[str, str]]:
     """`tjs sanity`'s project, its tolerances and the books' positions
     (cmd_sanity): exit 2 with no gains files."""
-    from taxjson.lib.report_model import (gains_basis_label,
-                                          resolve_gains_files)
+    from taxjson.lib.report_model import gains_basis_label, loss_checks, resolve_gains_files
     root = Path(args.dir).resolve()
     cache = root / "work"
     tol = float(1e-4 if getattr(args, "tolerance", None) is None
@@ -1407,7 +1472,7 @@ def _sanity_books(args: argparse.Namespace) -> Tuple[Path, Path, float, float, D
         # TJ-0353).
         # Named from the project (docs/output-style.md; TJ-0631).
         _die_input("no gains files in work/ — run `tjs run` first.")
-    basis = gains_basis_label(resolved)
+    basis = gains_basis_label(resolved, checks=loss_checks(root, loss_check_kinds(root)))
     tax, unreadable = _read_books(resolved)
     return root, cache, tol, cost_tol, resolved, basis, tax, unreadable
 

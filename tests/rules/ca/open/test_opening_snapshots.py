@@ -369,8 +369,11 @@ class TestViewsAgreeWithTheWalkOfTheOpenings(unittest.TestCase):
         self.assertTrue(affects, out)
         self.assertFalse(covered, out)
         self.assertIn("[!]", self._step10(root))
-        self.assertIn("affect 2025: SYNQ.TO (margin)",
-                      tj(root, "checklist", "--run", check=False).stdout)
+        # The broker codes the 2025 sale closing: the run reports it by
+        # hand (TJ-5349), and the step names it, once (TJ-5374).
+        ck = " ".join(tj(root, "checklist", "--run", check=False).stdout.split())
+        self.assertIn("(margin): 1 sale at an unknown cost, out of 2025's totals", ck)
+        self.assertNotIn("with missing basis affect 2025", ck)
 
     def test_used_up_opening_in_a_us_project(self):
         csv = (ib_fill("2024-06-03", -5, 10, "C")

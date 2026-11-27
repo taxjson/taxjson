@@ -3,7 +3,7 @@ for (CHANGELOG "Fixed"): interest paid shown apart, a negative futures
 price in a generic CSV, the audit over a pending election, the
 checklist's hints, init's timezone, the single-folder year hints,
 sanity with no holdings file, the headless election message, no empty
-manifest.json, compare's exit codes (tests/test_compare.py).
+elections.json, compare's exit codes (tests/test_compare.py).
 
 Formerly: test_workflow_audit_fixes"""
 import os

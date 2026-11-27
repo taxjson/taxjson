@@ -67,15 +67,24 @@ class TestWindowEdgesMarkedShort(unittest.TestCase):
         self.assertIn("after day 30", it["why"])
 
     def test_tj1207_marked_short_after_day_30_is_a_short_sale(self):
-        for code in ("O", "C;O"):
-            with self.subTest(code=code):
-                _doc, edge, _text = _edge(
-                    {"qt": self._qt(),
-                     "ibk": [self._marked("2025-07-03", code=code)]})
-                (it,) = _edges_of(edge["window_edges"], "2025-07-03")
-                self.assertEqual(it["kind"], "short sale", it)
-                self.assertEqual(it["qty"], -10.0)
-                self.assertNotIn("still held", it["why"])
+        _doc, edge, _text = _edge(
+            {"qt": self._qt(),
+             "ibk": [self._marked("2025-07-03", code="O")]})
+        (it,) = _edges_of(edge["window_edges"], "2025-07-03")
+        self.assertEqual(it["kind"], "short sale", it)
+        self.assertEqual(it["qty"], -10.0)
+        self.assertNotIn("still held", it["why"])
+
+    def test_a_close_and_open_order_begun_with_nothing_is_no_short_sale(self):
+        # C;O with no long of the account's own when the order began:
+        # the sale of shares bought before the files (reported by hand),
+        # never a short opened (lib/unbacked_close, backlog TJ-5349).
+        _doc, edge, _text = _edge(
+            {"qt": self._qt(),
+             "ibk": [self._marked("2025-07-03", code="C;O")]})
+        (it,) = _edges_of(edge["window_edges"], "2025-07-03")
+        self.assertEqual(it["kind"], "sale", it)
+        self.assertEqual(it["qty"], -10.0)
 
     def test_tj1207_rbc_marked_short_is_a_short_sale(self):
         rbc = _t("ibk", "BUYSELL", "2025-07-03", self.S, -10, 250.0,

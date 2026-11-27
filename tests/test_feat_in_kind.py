@@ -5,7 +5,9 @@ A taxable account's transfer-out paired with a registered account's
 transfer-in of the same security and quantity (or the reverse) is an
 in-kind contribution (withdrawal): Canada books it in the taxable account
 as a sale (purchase) at fair market value — a contribution's loss is
-denied for good (s.40(2)(g)(iv)) and the plan's purchase counts for
+denied for good (s.40(2)(g)(iv); to an RESP an ordinary loss, which the
+plan's acquisition makes superficial: tests/rules/ca/inkind/
+test_resp_contribution_at_a_loss.py) and the plan's purchase counts for
 s.54; the US warns about a contribution (cash only) and books a
 distribution at fair market value.
 
@@ -87,6 +89,14 @@ class TestCanadaContribution(unittest.TestCase):
                           "on margin's transfer row): loss 400.00 CAD "
                           "DENIED for good (s.40(2)(g)(iv)) — no ACB "
                           "addition", flat)
+            # The closing paragraph names s.40(2)(g)(iv)'s plans, and
+            # says nothing of an RESP when no move to one is booked
+            # (backlog TJ-5452).
+            self.assertIn("a gain is taxed; to an RRSP, RRIF, TFSA, FHSA "
+                          "or RDSP a loss is nil for good (s.40(2)(g)(iv); "
+                          "not a superficial loss, never added to an ACB)",
+                          flat)
+            self.assertNotIn("to an RESP", flat)
             t = _filing(root)
             self.assertEqual(t["gain"], 200.0)
             self.assertEqual(t["denied"], 0.0)          # not superficial

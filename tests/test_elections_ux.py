@@ -48,14 +48,14 @@ class TestElectSetHints(unittest.TestCase):
 
     def test_missing_required_hint_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
-            r = _run(_proj(tmp), "elect", "margin", "--set",
+            r = _run(_proj(tmp), "elections", "margin", "--set",
                      f"{self.EV}=rollover_s_85_1_5")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("needs fmv_per_share", r.stderr)
 
     def test_unknown_hint_key_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
-            r = _run(_proj(tmp), "elect", "margin", "--set",
+            r = _run(_proj(tmp), "elections", "margin", "--set",
                      f"{self.EV}=taxable_disposition",
                      "--hint", "fmv_pershare=12.5")
         self.assertNotEqual(r.returncode, 0)
@@ -64,17 +64,17 @@ class TestElectSetHints(unittest.TestCase):
     def test_valid_set_uses_pending_summary_no_warning(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _proj(tmp)
-            r = _run(root, "elect", "margin", "--set",
+            r = _run(root, "elections", "margin", "--set",
                      f"{self.EV}=taxable_disposition")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertNotIn("not in the manifest", r.stderr)
             self.assertNotIn("matches no pending", r.stderr)
             rec = json.loads((root / "inputs" / "margin" /
-                              "manifest.json").read_text())
+                              "elections.json").read_text())
             self.assertIn("merger: ABG.TO",
                           rec["elections"][self.EV]["summary"])
             # --pending now marks it as already elected.
-            r2 = _run(root, "elect", "--pending")
+            r2 = _run(root, "elections", "--pending")
             self.assertIn("already elected: taxable_disposition",
                           r2.stdout)
 
@@ -83,14 +83,14 @@ class TestElectSetHints(unittest.TestCase):
         # (2026-09 CLI audit).
         with tempfile.TemporaryDirectory() as tmp:
             root = _proj(tmp)
-            r = _run(root, "elect", "margin", "--set",
+            r = _run(root, "elections", "margin", "--set",
                      "deadbeef=taxable_disposition")
             # A usage error: exit 2 (backlog TJ-0539).
             self.assertEqual(r.returncode, 2)
             self.assertIn("matches no pending event", r.stderr)
             self.assertIn("nothing was saved", r.stderr)
             self.assertFalse(
-                (root / "inputs" / "margin" / "manifest.json").exists())
+                (root / "inputs" / "margin" / "elections.json").exists())
 
 
 class TestFilingReminder(unittest.TestCase):
@@ -114,7 +114,7 @@ class TestFilingReminder(unittest.TestCase):
                                  if o["election"] == choice), [])
                 hint = [x for h in declared
                         for x in ("--hint", f"{h['key']}=16.15")]
-                r = _run(root, "elect", "margin", "--set",
+                r = _run(root, "elections", "margin", "--set",
                          f"{ev['event_id']}={choice}", *hint)
                 self.assertEqual(r.returncode, 0, r.stderr)
             r = _run(root, "run", "--no-input")
@@ -154,7 +154,7 @@ class TestFilingReminder(unittest.TestCase):
                                  if o["election"] == choice), [])
                 hint = [x for h in declared
                         for x in ("--hint", f"{h['key']}=16.15")]
-                r = _run(root, "elect", "margin", "--set",
+                r = _run(root, "elections", "margin", "--set",
                          f"{ev['event_id']}={choice}", *hint)
                 self.assertEqual(r.returncode, 0, r.stderr)
             r = _run(root, "run", "--no-input")

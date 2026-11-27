@@ -15,13 +15,20 @@ lower it): `tjs init` (the layout it makes), `new-year` (the copy
 keeps the key, raised for its own layout), `migrate` (the layout it
 migrated to), `update-tobase-map --write`, `find-missing-history
 --write-missing-history` and `align --write`.
+
+A feature added between releases names the release that will first read
+it, and scripts/release.sh --prepare refuses a release whose new features
+name another. Until then the development tree's install still reports
+the last release (the version commit is made at the release): this code
+reads every feature FEATURES names, so it runs a project asking for the
+newest of them (problem), while the last release refuses it.
 """
 from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import (Any, Iterable, Mapping, NamedTuple, Optional, Set,
-                    Tuple)
+from typing import (Any, Iterable, List, Mapping, NamedTuple, Optional,
+                    Set, Tuple)
 
 from taxjson.project.toml_io import decode_toml_bytes, parse_toml
 
@@ -47,12 +54,16 @@ FEATURES: Tuple[Feature, ...] = (
             "tobase.map beside ticker.map: the interlisted pairs (Canada)"),
     Feature("shared_tobase_map", "0.27.1",
             "one tobase.map every year reads ([settings] tobase_map)"),
+    Feature("elections_json", "3.0.0",
+            "each account's elections in inputs/<account>/elections.json "
+            "(manifest.json, the name before, is refused)"),
 )
 _BY_NAME = {f.name: f for f in FEATURES}
 
 # What `tjs init` writes into every new project: the form its
-# missing history takes (find-missing-history writes .tt lines).
-INIT_FEATURES: Tuple[str, ...] = ("missing_history_tt",)
+# missing history takes (find-missing-history writes .tt lines) and
+# the name of its elections file.
+INIT_FEATURES: Tuple[str, ...] = ("missing_history_tt", "elections_json")
 
 _SPEC_RE = re.compile(r"\s*>=\s*(\d+)\.(\d+)\.(\d+)\s*")
 _EXAMPLE = '">=0.27.1"'
@@ -100,11 +111,19 @@ def running_version() -> Optional[str]:
         return None
 
 
+def newest_read() -> Version:
+    """The newest release FEATURES names: this code reads every feature
+    up to it, whatever version its install reports."""
+    return max(version_tuple(f.version) or (0, 0, 0) for f in FEATURES)
+
+
 def problem(table: Any, where: str = "this project") -> Optional[str]:
     """Why this taxjson cannot run a project whose [settings] are
-    `table`: a requires_taxjson newer than the installed version, or
-    one that is not `">=X.Y.Z"`. None when it may run (no key, or the
-    installed version is unknown)."""
+    `table`: a requires_taxjson newer than both the installed version
+    and every feature this code reads (newest_read: a development tree
+    between releases reports the last one), or one that is not
+    `">=X.Y.Z"`. None when it may run (no key, or the installed version
+    is unknown)."""
     v = table.get(KEY) if isinstance(table, Mapping) else getattr(table, KEY, None)
     if v is None:
         return None
@@ -114,7 +133,7 @@ def problem(table: Any, where: str = "this project") -> Optional[str]:
         return str(e)
     have_text = running_version()
     have = version_tuple(have_text) if have_text else None
-    if have is None or have >= need:
+    if have is None or max(have, newest_read()) >= need:
         return None
     return (f"{where} needs taxjson {shown(need)} or newer (installed: "
             f"{have_text}) — {UPGRADE}")
@@ -185,11 +204,14 @@ def raised_text(text: str, features: Iterable[str] = (),
     return PL.set_key_after(text, f"settings.{KEY}", new, "country")
 
 
-def raise_requirement(root: Any, features: Iterable[str] = ()
-                      ) -> Optional[str]:
+def raise_requirement(root: Any, features: Iterable[str] = (),
+                      keep_layout: bool = False) -> Optional[str]:
     """Raise project `root`'s requires_taxjson for its layout and
     `features` (taxjson.toml rewritten in place, through safe_write;
-    never lowered). The value written, or None when unchanged."""
+    never lowered) — with `keep_layout`, a file in the template layout
+    stays in it (_laid_out: a raise no command asked for leaves `tjs
+    format` and the checklist nothing to say). The value written, or
+    None when unchanged."""
     from taxjson.lib import project_layout as PL
     from taxjson.lib.safe_write import write_user_file
     root = Path(root)
@@ -199,8 +221,83 @@ def raise_requirement(root: Any, features: Iterable[str] = ()
                       own_tobase=(root / PL.TOBASE_MAP).is_file())
     if new == text:
         return None
+    if keep_layout:
+        new = _laid_out(text, new)
     write_user_file(path, new, root, backup=False)
     return parse_toml(new)["settings"][KEY]
+
+
+def _laid_out(before: str, after: str) -> str:
+    """`after` (`before` with a key set) in the template layout when
+    `before` was in it and `after` can be laid out losslessly; else
+    `after` as it is (lib/config_template.format_config)."""
+    from taxjson.lib.config_template import FormatError, format_config
+    try:
+        if format_config(before).changed:
+            return after
+        res = format_config(after)
+    except FormatError:
+        return after
+    return res.text if res.changed else after
+
+
+def raise_for_elections(path: Any) -> List[Tuple[Path, str]]:
+    """Raise requires_taxjson to the release that reads elections.json
+    (`elections_json`) in each project that reads the elections file
+    `path`: the project holding its inputs folder, or each year folder
+    beside it that reads it as the shared inputs folder (an older
+    taxjson there would see no elections: it asks them again, or books
+    a sheltered account's event by the zero default). Called by the one
+    writer of the file, lib/elections_save `update`, before it saves: `tjs elections --set` / `--redo` / `--reset`, the run's
+    prompt and auto-elections, taxjson-corp-actions. A year frozen with
+    its elections as manifest.json is written under that name: nothing
+    is raised. [(project folder, value written)]; ValueError naming the
+    taxjson.toml (from the folder holding the inputs folder) when one
+    cannot be read, parsed or written: which file it reads cannot be
+    told, so it is never skipped, and every one is read before the
+    first is written."""
+    import os
+    from taxjson.lib import project_layout as PL
+    path = Path(path)
+    if path.name != PL.ELECTIONS:
+        return []
+    acct, folder = path.parent.name, path.parent.parent.parent
+    want = os.path.realpath(path)
+
+    def _cannot(d: Path, e: Exception) -> ValueError:
+        return ValueError(f"cannot record the taxjson version "
+                          f"{PL.shown(d / PL.CONFIG, folder)} needs: "
+                          f"{getattr(e, 'strerror', None) or e}")
+    readers: List[Path] = []
+    for d in [folder] + [d for _y, d in PL.year_dirs(folder)]:
+        if not PL.has_config(d):
+            continue
+        try:
+            parse_toml(decode_toml_bytes((d / PL.CONFIG).read_bytes()))
+            src = PL.folder_setting(d, PL.INPUTS_KEY) or d / PL.INPUTS
+            if os.path.realpath(PL.elections_file(src / acct, d)) == want:
+                readers.append(d)
+        except (OSError, ValueError) as e:
+            raise _cannot(d, e) from e
+    out: List[Tuple[Path, str]] = []
+    for d in readers:
+        try:
+            new = raise_requirement(d, ("elections_json",), keep_layout=True)
+        except (OSError, ValueError) as e:
+            raise _cannot(d, e) from e
+        if new is not None:
+            out.append((d, new))
+    return out
+
+
+def raised_note(raised: Iterable[Tuple[Path, str]], base: Any) -> List[str]:
+    """One line per value raise_for_elections wrote, its taxjson.toml
+    shown from `base`, as the other raisers say it (cli/common
+    `_raise_requirements`)."""
+    from taxjson.lib import project_layout as PL
+    return [f"[settings] {KEY} = \"{new}\" (the oldest taxjson that "
+            f"reads elections.json) in {PL.shown(d / PL.CONFIG, Path(base))}"
+            for d, new in raised]
 
 
 def lowers(key: str, here: Any, there: Any) -> bool:

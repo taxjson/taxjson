@@ -226,6 +226,16 @@ _ALLOWED = {
     ("bin/taxjson_generate_parser.py",
      "output_path.write_text(code, encoding='utf-8')"):
         "the generated parser the user names with --output",
+    ("lib/command_log.py",
+     'with open(folder / ".gitignore", "x",'):
+        "logs/.gitignore, made once: \"x\" is O_CREAT|O_EXCL, so a link at "
+        "the name fails, never followed; a logs/ that is a link is refused "
+        "before (TJ-5366)",
+    ("lib/command_log.py",
+     'f = open(folder / name, "xb+", buffering=0, opener=opener)'):
+        "a new command log, written as the command runs: \"x\" is "
+        "O_CREAT|O_EXCL (mode 0600), so a link at the name fails, never "
+        "followed; a logs/ that is a link is refused before (TJ-5366)",
 }
 
 _WRITE_RE = re.compile(

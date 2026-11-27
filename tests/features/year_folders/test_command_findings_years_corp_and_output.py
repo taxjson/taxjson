@@ -42,9 +42,16 @@ def _tjs(root, *args, cwd=None, env_extra=None):
 
 
 def _snapshot(root):
-    """{relative path: sha256} of every file under `root`."""
+    """{relative path: sha256} of every file under `root` but the command
+    logs (the project's or a year's logs/: each command writes its own)."""
     return {str(p.relative_to(root)): hashlib.sha256(p.read_bytes())
-            .hexdigest() for p in Path(root).rglob("*") if p.is_file()}
+            .hexdigest() for p in Path(root).rglob("*") if p.is_file()
+            and not _command_log(p.relative_to(root).parts)}
+
+
+def _command_log(parts):
+    return parts[:1] == ("logs",) or (parts[1:2] == ("logs",)
+                                      and parts[0].isdigit())
 
 
 class TestAlignLeavesALoneAccountAlone(unittest.TestCase):
@@ -157,9 +164,9 @@ def _elect_project(d, sheltered=False):
 
 
 class TestElectJsonViewsAgree(unittest.TestCase):
-    """TJ-0400: `elect rrsp --json` listed only the saved elections:
+    """TJ-0400: `elections rrsp --json` listed only the saved elections:
     an event the run booked by the sheltered default (shown by `elect
-    --json` and `elect rrsp`) was missing, `{"accounts": {}}`.
+    --json` and `elections rrsp`) was missing, `{"accounts": {}}`.
     TJ-0406: a manifest that does not read was an `error` object with
     exit 0; the text listing stopped. Every view now exits 2 (an input
     that cannot be read, docs/commands.md)."""
@@ -178,9 +185,9 @@ class TestElectJsonViewsAgree(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root = _elect_project(d, sheltered=True)
             self._defaulted(root)
-            every = _tjs(root, "elect", "--json")
-            one = _tjs(root, "elect", "rrsp", "--json")
-            text = _tjs(root, "elect", "rrsp")
+            every = _tjs(root, "elections", "--json")
+            one = _tjs(root, "elections", "rrsp", "--json")
+            text = _tjs(root, "elections", "rrsp")
             for r in (every, one, text):
                 self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertIn("zz-spinoff-1", text.stdout)
@@ -194,14 +201,14 @@ class TestElectJsonViewsAgree(unittest.TestCase):
     def test_an_unreadable_manifest_exits_2_in_every_view(self):
         with tempfile.TemporaryDirectory() as d:
             root = _elect_project(d)
-            (root / "inputs" / "margin" / "manifest.json").write_text("{")
-            for args in (("elect", "margin", "--json"), ("elect", "--json")):
+            (root / "inputs" / "margin" / "elections.json").write_text("{")
+            for args in (("elections", "margin", "--json"), ("elections", "--json")):
                 r = _tjs(root, *args)
                 self.assertEqual(r.returncode, 2, args)
                 doc = json.loads(r.stdout)
                 self.assertIn("not valid JSON",
                               doc["accounts"]["margin"]["error"])
-            r = _tjs(root, "elect", "margin")
+            r = _tjs(root, "elections", "margin")
             self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
             self.assertIn("not valid JSON", r.stderr)
             self.assertNotIn("Traceback", r.stderr)
@@ -209,7 +216,7 @@ class TestElectJsonViewsAgree(unittest.TestCase):
     def test_no_manifest_is_still_an_empty_listing(self):
         with tempfile.TemporaryDirectory() as d:
             root = _elect_project(d)
-            r = _tjs(root, "elect", "margin", "--json")
+            r = _tjs(root, "elections", "margin", "--json")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(json.loads(r.stdout),
                              {"schema_version": 1, "accounts": {}})

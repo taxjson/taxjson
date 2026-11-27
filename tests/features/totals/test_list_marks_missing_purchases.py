@@ -53,6 +53,14 @@ class TestListMarksMissingHistory(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         suspects = {f"QOPN{sx}", f"QPAS{sx}", f"QXYZ{sx}", f"QRGL{sx}",
                     f"QRGT{sx}"}
+        if country == "canada":
+            # Every such sale is coded closing by the broker: a Canadian
+            # run reports it by hand and adds no short (CA-ACB-11, backlog
+            # TJ-5349), so no position is left to mark; the real short is
+            # the one short position. `tjs find-missing-history` lists
+            # the pairs as before.
+            self._check_canada(root, sx, suspects)
+            return
         for extra in ((), ("--date", "2025-12-31")):
             doc = json.loads(_tj(root, "list", "--json", *extra).stdout)
             got = {x["symbol"]: x["missing_history_suspect"]
@@ -94,6 +102,22 @@ class TestListMarksMissingHistory(unittest.TestCase):
             self.assertIn(sym, trunc)
         self.assertNotIn(f"QSHO{sx}", trunc)
         self.assertIn(f"QSHO{sx}", fmh.split("TRUNCATED HISTORY", 1)[0])
+
+    def _check_canada(self, root, sx, suspects):
+        doc = json.loads(_tj(root, "list", "--json").stdout)
+        got = {x["symbol"]: x["missing_history_suspect"] for x in doc["rows"]}
+        self.assertEqual({s for s, v in got.items() if v}, set(), got)
+        self.assertFalse(suspects & set(got), got)
+        self.assertFalse(got[f"QSHO{sx}"])
+        out = _tj(root, "list", "--negative").stdout
+        self.assertIn(f"QSHO{sx}", out)
+        self.assertIn("1 position(s)", out)
+        self.assertNotIn("Missing history (a sale with no purchase", out)
+        fmh = _tj(root, "find-missing-history", "--year", "2025").stdout
+        trunc = fmh.split("TRUNCATED HISTORY", 1)[1]
+        for sym in suspects:
+            self.assertIn(sym, trunc)
+        self.assertIn("As the run applies it", " ".join(trunc.split()))
 
 
 if __name__ == "__main__":

@@ -492,7 +492,7 @@ class TestManifest(unittest.TestCase):
             self.assertEqual(Manifest.load(path).records, {})
 
     def test_load_invalid_json_gives_actionable_error(self):
-        """Common user error: pointed --manifest at a CSV or other file.
+        """Common user error: pointed --elections at a CSV or other file.
         We surface the path + diagnostic instead of a Python traceback so
         the user can fix the invocation without reading our internals."""
         with tempfile.TemporaryDirectory() as tmp:

@@ -44,7 +44,7 @@ from taxjson.engine.assign import _make_assign_underlying_resolver
 from taxjson.model.transaction import TaxTransaction
 from taxjson.lib.option_symbols import is_option_symbol, parse_option_expiry
 from taxjson.lib.corporate_timeline import dedupe_split_events, event_sort_key
-from taxjson.lib.unbacked_close import OrderStarts, unbacked_close
+from taxjson.lib.unbacked_close import CloseWalk
 from taxjson.model import money as M
 
 
@@ -244,7 +244,7 @@ def write_lots(transactions: List[TaxTransaction],
     pos: Dict[Tuple[str, str], float] = {}
     lots: Dict[Tuple[str, str], List[WriteLot]] = {}
     out: List[WriteLot] = []
-    orders = OrderStarts()
+    closes = CloseWalk()
     for seq, t in enumerate(rows):
         q = float(t.quantity or 0.0)
         sym = t.symbol
@@ -277,7 +277,8 @@ def write_lots(transactions: List[TaxTransaction],
         if transfer and id(t) not in transfers:
             continue
         p = pos.get(key, 0.0)
-        p_order = orders.prev(key, t, p)
+        # (a marked CLOSE's units past the position open nothing: no write, no long)
+        unbacked = closes.read(key, t, p).unbacked if t.action == "BUYSELL" else 0.0
         if t.action == "OPENING_BALANCE":
             # A missing-history opening (a .tt OPENING cost=unknown line,
             # --include-options). Long: the contracts were held before
@@ -299,7 +300,7 @@ def write_lots(transactions: List[TaxTransaction],
         # contract came from.
         net = 0.0 if transfer else float(t.net_amount or 0.0)
         if q < 0:
-            opening = -q - min(-q, max(p, 0.0))
+            opening = -q - min(-q, max(p, 0.0)) - unbacked
             if long_sales is not None and not transfer and p > 1e-9:
                 long_sales.update((sym, _d, int(_date_of(t)[:4]))
                                   for _d in _row_dates(t))
@@ -314,8 +315,6 @@ def write_lots(transactions: List[TaxTransaction],
                                written_as=sym, dates=_row_dates(t),
                                origin=(ORIGIN_TRANSFER if transfer
                                        else ORIGIN_WRITE),
-                               broker_closing=(False if transfer else
-                                               unbacked_close(t, p, p_order)),
                                broker_basis=str(getattr(t, "broker_basis", "")
                                                 or ""))
                 lots.setdefault(key, []).append(lot); out.append(lot)
@@ -346,7 +345,7 @@ def write_lots(transactions: List[TaxTransaction],
                                             series=sym, dates=_row_dates(t)))
                     lot.open_units -= take; rem -= take
             lots[key] = [l for l in lots.get(key, []) if l.open_units > 1e-9]
-        pos[key] = p + q
+        pos[key] = p + q + (unbacked if q < 0 else -unbacked)
     return out
 
 
@@ -890,14 +889,21 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
 
 def expired_open(transactions: List[TaxTransaction], year: int,
                  today: Optional[date] = None,
-                 tax_date: Optional[str] = None) -> List[Dict[str, Any]]:
+                 tax_date: Optional[str] = None,
+                 country: Optional[str] = None) -> List[Dict[str, Any]]:
     """Option positions — LONG or written — still open in the books
     although the contract's expiry has passed (by the year end, or by
     the last date the books cover, and before `today`): the export is
     missing the expiry, exercise or assignment row. A data check, not a
     tax rule: in either country the missing row keeps a written
     premium or a long option's cost out of the year it belongs to
-    (S066-15 — a US project had no such check at all)."""
+    (S066-15 — a US project had no such check at all). A trade the broker
+    marks CLOSE with nothing it closes opens no position in a Canadian
+    book (lib/unbacked_close, CA-OPT-12). The US books go by position
+    (`country` given and not Canada): there it is a position, flagged
+    `broker_closing`: the missing row is its opening, not an expiry."""
+    from taxjson.lib.country import is_canada
+    by_position = country is not None and not is_canada(country)
     _date_of = date_basis_of(tax_date)
     rows = sorted((t for t in transactions
                    if t.action in ("BUYSELL", "ASSIGN", "SPLIT",
@@ -916,7 +922,7 @@ def expired_open(transactions: List[TaxTransaction], year: int,
     # coded IB C with no long held, a buy coded C with no short): the
     # missing row is the PURCHASE (or the write), not the expiry.
     closing: Dict[Any, bool] = {}
-    orders = OrderStarts()
+    closes = CloseWalk()
     for t in rows:
         key = (t.account or "", t.symbol)
         q = float(t.quantity or 0.0)
@@ -932,9 +938,11 @@ def expired_open(transactions: List[TaxTransaction], year: int,
         if t.action == "TRANSFER" and id(t) not in transfers:
             continue
         _p = pos.get(key, 0.0)
-        if unbacked_close(t, _p, orders.prev(key, t, _p)):
-            closing[key] = True
-        pos[key] = pos.get(key, 0.0) + q
+        # (a marked CLOSE's unbacked units open nothing: lib/unbacked_close)
+        _u = closes.read(key, t, _p).unbacked if t.action == "BUYSELL" else 0.0
+        if by_position and _u > 1e-9:
+            closing[key], _u = True, 0.0
+        pos[key] = _p + q + (_u if q < 0 else -_u)
         if abs(pos[key]) < 1e-9:
             closing.pop(key, None)
     _expired = _expired_test(transactions, year, today, _date_of)

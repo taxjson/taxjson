@@ -1,5 +1,5 @@
 """Re-audit-2 fixes, corp-actions-02 helper list (views, corporate
-timeline ordering, run --fast fingerprint, elect --redo, manifest
+timeline ordering, run --fast fingerprint, elections --redo, manifest
 migration). Synthetic data only.
 
 Formerly: test_fix_a2_corp02"""
@@ -40,7 +40,7 @@ def _proj(rows, elections=None, sheltered=False, country="canada",
     (root / "work").mkdir()
     (root / "inputs" / "m").mkdir(parents=True)
     (root / "work" / "m_base.json").write_text(json.dumps(rows))
-    (root / "inputs" / "m" / "manifest.json").write_text(
+    (root / "inputs" / "m" / "elections.json").write_text(
         manifest_text if manifest_text is not None
         else json.dumps({"elections": elections or {}}))
     cfg = {"settings": {"base_currency": "USD" if country == "usa"
@@ -155,12 +155,12 @@ class TestViewsRefuseUnreadable(unittest.TestCase):
             td, root, cfg = _proj(_spin_rows(10.0), manifest_text=text)
             with td, self.assertRaises(ViewError) as cm:
                 spinoffs(root, cfg, extractor_for=extractor_for)
-            self.assertIn("manifest", str(cm.exception), text)
+            self.assertIn("elections file", str(cm.exception), text)
 
     def test_a2_0968_unreadable_manifest_refused(self):
         td, root, cfg = _proj(_spin_rows(10.0))
         with td:
-            p = root / "inputs" / "m" / "manifest.json"
+            p = root / "inputs" / "m" / "elections.json"
             p.unlink()
             p.mkdir()                       # a directory, not a file
             with self.assertRaises(ViewError):
@@ -173,7 +173,7 @@ class TestViewsRefuseUnreadable(unittest.TestCase):
     def test_missing_manifest_is_no_elections(self):
         td, root, cfg = _proj(_spin_rows(10.0))
         with td:
-            (root / "inputs" / "m" / "manifest.json").unlink()
+            (root / "inputs" / "m" / "elections.json").unlink()
             s = spinoffs(root, cfg, extractor_for=extractor_for)["spinoffs"][0]
         self.assertEqual(s["flags"], ["PENDING"])   # booked, no record
 
@@ -195,12 +195,12 @@ class TestViewsRefuseUnreadable(unittest.TestCase):
     def test_a2_0979_corrupt_manifest_advice(self):
         from taxjson.lib.corp_actions import Manifest, ManifestError
         with tempfile.TemporaryDirectory() as d:
-            p = Path(d) / "manifest.json"
+            p = Path(d) / "elections.json"
             p.write_text('{"elections": {"a": ')
             with self.assertRaises(ManifestError) as cm:
                 Manifest.load(p)
         msg = str(cm.exception)
-        self.assertNotIn("--manifest", msg)
+        self.assertNotIn("--elections", msg)
         self.assertNotIn("start fresh", msg)
         self.assertIn("restore", msg)
         self.assertIn("Do not delete", msg)
@@ -425,14 +425,14 @@ class TestFastFingerprintCoversDecisions(unittest.TestCase):
             self.assertEqual(_run_cli(root, "run", "--no-input")
                              .returncode, 3)
             eid = _pending(root)[0]["event_id"]
-            e = _run_cli(root, "elect", "margin", "--set",
+            e = _run_cli(root, "elections", "margin", "--set",
                          f"{eid}=rollover_s_86_1", "--hint",
                          "allocated_acb_cad=1000")
             self.assertEqual(e.returncode, 0, e.stderr)
             r = _run_cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(_gains(root)[1]["SPNCO.TO"], (20, 1000.0))
-            man = root / "inputs" / "margin" / "manifest.json"
+            man = root / "inputs" / "margin" / "elections.json"
             doc = json.loads(man.read_text())
             doc["elections"][eid]["hints"]["allocated_acb_cad"] = 2500.0
             old = man.stat().st_mtime - 86400
@@ -475,7 +475,7 @@ class TestFastFingerprintCoversDecisions(unittest.TestCase):
 
 
 class TestRedoPassesRunFlags(unittest.TestCase):
-    """A2-0981 / A2-0982: `elect --redo` ran corp-actions without the
+    """A2-0981 / A2-0982: `elections --redo` ran corp-actions without the
     --rates / --base-currency / --ticker-map that `run` passes."""
 
     def test_redo_command_matches_run(self):
@@ -484,7 +484,7 @@ class TestRedoPassesRunFlags(unittest.TestCase):
         import io
         import sys
         from unittest import mock
-        from taxjson.cli import elect as cli_elect
+        from taxjson.cli import elections as cli_elect
         from _support.ib_corp_projects import _ib_spinoff_project, _pending
         with tempfile.TemporaryDirectory() as tmp:
             root = _ib_spinoff_project(tmp)
@@ -493,7 +493,7 @@ class TestRedoPassesRunFlags(unittest.TestCase):
                              .returncode, 3)
             eid = _pending(root)[0]["event_id"]
             self.assertEqual(_run_cli(
-                root, "elect", "margin", "--set",
+                root, "elections", "margin", "--set",
                 f"{eid}=taxable_deemed_dividend").returncode, 0)
             self.assertEqual(_run_cli(root, "run", "--no-input")
                              .returncode, 0)
@@ -505,7 +505,7 @@ class TestRedoPassesRunFlags(unittest.TestCase):
                     mock.patch.object(sys.stdin, "isatty",
                                       lambda: True), \
                     contextlib.redirect_stdout(io.StringIO()):
-                cli_elect.cmd_elect(args)
+                cli_elect.cmd_elections(args)
         self.assertEqual(len(calls), 1)
         cmd = calls[0]
         for flag, val in (("--rates", str(root / "work" / "to_base.csv")),
@@ -516,37 +516,26 @@ class TestRedoPassesRunFlags(unittest.TestCase):
 
 
 class TestLegacyManifestMigrationAtomic(unittest.TestCase):
-    """A2-0218: the legacy work/ manifest was copied in place; a failed
-    write left a truncated canonical copy that won from then on."""
+    """A2-0218: the legacy work/ manifest was copied in place on first
+    touch; a failed write left a truncated canonical copy that won from
+    then on. Since v3.0.0 no command reads or copies it: load_config
+    refuses it, naming `tjs migrate`, which moves it (one rename)."""
 
-    def test_failed_copy_leaves_legacy_authoritative(self):
-        import contextlib
-        import io
-        from unittest import mock
+    def test_the_run_never_copies_the_legacy_file(self):
         from taxjson.pipeline.stages import _resolve_manifest
         text = json.dumps({"elections": {"e1": {
             "election": "rollover_s_86_1",
             "hints": {"allocated_acb_cad": 1234.5},
             "summary": "x" * 5000}}})
-        # The copy is written through lib/safe_write; the disk fills
-        # after the data went into the temp file, before the rename.
-        def failing_write(fd):
-            raise OSError(27, "File too large")
-
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             acct_dir, cache = root / "inputs" / "m", root / "work"
             cache.mkdir()
             (cache / "m_manifest.json").write_text(text)
-            from taxjson.lib import safe_write as _sw
-            with mock.patch.object(_sw.os, "fsync", failing_write), \
-                    self.assertRaises(OSError):
-                _resolve_manifest(acct_dir, cache, "m")
-            self.assertFalse((acct_dir / "manifest.json").exists())
-            self.assertEqual(list(acct_dir.iterdir()), [])
-            with contextlib.redirect_stdout(io.StringIO()):
-                p = _resolve_manifest(acct_dir, cache, "m")
-            self.assertEqual(p.read_text(), text)
+            p = _resolve_manifest(acct_dir, cache, "m")
+            self.assertEqual(p, acct_dir / "elections.json")
+            self.assertFalse(acct_dir.exists())
+            self.assertEqual((cache / "m_manifest.json").read_text(), text)
 
 
 if __name__ == "__main__":

@@ -487,7 +487,7 @@ class TestASpinOff(unittest.TestCase):
             import re
             m = re.search(r'"(\d{8}-zzq-zzk-[0-9a-f]+)"', ev)
             self.assertTrue(m, r.stderr[-2000:])
-            r = _cli(root, "elect", "margin", "--set",
+            r = _cli(root, "elections", "margin", "--set",
                      f"{m[1]}=rollover_s_86_1", "--hint",
                      "allocated_acb_cad=90")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])

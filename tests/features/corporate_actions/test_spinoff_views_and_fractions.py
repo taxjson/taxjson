@@ -24,7 +24,7 @@ def _views_proj(rows, elections):
     (root / "work").mkdir()
     (root / "inputs" / "m").mkdir(parents=True)
     (root / "work" / "m_base.json").write_text(json.dumps(rows))
-    (root / "inputs" / "m" / "manifest.json").write_text(
+    (root / "inputs" / "m" / "elections.json").write_text(
         json.dumps({"elections": elections}))
     cfg = {"settings": {"base_currency": "CAD", "country": "canada"},
            "accounts": {"m": {"type": "taxable"}}}
@@ -79,7 +79,7 @@ class TestSpinoffViews(unittest.TestCase):
         """TJ-0166: an s.86.1 spin-off of 10.5 new shares for 105 (10
         delivered, 0.5 paid in cash) showed "0.0952381 new per share
         (10 for 105)" while 10.5 are booked. The views give the
-        entitlement and the cash in lieu; `elect --pending` says it
+        entitlement and the cash in lieu; `elections --pending` says it
         too."""
         from taxjson.lib import corp_views as CV
         eid = "20240614-zzp-zzs-0001"
@@ -113,12 +113,12 @@ class TestSpinoffViews(unittest.TestCase):
                          "12.00 CAD on 2024-06-18, for a fraction the "
                          "export does not size")
         self.assertEqual(CV.cash_in_lieu_line(10, 0, 0, "CAD", ""), "")
-        # `tjs elect --pending` on the same event, from a Questrade
+        # `tjs elections --pending` on the same event, from a Questrade
         # export.
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _qt_project(root, "2024-06-14", "2024-06-18")
-            r = _cli(root, "elect", "--pending")
+            r = _cli(root, "elections", "--pending")
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
             self.assertIn("cash in lieu: 0.5 of the 10.5 new shares, paid "
                           "in cash: 12.00 CAD on 2024-06-18", r.stdout)
@@ -130,7 +130,7 @@ class TestSpinoffViews(unittest.TestCase):
 def _elect(root):
     pend = json.loads((root / "work" / "pending_elections.json").read_text())
     eid = pend["accounts"]["margin"]["pending"][0]["event_id"]
-    r = _cli(root, "elect", "margin", "--set", f"{eid}=rollover_s_86_1",
+    r = _cli(root, "elections", "margin", "--set", f"{eid}=rollover_s_86_1",
              "--hint", "allocated_acb_cad=210")
     assert r.returncode == 0, r.stderr
     return eid

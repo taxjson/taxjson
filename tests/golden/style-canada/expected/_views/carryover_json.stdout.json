@@ -1,8 +1,21 @@
 {
   "country": "canada",
   "currency": "CAD",
+  "excluded_unknown_cost": [
+    {
+      "account": "margin",
+      "date": "2024-04-01",
+      "proceeds": 943.65,
+      "qty": 50.0,
+      "symbol": "OLDCO.US",
+      "year": 2024
+    }
+  ],
   "final_carryforward": 0.0,
   "first_transaction_year": 2024,
+  "incomplete_years": [
+    2024
+  ],
   "project_year": 2024,
   "rows": [
     {
@@ -13,6 +26,7 @@
       "claimed_applied": 0.0,
       "dispositions": 14,
       "engine_net_gain": 694.39,
+      "incomplete": true,
       "net_gain": 694.38,
       "net_source": "return_row",
       "prior_year": false,

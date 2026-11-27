@@ -142,8 +142,8 @@ class TestLongFormSubcommands(unittest.TestCase):
                     "check-filed"):
             self.assertIn(f'ctx.sub("{cmd}", LONG_FORM)', src)
             self.assertIn(cmd, _DETAILS_CMDS)
-        self.assertIn('ctx.sub("elect", "--pending", LONG_FORM)', src)
-        self.assertIn("elect", _DETAILS_CMDS)
+        self.assertIn('ctx.sub("elections", "--pending", LONG_FORM)', src)
+        self.assertIn("elections", _DETAILS_CMDS)
 
 
 if __name__ == "__main__":

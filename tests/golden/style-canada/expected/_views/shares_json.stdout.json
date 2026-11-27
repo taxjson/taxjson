@@ -60,15 +60,6 @@
     },
     {
       "accounts": {
-        "margin": -50.0
-      },
-      "cost": -1348.65,
-      "qty": -50.0,
-      "symbol": "OLDCO.US",
-      "unknown_cost": false
-    },
-    {
-      "accounts": {
         "margin": 100.0
       },
       "cost": 6751.35,

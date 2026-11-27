@@ -14,7 +14,7 @@ REPO_ROOT = _paths.REPO
 # Every slow sub-command answers cleanly, so the verdicts are stable
 # between a serial and a parallel run.
 OK = {sub: (0, "ok\n", "") for sub in (
-    "sanity", "find-missing-history", "elect", "audit", "option-boundary",
+    "sanity", "find-missing-history", "elections", "audit", "option-boundary",
     "handoff", "reconcile-slips", "form-export", "t1135", "carryover",
     "fx-cash", "amt", "check-filed", "check-dates", "sum")}
 
